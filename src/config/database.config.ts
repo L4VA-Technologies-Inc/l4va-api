@@ -1,10 +1,8 @@
 import { TypeOrmModuleOptions } from '@nestjs/typeorm';
+import { resolve } from 'path';
+import { config } from 'dotenv';
 
-import { Asset } from '../entities/asset.entity';
-import { Proposal } from '../entities/proposal.entity';
-import { Stake } from '../entities/stake.entity';
-import { Vault } from '../entities/vault.entity';
-import { Vote } from '../entities/vote.entity';
+config();
 
 export const databaseConfig: TypeOrmModuleOptions = {
   type: 'postgres',
@@ -13,8 +11,8 @@ export const databaseConfig: TypeOrmModuleOptions = {
   username: process.env.DB_USERNAME || 'postgres',
   password: process.env.DB_PASSWORD || 'postgres',
   database: process.env.DB_NAME || 'l4va-db',
-  entities: [Asset, Proposal, Stake, Vault, Vote],
-  migrations: ['dist/migrations/*{.ts,.js}'],
+  entities: [resolve(__dirname, '../entities/*.entity{.ts,.js}')],
   synchronize: false,
   logging: true,
+  keepConnectionAlive: true,
 };

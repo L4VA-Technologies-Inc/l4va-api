@@ -1,29 +1,19 @@
 import { DataSource } from 'typeorm';
-import { ConfigService } from '@nestjs/config';
 import { config } from 'dotenv';
 
-function getEnvFilePath() {
-  if (process.env.NODE_ENV) {
-    return `${process.env.NODE_ENV}.env`;
-  }
-  return '.env';
-}
-
-config({ path: getEnvFilePath() });
-
-const configService = new ConfigService();
+config();
 
 export default new DataSource({
   type: 'postgres',
-  host: configService.get('POSTGRES_HOST'),
-  port: configService.get('POSTGRES_PORT'),
-  username: configService.get('POSTGRES_USER'),
-  password: configService.get('POSTGRES_PASSWORD'),
-  database: configService.get('POSTGRES_DATABASE') as string,
+  host: process.env.DB_HOST || 'localhost',
+  port: parseInt(process.env.DB_PORT, 10) || 5432,
+  username: process.env.DB_USERNAME || 'postgres',
+  password: process.env.DB_PASSWORD || 'postgres',
+  database: process.env.DB_NAME || 'l4va-db',
   entities: [
-    __dirname + '/src/database/entities/**/*{.ts,.js}',
-    __dirname + '/src/database/entities/*{.ts,.js}',
+    __dirname + '/src/entities/**/*{.ts,.js}',
+    __dirname + '/src/entities/*{.ts,.js}',
   ],
-  migrations: [__dirname + '/src/database/migrationsInput/*{.ts,.js}'],
+  migrations: [__dirname + '/src/migrations/*{.ts,.js}'],
   migrationsTransactionMode: 'each',
 });
