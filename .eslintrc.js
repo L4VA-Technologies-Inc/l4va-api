@@ -2,13 +2,12 @@ module.exports = {
   parser: '@typescript-eslint/parser',
   parserOptions: {
     project: 'tsconfig.json',
-    tsconfigRootDir: __dirname,
+    tsconfigRootDir : __dirname,
     sourceType: 'module',
   },
   plugins: ['@typescript-eslint/eslint-plugin'],
   extends: [
     'plugin:@typescript-eslint/recommended',
-    'plugin:prettier/recommended',
   ],
   root: true,
   env: {
@@ -21,5 +20,16 @@ module.exports = {
     '@typescript-eslint/explicit-function-return-type': 'off',
     '@typescript-eslint/explicit-module-boundary-types': 'off',
     '@typescript-eslint/no-explicit-any': 'off',
+    'quotes': ['error', 'single'],
+    'semi': ['error', 'always'],
+    // 'no-console': 'error',
+    'no-unused-vars': 'off',
+    '@typescript-eslint/no-unused-vars': ["error", { "vars": "all", "args": "none", "ignoreRestSiblings": false }],
+    // 'indent': ['error', 2, { 'SwitchCase': 1, 'ignoredNodes': ['PropertyDefinition'] }],
+    'linebreak-style': ['error', 'unix'],
+    // 'import/newline-after-import': ['error', { count: 2 }],
+    // 'no-multiple-empty-lines': ['error', { max: 2 }],
+    // 'comma-dangle': ['error', 'always-multiline'],
+    // 'object-curly-spacing': ['error', 'always', { 'objectsInObjects': false }],
   },
 };

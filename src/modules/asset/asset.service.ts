@@ -1,17 +1,13 @@
-import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-
-import { Vault } from '../entities/vault.entity';
-import { CreateVaultDto } from '../dto/create-vault.dto';
-import { VaultResponseDto } from '../dto/vault-response.dto';
+import { Injectable, Inject } from '@nestjs/common';
+import { CreateVaultDto } from '../../dto/create-vault.dto';
+import { VaultResponseDto } from '../../dto/vault-response.dto';
+import { VaultRepository } from '../repository/vault.repository';
 
 @Injectable()
-export class VaultService {
-  constructor(
-    @InjectRepository(Vault)
-    private readonly vaultRepository: Repository<Vault>,
-  ) {}
+export class AssetService {
+
+  @Inject()
+  private readonly vaultRepository: VaultRepository;
 
   async getAllVaults(): Promise<VaultResponseDto[]> {
     const vaults = await this.vaultRepository.find();
