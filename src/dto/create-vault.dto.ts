@@ -1,45 +1,37 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { IsString, IsEnum, IsNumber, IsOptional, Max, Min } from 'class-validator';
 
 export class CreateVaultDto {
-  @ApiProperty({ description: 'Smart contract address of the vault' })
+  @IsString()
   contractAddress: string;
 
-  @ApiProperty({
-    description: 'Type of the vault',
-    enum: ['PRIVATE', 'PUBLIC', 'SEMI_PRIVATE'],
-  })
+  @IsEnum(['PRIVATE', 'PUBLIC', 'SEMI_PRIVATE'])
   type: 'PRIVATE' | 'PUBLIC' | 'SEMI_PRIVATE';
 
-  @ApiProperty({
-    description: 'Status of the vault',
-    enum: ['DRAFT', 'ACTIVE', 'LOCKED', 'TERMINATED'],
-  })
+  @IsEnum(['DRAFT', 'ACTIVE', 'LOCKED', 'TERMINATED'])
   status: 'DRAFT' | 'ACTIVE' | 'LOCKED' | 'TERMINATED';
 
-  @ApiProperty({
-    description: 'Token contract address for fractionalization',
-    required: false,
-  })
+  @IsOptional()
+  @IsString()
   fractionalizationTokenAddress?: string;
 
-  @ApiProperty({ description: 'Fractionalization percentage', required: false })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(100)
   fractionalizationPercentage?: number;
 
-  @ApiProperty({
-    description: 'Token supply for fractionalization',
-    required: false,
-  })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
   tokenSupply?: number;
 
-  @ApiProperty({
-    description: 'Decimals for the fractional token',
-    required: false,
-  })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(9)
   tokenDecimals?: number;
 
-  @ApiProperty({
-    description: 'Additional metadata as a JSON string',
-    required: false,
-  })
+  @IsOptional()
+  @IsString()
   metadata?: string;
 }
