@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body } from '@nestjs/common';
+import { Controller, Get, Post, Body, Version } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 
 import { Vault } from '../../entities/vault.entity';
@@ -10,6 +10,7 @@ import { CreateVaultDto } from '../../dto/create-vault.dto';
 export class VaultController {
   constructor(private readonly vaultRepository: VaultRepository) {}
 
+  @Version('1')
   @Get()
   @ApiOperation({ summary: 'Retrieve all vaults' })
   @ApiResponse({ status: 200, description: 'List of all vaults' })
@@ -17,6 +18,7 @@ export class VaultController {
     return await this.vaultRepository.findAll();
   }
 
+  @Version('1')
   @Post()
   @ApiOperation({ summary: 'Create a new vault' })
   @ApiResponse({ status: 201, description: 'Vault created successfully' })
