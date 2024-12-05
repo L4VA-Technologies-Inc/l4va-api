@@ -1,16 +1,23 @@
 version: '3.9'
+
 services:
   postgres:
     image: postgres:15
-    container_name: nestjs-postgres
+    container_name: l4va-postgres
+    restart: always
+    ports:
+      - "${DB_PORT}:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
-    ports:
-      - '5432:5432'
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - l4va-network
 
 volumes:
-  postgres_data:
+  postgres-data:
+
+networks:
+  l4va-network:

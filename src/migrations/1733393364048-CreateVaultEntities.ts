@@ -1,6 +1,6 @@
 import { MigrationInterface, QueryRunner } from "typeorm";
 
-export class MyFunnyMigration1733242873434 implements MigrationInterface {
+export class CreateVaultEntities1733393364048 implements MigrationInterface {
 
     public async up(queryRunner: QueryRunner): Promise<void> {
     }
