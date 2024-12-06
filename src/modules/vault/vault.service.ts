@@ -9,15 +9,14 @@ export class VaultService {
   private readonly vaultRepository: VaultRepository;
 
   async getAllVaults(): Promise<VaultResponseDto[]> {
-    const vaults = await this.vaultRepository.find();
+    const vaults = await this.vaultRepository.findAll();
     return vaults.map((vault) => ({
       ...vault,
     }));
   }
 
   async createVault(createVaultDto: CreateVaultDto): Promise<VaultResponseDto> {
-    const newVault = this.vaultRepository.create(createVaultDto);
-    const savedVault = await this.vaultRepository.save(newVault);
+    const savedVault = this.vaultRepository.createVault(createVaultDto);
     return {
       ...savedVault,
     };
