@@ -8,9 +8,10 @@ import { VaultModule } from './modules/vault/vault.module';
 
 import { databaseConfig } from './config/database.config';
 import { AuthMiddleware } from './middlewares/auth.middleware';
+import { AuthModule } from './modules/auth/auth.module';
 
 @Module({
-  imports: [TypeOrmModule.forRoot(databaseConfig), VaultModule],
+  imports: [TypeOrmModule.forRoot(databaseConfig), VaultModule, AuthModule],
   controllers: [AppController],
   providers: [AppService],
 })
