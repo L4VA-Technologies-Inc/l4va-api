@@ -11,9 +11,12 @@ import { AuthMiddleware } from './middlewares/auth.middleware';
 import { AuthModule } from './modules/auth/auth.module';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
+import { AuditInterceptor } from './interceptors/audit';
+import { AuditEntity } from './entities/audit.entity';
 
 @Module({
   imports: [
+    TypeOrmModule.forFeature([AuditEntity]),
     TypeOrmModule.forRoot(databaseConfig),
     VaultModule,
     AuthModule,
@@ -26,7 +29,9 @@ import { APP_GUARD } from '@nestjs/core';
   providers: [AppService, {
     provide: APP_GUARD,
     useClass: ThrottlerGuard
-  }],
+  },
+  AuditInterceptor,
+  ],
 })
 export class AppModule {
   configure(consumer: MiddlewareConsumer) {
