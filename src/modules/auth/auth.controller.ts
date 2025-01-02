@@ -1,7 +1,8 @@
-import { Body, Controller, Post, Version } from '@nestjs/common';
+import { Body, Controller, Get, Post, UseGuards, Version } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { AuthService } from './auth.service';
+import { AuthGuard } from '../../guards/auth.guard';
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -15,5 +16,11 @@ export class AuthController {
   @ApiResponse({ status: 400, description: 'Validation failed' })
   async signIn(@Body() signInDto: Record<string, any>) {
     return this.authService.signIn(signInDto.username, signInDto.password);
+  }
+
+  @UseGuards(AuthGuard)
+  @Get('profile')
+  async getProfile() {
+    return true;
   }
 }

@@ -4,8 +4,12 @@ import { AuthController } from './auth.controller';
 import { RepositoryModule } from '../repository/repository.module';
 import { JwtModule } from '@nestjs/jwt';
 import { jwtConstants } from '../../enum/constants';
-import { AuthGuard } from '../../guards/auth.guard';
-import { APP_GUARD } from '@nestjs/core';
+// import { AuthGuard } from '../../guards/auth.guard';
+// import { APP_GUARD } from '@nestjs/core';
+// , {
+//   provide: APP_GUARD,
+//     useClass: AuthGuard,
+// }
 
 @Module({
   imports: [RepositoryModule,
@@ -15,9 +19,6 @@ import { APP_GUARD } from '@nestjs/core';
       signOptions: { expiresIn: '60s' },
     }),],
   controllers: [AuthController],
-  providers: [AuthService, {
-    provide: APP_GUARD,
-    useClass: AuthGuard,
-  }],
+  providers: [AuthService],
 })
 export class AuthModule {}
