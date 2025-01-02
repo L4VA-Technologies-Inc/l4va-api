@@ -16,7 +16,7 @@ export class AuthGuard implements CanActivate {
     const token = this.extractTokenFromHeader(request);
 
     if (!token) {
-      throw new UnauthorizedException('Токен не знайдено');
+      throw new UnauthorizedException();
     }
 
     try {
@@ -28,7 +28,7 @@ export class AuthGuard implements CanActivate {
 
       return true;
     } catch {
-      throw new UnauthorizedException('Токен недійсний');
+      throw new UnauthorizedException();
     }
   }
 
