@@ -8,7 +8,6 @@ export class AuthController {
   @Post('login')
   async login(@Body() signatureData: {
     signature: any;
-    message: string;
     stakeAddress: string;
   }) {
     return this.authService.verifySignature(signatureData);
