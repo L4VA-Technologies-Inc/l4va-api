@@ -1,5 +1,5 @@
 {
-  "name": "l4va-api",
+  "name": "project-name",
   "version": "0.0.1",
   "description": "",
   "author": "",
@@ -17,28 +17,14 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json",
-    "typeorm": "typeorm-ts-node-commonjs -d ./ormconfig.ts",
-    "migration:create": "typeorm-ts-node-esm migration:create",
-    "migration:run": "npm run typeorm -- migration:run",
-    "migration:revert": "typeorm-ts-node-esm -d ormconfig.ts migration:revert",
-    "migration:show": "typeorm-ts-node-esm -d ormconfig.ts migration:show"
+    "test:e2e": "jest --config ./test/jest-e2e.json"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",
-    "@nestjs/config": "^3.3.0",
     "@nestjs/core": "^10.0.0",
     "@nestjs/platform-express": "^10.0.0",
-    "@nestjs/platform-fastify": "^10.4.9",
-    "@nestjs/swagger": "^8.0.7",
-    "@nestjs/typeorm": "^10.0.2",
-    "class-transformer": "^0.5.1",
-    "class-validator": "^0.14.1",
-    "fastify-swagger": "^5.1.1",
-    "pg": "^8.13.1",
     "reflect-metadata": "^0.2.0",
-    "rxjs": "^7.8.1",
-    "typeorm": "^0.3.20"
+    "rxjs": "^7.8.1"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.0.0",
@@ -61,7 +47,6 @@
     "ts-loader": "^9.4.3",
     "ts-node": "^10.9.1",
     "tsconfig-paths": "^4.2.0",
-    "typeorm-cli": "^1.0.7",
     "typescript": "^5.1.3"
   },
   "jest": {
