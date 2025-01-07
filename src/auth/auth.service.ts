@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { Buffer } from 'buffer';
 import { COSESign1, COSEKey, Label, Int, BigNum } from '@emurgo/cardano-message-signing-nodejs';
 import { Ed25519Signature, PublicKey, Address, RewardAddress } from '@emurgo/cardano-serialization-lib-nodejs';
+import { generateUsername } from 'unique-username-generator';
 
 import { UsersService } from '../users/users.service';
 
@@ -60,7 +61,7 @@ export class AuthService {
         try {
           user = await this.usersService.create({
             address: signerStakeAddrBech32,
-            name: `Wallet ${signerStakeAddrBech32.slice(0, 8)}...`, // Create a default name using address prefix
+            name: generateUsername(),
           });
         } catch (error) {
           console.error('Error creating new user:', error);
