@@ -1,13 +1,19 @@
 import { Injectable } from '@nestjs/common';
 import { Buffer } from 'buffer';
 import { COSESign1, COSEKey, Label, Int, BigNum } from '@emurgo/cardano-message-signing-nodejs';
-import { Ed25519Signature, PublicKey, Address } from '@emurgo/cardano-serialization-lib-nodejs';
+import { Ed25519Signature, PublicKey } from '@emurgo/cardano-serialization-lib-nodejs';
 
 @Injectable()
 export class AuthService {
-  // Sample list of registered users (move to database in production)
   private registeredUsers = [
-    'stake1uxslhvvuu4utn7gcqv3rw66rfuj4vh9tlhl42cc96gjkw4gmym2rt',
+    {
+      address: 'stake1uxslhvvuu4utn7gcqv3rw66rfuj4vh9tlhl42cc96gjkw4gmym2rt',
+      name: 'Yar'
+    },
+    {
+      address: 'stake1u8wgsawfthlfc7t402p708dy9gseeek8u3ymrxhk63grhzsz5c4xk',
+      name: 'Slav',
+    }
   ];
 
   async verifySignature(signatureData: {
@@ -20,13 +26,6 @@ export class AuthService {
 
       // Decode the signature
       const decoded = COSESign1.from_bytes(Buffer.from(signature.signature, 'hex'));
-
-      // Get the signing address from headers
-      const headermap = decoded.headers().protected().deserialized_headers();
-      const addressHex = Buffer.from(headermap.header(Label.new_text('address')).to_bytes())
-        .toString('hex')
-        .substring(4);
-      const address = Address.from_bytes(Buffer.from(addressHex, 'hex'));
 
       // Get the public key
       const key = COSEKey.from_bytes(Buffer.from(signature.key, 'hex'));
@@ -46,7 +45,7 @@ export class AuthService {
       const payloadMatches = receivedMessage === message;
 
       // Check if user is registered
-      const isRegistered = this.registeredUsers.includes(stakeAddress);
+      const user = this.registeredUsers.find(user => user.address === stakeAddress);
 
       if (!isVerified) {
         return {
@@ -62,7 +61,7 @@ export class AuthService {
         };
       }
 
-      if (!isRegistered) {
+      if (!user) {
         return {
           success: false,
           message: 'Wallet not registered',
@@ -70,6 +69,7 @@ export class AuthService {
       }
 
       return {
+        user,
         success: true,
         message: '✅ Signature verified successfully!',
       };
