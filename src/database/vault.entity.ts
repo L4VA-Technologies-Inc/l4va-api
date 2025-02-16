@@ -22,7 +22,7 @@ export class Vault {
   privacy: string;
 
   @Column({ nullable: true })
-  brief?: string;
+  description?: string;
 
   @Column({ nullable: true })
   imageUrl?: string;
