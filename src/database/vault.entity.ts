@@ -15,17 +15,11 @@ export class Vault {
   @Column()
   name: string;
 
-  @Column({
-    type: 'enum',
-    enum: ['single', 'multi', 'cnt'],
-  })
-  type: 'single' | 'multi' | 'cnt';
+  @Column()
+  type: string;
 
-  @Column({
-    type: 'enum',
-    enum: ['private', 'public', 'semi-private'],
-  })
-  privacy: 'private' | 'public' | 'semi-private';
+  @Column()
+  privacy: string;
 
   @Column({ nullable: true })
   brief?: string;
