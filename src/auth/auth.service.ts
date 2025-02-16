@@ -91,7 +91,6 @@ export class AuthService {
       };
 
     } catch (error) {
-      console.error('Verification error:', error);
       return {
         success: false,
         message: error.message || 'Authentication failed',
