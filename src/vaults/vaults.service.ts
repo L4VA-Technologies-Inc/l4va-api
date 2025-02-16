@@ -27,7 +27,7 @@ export class VaultsService {
       });
       return await this.vaultsRepository.save(vault);
     } catch (error) {
-      console.log(error);
+      console.error(error);
       throw new BadRequestException('Failed to create vault');
     }
   }
