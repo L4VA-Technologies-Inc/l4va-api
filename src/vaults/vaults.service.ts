@@ -15,7 +15,7 @@ export class VaultsService {
     name: string;
     type: 'single' | 'multi' | 'cnt';
     privacy: 'private' | 'public' | 'semi-private';
-    brief?: string;
+    description?: string;
     imageUrl?: string;
     bannerUrl?: string;
     socialLinks?: { facebook?: string; twitter?: string };
