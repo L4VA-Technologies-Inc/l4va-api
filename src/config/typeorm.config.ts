@@ -15,7 +15,7 @@ export default new DataSource({
   database: configService.get<string>('DB_NAME'),
   synchronize: false,
   entities: ['**/*.entity.ts'],
-  migrations: ['src/database/migrations/*-migration.ts'],
+  migrations: ['src/database/migrations/*.ts'],
   migrationsRun: false,
   logging: true,
 });

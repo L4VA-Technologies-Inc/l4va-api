@@ -3,11 +3,12 @@ import { User } from './user.entity';
 
 @Entity('vaults')
 export class Vault {
-  @PrimaryGeneratedColumn()
-  id: number;
 
-  @ManyToOne(() => User)
-  owner: User;
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  @ManyToOne(() => User, (owner: User) => owner.id)
+  public owner: User;
 
   @Column()
   ownerId: string;

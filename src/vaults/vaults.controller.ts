@@ -1,25 +1,24 @@
 import { Controller, Post, Body, Get, Param, Request, UseGuards } from '@nestjs/common';
 import { VaultsService } from './vaults.service';
 import { AuthGuard } from '../auth/auth.guard';
+import {CreateVaultReq} from "./dto/createVault.req";
+import {ApiOperation, ApiResponse} from "@nestjs/swagger";
 
 @Controller('vaults')
 export class VaultsController {
   constructor(private readonly vaultsService: VaultsService) {}
 
+  @ApiOperation({ summary: 'Create vault' })
+  @ApiResponse({
+    status: 200,
+    description: 'Vault successfully created',
+  })
   @UseGuards(AuthGuard)
   @Post()
   createVault(
     @Request() req,
     @Body()
-    data: {
-      name: string;
-      type: 'single' | 'multi' | 'cnt';
-      privacy: 'private' | 'public' | 'semi-private';
-      description?: string;
-      imageUrl?: string;
-      bannerUrl?: string;
-      socialLinks?: { facebook?: string; twitter?: string };
-    },
+    data: CreateVaultReq,
   ) {
     const userId = req.user.sub;
     return this.vaultsService.createVault(userId, data);
@@ -33,7 +32,7 @@ export class VaultsController {
   }
 
   @Get(':id')
-  getVaultById(@Param('id') id: number) {
+  getVaultById(@Param('id') id: string) {
     return this.vaultsService.getVaultById(id);
   }
 

@@ -1,8 +1,8 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-
 import { Vault } from '../database/vault.entity';
+import { CreateVaultReq } from './dto/createVault.req';
 
 @Injectable()
 export class VaultsService {
@@ -11,15 +11,7 @@ export class VaultsService {
     private readonly vaultsRepository: Repository<Vault>,
   ) {}
 
-  async createVault(userId: string, data: {
-    name: string;
-    type: 'single' | 'multi' | 'cnt';
-    privacy: 'private' | 'public' | 'semi-private';
-    description?: string;
-    imageUrl?: string;
-    bannerUrl?: string;
-    socialLinks?: { facebook?: string; twitter?: string };
-  }): Promise<Vault> {
+  async createVault(userId: string, data: CreateVaultReq): Promise<Vault> {
     try {
       const vault = this.vaultsRepository.create({
         ...data,
@@ -38,7 +30,7 @@ export class VaultsService {
     });
   }
 
-  async getVaultById(id: number): Promise<Vault> {
+  async getVaultById(id: string): Promise<Vault> {
     const vault = await this.vaultsRepository.findOne({ where: { id } });
     if (!vault) {
       throw new BadRequestException('Vault not found');

@@ -45,6 +45,22 @@ $ npm run start:dev
 $ npm run start:prod
 ```
 
+
+## Migration
+
+If you need to generate new empty migration file
+```bash
+# development
+$ npm run migration:create --name=MigrationName
+
+```
+If you need to generate migration based on changes in entity
+```bash
+# development
+$ npm run migration:generate --name=MigrationName
+
+```
+
 ## Run tests
 
 ```bash

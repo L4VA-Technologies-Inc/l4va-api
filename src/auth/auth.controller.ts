@@ -11,17 +11,21 @@ import {
 
 import { AuthGuard } from './auth.guard';
 import { AuthService } from './auth.service';
+import {ApiOperation, ApiResponse} from "@nestjs/swagger";
+import {LoginReq} from "./dto/login.req";
 
 @Controller('auth')
 export class AuthController {
   constructor(private authService: AuthService) {}
 
+  @ApiOperation({ summary: 'Login user' })
+  @ApiResponse({
+    status: 200,
+    description: 'User login successful',
+  })
   @HttpCode(HttpStatus.OK)
   @Post('login')
-  async login(@Body() signatureData: {
-    signature: any;
-    stakeAddress: string;
-  }) {
+  async login(@Body() signatureData: LoginReq) {
     return this.authService.verifySignature(signatureData);
   }
 

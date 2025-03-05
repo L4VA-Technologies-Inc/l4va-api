@@ -6,6 +6,7 @@ import { Ed25519Signature, PublicKey, Address, RewardAddress } from '@emurgo/car
 import { generateUsername } from 'unique-username-generator';
 
 import { UsersService } from '../users/users.service';
+import {LoginReq} from "./dto/login.req";
 
 @Injectable()
 export class AuthService {
@@ -14,10 +15,7 @@ export class AuthService {
     private jwtService: JwtService,
   ) {}
 
-  async verifySignature(signatureData: {
-    signature: any;
-    stakeAddress: string;
-  }) {
+  async verifySignature(signatureData: LoginReq) {
     try {
       const { signature, stakeAddress } = signatureData;
 
