@@ -13,16 +13,17 @@ import { AuthGuard } from './auth.guard';
 import { AuthService } from './auth.service';
 import {ApiOperation, ApiResponse, ApiTags} from "@nestjs/swagger";
 import {LoginReq} from "./dto/login.req";
+import {ApiDoc} from "../decorators/api-doc.decorator";
 
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
   constructor(private authService: AuthService) {}
 
-  @ApiOperation({ summary: 'Login user' })
-  @ApiResponse({
-    status: 200,
+  @ApiDoc({
+    summary: 'Login user',
     description: 'User login successful',
+    status: 200,
   })
   @HttpCode(HttpStatus.OK)
   @Post('login')
@@ -30,10 +31,10 @@ export class AuthController {
     return this.authService.verifySignature(signatureData);
   }
 
-  @ApiOperation({ summary: 'Get user profile' })
-  @ApiResponse({
-    status: 200,
+  @ApiDoc({
+    summary: 'Get user profile',
     description: 'User found profile selected successfully',
+    status: 200,
   })
   @UseGuards(AuthGuard)
   @Get('profile')
