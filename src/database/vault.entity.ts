@@ -10,7 +10,7 @@ import {
 } from 'typeorm';
 import { User } from './user.entity';
 import {FileEntity} from "./file.entity";
-import {AssetsWhitelistEntity} from "./assets.whitelist.entity";
+import {AssetsWhitelistEntity} from "./assetsWhitelist.entity";
 import {LinkEntity} from "./link.entity";
 import {
   ContributionWindowType,
@@ -64,7 +64,7 @@ export class Vault {
   contribution_open_window_time?:string;
 
   @Column({ type: 'interval', nullable: true})
-  asset_window: string;
+  asset_window?: string;
 
   @Column({ type: 'int', nullable: true})
   asset_count_cap_min?:number;
@@ -73,66 +73,66 @@ export class Vault {
   asset_count_cap_max?:number;
 
   @Column({ type: 'interval', nullable: true})
-  investment_window_duration: string;
+  investment_window_duration?: string;
 
   @Column({
     type: "enum",
     enum: InvestmentWindowType,
     nullable: true
   })
-  investment_open_window_type: InvestmentWindowType;
+  investment_open_window_type?: InvestmentWindowType;
 
   @Column({ type: 'interval', nullable: true})
-  investment_open_window_time: string;
+  investment_open_window_time?: string;
 
-  @Column({ type: "numeric", precision: 5, scale: 2 })
+  @Column({ type: "numeric", precision: 5, scale: 2, nullable:true})
   off_assets_offered: string;
 
   @Column({ type: 'interval', nullable: true})
-  ft_investment_window: string;
+  ft_investment_window?: string;
 
-  @Column({ type: "numeric", precision: 5, scale: 2 })
-  ft_investment_reverse: string;
+  @Column({ type: "numeric", precision: 5, scale: 2,  nullable:true})
+  ft_investment_reverse?: string;
 
-  @Column({ type: "numeric", precision: 5, scale: 2 })
-  liquidity_pool_contribution: string;
+  @Column({ type: "numeric", precision: 5, scale: 2, nullable:true })
+  liquidity_pool_contribution?: string;
 
-  @Column({ type: "numeric", precision: 5, scale: 2 })
-  ft_token_supply: string;
+  @Column({ type: "numeric", precision: 5, scale: 2,  nullable:true})
+  ft_token_supply?: string;
 
-  @Column({ type: "smallint", default: 1 })
+  @Column({ type: "smallint", default: 1,  nullable:true })
   @Check(`"ft_token_decimals" BETWEEN 1 AND 9`)
-  ft_token_decimals: string;
+  ft_token_decimals?: string;
 
   @Column({
     type: "enum",
     enum: TerminationType,
     nullable: true
   })
-  termination_type: TerminationType;
+  termination_type?: TerminationType;
 
   @Column({ type: 'interval', nullable: true})
-  time_elapsed_is_equal_to_time: string;
+  time_elapsed_is_equal_to_time?: string;
 
-  @Column({ type: "numeric", precision: 5, scale: 2 })
-  asset_appreciation: string;
+  @Column({ type: "numeric", precision: 5, scale: 2, nullable:true })
+  asset_appreciation?: string;
 
-  @Column({ type: "numeric", precision: 5, scale: 2 })
-  creation_threshold: string;
-  @Column({ type: "numeric", precision: 5, scale: 2 })
-  start_threshold: string;
-  @Column({ type: "numeric", precision: 5, scale: 2 })
-  vote_threshold: string;
-  @Column({ type: "numeric", precision: 5, scale: 2 })
-  execution_threshold: string;
-  @Column({ type: "numeric", precision: 5, scale: 2 })
-  cosigning_threshold: string;
+  @Column({ type: "numeric", precision: 5, scale: 2, nullable:true })
+  creation_threshold?: string;
+  @Column({ type: "numeric", precision: 5, scale: 2,  nullable:true })
+  start_threshold?: string;
+  @Column({ type: "numeric", precision: 5, scale: 2,  nullable:true })
+  vote_threshold?: string;
+  @Column({ type: "numeric", precision: 5, scale: 2,  nullable:true })
+  execution_threshold?: string;
+  @Column({ type: "numeric", precision: 5, scale: 2,  nullable:true })
+  cosigning_threshold?: string;
 
   @ManyToOne(() => User, (owner: User) => owner.id)
   public owner: User;
 
   @OneToMany(() => AssetsWhitelistEntity, (asset: AssetsWhitelistEntity) => asset.id)
-  public assets_whitelist: AssetsWhitelistEntity[];
+  assets_whitelist?: AssetsWhitelistEntity[];
 
   @OneToOne(() => FileEntity)
   @JoinColumn()
@@ -147,7 +147,7 @@ export class Vault {
   ft_token_img?: FileEntity;
 
   @OneToMany(() => LinkEntity, (link: LinkEntity) => link.id)
-  socialLinks: LinkEntity[]
+  social_links?: LinkEntity[]
 
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   updated_at: string;

@@ -13,7 +13,7 @@ export class AwsService {
 
   constructor(
     @InjectRepository(FileEntity)
-    private fileRepository: Repository<FileEntity>,
+    private readonly fileRepository: Repository<FileEntity>,
   ) {}
   getS3() {
     if (this.s3) {
@@ -97,8 +97,7 @@ export class AwsService {
       if (uploadResult) {
         const newFile = this.fileRepository.create({
           key: uploadResult.Key,
-          url: `http://localhost:8081/api/v1/aws/image/${uploadResult.Key}`,
-          message: message,
+          url: `api/v1/aws/image/${uploadResult.Key}`,
           file_type: fileType,
         });
         await this.fileRepository.save(newFile);
