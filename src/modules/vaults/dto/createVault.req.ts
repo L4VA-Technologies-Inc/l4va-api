@@ -1,21 +1,15 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsNotEmpty } from 'class-validator';
+import {VaultType} from "aws-sdk/clients/backup";
+import {VaultPrivacy} from "../../../types/vault.types";
 
-export enum VaultType {
-  single = 'single',
-  multi = 'multi',
-  ctn = 'ctn'
+type SocialLink = {
+  url:string,
+  name: string,
 }
 
-export enum VaultPrivacy {
-  private = 'private',
-  public = 'public',
-  semiPrivate = 'semi-private'
-}
-
-interface SocialLinks {
-  facebook?: string;
-  twitter?: string
+type AssetWhiteList = {
+  id: string,
 }
 
 export class CreateVaultReq {
@@ -42,5 +36,8 @@ export class CreateVaultReq {
   bannerUrl?: string;
 
   @ApiProperty()
-  socialLinks?: SocialLinks
+  assetsWhitelist?: AssetWhiteList[]
+
+  @ApiProperty()
+  socialLinks?: SocialLink[]
 }

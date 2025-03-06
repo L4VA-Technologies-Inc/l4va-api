@@ -6,11 +6,19 @@ import {
   BeforeInsert,
   BeforeUpdate,
   JoinColumn,
-  OneToOne, OneToMany
+  OneToOne, OneToMany, Check
 } from 'typeorm';
 import { User } from './user.entity';
 import {FileEntity} from "./file.entity";
 import {AssetsWhitelistEntity} from "./assets.whitelist.entity";
+import {LinkEntity} from "./link.entity";
+import {
+  ContributionWindowType,
+  InvestmentWindowType, TerminationType,
+  ValuationType,
+  VaultPrivacy,
+  VaultType
+} from "../types/vault.types";
 
 @Entity('vaults')
 export class Vault {
@@ -18,23 +26,113 @@ export class Vault {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
+  @Column()
+  name: string;
+
+  @Column({
+    type: "enum",
+    enum: VaultType,
+    nullable: true
+  })
+  type: VaultType;
+
+  @Column({
+    type: "enum",
+    enum: VaultPrivacy,
+    nullable: true
+  })
+  privacy: VaultPrivacy;
+
+  @Column({ nullable: true })
+  description?: string;
+
+  @Column({
+    type: "enum",
+    enum: ValuationType,
+    nullable: true
+  })
+  valuation_type?: ValuationType;
+
+  @Column({
+    type: "enum",
+    enum: ContributionWindowType,
+    nullable: true
+  })
+  contribution_open_window_type?: ContributionWindowType;
+
+  @Column({nullable: true})
+  contribution_open_window_time?:string;
+
+  @Column({ type: 'interval', nullable: true})
+  asset_window: string;
+
+  @Column({ type: 'int', nullable: true})
+  asset_count_cap_min?:number;
+
+  @Column({ type: 'int', nullable: true})
+  asset_count_cap_max?:number;
+
+  @Column({ type: 'interval', nullable: true})
+  investment_window_duration: string;
+
+  @Column({
+    type: "enum",
+    enum: InvestmentWindowType,
+    nullable: true
+  })
+  investment_open_window_type: InvestmentWindowType;
+
+  @Column({ type: 'interval', nullable: true})
+  investment_open_window_time: string;
+
+  @Column({ type: "numeric", precision: 5, scale: 2 })
+  off_assets_offered: string;
+
+  @Column({ type: 'interval', nullable: true})
+  ft_investment_window: string;
+
+  @Column({ type: "numeric", precision: 5, scale: 2 })
+  ft_investment_reverse: string;
+
+  @Column({ type: "numeric", precision: 5, scale: 2 })
+  liquidity_pool_contribution: string;
+
+  @Column({ type: "numeric", precision: 5, scale: 2 })
+  ft_token_supply: string;
+
+  @Column({ type: "smallint", default: 1 })
+  @Check(`"ft_token_decimals" BETWEEN 1 AND 9`)
+  ft_token_decimals: string;
+
+  @Column({
+    type: "enum",
+    enum: TerminationType,
+    nullable: true
+  })
+  termination_type: TerminationType;
+
+  @Column({ type: 'interval', nullable: true})
+  time_elapsed_is_equal_to_time: string;
+
+  @Column({ type: "numeric", precision: 5, scale: 2 })
+  asset_appreciation: string;
+
+  @Column({ type: "numeric", precision: 5, scale: 2 })
+  creation_threshold: string;
+  @Column({ type: "numeric", precision: 5, scale: 2 })
+  start_threshold: string;
+  @Column({ type: "numeric", precision: 5, scale: 2 })
+  vote_threshold: string;
+  @Column({ type: "numeric", precision: 5, scale: 2 })
+  execution_threshold: string;
+  @Column({ type: "numeric", precision: 5, scale: 2 })
+  cosigning_threshold: string;
+
   @ManyToOne(() => User, (owner: User) => owner.id)
   public owner: User;
 
   @OneToMany(() => AssetsWhitelistEntity, (asset: AssetsWhitelistEntity) => asset.id)
   public assets_whitelist: AssetsWhitelistEntity[];
-
-  @Column()
-  name: string;
-
-  @Column()
-  type: string;
-
-  @Column()
-  privacy: string;
-
-  @Column({ nullable: true })
-  description?: string;
 
   @OneToOne(() => FileEntity)
   @JoinColumn()
@@ -44,11 +142,12 @@ export class Vault {
   @JoinColumn()
   banner_image?: FileEntity;
 
-  @Column('jsonb', { nullable: true })
-  socialLinks: {
-    facebook?: string;
-    twitter?: string;
-  };
+  @OneToOne(() => FileEntity)
+  @JoinColumn()
+  ft_token_img?: FileEntity;
+
+  @OneToMany(() => LinkEntity, (link: LinkEntity) => link.id)
+  socialLinks: LinkEntity[]
 
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   updated_at: string;
