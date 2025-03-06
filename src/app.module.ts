@@ -4,8 +4,8 @@ import { AppService } from './app.service';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule } from '@nestjs/config';
 
-import { AuthModule } from './auth/auth.module';
-import { VaultsModule } from './vaults/vaults.module';
+import { AuthModule } from './modules/auth/auth.module';
+import { VaultsModule } from './modules/vaults/vaults.module';
 
 @Module({
   imports: [

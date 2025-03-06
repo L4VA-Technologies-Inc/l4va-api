@@ -3,7 +3,7 @@ import { VaultsService } from './vaults.service';
 import { AuthGuard } from '../auth/auth.guard';
 import {CreateVaultReq} from "./dto/createVault.req";
 import {ApiOperation, ApiResponse, ApiTags} from "@nestjs/swagger";
-import {ApiDoc} from "../decorators/api-doc.decorator";
+import {ApiDoc} from "../../decorators/api-doc.decorator";
 
 @ApiTags('vaults')
 @Controller('vaults')

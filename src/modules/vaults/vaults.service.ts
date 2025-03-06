@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Vault } from '../database/vault.entity';
+import { Vault } from '../../database/vault.entity';
 import { CreateVaultReq } from './dto/createVault.req';
 
 @Injectable()

@@ -5,7 +5,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 
 import { VaultsService } from './vaults.service';
 import { VaultsController } from './vaults.controller';
-import { Vault } from '../database/vault.entity';
+import { Vault } from '../../database/vault.entity';
 
 @Module({
   imports: [

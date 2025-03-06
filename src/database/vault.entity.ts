@@ -1,5 +1,16 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  BeforeInsert,
+  BeforeUpdate,
+  JoinColumn,
+  OneToOne, OneToMany
+} from 'typeorm';
 import { User } from './user.entity';
+import {FileEntity} from "./file.entity";
+import {AssetsWhitelistEntity} from "./assets.whitelist.entity";
 
 @Entity('vaults')
 export class Vault {
@@ -10,8 +21,8 @@ export class Vault {
   @ManyToOne(() => User, (owner: User) => owner.id)
   public owner: User;
 
-  @Column()
-  ownerId: string;
+  @OneToMany(() => AssetsWhitelistEntity, (asset: AssetsWhitelistEntity) => asset.id)
+  public assets_whitelist: AssetsWhitelistEntity[];
 
   @Column()
   name: string;
@@ -25,11 +36,13 @@ export class Vault {
   @Column({ nullable: true })
   description?: string;
 
-  @Column({ nullable: true })
-  imageUrl?: string;
+  @OneToOne(() => FileEntity)
+  @JoinColumn()
+  vault_image?: FileEntity;
 
-  @Column({ nullable: true })
-  bannerUrl?: string;
+  @OneToOne(() => FileEntity)
+  @JoinColumn()
+  banner_image?: FileEntity;
 
   @Column('jsonb', { nullable: true })
   socialLinks: {
@@ -37,9 +50,19 @@ export class Vault {
     twitter?: string;
   };
 
-  @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
-  createdAt: Date;
+  @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
+  updated_at: string;
 
-  @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
-  updatedAt: Date;
+  @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
+  created_at: string;
+
+  @BeforeInsert()
+  setDate() {
+    this.created_at = new Date().toISOString();
+  }
+
+  @BeforeUpdate()
+  updateDate() {
+    this.updated_at = new Date().toISOString();
+  }
 }

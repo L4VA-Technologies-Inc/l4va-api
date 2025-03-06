@@ -1,34 +1,29 @@
 import {
-  Entity,
-  PrimaryGeneratedColumn,
+  BeforeInsert,
+  BeforeUpdate,
   Column,
-  CreateDateColumn,
-  UpdateDateColumn,
-  OneToMany,
-  BeforeInsert, BeforeUpdate
+  Entity, ManyToOne,
+  PrimaryGeneratedColumn,
 } from 'typeorm';
 import {Vault} from "./vault.entity";
 
-@Entity('users')
-export class User {
+@Entity({ name: 'assets_whitelist' })
+export class AssetsWhitelistEntity {
 
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @OneToMany(() => Vault, (vault: Vault) => vault.owner)
-  public vaults: Vault[];
+  @Column({ type: 'varchar', nullable: false })
+  asset_id: string;
 
-  @Column()
-  name: string;
-
-  @Column({ unique: true })
-  address: string;
-
-  @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
-  created_at: string;
+  @ManyToOne(() => Vault, (vault: Vault) => vault.id)
+  public vault: Vault;
 
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   updated_at: string;
+
+  @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
+  created_at: string;
 
   @BeforeInsert()
   setDate() {
@@ -39,5 +34,4 @@ export class User {
   updateDate() {
     this.updated_at = new Date().toISOString();
   }
-
 }

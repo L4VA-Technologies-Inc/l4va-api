@@ -13,7 +13,7 @@ import { AuthGuard } from './auth.guard';
 import { AuthService } from './auth.service';
 import {ApiOperation, ApiResponse, ApiTags} from "@nestjs/swagger";
 import {LoginReq} from "./dto/login.req";
-import {ApiDoc} from "../decorators/api-doc.decorator";
+import {ApiDoc} from "../../decorators/api-doc.decorator";
 
 @ApiTags('auth')
 @Controller('auth')
