@@ -5,6 +5,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { FileEntity } from '../../database/file.entity';
 import { ManagedUpload } from 'aws-sdk/clients/s3';
+import {getMimeTypeFromArrayBuffer} from "../../helpers";
+import {HttpService} from "@nestjs/axios";
 
 @Injectable()
 export class AwsService {
@@ -14,13 +16,15 @@ export class AwsService {
   constructor(
     @InjectRepository(FileEntity)
     private readonly fileRepository: Repository<FileEntity>,
+    private readonly httpService: HttpService
   ) {}
   getS3() {
     if (this.s3) {
       return this.s3;
     }
     const s3 = new S3({
-      region: process.env.AWS_REGION,
+      region: 'auto',
+      endpoint: 'https://5b08c2c0f8341cc318b010351b36f379.r2.cloudflarestorage.com/static', // URL для R2
       signatureVersion: 'v4',
       credentials: {
         accessKeyId: process.env.AWS_ACCESS_KEY_ID,
@@ -35,10 +39,11 @@ export class AwsService {
   async uploadS3(file, name, type): Promise<ManagedUpload.SendData> {
     const s3 = this.getS3();
     const params = {
-      Bucket: this.bucketName,
+      Bucket: 'static',
       Key: name,
       Body: file,
       ContentType: type,
+      ACL: 'public-read',
     };
     return new Promise((resolve, reject) => {
       s3.upload(params, (err, data) => {
@@ -63,8 +68,10 @@ export class AwsService {
   }
 
 
-  async downloadLink(imageId: string, type: string) {
-    return this.getPreSignedURL(this.bucketName, imageId, type);
+  async downloadLink(imageId: string, type?: string) {
+
+    const preSignedUrl =  await this.getPreSignedURL(this.bucketName, imageId, 'image/jpeg');
+    return this.httpService.get(preSignedUrl, { responseType: 'stream' }).toPromise();
   }
 
   async publicDownloadLink(imageId: string){
@@ -86,8 +93,12 @@ export class AwsService {
     return blob;
   }
 
-  async uploadImage(dataBuffer: ArrayBuffer, message: any, fileType: string) {
+  async uploadImage(
+    dataBuffer: ArrayBuffer
+  ) {
     try {
+      const fileType = await getMimeTypeFromArrayBuffer(dataBuffer);
+
       const uploadResult = await this.uploadS3(
         dataBuffer,
         `${uuid()}`,
@@ -97,7 +108,7 @@ export class AwsService {
       if (uploadResult) {
         const newFile = this.fileRepository.create({
           key: uploadResult.Key,
-          url: `api/v1/aws/image/${uploadResult.Key}`,
+          url: uploadResult.Location,
           file_type: fileType,
         });
         await this.fileRepository.save(newFile);

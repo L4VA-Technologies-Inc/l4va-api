@@ -6,6 +6,8 @@ import { ConfigModule } from '@nestjs/config';
 
 import { AuthModule } from './modules/auth/auth.module';
 import { VaultsModule } from './modules/vaults/vaults.module';
+import {AwsModule} from "./modules/aws_bucket/aws.module";
+import {UsersModule} from "./modules/users/users.module";
 
 @Module({
   imports: [
@@ -25,6 +27,8 @@ import { VaultsModule } from './modules/vaults/vaults.module';
     }),
     AuthModule,
     VaultsModule,
+    UsersModule,
+    AwsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

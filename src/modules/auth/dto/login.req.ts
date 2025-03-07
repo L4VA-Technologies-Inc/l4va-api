@@ -10,4 +10,5 @@ export class LoginReq {
   @IsNotEmpty()
   @ApiProperty()
   stakeAddress: string;
+
 }
