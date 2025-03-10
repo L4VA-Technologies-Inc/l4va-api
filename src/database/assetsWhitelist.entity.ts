@@ -6,6 +6,7 @@ import {
   PrimaryGeneratedColumn,
 } from 'typeorm';
 import {Vault} from "./vault.entity";
+import {Expose} from "class-transformer";
 
 @Entity({ name: 'assets_whitelist' })
 export class AssetsWhitelistEntity {
@@ -19,9 +20,11 @@ export class AssetsWhitelistEntity {
   @ManyToOne(() => Vault, (vault: Vault) => vault.id)
   public vault: Vault;
 
+  @Expose({ name: 'updatedAt'})
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   updated_at: string;
 
+  @Expose({ name: 'createdAt'})
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   created_at: string;
 

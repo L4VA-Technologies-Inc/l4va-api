@@ -1,4 +1,5 @@
 import {
+  ClassSerializerInterceptor,
   Controller,
   FileTypeValidator,
   Get, MaxFileSizeValidator, Param, ParseFilePipe,
@@ -16,6 +17,7 @@ const mbMultiplication =  1024 * 1024;
 
 @ApiTags('files')
 @Controller('')
+@UseInterceptors(ClassSerializerInterceptor)
 export class AwsController {
 
   constructor(private readonly awsService: AwsService){}

@@ -8,6 +8,7 @@ import {
   BeforeInsert, BeforeUpdate
 } from 'typeorm';
 import {Vault} from "./vault.entity";
+import {Expose} from "class-transformer";
 
 @Entity('users')
 export class User {
@@ -24,9 +25,11 @@ export class User {
   @Column({ unique: true })
   address: string;
 
+  @Expose({ name: 'createdAt'})
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   created_at: string;
 
+  @Expose({ name: 'updatedAt'})
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   updated_at: string;
 

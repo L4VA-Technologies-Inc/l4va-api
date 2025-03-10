@@ -5,6 +5,7 @@ import {
   Entity,
   PrimaryGeneratedColumn,
 } from 'typeorm';
+import {Expose} from "class-transformer";
 
 @Entity({ name: 'files' })
 export class FileEntity {
@@ -18,15 +19,18 @@ export class FileEntity {
   @Column({ type: 'varchar', nullable: false })
   url: string;
 
-  @Column({ type: 'varchar' })
+  @Expose({ name: 'fileType'})
+  @Column({name: 'file_type', type: 'varchar' })
   file_type: string;
 
   @Column('jsonb', { nullable: true })
   metadata: {}
 
+  @Expose({ name: 'updatedAt'})
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   updated_at: string;
 
+  @Expose({ name: 'createdAt'})
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   created_at: string;
 
