@@ -7,6 +7,7 @@ import { FileEntity } from '../../database/file.entity';
 import { ManagedUpload } from 'aws-sdk/clients/s3';
 import {getMimeTypeFromArrayBuffer} from "../../helpers";
 import {HttpService} from "@nestjs/axios";
+import * as process from "process";
 
 @Injectable()
 export class AwsService {
@@ -94,7 +95,8 @@ export class AwsService {
   }
 
   async uploadImage(
-    dataBuffer: ArrayBuffer
+    dataBuffer: ArrayBuffer,
+    host: string
   ) {
     try {
       const fileType = await getMimeTypeFromArrayBuffer(dataBuffer);
@@ -104,11 +106,11 @@ export class AwsService {
         `${uuid()}`,
         fileType,
       );
-
+      const protocol = process.env.NODE_ENV === 'dev' ? 'http://' :'https://'
       if (uploadResult) {
         const newFile = this.fileRepository.create({
           key: uploadResult.Key,
-          url: uploadResult.Location,
+          url: `${protocol}${host}/api/v1/image/${uploadResult.Key}`,
           file_type: fileType,
         });
         await this.fileRepository.save(newFile);
