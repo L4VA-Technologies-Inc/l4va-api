@@ -4,6 +4,8 @@ import { Repository } from 'typeorm';
 import { Vault } from '../../database/vault.entity';
 import { CreateVaultReq } from './dto/createVault.req';
 import {User} from "../../database/user.entity";
+import {SaveDraftReq} from "./dto/saveDraft.req";
+import {VaultStatus} from "../../types/vault.types";
 
 @Injectable()
 export class VaultsService {
@@ -23,8 +25,29 @@ export class VaultsService {
       });
       const newVault = {
         owner: owner,
+        status: VaultStatus.published,
         ...data,
-      } as Vault;
+      };
+      const vault = this.vaultsRepository.create(newVault);
+      return await this.vaultsRepository.save(vault);
+    } catch (error) {
+      console.error(error);
+      throw new BadRequestException('Failed to create vault');
+    }
+  }
+
+  async saveDraftVault(userId: string, data: SaveDraftReq): Promise<Vault> {
+    try {
+      const owner = await this.usersRepository.findOne({
+        where: {
+          id: userId
+        }
+      });
+      const newVault = {
+        owner: owner,
+        status: VaultStatus.draft,
+        ...data,
+      };
       const vault = this.vaultsRepository.create(newVault);
       return await this.vaultsRepository.save(vault);
     } catch (error) {

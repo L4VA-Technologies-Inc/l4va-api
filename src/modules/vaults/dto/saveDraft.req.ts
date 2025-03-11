@@ -6,9 +6,9 @@ import {
   IsNotEmpty,
   IsObject,
   IsOptional,
-  IsString
+  IsString,
 } from 'class-validator';
-import {ContributionWindowType, VaultPrivacy, VaultType} from "../../../types/vault.types";
+import {ContributionWindowType, VaultPrivacy, VaultStatus, VaultType} from "../../../types/vault.types";
 
 type SocialLink = {
   url:string,
@@ -19,7 +19,7 @@ type AssetWhiteList = {
   id: string,
 }
 
-export class CreateVaultReq {
+export class SaveDraftReq {
 
   @ApiProperty()
   @IsNotEmpty()

@@ -47,8 +47,21 @@ export class AwsController {
     status: 200,
   })
   @Get('/image/:id')
-  async getFile(@Param('id') id,  @Res() res: Response ){
-    const response = await this.awsService.downloadLink(id)
+  async getImageFile(@Param('id') id,  @Res() res: Response ){
+    const response = await this.awsService.getImage(id)
+    res.setHeader('Content-Type', response.headers['content-type']);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    response.data.pipe(res);
+  }
+
+  @ApiDoc({
+    summary: 'Get csv from bucket',
+    description: 'Forward csv directly to frontend',
+    status: 200,
+  })
+  @Get('/csv/:id')
+  async getCsvFile(@Param('id') id,  @Res() res: Response ){
+    const response = await this.awsService.getCsv(id)
     res.setHeader('Content-Type', response.headers['content-type']);
     res.setHeader('Cache-Control', 'public, max-age=3600');
     response.data.pipe(res);
@@ -61,15 +74,18 @@ export class AwsController {
   })
   @UseInterceptors(FileInterceptor('csv'))
   @Post('/handle-csv')
-  handleCsvFiles(@UploadedFile(
+  async handleCsvFiles(@UploadedFile(
     new ParseFilePipe({
       validators: [
         new MaxFileSizeValidator({ maxSize: 10000 }),
         new FileTypeValidator({ fileType: 'text/csv' }),
       ],
     }),
-  ) file: Express.Multer.File){
+  ) file: Express.Multer.File, @Req() req: Request){
     // todo need to validate and parse csv and then return list of asset whitelist id's
     console.log('csv file received', file)
+    const {host} = req?.headers
+
+    return await this.awsService.uploadCSV(file as ArrayBuffer, host)
   }
 }

@@ -33,3 +33,12 @@ export enum TerminationType {
   dao = 'dao',
   programmed ='programmed',
 }
+
+
+export enum VaultStatus {
+  draft = 'draft',
+  published = 'published',
+  contribution = 'contribution',
+  investment = 'investment',
+  locked = 'locked'
+}

@@ -8,6 +8,7 @@ import { ManagedUpload } from 'aws-sdk/clients/s3';
 import {getMimeTypeFromArrayBuffer} from "../../helpers";
 import {HttpService} from "@nestjs/axios";
 import * as process from "process";
+import {Express} from "express";
 
 @Injectable()
 export class AwsService {
@@ -25,7 +26,7 @@ export class AwsService {
     }
     const s3 = new S3({
       region: 'auto',
-      endpoint: 'https://5b08c2c0f8341cc318b010351b36f379.r2.cloudflarestorage.com/static', // URL для R2
+      endpoint: process.env.AWS_BUCKET_URL, // URL for R2
       signatureVersion: 'v4',
       credentials: {
         accessKeyId: process.env.AWS_ACCESS_KEY_ID,
@@ -69,29 +70,38 @@ export class AwsService {
   }
 
 
-  async downloadLink(imageId: string, type?: string) {
+  async getImage(bucketKey: string) {
 
-    const preSignedUrl =  await this.getPreSignedURL(this.bucketName, imageId, 'image/jpeg');
+    const preSignedUrl =  await this.getPreSignedURL(this.bucketName, bucketKey, 'image/jpeg');
     return this.httpService.get(preSignedUrl, { responseType: 'stream' }).toPromise();
   }
 
-  async publicDownloadLink(imageId: string){
-    const selectedFile = await this.fileRepository.findOneBy({
-      key: imageId
-    })
-
-    return this.downloadLink(imageId, selectedFile.file_type);
+  async getCsv(bucketKey: string){
+    const preSignedUrl =  await this.getPreSignedURL(this.bucketName, bucketKey, 'text/csv');
+    return this.httpService.get(preSignedUrl, { responseType: 'stream' }).toPromise();
   }
 
 
-  async getBlobObject(imageId: string, type: string) {
-    const preSignedURL = await this.getPreSignedURL(this.bucketName, imageId, type);
-
-    const response = await fetch(preSignedURL);
-    if (!response.ok) throw new Error("Error with loading from S3");
-
-    const blob = await response.blob();
-    return blob;
+  async uploadCSV(file: Express.Multer.File, host: string) {
+    try {
+      const uploadResult = await this.uploadS3(
+        file.buffer,
+        `${uuid()}`,
+        file.mimetype,
+      );
+      const protocol = process.env.NODE_ENV === 'dev' ? 'http://' :'https://'
+      if (uploadResult) {
+        const newFile = this.fileRepository.create({
+          key: uploadResult.Key,
+          url: `${protocol}${host}/api/v1/csv/${uploadResult.Key}`,
+          file_type: file.mimetype,
+        });
+        await this.fileRepository.save(newFile);
+        if (newFile) return newFile;
+      }
+    } catch (error) {
+      console.log('error with uploading file ', error);
+    }
   }
 
   async uploadImage(

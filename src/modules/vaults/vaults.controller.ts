@@ -2,8 +2,9 @@ import { Controller, Post, Body, Get, Param, Request, UseGuards } from '@nestjs/
 import { VaultsService } from './vaults.service';
 import { AuthGuard } from '../auth/auth.guard';
 import {CreateVaultReq} from "./dto/createVault.req";
-import {ApiOperation, ApiResponse, ApiTags} from "@nestjs/swagger";
+import { ApiTags} from "@nestjs/swagger";
 import {ApiDoc} from "../../decorators/api-doc.decorator";
+import {SaveDraftReq} from "./dto/saveDraft.req";
 
 @ApiTags('vaults')
 @Controller('vaults')
@@ -26,6 +27,21 @@ export class VaultsController {
     return this.vaultsService.createVault(userId, data);
   }
 
+  @ApiDoc({
+    summary: 'Create vault',
+    description: 'Vault successfully created',
+    status: 200,
+  })
+  @UseGuards(AuthGuard)
+  @Post('save-draft')
+  saveDraft(
+    @Request() req,
+    @Body()
+      data: SaveDraftReq,
+  ) {
+    const userId = req.user.sub;
+    return this.vaultsService.saveDraftVault(userId, data);
+  }
 
   @ApiDoc({
     summary: 'Select my vault',

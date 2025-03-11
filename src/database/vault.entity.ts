@@ -16,7 +16,7 @@ import {
   ContributionWindowType,
   InvestmentWindowType, TerminationType,
   ValuationType,
-  VaultPrivacy,
+  VaultPrivacy, VaultStatus,
   VaultType
 } from "../types/vault.types";
 import { Expose } from 'class-transformer';
@@ -115,7 +115,7 @@ export class Vault {
     name: 'off_assets_offered',
     type: "numeric", precision: 5,
     scale: 2, nullable:true})
-  off_assets_offered: string;
+  off_assets_offered?: string;
 
   @Expose({ name: 'ftInvestmentWindow'})
   @Column({
@@ -219,6 +219,15 @@ export class Vault {
   })
   cosigning_threshold?: string;
 
+  @Expose({ name: 'vaultStatus'})
+  @Column({
+    name: 'vault_status',
+    type: "enum",
+    enum: VaultStatus,
+    nullable: true
+  })
+  vault_status: VaultStatus
+
   @Expose({ name: 'owner' })
   @ManyToOne(() => User, (owner: User) => owner.id)
   public owner: User;
@@ -236,6 +245,11 @@ export class Vault {
   @OneToOne(() => FileEntity)
   @JoinColumn()
   banner_image?: FileEntity;
+
+  @Expose({ name: 'whitelistCsv'})
+  @OneToOne(() => FileEntity)
+  @JoinColumn()
+  whitelist_csv?: FileEntity
 
   @Expose({ name: 'ftTokenImg' })
   @OneToOne(() => FileEntity)
