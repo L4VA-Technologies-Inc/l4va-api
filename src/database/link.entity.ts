@@ -20,8 +20,8 @@ export class LinkEntity {
   @Column({ type: 'varchar', nullable: false })
   name: string;
 
-  @ManyToOne(() => Vault, (vault: Vault) => vault.id)
-  public vault: Vault;
+  @ManyToOne(() => Vault, (vault: Vault) => vault.social_links, { onDelete: 'CASCADE' })
+  vault: Vault;
 
   @Expose({ name: 'updatedAt'})
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })

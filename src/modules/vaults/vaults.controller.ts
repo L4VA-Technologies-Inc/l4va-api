@@ -28,8 +28,8 @@ export class VaultsController {
   }
 
   @ApiDoc({
-    summary: 'Create vault',
-    description: 'Vault successfully created',
+    summary: 'Save draft vault',
+    description: 'Vault successfully saved',
     status: 200,
   })
   @UseGuards(AuthGuard)

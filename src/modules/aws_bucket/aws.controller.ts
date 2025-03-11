@@ -38,7 +38,7 @@ export class AwsController {
     }),
   ) file: Express.Multer.File, @Req() req: Request) {
     const {host} = req?.headers
-   return await this.awsService.uploadImage(file.buffer as ArrayBuffer, host)
+   return await this.awsService.uploadImage(file, host)
   }
 
   @ApiDoc({
@@ -86,6 +86,6 @@ export class AwsController {
     console.log('csv file received', file)
     const {host} = req?.headers
 
-    return await this.awsService.uploadCSV(file as ArrayBuffer, host)
+    return await this.awsService.uploadCSV(file, host)
   }
 }

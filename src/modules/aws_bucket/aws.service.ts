@@ -94,6 +94,7 @@ export class AwsService {
         const newFile = this.fileRepository.create({
           key: uploadResult.Key,
           url: `${protocol}${host}/api/v1/csv/${uploadResult.Key}`,
+          file_name: file.originalname,
           file_type: file.mimetype,
         });
         await this.fileRepository.save(newFile);
@@ -105,23 +106,22 @@ export class AwsService {
   }
 
   async uploadImage(
-    dataBuffer: ArrayBuffer,
+    file: Express.Multer.File ,
     host: string
   ) {
     try {
-      const fileType = await getMimeTypeFromArrayBuffer(dataBuffer);
-
       const uploadResult = await this.uploadS3(
-        dataBuffer,
+        file.buffer,
         `${uuid()}`,
-        fileType,
+        file.mimetype,
       );
       const protocol = process.env.NODE_ENV === 'dev' ? 'http://' :'https://'
       if (uploadResult) {
         const newFile = this.fileRepository.create({
           key: uploadResult.Key,
           url: `${protocol}${host}/api/v1/image/${uploadResult.Key}`,
-          file_type: fileType,
+          file_name: file.originalname,
+          file_type: file.mimetype,
         });
         await this.fileRepository.save(newFile);
         if (newFile) return newFile;

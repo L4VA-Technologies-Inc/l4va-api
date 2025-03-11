@@ -6,6 +6,9 @@ import { CreateVaultReq } from './dto/createVault.req';
 import {User} from "../../database/user.entity";
 import {SaveDraftReq} from "./dto/saveDraft.req";
 import {VaultStatus} from "../../types/vault.types";
+import {LinkEntity} from "../../database/link.entity";
+import {FileEntity} from "../../database/file.entity";
+import {AssetsWhitelistEntity} from "../../database/assetsWhitelist.entity";
 
 @Injectable()
 export class VaultsService {
@@ -13,7 +16,13 @@ export class VaultsService {
     @InjectRepository(Vault)
     private readonly vaultsRepository: Repository<Vault>,
     @InjectRepository(User)
-    private readonly usersRepository: Repository<User>
+    private readonly usersRepository: Repository<User>,
+    @InjectRepository(LinkEntity)
+    private readonly linksRepository: Repository<LinkEntity>,
+    @InjectRepository(FileEntity)
+    private readonly filesRepository: Repository<FileEntity>,
+    @InjectRepository(AssetsWhitelistEntity)
+    private readonly assetsWhitelistEntity: Repository<AssetsWhitelistEntity>
   ) {}
 
   async createVault(userId: string, data: CreateVaultReq): Promise<Vault> {
@@ -49,7 +58,28 @@ export class VaultsService {
         ...data,
       };
       const vault = this.vaultsRepository.create(newVault);
-      return await this.vaultsRepository.save(vault);
+      const vaultCreated = await this.vaultsRepository.save(vault);
+
+      if(data.socialLinks.length > 0){
+        data.socialLinks.forEach(linkItem => {
+          const link = this.linksRepository.create({
+            vault: vaultCreated,
+            name: linkItem.name,
+            url: linkItem.url
+          })
+          return this.linksRepository.save(link)
+        })
+      }
+      if(data.assetsWhitelist.length > 0){
+        data.assetsWhitelist.forEach(whiteListItem => {
+          const assetItem = this.assetsWhitelistEntity.create({
+            vault: vaultCreated,
+            asset_id: whiteListItem.id
+          })
+          return this.assetsWhitelistEntity.save(assetItem)
+        })
+      }
+      return vaultCreated
     } catch (error) {
       console.error(error);
       throw new BadRequestException('Failed to create vault');
@@ -62,7 +92,8 @@ export class VaultsService {
         owner: {
           id: userId
         }
-      }
+      },
+      relations: ['social_links', 'assets_whitelist']
     });
   }
 

@@ -1,9 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import {
-  ArrayNotEmpty,
   IsArray,
   IsEnum,
-  IsNotEmpty,
   IsObject,
   IsOptional,
   IsString,
@@ -21,66 +19,162 @@ type AssetWhiteList = {
 
 export class SaveDraftReq {
 
-  @ApiProperty()
-  @IsNotEmpty()
-  @IsString()
-  name: string; // required
-
-  @IsEnum(VaultType)
-  @ApiProperty()
-  type: VaultType; // required
-
-  @IsEnum(VaultPrivacy)
-  @ApiProperty()
-  privacy: VaultPrivacy; // required
-
-  @IsNotEmpty()
-  fractionTokenTicker: string;  // required
-
-  @IsNotEmpty()
-  valuationType: string; // required
-
-  @IsEnum(VaultType)
-  @ApiProperty()
-  contributionWindowType: ContributionWindowType;
-
-  @IsNotEmpty()
-  @ApiProperty()
-  contributionWindowTime: string;
-
-  @ApiProperty()
+  @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
-  @IsNotEmpty()
+  name?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsEnum(VaultType)
+  type?: VaultType;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsEnum(VaultPrivacy)
+  privacy?: VaultPrivacy;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  fractionTokenTicker?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  valuationType?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsEnum(ContributionWindowType)
+  contributionOpenWindowType?: ContributionWindowType;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  contributionOpenWindowTime?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
   description?: string;
 
-  @ApiProperty()
-  @IsNotEmpty()
-  imageUrl: string;
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  imageUrl?: string;
 
-  @ApiProperty()
-  @IsNotEmpty()
-  bannerUrl: string;
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  bannerUrl?: string;
 
-  @ApiProperty()
-  @IsNotEmpty()
-  whitelistCsv: string;
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  whitelistCsv?: string;
 
-  @ApiProperty()
+  @ApiProperty({ required: false })
+  @IsOptional()
+  assetWindow?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  assetCountCapMin?: number;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  assetCountCapMax: number;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  investmentWindowDuration: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  investmentOpenWindowType: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  investmentOpenWindowTime: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  offAssetsOffered: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  ftInvestmentWindow: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  ftInvestmentReverse: number;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  liquidityPoolContribution: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  ftTokenSupply: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  ftTokenDecimals: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  terminationType: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  timeElapsedIsEqualToTime: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  assetAppreciation: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  creationThreshold: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  startThreshold: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  voteThreshold: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  executionThreshold: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  cosigningThreshold: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  vaultImage: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  bannerImage: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  ftTokenImg: string;
+
+  @ApiProperty( { required: false })
   @IsOptional()
   @IsArray()
-  @ArrayNotEmpty()
   @IsObject({ each: true })
-  @IsString({ each: true })
-  @IsNotEmpty({ each: true })
-  assetsWhitelist?: AssetWhiteList[]
+  assetsWhitelist?: AssetWhiteList[];
 
-  @ApiProperty()
+  @ApiProperty({ required: false  })
   @IsOptional()
   @IsArray()
-  @ArrayNotEmpty()
   @IsObject({ each: true })
-  @IsString({ each: true })
-  @IsNotEmpty({ each: true })
-  socialLinks?: SocialLink[]
+  socialLinks?: SocialLink[];
 }

@@ -23,6 +23,10 @@ export class FileEntity {
   @Column({name: 'file_type', type: 'varchar' })
   file_type: string;
 
+  @Expose({ name: 'fileName'})
+  @Column({name: 'file_name', type: 'varchar' })
+  file_name: string;
+
   @Column('jsonb', { nullable: true })
   metadata: {}
 

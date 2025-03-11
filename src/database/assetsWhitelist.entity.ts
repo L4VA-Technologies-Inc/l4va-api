@@ -17,7 +17,7 @@ export class AssetsWhitelistEntity {
   @Column({ type: 'varchar', nullable: false })
   asset_id: string;
 
-  @ManyToOne(() => Vault, (vault: Vault) => vault.id)
+  @ManyToOne(() => Vault, (vault: Vault) => vault.assets_whitelist, { onDelete: 'CASCADE' })
   public vault: Vault;
 
   @Expose({ name: 'updatedAt'})

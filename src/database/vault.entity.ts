@@ -233,7 +233,7 @@ export class Vault {
   public owner: User;
 
   @Expose({ name: 'assetsWhitelist' })
-  @OneToMany(() => AssetsWhitelistEntity, (asset: AssetsWhitelistEntity) => asset.id)
+  @OneToMany(() => AssetsWhitelistEntity, (asset: AssetsWhitelistEntity) => asset.vault)
   assets_whitelist?: AssetsWhitelistEntity[];
 
   @Expose({ name: 'vaultImage' })
@@ -257,7 +257,7 @@ export class Vault {
   ft_token_img?: FileEntity;
 
   @Expose({ name: 'socialLinks' })
-  @OneToMany(() => LinkEntity, (link: LinkEntity) => link.id)
+  @OneToMany(() => LinkEntity, (link: LinkEntity) => link.vault)
   social_links?: LinkEntity[];
 
   @Expose({ name: 'updatedAt' })
