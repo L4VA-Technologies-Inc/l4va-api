@@ -11,9 +11,11 @@ import {FileEntity} from '../../database/file.entity';
 import {AssetsWhitelistEntity} from '../../database/assetsWhitelist.entity';
 import {LinkEntity} from '../../database/link.entity';
 import {InvestorsWhitelistEntity} from '../../database/investorsWhitelist.entity';
+import {AwsModule} from '../aws_bucket/aws.module';
 
 @Module({
   imports: [
+    AwsModule,
     TypeOrmModule.forFeature([Vault, User, FileEntity, AssetsWhitelistEntity, LinkEntity, InvestorsWhitelistEntity]),
     JwtModule.registerAsync({
       imports: [ConfigModule],

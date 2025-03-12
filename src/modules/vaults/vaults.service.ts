@@ -10,7 +10,9 @@ import { LinkEntity } from '../../database/link.entity';
 import { FileEntity } from '../../database/file.entity';
 import { AssetsWhitelistEntity } from '../../database/assetsWhitelist.entity';
 import { InvestorsWhitelistEntity } from '../../database/investorsWhitelist.entity';
-import {mapCamelToSnake} from "../../helpers/mapCamelToSnake";
+import { mapCamelToSnake } from '../../helpers/mapCamelToSnake';
+import * as csv from 'csv-parse';
+import { AwsService } from '../aws_bucket/aws.service';
 
 @Injectable()
 export class VaultsService {
@@ -26,7 +28,8 @@ export class VaultsService {
     @InjectRepository(AssetsWhitelistEntity)
     private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
     @InjectRepository(InvestorsWhitelistEntity)
-    private readonly investorsWhiteListRepository: Repository<InvestorsWhitelistEntity>
+    private readonly investorsWhiteListRepository: Repository<InvestorsWhitelistEntity>,
+    private readonly awsService: AwsService
   ) {}
 
   async createVault(userId: string, data: CreateVaultReq): Promise<Vault> {
@@ -49,6 +52,38 @@ export class VaultsService {
     }
   }
 
+  private async parseCSVFromS3(fileKey: string): Promise<string[]> {
+    try {
+      const csvStream = await this.awsService.getCsv(fileKey);
+      const csvData = await csvStream.data.toArray();
+      const csvString = Buffer.concat(csvData).toString();
+
+      return new Promise((resolve, reject) => {
+        const results: string[] = [];
+        csv.parse(csvString, {
+          columns: false, // No column headers in the CSV
+          skip_empty_lines: true,
+          trim: true // Remove any whitespace
+        })
+        .on('data', (data) => {
+          // Each row is an array with a single address
+          const address = data[0];
+          if (address && typeof address === 'string' && address.startsWith('0x')) {
+            results.push(address);
+          }
+        })
+        .on('end', () => {
+          console.log('Parsed addresses:', results);
+          resolve(results);
+        })
+        .on('error', (error) => reject(error));
+      });
+    } catch (error) {
+      console.error('Error parsing CSV from S3:', error);
+      throw new BadRequestException('Failed to parse CSV file from S3');
+    }
+  }
+
   async saveDraftVault(userId: string, data: SaveDraftReq): Promise<Vault> {
     try {
       const owner = await this.usersRepository.findOne({
@@ -56,6 +91,32 @@ export class VaultsService {
           id: userId
         }
       });
+
+      const imgKey = data.vaultImage?.split('image/')[1];
+      const vaultImg = imgKey ? await this.filesRepository.findOne({
+        where: { key: imgKey }
+      }) : null;
+
+      const bannerImgKey = data.bannerImage?.split('image/')[1];
+      const bannerImg = bannerImgKey ? await this.filesRepository.findOne({
+        where: { key: bannerImgKey }
+      }) : null;
+
+      const ftTokenImgKey = data.ftTokenImg?.split('image/')[1];
+      const ftTokenImg = ftTokenImgKey ? await this.filesRepository.findOne({
+        where: { key: ftTokenImgKey }
+      }) : null;
+
+      const assetsWhiteListCsvKey = data.assetsWhiteListCsv?.split('csv/')[1];
+      const assetsWhiteListCsvFile = assetsWhiteListCsvKey ? await this.filesRepository.findOne({
+        where: { key: assetsWhiteListCsvKey }
+      }) : null;
+
+      const investorsWhiteListCsvKey = data.investorsWhiteListCsv?.split('csv/')[1];
+      const investorsWhiteListFile = investorsWhiteListCsvKey ? await this.filesRepository.findOne({
+        where: { key: investorsWhiteListCsvKey }
+      }) : null;
+
       const newVault = {
         owner: owner,
         asset_window: new Date(data.assetWindow).toISOString(),
@@ -65,6 +126,11 @@ export class VaultsService {
         ft_investment_window: new Date(data.ftInvestmentWindow).toISOString(),
         time_elapsedOis_equal_to_time: new Date(data.timeElapsedIsEqualToTime).toISOString(),
         status: VaultStatus.draft,
+        vault_image: vaultImg,
+        banner_image: bannerImg,
+        ft_token_img: ftTokenImg,
+        assets_whitelist_csv: assetsWhiteListCsvFile,
+        investors_whitelist_csv: investorsWhiteListFile,
         ...data,
       };
       const vault = this.vaultsRepository.create(newVault);
@@ -80,23 +146,38 @@ export class VaultsService {
           return this.linksRepository.save(link);
         });
       }
-      if (data.assetsWhitelist.length > 0) {
-        data.assetsWhitelist.forEach(whiteListItem => {
-          const assetItem = this.assetsWhitelistRepository.create({
-            vault: vaultCreated,
-            asset_id: whiteListItem.id
-          });
-          return this.assetsWhitelistRepository.save(assetItem);
+      // Handle assets whitelist from both direct input and CSV
+      const assetsFromCsv = assetsWhiteListCsvFile ?
+        await this.parseCSVFromS3(assetsWhiteListCsvFile.key) : [];
+      console.log('Assets from CSV:', assetsFromCsv);
+      const allAssets = new Set([
+        ...data.assetsWhitelist.map(item => item.id),
+        ...assetsFromCsv
+      ]);
+
+      for (const assetId of allAssets) {
+        const assetItem = this.assetsWhitelistRepository.create({
+          vault: vaultCreated,
+          asset_id: assetId
         });
+        await this.assetsWhitelistRepository.save(assetItem);
       }
-      if (data.investorsWhiteList.length > 0) {
-        data.investorsWhiteList.forEach(whiteListItem => {
-          const assetItem = this.investorsWhiteListRepository.create({
-            vault: vaultCreated,
-            wallet_address: whiteListItem.wallet_address
-          });
-          return this.investorsWhiteListRepository.save(assetItem);
+
+      // Handle investors whitelist from both direct input and CSV
+      const investorsFromCsv = investorsWhiteListFile ?
+        await this.parseCSVFromS3(investorsWhiteListFile.key) : [];
+      console.log('Investors from CSV:', investorsFromCsv);
+      const allInvestors = new Set([
+        ...data.investorsWhiteList.map(item => item.wallet_address),
+        ...investorsFromCsv
+      ]);
+
+      for (const walletAddress of allInvestors) {
+        const investorItem = this.investorsWhiteListRepository.create({
+          vault: vaultCreated,
+          wallet_address: walletAddress
         });
+        await this.investorsWhiteListRepository.save(investorItem);
       }
       return vaultCreated;
     } catch (error) {
