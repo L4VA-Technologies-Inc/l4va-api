@@ -34,18 +34,131 @@ export class VaultsService {
 
   async createVault(userId: string, data: CreateVaultReq): Promise<Vault> {
     try {
-      const owner = await this.usersRepository.findOne({
-        where: {
-          id: userId
+      let vault: Vault;
+
+      // If vault ID is provided, try to find an existing draft vault
+      if (data.id) {
+        vault = await this.vaultsRepository.findOne({
+          where: {
+            id: data.id,
+            vault_status: VaultStatus.draft,
+            owner: { id: userId }
+          },
+          relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist']
+        });
+
+        if (vault) {
+          // Only update the vault status to published, preserve all other fields
+          await this.vaultsRepository.update(
+            { id: vault.id },
+            { vault_status: VaultStatus.published }
+          );
+          return await this.vaultsRepository.findOne({
+            where: { id: vault.id },
+            relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist']
+          });
         }
+      }
+
+      // If no draft vault found or no ID provided, create a new published vault
+      const owner = await this.usersRepository.findOne({
+        where: { id: userId }
       });
-      const newVault = {
+
+      // Process image files
+      const imgKey = data.vaultImage?.split('image/')[1];
+      const vaultImg = imgKey ? await this.filesRepository.findOne({
+        where: { key: imgKey }
+      }) : null;
+
+      const bannerImgKey = data.bannerImage?.split('image/')[1];
+      const bannerImg = bannerImgKey ? await this.filesRepository.findOne({
+        where: { key: bannerImgKey }
+      }) : null;
+
+      const ftTokenImgKey = data.ftTokenImg?.split('image/')[1];
+      const ftTokenImg = ftTokenImgKey ? await this.filesRepository.findOne({
+        where: { key: ftTokenImgKey }
+      }) : null;
+
+      // Process CSV files
+      const assetsWhiteListCsvKey = data.assetsWhiteListCsv?.split('csv/')[1];
+      const assetsWhiteListCsvFile = assetsWhiteListCsvKey ? await this.filesRepository.findOne({
+        where: { key: assetsWhiteListCsvKey }
+      }) : null;
+
+      const investorsWhiteListCsvKey = data.investorsWhiteListCsv?.split('csv/')[1];
+      const investorsWhiteListFile = investorsWhiteListCsvKey ? await this.filesRepository.findOne({
+        where: { key: investorsWhiteListCsvKey }
+      }) : null;
+
+      // Prepare vault data
+      const vaultData = {
         owner: owner,
-        status: VaultStatus.published,
+        asset_window: new Date(data.assetWindow).toISOString(),
+        investment_window_duration: new Date(data.investmentWindowDuration).toISOString(),
+        investment_open_window_time: new Date(data.investmentOpenWindowTime).toISOString(),
+        contribution_open_window_time: new Date(data.contributionOpenWindowTime).toISOString(),
+        ft_investment_window: new Date(data.ftInvestmentWindow).toISOString(),
+        time_elapsedOis_equal_to_time: new Date(data.timeElapsedIsEqualToTime).toISOString(),
+        vault_status: VaultStatus.published,
+        vault_image: vaultImg,
+        banner_image: bannerImg,
+        ft_token_img: ftTokenImg,
+        assets_whitelist_csv: assetsWhiteListCsvFile,
+        investors_whitelist_csv: investorsWhiteListFile,
         ...mapCamelToSnake(data),
-      } as Vault;
-      const vault = this.vaultsRepository.create(newVault);
-      return await this.vaultsRepository.save(vault);
+      };
+      vault = this.vaultsRepository.create(vaultData as Vault);
+      vault = await this.vaultsRepository.save(vault);
+
+      // Handle social links
+      if (data.socialLinks?.length > 0) {
+        const links = data.socialLinks.map(linkItem => {
+          return this.linksRepository.create({
+            vault: vault,
+            name: linkItem.name,
+            url: linkItem.url
+          });
+        });
+        await this.linksRepository.save(links);
+      }
+
+      // Handle assets whitelist
+      const assetsFromCsv = assetsWhiteListCsvFile ?
+        await this.parseCSVFromS3(assetsWhiteListCsvFile.key) : [];
+      console.log('Assets from CSV:', assetsFromCsv);
+      const allAssets = new Set([
+        ...data.assetsWhitelist.map(item => item.id),
+        ...assetsFromCsv
+      ]);
+
+      const assetItems = Array.from(allAssets).map(assetId => {
+        return this.assetsWhitelistRepository.create({
+          vault: vault,
+          asset_id: assetId
+        });
+      });
+      await this.assetsWhitelistRepository.save(assetItems);
+
+      // Handle investors whitelist
+      const investorsFromCsv = investorsWhiteListFile ?
+        await this.parseCSVFromS3(investorsWhiteListFile.key) : [];
+      console.log('Investors from CSV:', investorsFromCsv);
+      const allInvestors = new Set([
+        ...data.investorsWhiteList.map(item => item.wallet_address),
+        ...investorsFromCsv
+      ]);
+
+      const investorItems = Array.from(allInvestors).map(walletAddress => {
+        return this.investorsWhiteListRepository.create({
+          vault: vault,
+          wallet_address: walletAddress
+        });
+      });
+      await this.investorsWhiteListRepository.save(investorItems);
+
+      return vault;
     } catch (error) {
       console.error(error);
       throw new BadRequestException('Failed to create vault');
@@ -85,13 +198,43 @@ export class VaultsService {
   }
 
   async saveDraftVault(userId: string, data: SaveDraftReq): Promise<Vault> {
-    try {
-      const owner = await this.usersRepository.findOne({
+    let existingVault: Vault | null = null;
+
+    // Check for existing draft vault if ID is provided
+    if (data.id) {
+      existingVault = await this.vaultsRepository.findOne({
         where: {
-          id: userId
-        }
+          id: data.id,
+          vault_status: VaultStatus.draft,
+          owner: { id: userId }
+        },
+        relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist']
       });
 
+      // If found but not a draft, throw error
+      if (existingVault && existingVault.vault_status !== VaultStatus.draft) {
+        throw new BadRequestException('Cannot modify a published vault');
+      }
+
+      // If found and is draft, remove existing relationships
+      if (existingVault) {
+        if (existingVault.social_links?.length > 0) {
+          await this.linksRepository.remove(existingVault.social_links);
+        }
+        if (existingVault.assets_whitelist?.length > 0) {
+          await this.assetsWhitelistRepository.remove(existingVault.assets_whitelist);
+        }
+        if (existingVault.investors_whitelist?.length > 0) {
+          await this.investorsWhiteListRepository.remove(existingVault.investors_whitelist);
+        }
+      }
+    }
+    try {
+      const owner = await this.usersRepository.findOne({
+        where: { id: userId }
+      });
+
+      // Process image files
       const imgKey = data.vaultImage?.split('image/')[1];
       const vaultImg = imgKey ? await this.filesRepository.findOne({
         where: { key: imgKey }
@@ -107,6 +250,7 @@ export class VaultsService {
         where: { key: ftTokenImgKey }
       }) : null;
 
+      // Process CSV files
       const assetsWhiteListCsvKey = data.assetsWhiteListCsv?.split('csv/')[1];
       const assetsWhiteListCsvFile = assetsWhiteListCsvKey ? await this.filesRepository.findOne({
         where: { key: assetsWhiteListCsvKey }
@@ -117,7 +261,8 @@ export class VaultsService {
         where: { key: investorsWhiteListCsvKey }
       }) : null;
 
-      const newVault = {
+      // Prepare vault data
+      const vaultData = {
         owner: owner,
         asset_window: new Date(data.assetWindow).toISOString(),
         investment_window_duration: new Date(data.investmentWindowDuration).toISOString(),
@@ -125,7 +270,7 @@ export class VaultsService {
         contribution_open_window_time: new Date(data.contributionOpenWindowTime).toISOString(),
         ft_investment_window: new Date(data.ftInvestmentWindow).toISOString(),
         time_elapsedOis_equal_to_time: new Date(data.timeElapsedIsEqualToTime).toISOString(),
-        status: VaultStatus.draft,
+        vault_status: VaultStatus.draft,
         vault_image: vaultImg,
         banner_image: bannerImg,
         ft_token_img: ftTokenImg,
@@ -133,20 +278,31 @@ export class VaultsService {
         investors_whitelist_csv: investorsWhiteListFile,
         ...data,
       };
-      const vault = this.vaultsRepository.create(newVault);
-      const vaultCreated = await this.vaultsRepository.save(vault);
 
-      if (data.socialLinks.length > 0) {
-        data.socialLinks.forEach(linkItem => {
-          const link = this.linksRepository.create({
-            vault: vaultCreated,
+      let vault: Vault;
+      if (existingVault) {
+        // Update existing draft vault
+        Object.assign(existingVault, vaultData);
+        vault = await this.vaultsRepository.save(existingVault);
+      } else {
+        // Create new draft vault
+        vault = this.vaultsRepository.create(vaultData);
+        vault = await this.vaultsRepository.save(vault);
+      }
+
+      // Handle social links
+      if (data.socialLinks?.length > 0) {
+        const links = data.socialLinks.map(linkItem => {
+          return this.linksRepository.create({
+            vault: vault,
             name: linkItem.name,
             url: linkItem.url
           });
-          return this.linksRepository.save(link);
         });
+        await this.linksRepository.save(links);
       }
-      // Handle assets whitelist from both direct input and CSV
+
+      // Handle assets whitelist
       const assetsFromCsv = assetsWhiteListCsvFile ?
         await this.parseCSVFromS3(assetsWhiteListCsvFile.key) : [];
       console.log('Assets from CSV:', assetsFromCsv);
@@ -155,15 +311,15 @@ export class VaultsService {
         ...assetsFromCsv
       ]);
 
-      for (const assetId of allAssets) {
-        const assetItem = this.assetsWhitelistRepository.create({
-          vault: vaultCreated,
+      const assetItems = Array.from(allAssets).map(assetId => {
+        return this.assetsWhitelistRepository.create({
+          vault: vault,
           asset_id: assetId
         });
-        await this.assetsWhitelistRepository.save(assetItem);
-      }
+      });
+      await this.assetsWhitelistRepository.save(assetItems);
 
-      // Handle investors whitelist from both direct input and CSV
+      // Handle investors whitelist
       const investorsFromCsv = investorsWhiteListFile ?
         await this.parseCSVFromS3(investorsWhiteListFile.key) : [];
       console.log('Investors from CSV:', investorsFromCsv);
@@ -172,28 +328,43 @@ export class VaultsService {
         ...investorsFromCsv
       ]);
 
-      for (const walletAddress of allInvestors) {
-        const investorItem = this.investorsWhiteListRepository.create({
-          vault: vaultCreated,
+      const investorItems = Array.from(allInvestors).map(walletAddress => {
+        return this.investorsWhiteListRepository.create({
+          vault: vault,
           wallet_address: walletAddress
         });
-        await this.investorsWhiteListRepository.save(investorItem);
-      }
-      return vaultCreated;
+      });
+      await this.investorsWhiteListRepository.save(investorItems);
+
+      return vault;
     } catch (error) {
       console.error(error);
       throw new BadRequestException('Failed to create vault');
     }
   }
 
-  async getMyVaults(userId: string): Promise<Vault[]> {
+  async getMyVaults(userId: string, includeDrafts: boolean = false): Promise<Vault[]> {
+    const query = {
+      where: {
+        owner: { id: userId }
+      },
+      relations: ['social_links', 'assets_whitelist', 'investors_whitelist']
+    };
+
+    if (!includeDrafts) {
+      query.where['vault_status'] = VaultStatus.published;
+    }
+
+    return this.vaultsRepository.find(query);
+  }
+
+  async getMyDraftVaults(userId: string): Promise<Vault[]> {
     return this.vaultsRepository.find({
       where: {
-        owner: {
-          id: userId
-        }
+        owner: { id: userId },
+        vault_status: VaultStatus.draft
       },
-      relations: ['social_links', 'assets_whitelist']
+      relations: ['social_links', 'assets_whitelist', 'investors_whitelist']
     });
   }
 

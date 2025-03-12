@@ -4,90 +4,182 @@ import {
   IsArray,
   IsEnum,
   IsNotEmpty,
+  IsNumber,
   IsObject,
   IsOptional,
-  IsString
+  IsString,
 } from 'class-validator';
-import {ContributionWindowType, VaultPrivacy, VaultType} from '../../../types/vault.types';
-import {AssetWhiteList, InvestorsWhiteList, SocialLink} from '../types';
+import { ContributionWindowType, VaultPrivacy, VaultType } from '../../../types/vault.types';
+import { AssetWhiteList, InvestorsWhiteList, SocialLink } from '../types';
 
 export class CreateVaultReq {
-
-  @ApiProperty()
-  @IsNotEmpty()
-  @IsString()
-  name: string; // required
-
-  @IsEnum(VaultType)
-  @ApiProperty()
-  type: VaultType; // required
-
-  @IsEnum(VaultPrivacy)
-  @ApiProperty()
-  privacy: VaultPrivacy; // required
-
-  @IsNotEmpty()
-  fractionTokenTicker: string;  // required
-
-  @IsNotEmpty()
-  valuationType: string; // required
-
-  @IsEnum(VaultType)
-  @ApiProperty()
-  contributionWindowType: ContributionWindowType;
-
-  @IsNotEmpty()
-  @ApiProperty()
-  contributionWindowTime: string;
-
-  @ApiProperty()
+  @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  description?: string;
+  id?: string;
 
   @ApiProperty()
   @IsNotEmpty()
-  imageUrl: string;
+  @IsString()
+  name: string;
 
   @ApiProperty()
   @IsNotEmpty()
-  bannerUrl: string;
+  @IsEnum(VaultType)
+  type: VaultType;
 
   @ApiProperty()
   @IsNotEmpty()
+  @IsEnum(VaultPrivacy)
+  privacy: VaultPrivacy;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  @IsString()
+  valuationType: string;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  @IsEnum(ContributionWindowType)
+  contributionOpenWindowType: ContributionWindowType;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  contributionOpenWindowTime: string;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  @IsString()
+  description: string;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  @IsString()
+  vaultImage: string;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  @IsString()
+  bannerImage: string;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  @IsString()
   assetsWhiteListCsv: string;
 
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  investorsWhiteListCsv?: string;
 
   @ApiProperty()
   @IsNotEmpty()
-  investorsWitheListCsv: string;
+  assetWindow: string;
 
   @ApiProperty()
-  @IsOptional()
+  @IsNotEmpty()
+  @IsNumber()
+  assetCountCapMin: number;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  @IsNumber()
+  assetCountCapMax: number;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  investmentWindowDuration: string;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  @IsString()
+  investmentOpenWindowType: string;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  investmentOpenWindowTime: string;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  offAssetsOffered: string;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  ftInvestmentWindow: string;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  @IsNumber()
+  ftInvestmentReverse: number;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  liquidityPoolContribution: string;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  ftTokenSupply: string;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  ftTokenTicker: string;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  ftTokenDecimals: string;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  @IsString()
+  terminationType: string;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  timeElapsedIsEqualToTime: string;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  assetAppreciation: string;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  creationThreshold: string;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  startThreshold: string;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  voteThreshold: string;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  executionThreshold: string;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  cosigningThreshold: string;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  ftTokenImg: string;
+
+  @ApiProperty()
   @IsArray()
   @ArrayNotEmpty()
   @IsObject({ each: true })
-  @IsString({ each: true })
-  @IsNotEmpty({ each: true })
-  assetsWhiteList?: AssetWhiteList[];
-
+  assetsWhitelist: AssetWhiteList[];
 
   @ApiProperty()
-  @IsOptional()
   @IsArray()
   @ArrayNotEmpty()
   @IsObject({ each: true })
-  @IsString({ each: true })
-  @IsNotEmpty({ each: true })
-  investorsWhiteList?: InvestorsWhiteList[];
+  investorsWhiteList: InvestorsWhiteList[];
 
   @ApiProperty()
-  @IsOptional()
   @IsArray()
   @ArrayNotEmpty()
   @IsObject({ each: true })
-  @IsString({ each: true })
-  @IsNotEmpty({ each: true })
-  socialLinks?: SocialLink[];
+  socialLinks: SocialLink[];
 }

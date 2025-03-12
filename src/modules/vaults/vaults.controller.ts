@@ -44,8 +44,8 @@ export class VaultsController {
   }
 
   @ApiDoc({
-    summary: 'Select my vault',
-    description: 'Selected my vault',
+    summary: 'Select my published vaults',
+    description: 'Returns list of my published vaults',
     status: 200,
   })
   @UseGuards(AuthGuard)
@@ -53,6 +53,18 @@ export class VaultsController {
   getMyVaults(@Request() req) {
     const userId = req.user.sub;
     return this.vaultsService.getMyVaults(userId);
+  }
+
+  @ApiDoc({
+    summary: 'Select my draft vaults',
+    description: 'Returns list of my draft vaults',
+    status: 200,
+  })
+  @UseGuards(AuthGuard)
+  @Get('my/drafts')
+  getMyDraftVaults(@Request() req) {
+    const userId = req.user.sub;
+    return this.vaultsService.getMyDraftVaults(userId);
   }
 
   @ApiDoc({

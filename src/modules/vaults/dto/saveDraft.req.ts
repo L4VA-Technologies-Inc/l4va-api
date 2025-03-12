@@ -14,6 +14,11 @@ export class SaveDraftReq {
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
+  id?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
   name?: string;
 
   @ApiProperty({ required: false })
@@ -25,11 +30,6 @@ export class SaveDraftReq {
   @IsOptional()
   @IsEnum(VaultPrivacy)
   privacy?: VaultPrivacy;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  fractionTokenTicker?: string;
 
   @ApiProperty({ required: false })
   @IsOptional()
