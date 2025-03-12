@@ -5,8 +5,8 @@ import {
   Entity, ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import {Vault} from "./vault.entity";
-import {Expose} from "class-transformer";
+import {Vault} from './vault.entity';
+import {Expose} from 'class-transformer';
 
 @Entity({ name: 'assets_whitelist' })
 export class AssetsWhitelistEntity {

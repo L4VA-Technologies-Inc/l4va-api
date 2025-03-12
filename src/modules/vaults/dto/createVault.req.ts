@@ -8,16 +8,8 @@ import {
   IsOptional,
   IsString
 } from 'class-validator';
-import {ContributionWindowType, VaultPrivacy, VaultType} from "../../../types/vault.types";
-
-type SocialLink = {
-  url:string,
-  name: string,
-}
-
-type AssetWhiteList = {
-  id: string,
-}
+import {ContributionWindowType, VaultPrivacy, VaultType} from '../../../types/vault.types';
+import {AssetWhiteList, InvestorsWhiteList, SocialLink} from '../types';
 
 export class CreateVaultReq {
 
@@ -64,7 +56,12 @@ export class CreateVaultReq {
 
   @ApiProperty()
   @IsNotEmpty()
-  whitelistCsv: string;
+  assetsWhiteListCsv: string;
+
+
+  @ApiProperty()
+  @IsNotEmpty()
+  investorsWitheListCsv: string;
 
   @ApiProperty()
   @IsOptional()
@@ -73,7 +70,8 @@ export class CreateVaultReq {
   @IsObject({ each: true })
   @IsString({ each: true })
   @IsNotEmpty({ each: true })
-  assetsWhitelist?: AssetWhiteList[]
+  assetsWhiteList?: AssetWhiteList[];
+
 
   @ApiProperty()
   @IsOptional()
@@ -82,5 +80,14 @@ export class CreateVaultReq {
   @IsObject({ each: true })
   @IsString({ each: true })
   @IsNotEmpty({ each: true })
-  socialLinks?: SocialLink[]
+  investorsWhiteList?: InvestorsWhiteList[];
+
+  @ApiProperty()
+  @IsOptional()
+  @IsArray()
+  @ArrayNotEmpty()
+  @IsObject({ each: true })
+  @IsString({ each: true })
+  @IsNotEmpty({ each: true })
+  socialLinks?: SocialLink[];
 }

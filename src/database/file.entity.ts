@@ -5,7 +5,7 @@ import {
   Entity,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import {Expose} from "class-transformer";
+import {Expose} from 'class-transformer';
 
 @Entity({ name: 'files' })
 export class FileEntity {
@@ -28,7 +28,7 @@ export class FileEntity {
   file_name: string;
 
   @Column('jsonb', { nullable: true })
-  metadata: {}
+  metadata: {};
 
   @Expose({ name: 'updatedAt'})
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })

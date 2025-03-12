@@ -6,16 +6,8 @@ import {
   IsOptional,
   IsString,
 } from 'class-validator';
-import {ContributionWindowType, VaultPrivacy, VaultStatus, VaultType} from "../../../types/vault.types";
-
-type SocialLink = {
-  url:string,
-  name: string,
-}
-
-type AssetWhiteList = {
-  id: string,
-}
+import {ContributionWindowType, VaultPrivacy, VaultType} from '../../../types/vault.types';
+import {AssetWhiteList, InvestorsWhiteList, SocialLink} from '../types';
 
 export class SaveDraftReq {
 
@@ -51,7 +43,6 @@ export class SaveDraftReq {
 
   @ApiProperty({ required: false })
   @IsOptional()
-  @IsString()
   contributionOpenWindowTime?: string;
 
   @ApiProperty({ required: false })
@@ -72,7 +63,12 @@ export class SaveDraftReq {
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
-  whitelistCsv?: string;
+  assetsWhiteListCsv?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  investorsWhiteListCsv?: string;
 
   @ApiProperty({ required: false })
   @IsOptional()
@@ -117,6 +113,10 @@ export class SaveDraftReq {
   @ApiProperty({ required: false })
   @IsOptional()
   ftTokenSupply: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  ftTokenTicker: string;
 
   @ApiProperty({ required: false })
   @IsOptional()
@@ -171,6 +171,12 @@ export class SaveDraftReq {
   @IsArray()
   @IsObject({ each: true })
   assetsWhitelist?: AssetWhiteList[];
+
+  @ApiProperty( { required: false })
+  @IsOptional()
+  @IsArray()
+  @IsObject({ each: true })
+  investorsWhiteList?: InvestorsWhiteList[];
 
   @ApiProperty({ required: false  })
   @IsOptional()

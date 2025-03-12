@@ -2,13 +2,11 @@ import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
-  CreateDateColumn,
-  UpdateDateColumn,
   OneToMany,
   BeforeInsert, BeforeUpdate
 } from 'typeorm';
-import {Vault} from "./vault.entity";
-import {Expose} from "class-transformer";
+import {Vault} from './vault.entity';
+import {Expose} from 'class-transformer';
 
 @Entity('users')
 export class User {

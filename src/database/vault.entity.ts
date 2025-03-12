@@ -9,17 +9,18 @@ import {
   OneToOne, OneToMany, Check
 } from 'typeorm';
 import { User } from './user.entity';
-import {FileEntity} from "./file.entity";
-import {AssetsWhitelistEntity} from "./assetsWhitelist.entity";
-import {LinkEntity} from "./link.entity";
+import {FileEntity} from './file.entity';
+import {AssetsWhitelistEntity} from './assetsWhitelist.entity';
+import {LinkEntity} from './link.entity';
 import {
   ContributionWindowType,
   InvestmentWindowType, TerminationType,
   ValuationType,
   VaultPrivacy, VaultStatus,
   VaultType
-} from "../types/vault.types";
+} from '../types/vault.types';
 import { Expose } from 'class-transformer';
+import {InvestorsWhitelistEntity} from './investorsWhitelist.entity';
 
 @Entity('vaults')
 export class Vault {
@@ -31,14 +32,14 @@ export class Vault {
   name: string;
 
   @Column({
-    type: "enum",
+    type: 'enum',
     enum: VaultType,
     nullable: true
   })
   type: VaultType;
 
   @Column({
-    type: "enum",
+    type: 'enum',
     enum: VaultPrivacy,
     nullable: true
   })
@@ -49,7 +50,7 @@ export class Vault {
 
   @Expose({ name: 'valuationType'})
   @Column({
-    type: "enum",
+    type: 'enum',
     name: 'valuation_type',
     enum: ValuationType,
     nullable: true
@@ -58,7 +59,7 @@ export class Vault {
 
   @Expose({ name: 'contributionOpenWindowType'})
   @Column({
-    type: "enum",
+    type: 'enum',
     name: 'contribution_open_window_type',
     enum: ContributionWindowType,
     nullable: true
@@ -97,7 +98,7 @@ export class Vault {
   @Expose({ name: 'investmentOpenWindowType'})
   @Column({
     name: 'investment_open_window_type',
-    type: "enum",
+    type: 'enum',
     enum: InvestmentWindowType,
     nullable: true
   })
@@ -113,7 +114,7 @@ export class Vault {
   @Expose({ name: 'offAssetsOffered'})
   @Column({
     name: 'off_assets_offered',
-    type: "numeric", precision: 5,
+    type: 'numeric', precision: 5,
     scale: 2, nullable:true})
   off_assets_offered?: string;
 
@@ -126,31 +127,35 @@ export class Vault {
   @Expose({ name: 'ftInvestmentReverse'})
   @Column({
     name: 'ft_investment_reverse',
-    type: "numeric", precision: 5,
+    type: 'numeric', precision: 5,
     scale: 2,  nullable:true})
   ft_investment_reverse?: string;
 
   @Expose({ name: 'liquidityPoolContribution'})
   @Column({
     name: 'liquidity_pool_contribution',
-    type: "numeric", precision: 5, scale: 2, nullable:true })
+    type: 'numeric', precision: 5, scale: 2, nullable:true })
   liquidity_pool_contribution?: string;
 
   @Expose({ name: 'ftTokenSupply'})
   @Column({name: 'ft_token_supply',
-    type: "numeric", precision: 5, scale: 2,  nullable:true})
+    type: 'numeric', precision: 5, scale: 2,  nullable:true})
   ft_token_supply?: string;
+
+  @Expose({ name: 'ftTokenTicker'})
+  @Column({name: 'ft_token_ticker', nullable:true})
+  ft_token_ticker?: string;
 
   @Expose({ name: 'ftTokenDecimals'})
   @Column({name: 'ft_token_decimals',
-    type: "smallint", default: 1,  nullable:true })
-  @Check(`"ft_token_decimals" BETWEEN 1 AND 9`)
+    type: 'smallint', default: 1,  nullable:true })
+  @Check('"ft_token_decimals" BETWEEN 1 AND 9')
   ft_token_decimals?: string;
 
   @Expose({ name: 'terminationType'})
   @Column({
     name: 'termination_type',
-    type: "enum",
+    type: 'enum',
     enum: TerminationType,
     nullable: true
   })
@@ -165,7 +170,7 @@ export class Vault {
   @Expose({ name: 'assetAppreciation'})
   @Column({
     name: 'asset_appreciation',
-    type: "numeric",
+    type: 'numeric',
     precision: 5, scale: 2, nullable:true })
   asset_appreciation?: string;
 
@@ -222,11 +227,11 @@ export class Vault {
   @Expose({ name: 'vaultStatus'})
   @Column({
     name: 'vault_status',
-    type: "enum",
+    type: 'enum',
     enum: VaultStatus,
     nullable: true
   })
-  vault_status: VaultStatus
+  vault_status: VaultStatus;
 
   @Expose({ name: 'owner' })
   @ManyToOne(() => User, (owner: User) => owner.id)
@@ -235,6 +240,10 @@ export class Vault {
   @Expose({ name: 'assetsWhitelist' })
   @OneToMany(() => AssetsWhitelistEntity, (asset: AssetsWhitelistEntity) => asset.vault)
   assets_whitelist?: AssetsWhitelistEntity[];
+
+  @Expose({ name: 'investorsWhitelist' })
+  @OneToMany(() => InvestorsWhitelistEntity, (investor: InvestorsWhitelistEntity) => investor.vault)
+  investors_whitelist?: InvestorsWhitelistEntity[];
 
   @Expose({ name: 'vaultImage' })
   @OneToOne(() => FileEntity)
@@ -246,10 +255,15 @@ export class Vault {
   @JoinColumn()
   banner_image?: FileEntity;
 
-  @Expose({ name: 'whitelistCsv'})
+  @Expose({ name: 'assetsWhitelistCsv'})
   @OneToOne(() => FileEntity)
   @JoinColumn()
-  whitelist_csv?: FileEntity
+  assets_whitelist_csv?: FileEntity;
+
+  @Expose({ name: 'investorsWhitelistCsv'})
+  @OneToOne(() => FileEntity)
+  @JoinColumn()
+  investors_whitelist_csv?: FileEntity;
 
   @Expose({ name: 'ftTokenImg' })
   @OneToOne(() => FileEntity)

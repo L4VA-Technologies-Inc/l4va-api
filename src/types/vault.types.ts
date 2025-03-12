@@ -14,7 +14,8 @@ export enum VaultPrivacy {
 
 // step 2
 export enum ValuationType {
-  lbe ='lbe'
+  lbe ='lbe',
+  fixed = 'fixed'
 }
 export enum ContributionWindowType {
   custom = 'custom',

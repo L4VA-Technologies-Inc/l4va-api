@@ -8,20 +8,18 @@ import {
 import {Vault} from './vault.entity';
 import {Expose} from 'class-transformer';
 
-@Entity({ name: 'links' })
-export class LinkEntity {
+@Entity({ name: 'investors_whitelist' })
+export class InvestorsWhitelistEntity {
 
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
+  @Expose({ name: 'walletAddress'})
   @Column({ type: 'varchar', nullable: false })
-  url: string;
+  wallet_address: string;
 
-  @Column({ type: 'varchar', nullable: false })
-  name: string;
-
-  @ManyToOne(() => Vault, (vault: Vault) => vault.social_links, { onDelete: 'CASCADE' })
-  vault: Vault;
+  @ManyToOne(() => Vault, (vault: Vault) => vault.investors_whitelist, { onDelete: 'CASCADE' })
+  public vault: Vault;
 
   @Expose({ name: 'updatedAt'})
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
