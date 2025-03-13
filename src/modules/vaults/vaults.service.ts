@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import {In, Repository} from 'typeorm';
 import { Vault } from '../../database/vault.entity';
 import { CreateVaultReq } from './dto/createVault.req';
 import { User } from '../../database/user.entity';
@@ -14,6 +14,7 @@ import * as csv from 'csv-parse';
 import { AwsService } from '../aws_bucket/aws.service';
 import { snakeCase } from 'typeorm/util/StringUtils';
 import {classToPlain} from "class-transformer";
+import { VaultFilter } from './dto/get-vaults.dto';
 
 @Injectable()
 export class VaultsService {
@@ -360,7 +361,7 @@ export class VaultsService {
     }
   }
 
-  async getMyVaults(userId: string, includeDrafts: boolean = false): Promise<any[]> {
+  async getMyVaults(userId: string, filter?: VaultFilter): Promise<any[]> {
     const query = {
       where: {
         owner: { id: userId }
@@ -368,10 +369,17 @@ export class VaultsService {
       relations: ['social_links', 'assets_whitelist', 'investors_whitelist']
     };
 
-    if (!includeDrafts) {
-      query.where['vault_status'] = VaultStatus.published;
+    if (filter === VaultFilter.open) {
+      query.where['vault_status'] = In([
+        VaultStatus.published,
+        VaultStatus.contribution,
+        VaultStatus.investment
+      ]);
+    } else if (filter === VaultFilter.locked) {
+      query.where['vault_status'] = VaultStatus.locked;
     }
-      const listOfVaults = await this.vaultsRepository.find(query);
+
+    const listOfVaults = await this.vaultsRepository.find(query);
 
     return listOfVaults.map(item => {
       return classToPlain(item)
