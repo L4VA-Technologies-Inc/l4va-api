@@ -15,6 +15,7 @@ import { AwsService } from '../aws_bucket/aws.service';
 import { snakeCase } from 'typeorm/util/StringUtils';
 import {classToPlain} from "class-transformer";
 import { VaultFilter } from './dto/get-vaults.dto';
+import { PaginatedResponseDto } from './dto/paginated-response.dto';
 
 @Injectable()
 export class VaultsService {
@@ -361,12 +362,14 @@ export class VaultsService {
     }
   }
 
-  async getMyVaults(userId: string, filter?: VaultFilter): Promise<any[]> {
+  async getMyVaults(userId: string, filter?: VaultFilter, page: number = 1, limit: number = 10): Promise<PaginatedResponseDto<any>> {
     const query = {
       where: {
         owner: { id: userId }
       },
-      relations: ['social_links', 'assets_whitelist', 'investors_whitelist']
+      relations: ['social_links', 'assets_whitelist', 'investors_whitelist'],
+      skip: (page - 1) * limit,
+      take: limit
     };
 
     if (filter === VaultFilter.open) {
@@ -379,25 +382,35 @@ export class VaultsService {
       query.where['vault_status'] = VaultStatus.locked;
     }
 
-    const listOfVaults = await this.vaultsRepository.find(query);
+    const [listOfVaults, total] = await this.vaultsRepository.findAndCount(query);
 
-    return listOfVaults.map(item => {
-      return classToPlain(item)
-    })
+    return {
+      items: listOfVaults.map(item => classToPlain(item)),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit)
+    };
   }
 
-  async getMyDraftVaults(userId: string): Promise<any[]> {
-    const listOfVaults = await  this.vaultsRepository.find({
+  async getMyDraftVaults(userId: string, page: number = 1, limit: number = 10): Promise<PaginatedResponseDto<any>> {
+    const [listOfVaults, total] = await this.vaultsRepository.findAndCount({
       where: {
         owner: { id: userId },
         vault_status: VaultStatus.draft
       },
-      relations: ['social_links', 'assets_whitelist', 'investors_whitelist']
+      relations: ['social_links', 'assets_whitelist', 'investors_whitelist'],
+      skip: (page - 1) * limit,
+      take: limit
     });
 
-    return listOfVaults.map(item => {
-      return classToPlain(item)
-    })
+    return {
+      items: listOfVaults.map(item => classToPlain(item)),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit)
+    };
   }
 
   async getVaultById(id: string, userId: string): Promise<any> {

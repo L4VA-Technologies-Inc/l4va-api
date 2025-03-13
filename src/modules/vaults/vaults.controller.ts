@@ -5,6 +5,7 @@ import {CreateVaultReq} from "./dto/createVault.req";
 import { ApiTags} from "@nestjs/swagger";
 import {ApiDoc} from "../../decorators/api-doc.decorator";
 import {SaveDraftReq} from "./dto/saveDraft.req";
+import {PaginationDto} from "./dto/pagination.dto";
 import {GetVaultsDto} from "./dto/get-vaults.dto";
 
 @ApiTags('vaults')
@@ -53,7 +54,7 @@ export class VaultsController {
   @Get('my')
   getMyVaults(@Request() req, @Query() query: GetVaultsDto) {
     const userId = req.user.sub;
-    return this.vaultsService.getMyVaults(userId, query.filter);
+    return this.vaultsService.getMyVaults(userId, query.filter, query.page, query.limit);
   }
 
   @ApiDoc({
@@ -63,9 +64,9 @@ export class VaultsController {
   })
   @UseGuards(AuthGuard)
   @Get('my/drafts')
-  getMyDraftVaults(@Request() req) {
+  getMyDraftVaults(@Request() req, @Query() query: PaginationDto) {
     const userId = req.user.sub;
-    return this.vaultsService.getMyDraftVaults(userId);
+    return this.vaultsService.getMyDraftVaults(userId, query.page, query.limit);
   }
 
   @ApiDoc({
