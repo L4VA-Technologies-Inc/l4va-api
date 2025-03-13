@@ -8,6 +8,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { VaultsModule } from './modules/vaults/vaults.module';
 import {AwsModule} from "./modules/aws_bucket/aws.module";
 import {UsersModule} from "./modules/users/users.module";
+import {SnakeNamingStrategy} from "typeorm-naming-strategies";
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import {UsersModule} from "./modules/users/users.module";
       synchronize: false,
       entities: [__dirname + '/database/core/**/*.entity{.ts,.js}'],
       autoLoadEntities: true,
+      namingStrategy: new SnakeNamingStrategy(),
     }),
     AuthModule,
     VaultsModule,

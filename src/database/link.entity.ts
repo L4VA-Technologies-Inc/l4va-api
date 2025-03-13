@@ -2,7 +2,7 @@ import {
   BeforeInsert,
   BeforeUpdate,
   Column,
-  Entity, ManyToOne,
+  Entity, JoinColumn, ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
 import {Vault} from './vault.entity';
@@ -21,6 +21,7 @@ export class LinkEntity {
   name: string;
 
   @ManyToOne(() => Vault, (vault: Vault) => vault.social_links, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'vault_id' })
   vault: Vault;
 
   @Expose({ name: 'updatedAt'})

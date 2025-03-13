@@ -2,7 +2,7 @@ import {
   BeforeInsert,
   BeforeUpdate,
   Column,
-  Entity, ManyToOne,
+  Entity, JoinColumn, ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
 import {Vault} from './vault.entity';
@@ -19,6 +19,7 @@ export class InvestorsWhitelistEntity {
   wallet_address: string;
 
   @ManyToOne(() => Vault, (vault: Vault) => vault.investors_whitelist, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'vault_id' })
   public vault: Vault;
 
   @Expose({ name: 'updatedAt'})

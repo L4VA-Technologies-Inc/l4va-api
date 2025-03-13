@@ -69,6 +69,7 @@ export class Vault {
   @Expose({ name: 'contributionOpenWindowTime'})
   @Column({
     name: 'contribution_open_window_time',
+    type: 'timestamptz',
     nullable: true
   })
   contribution_open_window_time?:string;
@@ -114,9 +115,8 @@ export class Vault {
   @Expose({ name: 'offAssetsOffered'})
   @Column({
     name: 'off_assets_offered',
-    type: 'numeric', precision: 5,
-    scale: 2, nullable:true})
-  off_assets_offered?: string;
+    type: 'numeric', nullable:true})
+  off_assets_offered?: number;
 
   @Expose({ name: 'ftInvestmentWindow'})
   @Column({
@@ -127,20 +127,19 @@ export class Vault {
   @Expose({ name: 'ftInvestmentReverse'})
   @Column({
     name: 'ft_investment_reverse',
-    type: 'numeric', precision: 5,
-    scale: 2,  nullable:true})
-  ft_investment_reverse?: string;
+    type: 'numeric', nullable:true})
+  ft_investment_reverse?: number;
 
   @Expose({ name: 'liquidityPoolContribution'})
   @Column({
     name: 'liquidity_pool_contribution',
-    type: 'numeric', precision: 5, scale: 2, nullable:true })
-  liquidity_pool_contribution?: string;
+    type: 'numeric', nullable:true })
+  liquidity_pool_contribution?: number;
 
   @Expose({ name: 'ftTokenSupply'})
   @Column({name: 'ft_token_supply',
-    type: 'numeric', precision: 5, scale: 2,  nullable:true})
-  ft_token_supply?: string;
+    type: 'numeric',  nullable:true})
+  ft_token_supply?: number;
 
   @Expose({ name: 'ftTokenTicker'})
   @Column({name: 'ft_token_ticker', nullable:true})
@@ -171,58 +170,48 @@ export class Vault {
   @Column({
     name: 'asset_appreciation',
     type: 'numeric',
-    precision: 5, scale: 2, nullable:true })
-  asset_appreciation?: string;
+    nullable:true })
+  asset_appreciation?: number;
 
   @Expose({ name: 'creationThreshold' })
   @Column({
     name: 'creation_threshold',
     type: 'numeric',
-    precision: 5,
-    scale: 2,
     nullable: true,
   })
-  creation_threshold?: string;
+  creation_threshold?: number;
 
   @Expose({ name: 'startThreshold' })
   @Column({
     name: 'start_threshold',
     type: 'numeric',
-    precision: 5,
-    scale: 2,
     nullable: true,
   })
-  start_threshold?: string;
+  start_threshold?: number;
 
   @Expose({ name: 'voteThreshold' })
   @Column({
     name: 'vote_threshold',
     type: 'numeric',
-    precision: 5,
-    scale: 2,
     nullable: true,
   })
-  vote_threshold?: string;
+  vote_threshold?: number;
 
   @Expose({ name: 'executionThreshold' })
   @Column({
     name: 'execution_threshold',
     type: 'numeric',
-    precision: 5,
-    scale: 2,
     nullable: true,
   })
-  execution_threshold?: string;
+  execution_threshold?: number;
 
   @Expose({ name: 'cosigningThreshold' })
   @Column({
     name: 'cosigning_threshold',
     type: 'numeric',
-    precision: 5,
-    scale: 2,
     nullable: true,
   })
-  cosigning_threshold?: string;
+  cosigning_threshold?: number;
 
   @Expose({ name: 'vaultStatus'})
   @Column({
@@ -235,6 +224,7 @@ export class Vault {
 
   @Expose({ name: 'owner' })
   @ManyToOne(() => User, (owner: User) => owner.id)
+  @JoinColumn({ name: 'owner_id' })
   public owner: User;
 
   @Expose({ name: 'assetsWhitelist' })
@@ -247,27 +237,37 @@ export class Vault {
 
   @Expose({ name: 'vaultImage' })
   @OneToOne(() => FileEntity)
-  @JoinColumn()
+  @JoinColumn({
+    name: 'vault_image_id'
+  })
   vault_image?: FileEntity;
 
   @Expose({ name: 'bannerImage' })
   @OneToOne(() => FileEntity)
-  @JoinColumn()
+  @JoinColumn({
+    name: 'banner_image_id'
+  })
   banner_image?: FileEntity;
 
   @Expose({ name: 'assetsWhitelistCsv'})
   @OneToOne(() => FileEntity)
-  @JoinColumn()
+  @JoinColumn({
+    name: 'assets_whitelist_csv_id'
+  })
   assets_whitelist_csv?: FileEntity;
 
   @Expose({ name: 'investorsWhitelistCsv'})
   @OneToOne(() => FileEntity)
-  @JoinColumn()
+  @JoinColumn({
+    name: 'investors_whitelist_csv_id'
+  })
   investors_whitelist_csv?: FileEntity;
 
   @Expose({ name: 'ftTokenImg' })
   @OneToOne(() => FileEntity)
-  @JoinColumn()
+  @JoinColumn({
+    name: 'ft_token_img_id'
+  })
   ft_token_img?: FileEntity;
 
   @Expose({ name: 'socialLinks' })

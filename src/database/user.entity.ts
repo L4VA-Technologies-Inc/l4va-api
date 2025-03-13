@@ -3,7 +3,7 @@ import {
   PrimaryGeneratedColumn,
   Column,
   OneToMany,
-  BeforeInsert, BeforeUpdate
+  BeforeInsert, BeforeUpdate, JoinColumn
 } from 'typeorm';
 import {Vault} from './vault.entity';
 import {Expose} from 'class-transformer';
