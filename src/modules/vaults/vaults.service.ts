@@ -385,16 +385,28 @@ export class VaultsService {
     });
   }
 
-  async getVaultById(id: string): Promise<Vault> {
-    const vault = await this.vaultsRepository.findOne({ where: { id } });
+  async getVaultById(id: string, userId: string): Promise<Vault> {
+    const vault = await this.vaultsRepository.findOne({
+      where: { id },
+      relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'vaultImage', 'bannerImage', 'ftTokenImg']
+    });
+    
     if (!vault) {
       throw new BadRequestException('Vault not found');
     }
+
+    if (vault.owner.id !== userId) {
+      throw new BadRequestException('Access denied: You are not the owner of this vault');
+    }
+
     return vault;
   }
 
-  async getVaults(): Promise<Vault[]> {
+  async getVaults(userId: string): Promise<Vault[]> {
     return this.vaultsRepository.find({
+      where: {
+        owner: { id: userId }
+      },
       relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'vaultImage', 'bannerImage', 'ftTokenImg']
     });
   }

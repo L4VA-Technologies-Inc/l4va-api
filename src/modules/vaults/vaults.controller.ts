@@ -69,23 +69,25 @@ export class VaultsController {
 
   @ApiDoc({
     summary: 'Get one vault',
-    description: 'Vault has found and returned',
+    description: 'Returns vault if user is the owner',
     status: 200,
   })
   @UseGuards(AuthGuard)
   @Get(':id')
-  getVaultById(@Param('id') id: string) {
-    return this.vaultsService.getVaultById(id);
+  getVaultById(@Param('id') id: string, @Request() req) {
+    const userId = req.user.sub;
+    return this.vaultsService.getVaultById(id, userId);
   }
 
   @ApiDoc({
-    summary: 'List of vault',
-    description: 'Selected list of vaults',
+    summary: 'List of vaults',
+    description: 'Returns list of vaults owned by the authenticated user',
     status: 200,
   })
   @UseGuards(AuthGuard)
   @Get()
-  getVaults() {
-    return this.vaultsService.getVaults();
+  getVaults(@Request() req) {
+    const userId = req.user.sub;
+    return this.vaultsService.getVaults(userId);
   }
 }
