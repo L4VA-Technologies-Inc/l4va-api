@@ -21,6 +21,7 @@ import {
 } from '../types/vault.types';
 import { Expose } from 'class-transformer';
 import {InvestorsWhitelistEntity} from './investorsWhitelist.entity';
+import { Asset } from './asset.entity';
 
 @Entity('vaults')
 export class Vault {
@@ -234,6 +235,10 @@ export class Vault {
   @Expose({ name: 'investorsWhitelist' })
   @OneToMany(() => InvestorsWhitelistEntity, (investor: InvestorsWhitelistEntity) => investor.vault)
   investors_whitelist?: InvestorsWhitelistEntity[];
+
+  @Expose({ name: 'assets' })
+  @OneToMany(() => Asset, (asset: Asset) => asset.vault)
+  assets?: Asset[];
 
   @Expose({ name: 'vaultImage' })
   @OneToOne(() => FileEntity)

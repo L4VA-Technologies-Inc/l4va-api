@@ -2,18 +2,30 @@ import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ConfigModule } from '@nestjs/config';
+import {ConfigModule, ConfigService} from '@nestjs/config';
 
 import { AuthModule } from './modules/auth/auth.module';
 import { VaultsModule } from './modules/vaults/vaults.module';
 import {AwsModule} from "./modules/aws_bucket/aws.module";
 import {UsersModule} from "./modules/users/users.module";
 import {SnakeNamingStrategy} from "typeorm-naming-strategies";
+import { AssetsModule } from './modules/assets/assets.module';
+import { BlockchainModule } from './modules/blockchain/blockchain.module';
+import {JwtModule} from "@nestjs/jwt";
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+    }),
+    JwtModule.registerAsync({
+      imports: [ConfigModule],
+      useFactory: async (configService: ConfigService) => ({
+        global: true,
+        secret: configService.get<string>('JWT_SECRET'),
+        signOptions: { expiresIn: '1d' },
+      }),
+      inject: [ConfigService],
     }),
     TypeOrmModule.forRoot({
       type: 'postgres',
@@ -28,6 +40,8 @@ import {SnakeNamingStrategy} from "typeorm-naming-strategies";
       namingStrategy: new SnakeNamingStrategy(),
     }),
     AuthModule,
+    AssetsModule,
+    BlockchainModule,
     VaultsModule,
     UsersModule,
     AwsModule,
