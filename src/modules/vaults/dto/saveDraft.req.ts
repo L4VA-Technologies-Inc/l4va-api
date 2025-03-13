@@ -63,24 +63,11 @@ export class SaveDraftReq {
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
-  assetsWhiteListCsv?: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
   investorsWhiteListCsv?: string;
 
   @ApiProperty({ required: false })
   @IsOptional()
   assetWindow?: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  assetCountCapMin?: number;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  assetCountCapMax: number;
 
   @ApiProperty({ required: false })
   @IsOptional()

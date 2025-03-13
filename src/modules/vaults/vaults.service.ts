@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import {Injectable, BadRequestException, UnauthorizedException} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {In, Repository} from 'typeorm';
 import { Vault } from '../../database/vault.entity';
@@ -16,6 +16,7 @@ import { snakeCase } from 'typeorm/util/StringUtils';
 import {classToPlain} from "class-transformer";
 import { VaultFilter } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
+import { AssetWhiteList } from './types';
 
 @Injectable()
 export class VaultsService {
@@ -82,6 +83,10 @@ export class VaultsService {
         where: { id: userId }
       });
 
+      if(!owner){
+        throw new UnauthorizedException('User was not authorized!');
+      }
+
       // Process image files
       const imgKey = data.vaultImage?.split('image/')[1];
       const vaultImg = imgKey ? await this.filesRepository.findOne({
@@ -96,12 +101,6 @@ export class VaultsService {
       const ftTokenImgKey = data.ftTokenImg?.split('image/')[1];
       const ftTokenImg = ftTokenImgKey ? await this.filesRepository.findOne({
         where: { file_key: ftTokenImgKey }
-      }) : null;
-
-      // Process CSV files
-      const assetsWhiteListCsvKey = data.assetsWhiteListCsv?.split('csv/')[1];
-      const assetsWhiteListCsvFile = assetsWhiteListCsvKey ? await this.filesRepository.findOne({
-        where: { file_key: assetsWhiteListCsvKey }
       }) : null;
 
       const investorsWhiteListCsvKey = data.investorsWhiteListCsv?.split('csv/')[1];
@@ -123,7 +122,6 @@ export class VaultsService {
         vaultImage: vaultImg,
         bannerImage: bannerImg,
         ftTokenImg: ftTokenImg,
-        assetWhitelistCsv: assetsWhiteListCsvFile,
         investorsWhitelistCsv: investorsWhiteListFile
       });
         delete vaultData.assets_whitelist;
@@ -143,21 +141,17 @@ export class VaultsService {
         await this.linksRepository.save(links);
       }
 
-      // Handle assets whitelist
-      const assetsFromCsv = assetsWhiteListCsvFile ?
-        await this.parseCSVFromS3(assetsWhiteListCsvFile.file_key) : [];
-      console.log('Assets from CSV:', assetsFromCsv);
-      const allAssets = new Set([
-        ...data.assetsWhitelist.map(item => item.id),
-        ...assetsFromCsv
-      ]);
-
-      const assetItems = Array.from(allAssets).map(assetId => {
-        return this.assetsWhitelistRepository.save({
-          vault: vault,
-          asset_id: assetId
+      if(data.assetsWhitelist.length > 0){
+      data.assetsWhitelist.map(assetItem => {
+          return this.assetsWhitelistRepository.save({
+            vault: vault,
+            policy_id: assetItem.id,
+            asset_count_cap_min: assetItem.countCapMin,
+            asset_count_cap_max: assetItem.countCapMax
+          });
         });
-      });
+      }
+
 
       // Handle investors whitelist
       const investorsFromCsv = investorsWhiteListFile ?
@@ -267,12 +261,6 @@ export class VaultsService {
         where: { file_key: ftTokenImgKey }
       }) : null;
 
-      // Process CSV files
-      const assetsWhiteListCsvKey = data.assetsWhiteListCsv?.split('csv/')[1];
-      const assetsWhiteListCsvFile = assetsWhiteListCsvKey ? await this.filesRepository.findOne({
-        where: { file_key: assetsWhiteListCsvKey }
-      }) : null;
-
       const investorsWhiteListCsvKey = data.investorsWhiteListCsv?.split('csv/')[1];
       const investorsWhiteListFile = investorsWhiteListCsvKey ? await this.filesRepository.findOne({
         where: { file_key: investorsWhiteListCsvKey }
@@ -293,7 +281,6 @@ export class VaultsService {
         vaultImage: vaultImg,
         bannerImage: bannerImg,
         ftTokenImg: ftTokenImg,
-        assetWhitelistCsv: assetsWhiteListCsvFile,
         investorsWhitelistCsv: investorsWhiteListFile
       });
 
@@ -301,6 +288,8 @@ export class VaultsService {
       delete vaultData.investors_whitelist
 
       let vault: Vault;
+      // Remove asset count cap fields as they are now in AssetsWhitelist
+
       if (existingVault) {
         // Update existing draft vault
         Object.assign(existingVault, vaultData);
@@ -322,21 +311,23 @@ export class VaultsService {
         await this.linksRepository.save(links);
       }
 
-      // Handle assets whitelist
-      const assetsFromCsv = assetsWhiteListCsvFile ?
-        await this.parseCSVFromS3(assetsWhiteListCsvFile.file_key) : [];
       const allAssets = new Set([
         ...data.assetsWhitelist.map(item => item.id),
-        ...assetsFromCsv
       ]);
+      Array.from(allAssets).map(policyId => {
+        // Find matching whitelist item from request data
+        const assetData = data.assetsWhitelist.find(item => item.id === policyId);
 
-      const assetItems = Array.from(allAssets).map(assetId => {
-        return this.assetsWhitelistRepository.create({
+        // Create the whitelist entity with properly transformed property names
+        const whitelistEntity = this.assetsWhitelistRepository.create({
           vault: vault,
-          asset_id: assetId
+          policy_id: policyId,
+          asset_count_cap_min: assetData?.countCapMin,  // Optional field
+          asset_count_cap_max: assetData?.countCapMax   // Optional field
         });
+
+        return this.assetsWhitelistRepository.save(whitelistEntity);
       });
-      await this.assetsWhitelistRepository.save(assetItems);
 
       // Handle investors whitelist
       const investorsFromCsv = investorsWhiteListFile ?
@@ -435,7 +426,7 @@ export class VaultsService {
       where: {
         owner: { id: userId }
       },
-      relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'vaultImage', 'bannerImage', 'ftTokenImg']
+      relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'vault_image', 'banner_image', 'ft_token_img']
     });
     return listOfVaults.map(item => {
       return classToPlain(item)

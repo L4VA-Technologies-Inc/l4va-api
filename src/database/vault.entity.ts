@@ -81,17 +81,6 @@ export class Vault {
     type: 'timestamptz', nullable: true})
   asset_window?: string;
 
-  @Expose({ name: 'assetCountCapMin'})
-  @Column({
-    name: 'asset_count_cap_min',
-    type: 'int',
-    nullable: true
-  })
-  asset_count_cap_min?:number;
-
-  @Expose({ name: 'assetCountCapMax'})
-  @Column({name: 'asset_count_cap_max', type: 'int', nullable: true})
-  asset_count_cap_max?:number;
 
   @Expose({ name: 'investmentWindowDuration'})
   @Column({name: 'investment_window_duration', type: 'timestamptz', nullable: true})
@@ -253,13 +242,6 @@ export class Vault {
     name: 'banner_image_id'
   })
   banner_image?: FileEntity;
-
-  @Expose({ name: 'assetsWhitelistCsv'})
-  @OneToOne(() => FileEntity)
-  @JoinColumn({
-    name: 'assets_whitelist_csv_id'
-  })
-  assets_whitelist_csv?: FileEntity;
 
   @Expose({ name: 'investorsWhitelistCsv'})
   @OneToOne(() => FileEntity)

@@ -10,7 +10,8 @@ import {
   IsString,
 } from 'class-validator';
 import { ContributionWindowType, VaultPrivacy, VaultType } from '../../../types/vault.types';
-import { AssetWhiteList, InvestorsWhiteList, SocialLink } from '../types';
+import { InvestorsWhiteList, SocialLink } from '../types';
+import { AssetWhitelistDto } from './assetWhitelist.dto';
 
 export class CreateVaultReq {
   @ApiProperty({ required: false })
@@ -62,11 +63,6 @@ export class CreateVaultReq {
   @IsString()
   bannerImage: string;
 
-  @ApiProperty()
-  @IsNotEmpty()
-  @IsString()
-  assetsWhiteListCsv: string;
-
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
@@ -75,16 +71,6 @@ export class CreateVaultReq {
   @ApiProperty()
   @IsNotEmpty()
   assetWindow: string;
-
-  @ApiProperty()
-  @IsNotEmpty()
-  @IsNumber()
-  assetCountCapMin: number;
-
-  @ApiProperty()
-  @IsNotEmpty()
-  @IsNumber()
-  assetCountCapMax: number;
 
   @ApiProperty()
   @IsNotEmpty()
@@ -165,11 +151,19 @@ export class CreateVaultReq {
   @IsNotEmpty()
   ftTokenImg: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    description: 'List of whitelisted assets with their policy IDs and optional count caps',
+    type: [AssetWhitelistDto],
+    example: [{
+      id: '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd',
+      countCapMin: 1,
+      countCapMax: 10
+    }]
+  })
   @IsArray()
   @ArrayNotEmpty()
   @IsObject({ each: true })
-  assetsWhitelist: AssetWhiteList[];
+  assetsWhitelist: AssetWhitelistDto[];
 
   @ApiProperty()
   @IsArray()
