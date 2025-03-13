@@ -9,6 +9,8 @@ import {getMimeTypeFromArrayBuffer} from "../../helpers";
 import {HttpService} from "@nestjs/axios";
 import * as process from "process";
 import {Express} from "express";
+import * as csv from 'csv-parse';
+import { BadRequestException } from '@nestjs/common';
 
 @Injectable()
 export class AwsService {
@@ -82,8 +84,38 @@ export class AwsService {
   }
 
 
+  private async validateCsvAddresses(buffer: Buffer): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const addresses: string[] = [];
+      csv.parse(buffer.toString(), {
+        columns: false,
+        skip_empty_lines: true,
+        trim: true
+      })
+      .on('data', (data) => {
+        const address = data[0];
+        if (!address || typeof address !== 'string' || !address.startsWith('0x')) {
+          reject(new BadRequestException(`Invalid address format found in CSV: ${address}. All addresses must start with '0x'`));
+        }
+        addresses.push(address);
+      })
+      .on('end', () => {
+        if (addresses.length === 0) {
+          reject(new BadRequestException('CSV file is empty or contains no valid addresses'));
+        }
+        resolve();
+      })
+      .on('error', (error) => {
+        reject(new BadRequestException(`Error parsing CSV: ${error.message}`));
+      });
+    });
+  }
+
   async uploadCSV(file: Express.Multer.File, host: string) {
     try {
+      // Validate CSV content before uploading
+      await this.validateCsvAddresses(file.buffer);
+
       const uploadResult = await this.uploadS3(
         file.buffer,
         `${uuid()}`,
@@ -101,7 +133,11 @@ export class AwsService {
         if (newFile) return newFile;
       }
     } catch (error) {
-      console.log('error with uploading file ', error);
+      if (error instanceof BadRequestException) {
+        throw error; // Re-throw validation errors
+      }
+      Logger.error('Error uploading CSV file:', error);
+      throw new BadRequestException('Failed to upload CSV file');
     }
   }
 
