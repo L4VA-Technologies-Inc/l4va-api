@@ -13,6 +13,7 @@ import { InvestorsWhitelistEntity } from '../../database/investorsWhitelist.enti
 import * as csv from 'csv-parse';
 import { AwsService } from '../aws_bucket/aws.service';
 import { snakeCase } from 'typeorm/util/StringUtils';
+import {classToPlain} from "class-transformer";
 
 @Injectable()
 export class VaultsService {
@@ -46,7 +47,7 @@ export class VaultsService {
     return obj;
   }
 
-  async createVault(userId: string, data: CreateVaultReq): Promise<Vault> {
+  async createVault(userId: string, data: CreateVaultReq): Promise<any> {
     try {
       let vault: Vault;
 
@@ -82,28 +83,28 @@ export class VaultsService {
       // Process image files
       const imgKey = data.vaultImage?.split('image/')[1];
       const vaultImg = imgKey ? await this.filesRepository.findOne({
-        where: { key: imgKey }
+        where: { file_key: imgKey }
       }) : null;
 
       const bannerImgKey = data.bannerImage?.split('image/')[1];
       const bannerImg = bannerImgKey ? await this.filesRepository.findOne({
-        where: { key: bannerImgKey }
+        where: { file_key: bannerImgKey }
       }) : null;
 
       const ftTokenImgKey = data.ftTokenImg?.split('image/')[1];
       const ftTokenImg = ftTokenImgKey ? await this.filesRepository.findOne({
-        where: { key: ftTokenImgKey }
+        where: { file_key: ftTokenImgKey }
       }) : null;
 
       // Process CSV files
       const assetsWhiteListCsvKey = data.assetsWhiteListCsv?.split('csv/')[1];
       const assetsWhiteListCsvFile = assetsWhiteListCsvKey ? await this.filesRepository.findOne({
-        where: { key: assetsWhiteListCsvKey }
+        where: { file_key: assetsWhiteListCsvKey }
       }) : null;
 
       const investorsWhiteListCsvKey = data.investorsWhiteListCsv?.split('csv/')[1];
       const investorsWhiteListFile = investorsWhiteListCsvKey ? await this.filesRepository.findOne({
-        where: { key: investorsWhiteListCsvKey }
+        where: { file_key: investorsWhiteListCsvKey }
       }) : null;
       // Prepare vault data
       const vaultData = this.transformToSnakeCase({
@@ -123,7 +124,6 @@ export class VaultsService {
         assetWhitelistCsv: assetsWhiteListCsvFile,
         investorsWhitelistCsv: investorsWhiteListFile
       });
-      console.log('vault obect befor create', vaultData)
         delete vaultData.assets_whitelist;
       delete vaultData.investors_whitelist
 
@@ -143,7 +143,7 @@ export class VaultsService {
 
       // Handle assets whitelist
       const assetsFromCsv = assetsWhiteListCsvFile ?
-        await this.parseCSVFromS3(assetsWhiteListCsvFile.key) : [];
+        await this.parseCSVFromS3(assetsWhiteListCsvFile.file_key) : [];
       console.log('Assets from CSV:', assetsFromCsv);
       const allAssets = new Set([
         ...data.assetsWhitelist.map(item => item.id),
@@ -159,7 +159,7 @@ export class VaultsService {
 
       // Handle investors whitelist
       const investorsFromCsv = investorsWhiteListFile ?
-        await this.parseCSVFromS3(investorsWhiteListFile.key) : [];
+        await this.parseCSVFromS3(investorsWhiteListFile.file_key) : [];
       console.log('Investors from CSV:', investorsFromCsv);
       const allInvestors = new Set([
         ...data.investorsWhiteList.map(item => item.wallet_address),
@@ -173,16 +173,16 @@ export class VaultsService {
         });
       });
 
-      return vault;
+      return classToPlain(vault);
     } catch (error) {
       console.error(error);
       throw new BadRequestException('Failed to create vault');
     }
   }
 
-  private async parseCSVFromS3(fileKey: string): Promise<string[]> {
+  private async parseCSVFromS3(file_key: string): Promise<string[]> {
     try {
-      const csvStream = await this.awsService.getCsv(fileKey);
+      const csvStream = await this.awsService.getCsv(file_key);
       const csvData = await csvStream.data.toArray();
       const csvString = Buffer.concat(csvData).toString();
 
@@ -212,7 +212,7 @@ export class VaultsService {
     }
   }
 
-  async saveDraftVault(userId: string, data: SaveDraftReq): Promise<Vault> {
+  async saveDraftVault(userId: string, data: SaveDraftReq): Promise<any> {
     let existingVault: Vault | null = null;
 
     // Check for existing draft vault if ID is provided
@@ -252,28 +252,28 @@ export class VaultsService {
       // Process image files
       const imgKey = data.vaultImage?.split('image/')[1];
       const vaultImg = imgKey ? await this.filesRepository.findOne({
-        where: { key: imgKey }
+        where: { file_key: imgKey }
       }) : null;
 
       const bannerImgKey = data.bannerImage?.split('image/')[1];
       const bannerImg = bannerImgKey ? await this.filesRepository.findOne({
-        where: { key: bannerImgKey }
+        where: { file_key: bannerImgKey }
       }) : null;
 
       const ftTokenImgKey = data.ftTokenImg?.split('image/')[1];
       const ftTokenImg = ftTokenImgKey ? await this.filesRepository.findOne({
-        where: { key: ftTokenImgKey }
+        where: { file_key: ftTokenImgKey }
       }) : null;
 
       // Process CSV files
       const assetsWhiteListCsvKey = data.assetsWhiteListCsv?.split('csv/')[1];
       const assetsWhiteListCsvFile = assetsWhiteListCsvKey ? await this.filesRepository.findOne({
-        where: { key: assetsWhiteListCsvKey }
+        where: { file_key: assetsWhiteListCsvKey }
       }) : null;
 
       const investorsWhiteListCsvKey = data.investorsWhiteListCsv?.split('csv/')[1];
       const investorsWhiteListFile = investorsWhiteListCsvKey ? await this.filesRepository.findOne({
-        where: { key: investorsWhiteListCsvKey }
+        where: { file_key: investorsWhiteListCsvKey }
       }) : null;
 
       // Prepare vault data
@@ -322,7 +322,7 @@ export class VaultsService {
 
       // Handle assets whitelist
       const assetsFromCsv = assetsWhiteListCsvFile ?
-        await this.parseCSVFromS3(assetsWhiteListCsvFile.key) : [];
+        await this.parseCSVFromS3(assetsWhiteListCsvFile.file_key) : [];
       const allAssets = new Set([
         ...data.assetsWhitelist.map(item => item.id),
         ...assetsFromCsv
@@ -338,7 +338,7 @@ export class VaultsService {
 
       // Handle investors whitelist
       const investorsFromCsv = investorsWhiteListFile ?
-        await this.parseCSVFromS3(investorsWhiteListFile.key) : [];
+        await this.parseCSVFromS3(investorsWhiteListFile.file_key) : [];
       console.log('Investors from CSV:', investorsFromCsv);
       const allInvestors = new Set([
         ...data.investorsWhiteList.map(item => item.wallet_address),
@@ -353,14 +353,14 @@ export class VaultsService {
       });
       await this.investorsWhiteListRepository.save(investorItems);
 
-      return vault;
+      return classToPlain(vault);
     } catch (error) {
       console.error(error);
       throw new BadRequestException('Failed to create vault');
     }
   }
 
-  async getMyVaults(userId: string, includeDrafts: boolean = false): Promise<Vault[]> {
+  async getMyVaults(userId: string, includeDrafts: boolean = false): Promise<any[]> {
     const query = {
       where: {
         owner: { id: userId }
@@ -371,26 +371,33 @@ export class VaultsService {
     if (!includeDrafts) {
       query.where['vault_status'] = VaultStatus.published;
     }
+      const listOfVaults = await this.vaultsRepository.find(query);
 
-    return this.vaultsRepository.find(query);
+    return listOfVaults.map(item => {
+      return classToPlain(item)
+    })
   }
 
-  async getMyDraftVaults(userId: string): Promise<Vault[]> {
-    return this.vaultsRepository.find({
+  async getMyDraftVaults(userId: string): Promise<any[]> {
+    const listOfVaults = await  this.vaultsRepository.find({
       where: {
         owner: { id: userId },
         vault_status: VaultStatus.draft
       },
       relations: ['social_links', 'assets_whitelist', 'investors_whitelist']
     });
+
+    return listOfVaults.map(item => {
+      return classToPlain(item)
+    })
   }
 
-  async getVaultById(id: string, userId: string): Promise<Vault> {
+  async getVaultById(id: string, userId: string): Promise<any> {
     const vault = await this.vaultsRepository.findOne({
       where: { id },
       relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'vaultImage', 'bannerImage', 'ftTokenImg']
     });
-    
+
     if (!vault) {
       throw new BadRequestException('Vault not found');
     }
@@ -399,15 +406,18 @@ export class VaultsService {
       throw new BadRequestException('Access denied: You are not the owner of this vault');
     }
 
-    return vault;
+    return classToPlain(vault);
   }
 
-  async getVaults(userId: string): Promise<Vault[]> {
-    return this.vaultsRepository.find({
+  async getVaults(userId: string): Promise<any[]> {
+    const listOfVaults = await  this.vaultsRepository.find({
       where: {
         owner: { id: userId }
       },
       relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'vaultImage', 'bannerImage', 'ftTokenImg']
     });
+    return listOfVaults.map(item => {
+      return classToPlain(item)
+    })
   }
 }

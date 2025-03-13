@@ -124,8 +124,8 @@ export class AwsService {
       const protocol = process.env.NODE_ENV === 'dev' ? 'http://' :'https://'
       if (uploadResult) {
         const newFile = this.fileRepository.create({
-          key: uploadResult.Key,
-          url: `${protocol}${host}/api/v1/csv/${uploadResult.Key}`,
+          file_key: uploadResult.Key,
+          file_url: `${protocol}${host}/api/v1/csv/${uploadResult.Key}`,
           file_name: file.originalname,
           file_type: file.mimetype,
         });
@@ -154,8 +154,8 @@ export class AwsService {
       const protocol = process.env.NODE_ENV === 'dev' ? 'http://' :'https://'
       if (uploadResult) {
         const newFile = this.fileRepository.create({
-          key: uploadResult.Key,
-          url: `${protocol}${host}/api/v1/image/${uploadResult.Key}`,
+          file_key: uploadResult.Key,
+          file_url: `${protocol}${host}/api/v1/image/${uploadResult.Key}`,
           file_name: file.originalname,
           file_type: file.mimetype,
         });

@@ -13,29 +13,32 @@ export class FileEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'varchar', nullable: false })
-  key: string;
+  @Expose({ name: 'key' })
+  @Column({ name: 'file_key', type: 'varchar', nullable: false })
+  file_key: string;
 
-  @Column({ type: 'varchar', nullable: false })
-  url: string;
+  @Expose({ name: 'url' })
+  @Column({ name: 'file_url', type: 'varchar', nullable: false })
+  file_url: string;
 
-  @Expose({ name: 'fileType'})
-  @Column({name: 'file_type', type: 'varchar' })
+  @Expose({ name: 'fileType' })
+  @Column({ name: 'file_type', type: 'varchar' })
   file_type: string;
 
-  @Expose({ name: 'fileName'})
-  @Column({name: 'file_name', type: 'varchar' })
+  @Expose({ name: 'fileName' })
+  @Column({ name: 'file_name', type: 'varchar' })
   file_name: string;
 
-  @Column('jsonb', { nullable: true })
+  @Expose({ name: 'metadata' })
+  @Column({ name: 'metadata', type: 'jsonb', nullable: true })
   metadata: {};
 
-  @Expose({ name: 'updatedAt'})
-  @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
+  @Expose({ name: 'updatedAt' })
+  @Column({ name: 'updated_at', type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   updated_at: string;
 
-  @Expose({ name: 'createdAt'})
-  @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
+  @Expose({ name: 'createdAt' })
+  @Column({ name: 'created_at', type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   created_at: string;
 
   @BeforeInsert()

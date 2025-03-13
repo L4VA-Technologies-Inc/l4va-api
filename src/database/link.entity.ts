@@ -5,8 +5,9 @@ import {
   Entity, JoinColumn, ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import {Vault} from './vault.entity';
-import {Expose} from 'class-transformer';
+import { Vault } from './vault.entity';
+import { User } from './user.entity';
+import { Expose } from 'class-transformer';
 
 @Entity({ name: 'links' })
 export class LinkEntity {
@@ -20,9 +21,15 @@ export class LinkEntity {
   @Column({ type: 'varchar', nullable: false })
   name: string;
 
-  @ManyToOne(() => Vault, (vault: Vault) => vault.social_links, { onDelete: 'CASCADE' })
+  @Expose({ name: 'vaultId' })
+  @ManyToOne(() => Vault, (vault: Vault) => vault.social_links, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({ name: 'vault_id' })
   vault: Vault;
+
+  @Expose({ name: 'userId' })
+  @ManyToOne(() => User, (user: User) => user.social_links, { onDelete: 'CASCADE', nullable: true })
+  @JoinColumn({ name: 'user_id' })
+  user: User;
 
   @Expose({ name: 'updatedAt'})
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })

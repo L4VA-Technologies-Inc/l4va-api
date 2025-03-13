@@ -3,10 +3,15 @@ import {
   PrimaryGeneratedColumn,
   Column,
   OneToMany,
-  BeforeInsert, BeforeUpdate, JoinColumn
+  OneToOne,
+  BeforeInsert,
+  BeforeUpdate,
+  JoinColumn
 } from 'typeorm';
-import {Vault} from './vault.entity';
-import {Expose} from 'class-transformer';
+import { Vault } from './vault.entity';
+import { Expose } from 'class-transformer';
+import { FileEntity } from './file.entity';
+import { LinkEntity } from './link.entity';
 
 @Entity('users')
 export class User {
@@ -22,6 +27,33 @@ export class User {
 
   @Column({ unique: true })
   address: string;
+
+  @Column({ nullable: true })
+  description: string;
+
+  @Expose({ name: 'profileImage' })
+  @OneToOne(() => FileEntity)
+  @JoinColumn({ name: 'profile_image_id' })
+  profile_image: FileEntity;
+
+  @Expose({ name: 'bannerImage' })
+  @OneToOne(() => FileEntity)
+  @JoinColumn({ name: 'banner_image_id' })
+  banner_image: FileEntity;
+
+  @Expose({ name: 'socialLinks' })
+  @OneToMany(() => LinkEntity, (link: LinkEntity) => link.user)
+  social_links: LinkEntity[];
+
+  @Column({ type: 'decimal', precision: 20, scale: 2, default: 0 })
+  tvl: number;
+
+  @Expose({ name: 'totalVaults' })
+  @Column({ type: 'integer', default: 0 })
+  total_vaults: number;
+
+  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
+  gains: number;
 
   @Expose({ name: 'createdAt'})
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
