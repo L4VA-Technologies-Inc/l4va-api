@@ -72,6 +72,7 @@ export class VaultsController {
     description: 'Vault has found and returned',
     status: 200,
   })
+  @UseGuards(AuthGuard)
   @Get(':id')
   getVaultById(@Param('id') id: string) {
     return this.vaultsService.getVaultById(id);
@@ -82,6 +83,7 @@ export class VaultsController {
     description: 'Selected list of vaults',
     status: 200,
   })
+  @UseGuards(AuthGuard)
   @Get()
   getVaults() {
     return this.vaultsService.getVaults();

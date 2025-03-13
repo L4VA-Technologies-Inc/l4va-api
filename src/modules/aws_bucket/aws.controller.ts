@@ -4,7 +4,7 @@ import {
   FileTypeValidator,
   Get, MaxFileSizeValidator, Param, ParseFilePipe,
   Post, Req, Res,
-  UploadedFile,
+  UploadedFile, UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import {ApiTags} from "@nestjs/swagger";
@@ -12,6 +12,7 @@ import {AwsService} from "./aws.service";
 import {ApiDoc} from "../../decorators/api-doc.decorator";
 import {FileInterceptor} from "@nestjs/platform-express";
 import { Express, Response, Request } from 'express'
+import {AuthGuard} from "../auth/auth.guard";
 
 const mbMultiplication =  1024 * 1024;
 
@@ -29,6 +30,7 @@ export class AwsController {
   })
   @UseInterceptors(FileInterceptor('image'))
   @Post('/upload')
+  @UseGuards(AuthGuard)
   async uploadFile(@UploadedFile(
     new ParseFilePipe({
       validators: [
@@ -73,6 +75,7 @@ export class AwsController {
     status: 200,
   })
   @UseInterceptors(FileInterceptor('csv'))
+  @UseGuards(AuthGuard)
   @Post('/handle-csv')
   async handleCsvFiles(@UploadedFile(
     new ParseFilePipe({

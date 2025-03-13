@@ -12,7 +12,6 @@ import { AssetsWhitelistEntity } from '../../database/assetsWhitelist.entity';
 import { InvestorsWhitelistEntity } from '../../database/investorsWhitelist.entity';
 import * as csv from 'csv-parse';
 import { AwsService } from '../aws_bucket/aws.service';
-import {plainToInstance} from "class-transformer";
 import { snakeCase } from 'typeorm/util/StringUtils';
 
 @Injectable()
