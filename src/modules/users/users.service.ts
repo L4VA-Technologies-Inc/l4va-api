@@ -73,16 +73,14 @@ export class UsersService {
       }
 
       // Create new social links
-      const links = updateData.socialLinks.map(linkData => {
-        return this.linksRepository.create({
+      updateData.socialLinks.map(linkData => {
+        return this.linksRepository.save({
           user: user,
           name: linkData.name,
           url: linkData.url
         });
       });
-      await this.linksRepository.save(links);
     }
-
     return this.usersRepository.save(user);
   }
 
