@@ -6,7 +6,8 @@ import {
   BeforeInsert,
   BeforeUpdate,
   JoinColumn,
-  OneToOne, OneToMany, Check
+  OneToOne, OneToMany, Check,
+  ManyToMany, JoinTable
 } from 'typeorm';
 import { User } from './user.entity';
 import {FileEntity} from './file.entity';
@@ -22,6 +23,7 @@ import {
 import { Expose } from 'class-transformer';
 import {InvestorsWhitelistEntity} from './investorsWhitelist.entity';
 import { Asset } from './asset.entity';
+import { TagEntity } from './tag.entity';
 
 @Entity('vaults')
 export class Vault {
@@ -75,11 +77,11 @@ export class Vault {
   })
   contribution_open_window_time?:string;
 
-  @Expose({ name: 'assetWindow'})
+  @Expose({ name: 'contributionDuration'})
   @Column({
-    name: 'asset_window',
-    type: 'timestamptz', nullable: true})
-  asset_window?: string;
+    name: 'contribution_duration',
+    type: 'interval', nullable: true})
+  contribution_duration?: string;
 
 
   @Expose({ name: 'investmentWindowDuration'})
@@ -108,11 +110,7 @@ export class Vault {
     type: 'numeric', nullable:true})
   off_assets_offered?: number;
 
-  @Expose({ name: 'ftInvestmentWindow'})
-  @Column({
-    name: 'ft_investment_window',
-    type: 'timestamptz', nullable: true})
-    ft_investment_window?: string;
+
 
   @Expose({ name: 'ftInvestmentReverse'})
   @Column({
@@ -260,6 +258,21 @@ export class Vault {
   @Expose({ name: 'socialLinks' })
   @OneToMany(() => LinkEntity, (link: LinkEntity) => link.vault)
   social_links?: LinkEntity[];
+
+  @Expose({ name: 'tags' })
+  @ManyToMany(() => TagEntity, (tag: TagEntity) => tag.vaults)
+  @JoinTable({
+    name: 'vault_tags',
+    joinColumn: {
+      name: 'vault_id',
+      referencedColumnName: 'id'
+    },
+    inverseJoinColumn: {
+      name: 'tag_id',
+      referencedColumnName: 'id'
+    }
+  })
+  tags?: TagEntity[];
 
   @Expose({ name: 'updatedAt' })
   @Column({ name: 'updated_at', type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })

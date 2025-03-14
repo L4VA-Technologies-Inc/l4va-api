@@ -17,6 +17,7 @@ import {classToPlain} from "class-transformer";
 import { VaultFilter } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { AssetWhiteList } from './types';
+import { TagEntity } from '../../database/tag.entity';
 
 @Injectable()
 export class VaultsService {
@@ -33,6 +34,8 @@ export class VaultsService {
     private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
     @InjectRepository(InvestorsWhitelistEntity)
     private readonly investorsWhiteListRepository: Repository<InvestorsWhitelistEntity>,
+    @InjectRepository(TagEntity)
+    private readonly tagsRepository: Repository<TagEntity>,
     private readonly awsService: AwsService
   ) {}
 
@@ -111,11 +114,11 @@ export class VaultsService {
       const vaultData = this.transformToSnakeCase({
         ...data,
         owner: owner,
-        assetWindow: new Date(data.assetWindow).toISOString(),
+        contributionDuration: data.contributionDuration,
         investmentWindowDuration: new Date(data.investmentWindowDuration).toISOString(),
         investmentOpenWindowTime: new Date(data.investmentOpenWindowTime).toISOString(),
         contributionOpenWindowTime: new Date(data.contributionOpenWindowTime).toISOString(),
-        ftInvestmentWindow: new Date(data.ftInvestmentWindow).toISOString(),
+
         timeElapsedIsEqualToTime: new Date(data.timeElapsedIsEqualToTime).toISOString(),
         vaultStatus: VaultStatus.published,
         // Ensure FileEntity relationships are preserved by placing them after the spread
@@ -125,7 +128,8 @@ export class VaultsService {
         investorsWhitelistCsv: investorsWhiteListFile
       });
         delete vaultData.assets_whitelist;
-      delete vaultData.investors_whitelist
+      delete vaultData.investors_whitelist;
+      delete vaultData.tags
 
         vault = await this.vaultsRepository.save(vaultData as Vault);
 
@@ -169,6 +173,25 @@ export class VaultsService {
         });
       });
 
+      // Handle tags
+      if (data.tags?.length > 0) {
+        const tags = await Promise.all(
+          data.tags.map(async (tagData) => {
+            let tag = await this.tagsRepository.findOne({
+              where: { name: tagData.name }
+            });
+            if (!tag) {
+              tag = await this.tagsRepository.save({
+                name: tagData.name
+              });
+            }
+            return tag;
+          })
+        );
+        vault.tags = tags;
+        await this.vaultsRepository.save(vault);
+      }
+
       return classToPlain(vault);
     } catch (error) {
       console.error(error);
@@ -192,7 +215,7 @@ export class VaultsService {
         .on('data', (data) => {
           // Each row is an array with a single address
           const address = data[0];
-          if (address && typeof address === 'string' && address.startsWith('0x')) {
+          if (address && typeof address === 'string' && /^addr1[a-zA-Z0-9]{98}$/.test(address)) {
             results.push(address);
           }
         })
@@ -270,11 +293,11 @@ export class VaultsService {
       const vaultData = this.transformToSnakeCase({
         ...data,
         owner: owner,
-        assetWindow: new Date(data.assetWindow).toISOString(),
+        contributionDuration: data.contributionDuration,
         investmentWindowDuration: new Date(data.investmentWindowDuration).toISOString(),
         investmentOpenWindowTime: new Date(data.investmentOpenWindowTime).toISOString(),
         contributionOpenWindowTime: new Date(data.contributionOpenWindowTime).toISOString(),
-        ftInvestmentWindow: new Date(data.ftInvestmentWindow).toISOString(),
+
         timeElapsedIsEqualToTime: new Date(data.timeElapsedIsEqualToTime).toISOString(),
         vaultStatus: VaultStatus.draft,
         // Ensure FileEntity relationships are preserved by placing them after the spread
@@ -311,24 +334,19 @@ export class VaultsService {
         await this.linksRepository.save(links);
       }
 
-      const allAssets = new Set([
-        ...data.assetsWhitelist.map(item => item.id),
-      ]);
-      Array.from(allAssets).map(policyId => {
-        // Find matching whitelist item from request data
-        const assetData = data.assetsWhitelist.find(item => item.id === policyId);
+      if(data.assetsWhitelist.length > 0){
+        data.assetsWhitelist.map(whitelistItem => {
+          // Find matching whitelist item from request data
 
-        // Create the whitelist entity with properly transformed property names
-        const whitelistEntity = this.assetsWhitelistRepository.create({
-          vault: vault,
-          policy_id: policyId,
-          asset_count_cap_min: assetData?.countCapMin,  // Optional field
-          asset_count_cap_max: assetData?.countCapMax   // Optional field
+          // Create the whitelist entity with properly transformed property names
+          this.assetsWhitelistRepository.save({
+            vault: vault,
+            policy_id: whitelistItem.id,
+            asset_count_cap_min: whitelistItem?.countCapMin,  // Optional field
+            asset_count_cap_max: whitelistItem?.countCapMax   // Optional field
+          });
         });
-
-        return this.assetsWhitelistRepository.save(whitelistEntity);
-      });
-
+      }
       // Handle investors whitelist
       const investorsFromCsv = investorsWhiteListFile ?
         await this.parseCSVFromS3(investorsWhiteListFile.file_key) : [];

@@ -8,10 +8,13 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  MaxLength,
+  MinLength,
 } from 'class-validator';
 import { ContributionWindowType, VaultPrivacy, VaultType } from '../../../types/vault.types';
 import { InvestorsWhiteList, SocialLink } from '../types';
 import { AssetWhitelistDto } from './assetWhitelist.dto';
+import { TagDto } from './tag.dto';
 
 export class CreateVaultReq {
   @ApiProperty({ required: false })
@@ -59,7 +62,7 @@ export class CreateVaultReq {
   vaultImage: string;
 
   @ApiProperty()
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
   bannerImage: string;
 
@@ -68,9 +71,12 @@ export class CreateVaultReq {
   @IsString()
   investorsWhiteListCsv?: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    description: 'Duration in PostgreSQL interval format (e.g., "2 days", "1 month", "14 days 12 hours")'
+  })
   @IsNotEmpty()
-  assetWindow: string;
+  @IsString()
+  contributionDuration: string;
 
   @ApiProperty()
   @IsNotEmpty()
@@ -91,10 +97,6 @@ export class CreateVaultReq {
 
   @ApiProperty()
   @IsNotEmpty()
-  ftInvestmentWindow: string;
-
-  @ApiProperty()
-  @IsNotEmpty()
   @IsNumber()
   ftInvestmentReverse: number;
 
@@ -106,8 +108,13 @@ export class CreateVaultReq {
   @IsNotEmpty()
   ftTokenSupply: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    description: 'Should be 1-10 characters'
+  })
   @IsNotEmpty()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(10)
   ftTokenTicker: string;
 
   @ApiProperty()
@@ -176,4 +183,14 @@ export class CreateVaultReq {
   @ArrayNotEmpty()
   @IsObject({ each: true })
   socialLinks: SocialLink[];
+
+  @ApiProperty({
+    description: 'List of tags for the vault',
+    type: [TagDto],
+    required: false
+  })
+  @IsArray()
+  @IsOptional()
+  @IsObject({ each: true })
+  tags?: TagDto[];
 }

@@ -87,6 +87,8 @@ export class AwsService {
   private async validateCsvAddresses(buffer: Buffer): Promise<void> {
     return new Promise((resolve, reject) => {
       const addresses: string[] = [];
+      const cardanoAddressRegex = /^addr1[a-zA-Z0-9]{98}$/;
+
       csv.parse(buffer.toString(), {
         columns: false,
         skip_empty_lines: true,
@@ -94,8 +96,8 @@ export class AwsService {
       })
       .on('data', (data) => {
         const address = data[0];
-        if (!address || typeof address !== 'string' || !address.startsWith('0x')) {
-          reject(new BadRequestException(`Invalid address format found in CSV: ${address}. All addresses must start with '0x'`));
+        if (!address || typeof address !== 'string' || !cardanoAddressRegex.test(address)) {
+          reject(new BadRequestException(`Invalid Cardano address format found in CSV: ${address}. Address must be a valid Cardano Shelley address starting with 'addr1' and containing 98 alphanumeric characters`));
         }
         addresses.push(address);
       })

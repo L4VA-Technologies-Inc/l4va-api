@@ -8,6 +8,7 @@ import {
 } from 'class-validator';
 import {ContributionWindowType, VaultPrivacy, VaultType} from '../../../types/vault.types';
 import {AssetWhiteList, InvestorsWhiteList, SocialLink} from '../types';
+import { TagDto } from './tag.dto';
 
 export class SaveDraftReq {
 
@@ -65,9 +66,13 @@ export class SaveDraftReq {
   @IsString()
   investorsWhiteListCsv?: string;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({
+    required: false,
+    description: 'Duration in PostgreSQL interval format (e.g., "2 days", "1 month", "14 days 12 hours")'
+  })
   @IsOptional()
-  assetWindow?: string;
+  @IsString()
+  contributionDuration?: string;
 
   @ApiProperty({ required: false })
   @IsOptional()
@@ -84,10 +89,6 @@ export class SaveDraftReq {
   @ApiProperty({ required: false })
   @IsOptional()
   offAssetsOffered: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  ftInvestmentWindow: string;
 
   @ApiProperty({ required: false })
   @IsOptional()
@@ -170,4 +171,14 @@ export class SaveDraftReq {
   @IsArray()
   @IsObject({ each: true })
   socialLinks?: SocialLink[];
+
+  @ApiProperty({
+    description: 'List of tags for the vault',
+    type: [TagDto],
+    required: false
+  })
+  @IsOptional()
+  @IsArray()
+  @IsObject({ each: true })
+  tags?: TagDto[];
 }
