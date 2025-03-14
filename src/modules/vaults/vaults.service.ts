@@ -115,11 +115,11 @@ export class VaultsService {
         ...data,
         owner: owner,
         contributionDuration: data.contributionDuration,
-        investmentWindowDuration: new Date(data.investmentWindowDuration).toISOString(),
+        investmentWindowDuration: data.investmentWindowDuration,
         investmentOpenWindowTime: new Date(data.investmentOpenWindowTime).toISOString(),
         contributionOpenWindowTime: new Date(data.contributionOpenWindowTime).toISOString(),
 
-        timeElapsedIsEqualToTime: new Date(data.timeElapsedIsEqualToTime).toISOString(),
+        timeElapsedIsEqualToTime: data.timeElapsedIsEqualToTime,
         vaultStatus: VaultStatus.published,
         // Ensure FileEntity relationships are preserved by placing them after the spread
         vaultImage: vaultImg,
@@ -129,7 +129,7 @@ export class VaultsService {
       });
         delete vaultData.assets_whitelist;
       delete vaultData.investors_whitelist;
-      delete vaultData.tags
+      delete vaultData.tags;
 
         vault = await this.vaultsRepository.save(vaultData as Vault);
 

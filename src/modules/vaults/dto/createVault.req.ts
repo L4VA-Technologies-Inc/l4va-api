@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import {
+  ArrayMaxSize,
   ArrayNotEmpty,
   IsArray,
   IsEnum,
@@ -91,22 +92,38 @@ export class CreateVaultReq {
   @IsNotEmpty()
   investmentOpenWindowTime: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    description: 'Percentage of assets offered',
+    required: true
+  })
   @IsNotEmpty()
+  @IsString()
   offAssetsOffered: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    description: 'FT investment reverse percentage',
+    required: true
+  })
   @IsNotEmpty()
   @IsNumber()
   ftInvestmentReverse: number;
 
-  @ApiProperty()
+  @ApiProperty({
+    description: 'Liquidity pool contribution percentage',
+    required: true
+  })
   @IsNotEmpty()
+  @IsString()
   liquidityPoolContribution: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    description: 'Total supply of FT tokens',
+    required: true,
+    default: '100000000'
+  })
   @IsNotEmpty()
-  ftTokenSupply: string;
+  @IsString()
+  ftTokenSupply: string = '100000000';
 
   @ApiProperty({
     description: 'Should be 1-10 characters'
@@ -117,41 +134,74 @@ export class CreateVaultReq {
   @MaxLength(10)
   ftTokenTicker: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    description: 'Number of decimal places for the FT token',
+    required: true,
+    default: '2'
+  })
   @IsNotEmpty()
-  ftTokenDecimals: string;
+  @IsString()
+  ftTokenDecimals: string = '2';
 
   @ApiProperty()
   @IsNotEmpty()
   @IsString()
   terminationType: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    description: 'Duration in PostgreSQL interval format (e.g., "2 days", "1 month", "14 days 12 hours")',
+    required: true
+  })
   @IsNotEmpty()
+  @IsString()
   timeElapsedIsEqualToTime: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    description: 'Vault appreciation percentage',
+    required: true
+  })
   @IsNotEmpty()
-  assetAppreciation: string;
+  @IsString()
+  vaultAppreciation: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    description: 'Creation threshold percentage',
+    required: true
+  })
   @IsNotEmpty()
+  @IsString()
   creationThreshold: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    description: 'Start threshold percentage',
+    required: true
+  })
   @IsNotEmpty()
+  @IsString()
   startThreshold: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    description: 'Vote threshold percentage',
+    required: true
+  })
   @IsNotEmpty()
+  @IsString()
   voteThreshold: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    description: 'Execution threshold percentage',
+    required: true
+  })
   @IsNotEmpty()
+  @IsString()
   executionThreshold: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    description: 'Cosigning threshold percentage',
+    required: true
+  })
   @IsNotEmpty()
+  @IsString()
   cosigningThreshold: string;
 
   @ApiProperty()
@@ -159,18 +209,20 @@ export class CreateVaultReq {
   ftTokenImg: string;
 
   @ApiProperty({
-    description: 'List of whitelisted assets with their policy IDs and optional count caps',
+    description: 'List of whitelisted assets with their policy IDs and optional count caps (max 10 assets)',
     type: [AssetWhitelistDto],
+    required: false,
     example: [{
       id: '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd',
       countCapMin: 1,
       countCapMax: 10
     }]
   })
+  @IsOptional()
   @IsArray()
-  @ArrayNotEmpty()
+  @ArrayMaxSize(10)
   @IsObject({ each: true })
-  assetsWhitelist: AssetWhitelistDto[];
+  assetsWhitelist?: AssetWhitelistDto[];
 
   @ApiProperty()
   @IsArray()
