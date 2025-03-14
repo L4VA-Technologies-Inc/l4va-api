@@ -12,7 +12,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
-import { ContributionWindowType, VaultPrivacy, VaultType } from '../../../types/vault.types';
+import { ContributionWindowType, ValuationType, VaultPrivacy, VaultType } from '../../../types/vault.types';
 import { InvestorsWhiteList, SocialLink } from '../types';
 import { AssetWhitelistDto } from './assetWhitelist.dto';
 import { TagDto } from './tag.dto';
@@ -38,10 +38,31 @@ export class CreateVaultReq {
   @IsEnum(VaultPrivacy)
   privacy: VaultPrivacy;
 
-  @ApiProperty()
+  @ApiProperty({
+    description: 'Valuation type - public vaults can only use LBE, private/semi-private can use LBE or fixed',
+    enum: ValuationType
+  })
   @IsNotEmpty()
+  @IsEnum(ValuationType)
+  valuationType: ValuationType;
+
+  @ApiProperty({
+    description: 'Currency for fixed valuation (required when valuationType is fixed)',
+    required: false,
+    example: 'ADA'
+  })
+  @IsOptional()
   @IsString()
-  valuationType: string;
+  valuationCurrency?: string;
+
+  @ApiProperty({
+    description: 'Amount for fixed valuation (required when valuationType is fixed)',
+    required: false,
+    example: '1000000'
+  })
+  @IsOptional()
+  @IsString()
+  valuationAmount?: string;
 
   @ApiProperty()
   @IsNotEmpty()

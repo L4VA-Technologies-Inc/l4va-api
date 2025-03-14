@@ -1,4 +1,5 @@
 import {Injectable, BadRequestException, UnauthorizedException} from '@nestjs/common';
+import { ValuationType, VaultPrivacy } from '../../types/vault.types';
 import { InjectRepository } from '@nestjs/typeorm';
 import {In, Repository} from 'typeorm';
 import { Vault } from '../../database/vault.entity';
@@ -88,6 +89,25 @@ export class VaultsService {
 
       if(!owner){
         throw new UnauthorizedException('User was not authorized!');
+      }
+
+      // Validate valuation type based on privacy setting
+      if (data.privacy === VaultPrivacy.public && data.valuationType !== ValuationType.lbe) {
+        throw new BadRequestException('Public vaults can only use LBE valuation type');
+      }
+      if ((data.privacy === VaultPrivacy.private || data.privacy === VaultPrivacy.semiPrivate) && 
+          ![ValuationType.lbe, ValuationType.fixed].includes(data.valuationType)) {
+        throw new BadRequestException('Private and semi-private vaults can use either LBE or fixed valuation type');
+      }
+
+      // Validate required fields for fixed valuation type
+      if (data.valuationType === ValuationType.fixed) {
+        if (!data.valuationCurrency) {
+          throw new BadRequestException('Valuation currency is required when using fixed valuation type');
+        }
+        if (!data.valuationAmount) {
+          throw new BadRequestException('Valuation amount is required when using fixed valuation type');
+        }
       }
 
       // Process image files

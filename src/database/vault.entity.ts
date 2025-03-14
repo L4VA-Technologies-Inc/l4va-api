@@ -60,6 +60,22 @@ export class Vault {
   })
   valuation_type?: ValuationType;
 
+  @Expose({ name: 'valuationCurrency'})
+  @Column({
+    name: 'valuation_currency',
+    type: 'varchar',
+    nullable: true
+  })
+  valuation_currency?: string;
+
+  @Expose({ name: 'valuationAmount'})
+  @Column({
+    name: 'valuation_amount',
+    type: 'numeric',
+    nullable: true
+  })
+  valuation_amount?: number;
+
   @Expose({ name: 'contributionOpenWindowType'})
   @Column({
     type: 'enum',
