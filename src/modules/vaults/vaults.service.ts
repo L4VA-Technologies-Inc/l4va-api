@@ -17,7 +17,6 @@ import { snakeCase } from 'typeorm/util/StringUtils';
 import {classToPlain} from "class-transformer";
 import { VaultFilter } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
-import { AssetWhiteList } from './types';
 import { TagEntity } from '../../database/tag.entity';
 
 @Injectable()
@@ -95,7 +94,7 @@ export class VaultsService {
       if (data.privacy === VaultPrivacy.public && data.valuationType !== ValuationType.lbe) {
         throw new BadRequestException('Public vaults can only use LBE valuation type');
       }
-      if ((data.privacy === VaultPrivacy.private || data.privacy === VaultPrivacy.semiPrivate) && 
+      if ((data.privacy === VaultPrivacy.private || data.privacy === VaultPrivacy.semiPrivate) &&
           ![ValuationType.lbe, ValuationType.fixed].includes(data.valuationType)) {
         throw new BadRequestException('Private and semi-private vaults can use either LBE or fixed valuation type');
       }
