@@ -298,6 +298,18 @@ export class Vault {
   @Column({ name: 'created_at', type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   created_at: string;
 
+  @Expose({ name: 'contributionPhaseStart' })
+  @Column({ name: 'contribution_phase_start', type: 'timestamptz', nullable: true })
+  contribution_phase_start?: string;
+
+  @Expose({ name: 'investmentPhaseStart' })
+  @Column({ name: 'investment_phase_start', type: 'timestamptz', nullable: true })
+  investment_phase_start?: string;
+
+  @Expose({ name: 'lockedAt' })
+  @Column({ name: 'locked_at', type: 'timestamptz', nullable: true })
+  locked_at?: string;
+
   @BeforeInsert()
   setDate() {
     this.created_at = new Date().toISOString();

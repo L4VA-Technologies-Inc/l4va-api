@@ -1,12 +1,12 @@
 import { Controller, Post, Body, Get, Param, Request, UseGuards, Query } from '@nestjs/common';
 import { VaultsService } from './vaults.service';
 import { AuthGuard } from '../auth/auth.guard';
-import {CreateVaultReq} from "./dto/createVault.req";
-import { ApiTags} from "@nestjs/swagger";
-import {ApiDoc} from "../../decorators/api-doc.decorator";
-import {SaveDraftReq} from "./dto/saveDraft.req";
-import {PaginationDto} from "./dto/pagination.dto";
-import {GetVaultsDto} from "./dto/get-vaults.dto";
+import { CreateVaultReq } from "./dto/createVault.req";
+import { ApiTags } from "@nestjs/swagger";
+import { ApiDoc } from "../../decorators/api-doc.decorator";
+import { SaveDraftReq } from "./dto/saveDraft.req";
+import { PaginationDto } from "./dto/pagination.dto";
+import { GetVaultsDto } from "./dto/get-vaults.dto";
 
 @ApiTags('vaults')
 @Controller('vaults')
