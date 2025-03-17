@@ -458,15 +458,25 @@ export class VaultsService {
     return classToPlain(vault);
   }
 
-  async getVaults(userId: string): Promise<any[]> {
-    const listOfVaults = await  this.vaultsRepository.find({
+  async getVaults(userId: string, page: number = 1, limit: number = 10): Promise<PaginatedResponseDto<any>> {
+    const [listOfVaults, total] = await this.vaultsRepository.findAndCount({
       where: {
         owner: { id: userId }
       },
-      relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'vault_image', 'banner_image', 'ft_token_img']
+      relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'vault_image', 'banner_image', 'ft_token_img'],
+      skip: (page - 1) * limit,
+      take: limit,
+      order: {
+        created_at: 'DESC'
+      }
     });
-    return listOfVaults.map(item => {
-      return classToPlain(item)
-    })
+
+    return {
+      items: listOfVaults.map(item => classToPlain(item)),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit)
+    };
   }
 }

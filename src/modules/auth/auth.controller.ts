@@ -30,15 +30,4 @@ export class AuthController {
   async login(@Body() signatureData: LoginReq) {
     return this.authService.verifySignature(signatureData);
   }
-
-  @ApiDoc({
-    summary: 'Get user profile',
-    description: 'User found profile selected successfully',
-    status: 200,
-  })
-  @UseGuards(AuthGuard)
-  @Get('profile')
-  getProfile(@Request() req) {
-    return req.user;
-  }
 }
