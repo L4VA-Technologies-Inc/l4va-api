@@ -444,7 +444,7 @@ export class VaultsService {
   async getVaultById(id: string, userId: string): Promise<any> {
     const vault = await this.vaultsRepository.findOne({
       where: { id },
-      relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'vaultImage', 'bannerImage', 'ftTokenImg']
+      relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'vault_image', 'banner_image', 'ft_token_img']
     });
 
     if (!vault) {
