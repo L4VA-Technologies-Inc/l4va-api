@@ -82,16 +82,12 @@ export class VaultsController {
   }
 
   @ApiDoc({
-    summary: 'List of vaults',
-    description: 'Returns paginated list of vaults owned by the authenticated user. Default page: 1, default limit: 10. Response includes total count and total pages.',
+    summary: 'List of public vaults',
+    description: 'Returns paginated list of all published vaults. Default page: 1, default limit: 10. Response includes total count and total pages.',
     status: 200,
   })
   @Get()
-  getVaults(
-    @Request() req,
-    @Query() query: PaginationDto = { page: 1, limit: 10 }
-  ) {
-    const userId = req.user.sub;
-    return this.vaultsService.getVaults(userId, query.page, query.limit);
+  getVaults(@Query() query: GetVaultsDto) {
+    return this.vaultsService.getVaults(query.filter, query.page, query.limit);
   }
 }

@@ -458,18 +458,34 @@ export class VaultsService {
     return classToPlain(vault);
   }
 
-  async getVaults(userId: string, page: number = 1, limit: number = 10): Promise<PaginatedResponseDto<any>> {
-    const [listOfVaults, total] = await this.vaultsRepository.findAndCount({
-      where: {
-        owner: { id: userId }
-      },
-      relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'vault_image', 'banner_image', 'ft_token_img'],
-      skip: (page - 1) * limit,
-      take: limit,
-      order: {
-        created_at: 'DESC'
-      }
-    });
+  async getVaults(filter?: VaultFilter, page: number = 1, limit: number = 10): Promise<PaginatedResponseDto<any>> {
+    const queryBuilder = this.vaultsRepository.createQueryBuilder('vault')
+      .leftJoinAndSelect('vault.social_links', 'social_links')
+      .leftJoinAndSelect('vault.assets_whitelist', 'assets_whitelist')
+      .leftJoinAndSelect('vault.vault_image', 'vault_image')
+      .leftJoinAndSelect('vault.banner_image', 'banner_image')
+      .leftJoinAndSelect('vault.ft_token_img', 'ft_token_img')
+      .leftJoinAndSelect('vault.tags', 'tags')
+      .where('vault.vault_status != :draftStatus', { draftStatus: VaultStatus.draft })
+      // Only show public vaults in the public listing
+      .andWhere('vault.privacy = :privacy', { privacy: VaultPrivacy.public });
+
+    // Apply status filter if provided
+    if (filter === VaultFilter.open) {
+      queryBuilder.andWhere('vault.vault_status IN (:...statuses)', {
+        statuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.investment]
+      });
+    } else if (filter === VaultFilter.locked) {
+      queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked });
+    }
+
+    // Add pagination and ordering
+    queryBuilder
+      .orderBy('vault.created_at', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    const [listOfVaults, total] = await queryBuilder.getManyAndCount();
 
     return {
       items: listOfVaults.map(item => classToPlain(item)),
