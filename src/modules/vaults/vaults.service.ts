@@ -14,7 +14,7 @@ import { InvestorsWhitelistEntity } from '../../database/investorsWhitelist.enti
 import * as csv from 'csv-parse';
 import { AwsService } from '../aws_bucket/aws.service';
 import { snakeCase } from 'typeorm/util/StringUtils';
-import {classToPlain} from "class-transformer";
+import {classToPlain, instanceToPlain, plainToInstance} from "class-transformer";
 import { VaultFilter } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { TagEntity } from '../../database/tag.entity';
@@ -210,8 +210,8 @@ export class VaultsService {
         vault.tags = tags;
         await this.vaultsRepository.save(vault);
       }
-
-      return classToPlain(vault);
+      const createdVault = plainToInstance(Vault, vault, { exposeDefaultValues: true});
+      return classToPlain(createdVault);
     } catch (error) {
       console.error(error);
       throw new BadRequestException('Failed to create vault');
@@ -352,7 +352,7 @@ export class VaultsService {
         vault = await this.vaultsRepository.save({
           ...existingVault,
           ...vaultData
-        });
+        }) as Vault;
       } else {
         // Create new draft vault with provided fields
         vault = await this.vaultsRepository.save(vaultData as Vault);
@@ -388,7 +388,7 @@ export class VaultsService {
       if (data.investorsWhiteList !== undefined || investorsWhiteListFile) {
         const investorsFromCsv = investorsWhiteListFile ?
           await this.parseCSVFromS3(investorsWhiteListFile.file_key) : [];
-        
+
         const manualInvestors = data.investorsWhiteList?.map(item => item.wallet_address) || [];
         const allInvestors = new Set([...manualInvestors, ...investorsFromCsv]);
 
@@ -402,8 +402,8 @@ export class VaultsService {
           await this.investorsWhiteListRepository.save(investorItems);
         }
       }
-
-      return classToPlain(vault);
+      const createdVault = plainToInstance(Vault, vault, { exposeDefaultValues: true});
+      return instanceToPlain(createdVault);
     } catch (error) {
       console.error(error);
       throw new BadRequestException('Failed to create vault');
