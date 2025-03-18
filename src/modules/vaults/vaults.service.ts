@@ -4,8 +4,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import {In, Repository} from 'typeorm';
 import { Vault } from '../../database/vault.entity';
 import { CreateVaultReq } from './dto/createVault.req';
-import { User } from '../../database/user.entity';
 import { SaveDraftReq } from './dto/saveDraft.req';
+import { User } from '../../database/user.entity';
 import { VaultStatus } from '../../types/vault.types';
 import { LinkEntity } from '../../database/link.entity';
 import { FileEntity } from '../../database/file.entity';
@@ -14,7 +14,7 @@ import { InvestorsWhitelistEntity } from '../../database/investorsWhitelist.enti
 import * as csv from 'csv-parse';
 import { AwsService } from '../aws_bucket/aws.service';
 import { snakeCase } from 'typeorm/util/StringUtils';
-import {classToPlain, instanceToPlain, plainToInstance} from "class-transformer";
+import {classToPlain} from "class-transformer";
 import { VaultFilter } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { TagEntity } from '../../database/tag.entity';
@@ -39,6 +39,10 @@ export class VaultsService {
     private readonly awsService: AwsService
   ) {}
 
+  private transformImageToUrl(imageEntity: FileEntity | null): string | null {
+    return imageEntity?.file_url || null;
+  }
+
   private transformToSnakeCase(obj: any): any {
     if (Array.isArray(obj)) {
       return obj.map(item => this.transformToSnakeCase(item));
@@ -53,40 +57,43 @@ export class VaultsService {
     return obj;
   }
 
+  private async parseCSVFromS3(file_key: string): Promise<string[]> {
+    try {
+      const csvStream = await this.awsService.getCsv(file_key);
+      const csvData = await csvStream.data.toArray();
+      const csvString = Buffer.concat(csvData).toString();
+
+      return new Promise((resolve, reject) => {
+        const results: string[] = [];
+        csv.parse(csvString, {
+          columns: false,
+          skip_empty_lines: true,
+          trim: true
+        })
+        .on('data', (data) => {
+          const address = data[0];
+          if (address && typeof address === 'string' && /^addr1[a-zA-Z0-9]{98}$/.test(address)) {
+            results.push(address);
+          }
+        })
+        .on('end', () => resolve(results))
+        .on('error', (error) => reject(error));
+      });
+    } catch (error) {
+      console.error('Error parsing CSV from S3:', error);
+      throw new BadRequestException('Failed to parse CSV file from S3');
+    }
+  }
+
+
+
   async createVault(userId: string, data: CreateVaultReq): Promise<any> {
     try {
-      let vault: Vault;
-
-      // If vault ID is provided, try to find an existing draft vault
-      if (data.id) {
-        vault = await this.vaultsRepository.findOne({
-          where: {
-            id: data.id,
-            vault_status: VaultStatus.draft,
-            owner: { id: userId }
-          },
-          relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist']
-        });
-
-        if (vault) {
-          // Only update the vault status to published, preserve all other fields
-          await this.vaultsRepository.update(
-            { id: vault.id },
-            { vault_status: VaultStatus.published }
-          );
-          return await this.vaultsRepository.findOne({
-            where: { id: vault.id },
-            relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist']
-          });
-        }
-      }
-
-      // If no draft vault found or no ID provided, create a new published vault
       const owner = await this.usersRepository.findOne({
         where: { id: userId }
       });
 
-      if(!owner){
+      if (!owner) {
         throw new UnauthorizedException('User was not authorized!');
       }
 
@@ -129,6 +136,7 @@ export class VaultsService {
       const investorsWhiteListFile = investorsWhiteListCsvKey ? await this.filesRepository.findOne({
         where: { file_key: investorsWhiteListCsvKey }
       }) : null;
+
       // Prepare vault data
       const vaultData = this.transformToSnakeCase({
         ...data,
@@ -137,26 +145,25 @@ export class VaultsService {
         investmentWindowDuration: data.investmentWindowDuration,
         investmentOpenWindowTime: new Date(data.investmentOpenWindowTime).toISOString(),
         contributionOpenWindowTime: new Date(data.contributionOpenWindowTime).toISOString(),
-
         timeElapsedIsEqualToTime: data.timeElapsedIsEqualToTime,
         vaultStatus: VaultStatus.published,
-        // Ensure FileEntity relationships are preserved by placing them after the spread
         vaultImage: vaultImg,
         bannerImage: bannerImg,
         ftTokenImg: ftTokenImg,
         investorsWhitelistCsv: investorsWhiteListFile
       });
-        delete vaultData.assets_whitelist;
+
+      delete vaultData.assets_whitelist;
       delete vaultData.investors_whitelist;
       delete vaultData.tags;
 
-        vault = await this.vaultsRepository.save(vaultData as Vault);
+      const newVault = await this.vaultsRepository.save(vaultData as Vault);
 
       // Handle social links
       if (data.socialLinks?.length > 0) {
         const links = data.socialLinks.map(linkItem => {
           return this.linksRepository.create({
-            vault: vault,
+            vault: newVault,
             name: linkItem.name,
             url: linkItem.url
           });
@@ -164,33 +171,33 @@ export class VaultsService {
         await this.linksRepository.save(links);
       }
 
-      if(data.assetsWhitelist.length > 0){
-      data.assetsWhitelist.map(assetItem => {
+      // Handle assets whitelist
+      if (data.assetsWhitelist?.length > 0) {
+        await Promise.all(data.assetsWhitelist.map(assetItem => {
           return this.assetsWhitelistRepository.save({
-            vault: vault,
+            vault: newVault,
             policy_id: assetItem.id,
             asset_count_cap_min: assetItem.countCapMin,
             asset_count_cap_max: assetItem.countCapMax
           });
-        });
+        }));
       }
-
 
       // Handle investors whitelist
       const investorsFromCsv = investorsWhiteListFile ?
         await this.parseCSVFromS3(investorsWhiteListFile.file_key) : [];
-      console.log('Investors from CSV:', investorsFromCsv);
+
       const allInvestors = new Set([
         ...data.investorsWhiteList.map(item => item.wallet_address),
         ...investorsFromCsv
       ]);
 
-       Array.from(allInvestors).map(walletAddress => {
+      await Promise.all(Array.from(allInvestors).map(walletAddress => {
         return this.investorsWhiteListRepository.save({
-          vault: vault,
+          vault: newVault,
           wallet_address: walletAddress
         });
-      });
+      }));
 
       // Handle tags
       if (data.tags?.length > 0) {
@@ -207,48 +214,32 @@ export class VaultsService {
             return tag;
           })
         );
-        vault.tags = tags;
-        await this.vaultsRepository.save(vault);
+        newVault.tags = tags;
+        await this.vaultsRepository.save(newVault);
       }
-      const createdVault = plainToInstance(Vault, vault, { exposeDefaultValues: true});
-      return classToPlain(createdVault);
+
+      const finalVault = await this.vaultsRepository.findOne({
+        where: { id: newVault.id },
+        relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'tags', 'vault_image', 'banner_image', 'ft_token_img']
+      });
+
+      if (!finalVault) {
+        throw new BadRequestException('Failed to retrieve created vault');
+      }
+
+      // Transform image entities to URLs
+      finalVault.vault_image = this.transformImageToUrl(finalVault.vault_image as FileEntity) as any;
+      finalVault.banner_image = this.transformImageToUrl(finalVault.banner_image as FileEntity) as any;
+      finalVault.ft_token_img = this.transformImageToUrl(finalVault.ft_token_img as FileEntity) as any;
+
+      return classToPlain(finalVault);
     } catch (error) {
       console.error(error);
       throw new BadRequestException('Failed to create vault');
     }
   }
 
-  private async parseCSVFromS3(file_key: string): Promise<string[]> {
-    try {
-      const csvStream = await this.awsService.getCsv(file_key);
-      const csvData = await csvStream.data.toArray();
-      const csvString = Buffer.concat(csvData).toString();
 
-      return new Promise((resolve, reject) => {
-        const results: string[] = [];
-        csv.parse(csvString, {
-          columns: false, // No column headers in the CSV
-          skip_empty_lines: true,
-          trim: true // Remove any whitespace
-        })
-        .on('data', (data) => {
-          // Each row is an array with a single address
-          const address = data[0];
-          if (address && typeof address === 'string' && /^addr1[a-zA-Z0-9]{98}$/.test(address)) {
-            results.push(address);
-          }
-        })
-        .on('end', () => {
-          console.log('Parsed addresses:', results);
-          resolve(results);
-        })
-        .on('error', (error) => reject(error));
-      });
-    } catch (error) {
-      console.error('Error parsing CSV from S3:', error);
-      throw new BadRequestException('Failed to parse CSV file from S3');
-    }
-  }
 
   async saveDraftVault(userId: string, data: SaveDraftReq): Promise<any> {
     let existingVault: Vault | null = null;
@@ -421,7 +412,7 @@ export class VaultsService {
         }
       }
 
-      return await this.getLocalVaultById(vault.id)
+      return await this.prepareDraftResponse(vault.id)
     } catch (error) {
       console.error(error);
       throw new BadRequestException('Failed to create vault');
@@ -479,17 +470,23 @@ export class VaultsService {
     };
   }
 
-  async getLocalVaultById(id: string){
+
+
+  async prepareDraftResponse(id: string) {
     const vault = await this.vaultsRepository.findOne({
       where: { id },
       relations: ['owner', 'social_links', 'investors_whitelist',
         'tags', 'vault_image', 'banner_image', 'ft_token_img']
     });
-    console.log('vault', vault)
 
     if (!vault) {
       throw new BadRequestException('Vault not found');
     }
+
+    // Transform image entities to URLs before converting to plain object
+    vault.vault_image = this.transformImageToUrl(vault.vault_image as FileEntity) as any;
+    vault.banner_image = this.transformImageToUrl(vault.banner_image as FileEntity) as any;
+    vault.ft_token_img = this.transformImageToUrl(vault.ft_token_img as FileEntity) as any;
 
     return classToPlain(vault);
   }
@@ -508,6 +505,11 @@ export class VaultsService {
     if (vault.owner.id !== userId) {
       throw new BadRequestException('Access denied: You are not the owner of this vault');
     }
+
+    // Transform image entities to URLs
+    vault.vault_image = this.transformImageToUrl(vault.vault_image as FileEntity) as any;
+    vault.banner_image = this.transformImageToUrl(vault.banner_image as FileEntity) as any;
+    vault.ft_token_img = this.transformImageToUrl(vault.ft_token_img as FileEntity) as any;
 
     return classToPlain(vault);
   }
@@ -542,7 +544,13 @@ export class VaultsService {
     const [listOfVaults, total] = await queryBuilder.getManyAndCount();
 
     return {
-      items: listOfVaults.map(item => classToPlain(item)),
+      items: listOfVaults.map(item => {
+        // Transform image entities to URLs
+        item.vault_image = this.transformImageToUrl(item.vault_image as FileEntity) as any;
+        item.banner_image = this.transformImageToUrl(item.banner_image as FileEntity) as any;
+        item.ft_token_img = this.transformImageToUrl(item.ft_token_img as FileEntity) as any;
+        return classToPlain(item);
+      }),
       total,
       page,
       limit,

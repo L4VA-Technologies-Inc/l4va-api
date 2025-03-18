@@ -1,5 +1,6 @@
 import { Controller, Post, Body, Get, Param, Request, UseGuards, Query } from '@nestjs/common';
 import { VaultsService } from './vaults.service';
+import { DraftVaultsService } from './draft-vaults.service';
 import { AuthGuard } from '../auth/auth.guard';
 import { CreateVaultReq } from "./dto/createVault.req";
 import { ApiTags } from "@nestjs/swagger";
@@ -11,7 +12,10 @@ import { GetVaultsDto } from "./dto/get-vaults.dto";
 @ApiTags('vaults')
 @Controller('vaults')
 export class VaultsController {
-  constructor(private readonly vaultsService: VaultsService) {}
+  constructor(
+    private readonly vaultsService: VaultsService,
+    private readonly draftVaultsService: DraftVaultsService
+  ) {}
 
   @ApiDoc({
     summary: 'Create vault',
@@ -42,7 +46,7 @@ export class VaultsController {
       data: SaveDraftReq,
   ) {
     const userId = req.user.sub;
-    return this.vaultsService.saveDraftVault(userId, data);
+    return this.draftVaultsService.saveDraftVault(userId, data);
   }
 
   @ApiDoc({
@@ -66,19 +70,26 @@ export class VaultsController {
   @Get('my/drafts')
   getMyDraftVaults(@Request() req, @Query() query: PaginationDto) {
     const userId = req.user.sub;
-    return this.vaultsService.getMyDraftVaults(userId, query.page, query.limit);
+    return this.draftVaultsService.getMyDraftVaults(userId, query.page, query.limit);
   }
 
   @ApiDoc({
     summary: 'Get one vault',
-    description: 'Returns vault if user is the owner',
+    description: 'Returns vault if user is the owner. Uses draft service for draft vaults.',
     status: 200,
   })
   @UseGuards(AuthGuard)
   @Get(':id')
-  getVaultById(@Param('id') id: string, @Request() req) {
+  async getVaultById(@Param('id') id: string, @Request() req) {
     const userId = req.user.sub;
-    return this.vaultsService.getVaultById(id, userId);
+    try {
+      return await this.draftVaultsService.getDraftVaultById(id, userId);
+    } catch (error) {
+      if (error?.message === 'Draft vault not found') {
+        return this.vaultsService.getVaultById(id, userId);
+      }
+      throw error;
+    }
   }
 
   @ApiDoc({

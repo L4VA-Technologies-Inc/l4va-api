@@ -1,0 +1,288 @@
+import { Injectable, BadRequestException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { classToPlain } from 'class-transformer';
+import { Vault } from '../../database/vault.entity';
+import { User } from '../../database/user.entity';
+import { FileEntity } from '../../database/file.entity';
+import { LinkEntity } from '../../database/link.entity';
+import { AssetsWhitelistEntity } from '../../database/assetsWhitelist.entity';
+import { InvestorsWhitelistEntity } from '../../database/investorsWhitelist.entity';
+import { TagEntity } from '../../database/tag.entity';
+import { SaveDraftReq } from './dto/saveDraft.req';
+import { VaultStatus } from '../../types/vault.types';
+import { PaginatedResponseDto } from './dto/paginated-response.dto';
+import { AwsService } from '../aws_bucket/aws.service';
+import * as csv from 'csv-parse';
+
+@Injectable()
+export class DraftVaultsService {
+  constructor(
+    @InjectRepository(Vault)
+    private readonly vaultsRepository: Repository<Vault>,
+    @InjectRepository(User)
+    private readonly usersRepository: Repository<User>,
+    @InjectRepository(LinkEntity)
+    private readonly linksRepository: Repository<LinkEntity>,
+    @InjectRepository(FileEntity)
+    private readonly filesRepository: Repository<FileEntity>,
+    @InjectRepository(AssetsWhitelistEntity)
+    private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
+    @InjectRepository(InvestorsWhitelistEntity)
+    private readonly investorsWhiteListRepository: Repository<InvestorsWhitelistEntity>,
+    @InjectRepository(TagEntity)
+    private readonly tagsRepository: Repository<TagEntity>,
+    private readonly awsService: AwsService
+  ) {}
+
+  private transformImageToUrl(imageEntity: FileEntity | null): string | null {
+    return imageEntity?.file_url || null;
+  }
+
+  async getMyDraftVaults(userId: string, page: number = 1, limit: number = 10): Promise<PaginatedResponseDto<any>> {
+    const [listOfVaults, total] = await this.vaultsRepository.findAndCount({
+      where: {
+        owner: { id: userId },
+        vault_status: VaultStatus.draft
+      },
+      relations: ['social_links', 'assets_whitelist', 'investors_whitelist', 'vault_image', 'banner_image', 'ft_token_img'],
+      skip: (page - 1) * limit,
+      take: limit
+    });
+
+    return {
+      items: listOfVaults.map(item => {
+        // Transform image entities to URLs
+        item.vault_image = this.transformImageToUrl(item.vault_image as FileEntity) as any;
+        item.banner_image = this.transformImageToUrl(item.banner_image as FileEntity) as any;
+        item.ft_token_img = this.transformImageToUrl(item.ft_token_img as FileEntity) as any;
+        return classToPlain(item);
+      }),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit)
+    };
+  }
+
+  async getDraftVaultById(id: string, userId: string): Promise<any> {
+    const vault = await this.vaultsRepository.findOne({
+      where: { 
+        id,
+        vault_status: VaultStatus.draft,
+        owner: { id: userId }
+      },
+      relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'vault_image', 'banner_image', 'ft_token_img']
+    });
+
+    if (!vault) {
+      throw new BadRequestException('Draft vault not found');
+    }
+
+    // Transform image entities to URLs
+    vault.vault_image = this.transformImageToUrl(vault.vault_image as FileEntity) as any;
+    vault.banner_image = this.transformImageToUrl(vault.banner_image as FileEntity) as any;
+    vault.ft_token_img = this.transformImageToUrl(vault.ft_token_img as FileEntity) as any;
+
+    return classToPlain(vault);
+  }
+
+  private async parseCSVFromS3(file_key: string): Promise<string[]> {
+    try {
+      const csvStream = await this.awsService.getCsv(file_key);
+      const csvData = await csvStream.data.toArray();
+      const csvString = Buffer.concat(csvData).toString();
+
+      return new Promise((resolve, reject) => {
+        const results: string[] = [];
+        csv.parse(csvString, {
+          columns: false,
+          skip_empty_lines: true,
+          trim: true
+        })
+        .on('data', (data) => {
+          const address = data[0];
+          if (address && typeof address === 'string' && /^addr1[a-zA-Z0-9]{98}$/.test(address)) {
+            results.push(address);
+          }
+        })
+        .on('end', () => resolve(results))
+        .on('error', (error) => reject(error));
+      });
+    } catch (error) {
+      console.error('Error parsing CSV from S3:', error);
+      throw new BadRequestException('Failed to parse CSV file from S3');
+    }
+  }
+
+  async saveDraftVault(userId: string, data: SaveDraftReq): Promise<any> {
+    let existingVault: Vault | null = null;
+
+    if (data.id) {
+      existingVault = await this.vaultsRepository.findOne({
+        where: {
+          id: data.id,
+          vault_status: VaultStatus.draft,
+          owner: { id: userId }
+        },
+        relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist']
+      });
+
+      if (existingVault && existingVault.vault_status !== VaultStatus.draft) {
+        throw new BadRequestException('Cannot modify a published vault');
+      }
+
+      if (existingVault) {
+        if (existingVault.social_links?.length > 0) {
+          await this.linksRepository.remove(existingVault.social_links);
+        }
+        if (existingVault.assets_whitelist?.length > 0) {
+          await this.assetsWhitelistRepository.remove(existingVault.assets_whitelist);
+        }
+        if (existingVault.investors_whitelist?.length > 0) {
+          await this.investorsWhiteListRepository.remove(existingVault.investors_whitelist);
+        }
+      }
+    }
+
+    try {
+      const owner = await this.usersRepository.findOne({
+        where: { id: userId }
+      });
+
+      // Process image files
+      const imgKey = data.vaultImage?.split('image/')[1];
+      const vaultImg = imgKey ? await this.filesRepository.findOne({
+        where: { file_key: imgKey }
+      }) : null;
+
+      const bannerImgKey = data.bannerImage?.split('image/')[1];
+      const bannerImg = bannerImgKey ? await this.filesRepository.findOne({
+        where: { file_key: bannerImgKey }
+      }) : null;
+
+      const ftTokenImgKey = data.ftTokenImg?.split('image/')[1];
+      const ftTokenImg = ftTokenImgKey ? await this.filesRepository.findOne({
+        where: { file_key: ftTokenImgKey }
+      }) : null;
+
+      const investorsWhiteListCsvKey = data.investorsWhiteListCsv?.split('csv/')[1];
+      const investorsWhiteListFile = investorsWhiteListCsvKey ? await this.filesRepository.findOne({
+        where: { file_key: investorsWhiteListCsvKey }
+      }) : null;
+
+      const vaultData: any = {
+        owner: owner,
+        vault_status: VaultStatus.draft
+      };
+
+      // Only include fields that are actually provided
+      if (data.name !== undefined) vaultData.name = data.name;
+      if (data.type !== undefined) vaultData.type = data.type;
+      if (data.privacy !== undefined) vaultData.privacy = data.privacy;
+      if (data.valuationType !== undefined) vaultData.valuation_type = data.valuationType;
+      if (data.valuationCurrency !== undefined) vaultData.valuation_currency = data.valuationCurrency;
+      if (data.valuationAmount !== undefined) vaultData.valuation_amount = data.valuationAmount;
+      if (data.description !== undefined) vaultData.description = data.description;
+
+      if (data.contributionDuration !== undefined) {
+        vaultData.contribution_duration = data.contributionDuration;
+      }
+      if (data.investmentWindowDuration !== undefined) {
+        vaultData.investment_window_duration = data.investmentWindowDuration;
+      }
+      if (data.investmentOpenWindowTime !== undefined) {
+        vaultData.investment_open_window_time = new Date(data.investmentOpenWindowTime).toISOString();
+      }
+      if (data.contributionOpenWindowTime !== undefined) {
+        vaultData.contribution_open_window_time = new Date(data.contributionOpenWindowTime).toISOString();
+      }
+      if (data.timeElapsedIsEqualToTime !== undefined) {
+        vaultData.time_elapsed_is_equal_to_time = data.timeElapsedIsEqualToTime;
+      }
+
+      // Handle file relationships only if provided
+      if (vaultImg) vaultData.vault_image = vaultImg;
+      if (bannerImg) vaultData.banner_image = bannerImg;
+      if (ftTokenImg) vaultData.ft_token_img = ftTokenImg;
+      if (investorsWhiteListFile) vaultData.investors_whitelist_csv = investorsWhiteListFile;
+
+      let vault: Vault;
+      if (existingVault) {
+        vault = await this.vaultsRepository.save({
+          ...existingVault,
+          ...vaultData
+        }) as Vault;
+      } else {
+        vault = await this.vaultsRepository.save(vaultData as Vault);
+      }
+
+      // Handle social links only if provided
+      if (data.socialLinks !== undefined && data.socialLinks.length > 0) {
+        const links = data.socialLinks.map(linkItem => {
+          return this.linksRepository.create({
+            vault: vault,
+            name: linkItem.name,
+            url: linkItem.url
+          });
+        });
+        await this.linksRepository.save(links);
+      }
+
+      // Handle tags if provided
+      if (data.tags?.length > 0) {
+        const tags = await Promise.all(
+          data.tags.map(async (tagData) => {
+            let tag = await this.tagsRepository.findOne({
+              where: { name: tagData.name }
+            });
+            if (!tag) {
+              tag = await this.tagsRepository.save({
+                name: tagData.name
+              });
+            }
+            return tag;
+          })
+        );
+        vault.tags = tags;
+        await this.vaultsRepository.save(vault);
+      }
+
+      // Handle assets whitelist only if provided
+      if (data.assetsWhitelist !== undefined && data.assetsWhitelist.length > 0) {
+        await Promise.all(data.assetsWhitelist.map(whitelistItem => {
+          return this.assetsWhitelistRepository.save({
+            vault: vault,
+            policy_id: whitelistItem.id,
+            asset_count_cap_min: whitelistItem?.countCapMin,
+            asset_count_cap_max: whitelistItem?.countCapMax
+          });
+        }));
+      }
+
+      // Handle investors whitelist only if provided
+      if (data.investorsWhiteList !== undefined || investorsWhiteListFile) {
+        const investorsFromCsv = investorsWhiteListFile ?
+          await this.parseCSVFromS3(investorsWhiteListFile.file_key) : [];
+
+        const manualInvestors = data.investorsWhiteList?.map(item => item.wallet_address) || [];
+        const allInvestors = new Set([...manualInvestors, ...investorsFromCsv]);
+
+        if (allInvestors.size > 0) {
+          const investorItems = Array.from(allInvestors).map(walletAddress => {
+            return this.investorsWhiteListRepository.create({
+              vault: vault,
+              wallet_address: walletAddress
+            });
+          });
+          await this.investorsWhiteListRepository.save(investorItems);
+        }
+      }
+
+      return await this.getDraftVaultById(vault.id, userId);
+    } catch (error) {
+      console.error(error);
+      throw new BadRequestException('Failed to save draft vault');
+    }
+  }
+}

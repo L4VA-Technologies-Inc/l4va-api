@@ -7,8 +7,8 @@ import {
   IsOptional,
   IsString,
 } from 'class-validator';
-import {ContributionWindowType, VaultPrivacy, VaultType} from '../../../types/vault.types';
-import {AssetWhiteList, InvestorsWhiteList, SocialLink} from '../types';
+import { ContributionWindowType, ValuationType, VaultPrivacy, VaultType } from '../../../types/vault.types';
+import { AssetWhiteList, InvestorsWhiteList, SocialLink } from '../types';
 import { TagDto } from './tag.dto';
 
 export class SaveDraftReq {
@@ -33,18 +33,31 @@ export class SaveDraftReq {
   @IsEnum(VaultPrivacy)
   privacy?: VaultPrivacy;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({
+    description: 'Valuation type - public vaults can only use LBE, private/semi-private can use LBE or fixed',
+    enum: ValuationType,
+    required: false
+  })
   @IsOptional()
-  @IsString()
-  valuationType?: string;
+  @IsEnum(ValuationType)
+  valuationType?: ValuationType;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({
+    description: 'Currency for fixed valuation (required when valuationType is fixed)',
+    required: false,
+    example: 'ADA'
+  })
   @IsOptional()
   @IsString()
   valuationCurrency?: string;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({
+    description: 'Amount for fixed valuation (required when valuationType is fixed)',
+    required: false,
+    example: '1000000'
+  })
   @IsOptional()
+  @IsString()
   valuationAmount?: string;
 
   @ApiProperty({ required: false })
