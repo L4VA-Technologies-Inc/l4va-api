@@ -35,7 +35,7 @@ export class AwsController {
     new ParseFilePipe({
       validators: [
         new MaxFileSizeValidator({ maxSize: 5 * mbMultiplication }), // 5mb
-        new FileTypeValidator({ fileType: 'image/jpeg' }),
+        new FileTypeValidator({ fileType: 'image/*' }),
       ],
     }),
   ) file: Express.Multer.File, @Req() req: Request) {

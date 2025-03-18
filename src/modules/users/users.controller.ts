@@ -3,7 +3,6 @@ import { Controller, Get, Patch, Body, Request, UseGuards, Post, UseInterceptors
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UsersService } from './users.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
-import { UploadImageDto } from './dto/upload-image.dto';
 import { AuthGuard } from '../auth/auth.guard';
 import { ApiDoc } from '../../decorators/api-doc.decorator';
 
