@@ -1,5 +1,5 @@
 import { ApiTags, ApiConsumes } from '@nestjs/swagger';
-import { Controller, Get, Patch, Body, Request, UseGuards, Post, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { Controller, Get, Patch, Body, Request, UseGuards, Post, UseInterceptors, UploadedFile, Param } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UsersService } from './users.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -21,6 +21,16 @@ export class UsersController {
   async getProfile(@Request() req) {
     const userId = req.user.sub;
     return this.usersService.getProfile(userId);
+  }
+
+  @ApiDoc({
+    summary: 'Get public user profile',
+    description: 'Returns a user\'s public profile information by ID (excludes sensitive data)',
+    status: 200,
+  })
+  @Get('/profile/:id')
+  async getPublicProfile(@Param('id') userId: string) {
+    return this.usersService.getPublicProfile(userId);
   }
 
   @ApiDoc({
