@@ -96,13 +96,13 @@ export class Vault {
   @Expose({ name: 'contributionDuration'})
   @Column({
     name: 'contribution_duration',
-    type: 'interval', nullable: true})
-  contribution_duration?: string;
+    type: 'bigint', nullable: true})
+  contribution_duration?: number;
 
 
   @Expose({ name: 'investmentWindowDuration'})
-  @Column({name: 'investment_window_duration', type: 'interval', nullable: true})
-  investment_window_duration?: string;
+  @Column({name: 'investment_window_duration', type: 'bigint', nullable: true})
+  investment_window_duration?: number;
 
   @Expose({ name: 'investmentOpenWindowType'})
   @Column({
@@ -167,8 +167,8 @@ export class Vault {
   @Expose({ name: 'timeElapsedIsEqualToTime'})
   @Column({
     name: 'time_elapsed_is_equal_to_time',
-    type: 'interval', nullable: true})
-  time_elapsed_is_equal_to_time?: string;
+    type: 'bigint', nullable: true})
+  time_elapsed_is_equal_to_time?: number;
 
   @Expose({ name: 'vaultAppreciation'})
   @Column({

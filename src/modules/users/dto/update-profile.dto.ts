@@ -74,15 +74,6 @@ export class UpdateProfileDto {
   totalVaults?: number;
 
   @ApiProperty({
-    description: 'Total gains from all vaults',
-    example: 50000,
-    required: false
-  })
-  @IsNumber()
-  @IsOptional()
-  gains?: number;
-
-  @ApiProperty({
     description: 'List of social media links',
     type: [SocialLinkDto],
     required: false

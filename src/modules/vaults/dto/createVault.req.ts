@@ -94,15 +94,18 @@ export class CreateVaultReq {
   investorsWhiteListCsv?: string;
 
   @ApiProperty({
-    description: 'Duration in PostgreSQL interval format (e.g., "2 days", "1 month", "14 days 12 hours")'
+    description: 'Duration in milliseconds'
   })
   @IsNotEmpty()
-  @IsString()
-  contributionDuration: string;
+  @IsNumber()
+  contributionDuration: number;
 
-  @ApiProperty()
+  @ApiProperty({
+    description: 'Duration in milliseconds'
+  })
   @IsNotEmpty()
-  investmentWindowDuration: string;
+  @IsNumber()
+  investmentWindowDuration: number;
 
   @ApiProperty()
   @IsNotEmpty()
@@ -170,12 +173,12 @@ export class CreateVaultReq {
   terminationType: string;
 
   @ApiProperty({
-    description: 'Duration in PostgreSQL interval format (e.g., "2 days", "1 month", "14 days 12 hours")',
+    description: 'Duration in milliseconds',
     required: true
   })
   @IsNotEmpty()
-  @IsString()
-  timeElapsedIsEqualToTime: string;
+  @IsNumber()
+  timeElapsedIsEqualToTime: number;
 
   @ApiProperty({
     description: 'Vault appreciation percentage',

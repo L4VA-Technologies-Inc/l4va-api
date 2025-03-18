@@ -2,6 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import {
   IsArray,
   IsEnum,
+  IsNumber,
   IsObject,
   IsOptional,
   IsString,
@@ -77,15 +78,19 @@ export class SaveDraftReq {
 
   @ApiProperty({
     required: false,
-    description: 'Duration in PostgreSQL interval format (e.g., "2 days", "1 month", "14 days 12 hours")'
+    description: 'Duration in milliseconds'
   })
   @IsOptional()
-  @IsString()
-  contributionDuration?: string;
+  @IsNumber()
+  contributionDuration?: number;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({
+    required: false,
+    description: 'Duration in milliseconds'
+  })
   @IsOptional()
-  investmentWindowDuration: string;
+  @IsNumber()
+  investmentWindowDuration?: number;
 
   @ApiProperty({ required: false })
   @IsOptional()
@@ -123,9 +128,13 @@ export class SaveDraftReq {
   @IsOptional()
   terminationType: string;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({
+    required: false,
+    description: 'Duration in milliseconds'
+  })
   @IsOptional()
-  timeElapsedIsEqualToTime: string;
+  @IsNumber()
+  timeElapsedIsEqualToTime?: number;
 
   @ApiProperty({ required: false })
   @IsOptional()

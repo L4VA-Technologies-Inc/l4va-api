@@ -55,11 +55,7 @@ export class LifecycleService {
 
     for (const vault of contributionVaults) {
       const contributionStart = new Date(vault.contribution_phase_start);
-      const contributionDuration = vault.contribution_duration;
-      
-      // Parse PostgreSQL interval to milliseconds
-      const durationMs = this.parseIntervalToMs(contributionDuration);
-      const contributionEnd = new Date(contributionStart.getTime() + durationMs);
+      const contributionEnd = new Date(contributionStart.getTime() + vault.contribution_duration);
 
       if (now >= contributionEnd) {
         vault.investment_phase_start = now.toISOString();
@@ -82,11 +78,7 @@ export class LifecycleService {
 
     for (const vault of investmentVaults) {
       const investmentStart = new Date(vault.investment_phase_start);
-      const investmentDuration = vault.investment_window_duration;
-      
-      // Parse PostgreSQL interval to milliseconds
-      const durationMs = this.parseIntervalToMs(investmentDuration);
-      const investmentEnd = new Date(investmentStart.getTime() + durationMs);
+      const investmentEnd = new Date(investmentStart.getTime() + vault.investment_window_duration);
 
       if (now >= investmentEnd) {
         vault.locked_at = now.toISOString();
@@ -97,37 +89,5 @@ export class LifecycleService {
     }
   }
 
-  private parseIntervalToMs(interval: string): number {
-    // Example interval format: '1 year 2 months 3 days 4 hours 5 minutes'
-    const parts = interval.toLowerCase().match(/(\d+)\s+(year|month|day|hour|minute|second)s?/g) || [];
-    let totalMs = 0;
 
-    for (const part of parts) {
-      const [value, unit] = part.split(/\s+/);
-      const numValue = parseInt(value, 10);
-
-      switch (unit) {
-        case 'year':
-          totalMs += numValue * 365 * 24 * 60 * 60 * 1000;
-          break;
-        case 'month':
-          totalMs += numValue * 30 * 24 * 60 * 60 * 1000;
-          break;
-        case 'day':
-          totalMs += numValue * 24 * 60 * 60 * 1000;
-          break;
-        case 'hour':
-          totalMs += numValue * 60 * 60 * 1000;
-          break;
-        case 'minute':
-          totalMs += numValue * 60 * 1000;
-          break;
-        case 'second':
-          totalMs += numValue * 1000;
-          break;
-      }
-    }
-
-    return totalMs;
-  }
 }
