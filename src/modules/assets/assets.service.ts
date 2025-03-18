@@ -102,6 +102,10 @@ export class AssetsService {
       throw new BadRequestException('Asset not found or access denied');
     }
 
+    if (asset.vault.vault_status !== VaultStatus.contribution) {
+      throw new BadRequestException('Assets can only be locked during the contribution phase');
+    }
+
     if (asset.status !== AssetStatus.PENDING) {
       throw new BadRequestException('Only pending assets can be locked');
     }
@@ -123,6 +127,10 @@ export class AssetsService {
       throw new BadRequestException('Asset not found or access denied');
     }
 
+    if (asset.vault.vault_status !== VaultStatus.contribution) {
+      throw new BadRequestException('Assets can only be released during the contribution phase');
+    }
+
     if (asset.status !== AssetStatus.LOCKED) {
       throw new BadRequestException('Only locked assets can be released');
     }
@@ -142,6 +150,10 @@ export class AssetsService {
 
     if (!asset || asset.vault.owner.id !== userId) {
       throw new BadRequestException('Asset not found or access denied');
+    }
+
+    if (asset.vault.vault_status !== VaultStatus.contribution) {
+      throw new BadRequestException('Asset valuations can only be updated during the contribution phase');
     }
 
     if (asset.type === AssetType.NFT && floorPrice !== undefined) {

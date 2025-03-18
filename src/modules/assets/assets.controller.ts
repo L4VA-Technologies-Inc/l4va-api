@@ -13,7 +13,7 @@ export class AssetsController {
 
   @ApiDoc({
     summary: 'Add asset to vault',
-    description: 'Add a new asset to a vault during contribution phase',
+    description: 'Add a new asset to a vault. Only available during the vault contribution phase.',
     status: 201,
   })
   @UseGuards(AuthGuard)
@@ -44,7 +44,7 @@ export class AssetsController {
 
   @ApiDoc({
     summary: 'Lock asset',
-    description: 'Lock a pending asset',
+    description: 'Lock a pending asset. Only available during the vault contribution phase.',
     status: 200,
   })
   @UseGuards(AuthGuard)
@@ -59,7 +59,7 @@ export class AssetsController {
 
   @ApiDoc({
     summary: 'Release asset',
-    description: 'Release a locked asset',
+    description: 'Release a locked asset. Only available during the vault contribution phase.',
     status: 200,
   })
   @UseGuards(AuthGuard)
@@ -74,7 +74,7 @@ export class AssetsController {
 
   @ApiDoc({
     summary: 'Update asset valuation',
-    description: 'Update floor price for NFTs or DEX price for CNTs',
+    description: 'Update floor price for NFTs or DEX price for CNTs. Only available during the vault contribution phase.',
     status: 200,
   })
   @UseGuards(AuthGuard)

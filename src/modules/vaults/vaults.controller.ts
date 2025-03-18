@@ -1,12 +1,12 @@
 import { Controller, Post, Body, Get, Param, Request, UseGuards, Query } from '@nestjs/common';
 import { VaultsService } from './vaults.service';
 import { AuthGuard } from '../auth/auth.guard';
-import {CreateVaultReq} from "./dto/createVault.req";
-import { ApiTags} from "@nestjs/swagger";
-import {ApiDoc} from "../../decorators/api-doc.decorator";
-import {SaveDraftReq} from "./dto/saveDraft.req";
-import {PaginationDto} from "./dto/pagination.dto";
-import {GetVaultsDto} from "./dto/get-vaults.dto";
+import { CreateVaultReq } from "./dto/createVault.req";
+import { ApiTags } from "@nestjs/swagger";
+import { ApiDoc } from "../../decorators/api-doc.decorator";
+import { SaveDraftReq } from "./dto/saveDraft.req";
+import { PaginationDto } from "./dto/pagination.dto";
+import { GetVaultsDto } from "./dto/get-vaults.dto";
 
 @ApiTags('vaults')
 @Controller('vaults')
@@ -83,13 +83,16 @@ export class VaultsController {
 
   @ApiDoc({
     summary: 'List of vaults',
-    description: 'Returns list of vaults owned by the authenticated user',
+    description: 'Returns paginated list of vaults owned by the authenticated user. Default page: 1, default limit: 10. Response includes total count and total pages.',
     status: 200,
   })
   @UseGuards(AuthGuard)
   @Get()
-  getVaults(@Request() req) {
+  getVaults(
+    @Request() req,
+    @Query() query: PaginationDto = { page: 1, limit: 10 }
+  ) {
     const userId = req.user.sub;
-    return this.vaultsService.getVaults(userId);
+    return this.vaultsService.getVaults(userId, query.page, query.limit);
   }
 }

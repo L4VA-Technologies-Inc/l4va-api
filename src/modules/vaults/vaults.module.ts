@@ -5,6 +5,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 
 import { VaultsService } from './vaults.service';
 import { VaultsController } from './vaults.controller';
+import { LifecycleModule } from '../lifecycle/lifecycle.module';
 import { Vault } from '../../database/vault.entity';
 import {User} from '../../database/user.entity';
 import {FileEntity} from '../../database/file.entity';
@@ -17,6 +18,7 @@ import {TagEntity} from "../../database/tag.entity";
 @Module({
   imports: [
     AwsModule,
+    LifecycleModule,
     TypeOrmModule.forFeature([Vault, User, FileEntity, AssetsWhitelistEntity, LinkEntity, InvestorsWhitelistEntity, TagEntity]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
