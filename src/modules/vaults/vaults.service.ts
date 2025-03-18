@@ -372,6 +372,24 @@ export class VaultsService {
         }
       }
 
+      if (data.tags?.length > 0) {
+        const tags = await Promise.all(
+          data.tags.map(async (tagData) => {
+            let tag = await this.tagsRepository.findOne({
+              where: { name: tagData.name }
+            });
+            if (!tag) {
+              tag = await this.tagsRepository.save({
+                name: tagData.name
+              });
+            }
+            return tag;
+          })
+        );
+        vault.tags = tags;
+        await this.vaultsRepository.save(vault);
+      }
+
       // Handle assets whitelist only if provided
       if (data.assetsWhitelist !== undefined && data.assetsWhitelist.length > 0) {
         await Promise.all(data.assetsWhitelist.map(whitelistItem => {
@@ -402,8 +420,8 @@ export class VaultsService {
           await this.investorsWhiteListRepository.save(investorItems);
         }
       }
-      const createdVault = plainToInstance(Vault, vault, { exposeDefaultValues: true});
-      return instanceToPlain(createdVault);
+
+      return await this.getLocalVaultById(vault.id)
     } catch (error) {
       console.error(error);
       throw new BadRequestException('Failed to create vault');
@@ -460,6 +478,22 @@ export class VaultsService {
       totalPages: Math.ceil(total / limit)
     };
   }
+
+  async getLocalVaultById(id: string){
+    const vault = await this.vaultsRepository.findOne({
+      where: { id },
+      relations: ['owner', 'social_links', 'investors_whitelist',
+        'tags', 'vault_image', 'banner_image', 'ft_token_img']
+    });
+    console.log('vault', vault)
+
+    if (!vault) {
+      throw new BadRequestException('Vault not found');
+    }
+
+    return classToPlain(vault);
+  }
+
 
   async getVaultById(id: string, userId: string): Promise<any> {
     const vault = await this.vaultsRepository.findOne({
