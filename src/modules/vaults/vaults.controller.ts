@@ -86,7 +86,6 @@ export class VaultsController {
     description: 'Returns paginated list of vaults owned by the authenticated user. Default page: 1, default limit: 10. Response includes total count and total pages.',
     status: 200,
   })
-  @UseGuards(AuthGuard)
   @Get()
   getVaults(
     @Request() req,
