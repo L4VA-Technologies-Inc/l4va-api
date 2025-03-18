@@ -319,6 +319,8 @@ export class VaultsService {
       if (data.type !== undefined) vaultData.type = data.type;
       if (data.privacy !== undefined) vaultData.privacy = data.privacy;
       if (data.valuationType !== undefined) vaultData.valuation_type = data.valuationType;
+      if (data.valuationCurrency !== undefined) vaultData.valuation_currency = data.valuationCurrency;
+      if (data.valuationAmount !== undefined) vaultData.valuation_amount = data.valuationAmount;
       if (data.description !== undefined) vaultData.description = data.description;
 
       // Handle date fields only if they are provided

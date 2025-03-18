@@ -39,6 +39,15 @@ export class SaveDraftReq {
 
   @ApiProperty({ required: false })
   @IsOptional()
+  @IsString()
+  valuationCurrency?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  valuationAmount?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
   @IsEnum(ContributionWindowType)
   contributionOpenWindowType?: ContributionWindowType;
 
