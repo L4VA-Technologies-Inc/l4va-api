@@ -308,80 +308,98 @@ export class VaultsService {
         where: { file_key: investorsWhiteListCsvKey }
       }) : null;
 
-      // Prepare vault data
-      const vaultData = this.transformToSnakeCase({
-        ...data,
+      // Prepare vault data with only the provided fields
+      const vaultData: any = {
         owner: owner,
-        contributionDuration: data.contributionDuration,
-        investmentWindowDuration: new Date(data.investmentWindowDuration).toISOString(),
-        investmentOpenWindowTime: new Date(data.investmentOpenWindowTime).toISOString(),
-        contributionOpenWindowTime: new Date(data.contributionOpenWindowTime).toISOString(),
+        vault_status: VaultStatus.draft
+      };
 
-        timeElapsedIsEqualToTime: new Date(data.timeElapsedIsEqualToTime).toISOString(),
-        vaultStatus: VaultStatus.draft,
-        // Ensure FileEntity relationships are preserved by placing them after the spread
-        vaultImage: vaultImg,
-        bannerImage: bannerImg,
-        ftTokenImg: ftTokenImg,
-        investorsWhitelistCsv: investorsWhiteListFile
-      });
+      // Only include fields that are actually provided
+      if (data.name !== undefined) vaultData.name = data.name;
+      if (data.type !== undefined) vaultData.type = data.type;
+      if (data.privacy !== undefined) vaultData.privacy = data.privacy;
+      if (data.valuationType !== undefined) vaultData.valuation_type = data.valuationType;
+      if (data.description !== undefined) vaultData.description = data.description;
 
-      delete vaultData.assets_whitelist
-      delete vaultData.investors_whitelist
+      // Handle date fields only if they are provided
+      if (data.contributionDuration !== undefined) {
+        vaultData.contribution_duration = data.contributionDuration;
+      }
+      if (data.investmentWindowDuration !== undefined) {
+        vaultData.investment_window_duration = data.investmentWindowDuration;
+      }
+      if (data.investmentOpenWindowTime !== undefined) {
+        vaultData.investment_open_window_time = new Date(data.investmentOpenWindowTime).toISOString();
+      }
+      if (data.contributionOpenWindowTime !== undefined) {
+        vaultData.contribution_open_window_time = new Date(data.contributionOpenWindowTime).toISOString();
+      }
+      if (data.timeElapsedIsEqualToTime !== undefined) {
+        vaultData.time_elapsed_is_equal_to_time = data.timeElapsedIsEqualToTime;
+      }
+
+      // Handle file relationships only if provided
+      if (vaultImg) vaultData.vault_image = vaultImg;
+      if (bannerImg) vaultData.banner_image = bannerImg;
+      if (ftTokenImg) vaultData.ft_token_img = ftTokenImg;
+      if (investorsWhiteListFile) vaultData.investors_whitelist_csv = investorsWhiteListFile;
 
       let vault: Vault;
-      // Remove asset count cap fields as they are now in AssetsWhitelist
-
       if (existingVault) {
-        // Update existing draft vault
-        Object.assign(existingVault, vaultData);
-        vault = await this.vaultsRepository.save(existingVault);
+        // Update only the provided fields in existing draft vault
+        vault = await this.vaultsRepository.save({
+          ...existingVault,
+          ...vaultData
+        });
       } else {
-        // Create new draft vault
+        // Create new draft vault with provided fields
         vault = await this.vaultsRepository.save(vaultData as Vault);
       }
 
-      // Handle social links
-      if (data.socialLinks?.length > 0) {
-        const links = data.socialLinks.map(linkItem => {
-          return this.linksRepository.create({
-            vault: vault,
-            name: linkItem.name,
-            url: linkItem.url
+      // Handle social links only if provided
+      if (data.socialLinks !== undefined) {
+        if (data.socialLinks.length > 0) {
+          const links = data.socialLinks.map(linkItem => {
+            return this.linksRepository.create({
+              vault: vault,
+              name: linkItem.name,
+              url: linkItem.url
+            });
           });
-        });
-        await this.linksRepository.save(links);
+          await this.linksRepository.save(links);
+        }
       }
 
-      if(data.assetsWhitelist.length > 0){
-        data.assetsWhitelist.map(whitelistItem => {
-          // Find matching whitelist item from request data
-
-          // Create the whitelist entity with properly transformed property names
-          this.assetsWhitelistRepository.save({
+      // Handle assets whitelist only if provided
+      if (data.assetsWhitelist !== undefined && data.assetsWhitelist.length > 0) {
+        await Promise.all(data.assetsWhitelist.map(whitelistItem => {
+          return this.assetsWhitelistRepository.save({
             vault: vault,
             policy_id: whitelistItem.id,
-            asset_count_cap_min: whitelistItem?.countCapMin,  // Optional field
-            asset_count_cap_max: whitelistItem?.countCapMax   // Optional field
+            asset_count_cap_min: whitelistItem?.countCapMin,
+            asset_count_cap_max: whitelistItem?.countCapMax
           });
-        });
+        }));
       }
-      // Handle investors whitelist
-      const investorsFromCsv = investorsWhiteListFile ?
-        await this.parseCSVFromS3(investorsWhiteListFile.file_key) : [];
-      console.log('Investors from CSV:', investorsFromCsv);
-      const allInvestors = new Set([
-        ...data.investorsWhiteList.map(item => item.wallet_address),
-        ...investorsFromCsv
-      ]);
 
-      const investorItems = Array.from(allInvestors).map(walletAddress => {
-        return this.investorsWhiteListRepository.create({
-          vault: vault,
-          wallet_address: walletAddress
-        });
-      });
-      await this.investorsWhiteListRepository.save(investorItems);
+      // Handle investors whitelist only if provided
+      if (data.investorsWhiteList !== undefined || investorsWhiteListFile) {
+        const investorsFromCsv = investorsWhiteListFile ?
+          await this.parseCSVFromS3(investorsWhiteListFile.file_key) : [];
+        
+        const manualInvestors = data.investorsWhiteList?.map(item => item.wallet_address) || [];
+        const allInvestors = new Set([...manualInvestors, ...investorsFromCsv]);
+
+        if (allInvestors.size > 0) {
+          const investorItems = Array.from(allInvestors).map(walletAddress => {
+            return this.investorsWhiteListRepository.create({
+              vault: vault,
+              wallet_address: walletAddress
+            });
+          });
+          await this.investorsWhiteListRepository.save(investorItems);
+        }
+      }
 
       return classToPlain(vault);
     } catch (error) {

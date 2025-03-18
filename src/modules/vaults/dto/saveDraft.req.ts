@@ -120,7 +120,7 @@ export class SaveDraftReq {
 
   @ApiProperty({ required: false })
   @IsOptional()
-  assetAppreciation: string;
+  vaultAppreciation: string;
 
   @ApiProperty({ required: false })
   @IsOptional()
