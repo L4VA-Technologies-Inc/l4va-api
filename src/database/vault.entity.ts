@@ -128,11 +128,11 @@ export class Vault {
 
 
 
-  @Expose({ name: 'ftInvestmentReverse'})
+  @Expose({ name: 'ftInvestmentReserve'})
   @Column({
-    name: 'ft_investment_reverse',
+    name: 'ft_investment_reserve',
     type: 'numeric', nullable:true})
-  ft_investment_reverse?: number;
+  ft_investment_reserve?: number;
 
   @Expose({ name: 'liquidityPoolContribution'})
   @Column({

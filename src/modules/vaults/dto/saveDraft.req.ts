@@ -119,7 +119,7 @@ export class SaveDraftReq {
 
   @ApiProperty({ required: false })
   @IsOptional()
-  ftInvestmentReverse: number;
+  ftInvestmentReserve: number;
 
   @ApiProperty({ required: false })
   @IsOptional()

@@ -38,8 +38,8 @@ export class UpdateProfileDto {
   description?: string;
 
   @ApiProperty({
-    description: 'URL to profile image',
-    example: 'https://example.com/profile.jpg',
+    description: 'Profile image file URL (format: image/<file_key>)',
+    example: 'image/profile-123.jpg',
     required: false
   })
   @IsString()
@@ -47,8 +47,8 @@ export class UpdateProfileDto {
   profileImage?: string;
 
   @ApiProperty({
-    description: 'URL to banner image',
-    example: 'https://example.com/banner.jpg',
+    description: 'Banner image file URL (format: image/<file_key>)',
+    example: 'image/banner-123.jpg',
     required: false
   })
   @IsString()

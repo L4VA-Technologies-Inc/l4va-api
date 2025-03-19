@@ -87,6 +87,32 @@ export class UsersService {
       user.description = updateData.description;
     }
 
+    // Process profile image file
+    if (updateData.profileImage) {
+      const profileImgKey = updateData.profileImage.split('image/')[1];
+      if (profileImgKey) {
+        const profileImg = await this.filesRepository.findOne({
+          where: { file_key: profileImgKey }
+        });
+        if (profileImg) {
+          user.profile_image = profileImg;
+        }
+      }
+    }
+
+    // Process banner image file
+    if (updateData.bannerImage) {
+      const bannerImgKey = updateData.bannerImage.split('image/')[1];
+      if (bannerImgKey) {
+        const bannerImg = await this.filesRepository.findOne({
+          where: { file_key: bannerImgKey }
+        });
+        if (bannerImg) {
+          user.banner_image = bannerImg;
+        }
+      }
+    }
+
     // Handle social links update
     if (updateData.socialLinks) {
       // Remove existing social links
@@ -103,6 +129,7 @@ export class UsersService {
         });
       });
     }
+
     return this.usersRepository.save(user);
   }
 

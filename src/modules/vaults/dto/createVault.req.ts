@@ -130,7 +130,7 @@ export class CreateVaultReq {
   })
   @IsNotEmpty()
   @IsNumber()
-  ftInvestmentReverse: number;
+  ftInvestmentReserve: number;
 
   @ApiProperty({
     description: 'Liquidity pool contribution percentage',

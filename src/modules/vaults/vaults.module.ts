@@ -14,6 +14,7 @@ import {LinkEntity} from '../../database/link.entity';
 import {InvestorsWhitelistEntity} from '../../database/investorsWhitelist.entity';
 import {AwsModule} from '../aws_bucket/aws.module';
 import {TagEntity} from "../../database/tag.entity";
+import { DraftVaultsService } from './draft-vaults.service';
 
 @Module({
   imports: [
@@ -30,8 +31,8 @@ import {TagEntity} from "../../database/tag.entity";
       inject: [ConfigService],
     }),
   ],
-  providers: [VaultsService],
+  providers: [VaultsService, DraftVaultsService],
   controllers: [VaultsController],
-  exports: [VaultsService],
+  exports: [VaultsService, DraftVaultsService],
 })
 export class VaultsModule {}
