@@ -51,26 +51,39 @@ export class VaultsController {
 
   @ApiDoc({
     summary: 'Select my vaults',
-    description: 'Returns list of my vaults. Can be filtered by status: open (published, contribution, investment) or locked',
+    description: 'Returns list of my vaults. Can be filtered by status: open (published, contribution, investment) or locked. Supports sorting by name, created_at, or updated_at.',
     status: 200,
   })
   @UseGuards(AuthGuard)
   @Get('my')
   getMyVaults(@Request() req, @Query() query: GetVaultsDto) {
     const userId = req.user.sub;
-    return this.vaultsService.getMyVaults(userId, query.filter, query.page, query.limit);
+    return this.vaultsService.getMyVaults(
+      userId,
+      query.filter,
+      query.page,
+      query.limit,
+      query.sortBy,
+      query.sortOrder
+    );
   }
 
   @ApiDoc({
     summary: 'Select my draft vaults',
-    description: 'Returns list of my draft vaults',
+    description: 'Returns list of my draft vaults. Supports sorting by name, created_at, or updated_at.',
     status: 200,
   })
   @UseGuards(AuthGuard)
   @Get('my/drafts')
-  getMyDraftVaults(@Request() req, @Query() query: PaginationDto) {
+  getMyDraftVaults(@Request() req, @Query() query: GetVaultsDto) {
     const userId = req.user.sub;
-    return this.draftVaultsService.getMyDraftVaults(userId, query.page, query.limit);
+    return this.draftVaultsService.getMyDraftVaults(
+      userId,
+      query.page,
+      query.limit,
+      query.sortBy,
+      query.sortOrder
+    );
   }
 
   @ApiDoc({
@@ -94,11 +107,17 @@ export class VaultsController {
 
   @ApiDoc({
     summary: 'List of public vaults',
-    description: 'Returns paginated list of all published vaults. Default page: 1, default limit: 10. Response includes total count and total pages.',
+    description: 'Returns paginated list of all published vaults. Default page: 1, default limit: 10. Supports sorting by name, created_at, or updated_at. Response includes total count and total pages.',
     status: 200,
   })
   @Get()
   getVaults(@Query() query: GetVaultsDto) {
-    return this.vaultsService.getVaults(query.filter, query.page, query.limit);
+    return this.vaultsService.getVaults(
+      query.filter,
+      query.page,
+      query.limit,
+      query.sortBy,
+      query.sortOrder
+    );
   }
 }

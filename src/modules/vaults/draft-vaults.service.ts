@@ -11,6 +11,7 @@ import { InvestorsWhitelistEntity } from '../../database/investorsWhitelist.enti
 import { TagEntity } from '../../database/tag.entity';
 import { SaveDraftReq } from './dto/saveDraft.req';
 import { VaultStatus } from '../../types/vault.types';
+import { VaultSortField, SortOrder } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { AwsService } from '../aws_bucket/aws.service';
 import * as csv from 'csv-parse';
@@ -39,16 +40,27 @@ export class DraftVaultsService {
     return imageEntity?.file_url || null;
   }
 
-  async getMyDraftVaults(userId: string, page: number = 1, limit: number = 10): Promise<PaginatedResponseDto<any>> {
-    const [listOfVaults, total] = await this.vaultsRepository.findAndCount({
+  async getMyDraftVaults(userId: string, page: number = 1, limit: number = 10, sortBy?: VaultSortField, sortOrder: SortOrder = SortOrder.DESC): Promise<PaginatedResponseDto<any>> {
+    const query = {
       where: {
         owner: { id: userId },
         vault_status: VaultStatus.draft
       },
       relations: ['social_links', 'assets_whitelist', 'investors_whitelist', 'vault_image', 'banner_image', 'ft_token_img'],
       skip: (page - 1) * limit,
-      take: limit
-    });
+      take: limit,
+      order: {}
+    };
+
+    // Add sorting if specified
+    if (sortBy) {
+      query.order[sortBy] = sortOrder;
+    } else {
+      // Default sort by created_at DESC if no sort specified
+      query.order['created_at'] = SortOrder.DESC;
+    }
+
+    const [listOfVaults, total] = await this.vaultsRepository.findAndCount(query);
 
     return {
       items: listOfVaults.map(item => {

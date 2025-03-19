@@ -15,7 +15,7 @@ import * as csv from 'csv-parse';
 import { AwsService } from '../aws_bucket/aws.service';
 import { snakeCase } from 'typeorm/util/StringUtils';
 import {classToPlain} from "class-transformer";
-import { VaultFilter } from './dto/get-vaults.dto';
+import { VaultFilter, VaultSortField, SortOrder } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { TagEntity } from '../../database/tag.entity';
 
@@ -419,14 +419,15 @@ export class VaultsService {
     }
   }
 
-  async getMyVaults(userId: string, filter?: VaultFilter, page: number = 1, limit: number = 10): Promise<PaginatedResponseDto<any>> {
+  async getMyVaults(userId: string, filter?: VaultFilter, page: number = 1, limit: number = 10, sortBy?: VaultSortField, sortOrder: SortOrder = SortOrder.DESC): Promise<PaginatedResponseDto<any>> {
     const query = {
       where: {
         owner: { id: userId }
       },
-      relations: ['social_links', 'assets_whitelist', 'investors_whitelist'],
+      relations: ['social_links', 'assets_whitelist', 'investors_whitelist', 'vault_image', 'banner_image', 'ft_token_img'],
       skip: (page - 1) * limit,
-      take: limit
+      take: limit,
+      order: {}
     };
 
     if (filter === VaultFilter.open) {
@@ -439,10 +440,24 @@ export class VaultsService {
       query.where['vault_status'] = VaultStatus.locked;
     }
 
+    // Add sorting if specified
+    if (sortBy) {
+      query.order[sortBy] = sortOrder;
+    } else {
+      // Default sort by created_at DESC if no sort specified
+      query.order['created_at'] = SortOrder.DESC;
+    }
+
     const [listOfVaults, total] = await this.vaultsRepository.findAndCount(query);
 
     return {
-      items: listOfVaults.map(item => classToPlain(item)),
+      items: listOfVaults.map(item => {
+        // Transform image entities to URLs
+        item.vault_image = this.transformImageToUrl(item.vault_image as FileEntity) as any;
+        item.banner_image = this.transformImageToUrl(item.banner_image as FileEntity) as any;
+        item.ft_token_img = this.transformImageToUrl(item.ft_token_img as FileEntity) as any;
+        return classToPlain(item);
+      }),
       total,
       page,
       limit,
@@ -514,7 +529,7 @@ export class VaultsService {
     return classToPlain(vault);
   }
 
-  async getVaults(filter?: VaultFilter, page: number = 1, limit: number = 10): Promise<PaginatedResponseDto<any>> {
+  async getVaults(filter?: VaultFilter, page: number = 1, limit: number = 10, sortBy?: VaultSortField, sortOrder: SortOrder = SortOrder.DESC): Promise<PaginatedResponseDto<any>> {
     const queryBuilder = this.vaultsRepository.createQueryBuilder('vault')
       .leftJoinAndSelect('vault.social_links', 'social_links')
       .leftJoinAndSelect('vault.assets_whitelist', 'assets_whitelist')
@@ -533,6 +548,14 @@ export class VaultsService {
       });
     } else if (filter === VaultFilter.locked) {
       queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked });
+    }
+
+    // Apply sorting
+    if (sortBy) {
+      queryBuilder.orderBy(`vault.${sortBy}`, sortOrder);
+    } else {
+      // Default sort by created_at DESC
+      queryBuilder.orderBy('vault.created_at', SortOrder.DESC);
     }
 
     // Add pagination and ordering
