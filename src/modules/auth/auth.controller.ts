@@ -28,6 +28,7 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @Post('login')
   async login(@Body() signatureData: LoginReq) {
+    console.log("signatureData", signatureData)
     return this.authService.verifySignature(signatureData);
   }
 }
