@@ -26,7 +26,7 @@ export class AssetWhiteList {
   @ApiProperty()
   @IsString()
   @Expose()
-  id: string;
+  policyId: string;
 
   /**
    * Minimum number of assets allowed

@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { Expose } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayNotEmpty,
@@ -90,10 +91,14 @@ export class CreateVaultReq {
   @IsString()
   bannerImage: string;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({
+    description: 'CSV file containing investors whitelist',
+    required: false
+  })
   @IsOptional()
   @IsString()
-  investorsWhiteListCsv?: string;
+  @Expose()
+  investorsWhitelistCsv?: string;
 
   @ApiProperty({
     description: 'Duration in milliseconds'

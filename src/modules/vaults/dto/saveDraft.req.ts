@@ -10,7 +10,13 @@ import {
   Min,
   Max,
 } from 'class-validator';
-import { ContributionWindowType, ValuationType, VaultPrivacy, VaultType } from '../../../types/vault.types';
+import {
+  ContributionWindowType,
+  InvestmentWindowType, TerminationType,
+  ValuationType,
+  VaultPrivacy,
+  VaultType
+} from '../../../types/vault.types';
 import { AssetWhiteList, InvestorsWhiteList, SocialLink } from '../types';
 import { TagDto } from './tag.dto';
 import { Expose, Type, plainToInstance } from 'class-transformer';
@@ -115,11 +121,16 @@ export class SaveDraftReq {
   @IsString()
   bannerUrl?: string | null;
 
-  @ApiProperty({ required: false, nullable: true })
+  @ApiProperty({
+    description: 'CSV file containing investors whitelist',
+    required: false,
+    nullable: true
+  })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
   @IsString()
-  investorsWhiteListCsv?: string | null;
+  @Expose()
+  investorsWhitelistCsv?: string | null;
 
   @ApiProperty({
     required: false,
@@ -141,10 +152,11 @@ export class SaveDraftReq {
   @IsNumber()
   investmentWindowDuration?: number | null;
 
-  @ApiProperty({ required: false, nullable: true })
+  @ApiProperty({ required: false, nullable: true, enum: InvestmentWindowType })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
-  @IsString()
+  @IsEnum(InvestmentWindowType)
+  @Expose()
   investmentOpenWindowType?: string | null;
 
   @ApiProperty({ required: false, nullable: true })
@@ -174,8 +186,9 @@ export class SaveDraftReq {
   @ApiProperty({ required: false, nullable: true })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
-  @IsString()
-  ftTokenSupply?: string | null;
+  @IsNumber()
+  @Expose()
+  ftTokenSupply?: number | null;
 
   @ApiProperty({ required: false, nullable: true })
   @IsOptional()
@@ -186,13 +199,15 @@ export class SaveDraftReq {
   @ApiProperty({ required: false, nullable: true })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
-  @IsString()
-  ftTokenDecimals?: string | null;
+  @IsNumber()
+  @Expose()
+  ftTokenDecimals?: number | null;
 
-  @ApiProperty({ required: false, nullable: true })
+  @ApiProperty({ required: false, nullable: true, enum: TerminationType })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
-  @IsString()
+  @IsEnum(TerminationType)
+  @Expose()
   terminationType?: string | null;
 
   @ApiProperty({

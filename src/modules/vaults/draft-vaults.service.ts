@@ -46,7 +46,7 @@ export class DraftVaultsService {
         owner: { id: userId },
         vault_status: VaultStatus.draft
       },
-      relations: ['social_links', 'assets_whitelist', 'investors_whitelist', 'vault_image', 'banner_image', 'ft_token_img'],
+      relations: ['social_links', 'assets_whitelist', 'investors_whitelist', 'vault_image', 'banner_image', 'ft_token_img', 'investors_whitelist_csv'],
       skip: (page - 1) * limit,
       take: limit,
       order: {}
@@ -68,6 +68,7 @@ export class DraftVaultsService {
         item.vault_image = this.transformImageToUrl(item.vault_image as FileEntity) as any;
         item.banner_image = this.transformImageToUrl(item.banner_image as FileEntity) as any;
         item.ft_token_img = this.transformImageToUrl(item.ft_token_img as FileEntity) as any;
+        item.investors_whitelist_csv = this.transformImageToUrl(item.investors_whitelist_csv) as any
         return classToPlain(item);
       }),
       total,
@@ -79,12 +80,12 @@ export class DraftVaultsService {
 
   async getDraftVaultById(id: string, userId: string): Promise<any> {
     const vault = await this.vaultsRepository.findOne({
-      where: { 
+      where: {
         id,
         vault_status: VaultStatus.draft,
         owner: { id: userId }
       },
-      relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'vault_image', 'banner_image', 'ft_token_img']
+      relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'vault_image', 'banner_image', 'ft_token_img', 'investors_whitelist_csv']
     });
 
     if (!vault) {
@@ -95,6 +96,11 @@ export class DraftVaultsService {
     vault.vault_image = this.transformImageToUrl(vault.vault_image as FileEntity) as any;
     vault.banner_image = this.transformImageToUrl(vault.banner_image as FileEntity) as any;
     vault.ft_token_img = this.transformImageToUrl(vault.ft_token_img as FileEntity) as any;
+    vault.investors_whitelist_csv = this.transformImageToUrl(vault.investors_whitelist_csv) as any;
+    delete vault.owner
+    delete vault.contribution_phase_start
+    delete vault.investment_phase_start
+    delete vault.locked_at
 
     return classToPlain(vault);
   }
@@ -137,7 +143,7 @@ export class DraftVaultsService {
           vault_status: VaultStatus.draft,
           owner: { id: userId }
         },
-        relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist']
+        relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'investors_whitelist_csv', 'vault_image', 'banner_image', 'ft_token_img']
       });
 
       if (existingVault && existingVault.vault_status !== VaultStatus.draft) {
@@ -178,10 +184,16 @@ export class DraftVaultsService {
         where: { file_key: ftTokenImgKey }
       }) : null;
 
-      const investorsWhiteListCsvKey = data.investorsWhiteListCsv?.split('csv/')[1];
+      const investorsWhiteListCsvKey = data.investorsWhitelistCsv?.split('csv/')[1];
       const investorsWhiteListFile = investorsWhiteListCsvKey ? await this.filesRepository.findOne({
         where: { file_key: investorsWhiteListCsvKey }
       }) : null;
+
+      // Check if the vault already has these files to avoid duplicate relations
+      const hasVaultImage = existingVault?.vault_image?.file_key === imgKey;
+      const hasBannerImage = existingVault?.banner_image?.file_key === bannerImgKey;
+      const hasFtTokenImage = existingVault?.ft_token_img?.file_key === ftTokenImgKey;
+      const hasInvestorsWhiteListCsv = existingVault?.investors_whitelist_csv?.file_key === investorsWhiteListCsvKey;
 
       const vaultData: any = {
         owner: owner,
@@ -196,6 +208,9 @@ export class DraftVaultsService {
       if (data.valuationCurrency !== undefined) vaultData.valuation_currency = data.valuationCurrency;
       if (data.valuationAmount !== undefined) vaultData.valuation_amount = data.valuationAmount;
       if (data.description !== undefined) vaultData.description = data.description;
+      if(data.ftTokenDecimals) vaultData.ft_token_decimals = data.ftTokenDecimals;
+      if(data.ftTokenSupply) vaultData.ft_token_supply = data.ftTokenSupply;
+      if(data.terminationType) vaultData.termination_type = data.terminationType;
 
       if (data.contributionDuration !== undefined) {
         vaultData.contribution_duration = data.contributionDuration;
@@ -203,21 +218,27 @@ export class DraftVaultsService {
       if (data.investmentWindowDuration !== undefined) {
         vaultData.investment_window_duration = data.investmentWindowDuration;
       }
-      if (data.investmentOpenWindowTime !== undefined) {
+      if (data.investmentOpenWindowTime !== undefined && data.investmentOpenWindowTime !== null) {
         vaultData.investment_open_window_time = new Date(data.investmentOpenWindowTime).toISOString();
       }
-      if (data.contributionOpenWindowTime !== undefined) {
+      if (data.investmentOpenWindowType !== undefined && data.investmentOpenWindowType !== null) {
+        vaultData.investment_open_window_type = data.investmentOpenWindowType;
+      }
+      if (data.contributionOpenWindowTime !== undefined && data.contributionOpenWindowTime !== null) {
         vaultData.contribution_open_window_time = new Date(data.contributionOpenWindowTime).toISOString();
       }
-      if (data.timeElapsedIsEqualToTime !== undefined) {
+      if (data.contributionOpenWindowType !== undefined && data.contributionOpenWindowType !== null) {
+        vaultData.contribution_open_window_type = data.contributionOpenWindowType
+      }
+      if (data.timeElapsedIsEqualToTime !== undefined && data.timeElapsedIsEqualToTime !== null) {
         vaultData.time_elapsed_is_equal_to_time = data.timeElapsedIsEqualToTime;
       }
 
-      // Handle file relationships only if provided
-      if (vaultImg) vaultData.vault_image = vaultImg;
-      if (bannerImg) vaultData.banner_image = bannerImg;
-      if (ftTokenImg) vaultData.ft_token_img = ftTokenImg;
-      if (investorsWhiteListFile) vaultData.investors_whitelist_csv = investorsWhiteListFile;
+      // Handle file relationships only if provided and not already set
+      if (vaultImg && !hasVaultImage) vaultData.vault_image = vaultImg;
+      if (bannerImg && !hasBannerImage) vaultData.banner_image = bannerImg;
+      if (ftTokenImg && !hasFtTokenImage) vaultData.ft_token_img = ftTokenImg;
+      if (investorsWhiteListFile && !hasInvestorsWhiteListCsv) vaultData.investors_whitelist_csv = investorsWhiteListFile;
 
       let vault: Vault;
       if (existingVault) {
@@ -265,7 +286,7 @@ export class DraftVaultsService {
         await Promise.all(data.assetsWhitelist.map(whitelistItem => {
           return this.assetsWhitelistRepository.save({
             vault: vault,
-            policy_id: whitelistItem.id,
+            policy_id: whitelistItem.policyId,
             asset_count_cap_min: whitelistItem?.countCapMin,
             asset_count_cap_max: whitelistItem?.countCapMax
           });

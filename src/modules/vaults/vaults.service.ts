@@ -132,7 +132,7 @@ export class VaultsService {
         where: { file_key: ftTokenImgKey }
       }) : null;
 
-      const investorsWhiteListCsvKey = data.investorsWhiteListCsv?.split('csv/')[1];
+      const investorsWhiteListCsvKey = data.investorsWhitelistCsv?.split('csv/')[1];
       const investorsWhiteListFile = investorsWhiteListCsvKey ? await this.filesRepository.findOne({
         where: { file_key: investorsWhiteListCsvKey }
       }) : null;
@@ -294,7 +294,7 @@ export class VaultsService {
         where: { file_key: ftTokenImgKey }
       }) : null;
 
-      const investorsWhiteListCsvKey = data.investorsWhiteListCsv?.split('csv/')[1];
+      const investorsWhiteListCsvKey = data.investorsWhitelistCsv?.split('csv/')[1];
       const investorsWhiteListFile = investorsWhiteListCsvKey ? await this.filesRepository.findOne({
         where: { file_key: investorsWhiteListCsvKey }
       }) : null;
@@ -386,7 +386,7 @@ export class VaultsService {
         await Promise.all(data.assetsWhitelist.map(whitelistItem => {
           return this.assetsWhitelistRepository.save({
             vault: vault,
-            policy_id: whitelistItem.id,
+            policy_id: whitelistItem.policyId,
             asset_count_cap_min: whitelistItem?.countCapMin,
             asset_count_cap_max: whitelistItem?.countCapMax
           });
