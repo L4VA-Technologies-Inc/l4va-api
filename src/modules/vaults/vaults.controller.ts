@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, Param, Request, UseGuards, Query } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Request, UseGuards, Query, ValidationPipe } from '@nestjs/common';
 import { VaultsService } from './vaults.service';
 import { DraftVaultsService } from './draft-vaults.service';
 import { AuthGuard } from '../auth/auth.guard';
@@ -43,9 +43,10 @@ export class VaultsController {
   saveDraft(
     @Request() req,
     @Body()
-      data: SaveDraftReq,
+    data: SaveDraftReq,
   ) {
     const userId = req.user.sub;
+    console.log('drfat data ', data)
     return this.draftVaultsService.saveDraftVault(userId, data);
   }
 

@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsNotEmpty, IsString } from 'class-validator';
+import { Expose } from 'class-transformer';
 
 export class TagDto {
   @ApiProperty({
@@ -8,5 +9,10 @@ export class TagDto {
   })
   @IsNotEmpty()
   @IsString()
+  @Expose()
   name: string;
+
+  constructor(partial: Partial<TagDto>) {
+    Object.assign(this, partial);
+  }
 }

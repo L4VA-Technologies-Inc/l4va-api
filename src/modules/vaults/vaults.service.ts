@@ -188,7 +188,7 @@ export class VaultsService {
         await this.parseCSVFromS3(investorsWhiteListFile.file_key) : [];
 
       const allInvestors = new Set([
-        ...data.investorsWhiteList.map(item => item.wallet_address),
+        ...data.investorsWhiteList.map(item => item.walletAddress),
         ...investorsFromCsv
       ]);
 
@@ -398,7 +398,7 @@ export class VaultsService {
         const investorsFromCsv = investorsWhiteListFile ?
           await this.parseCSVFromS3(investorsWhiteListFile.file_key) : [];
 
-        const manualInvestors = data.investorsWhiteList?.map(item => item.wallet_address) || [];
+        const manualInvestors = data.investorsWhiteList?.map(item => item.walletAddress) || [];
         const allInvestors = new Set([...manualInvestors, ...investorsFromCsv]);
 
         if (allInvestors.size > 0) {

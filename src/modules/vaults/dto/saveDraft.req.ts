@@ -6,210 +6,357 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  ValidateIf,
+  Min,
+  Max,
 } from 'class-validator';
 import { ContributionWindowType, ValuationType, VaultPrivacy, VaultType } from '../../../types/vault.types';
 import { AssetWhiteList, InvestorsWhiteList, SocialLink } from '../types';
 import { TagDto } from './tag.dto';
+import { Expose, Type, plainToInstance } from 'class-transformer';
 
 export class SaveDraftReq {
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true })
   @IsOptional()
+  @ValidateIf((o, v) => v !== null)
   @IsString()
-  id?: string;
+  @Expose()
+  id?: string | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true })
   @IsOptional()
+  @ValidateIf((o, v) => v !== null)
   @IsString()
-  name?: string;
+  @Expose()
+  name?: string | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true, enum: VaultType })
   @IsOptional()
+  @ValidateIf((o, v) => v !== null)
   @IsEnum(VaultType)
-  type?: VaultType;
+  @Expose()
+  type?: VaultType | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true, enum: VaultPrivacy })
   @IsOptional()
+  @ValidateIf((o, v) => v !== null)
   @IsEnum(VaultPrivacy)
-  privacy?: VaultPrivacy;
+  @Expose()
+  privacy?: VaultPrivacy | null;
 
   @ApiProperty({
     description: 'Valuation type - public vaults can only use LBE, private/semi-private can use LBE or fixed',
     enum: ValuationType,
-    required: false
+    required: false,
+    nullable: true
   })
   @IsOptional()
+  @ValidateIf((o, v) => v !== null)
   @IsEnum(ValuationType)
-  valuationType?: ValuationType;
+  @Expose()
+  valuationType?: ValuationType | null;
 
   @ApiProperty({
     description: 'Currency for fixed valuation (required when valuationType is fixed)',
     required: false,
+    nullable: true,
     example: 'ADA'
   })
   @IsOptional()
+  @ValidateIf((o, v) => v !== null)
   @IsString()
-  valuationCurrency?: string;
+  @Expose()
+  valuationCurrency?: string | null;
 
   @ApiProperty({
     description: 'Amount for fixed valuation (required when valuationType is fixed)',
     required: false,
+    nullable: true,
     example: '1000000'
   })
   @IsOptional()
+  @ValidateIf((o, v) => v !== null)
   @IsString()
-  valuationAmount?: string;
+  @Expose()
+  valuationAmount?: string | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true, enum: ContributionWindowType })
   @IsOptional()
+  @ValidateIf((o, v) => v !== null)
   @IsEnum(ContributionWindowType)
-  contributionOpenWindowType?: ContributionWindowType;
+  @Expose()
+  contributionOpenWindowType?: ContributionWindowType | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true })
   @IsOptional()
-  contributionOpenWindowTime?: string;
+  @ValidateIf((o, v) => v !== null)
+  @IsNumber()
+  @Expose()
+  contributionOpenWindowTime?: number | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true })
   @IsOptional()
+  @ValidateIf((o, v) => v !== null)
   @IsString()
-  description?: string;
+  @Expose()
+  description?: string | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true })
   @IsOptional()
+  @ValidateIf((o, v) => v !== null)
   @IsString()
-  imageUrl?: string;
+  @Expose()
+  imageUrl?: string | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true })
   @IsOptional()
+  @ValidateIf((o, v) => v !== null)
   @IsString()
-  bannerUrl?: string;
+  bannerUrl?: string | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true })
   @IsOptional()
+  @ValidateIf((o, v) => v !== null)
   @IsString()
-  investorsWhiteListCsv?: string;
+  investorsWhiteListCsv?: string | null;
 
   @ApiProperty({
     required: false,
+    nullable: true,
     description: 'Duration in milliseconds'
   })
   @IsOptional()
+  @ValidateIf((o, v) => v !== null)
   @IsNumber()
-  contributionDuration?: number;
+  contributionDuration?: number | null;
 
   @ApiProperty({
     required: false,
+    nullable: true,
     description: 'Duration in milliseconds'
   })
   @IsOptional()
+  @ValidateIf((o, v) => v !== null)
   @IsNumber()
-  investmentWindowDuration?: number;
+  investmentWindowDuration?: number | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true })
   @IsOptional()
-  investmentOpenWindowType: string;
+  @ValidateIf((o, v) => v !== null)
+  @IsString()
+  investmentOpenWindowType?: string | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true })
   @IsOptional()
-  investmentOpenWindowTime: string;
+  @ValidateIf((o, v) => v !== null)
+  @IsString()
+  investmentOpenWindowTime?: string | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true })
   @IsOptional()
-  offAssetsOffered: string;
+  @ValidateIf((o, v) => v !== null)
+  @IsString()
+  offAssetsOffered?: string | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true })
   @IsOptional()
-  ftInvestmentReserve: number;
+  @ValidateIf((o, v) => v !== null)
+  @IsNumber()
+  ftInvestmentReserve?: number | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true })
   @IsOptional()
-  liquidityPoolContribution: string;
+  @ValidateIf((o, v) => v !== null)
+  @IsString()
+  liquidityPoolContribution?: string | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true })
   @IsOptional()
-  ftTokenSupply: string;
+  @ValidateIf((o, v) => v !== null)
+  @IsString()
+  ftTokenSupply?: string | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true })
   @IsOptional()
-  ftTokenTicker: string;
+  @ValidateIf((o, v) => v !== null)
+  @IsString()
+  ftTokenTicker?: string | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true })
   @IsOptional()
-  ftTokenDecimals: string;
+  @ValidateIf((o, v) => v !== null)
+  @IsString()
+  ftTokenDecimals?: string | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true })
   @IsOptional()
-  terminationType: string;
+  @ValidateIf((o, v) => v !== null)
+  @IsString()
+  terminationType?: string | null;
 
   @ApiProperty({
     required: false,
+    nullable: true,
     description: 'Duration in milliseconds'
   })
   @IsOptional()
+  @ValidateIf((o, v) => v !== null)
   @IsNumber()
-  timeElapsedIsEqualToTime?: number;
+  @Expose()
+  timeElapsedIsEqualToTime?: number | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({
+    description: 'Vault appreciation percentage (between 0.00 and 100.00)',
+    required: false,
+    nullable: true,
+    minimum: 0,
+    maximum: 100,
+    type: Number
+  })
   @IsOptional()
-  vaultAppreciation: string;
+  @ValidateIf((o, v) => v !== null)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  @Expose()
+  vaultAppreciation?: number | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    description: 'Threshold value between 0.00 and 100.00',
+    minimum: 0,
+    maximum: 100,
+    type: Number
+  })
   @IsOptional()
-  creationThreshold: string;
+  @ValidateIf((o, v) => v !== null)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  @Expose()
+  creationThreshold?: number | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    description: 'Threshold value between 0.00 and 100.00',
+    minimum: 0,
+    maximum: 100,
+    type: Number
+  })
   @IsOptional()
-  startThreshold: string;
+  @ValidateIf((o, v) => v !== null)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  @Expose()
+  startThreshold?: number | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    description: 'Threshold value between 0.00 and 100.00',
+    minimum: 0,
+    maximum: 100,
+    type: Number
+  })
   @IsOptional()
-  voteThreshold: string;
+  @ValidateIf((o, v) => v !== null)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  @Expose()
+  voteThreshold?: number | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    description: 'Threshold value between 0.00 and 100.00',
+    minimum: 0,
+    maximum: 100,
+    type: Number
+  })
   @IsOptional()
-  executionThreshold: string;
+  @ValidateIf((o, v) => v !== null)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  @Expose()
+  executionThreshold?: number | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    description: 'Threshold value between 0.00 and 100.00',
+    minimum: 0,
+    maximum: 100,
+    type: Number
+  })
   @IsOptional()
-  cosigningThreshold: string;
+  @ValidateIf((o, v) => v !== null)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  @Expose()
+  cosigningThreshold?: number | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true })
   @IsOptional()
-  vaultImage: string;
+  @ValidateIf((o, v) => v !== null)
+  @IsString()
+  @Expose()
+  vaultImage?: string | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true })
   @IsOptional()
-  bannerImage: string;
+  @ValidateIf((o, v) => v !== null)
+  @IsString()
+  @Expose()
+  bannerImage?: string | null;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true })
   @IsOptional()
-  ftTokenImg: string;
+  @ValidateIf((o, v) => v !== null)
+  @IsString()
+  @Expose()
+  ftTokenImg?: string | null;
 
-  @ApiProperty( { required: false })
+  @ApiProperty({ required: false, nullable: true, type: [AssetWhiteList] })
   @IsOptional()
+  @ValidateIf((o, v) => v !== null)
   @IsArray()
-  @IsObject({ each: true })
-  assetsWhitelist?: AssetWhiteList[];
+  @Type(() => AssetWhiteList)
+  @Expose()
+  assetsWhitelist?: AssetWhiteList[] | null;
 
-  @ApiProperty( { required: false })
+  @ApiProperty({ required: false, nullable: true, type: [InvestorsWhiteList] })
   @IsOptional()
+  @ValidateIf((o, v) => v !== null)
   @IsArray()
-  @IsObject({ each: true })
-  investorsWhiteList?: InvestorsWhiteList[];
+  @Type(() => InvestorsWhiteList)
+  @Expose()
+  investorsWhiteList?: InvestorsWhiteList[] | null;
 
-  @ApiProperty({ required: false  })
+  @ApiProperty({ required: false, nullable: true, type: [SocialLink] })
   @IsOptional()
+  @ValidateIf((o, v) => v !== null)
   @IsArray()
-  @IsObject({ each: true })
-  socialLinks?: SocialLink[];
+  @Type(() => SocialLink)
+  @Expose()
+  socialLinks?: SocialLink[] | null;
 
   @ApiProperty({
     description: 'List of tags for the vault',
     type: [TagDto],
-    required: false
+    required: false,
+    nullable: true
   })
   @IsOptional()
+  @ValidateIf((o, v) => v !== null)
   @IsArray()
-  @IsObject({ each: true })
-  tags?: TagDto[];
+  @Type(() => TagDto)
+  @Expose()
+  tags?: TagDto[] | null;
 }

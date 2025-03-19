@@ -11,6 +11,8 @@ import {
   IsString,
   MaxLength,
   MinLength,
+  Min,
+  Max,
 } from 'class-validator';
 import { ContributionWindowType, ValuationType, VaultPrivacy, VaultType } from '../../../types/vault.types';
 import { InvestorsWhiteList, SocialLink } from '../types';
@@ -181,52 +183,82 @@ export class CreateVaultReq {
   timeElapsedIsEqualToTime: number;
 
   @ApiProperty({
-    description: 'Vault appreciation percentage',
-    required: true
+    description: 'Vault appreciation percentage (between 0.00 and 100.00)',
+    required: true,
+    minimum: 0,
+    maximum: 100,
+    type: Number
   })
   @IsNotEmpty()
-  @IsString()
-  vaultAppreciation: string;
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  vaultAppreciation: number;
 
   @ApiProperty({
-    description: 'Creation threshold percentage',
-    required: true
+    description: 'Creation threshold percentage (between 0.00 and 100.00)',
+    required: true,
+    minimum: 0,
+    maximum: 100,
+    type: Number
   })
   @IsNotEmpty()
-  @IsString()
-  creationThreshold: string;
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  creationThreshold: number;
 
   @ApiProperty({
-    description: 'Start threshold percentage',
-    required: true
+    description: 'Start threshold percentage (between 0.00 and 100.00)',
+    required: true,
+    minimum: 0,
+    maximum: 100,
+    type: Number
   })
   @IsNotEmpty()
-  @IsString()
-  startThreshold: string;
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  startThreshold: number;
 
   @ApiProperty({
-    description: 'Vote threshold percentage',
-    required: true
+    description: 'Vote threshold percentage (between 0.00 and 100.00)',
+    required: true,
+    minimum: 0,
+    maximum: 100,
+    type: Number
   })
   @IsNotEmpty()
-  @IsString()
-  voteThreshold: string;
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  voteThreshold: number;
 
   @ApiProperty({
-    description: 'Execution threshold percentage',
-    required: true
+    description: 'Execution threshold percentage (between 0.00 and 100.00)',
+    required: true,
+    minimum: 0,
+    maximum: 100,
+    type: Number
   })
   @IsNotEmpty()
-  @IsString()
-  executionThreshold: string;
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  executionThreshold: number;
 
   @ApiProperty({
-    description: 'Cosigning threshold percentage',
-    required: true
+    description: 'Cosigning threshold percentage (between 0.00 and 100.00)',
+    required: true,
+    minimum: 0,
+    maximum: 100,
+    type: Number
   })
   @IsNotEmpty()
-  @IsString()
-  cosigningThreshold: string;
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  cosigningThreshold: number;
 
   @ApiProperty()
   @IsNotEmpty()
