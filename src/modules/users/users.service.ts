@@ -73,9 +73,12 @@ export class UsersService {
     let selectedUser = await this.usersRepository.save(user)
     const updateImage = {
       ...selectedUser,
-      bannerImage: selectedUser.banner_image.file_url,
-      profileImage: selectedUser.profile_image.file_url
+      bannerImage: selectedUser.banner_image ? selectedUser.banner_image.file_url: null,
+      profileImage: selectedUser.profile_image ? selectedUser.profile_image.file_url : null
     }
+    delete updateImage.banner_image;
+    delete updateImage.profile_image;
+
     return classToPlain(updateImage) as User;
   }
 
@@ -144,8 +147,8 @@ export class UsersService {
     let selectedUser = await this.usersRepository.save(user)
     const updateImage = {
       ...selectedUser,
-      banner_image: selectedUser.banner_image.file_url,
-      profile_image: selectedUser.profile_image.file_url
+      banner_image: selectedUser.banner_image ? selectedUser.banner_image.file_url : null,
+      profile_image: selectedUser.profile_image ? selectedUser.profile_image.file_url: null,
     }
     return classToPlain(updateImage) as User;
   }
