@@ -130,7 +130,7 @@ export class SaveDraftReq {
   @ValidateIf((o, v) => v !== null)
   @IsString()
   @Expose()
-  investorsWhitelistCsv?: string | null;
+  investorsWhiteListCsv?: string | null;
 
   @ApiProperty({
     required: false,
@@ -352,7 +352,7 @@ export class SaveDraftReq {
   @IsArray()
   @Type(() => InvestorsWhiteList)
   @Expose()
-  investorsWhiteList?: InvestorsWhiteList[] | null;
+  investorWhitelist?: InvestorsWhiteList[] | null;
 
   @ApiProperty({ required: false, nullable: true, type: [SocialLink] })
   @IsOptional()

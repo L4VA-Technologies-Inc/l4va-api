@@ -184,7 +184,7 @@ export class DraftVaultsService {
         where: { file_key: ftTokenImgKey }
       }) : null;
 
-      const investorsWhiteListCsvKey = data.investorsWhitelistCsv?.split('csv/')[1];
+      const investorsWhiteListCsvKey = data.investorsWhiteListCsv?.split('csv/')[1];
       const investorsWhiteListFile = investorsWhiteListCsvKey ? await this.filesRepository.findOne({
         where: { file_key: investorsWhiteListCsvKey }
       }) : null;
@@ -294,12 +294,10 @@ export class DraftVaultsService {
       }
 
       // Handle investors whitelist only if provided
-      if (data.investorsWhiteList !== undefined || investorsWhiteListFile) {
-        const investorsFromCsv = investorsWhiteListFile ?
-          await this.parseCSVFromS3(investorsWhiteListFile.file_key) : [];
+      if (data.investorWhitelist !== undefined || investorsWhiteListFile) {
 
-        const manualInvestors = data.investorsWhiteList?.map(item => item.walletAddress) || [];
-        const allInvestors = new Set([...manualInvestors, ...investorsFromCsv]);
+        const manualInvestors = data.investorWhitelist?.map(item => item.walletAddress) || [];
+        const allInvestors = new Set([...manualInvestors]);
 
         if (allInvestors.size > 0) {
           const investorItems = Array.from(allInvestors).map(walletAddress => {
