@@ -26,7 +26,6 @@ export class User {
   @Column()
   name: string;
 
-  @Exclude()
   @Column({ unique: true })
   address: string;
 
