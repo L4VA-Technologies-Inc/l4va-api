@@ -1,6 +1,7 @@
-import { IsString, IsOptional, IsArray, ValidateNested, IsNumber } from 'class-validator';
+import {IsString, IsOptional, IsArray, ValidateNested, IsNumber, ArrayNotEmpty, IsObject} from 'class-validator';
 import {Expose, Type} from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
+import {SocialLink} from "../../vaults/types";
 
 export class SocialLinkDto {
   @ApiProperty({
@@ -46,6 +47,7 @@ export class UpdateProfileDto {
   })
   @IsString()
   @IsOptional()
+  @Expose()
   profileImage?: string;
 
   @ApiProperty({
@@ -55,6 +57,7 @@ export class UpdateProfileDto {
   })
   @IsString()
   @IsOptional()
+  @Expose()
   bannerImage?: string;
 
   @ApiProperty({
@@ -80,9 +83,11 @@ export class UpdateProfileDto {
     type: [SocialLinkDto],
     required: false
   })
+
+  @ApiProperty()
   @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => SocialLinkDto)
-  @IsOptional()
-  socialLinks?: SocialLinkDto[];
+  @ArrayNotEmpty()
+  @IsObject({ each: true })
+  @Expose()
+  socialLinks: SocialLink[];
 }

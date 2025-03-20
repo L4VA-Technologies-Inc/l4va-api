@@ -69,6 +69,7 @@ export class UsersService {
   }
 
   async updateProfile(userId: string, updateData: UpdateProfileDto): Promise<User> {
+    console.log("Update", updateData)
     const user = await this.usersRepository.findOne({
       where: { id: userId },
       relations: ['profile_image', 'banner_image', 'social_links']
@@ -129,8 +130,13 @@ export class UsersService {
         });
       });
     }
-
-    return this.usersRepository.save(user);
+    let selectedUser = await this.usersRepository.save(user)
+    const updateImage = {
+      ...selectedUser,
+      banner_image: selectedUser.banner_image.file_url,
+      profile_image: selectedUser.profile_image.file_url
+    }
+    return classToPlain(updateImage) as User;
   }
 
   async uploadProfileImage(userId: string, file: Express.Multer.File, host: string): Promise<User> {
