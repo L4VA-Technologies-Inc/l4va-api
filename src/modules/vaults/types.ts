@@ -53,6 +53,17 @@ export class AssetWhiteList {
   }
 }
 
+export class ContributorWhiteList {
+  @ApiProperty()
+  @IsString()
+  @Expose()
+  policyId: string;
+
+  constructor(partial: Partial<ContributorWhiteList>) {
+    Object.assign(this, partial);
+  }
+}
+
 export class InvestorsWhiteList {
   @ApiProperty()
   @IsString()

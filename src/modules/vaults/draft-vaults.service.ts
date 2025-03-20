@@ -8,6 +8,7 @@ import { FileEntity } from '../../database/file.entity';
 import { LinkEntity } from '../../database/link.entity';
 import { AssetsWhitelistEntity } from '../../database/assetsWhitelist.entity';
 import { InvestorsWhitelistEntity } from '../../database/investorsWhitelist.entity';
+import { ContributorWhitelistEntity } from '../../database/contributorWhitelist.entity';
 import { TagEntity } from '../../database/tag.entity';
 import { SaveDraftReq } from './dto/saveDraft.req';
 import { VaultStatus } from '../../types/vault.types';
@@ -31,6 +32,8 @@ export class DraftVaultsService {
     private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
     @InjectRepository(InvestorsWhitelistEntity)
     private readonly investorsWhiteListRepository: Repository<InvestorsWhitelistEntity>,
+    @InjectRepository(ContributorWhitelistEntity)
+    private readonly contributorWhitelistRepository: Repository<ContributorWhitelistEntity>,
     @InjectRepository(TagEntity)
     private readonly tagsRepository: Repository<TagEntity>,
     private readonly awsService: AwsService
@@ -46,7 +49,7 @@ export class DraftVaultsService {
         owner: { id: userId },
         vault_status: VaultStatus.draft
       },
-      relations: ['social_links', 'assets_whitelist', 'investors_whitelist', 'vault_image', 'banner_image', 'ft_token_img', 'investors_whitelist_csv'],
+      relations: ['social_links', 'assets_whitelist', 'investors_whitelist', 'contributor_whitelist', 'vault_image', 'banner_image', 'ft_token_img', 'investors_whitelist_csv'],
       skip: (page - 1) * limit,
       take: limit,
       order: {}
@@ -85,7 +88,7 @@ export class DraftVaultsService {
         vault_status: VaultStatus.draft,
         owner: { id: userId }
       },
-      relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'vault_image', 'banner_image', 'ft_token_img', 'investors_whitelist_csv']
+      relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'contributor_whitelist', 'vault_image', 'banner_image', 'ft_token_img', 'investors_whitelist_csv']
     });
 
     if (!vault) {
@@ -159,6 +162,9 @@ export class DraftVaultsService {
         }
         if (existingVault.investors_whitelist?.length > 0) {
           await this.investorsWhiteListRepository.remove(existingVault.investors_whitelist);
+        }
+        if (existingVault.contributor_whitelist?.length > 0) {
+          await this.contributorWhitelistRepository.remove(existingVault.contributor_whitelist);
         }
       }
     }
@@ -295,7 +301,6 @@ export class DraftVaultsService {
 
       // Handle investors whitelist only if provided
       if (data.investorWhitelist !== undefined || investorsWhiteListFile) {
-
         const manualInvestors = data.investorWhitelist?.map(item => item.walletAddress) || [];
         const allInvestors = new Set([...manualInvestors]);
 
@@ -308,6 +313,17 @@ export class DraftVaultsService {
           });
           await this.investorsWhiteListRepository.save(investorItems);
         }
+      }
+
+      // Handle contributor whitelist only if provided and vault is private
+      if (data.whitelistContributors !== undefined && data.whitelistContributors.length > 0) {
+        const contributorItems = data.whitelistContributors.map(item => {
+          return this.contributorWhitelistRepository.create({
+            vault: vault,
+            wallet_address: item.policyId
+          });
+        });
+        await this.contributorWhitelistRepository.save(contributorItems);
       }
 
       return await this.getDraftVaultById(vault.id, userId);

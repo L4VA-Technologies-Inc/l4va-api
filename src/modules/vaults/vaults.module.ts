@@ -15,12 +15,13 @@ import {InvestorsWhitelistEntity} from '../../database/investorsWhitelist.entity
 import {AwsModule} from '../aws_bucket/aws.module';
 import {TagEntity} from "../../database/tag.entity";
 import { DraftVaultsService } from './draft-vaults.service';
+import {ContributorWhitelistEntity} from "../../database/contributorWhitelist.entity";
 
 @Module({
   imports: [
     AwsModule,
     LifecycleModule,
-    TypeOrmModule.forFeature([Vault, User, FileEntity, AssetsWhitelistEntity, LinkEntity, InvestorsWhitelistEntity, TagEntity]),
+    TypeOrmModule.forFeature([Vault, User, FileEntity, AssetsWhitelistEntity, LinkEntity, InvestorsWhitelistEntity, TagEntity, ContributorWhitelistEntity]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({

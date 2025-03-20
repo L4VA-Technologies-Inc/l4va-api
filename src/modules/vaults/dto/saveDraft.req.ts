@@ -17,7 +17,7 @@ import {
   VaultPrivacy,
   VaultType
 } from '../../../types/vault.types';
-import { AssetWhiteList, InvestorsWhiteList, SocialLink } from '../types';
+import { AssetWhiteList, ContributorWhiteList, InvestorsWhiteList, SocialLink } from '../types';
 import { TagDto } from './tag.dto';
 import { Expose, Type, plainToInstance } from 'class-transformer';
 
@@ -353,6 +353,19 @@ export class SaveDraftReq {
   @Type(() => InvestorsWhiteList)
   @Expose()
   investorWhitelist?: InvestorsWhiteList[] | null;
+
+  @ApiProperty({
+    description: 'List of contributor wallet addresses (required for private vaults)',
+    type: [ContributorWhiteList],
+    required: false,
+    nullable: true
+  })
+  @IsOptional()
+  @ValidateIf((o, v) => v !== null)
+  @IsArray()
+  @Type(() => ContributorWhiteList)
+  @Expose()
+  whitelistContributors?: ContributorWhiteList[] | null;
 
   @ApiProperty({ required: false, nullable: true, type: [SocialLink] })
   @IsOptional()

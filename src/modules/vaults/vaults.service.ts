@@ -18,6 +18,7 @@ import {classToPlain} from "class-transformer";
 import { VaultFilter, VaultSortField, SortOrder } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { TagEntity } from '../../database/tag.entity';
+import { ContributorWhitelistEntity } from '../../database/contributorWhitelist.entity';
 
 @Injectable()
 export class VaultsService {
@@ -36,6 +37,8 @@ export class VaultsService {
     private readonly investorsWhiteListRepository: Repository<InvestorsWhitelistEntity>,
     @InjectRepository(TagEntity)
     private readonly tagsRepository: Repository<TagEntity>,
+    @InjectRepository(ContributorWhitelistEntity)
+    private readonly contributorWhitelistRepository: Repository<ContributorWhitelistEntity>,
     private readonly awsService: AwsService
   ) {}
 
@@ -137,6 +140,11 @@ export class VaultsService {
         where: { file_key: investorsWhiteListCsvKey }
       }) : null;
 
+      const contributorWhiteListCsvKey = data.contributorWhitelistCsv?.split('csv/')[1];
+      const contributorWhiteListFile = contributorWhiteListCsvKey ? await this.filesRepository.findOne({
+        where: { file_key: contributorWhiteListCsvKey }
+      }) : null;
+
       // Prepare vault data
       const vaultData = this.transformToSnakeCase({
         ...data,
@@ -150,11 +158,13 @@ export class VaultsService {
         vaultImage: vaultImg,
         bannerImage: bannerImg,
         ftTokenImg: ftTokenImg,
-        investorsWhitelistCsv: investorsWhiteListFile
+        investorsWhitelistCsv: investorsWhiteListFile,
+        contributorWhitelistCsv: contributorWhiteListFile
       });
 
       delete vaultData.assets_whitelist;
       delete vaultData.investors_whitelist;
+      delete vaultData.contributor_whitelist;
       delete vaultData.tags;
 
       const newVault = await this.vaultsRepository.save(vaultData as Vault);
@@ -199,6 +209,22 @@ export class VaultsService {
         });
       }));
 
+      // Handle contributors whitelist
+      const contributorsFromCsv = contributorWhiteListFile ?
+        await this.parseCSVFromS3(contributorWhiteListFile.file_key) : [];
+
+      const allContributors = new Set([
+        ...(data.contributorWhiteList?.map(item => item.policyId) || []),
+        ...contributorsFromCsv
+      ]);
+
+      await Promise.all(Array.from(allContributors).map(walletAddress => {
+        return this.contributorWhitelistRepository.save({
+          vault: newVault,
+          wallet_address: walletAddress
+        });
+      }));
+
       // Handle tags
       if (data.tags?.length > 0) {
         const tags = await Promise.all(
@@ -220,7 +246,7 @@ export class VaultsService {
 
       const finalVault = await this.vaultsRepository.findOne({
         where: { id: newVault.id },
-        relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'tags', 'vault_image', 'banner_image', 'ft_token_img']
+        relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'contributor_whitelist', 'tags', 'vault_image', 'banner_image', 'ft_token_img']
       });
 
       if (!finalVault) {

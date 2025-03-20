@@ -14,9 +14,11 @@ import {
   MinLength,
   Min,
   Max,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ContributionWindowType, ValuationType, VaultPrivacy, VaultType } from '../../../types/vault.types';
-import { InvestorsWhiteList, SocialLink } from '../types';
+import { InvestorsWhiteList, ContributorWhiteList, SocialLink } from '../types';
 import { AssetWhitelistDto } from './assetWhitelist.dto';
 import { TagDto } from './tag.dto';
 
@@ -99,6 +101,26 @@ export class CreateVaultReq {
   @IsString()
   @Expose()
   investorsWhitelistCsv?: string;
+
+  @ApiProperty({
+    description: 'CSV file containing contributors whitelist',
+    required: false
+  })
+  @IsOptional()
+  @IsString()
+  @Expose()
+  contributorWhitelistCsv?: string;
+
+  @ApiProperty({
+    description: 'List of contributor wallet addresses',
+    required: false,
+    type: [ContributorWhiteList]
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ContributorWhiteList)
+  contributorWhiteList?: ContributorWhiteList[];
 
   @ApiProperty({
     description: 'Duration in milliseconds'
@@ -290,6 +312,18 @@ export class CreateVaultReq {
   @ArrayNotEmpty()
   @IsObject({ each: true })
   investorsWhiteList: InvestorsWhiteList[];
+
+  @ApiProperty({
+    description: 'List of contributor wallet addresses (required for private vaults)',
+    type: [ContributorWhiteList],
+    required: false
+  })
+  @IsArray()
+  @IsObject({ each: true })
+  @ArrayNotEmpty({
+    message: 'Contributor whitelist is required for private vaults and must not be empty'
+  })
+  whitelistContributors?: ContributorWhiteList[];
 
   @ApiProperty()
   @IsArray()
