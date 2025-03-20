@@ -20,7 +20,7 @@ import {
   VaultPrivacy, VaultStatus,
   VaultType
 } from '../types/vault.types';
-import { Expose } from 'class-transformer';
+import {Expose, Transform} from 'class-transformer';
 import {InvestorsWhitelistEntity} from './investorsWhitelist.entity';
 import {ContributorWhitelistEntity} from './contributorWhitelist.entity';
 import { Asset } from './asset.entity';
@@ -87,6 +87,7 @@ export class Vault {
   contribution_open_window_type?: ContributionWindowType;
 
   @Expose({ name: 'contributionOpenWindowTime'})
+  @Transform(({ value }) => value ? new Date(value).getTime() : null)
   @Column({
     name: 'contribution_open_window_time',
     type: 'timestamptz',
@@ -95,6 +96,7 @@ export class Vault {
   contribution_open_window_time?:string;
 
   @Expose({ name: 'contributionDuration'})
+  @Transform(({ value }) => value ? Number(value) : null)
   @Column({
     name: 'contribution_duration',
     type: 'bigint', nullable: true})
@@ -122,6 +124,7 @@ export class Vault {
   investment_open_window_time?: string;
 
   @Expose({ name: 'offAssetsOffered'})
+  @Transform(({ value }) => value ? Number(value) : null)
   @Column({
     name: 'off_assets_offered',
     type: 'numeric', nullable:true})
@@ -130,18 +133,21 @@ export class Vault {
 
 
   @Expose({ name: 'ftInvestmentReserve'})
+  @Transform(({ value }) => value ? Number(value) : null)
   @Column({
     name: 'ft_investment_reserve',
     type: 'numeric', nullable:true})
   ft_investment_reserve?: number;
 
   @Expose({ name: 'liquidityPoolContribution'})
+  @Transform(({ value }) => value ? Number(value) : null)
   @Column({
     name: 'liquidity_pool_contribution',
     type: 'numeric', nullable:true })
   liquidity_pool_contribution?: number;
 
   @Expose({ name: 'ftTokenSupply'})
+  @Transform(({ value }) => value ? Number(value) : null)
   @Column({name: 'ft_token_supply',
     type: 'numeric',  nullable:true})
   ft_token_supply?: number;
@@ -172,6 +178,7 @@ export class Vault {
   time_elapsed_is_equal_to_time?: number;
 
   @Expose({ name: 'vaultAppreciation'})
+  @Transform(({ value }) => value ? Number(value) : null)
   @Column({
     name: 'vault_appreciation',
     type: 'numeric',
@@ -179,6 +186,7 @@ export class Vault {
   vault_appreciation?: number;
 
   @Expose({ name: 'creationThreshold' })
+  @Transform(({ value }) => value ? Number(value) : null)
   @Column({
     name: 'creation_threshold',
     type: 'numeric',
@@ -187,6 +195,7 @@ export class Vault {
   creation_threshold?: number;
 
   @Expose({ name: 'startThreshold' })
+  @Transform(({ value }) => value ? Number(value) : null)
   @Column({
     name: 'start_threshold',
     type: 'numeric',
@@ -195,6 +204,7 @@ export class Vault {
   start_threshold?: number;
 
   @Expose({ name: 'voteThreshold' })
+  @Transform(({ value }) => value ? Number(value) : null)
   @Column({
     name: 'vote_threshold',
     type: 'numeric',
@@ -203,6 +213,7 @@ export class Vault {
   vote_threshold?: number;
 
   @Expose({ name: 'executionThreshold' })
+  @Transform(({ value }) => value ? Number(value) : null)
   @Column({
     name: 'execution_threshold',
     type: 'numeric',
@@ -211,6 +222,7 @@ export class Vault {
   execution_threshold?: number;
 
   @Expose({ name: 'cosigningThreshold' })
+  @Transform(({ value }) => value ? Number(value) : null)
   @Column({
     name: 'cosigning_threshold',
     type: 'numeric',

@@ -20,7 +20,7 @@ export class AssetWhitelistDto {
   })
   @IsOptional()
   @IsNumber()
-  @Expose({ name: 'assetCountCapMin' })
+  @Expose({ name: 'countCapMin' })
   countCapMin?: number;
 
   @ApiProperty({
@@ -30,6 +30,6 @@ export class AssetWhitelistDto {
   })
   @IsOptional()
   @IsNumber()
-  @Expose({ name: 'assetCountCapMax' })
+  @Expose({ name: 'countCapMax' })
   countCapMax?: number;
 }

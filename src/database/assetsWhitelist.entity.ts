@@ -22,16 +22,16 @@ export class AssetsWhitelistEntity {
   })
   policy_id: string;
 
-  @Expose({ name: 'assetCountCapMin' })
-  @Column({ 
+  @Expose({ name: 'countCapMin' })
+  @Column({
     name: 'asset_count_cap_min',
     type: 'integer',
     nullable: true
   })
   asset_count_cap_min?: number;
 
-  @Expose({ name: 'assetCountCapMax' })
-  @Column({ 
+  @Expose({ name: 'countCapMax' })
+  @Column({
     name: 'asset_count_cap_max',
     type: 'integer',
     nullable: true

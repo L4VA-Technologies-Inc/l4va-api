@@ -140,6 +140,7 @@ export class SaveDraftReq {
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
   @IsNumber()
+  @Expose()
   contributionDuration?: number | null;
 
   @ApiProperty({
@@ -168,20 +169,23 @@ export class SaveDraftReq {
   @ApiProperty({ required: false, nullable: true })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
-  @IsString()
-  offAssetsOffered?: string | null;
+  @IsNumber()
+  @Expose()
+  offAssetsOffered?: number | null;
 
   @ApiProperty({ required: false, nullable: true })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
   @IsNumber()
+  @Expose()
   ftInvestmentReserve?: number | null;
 
   @ApiProperty({ required: false, nullable: true })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
-  @IsString()
-  liquidityPoolContribution?: string | null;
+  @IsNumber()
+  @Expose()
+  liquidityPoolContribution?: number | null;
 
   @ApiProperty({ required: false, nullable: true })
   @IsOptional()
@@ -194,6 +198,7 @@ export class SaveDraftReq {
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
   @IsString()
+  @Expose()
   ftTokenTicker?: string | null;
 
   @ApiProperty({ required: false, nullable: true })

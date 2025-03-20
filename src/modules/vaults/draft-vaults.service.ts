@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { classToPlain } from 'class-transformer';
+import {classToPlain, Expose} from 'class-transformer';
 import { Vault } from '../../database/vault.entity';
 import { User } from '../../database/user.entity';
 import { FileEntity } from '../../database/file.entity';
@@ -16,6 +16,8 @@ import { VaultSortField, SortOrder } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { AwsService } from '../aws_bucket/aws.service';
 import * as csv from 'csv-parse';
+import {ApiProperty} from "@nestjs/swagger";
+import {IsNumber, IsOptional, Max, Min, ValidateIf} from "class-validator";
 
 @Injectable()
 export class DraftVaultsService {
@@ -99,7 +101,6 @@ export class DraftVaultsService {
     vault.vault_image = this.transformImageToUrl(vault.vault_image as FileEntity) as any;
     vault.banner_image = this.transformImageToUrl(vault.banner_image as FileEntity) as any;
     vault.ft_token_img = this.transformImageToUrl(vault.ft_token_img as FileEntity) as any;
-    vault.investors_whitelist_csv = this.transformImageToUrl(vault.investors_whitelist_csv) as any;
     delete vault.owner
     delete vault.contribution_phase_start
     delete vault.investment_phase_start
@@ -217,6 +218,17 @@ export class DraftVaultsService {
       if(data.ftTokenDecimals) vaultData.ft_token_decimals = data.ftTokenDecimals;
       if(data.ftTokenSupply) vaultData.ft_token_supply = data.ftTokenSupply;
       if(data.terminationType) vaultData.termination_type = data.terminationType;
+      if(data.ftTokenTicker) vaultData.ft_token_ticker = data.ftTokenTicker;
+      if(data.offAssetsOffered) vaultData.off_assets_offered = data.offAssetsOffered;
+      if(data.ftInvestmentReserve) vaultData.ft_investment_reserve = data.ftInvestmentReserve;
+      if(data.liquidityPoolContribution) vaultData.liquidity_pool_contribution = data.liquidityPoolContribution;
+      if(data.creationThreshold) vaultData.creation_threshold = data.creationThreshold;
+      if(data.startThreshold) vaultData.start_threshold = data.startThreshold;
+      if(data.voteThreshold) vaultData.vote_threshold = data.voteThreshold;
+      if(data.executionThreshold) vaultData.execution_threshold = data.executionThreshold;
+      if(data.cosigningThreshold) vaultData.cosigning_threshold = data.cosigningThreshold;
+      if(data.vaultAppreciation) vaultData.vault_appreciation = data.vaultAppreciation
+
 
       if (data.contributionDuration !== undefined) {
         vaultData.contribution_duration = data.contributionDuration;
@@ -300,7 +312,7 @@ export class DraftVaultsService {
       }
 
       // Handle investors whitelist only if provided
-      if (data.investorWhitelist !== undefined || investorsWhiteListFile) {
+      if (data.investorWhitelist !== undefined && data.investorWhitelist.length > 0) {
         const manualInvestors = data.investorWhitelist?.map(item => item.walletAddress) || [];
         const allInvestors = new Set([...manualInvestors]);
 
