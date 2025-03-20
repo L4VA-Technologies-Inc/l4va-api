@@ -20,6 +20,7 @@ export class SocialLinkDto {
 }
 
 export class UpdateProfileDto {
+
   @ApiProperty({
     description: 'User display name',
     example: 'John Doe',

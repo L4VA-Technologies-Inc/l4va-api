@@ -6,7 +6,7 @@ import { FileEntity } from '../../database/file.entity';
 import { LinkEntity } from '../../database/link.entity';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AwsService } from '../aws_bucket/aws.service';
-import {classToPlain} from "class-transformer";
+import {classToPlain, plainToInstance} from "class-transformer";
 
 @Injectable()
 export class UsersService {
@@ -22,6 +22,10 @@ export class UsersService {
 
   async findByAddress(address: string): Promise<User | undefined> {
     return this.usersRepository.findOne({ where: { address } });
+  }
+
+  private transformImageToUrl(imageEntity: FileEntity | null): string | null {
+    return imageEntity?.file_url || null;
   }
 
   async getPublicProfile(userId: string): Promise<any> {
@@ -70,16 +74,11 @@ export class UsersService {
 
     // Calculate total_vaults from the vaults relation
     user.total_vaults = user.vaults?.length || 0;
-    let selectedUser = await this.usersRepository.save(user)
-    const updateImage = {
-      ...selectedUser,
-      bannerImage: selectedUser.banner_image ? selectedUser.banner_image.file_url: null,
-      profileImage: selectedUser.profile_image ? selectedUser.profile_image.file_url : null
-    }
-    delete updateImage.banner_image;
-    delete updateImage.profile_image;
+    // let selectedUser = await this.usersRepository.save(user)
+    user.banner_image = this.transformImageToUrl(user.banner_image as FileEntity) as any;
+    user.profile_image = this.transformImageToUrl(user.profile_image as FileEntity) as any;
 
-    return classToPlain(updateImage) as User;
+    return classToPlain(user, { excludeExtraneousValues: true }) as User;
   }
 
   async updateProfile(userId: string, updateData: UpdateProfileDto): Promise<User> {
@@ -145,12 +144,11 @@ export class UsersService {
       });
     }
     let selectedUser = await this.usersRepository.save(user)
-    const updateImage = {
-      ...selectedUser,
-      banner_image: selectedUser.banner_image ? selectedUser.banner_image.file_url : null,
-      profile_image: selectedUser.profile_image ? selectedUser.profile_image.file_url: null,
-    }
-    return classToPlain(updateImage) as User;
+
+    selectedUser.banner_image = this.transformImageToUrl(selectedUser.banner_image as FileEntity) as any;
+    selectedUser.profile_image = this.transformImageToUrl(selectedUser.profile_image as FileEntity) as any;
+
+    return classToPlain(selectedUser, { excludeExtraneousValues: true } ) as User;
   }
 
   async uploadProfileImage(userId: string, file: Express.Multer.File, host: string): Promise<User> {

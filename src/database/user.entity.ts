@@ -16,6 +16,7 @@ import { LinkEntity } from './link.entity';
 @Entity('users')
 export class User {
 
+  @Expose({ name: 'id' })
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
@@ -23,12 +24,15 @@ export class User {
   @OneToMany(() => Vault, (vault: Vault) => vault.owner)
   public vaults: Vault[];
 
+  @Expose({ name: 'name' })
   @Column()
   name: string;
 
+  @Expose({ name: 'address' })
   @Column({ unique: true })
   address: string;
 
+  @Expose({ name: 'description' })
   @Column({ nullable: true })
   description: string;
 
@@ -46,6 +50,7 @@ export class User {
   @OneToMany(() => LinkEntity, (link: LinkEntity) => link.user)
   social_links: LinkEntity[];
 
+  @Expose({ name: 'tvl' })
   @Column({ type: 'decimal', precision: 20, scale: 2, default: 0 })
   tvl: number;
 
@@ -53,6 +58,7 @@ export class User {
   @Column({ type: 'integer', default: 0 })
   total_vaults: number;
 
+  @Expose({ name: 'gains' })
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
   gains: number;
 
