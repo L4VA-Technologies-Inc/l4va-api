@@ -27,7 +27,7 @@ export class UsersService {
   async getPublicProfile(userId: string): Promise<any> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
-      relations: ['profile_image', 'banner_image', 'social_links', 'vaults']
+      relations: ['profile_image', 'banner_image', 'social_links']
     });
     console.log("USER" , user)
 
@@ -38,8 +38,14 @@ export class UsersService {
     // Calculate total_vaults from the vaults relation
     user.total_vaults = user.vaults?.length || 0;
 
+    const userSource =  {
+      ...user,
+      banner_image: user.banner_image.file_url,
+      profile_image: user.profile_image.file_url
+    }
+
     // Transform to plain object and remove sensitive data
-    const plainUser = classToPlain(user);
+    const plainUser = classToPlain(userSource);
     delete plainUser.address;
     delete plainUser.gains;
     delete plainUser.vaults;
@@ -55,7 +61,7 @@ export class UsersService {
   async getProfile(userId: string): Promise<any> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
-      relations: ['profile_image', 'banner_image', 'social_links', 'vaults']
+      relations: ['profile_image', 'banner_image', 'social_links']
     });
 
     if (!user) {
@@ -64,8 +70,13 @@ export class UsersService {
 
     // Calculate total_vaults from the vaults relation
     user.total_vaults = user.vaults?.length || 0;
-
-    return classToPlain(user);
+    let selectedUser = await this.usersRepository.save(user)
+    const updateImage = {
+      ...selectedUser,
+      bannerImage: selectedUser.banner_image.file_url,
+      profileImage: selectedUser.profile_image.file_url
+    }
+    return classToPlain(updateImage) as User;
   }
 
   async updateProfile(userId: string, updateData: UpdateProfileDto): Promise<User> {
