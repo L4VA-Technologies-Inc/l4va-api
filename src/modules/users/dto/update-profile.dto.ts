@@ -83,10 +83,8 @@ export class UpdateProfileDto {
     type: [SocialLinkDto],
     required: false
   })
-
-  @ApiProperty()
   @IsArray()
-  @ArrayNotEmpty()
+  @IsOptional()
   @IsObject({ each: true })
   @Expose()
   socialLinks: SocialLink[];
