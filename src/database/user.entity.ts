@@ -9,7 +9,7 @@ import {
   JoinColumn
 } from 'typeorm';
 import { Vault } from './vault.entity';
-import { Expose } from 'class-transformer';
+import {Exclude, Expose} from 'class-transformer';
 import { FileEntity } from './file.entity';
 import { LinkEntity } from './link.entity';
 
@@ -19,12 +19,14 @@ export class User {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
+  @Exclude()
   @OneToMany(() => Vault, (vault: Vault) => vault.owner)
   public vaults: Vault[];
 
   @Column()
   name: string;
 
+  @Exclude()
   @Column({ unique: true })
   address: string;
 

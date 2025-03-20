@@ -1,5 +1,5 @@
 import { IsString, IsOptional, IsArray, ValidateNested, IsNumber } from 'class-validator';
-import { Type } from 'class-transformer';
+import {Expose, Type} from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class SocialLinkDto {
@@ -26,6 +26,7 @@ export class UpdateProfileDto {
   })
   @IsString()
   @IsOptional()
+  @Expose()
   name?: string;
 
   @ApiProperty({
@@ -35,6 +36,7 @@ export class UpdateProfileDto {
   })
   @IsString()
   @IsOptional()
+  @Expose()
   description?: string;
 
   @ApiProperty({
