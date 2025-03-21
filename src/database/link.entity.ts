@@ -15,9 +15,11 @@ export class LinkEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
+  @Expose({ name: 'url' })
   @Column({ type: 'varchar', nullable: false })
   url: string;
 
+  @Expose({ name: 'name' })
   @Column({ type: 'varchar', nullable: false })
   name: string;
 

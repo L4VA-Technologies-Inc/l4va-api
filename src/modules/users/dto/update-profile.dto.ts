@@ -9,6 +9,7 @@ export class SocialLinkDto {
     example: 'twitter'
   })
   @IsString()
+  @Expose()
   name: string;
 
   @ApiProperty({
@@ -16,6 +17,7 @@ export class SocialLinkDto {
     example: 'https://twitter.com/username'
   })
   @IsString()
+  @Expose()
   url: string;
 }
 
