@@ -29,25 +29,26 @@ export class CreateVaultReq {
   @Expose()
   id?: string;
 
-  @ApiProperty()
+  @ApiProperty({ required: true})
   @IsNotEmpty()
   @IsString()
   @Expose()
   name: string;
 
-  @ApiProperty()
+  @ApiProperty({ required: true })
   @IsNotEmpty()
   @IsEnum(VaultType)
   @Expose()
   type: VaultType;
 
-  @ApiProperty()
+  @ApiProperty({ required: true })
   @IsNotEmpty()
   @IsEnum(VaultPrivacy)
   @Expose()
   privacy: VaultPrivacy;
 
   @ApiProperty({
+    required: true,
     description: 'Valuation type - public vaults can only use LBE, private/semi-private can use LBE or fixed',
     enum: ValuationType
   })
@@ -76,7 +77,9 @@ export class CreateVaultReq {
   @Expose()
   valuationAmount?: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    required: true
+  })
   @IsNotEmpty()
   @IsEnum(ContributionWindowType)
   @Expose()
@@ -87,19 +90,21 @@ export class CreateVaultReq {
   @Expose()
   contributionOpenWindowTime: number;
 
-  @ApiProperty()
-  @IsNotEmpty()
+  @ApiProperty({
+    required: false
+  })
+  @IsOptional()
   @IsString()
   @Expose()
   description: string;
 
-  @ApiProperty()
+  @ApiProperty({ required: true})
   @IsNotEmpty()
   @IsString()
   @Expose()
   vaultImage: string;
 
-  @ApiProperty()
+  @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
   @Expose()
@@ -136,6 +141,7 @@ export class CreateVaultReq {
   contributorWhitelist?: ContributorWhitelist[];
 
   @ApiProperty({
+    required: true,
     description: 'Duration in milliseconds'
   })
   @IsNotEmpty()
@@ -144,6 +150,7 @@ export class CreateVaultReq {
   contributionDuration: number;
 
   @ApiProperty({
+    required: true,
     description: 'Duration in milliseconds'
   })
   @IsNotEmpty()
@@ -151,7 +158,9 @@ export class CreateVaultReq {
   @Expose()
   investmentWindowDuration: number;
 
-  @ApiProperty()
+  @ApiProperty({
+    required: true
+  })
   @IsNotEmpty()
   @IsString()
   @Expose()
@@ -200,6 +209,7 @@ export class CreateVaultReq {
   ftTokenSupply: number = 100000000;
 
   @ApiProperty({
+    required: true,
     description: 'Should be 1-10 characters'
   })
   @IsNotEmpty()
@@ -340,7 +350,9 @@ export class CreateVaultReq {
   @Expose()
   assetsWhitelist?: AssetWhitelistDto[];
 
-  @ApiProperty()
+  @ApiProperty({
+    required: true
+  })
   @IsArray()
   @ArrayNotEmpty()
   @IsObject({ each: true })
@@ -360,9 +372,11 @@ export class CreateVaultReq {
   @Expose()
   whitelistContributors?: ContributorWhitelist[];
 
-  @ApiProperty()
+  @ApiProperty({
+    required: false
+  })
+  @IsOptional()
   @IsArray()
-  @ArrayNotEmpty()
   @IsObject({ each: true })
   @Expose()
   socialLinks: SocialLink[];
