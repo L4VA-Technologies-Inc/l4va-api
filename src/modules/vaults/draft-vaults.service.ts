@@ -16,8 +16,7 @@ import { VaultSortField, SortOrder } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { AwsService } from '../aws_bucket/aws.service';
 import * as csv from 'csv-parse';
-import {ApiProperty} from "@nestjs/swagger";
-import {IsNumber, IsOptional, Max, Min, ValidateIf} from "class-validator";
+import { transformImageToUrl } from '../../helpers';
 
 @Injectable()
 export class DraftVaultsService {
@@ -41,9 +40,6 @@ export class DraftVaultsService {
     private readonly awsService: AwsService
   ) {}
 
-  private transformImageToUrl(imageEntity: FileEntity | null): string | null {
-    return imageEntity?.file_url || null;
-  }
 
   async getMyDraftVaults(userId: string, page: number = 1, limit: number = 10, sortBy?: VaultSortField, sortOrder: SortOrder = SortOrder.DESC): Promise<PaginatedResponseDto<any>> {
     const query = {
@@ -70,10 +66,10 @@ export class DraftVaultsService {
     return {
       items: listOfVaults.map(item => {
         // Transform image entities to URLs
-        item.vault_image = this.transformImageToUrl(item.vault_image as FileEntity) as any;
-        item.banner_image = this.transformImageToUrl(item.banner_image as FileEntity) as any;
-        item.ft_token_img = this.transformImageToUrl(item.ft_token_img as FileEntity) as any;
-        item.investors_whitelist_csv = this.transformImageToUrl(item.investors_whitelist_csv) as any
+        item.vault_image = transformImageToUrl(item.vault_image as FileEntity) as any;
+        item.banner_image = transformImageToUrl(item.banner_image as FileEntity) as any;
+        item.ft_token_img = transformImageToUrl(item.ft_token_img as FileEntity) as any;
+        item.investors_whitelist_csv = transformImageToUrl(item.investors_whitelist_csv) as any
         return classToPlain(item);
       }),
       total,
@@ -98,9 +94,9 @@ export class DraftVaultsService {
     }
 
     // Transform image entities to URLs
-    vault.vault_image = this.transformImageToUrl(vault.vault_image as FileEntity) as any;
-    vault.banner_image = this.transformImageToUrl(vault.banner_image as FileEntity) as any;
-    vault.ft_token_img = this.transformImageToUrl(vault.ft_token_img as FileEntity) as any;
+    vault.vault_image = transformImageToUrl(vault.vault_image as FileEntity) as any;
+    vault.banner_image = transformImageToUrl(vault.banner_image as FileEntity) as any;
+    vault.ft_token_img = transformImageToUrl(vault.ft_token_img as FileEntity) as any;
     delete vault.owner
     delete vault.contribution_phase_start
     delete vault.investment_phase_start

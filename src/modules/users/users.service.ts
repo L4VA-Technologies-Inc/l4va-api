@@ -6,7 +6,8 @@ import { FileEntity } from '../../database/file.entity';
 import { LinkEntity } from '../../database/link.entity';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AwsService } from '../aws_bucket/aws.service';
-import {classToPlain, plainToInstance} from "class-transformer";
+import {classToPlain } from 'class-transformer';
+import { transformImageToUrl } from '../../helpers';
 
 @Injectable()
 export class UsersService {
@@ -22,10 +23,6 @@ export class UsersService {
 
   async findByAddress(address: string): Promise<User | undefined> {
     return this.usersRepository.findOne({ where: { address } });
-  }
-
-  private transformImageToUrl(imageEntity: FileEntity | null): string | null {
-    return imageEntity?.file_url || null;
   }
 
   async getPublicProfile(userId: string): Promise<any> {
@@ -75,8 +72,8 @@ export class UsersService {
     // Calculate total_vaults from the vaults relation
     user.total_vaults = user.vaults?.length || 0;
     // let selectedUser = await this.usersRepository.save(user)
-    user.banner_image = this.transformImageToUrl(user.banner_image as FileEntity) as any;
-    user.profile_image = this.transformImageToUrl(user.profile_image as FileEntity) as any;
+    user.banner_image = transformImageToUrl(user.banner_image as FileEntity) as any;
+    user.profile_image = transformImageToUrl(user.profile_image as FileEntity) as any;
 
     return classToPlain(user, { excludeExtraneousValues: true }) as User;
   }
@@ -145,8 +142,8 @@ export class UsersService {
     }
     let selectedUser = await this.usersRepository.save(user)
 
-    selectedUser.banner_image = this.transformImageToUrl(selectedUser.banner_image as FileEntity) as any;
-    selectedUser.profile_image = this.transformImageToUrl(selectedUser.profile_image as FileEntity) as any;
+    selectedUser.banner_image = transformImageToUrl(selectedUser.banner_image as FileEntity) as any;
+    selectedUser.profile_image = transformImageToUrl(selectedUser.profile_image as FileEntity) as any;
 
     return classToPlain(selectedUser, { excludeExtraneousValues: true } ) as User;
   }

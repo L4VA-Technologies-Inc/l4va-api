@@ -13,12 +13,12 @@ import { AssetsWhitelistEntity } from '../../database/assetsWhitelist.entity';
 import { InvestorsWhitelistEntity } from '../../database/investorsWhitelist.entity';
 import * as csv from 'csv-parse';
 import { AwsService } from '../aws_bucket/aws.service';
-import { snakeCase } from 'typeorm/util/StringUtils';
 import {classToPlain} from "class-transformer";
 import { VaultFilter, VaultSortField, SortOrder } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { TagEntity } from '../../database/tag.entity';
 import { ContributorWhitelistEntity } from '../../database/contributorWhitelist.entity';
+import {transformImageToUrl, transformToSnakeCase} from '../../helpers';
 
 @Injectable()
 export class VaultsService {
@@ -41,24 +41,6 @@ export class VaultsService {
     private readonly contributorWhitelistRepository: Repository<ContributorWhitelistEntity>,
     private readonly awsService: AwsService
   ) {}
-
-  private transformImageToUrl(imageEntity: FileEntity | null): string | null {
-    return imageEntity?.file_url || null;
-  }
-
-  private transformToSnakeCase(obj: any): any {
-    if (Array.isArray(obj)) {
-      return obj.map(item => this.transformToSnakeCase(item));
-    }
-    if (obj !== null && typeof obj === 'object' && !(obj instanceof Date) && !(obj instanceof FileEntity) && !(obj instanceof User)) {
-      return Object.keys(obj).reduce((acc, key) => {
-        const snakeKey = snakeCase(key);
-        acc[snakeKey] = this.transformToSnakeCase(obj[key]);
-        return acc;
-      }, {});
-    }
-    return obj;
-  }
 
   private async parseCSVFromS3(file_key: string): Promise<string[]> {
     try {
@@ -87,8 +69,6 @@ export class VaultsService {
       throw new BadRequestException('Failed to parse CSV file from S3');
     }
   }
-
-
 
   async createVault(userId: string, data: CreateVaultReq): Promise<any> {
     try {
@@ -146,7 +126,7 @@ export class VaultsService {
       }) : null;
 
       // Prepare vault data
-      const vaultData = this.transformToSnakeCase({
+      const vaultData = transformToSnakeCase({
         ...data,
         owner: owner,
         contributionDuration: data.contributionDuration,
@@ -254,9 +234,9 @@ export class VaultsService {
       }
 
       // Transform image entities to URLs
-      finalVault.vault_image = this.transformImageToUrl(finalVault.vault_image as FileEntity) as any;
-      finalVault.banner_image = this.transformImageToUrl(finalVault.banner_image as FileEntity) as any;
-      finalVault.ft_token_img = this.transformImageToUrl(finalVault.ft_token_img as FileEntity) as any;
+      finalVault.vault_image = transformImageToUrl(finalVault.vault_image as FileEntity) as any;
+      finalVault.banner_image = transformImageToUrl(finalVault.banner_image as FileEntity) as any;
+      finalVault.ft_token_img = transformImageToUrl(finalVault.ft_token_img as FileEntity) as any;
 
       return classToPlain(finalVault);
     } catch (error) {
@@ -264,8 +244,6 @@ export class VaultsService {
       throw new BadRequestException('Failed to create vault');
     }
   }
-
-
 
   async saveDraftVault(userId: string, data: SaveDraftReq): Promise<any> {
     let existingVault: Vault | null = null;
@@ -479,9 +457,9 @@ export class VaultsService {
     return {
       items: listOfVaults.map(item => {
         // Transform image entities to URLs
-        item.vault_image = this.transformImageToUrl(item.vault_image as FileEntity) as any;
-        item.banner_image = this.transformImageToUrl(item.banner_image as FileEntity) as any;
-        item.ft_token_img = this.transformImageToUrl(item.ft_token_img as FileEntity) as any;
+        item.vault_image = transformImageToUrl(item.vault_image as FileEntity) as any;
+        item.banner_image = transformImageToUrl(item.banner_image as FileEntity) as any;
+        item.ft_token_img = transformImageToUrl(item.ft_token_img as FileEntity) as any;
         return classToPlain(item);
       }),
       total,
@@ -525,9 +503,9 @@ export class VaultsService {
     }
 
     // Transform image entities to URLs before converting to plain object
-    vault.vault_image = this.transformImageToUrl(vault.vault_image as FileEntity) as any;
-    vault.banner_image = this.transformImageToUrl(vault.banner_image as FileEntity) as any;
-    vault.ft_token_img = this.transformImageToUrl(vault.ft_token_img as FileEntity) as any;
+    vault.vault_image = transformImageToUrl(vault.vault_image as FileEntity) as any;
+    vault.banner_image = transformImageToUrl(vault.banner_image as FileEntity) as any;
+    vault.ft_token_img = transformImageToUrl(vault.ft_token_img as FileEntity) as any;
 
     return classToPlain(vault);
   }
@@ -548,9 +526,9 @@ export class VaultsService {
     }
 
     // Transform image entities to URLs
-    vault.vault_image = this.transformImageToUrl(vault.vault_image as FileEntity) as any;
-    vault.banner_image = this.transformImageToUrl(vault.banner_image as FileEntity) as any;
-    vault.ft_token_img = this.transformImageToUrl(vault.ft_token_img as FileEntity) as any;
+    vault.vault_image = transformImageToUrl(vault.vault_image as FileEntity) as any;
+    vault.banner_image = transformImageToUrl(vault.banner_image as FileEntity) as any;
+    vault.ft_token_img = transformImageToUrl(vault.ft_token_img as FileEntity) as any;
 
     return classToPlain(vault);
   }
@@ -595,9 +573,9 @@ export class VaultsService {
     return {
       items: listOfVaults.map(item => {
         // Transform image entities to URLs
-        item.vault_image = this.transformImageToUrl(item.vault_image as FileEntity) as any;
-        item.banner_image = this.transformImageToUrl(item.banner_image as FileEntity) as any;
-        item.ft_token_img = this.transformImageToUrl(item.ft_token_img as FileEntity) as any;
+        item.vault_image = transformImageToUrl(item.vault_image as FileEntity) as any;
+        item.banner_image = transformImageToUrl(item.banner_image as FileEntity) as any;
+        item.ft_token_img = transformImageToUrl(item.ft_token_img as FileEntity) as any;
         return classToPlain(item);
       }),
       total,
