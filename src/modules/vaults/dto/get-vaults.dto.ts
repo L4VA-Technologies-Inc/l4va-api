@@ -1,6 +1,7 @@
 import { IsEnum, IsOptional, IsString } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { PaginationDto } from './pagination.dto';
+import {Expose} from "class-transformer";
 
 export enum VaultFilter {
   open = 'open',
@@ -22,6 +23,7 @@ export class GetVaultsDto extends PaginationDto {
   @IsEnum(VaultFilter)
   @IsOptional()
   @ApiProperty({ enum: VaultFilter, required: false })
+  @Expose()
   filter?: VaultFilter;
 
   @IsEnum(VaultSortField)
@@ -31,6 +33,7 @@ export class GetVaultsDto extends PaginationDto {
     required: false,
     description: 'Field to sort by'
   })
+  @Expose()
   sortBy?: VaultSortField;
 
   @IsEnum(SortOrder)
@@ -41,5 +44,6 @@ export class GetVaultsDto extends PaginationDto {
     default: SortOrder.DESC,
     description: 'Sort order (ASC or DESC)'
   })
+  @Expose()
   sortOrder?: SortOrder = SortOrder.DESC;
 }
