@@ -17,7 +17,7 @@ import {
   VaultPrivacy,
   VaultType
 } from '../../../types/vault.types';
-import { AssetWhiteList, ContributorWhiteList, InvestorsWhiteList, SocialLink } from '../types';
+import { AssetWhitelist, ContributorWhitelist, InvestorsWhitelist, SocialLink } from '../types';
 import { TagDto } from './tag.dto';
 import { Expose, Type, plainToInstance } from 'class-transformer';
 
@@ -130,7 +130,7 @@ export class SaveDraftReq {
   @ValidateIf((o, v) => v !== null)
   @IsString()
   @Expose()
-  investorsWhiteListCsv?: string | null;
+  investorsWhitelistCsv?: string | null;
 
   @ApiProperty({
     required: false,
@@ -343,34 +343,34 @@ export class SaveDraftReq {
   @Expose()
   ftTokenImg?: string | null;
 
-  @ApiProperty({ required: false, nullable: true, type: [AssetWhiteList] })
+  @ApiProperty({ required: false, nullable: true, type: [AssetWhitelist] })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
   @IsArray()
-  @Type(() => AssetWhiteList)
+  @Type(() => AssetWhitelist)
   @Expose()
-  assetsWhitelist?: AssetWhiteList[] | null;
+  assetsWhitelist?: AssetWhitelist[] | null;
 
-  @ApiProperty({ required: false, nullable: true, type: [InvestorsWhiteList] })
+  @ApiProperty({ required: false, nullable: true, type: [InvestorsWhitelist] })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
   @IsArray()
-  @Type(() => InvestorsWhiteList)
+  @Type(() => InvestorsWhitelist)
   @Expose()
-  investorWhitelist?: InvestorsWhiteList[] | null;
+  investorWhitelist?: InvestorsWhitelist[] | null;
 
   @ApiProperty({
     description: 'List of contributor wallet addresses (required for private vaults)',
-    type: [ContributorWhiteList],
+    type: [ContributorWhitelist],
     required: false,
     nullable: true
   })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
   @IsArray()
-  @Type(() => ContributorWhiteList)
+  @Type(() => ContributorWhitelist)
   @Expose()
-  whitelistContributors?: ContributorWhiteList[] | null;
+  whitelistContributors?: ContributorWhitelist[] | null;
 
   @ApiProperty({ required: false, nullable: true, type: [SocialLink] })
   @IsOptional()

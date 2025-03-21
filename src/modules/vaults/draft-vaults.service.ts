@@ -33,7 +33,7 @@ export class DraftVaultsService {
     @InjectRepository(AssetsWhitelistEntity)
     private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
     @InjectRepository(InvestorsWhitelistEntity)
-    private readonly investorsWhiteListRepository: Repository<InvestorsWhitelistEntity>,
+    private readonly investorsWhitelistRepository: Repository<InvestorsWhitelistEntity>,
     @InjectRepository(ContributorWhitelistEntity)
     private readonly contributorWhitelistRepository: Repository<ContributorWhitelistEntity>,
     @InjectRepository(TagEntity)
@@ -162,7 +162,7 @@ export class DraftVaultsService {
           await this.assetsWhitelistRepository.remove(existingVault.assets_whitelist);
         }
         if (existingVault.investors_whitelist?.length > 0) {
-          await this.investorsWhiteListRepository.remove(existingVault.investors_whitelist);
+          await this.investorsWhitelistRepository.remove(existingVault.investors_whitelist);
         }
         if (existingVault.contributor_whitelist?.length > 0) {
           await this.contributorWhitelistRepository.remove(existingVault.contributor_whitelist);
@@ -191,16 +191,16 @@ export class DraftVaultsService {
         where: { file_key: ftTokenImgKey }
       }) : null;
 
-      const investorsWhiteListCsvKey = data.investorsWhiteListCsv?.split('csv/')[1];
-      const investorsWhiteListFile = investorsWhiteListCsvKey ? await this.filesRepository.findOne({
-        where: { file_key: investorsWhiteListCsvKey }
+      const investorsWhitelistCsvKey = data.investorsWhitelistCsv?.split('csv/')[1];
+      const investorsWhitelistFile = investorsWhitelistCsvKey ? await this.filesRepository.findOne({
+        where: { file_key: investorsWhitelistCsvKey }
       }) : null;
 
       // Check if the vault already has these files to avoid duplicate relations
       const hasVaultImage = existingVault?.vault_image?.file_key === imgKey;
       const hasBannerImage = existingVault?.banner_image?.file_key === bannerImgKey;
       const hasFtTokenImage = existingVault?.ft_token_img?.file_key === ftTokenImgKey;
-      const hasInvestorsWhiteListCsv = existingVault?.investors_whitelist_csv?.file_key === investorsWhiteListCsvKey;
+      const hasInvestorsWhitelistCsv = existingVault?.investors_whitelist_csv?.file_key === investorsWhitelistCsvKey;
 
       const vaultData: any = {
         owner: owner,
@@ -256,7 +256,7 @@ export class DraftVaultsService {
       if (vaultImg && !hasVaultImage) vaultData.vault_image = vaultImg;
       if (bannerImg && !hasBannerImage) vaultData.banner_image = bannerImg;
       if (ftTokenImg && !hasFtTokenImage) vaultData.ft_token_img = ftTokenImg;
-      if (investorsWhiteListFile && !hasInvestorsWhiteListCsv) vaultData.investors_whitelist_csv = investorsWhiteListFile;
+      if (investorsWhitelistFile && !hasInvestorsWhitelistCsv) vaultData.investors_whitelist_csv = investorsWhitelistFile;
 
       let vault: Vault;
       if (existingVault) {
@@ -318,12 +318,12 @@ export class DraftVaultsService {
 
         if (allInvestors.size > 0) {
           const investorItems = Array.from(allInvestors).map(walletAddress => {
-            return this.investorsWhiteListRepository.create({
+            return this.investorsWhitelistRepository.create({
               vault: vault,
               wallet_address: walletAddress
             });
           });
-          await this.investorsWhiteListRepository.save(investorItems);
+          await this.investorsWhitelistRepository.save(investorItems);
         }
       }
 

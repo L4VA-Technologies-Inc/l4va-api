@@ -18,7 +18,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ContributionWindowType, ValuationType, VaultPrivacy, VaultType } from '../../../types/vault.types';
-import { InvestorsWhiteList, ContributorWhiteList, SocialLink } from '../types';
+import { InvestorsWhitelist, ContributorWhitelist, SocialLink } from '../types';
 import { AssetWhitelistDto } from './assetWhitelist.dto';
 import { TagDto } from './tag.dto';
 
@@ -31,16 +31,19 @@ export class CreateVaultReq {
   @ApiProperty()
   @IsNotEmpty()
   @IsString()
+  @Expose()
   name: string;
 
   @ApiProperty()
   @IsNotEmpty()
   @IsEnum(VaultType)
+  @Expose()
   type: VaultType;
 
   @ApiProperty()
   @IsNotEmpty()
   @IsEnum(VaultPrivacy)
+  @Expose()
   privacy: VaultPrivacy;
 
   @ApiProperty({
@@ -49,6 +52,7 @@ export class CreateVaultReq {
   })
   @IsNotEmpty()
   @IsEnum(ValuationType)
+  @Expose()
   valuationType: ValuationType;
 
   @ApiProperty({
@@ -58,6 +62,7 @@ export class CreateVaultReq {
   })
   @IsOptional()
   @IsString()
+  @Expose()
   valuationCurrency?: string;
 
   @ApiProperty({
@@ -67,6 +72,7 @@ export class CreateVaultReq {
   })
   @IsOptional()
   @IsString()
+  @Expose()
   valuationAmount?: string;
 
   @ApiProperty()
@@ -114,13 +120,13 @@ export class CreateVaultReq {
   @ApiProperty({
     description: 'List of contributor wallet addresses',
     required: false,
-    type: [ContributorWhiteList]
+    type: [ContributorWhitelist]
   })
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
-  @Type(() => ContributorWhiteList)
-  contributorWhiteList?: ContributorWhiteList[];
+  @Type(() => ContributorWhitelist)
+  contributorWhitelist?: ContributorWhitelist[];
 
   @ApiProperty({
     description: 'Duration in milliseconds'
@@ -311,11 +317,11 @@ export class CreateVaultReq {
   @IsArray()
   @ArrayNotEmpty()
   @IsObject({ each: true })
-  investorsWhiteList: InvestorsWhiteList[];
+  investorsWhitelist: InvestorsWhitelist[];
 
   @ApiProperty({
     description: 'List of contributor wallet addresses (required for private vaults)',
-    type: [ContributorWhiteList],
+    type: [ContributorWhitelist],
     required: false
   })
   @IsArray()
@@ -323,7 +329,7 @@ export class CreateVaultReq {
   @ArrayNotEmpty({
     message: 'Contributor whitelist is required for private vaults and must not be empty'
   })
-  whitelistContributors?: ContributorWhiteList[];
+  whitelistContributors?: ContributorWhitelist[];
 
   @ApiProperty()
   @IsArray()

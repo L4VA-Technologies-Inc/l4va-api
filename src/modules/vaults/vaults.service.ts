@@ -34,7 +34,7 @@ export class VaultsService {
     @InjectRepository(AssetsWhitelistEntity)
     private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
     @InjectRepository(InvestorsWhitelistEntity)
-    private readonly investorsWhiteListRepository: Repository<InvestorsWhitelistEntity>,
+    private readonly investorsWhitelistRepository: Repository<InvestorsWhitelistEntity>,
     @InjectRepository(TagEntity)
     private readonly tagsRepository: Repository<TagEntity>,
     @InjectRepository(ContributorWhitelistEntity)
@@ -135,14 +135,14 @@ export class VaultsService {
         where: { file_key: ftTokenImgKey }
       }) : null;
 
-      const investorsWhiteListCsvKey = data.investorsWhitelistCsv?.split('csv/')[1];
-      const investorsWhiteListFile = investorsWhiteListCsvKey ? await this.filesRepository.findOne({
-        where: { file_key: investorsWhiteListCsvKey }
+      const investorsWhitelistCsvKey = data.investorsWhitelistCsv?.split('csv/')[1];
+      const investorsWhitelistFile = investorsWhitelistCsvKey ? await this.filesRepository.findOne({
+        where: { file_key: investorsWhitelistCsvKey }
       }) : null;
 
-      const contributorWhiteListCsvKey = data.contributorWhitelistCsv?.split('csv/')[1];
-      const contributorWhiteListFile = contributorWhiteListCsvKey ? await this.filesRepository.findOne({
-        where: { file_key: contributorWhiteListCsvKey }
+      const contributorWhitelistCsvKey = data.contributorWhitelistCsv?.split('csv/')[1];
+      const contributorWhitelistFile = contributorWhitelistCsvKey ? await this.filesRepository.findOne({
+        where: { file_key: contributorWhitelistCsvKey }
       }) : null;
 
       // Prepare vault data
@@ -158,8 +158,8 @@ export class VaultsService {
         vaultImage: vaultImg,
         bannerImage: bannerImg,
         ftTokenImg: ftTokenImg,
-        investorsWhitelistCsv: investorsWhiteListFile,
-        contributorWhitelistCsv: contributorWhiteListFile
+        investorsWhitelistCsv: investorsWhitelistFile,
+        contributorWhitelistCsv: contributorWhitelistFile
       });
 
       delete vaultData.assets_whitelist;
@@ -194,27 +194,27 @@ export class VaultsService {
       }
 
       // Handle investors whitelist
-      const investorsFromCsv = investorsWhiteListFile ?
-        await this.parseCSVFromS3(investorsWhiteListFile.file_key) : [];
+      const investorsFromCsv = investorsWhitelistFile ?
+        await this.parseCSVFromS3(investorsWhitelistFile.file_key) : [];
 
       const allInvestors = new Set([
-        ...data.investorsWhiteList.map(item => item.walletAddress),
+        ...data.investorsWhitelist.map(item => item.walletAddress),
         ...investorsFromCsv
       ]);
 
       await Promise.all(Array.from(allInvestors).map(walletAddress => {
-        return this.investorsWhiteListRepository.save({
+        return this.investorsWhitelistRepository.save({
           vault: newVault,
           wallet_address: walletAddress
         });
       }));
 
       // Handle contributors whitelist
-      const contributorsFromCsv = contributorWhiteListFile ?
-        await this.parseCSVFromS3(contributorWhiteListFile.file_key) : [];
+      const contributorsFromCsv = contributorWhitelistFile ?
+        await this.parseCSVFromS3(contributorWhitelistFile.file_key) : [];
 
       const allContributors = new Set([
-        ...(data.contributorWhiteList?.map(item => item.policyId) || []),
+        ...(data.contributorWhitelist?.map(item => item.policyId) || []),
         ...contributorsFromCsv
       ]);
 
@@ -295,7 +295,7 @@ export class VaultsService {
           await this.assetsWhitelistRepository.remove(existingVault.assets_whitelist);
         }
         if (existingVault.investors_whitelist?.length > 0) {
-          await this.investorsWhiteListRepository.remove(existingVault.investors_whitelist);
+          await this.investorsWhitelistRepository.remove(existingVault.investors_whitelist);
         }
       }
     }
@@ -320,9 +320,9 @@ export class VaultsService {
         where: { file_key: ftTokenImgKey }
       }) : null;
 
-      const investorsWhiteListCsvKey = data.investorsWhiteListCsv?.split('csv/')[1];
-      const investorsWhiteListFile = investorsWhiteListCsvKey ? await this.filesRepository.findOne({
-        where: { file_key: investorsWhiteListCsvKey }
+      const investorsWhitelistCsvKey = data.investorsWhitelistCsv?.split('csv/')[1];
+      const investorsWhitelistFile = investorsWhitelistCsvKey ? await this.filesRepository.findOne({
+        where: { file_key: investorsWhitelistCsvKey }
       }) : null;
 
       // Prepare vault data with only the provided fields
@@ -361,7 +361,7 @@ export class VaultsService {
       if (vaultImg) vaultData.vault_image = vaultImg;
       if (bannerImg) vaultData.banner_image = bannerImg;
       if (ftTokenImg) vaultData.ft_token_img = ftTokenImg;
-      if (investorsWhiteListFile) vaultData.investors_whitelist_csv = investorsWhiteListFile;
+      if (investorsWhitelistFile) vaultData.investors_whitelist_csv = investorsWhitelistFile;
 
       let vault: Vault;
       if (existingVault) {
@@ -420,21 +420,21 @@ export class VaultsService {
       }
 
       // Handle investors whitelist only if provided
-      if (data.investorWhitelist !== undefined || investorsWhiteListFile) {
-        const investorsFromCsv = investorsWhiteListFile ?
-          await this.parseCSVFromS3(investorsWhiteListFile.file_key) : [];
+      if (data.investorWhitelist !== undefined || investorsWhitelistFile) {
+        const investorsFromCsv = investorsWhitelistFile ?
+          await this.parseCSVFromS3(investorsWhitelistFile.file_key) : [];
 
         const manualInvestors = data.investorWhitelist?.map(item => item.walletAddress) || [];
         const allInvestors = new Set([...manualInvestors, ...investorsFromCsv]);
 
         if (allInvestors.size > 0) {
           const investorItems = Array.from(allInvestors).map(walletAddress => {
-            return this.investorsWhiteListRepository.create({
+            return this.investorsWhitelistRepository.create({
               vault: vault,
               wallet_address: walletAddress
             });
           });
-          await this.investorsWhiteListRepository.save(investorItems);
+          await this.investorsWhitelistRepository.save(investorItems);
         }
       }
 

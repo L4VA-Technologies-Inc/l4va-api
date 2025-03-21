@@ -18,7 +18,7 @@ export class SocialLink {
   }
 }
 
-export class AssetWhiteList {
+export class AssetWhitelist {
   /**
    * Policy ID of the asset (56-character hex string)
    * @example '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd'
@@ -48,29 +48,29 @@ export class AssetWhiteList {
   @Expose()
   countCapMax?: number;
 
-  constructor(partial: Partial<AssetWhiteList>) {
+  constructor(partial: Partial<AssetWhitelist>) {
     Object.assign(this, partial);
   }
 }
 
-export class ContributorWhiteList {
+export class ContributorWhitelist {
   @ApiProperty()
   @IsString()
   @Expose()
   policyId: string;
 
-  constructor(partial: Partial<ContributorWhiteList>) {
+  constructor(partial: Partial<ContributorWhitelist>) {
     Object.assign(this, partial);
   }
 }
 
-export class InvestorsWhiteList {
+export class InvestorsWhitelist {
   @ApiProperty()
   @IsString()
   @Expose()
   walletAddress: string;
 
-  constructor(partial: Partial<InvestorsWhiteList>) {
+  constructor(partial: Partial<InvestorsWhitelist>) {
     Object.assign(this, partial);
   }
 }
