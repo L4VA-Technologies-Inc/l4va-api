@@ -26,6 +26,7 @@ export class CreateVaultReq {
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
+  @Expose()
   id?: string;
 
   @ApiProperty()
@@ -78,25 +79,30 @@ export class CreateVaultReq {
   @ApiProperty()
   @IsNotEmpty()
   @IsEnum(ContributionWindowType)
+  @Expose()
   contributionOpenWindowType: ContributionWindowType;
 
   @ApiProperty()
   @IsNotEmpty()
-  contributionOpenWindowTime: string;
+  @Expose()
+  contributionOpenWindowTime: number;
 
   @ApiProperty()
   @IsNotEmpty()
   @IsString()
+  @Expose()
   description: string;
 
   @ApiProperty()
   @IsNotEmpty()
   @IsString()
+  @Expose()
   vaultImage: string;
 
   @ApiProperty()
   @IsOptional()
   @IsString()
+  @Expose()
   bannerImage: string;
 
   @ApiProperty({
@@ -126,6 +132,7 @@ export class CreateVaultReq {
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => ContributorWhitelist)
+  @Expose()
   contributorWhitelist?: ContributorWhitelist[];
 
   @ApiProperty({
@@ -133,6 +140,7 @@ export class CreateVaultReq {
   })
   @IsNotEmpty()
   @IsNumber()
+  @Expose()
   contributionDuration: number;
 
   @ApiProperty({
@@ -140,15 +148,18 @@ export class CreateVaultReq {
   })
   @IsNotEmpty()
   @IsNumber()
+  @Expose()
   investmentWindowDuration: number;
 
   @ApiProperty()
   @IsNotEmpty()
   @IsString()
+  @Expose()
   investmentOpenWindowType: string;
 
   @ApiProperty()
   @IsNotEmpty()
+  @Expose()
   investmentOpenWindowTime: string;
 
   @ApiProperty({
@@ -156,8 +167,9 @@ export class CreateVaultReq {
     required: true
   })
   @IsNotEmpty()
-  @IsString()
-  offAssetsOffered: string;
+  @IsNumber()
+  @Expose()
+  offAssetsOffered: number;
 
   @ApiProperty({
     description: 'FT investment reverse percentage',
@@ -165,6 +177,7 @@ export class CreateVaultReq {
   })
   @IsNotEmpty()
   @IsNumber()
+  @Expose()
   ftInvestmentReserve: number;
 
   @ApiProperty({
@@ -172,8 +185,9 @@ export class CreateVaultReq {
     required: true
   })
   @IsNotEmpty()
-  @IsString()
-  liquidityPoolContribution: string;
+  @IsNumber()
+  @Expose()
+  liquidityPoolContribution: number;
 
   @ApiProperty({
     description: 'Total supply of FT tokens',
@@ -181,8 +195,9 @@ export class CreateVaultReq {
     default: '100000000'
   })
   @IsNotEmpty()
-  @IsString()
-  ftTokenSupply: string = '100000000';
+  @IsNumber()
+  @Expose()
+  ftTokenSupply: number = 100000000;
 
   @ApiProperty({
     description: 'Should be 1-10 characters'
@@ -191,6 +206,7 @@ export class CreateVaultReq {
   @IsString()
   @MinLength(1)
   @MaxLength(10)
+  @Expose()
   ftTokenTicker: string;
 
   @ApiProperty({
@@ -200,11 +216,13 @@ export class CreateVaultReq {
   })
   @IsNotEmpty()
   @IsString()
+  @Expose()
   ftTokenDecimals: string = '2';
 
   @ApiProperty()
   @IsNotEmpty()
   @IsString()
+  @Expose()
   terminationType: string;
 
   @ApiProperty({
@@ -213,6 +231,7 @@ export class CreateVaultReq {
   })
   @IsNotEmpty()
   @IsNumber()
+  @Expose()
   timeElapsedIsEqualToTime: number;
 
   @ApiProperty({
@@ -226,6 +245,7 @@ export class CreateVaultReq {
   @IsNumber()
   @Min(0)
   @Max(100)
+  @Expose()
   vaultAppreciation: number;
 
   @ApiProperty({
@@ -239,6 +259,7 @@ export class CreateVaultReq {
   @IsNumber()
   @Min(0)
   @Max(100)
+  @Expose()
   creationThreshold: number;
 
   @ApiProperty({
@@ -252,6 +273,7 @@ export class CreateVaultReq {
   @IsNumber()
   @Min(0)
   @Max(100)
+  @Expose()
   startThreshold: number;
 
   @ApiProperty({
@@ -265,6 +287,7 @@ export class CreateVaultReq {
   @IsNumber()
   @Min(0)
   @Max(100)
+  @Expose()
   voteThreshold: number;
 
   @ApiProperty({
@@ -278,6 +301,7 @@ export class CreateVaultReq {
   @IsNumber()
   @Min(0)
   @Max(100)
+  @Expose()
   executionThreshold: number;
 
   @ApiProperty({
@@ -291,10 +315,12 @@ export class CreateVaultReq {
   @IsNumber()
   @Min(0)
   @Max(100)
+  @Expose()
   cosigningThreshold: number;
 
   @ApiProperty()
   @IsNotEmpty()
+  @Expose()
   ftTokenImg: string;
 
   @ApiProperty({
@@ -311,12 +337,14 @@ export class CreateVaultReq {
   @IsArray()
   @ArrayMaxSize(10)
   @IsObject({ each: true })
+  @Expose()
   assetsWhitelist?: AssetWhitelistDto[];
 
   @ApiProperty()
   @IsArray()
   @ArrayNotEmpty()
   @IsObject({ each: true })
+  @Expose()
   investorsWhitelist: InvestorsWhitelist[];
 
   @ApiProperty({
@@ -329,12 +357,14 @@ export class CreateVaultReq {
   @ArrayNotEmpty({
     message: 'Contributor whitelist is required for private vaults and must not be empty'
   })
+  @Expose()
   whitelistContributors?: ContributorWhitelist[];
 
   @ApiProperty()
   @IsArray()
   @ArrayNotEmpty()
   @IsObject({ each: true })
+  @Expose()
   socialLinks: SocialLink[];
 
   @ApiProperty({
@@ -345,5 +375,6 @@ export class CreateVaultReq {
   @IsArray()
   @IsOptional()
   @IsObject({ each: true })
+  @Expose()
   tags?: TagDto[];
 }

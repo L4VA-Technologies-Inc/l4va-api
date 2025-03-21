@@ -112,13 +112,6 @@ export class SaveDraftReq {
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
   @IsString()
-  @Expose()
-  imageUrl?: string | null;
-
-  @ApiProperty({ required: false, nullable: true })
-  @IsOptional()
-  @ValidateIf((o, v) => v !== null)
-  @IsString()
   bannerUrl?: string | null;
 
   @ApiProperty({
