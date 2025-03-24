@@ -197,13 +197,14 @@ export class VaultsService {
         ...(data.contributorWhitelist?.map(item => item.policyId) || []),
         ...contributorsFromCsv
       ]);
+      const contributorsArray = [...allContributors]
 
-      await Promise.all(Array.from(allContributors).map(walletAddress => {
+      contributorsArray.map(item => {
         return this.contributorWhitelistRepository.save({
           vault: newVault,
-          wallet_address: walletAddress
+          wallet_address: item
         });
-      }));
+      })
 
       // Handle tags
       if (data.tags?.length > 0) {

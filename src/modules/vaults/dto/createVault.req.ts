@@ -257,6 +257,7 @@ export class CreateVaultReq {
     maximum: 100,
     type: Number
   })
+  @ValidateIf((o) => o.terminationType === TerminationType.programmed)
   @IsNotEmpty()
   @IsNumber()
   @Min(0)
