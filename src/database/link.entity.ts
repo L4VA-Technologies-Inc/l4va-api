@@ -12,6 +12,7 @@ import { Expose } from 'class-transformer';
 @Entity({ name: 'links' })
 export class LinkEntity {
 
+  @Expose({ name: 'id'})
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
