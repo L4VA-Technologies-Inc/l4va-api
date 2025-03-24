@@ -317,6 +317,8 @@ export class VaultsService {
       if (data.valuationCurrency !== undefined) vaultData.valuation_currency = data.valuationCurrency;
       if (data.valuationAmount !== undefined) vaultData.valuation_amount = data.valuationAmount;
       if (data.description !== undefined) vaultData.description = data.description;
+      if(data.ftTokenDecimals) vaultData.ftToken_decimals = data.ftTokenDecimals;
+      if(data.investmentOpenWindowType) vaultData.investment_open_window_type = data.investmentOpenWindowType;
 
       // Handle date fields only if they are provided
       if (data.contributionDuration !== undefined) {

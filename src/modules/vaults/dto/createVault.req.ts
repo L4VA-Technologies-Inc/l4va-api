@@ -14,10 +14,16 @@ import {
   MinLength,
   Min,
   Max,
-  ValidateNested,
+  ValidateNested, ValidateIf,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { ContributionWindowType, ValuationType, VaultPrivacy, VaultType } from '../../../types/vault.types';
+import {
+  ContributionWindowType, InvestmentWindowType,
+  TerminationType,
+  ValuationType,
+  VaultPrivacy,
+  VaultType
+} from '../../../types/vault.types';
 import { InvestorsWhitelist, ContributorWhitelist, SocialLink } from '../types';
 import { AssetWhitelistDto } from './assetWhitelist.dto';
 import { TagDto } from './tag.dto';
@@ -86,6 +92,7 @@ export class CreateVaultReq {
   contributionOpenWindowType: ContributionWindowType;
 
   @ApiProperty()
+  @ValidateIf((o) => o.contributionOpenWindowType === ContributionWindowType.custom)
   @IsNotEmpty()
   @Expose()
   contributionOpenWindowTime: number;
@@ -114,6 +121,7 @@ export class CreateVaultReq {
     description: 'CSV file containing investors whitelist',
     required: false
   })
+  @ValidateIf((o) => o.privacy !== VaultPrivacy.public)
   @IsOptional()
   @IsString()
   @Expose()
@@ -135,7 +143,6 @@ export class CreateVaultReq {
   })
   @IsOptional()
   @IsArray()
-  @ValidateNested({ each: true })
   @Type(() => ContributorWhitelist)
   @Expose()
   contributorWhitelist?: ContributorWhitelist[];
@@ -158,15 +165,14 @@ export class CreateVaultReq {
   @Expose()
   investmentWindowDuration: number;
 
-  @ApiProperty({
-    required: true
-  })
-  @IsNotEmpty()
-  @IsString()
+  @ApiProperty({ required: false, nullable: true, enum: InvestmentWindowType })
+  @ValidateIf((o, v) => v !== null)
+  @IsEnum(InvestmentWindowType)
   @Expose()
   investmentOpenWindowType: string;
 
   @ApiProperty()
+  @ValidateIf((o) => o.investmentOpenWindowType === InvestmentWindowType.custom)
   @IsNotEmpty()
   @Expose()
   investmentOpenWindowTime: string;
@@ -206,7 +212,7 @@ export class CreateVaultReq {
   @IsNotEmpty()
   @IsNumber()
   @Expose()
-  ftTokenSupply: number = 100000000;
+  ftTokenSupply: number | null = 100000000;
 
   @ApiProperty({
     required: true,
@@ -222,12 +228,12 @@ export class CreateVaultReq {
   @ApiProperty({
     description: 'Number of decimal places for the FT token',
     required: true,
-    default: '2'
+    default: 2
   })
   @IsNotEmpty()
-  @IsString()
+  @IsNumber()
   @Expose()
-  ftTokenDecimals: string = '2';
+  ftTokenDecimals: number = 2;
 
   @ApiProperty()
   @IsNotEmpty()
@@ -239,6 +245,7 @@ export class CreateVaultReq {
     description: 'Duration in milliseconds',
     required: true
   })
+  @ValidateIf((o) => o.terminationType === TerminationType.programmed)
   @IsNotEmpty()
   @IsNumber()
   @Expose()
@@ -350,9 +357,8 @@ export class CreateVaultReq {
   @Expose()
   assetsWhitelist?: AssetWhitelistDto[];
 
-  @ApiProperty({
-    required: true
-  })
+  @ApiProperty({ required: false, nullable: true, type: [InvestorsWhitelist] })
+  @ValidateIf((o) => o.privacy !== VaultPrivacy.public)
   @IsArray()
   @ArrayNotEmpty()
   @IsObject({ each: true })
@@ -362,13 +368,13 @@ export class CreateVaultReq {
   @ApiProperty({
     description: 'List of contributor wallet addresses (required for private vaults)',
     type: [ContributorWhitelist],
-    required: false
+    required: false,
+    nullable: true,
   })
+  @ValidateIf((o) => o.privacy !== VaultPrivacy.public)
   @IsArray()
+  @ArrayNotEmpty()
   @IsObject({ each: true })
-  @ArrayNotEmpty({
-    message: 'Contributor whitelist is required for private vaults and must not be empty'
-  })
   @Expose()
   whitelistContributors?: ContributorWhitelist[];
 
