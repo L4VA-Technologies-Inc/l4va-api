@@ -187,7 +187,7 @@ export class DraftVaultsService {
         where: { file_key: ftTokenImgKey }
       }) : null;
 
-      const investorsWhitelistCsvKey = data.investorsWhitelistCsv?.split('csv/')[1];
+      const investorsWhitelistCsvKey = data.investorsWhitelistCsv?.key;
       const investorsWhitelistFile = investorsWhitelistCsvKey ? await this.filesRepository.findOne({
         where: { file_key: investorsWhitelistCsvKey }
       }) : null;

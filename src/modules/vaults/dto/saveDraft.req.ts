@@ -17,7 +17,7 @@ import {
   VaultPrivacy,
   VaultType
 } from '../../../types/vault.types';
-import { AssetWhitelist, ContributorWhitelist, InvestorsWhitelist, SocialLink } from '../types';
+import {AssetWhitelist, ContributorWhitelist, InvestorsWhitelist, InvestorsWhitelistCsv, SocialLink} from '../types';
 import { TagDto } from './tag.dto';
 import { Expose, Type, plainToInstance } from 'class-transformer';
 
@@ -121,9 +121,8 @@ export class SaveDraftReq {
   })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
-  @IsString()
   @Expose()
-  investorsWhitelistCsv?: string | null;
+  investorsWhitelistCsv?: InvestorsWhitelistCsv | null;
 
   @ApiProperty({
     required: false,

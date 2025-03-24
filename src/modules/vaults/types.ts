@@ -74,3 +74,27 @@ export class InvestorsWhitelist {
     Object.assign(this, partial);
   }
 }
+
+
+export class InvestorsWhitelistCsv {
+  @ApiProperty()
+  @IsString()
+  @Expose()
+  fileName: string;
+  @ApiProperty()
+  @IsString()
+  @Expose()
+  fileType: string;
+  @ApiProperty()
+  @IsString()
+  @Expose()
+  id: string
+  @ApiProperty()
+  @IsString()
+  @Expose()
+  key: string
+  @ApiProperty()
+  @IsString()
+  @Expose()
+  url: string
+}

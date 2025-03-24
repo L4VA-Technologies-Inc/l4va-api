@@ -24,7 +24,7 @@ import {
   VaultPrivacy,
   VaultType
 } from '../../../types/vault.types';
-import { InvestorsWhitelist, ContributorWhitelist, SocialLink } from '../types';
+import {InvestorsWhitelist, ContributorWhitelist, SocialLink, InvestorsWhitelistCsv} from '../types';
 import { AssetWhitelistDto } from './assetWhitelist.dto';
 import { TagDto } from './tag.dto';
 
@@ -123,9 +123,8 @@ export class CreateVaultReq {
   })
   @ValidateIf((o) => o.privacy !== VaultPrivacy.public)
   @IsOptional()
-  @IsString()
   @Expose()
-  investorsWhitelistCsv?: string;
+  investorsWhitelistCsv?: InvestorsWhitelistCsv;
 
   @ApiProperty({
     description: 'CSV file containing contributors whitelist',
