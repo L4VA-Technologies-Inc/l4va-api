@@ -143,6 +143,7 @@ export class SaveDraftReq {
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
   @IsNumber()
+  @Expose()
   investmentWindowDuration?: number | null;
 
   @ApiProperty({ required: false, nullable: true, enum: InvestmentWindowType })
@@ -156,6 +157,7 @@ export class SaveDraftReq {
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
   @IsString()
+  @Expose()
   investmentOpenWindowTime?: string | null;
 
   @ApiProperty({ required: false, nullable: true })

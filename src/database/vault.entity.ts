@@ -104,6 +104,7 @@ export class Vault {
 
 
   @Expose({ name: 'investmentWindowDuration'})
+  @Transform(({ value }) => value ? Number(value) : null)
   @Column({name: 'investment_window_duration', type: 'bigint', nullable: true})
   investment_window_duration?: number;
 
@@ -173,6 +174,7 @@ export class Vault {
   termination_type?: TerminationType;
 
   @Expose({ name: 'timeElapsedIsEqualToTime'})
+  @Transform(({ value }) => value ? Number(value) : null)
   @Column({
     name: 'time_elapsed_is_equal_to_time',
     type: 'bigint', nullable: true})
