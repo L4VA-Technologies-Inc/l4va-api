@@ -17,13 +17,13 @@ export class LifecycleService {
   @Cron(CronExpression.EVERY_MINUTE)
   async handleVaultLifecycleTransitions() {
     this.logger.debug('Checking vault lifecycle transitions...');
-    
+
     // Handle published -> contribution transitions
     await this.handlePublishedToContribution();
-    
+
     // Handle contribution -> investment transitions
     await this.handleContributionToInvestment();
-    
+
     // Handle investment -> locked transitions
     await this.handleInvestmentToLocked();
   }
@@ -32,7 +32,7 @@ export class LifecycleService {
     const publishedVaults = await this.vaultRepository
       .createQueryBuilder('vault')
       .where('vault.vault_status = :status', { status: VaultStatus.published })
-      .andWhere('vault.contribution_open_window_type = :type', { type: 'upon-vault-lunch' })
+      .andWhere('vault.contribution_open_window_type = :type', { type: 'upon-vault-launch' })
       .getMany();
 
     for (const vault of publishedVaults) {

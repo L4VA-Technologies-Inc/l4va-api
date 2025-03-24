@@ -84,7 +84,13 @@ export class AuthService {
         user: {
           id: user.id,
           name: user.name,
-          address: user.address
+          address: user.address,
+          description: user.description,
+          tvl: user.tvl,
+          totalVaults: user.total_vaults,
+          gains: user.gains,
+          profileImage: user.profile_image,
+          bannerImage: user.banner_image,
         }
       };
 

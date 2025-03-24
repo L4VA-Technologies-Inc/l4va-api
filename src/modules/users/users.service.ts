@@ -22,7 +22,10 @@ export class UsersService {
   ) {}
 
   async findByAddress(address: string): Promise<User | undefined> {
-    return this.usersRepository.findOne({ where: { address } });
+    return this.usersRepository.findOne({
+      where: { address },
+      relations:['profile_image', 'banner_image', 'social_links']
+    });
   }
 
   async getPublicProfile(userId: string): Promise<any> {
@@ -79,7 +82,6 @@ export class UsersService {
   }
 
   async updateProfile(userId: string, updateData: UpdateProfileDto): Promise<User> {
-    console.log("Update", updateData)
     const user = await this.usersRepository.findOne({
       where: { id: userId },
       relations: ['profile_image', 'banner_image', 'social_links']

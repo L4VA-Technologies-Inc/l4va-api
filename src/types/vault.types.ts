@@ -19,7 +19,7 @@ export enum ValuationType {
 }
 export enum ContributionWindowType {
   custom = 'custom',
-  uponVaultLunch = 'upon-vault-lunch'
+  uponVaultLaunch = 'upon-vault-launch'
 }
 
 // step 3
