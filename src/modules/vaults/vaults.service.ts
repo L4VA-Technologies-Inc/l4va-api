@@ -13,12 +13,13 @@ import { AssetsWhitelistEntity } from '../../database/assetsWhitelist.entity';
 import { InvestorsWhitelistEntity } from '../../database/investorsWhitelist.entity';
 import * as csv from 'csv-parse';
 import { AwsService } from '../aws_bucket/aws.service';
-import {classToPlain} from "class-transformer";
+import { plainToInstance, classToPlain } from "class-transformer";
 import { VaultFilter, VaultSortField, SortOrder } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { TagEntity } from '../../database/tag.entity';
 import { ContributorWhitelistEntity } from '../../database/contributorWhitelist.entity';
 import {transformImageToUrl, transformToSnakeCase} from '../../helpers';
+import { VaultShortResponse } from './dto/vault.response';
 
 @Injectable()
 export class VaultsService {
@@ -426,12 +427,12 @@ export class VaultsService {
     }
   }
 
-  async getMyVaults(userId: string, filter?: VaultFilter, page: number = 1, limit: number = 10, sortBy?: VaultSortField, sortOrder: SortOrder = SortOrder.DESC): Promise<PaginatedResponseDto<any>> {
+  async getMyVaults(userId: string, filter?: VaultFilter, page: number = 1, limit: number = 10, sortBy?: VaultSortField, sortOrder: SortOrder = SortOrder.DESC): Promise<PaginatedResponseDto<VaultShortResponse>> {
     const query = {
       where: {
         owner: { id: userId }
       },
-      relations: ['social_links', 'assets_whitelist', 'investors_whitelist', 'vault_image', 'banner_image', 'ft_token_img'],
+      relations: ['social_links', 'vault_image', 'banner_image'],
       skip: (page - 1) * limit,
       take: limit,
       order: {}
@@ -457,40 +458,22 @@ export class VaultsService {
 
     const [listOfVaults, total] = await this.vaultsRepository.findAndCount(query);
 
-    return {
-      items: listOfVaults.map(item => {
-        // Transform image entities to URLs
-        item.vault_image = transformImageToUrl(item.vault_image as FileEntity) as any;
-        item.banner_image = transformImageToUrl(item.banner_image as FileEntity) as any;
-        item.ft_token_img = transformImageToUrl(item.ft_token_img as FileEntity) as any;
-        return classToPlain(item);
-      }),
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit)
-    };
-  }
-
-  async getMyDraftVaults(userId: string, page: number = 1, limit: number = 10): Promise<PaginatedResponseDto<any>> {
-    const [listOfVaults, total] = await this.vaultsRepository.findAndCount({
-      where: {
-        owner: { id: userId },
-        vault_status: VaultStatus.draft
-      },
-      relations: ['social_links', 'assets_whitelist', 'investors_whitelist'],
-      skip: (page - 1) * limit,
-      take: limit
+    // Transform vault images to URLs and convert to VaultShortResponse
+    const transformedItems = listOfVaults.map(vault => {
+      vault.vault_image = transformImageToUrl(vault.vault_image as FileEntity) as any;
+      vault.banner_image = transformImageToUrl(vault.banner_image as FileEntity) as any;
+      return plainToInstance(VaultShortResponse, classToPlain(vault), { excludeExtraneousValues: true });
     });
 
     return {
-      items: listOfVaults.map(item => classToPlain(item)),
+      items: transformedItems,
       total,
       page,
       limit,
       totalPages: Math.ceil(total / limit)
     };
   }
+
 
 
 
@@ -536,7 +519,7 @@ export class VaultsService {
     return classToPlain(vault);
   }
 
-  async getVaults(filter?: VaultFilter, page: number = 1, limit: number = 10, sortBy?: VaultSortField, sortOrder: SortOrder = SortOrder.DESC): Promise<PaginatedResponseDto<any>> {
+  async getVaults(filter?: VaultFilter, page: number = 1, limit: number = 10, sortBy?: VaultSortField, sortOrder: SortOrder = SortOrder.DESC): Promise<PaginatedResponseDto<VaultShortResponse>> {
     const queryBuilder = this.vaultsRepository.createQueryBuilder('vault')
       .leftJoinAndSelect('vault.social_links', 'social_links')
       .leftJoinAndSelect('vault.assets_whitelist', 'assets_whitelist')
@@ -565,22 +548,21 @@ export class VaultsService {
       queryBuilder.orderBy('vault.created_at', SortOrder.DESC);
     }
 
-    // Add pagination and ordering
-    queryBuilder
-      .orderBy('vault.created_at', 'DESC')
+    // Get paginated results
+    const [items, total] = await queryBuilder
       .skip((page - 1) * limit)
-      .take(limit);
+      .take(limit)
+      .getManyAndCount();
 
-    const [listOfVaults, total] = await queryBuilder.getManyAndCount();
+    // Transform vault images to URLs and convert to VaultShortResponse
+    const transformedItems = items.map(vault => {
+      vault.vault_image = transformImageToUrl(vault.vault_image as FileEntity) as any;
+      vault.banner_image = transformImageToUrl(vault.banner_image as FileEntity) as any;
+      return plainToInstance(VaultShortResponse, classToPlain(vault), { excludeExtraneousValues: true });
+    });
 
     return {
-      items: listOfVaults.map(item => {
-        // Transform image entities to URLs
-        item.vault_image = transformImageToUrl(item.vault_image as FileEntity) as any;
-        item.banner_image = transformImageToUrl(item.banner_image as FileEntity) as any;
-        item.ft_token_img = transformImageToUrl(item.ft_token_img as FileEntity) as any;
-        return classToPlain(item);
-      }),
+      items: transformedItems,
       total,
       page,
       limit,

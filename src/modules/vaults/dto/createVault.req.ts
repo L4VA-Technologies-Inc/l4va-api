@@ -68,7 +68,7 @@ export class CreateVaultReq {
     required: false,
     example: 'ADA'
   })
-  @IsOptional()
+  @ValidateIf(o => o.valuationType === ValuationType.fixed)
   @IsString()
   @Expose()
   valuationCurrency?: string;
@@ -78,7 +78,7 @@ export class CreateVaultReq {
     required: false,
     example: '1000000'
   })
-  @IsOptional()
+  @ValidateIf((o) => o.valuationType === ValuationType.fixed)
   @IsString()
   @Expose()
   valuationAmount?: string;
@@ -358,7 +358,7 @@ export class CreateVaultReq {
   assetsWhitelist?: AssetWhitelistDto[];
 
   @ApiProperty({ required: false, nullable: true, type: [InvestorsWhitelist] })
-  @ValidateIf((o) => o.privacy !== VaultPrivacy.public)
+  @ValidateIf((o) => o.privacy !== VaultPrivacy.public && !o.investorsWhitelistCsv)
   @IsArray()
   @ArrayNotEmpty()
   @IsObject({ each: true })
@@ -371,7 +371,7 @@ export class CreateVaultReq {
     required: false,
     nullable: true,
   })
-  @ValidateIf((o) => o.privacy !== VaultPrivacy.public)
+  @ValidateIf((o) => o.privacy !== VaultPrivacy.public && o.valuationType === ValuationType.lbe)
   @IsArray()
   @ArrayNotEmpty()
   @IsObject({ each: true })

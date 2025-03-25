@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import {classToPlain, Expose} from 'class-transformer';
+import { classToPlain, plainToInstance } from 'class-transformer';
 import { Vault } from '../../database/vault.entity';
 import { User } from '../../database/user.entity';
 import { FileEntity } from '../../database/file.entity';
@@ -17,6 +17,7 @@ import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { AwsService } from '../aws_bucket/aws.service';
 import * as csv from 'csv-parse';
 import { transformImageToUrl } from '../../helpers';
+import { VaultShortResponse } from './dto/vault.response';
 
 @Injectable()
 export class DraftVaultsService {
@@ -41,13 +42,13 @@ export class DraftVaultsService {
   ) {}
 
 
-  async getMyDraftVaults(userId: string, page: number = 1, limit: number = 10, sortBy?: VaultSortField, sortOrder: SortOrder = SortOrder.DESC): Promise<PaginatedResponseDto<any>> {
+  async getMyDraftVaults(userId: string, page: number = 1, limit: number = 10, sortBy?: VaultSortField, sortOrder: SortOrder = SortOrder.DESC): Promise<PaginatedResponseDto<VaultShortResponse>> {
     const query = {
       where: {
         owner: { id: userId },
         vault_status: VaultStatus.draft
       },
-      relations: ['social_links', 'assets_whitelist', 'investors_whitelist', 'contributor_whitelist', 'vault_image', 'banner_image', 'ft_token_img', 'investors_whitelist_csv'],
+      relations: ['social_links', 'vault_image', 'banner_image', 'ft_token_img'],
       skip: (page - 1) * limit,
       take: limit,
       order: {}
@@ -63,15 +64,16 @@ export class DraftVaultsService {
 
     const [listOfVaults, total] = await this.vaultsRepository.findAndCount(query);
 
+    // Transform vault images to URLs and convert to VaultShortResponse
+    const transformedItems = listOfVaults.map(vault => {
+      vault.vault_image = transformImageToUrl(vault.vault_image as FileEntity) as any;
+      vault.banner_image = transformImageToUrl(vault.banner_image as FileEntity) as any;
+      const plainedVault = classToPlain(vault);
+      return plainToInstance(VaultShortResponse, plainedVault, { excludeExtraneousValues: true});
+    });
+
     return {
-      items: listOfVaults.map(item => {
-        // Transform image entities to URLs
-        item.vault_image = transformImageToUrl(item.vault_image as FileEntity) as any;
-        item.banner_image = transformImageToUrl(item.banner_image as FileEntity) as any;
-        item.ft_token_img = transformImageToUrl(item.ft_token_img as FileEntity) as any;
-        item.investors_whitelist_csv = transformImageToUrl(item.investors_whitelist_csv) as any
-        return classToPlain(item);
-      }),
+      items: transformedItems,
       total,
       page,
       limit,
