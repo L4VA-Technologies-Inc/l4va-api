@@ -43,69 +43,21 @@ export class VaultShortResponse {
   @Expose()
   privacy: VaultPrivacy;
 
-  @ApiProperty({ description: 'Timestamp when contribution phase starts', required: false })
+  @ApiProperty({ description: 'Timestamp when current phase ends', required: false })
   @Expose()
   @Transform(({ value }) => value ? new Date(value).toISOString() : null)
-  contributionStartTime?: string;
+  phaseEndTime?: string;
 
-  @ApiProperty({ description: 'Timestamp when contribution phase ends', required: false })
-  @Expose()
-  @Transform(({ value }) => value ? new Date(value).toISOString() : null)
-  contributionEndTime?: string;
-
-  @ApiProperty({ description: 'Time remaining until contribution starts in milliseconds', required: false })
+  @ApiProperty({ description: 'Time remaining in current phase in milliseconds', required: false })
   @Expose()
   @Transform(({ obj }) => {
-    if (!obj.contributionStartTime) return null;
+    if (!obj.phaseEndTime) return null;
     const now = new Date();
-    const startTime = new Date(obj.contributionStartTime);
-    const diff = startTime.getTime() - now.getTime();
-    return diff > 0 ? diff : 0;
-  })
-  timeToContributionStart?: number;
-
-  @ApiProperty({ description: 'Time remaining in contribution phase in milliseconds', required: false })
-  @Expose()
-  @Transform(({ obj }) => {
-    if (!obj.contributionEndTime) return null;
-    const now = new Date();
-    const endTime = new Date(obj.contributionEndTime);
+    const endTime = new Date(obj.phaseEndTime);
     const diff = endTime.getTime() - now.getTime();
     return diff > 0 ? diff : 0;
   })
-  contributionTimeRemaining?: number;
-
-  @ApiProperty({ description: 'Timestamp when investment phase starts', required: false })
-  @Expose()
-  @Transform(({ value }) => value ? new Date(value).toISOString() : null)
-  investmentStartTime?: string;
-
-  @ApiProperty({ description: 'Timestamp when investment phase ends', required: false })
-  @Expose()
-  @Transform(({ value }) => value ? new Date(value).toISOString() : null)
-  investmentEndTime?: string;
-
-  @ApiProperty({ description: 'Time remaining until investment starts in milliseconds', required: false })
-  @Expose()
-  @Transform(({ obj }) => {
-    if (!obj.investmentStartTime) return null;
-    const now = new Date();
-    const startTime = new Date(obj.investmentStartTime);
-    const diff = startTime.getTime() - now.getTime();
-    return diff > 0 ? diff : 0;
-  })
-  timeToInvestmentStart?: number;
-
-  @ApiProperty({ description: 'Time remaining in investment phase in milliseconds', required: false })
-  @Expose()
-  @Transform(({ obj }) => {
-    if (!obj.investmentEndTime) return null;
-    const now = new Date();
-    const endTime = new Date(obj.investmentEndTime);
-    const diff = endTime.getTime() - now.getTime();
-    return diff > 0 ? diff : 0;
-  })
-  investmentTimeRemaining?: number;
+  timeRemaining?: number;
 
   @ApiProperty({ description: 'Vault image', required: true })
   @Expose()

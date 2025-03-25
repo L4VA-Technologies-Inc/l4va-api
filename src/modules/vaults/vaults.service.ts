@@ -521,56 +521,20 @@ export class VaultsService {
     vault.banner_image = transformImageToUrl(vault.banner_image as FileEntity) as any;
     vault.ft_token_img = transformImageToUrl(vault.ft_token_img as FileEntity) as any;
 
-    // Calculate contribution and investment timing information
+    // Calculate phase end time based on current status
     const now = new Date();
     const createdAt = new Date(vault.created_at);
 
-    // Calculate contribution phase timing
-    if (vault.contribution_duration) {
-      let contributionStartTime: Date;
-
-      // If vault is published or in contribution, set start time
-      if (vault.vault_status === VaultStatus.published || vault.vault_status === VaultStatus.contribution) {
-        contributionStartTime = createdAt;
-        vault['contributionStartTime'] = contributionStartTime.toISOString();
-
-        const contributionEndTime = new Date(contributionStartTime.getTime() + Number(vault.contribution_duration));
-        vault['contributionEndTime'] = contributionEndTime.toISOString();
-
-        // Calculate investment phase timing if investment_window_duration is set
-        if (vault.investment_window_duration) {
-          // Determine investment start time based on window type
-          if (vault.investment_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
-            // Investment starts right after contribution ends
-            vault['investmentStartTime'] = contributionEndTime.toISOString();
-          } else if (vault.investment_open_window_type === InvestmentWindowType.custom && vault.investment_open_window_time) {
-            // Custom start time after contribution ends
-            const customStartTime = new Date(vault.investment_open_window_time);
-            // Only set if it's after contribution ends
-            if (customStartTime.getTime() > contributionEndTime.getTime()) {
-              vault['investmentStartTime'] = customStartTime.toISOString();
-            } else {
-              // If custom time is before contribution ends, default to contribution end
-              vault['investmentStartTime'] = contributionEndTime.toISOString();
-            }
-          }
-
-          // Calculate investment end time if we have a start time
-          if (vault['investmentStartTime']) {
-            const investmentEndTime = new Date(new Date(vault['investmentStartTime']).getTime() + Number(vault.investment_window_duration));
-            vault['investmentEndTime'] = investmentEndTime.toISOString();
-          }
-        }
-      }
-    }
-
-    // If already in investment phase, use actual start time and calculate remaining time
-    if (vault.vault_status === VaultStatus.investment && vault.investment_window_duration) {
-      const investmentStartTime = new Date(vault.investment_phase_start || createdAt);
-      vault['investmentStartTime'] = investmentStartTime.toISOString();
-
-      const investmentEndTime = new Date(investmentStartTime.getTime() + Number(vault.investment_window_duration));
-      vault['investmentEndTime'] = investmentEndTime.toISOString();
+    if (vault.vault_status === VaultStatus.contribution && vault.contribution_duration) {
+      // In contribution phase - end time is start + duration
+      const endTime = new Date(createdAt.getTime() + Number(vault.contribution_duration));
+      vault['phaseEndTime'] = endTime.toISOString();
+    } 
+    else if (vault.vault_status === VaultStatus.investment && vault.investment_window_duration) {
+      // In investment phase - end time is investment start + duration
+      const startTime = new Date(vault.investment_phase_start || createdAt);
+      const endTime = new Date(startTime.getTime() + Number(vault.investment_window_duration));
+      vault['phaseEndTime'] = endTime.toISOString();
     }
 
     return plainToInstance(VaultFullResponse, classToPlain(vault), { excludeExtraneousValues: true });
