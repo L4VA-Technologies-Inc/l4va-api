@@ -8,7 +8,6 @@ import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AwsService } from '../aws_bucket/aws.service';
 import {classToPlain, plainToInstance} from 'class-transformer';
 import { transformImageToUrl } from '../../helpers';
-import {VaultShortResponse} from "../vaults/dto/vault.response";
 import {PublicProfileRes} from "./dto/public-profile.res";
 
 @Injectable()

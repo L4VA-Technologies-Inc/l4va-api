@@ -2,6 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Transform } from 'class-transformer';
 import { VaultPrivacy, VaultStatus, VaultType, ValuationType } from '../../../types/vault.types';
 import { LinkEntity } from '../../../database/link.entity';
+import {FileEntity} from "../../../database/file.entity";
 
 export class VaultShortResponse {
   @ApiProperty({ description: 'Unique identifier of the vault' })
@@ -61,11 +62,13 @@ export class VaultShortResponse {
 
   @ApiProperty({ description: 'Vault image', required: true })
   @Expose()
-  vaultImage?: string;
+  @Transform(({ value }) => value ? value.url : null)
+  vaultImage?: FileEntity;
 
   @ApiProperty({ description: 'Banner image', required:true })
+  @Transform(({ value }) => value ? value.url : null)
   @Expose()
-  bannerImage?: string;
+  bannerImage?: FileEntity;
 
   @ApiProperty({ description: 'Social links', type: [LinkEntity], required: false })
   @Expose({ name: 'socialLinks' })
@@ -81,6 +84,11 @@ export class VaultFullResponse extends VaultShortResponse {
   @ApiProperty({ description: 'Status of the vault', enum: VaultStatus })
   @Expose()
   vaultStatus: VaultStatus;
+
+  @ApiProperty({ description: 'Fractional token image '})
+  @Expose()
+  @Transform(({ value }) => value ? value.url : null)
+  ftTokenImg: FileEntity;
 
   @ApiProperty({ description: 'Valuation type', enum: ValuationType, required: false })
   @Expose({ name: 'valuationType' })

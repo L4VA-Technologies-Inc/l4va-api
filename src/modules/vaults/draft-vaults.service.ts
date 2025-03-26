@@ -63,14 +63,9 @@ export class DraftVaultsService {
     }
 
     const [listOfVaults, total] = await this.vaultsRepository.findAndCount(query);
-
-    // Transform vault images to URLs and convert to VaultShortResponse
-    const transformedItems = listOfVaults.map(vault => {
-      vault.vault_image = transformImageToUrl(vault.vault_image as FileEntity) as any;
-      vault.banner_image = transformImageToUrl(vault.banner_image as FileEntity) as any;
-      const plainedVault = classToPlain(vault);
-      return plainToInstance(VaultShortResponse, plainedVault, { excludeExtraneousValues: true});
-    });
+    const transformedItems = listOfVaults.map(vault => 
+      plainToInstance(VaultShortResponse, classToPlain(vault), { excludeExtraneousValues: true })
+    );
 
     return {
       items: transformedItems,

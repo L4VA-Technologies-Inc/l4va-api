@@ -465,8 +465,6 @@ export class VaultsService {
 
     // Transform vault images to URLs and convert to VaultShortResponse
     const transformedItems = listOfVaults.map(vault => {
-      vault.vault_image = transformImageToUrl(vault.vault_image as FileEntity) as any;
-      vault.banner_image = transformImageToUrl(vault.banner_image as FileEntity) as any;
       return plainToInstance(VaultShortResponse, classToPlain(vault), { excludeExtraneousValues: true });
     });
 
@@ -517,9 +515,9 @@ export class VaultsService {
     }
 
     // Transform image entities to URLs
-    vault.vault_image = transformImageToUrl(vault.vault_image as FileEntity) as any;
-    vault.banner_image = transformImageToUrl(vault.banner_image as FileEntity) as any;
-    vault.ft_token_img = transformImageToUrl(vault.ft_token_img as FileEntity) as any;
+    // vault.vault_image = transformImageToUrl(vault.vault_image as FileEntity) as any;
+    // vault.banner_image = transformImageToUrl(vault.banner_image as FileEntity) as any;
+    // vault.ft_token_img = transformImageToUrl(vault.ft_token_img as FileEntity) as any;
 
     // Calculate phase end time based on current status
     const now = new Date();
@@ -529,7 +527,7 @@ export class VaultsService {
       // In contribution phase - end time is start + duration
       const endTime = new Date(createdAt.getTime() + Number(vault.contribution_duration));
       vault['phaseEndTime'] = endTime.toISOString();
-    } 
+    }
     else if (vault.vault_status === VaultStatus.investment && vault.investment_window_duration) {
       // In investment phase - end time is investment start + duration
       const startTime = new Date(vault.investment_phase_start || createdAt);
