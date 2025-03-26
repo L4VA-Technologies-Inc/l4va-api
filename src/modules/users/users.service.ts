@@ -6,8 +6,10 @@ import { FileEntity } from '../../database/file.entity';
 import { LinkEntity } from '../../database/link.entity';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AwsService } from '../aws_bucket/aws.service';
-import {classToPlain } from 'class-transformer';
+import {classToPlain, plainToInstance} from 'class-transformer';
 import { transformImageToUrl } from '../../helpers';
+import {VaultShortResponse} from "../vaults/dto/vault.response";
+import {PublicProfileRes} from "./dto/public-profile.res";
 
 @Injectable()
 export class UsersService {
@@ -74,11 +76,8 @@ export class UsersService {
 
     // Calculate total_vaults from the vaults relation
     user.total_vaults = user.vaults?.length || 0;
-    // let selectedUser = await this.usersRepository.save(user)
-    user.banner_image = transformImageToUrl(user.banner_image as FileEntity) as any;
-    user.profile_image = transformImageToUrl(user.profile_image as FileEntity) as any;
-
-    return classToPlain(user, { excludeExtraneousValues: true }) as User;
+    const plainedUsers = classToPlain(user)
+    return plainToInstance(PublicProfileRes, plainedUsers , { excludeExtraneousValues: true });
   }
 
   async updateProfile(userId: string, updateData: UpdateProfileDto): Promise<User> {
