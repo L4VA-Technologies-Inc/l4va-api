@@ -7,6 +7,7 @@ import { generateUsername } from 'unique-username-generator';
 
 import { UsersService } from '../users/users.service';
 import {LoginReq} from "./dto/login.req";
+import {transformImageToUrl} from "../../helpers";
 
 @Injectable()
 export class AuthService {
@@ -77,6 +78,9 @@ export class AuthService {
         name: user.name
       };
 
+      const profileImage = transformImageToUrl(user.profile_image);
+      const bannerImage = transformImageToUrl(user.banner_image);
+
       return {
         success: true,
         message: '✅ Authentication success!',
@@ -89,8 +93,8 @@ export class AuthService {
           tvl: user.tvl,
           totalVaults: user.total_vaults,
           gains: user.gains,
-          profileImage: user.profile_image,
-          bannerImage: user.banner_image,
+          profileImage: profileImage,
+          bannerImage: bannerImage,
         }
       };
 
