@@ -1,48 +1,76 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { FileEntity } from '../../../database/file.entity';
 import { LinkEntity } from '../../../database/link.entity';
-import {Expose, Transform} from "class-transformer";
+import {DtoRepresent} from "../../../decorators/dto-represents.decorator";
 
 export class PublicProfileRes {
   @ApiProperty()
-  @Expose()
+  @DtoRepresent({
+    transform: false,
+    expose: true
+  })
   id: string;
 
   @ApiProperty()
-  @Expose()
+  @DtoRepresent({
+    transform: false,
+    expose: true
+  })
   name: string;
 
   @ApiProperty({ required: false })
-  @Expose()
+  @DtoRepresent({
+    transform: false,
+    expose: true
+  })
   description?: string;
 
   @ApiProperty({ required: false })
-  @Expose({ name: 'profileImage'})
-  @Transform(({ value }) => value ? value.url : null)
+  @DtoRepresent({
+    transform: ({ value }) => value ? value.url : null,
+    expose: { name: 'profileImage' }
+  })
   profileImage?: FileEntity;
 
   @ApiProperty({ required: false })
-  @Expose()
-  @Transform(({value }) => value ? value.url : null )
+  @DtoRepresent({
+    transform: ({ value }) => value ? value.url : null,
+    expose: true
+  })
   bannerImage?: FileEntity;
 
   @ApiProperty({ type: [LinkEntity], required: false })
-  @Expose()
+  @DtoRepresent({
+    transform: false,
+    expose: true
+  })
   socialLinks?: LinkEntity[];
 
   @ApiProperty()
-  @Expose()
+  @DtoRepresent({
+    transform: false,
+    expose: true
+  })
   tvl: number;
 
   @ApiProperty()
-  @Expose()
+  @DtoRepresent({
+    transform: false,
+    expose: true
+  })
   totalVaults: number;
 
   @ApiProperty()
-  @Expose()
+  @DtoRepresent({
+    transform: false,
+    expose: true
+  })
   createdAt: string;
 
   @ApiProperty()
-  @Expose()
+  @DtoRepresent({
+    transform: false,
+    expose: true
+  })
   updatedAt: string;
 }
