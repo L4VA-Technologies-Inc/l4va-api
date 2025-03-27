@@ -156,9 +156,9 @@ export class SaveDraftReq {
   @ApiProperty({ required: false, nullable: true })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
-  @IsString()
+  @IsNumber()
   @Expose()
-  investmentOpenWindowTime?: string | null;
+  investmentOpenWindowTime?: number | null;
 
   @ApiProperty({ required: false, nullable: true })
   @IsOptional()
@@ -351,7 +351,7 @@ export class SaveDraftReq {
   @IsArray()
   @Type(() => InvestorsWhitelist)
   @Expose()
-  investorWhitelist?: InvestorsWhitelist[] | null;
+  investorsWhitelist?: InvestorsWhitelist[] | null;
 
   @ApiProperty({
     description: 'List of contributor wallet addresses (required for private vaults)',

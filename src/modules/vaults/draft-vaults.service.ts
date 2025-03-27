@@ -16,7 +16,7 @@ import { VaultSortField, SortOrder } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { AwsService } from '../aws_bucket/aws.service';
 import { transformImageToUrl } from '../../helpers';
-import { VaultShortResponse } from './dto/vault.response';
+import {VaultFullResponse, VaultShortResponse} from './dto/vault.response';
 
 @Injectable()
 export class DraftVaultsService {
@@ -98,6 +98,7 @@ export class DraftVaultsService {
     delete vault.investment_phase_start
     delete vault.locked_at
 
+    // todo need to create additional model for remove owner, and transform image to link
     return classToPlain(vault);
   }
 
@@ -276,8 +277,8 @@ export class DraftVaultsService {
       }
 
       // Handle investors whitelist only if provided
-      if (data.investorWhitelist !== undefined && data.investorWhitelist.length > 0) {
-        const manualInvestors = data.investorWhitelist?.map(item => item.walletAddress) || [];
+      if (data.investorsWhitelist !== undefined && data.investorsWhitelist.length > 0) {
+        const manualInvestors = data.investorsWhitelist?.map(item => item.walletAddress) || [];
         const allInvestors = new Set([...manualInvestors]);
 
         if (allInvestors.size > 0) {

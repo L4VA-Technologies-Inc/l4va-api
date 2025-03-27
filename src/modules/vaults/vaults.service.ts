@@ -401,11 +401,11 @@ export class VaultsService {
       }
 
       // Handle investors whitelist only if provided
-      if (data.investorWhitelist !== undefined || investorsWhitelistFile) {
+      if (data.investorsWhitelist !== undefined || investorsWhitelistFile) {
         const investorsFromCsv = investorsWhitelistFile ?
           await this.parseCSVFromS3(investorsWhitelistFile.file_key) : [];
 
-        const manualInvestors = data.investorWhitelist?.map(item => item.walletAddress) || [];
+        const manualInvestors = data.investorsWhitelist?.map(item => item.walletAddress) || [];
         const allInvestors = new Set([...manualInvestors, ...investorsFromCsv]);
 
         if (allInvestors.size > 0) {

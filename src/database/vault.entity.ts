@@ -102,7 +102,6 @@ export class Vault {
     type: 'bigint', nullable: true})
   contribution_duration?: number;
 
-
   @Expose({ name: 'investmentWindowDuration'})
   @Transform(({ value }) => value ? Number(value) : null)
   @Column({name: 'investment_window_duration', type: 'bigint', nullable: true})
@@ -118,6 +117,7 @@ export class Vault {
   investment_open_window_type?: InvestmentWindowType;
 
   @Expose({ name: 'investmentOpenWindowTime'})
+  @Transform(({ value }) => value ? new Date(value).getTime() : null)
   @Column({
     name: 'investment_open_window_time',
     type: 'timestamptz', nullable: true
@@ -130,8 +130,6 @@ export class Vault {
     name: 'off_assets_offered',
     type: 'numeric', nullable:true})
   off_assets_offered?: number;
-
-
 
   @Expose({ name: 'ftInvestmentReserve'})
   @Transform(({ value }) => value ? Number(value) : null)

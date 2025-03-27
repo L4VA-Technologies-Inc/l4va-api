@@ -19,7 +19,7 @@ export class InvestmentService {
   async invest(vaultId: string, investReq: InvestReq, userId: string) {
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
-      relations: ['investorWhitelist'],
+      relations: ['investors_whitelist'],
     });
 
     const user = await this.userRepository.findOne({
