@@ -1,8 +1,33 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Transform } from 'class-transformer';
-import { VaultPrivacy, VaultStatus, VaultType, ValuationType } from '../../../types/vault.types';
+import {
+  VaultPrivacy,
+  VaultStatus,
+  VaultType,
+  ValuationType,
+  ContributionWindowType,
+  InvestmentWindowType, TerminationType
+} from '../../../types/vault.types';
 import { LinkEntity } from '../../../database/link.entity';
 import {FileEntity} from "../../../database/file.entity";
+import {
+  BeforeInsert, BeforeUpdate,
+  Check,
+  Column,
+  JoinColumn,
+  JoinTable,
+  ManyToMany,
+  ManyToOne,
+  OneToMany,
+  OneToOne,
+  PrimaryGeneratedColumn
+} from "typeorm";
+import {User} from "../../../database/user.entity";
+import {AssetsWhitelistEntity} from "../../../database/assetsWhitelist.entity";
+import {InvestorsWhitelistEntity} from "../../../database/investorsWhitelist.entity";
+import {ContributorWhitelistEntity} from "../../../database/contributorWhitelist.entity";
+import {Asset} from "../../../database/asset.entity";
+import {TagEntity} from "../../../database/tag.entity";
 
 export class VaultShortResponse {
   @ApiProperty({ description: 'Unique identifier of the vault' })
@@ -117,6 +142,117 @@ export class VaultFullResponse extends VaultShortResponse {
   @Expose({ name: 'timeElapsedIsEqualToTime' })
   @Transform(({ value }) => value ? Number(value) : null)
   timeElapsedIsEqualToTime?: number;
+
+  @ApiProperty({ description: 'Contribution window type', enum: ContributionWindowType })
+  @Expose()
+  contributionOpenWindowType: ContributionWindowType;
+
+  @ApiProperty({ description: 'Contribution window time' })
+  @Expose()
+  contributionOpenWindowTime: string;
+
+  @ApiProperty({ description: 'Investment window type', enum: InvestmentWindowType })
+  @Expose()
+  investmentOpenWindowType: InvestmentWindowType;
+
+  @ApiProperty({ description: 'Investment window time' })
+  @Expose()
+  investmentOpenWindowTime: string;
+
+  @ApiProperty({ description: 'Number of assets offered' })
+  @Expose()
+  offAssetsOffered: number;
+
+  @ApiProperty({ description: 'FT investment reserve' })
+  @Expose()
+  ftInvestmentReserve: number;
+
+  @ApiProperty({ description: 'Liquidity pool contribution' })
+  @Expose()
+  liquidityPoolContribution: number;
+
+  @ApiProperty({ description: 'FT token supply' })
+  @Expose()
+  ftTokenSupply: number;
+
+  @ApiProperty({ description: 'FT token ticker' })
+  @Expose()
+  ftTokenTicker: string;
+
+  @ApiProperty({ description: 'FT token decimals' })
+  @Expose()
+  ftTokenDecimals: number;
+
+  @ApiProperty({ description: 'Termination type', enum: TerminationType })
+  @Expose()
+  terminationType: TerminationType;
+
+  @ApiProperty({ description: 'Vault appreciation' })
+  @Expose()
+  vaultAppreciation: number;
+
+  @ApiProperty({ description: 'Vault owner', type: () => User })
+  @Expose()
+  owner: User;
+
+  @ApiProperty({ description: 'Creation threshold', required: false })
+  @Expose()
+  creation_threshold?: number;
+
+  @ApiProperty({ description: 'Start threshold', required: false })
+  @Expose()
+  start_threshold?: number;
+
+  @ApiProperty({ description: 'Vote threshold', required: false })
+  @Expose()
+  vote_threshold?: number;
+
+  @ApiProperty({ description: 'Execution threshold', required: false })
+  @Expose()
+  execution_threshold?: number;
+
+  @ApiProperty({ description: 'Cosigning threshold', required: false })
+  @Expose()
+  cosigning_threshold?: number;
+
+  @ApiProperty({ description: 'Assets whitelist', type: [AssetsWhitelistEntity], required: false })
+  @Expose()
+  assets_whitelist?: AssetsWhitelistEntity[];
+
+  @ApiProperty({ description: 'Investors whitelist', type: [InvestorsWhitelistEntity], required: false })
+  @Expose()
+  investors_whitelist?: InvestorsWhitelistEntity[];
+
+  @ApiProperty({ description: 'Contributor whitelist', type: [ContributorWhitelistEntity], required: false })
+  @Expose()
+  contributor_whitelist?: ContributorWhitelistEntity[];
+
+  @ApiProperty({ description: 'Assets', type: [Asset], required: false })
+  @Expose()
+  assets?: Asset[];
+
+  @ApiProperty({ description: 'Investors whitelist CSV file', required: false })
+  @Expose()
+  investors_whitelist_csv?: FileEntity;
+
+  @ApiProperty({ description: 'Tags', type: [TagEntity], required: false })
+  @Expose()
+  tags?: TagEntity[];
+
+  @ApiProperty({ description: 'Contribution phase start time', required: false })
+  @Expose()
+  @Transform(({ value }) => value ? new Date(value).toISOString() : null)
+  contribution_phase_start?: string;
+
+  @ApiProperty({ description: 'Investment phase start time', required: false })
+  @Expose()
+  @Transform(({ value }) => value ? new Date(value).toISOString() : null)
+  investment_phase_start?: string;
+
+  @ApiProperty({ description: 'Locked at time', required: false })
+  @Expose()
+  @Transform(({ value }) => value ? new Date(value).toISOString() : null)
+  locked_at?: string;
 
   @ApiProperty({ description: 'Creation timestamp' })
   @Transform(({ value }) => value ? new Date(value).toISOString() : null)

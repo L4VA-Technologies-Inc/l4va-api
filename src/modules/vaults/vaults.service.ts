@@ -18,7 +18,7 @@ import { VaultFilter, VaultSortField, SortOrder } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { TagEntity } from '../../database/tag.entity';
 import { ContributorWhitelistEntity } from '../../database/contributorWhitelist.entity';
-import {transformImageToUrl, transformToSnakeCase} from '../../helpers';
+import { transformToSnakeCase} from '../../helpers';
 import { VaultShortResponse, VaultFullResponse } from './dto/vault.response';
 
 @Injectable()
@@ -239,13 +239,7 @@ export class VaultsService {
       if (!finalVault) {
         throw new BadRequestException('Failed to retrieve created vault');
       }
-
-      // Transform image entities to URLs
-      finalVault.vault_image = transformImageToUrl(finalVault.vault_image as FileEntity) as any;
-      finalVault.banner_image = transformImageToUrl(finalVault.banner_image as FileEntity) as any;
-      finalVault.ft_token_img = transformImageToUrl(finalVault.ft_token_img as FileEntity) as any;
-
-      return classToPlain(finalVault);
+      return plainToInstance(VaultFullResponse, finalVault, {excludeExtraneousValues: true });
     } catch (error) {
       console.error(error);
       throw new BadRequestException('Failed to create vault');
@@ -477,9 +471,6 @@ export class VaultsService {
     };
   }
 
-
-
-
   async prepareDraftResponse(id: string) {
     const vault = await this.vaultsRepository.findOne({
       where: { id },
@@ -490,15 +481,8 @@ export class VaultsService {
     if (!vault) {
       throw new BadRequestException('Vault not found');
     }
-
-    // Transform image entities to URLs before converting to plain object
-    vault.vault_image = transformImageToUrl(vault.vault_image as FileEntity) as any;
-    vault.banner_image = transformImageToUrl(vault.banner_image as FileEntity) as any;
-    vault.ft_token_img = transformImageToUrl(vault.ft_token_img as FileEntity) as any;
-
-    return classToPlain(vault);
+    return plainToInstance(VaultFullResponse, vault, { excludeExtraneousValues: true});
   }
-
 
   async getVaultById(id: string, userId: string): Promise<VaultFullResponse> {
     const vault = await this.vaultsRepository.findOne({
@@ -514,13 +498,6 @@ export class VaultsService {
       throw new BadRequestException('Access denied: You are not the owner of this vault');
     }
 
-    // Transform image entities to URLs
-    // vault.vault_image = transformImageToUrl(vault.vault_image as FileEntity) as any;
-    // vault.banner_image = transformImageToUrl(vault.banner_image as FileEntity) as any;
-    // vault.ft_token_img = transformImageToUrl(vault.ft_token_img as FileEntity) as any;
-
-    // Calculate phase end time based on current status
-    const now = new Date();
     const createdAt = new Date(vault.created_at);
 
     if (vault.vault_status === VaultStatus.contribution && vault.contribution_duration) {
@@ -575,8 +552,6 @@ export class VaultsService {
 
     // Transform vault images to URLs and convert to VaultShortResponse
     const transformedItems = items.map(vault => {
-      vault.vault_image = transformImageToUrl(vault.vault_image as FileEntity) as any;
-      vault.banner_image = transformImageToUrl(vault.banner_image as FileEntity) as any;
       return plainToInstance(VaultShortResponse, classToPlain(vault), { excludeExtraneousValues: true });
     });
 

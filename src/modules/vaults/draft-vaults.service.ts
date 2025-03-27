@@ -15,7 +15,6 @@ import { VaultStatus } from '../../types/vault.types';
 import { VaultSortField, SortOrder } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { AwsService } from '../aws_bucket/aws.service';
-import * as csv from 'csv-parse';
 import { transformImageToUrl } from '../../helpers';
 import { VaultShortResponse } from './dto/vault.response';
 
@@ -63,7 +62,7 @@ export class DraftVaultsService {
     }
 
     const [listOfVaults, total] = await this.vaultsRepository.findAndCount(query);
-    const transformedItems = listOfVaults.map(vault => 
+    const transformedItems = listOfVaults.map(vault =>
       plainToInstance(VaultShortResponse, classToPlain(vault), { excludeExtraneousValues: true })
     );
 
@@ -100,34 +99,6 @@ export class DraftVaultsService {
     delete vault.locked_at
 
     return classToPlain(vault);
-  }
-
-  private async parseCSVFromS3(file_key: string): Promise<string[]> {
-    try {
-      const csvStream = await this.awsService.getCsv(file_key);
-      const csvData = await csvStream.data.toArray();
-      const csvString = Buffer.concat(csvData).toString();
-
-      return new Promise((resolve, reject) => {
-        const results: string[] = [];
-        csv.parse(csvString, {
-          columns: false,
-          skip_empty_lines: true,
-          trim: true
-        })
-        .on('data', (data) => {
-          const address = data[0];
-          if (address && typeof address === 'string' && /^addr1[a-zA-Z0-9]{98}$/.test(address)) {
-            results.push(address);
-          }
-        })
-        .on('end', () => resolve(results))
-        .on('error', (error) => reject(error));
-      });
-    } catch (error) {
-      console.error('Error parsing CSV from S3:', error);
-      throw new BadRequestException('Failed to parse CSV file from S3');
-    }
   }
 
   async saveDraftVault(userId: string, data: SaveDraftReq): Promise<any> {
