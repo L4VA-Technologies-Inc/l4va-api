@@ -3,8 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CreateProposalReq } from './dto/create-proposal.req';
 import { VoteReq } from './dto/vote.req';
-import { Vault } from '../vaults/entities/vault.entity';
-import { VaultStatus } from '../vaults/types';
+import {Vault} from "../../database/vault.entity";
+import {VaultStatus} from "../../types/vault.types";
 
 @Injectable()
 export class GovernanceService {
@@ -22,7 +22,7 @@ export class GovernanceService {
       throw new NotFoundException('Vault not found');
     }
 
-    if (vault.status !== VaultStatus.LOCKED) {
+    if (vault.vault_status !== VaultStatus.locked) {
       throw new BadRequestException('Governance is only available for locked vaults');
     }
 

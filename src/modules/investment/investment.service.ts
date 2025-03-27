@@ -2,14 +2,18 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { InvestReq } from './dto/invest.req';
-import { Vault } from '../vaults/entities/vault.entity';
-import { VaultStatus } from '../vaults/types';
+import {Vault} from "../../database/vault.entity";
+import {VaultStatus} from "../../types/vault.types";
+import {User} from "../../database/user.entity";
 
 @Injectable()
 export class InvestmentService {
   constructor(
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
+
   ) {}
 
   async invest(vaultId: string, investReq: InvestReq, userId: string) {
@@ -18,18 +22,23 @@ export class InvestmentService {
       relations: ['investorWhitelist'],
     });
 
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+    });
+
+
     if (!vault) {
       throw new NotFoundException('Vault not found');
     }
 
-    if (vault.status !== VaultStatus.INVESTMENT) {
+    if (vault.vault_status !== VaultStatus.investment) {
       throw new BadRequestException('Vault is not in investment phase');
     }
 
     // Check if user is in investor whitelist if vault has one
-    if (vault.investorWhitelist?.length > 0) {
-      const isWhitelisted = vault.investorWhitelist.some(
-        (entry) => entry.user_id === userId,
+    if (vault.investors_whitelist?.length > 0) {
+      const isWhitelisted = vault.investors_whitelist.some(
+        (entry) => entry.wallet_address === user.address,
       );
       if (!isWhitelisted) {
         throw new BadRequestException('User is not in investor whitelist');
@@ -37,8 +46,8 @@ export class InvestmentService {
     }
 
     // Validate investment amount and currency based on vault settings
-    if (vault.valuationType === 'fixed') {
-      if (investReq.currency !== vault.valuationCurrency) {
+    if (vault.valuation_type === 'fixed') {
+      if (investReq.currency !== vault.valuation_currency) {
         throw new BadRequestException('Invalid investment currency');
       }
       // Additional validation for fixed valuation type can be added here
