@@ -10,18 +10,6 @@ import {
 } from '../../../types/vault.types';
 import { LinkEntity } from '../../../database/link.entity';
 import {FileEntity} from "../../../database/file.entity";
-import {
-  BeforeInsert, BeforeUpdate,
-  Check,
-  Column,
-  JoinColumn,
-  JoinTable,
-  ManyToMany,
-  ManyToOne,
-  OneToMany,
-  OneToOne,
-  PrimaryGeneratedColumn
-} from "typeorm";
 import {User} from "../../../database/user.entity";
 import {AssetsWhitelistEntity} from "../../../database/assetsWhitelist.entity";
 import {InvestorsWhitelistEntity} from "../../../database/investorsWhitelist.entity";
