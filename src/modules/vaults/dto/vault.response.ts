@@ -16,6 +16,7 @@ import {InvestorsWhitelistEntity} from "../../../database/investorsWhitelist.ent
 import {ContributorWhitelistEntity} from "../../../database/contributorWhitelist.entity";
 import {Asset} from "../../../database/asset.entity";
 import {TagEntity} from "../../../database/tag.entity";
+import {DtoRepresent} from "../../../decorators/dto-represents.decorator";
 
 export class VaultShortResponse {
   @ApiProperty({ description: 'Unique identifier of the vault' })
@@ -74,8 +75,10 @@ export class VaultShortResponse {
   timeRemaining?: number;
 
   @ApiProperty({ description: 'Vault image', required: true })
-  @Expose()
-  @Transform(({ value }) => value ? value.url : null)
+  @DtoRepresent({
+    transform: ({ value }) => value ? value.url : null,
+    expose: true,
+  })
   vaultImage?: FileEntity;
 
   @ApiProperty({ description: 'Banner image', required:true })
@@ -84,7 +87,10 @@ export class VaultShortResponse {
   bannerImage?: FileEntity;
 
   @ApiProperty({ description: 'Social links', type: [LinkEntity], required: false })
-  @Expose({ name: 'socialLinks' })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'socialLinks'},
+  })
   socialLinks?: LinkEntity[];
 }
 
