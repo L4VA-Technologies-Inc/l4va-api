@@ -3,7 +3,8 @@
 export enum VaultType {
   single = 'single',
   multi = 'multi',
-  ctn = 'ctn'
+  ctn = 'ctn',
+  cnt = 'cnt'
 }
 
 export enum VaultPrivacy {

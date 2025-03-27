@@ -1,9 +1,11 @@
 
 export enum TransactionStatus {
+  created = 'created',
   pending = 'pending',
   submitted ='submitted',
   confirmed = 'confirmed',
-  failed = 'failed'
+  failed = 'failed',
+  manual_review = 'manual-review'
 }
 
 export enum TransactionType {

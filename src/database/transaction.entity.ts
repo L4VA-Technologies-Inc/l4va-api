@@ -5,11 +5,10 @@ import {TransactionStatus, TransactionType} from "../types/transaction.types";
 
 
 @Entity('transactions')
-export class User {
+export class Transaction {
 
   @ApiProperty({ description: 'Unique identifier of the transaction' })
   @PrimaryGeneratedColumn('uuid')
-  @Expose()
   id: string;
 
   @Expose({ name: 'sender' })
@@ -20,7 +19,6 @@ export class User {
   @Column()
   receiver: string;
 
-  @Expose({ name: 'type'})
   @Column({
     name: 'type',
     type: 'enum',
@@ -29,13 +27,12 @@ export class User {
   })
   type?: TransactionType;
 
-  @Expose({ name: 'fee' })
   @Column()
   fee: number;
 
   @Expose({ name: 'txHash' })
   @Column()
-  txHash: string;
+  tx_hash: string;
 
   @Expose({ name: 'block' })
   @Column()
@@ -51,7 +48,11 @@ export class User {
   status?: TransactionStatus;
 
   @Expose({ name: 'metadata' })
-  @Column()
+  @Column({
+    name: 'metadata',
+    type: 'jsonb',
+    nullable: true
+  })
   metadata: any;
 
 }
