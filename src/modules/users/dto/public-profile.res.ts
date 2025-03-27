@@ -27,6 +27,13 @@ export class PublicProfileRes {
 
   @ApiProperty({ required: false })
   @DtoRepresent({
+    transform: false,
+    expose: true
+  })
+  address:string;
+
+  @ApiProperty({ required: false })
+  @DtoRepresent({
     transform: ({ value }) => value ? value.url : null,
     expose: { name: 'profileImage' }
   })
