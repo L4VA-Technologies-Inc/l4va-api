@@ -1,10 +1,24 @@
 import { ApiTags, ApiConsumes } from '@nestjs/swagger';
-import { Controller, Get, Patch, Body, Request, UseGuards, Post, UseInterceptors, UploadedFile, Param } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Patch,
+  Body,
+  Request,
+  UseGuards,
+  Post,
+  UseInterceptors,
+  UploadedFile,
+  Param,
+  ParseFilePipe, MaxFileSizeValidator, FileTypeValidator
+} from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UsersService } from './users.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AuthGuard } from '../auth/auth.guard';
 import { ApiDoc } from '../../decorators/api-doc.decorator';
+import {Express} from "express";
+import {mbMultiplication} from "../aws_bucket/aws.controller";
 
 @ApiTags('users')
 @Controller('users')
@@ -59,7 +73,14 @@ export class UsersController {
   @UseInterceptors(FileInterceptor('file'))
   async uploadProfileImage(
     @Request() req,
-    @UploadedFile() file: Express.Multer.File,
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({ maxSize: 5 * mbMultiplication }), // 5mb
+          new FileTypeValidator({ fileType: 'image/*' }),
+        ],
+      }),
+    ) file: Express.Multer.File
   ) {
     const userId = req.user.sub;
     return this.usersService.uploadProfileImage(userId, file, req.get('host'));
@@ -76,7 +97,14 @@ export class UsersController {
   @UseInterceptors(FileInterceptor('file'))
   async uploadBannerImage(
     @Request() req,
-    @UploadedFile() file: Express.Multer.File,
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({ maxSize: 5 * mbMultiplication }), // 5mb
+          new FileTypeValidator({ fileType: 'image/*' }),
+        ],
+      }),
+    ) file: Express.Multer.File
   ) {
     const userId = req.user.sub;
     return this.usersService.uploadBannerImage(userId, file, req.get('host'));

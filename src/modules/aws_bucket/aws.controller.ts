@@ -14,7 +14,7 @@ import {FileInterceptor} from "@nestjs/platform-express";
 import { Express, Response, Request } from 'express'
 import {AuthGuard} from "../auth/auth.guard";
 
-const mbMultiplication =  1024 * 1024;
+export const mbMultiplication =  1024 * 1024;
 
 @ApiTags('files')
 @Controller('')
@@ -80,7 +80,7 @@ export class AwsController {
   async handleCsvFiles(@UploadedFile(
     new ParseFilePipe({
       validators: [
-        new MaxFileSizeValidator({ maxSize: 10000 }),
+        new MaxFileSizeValidator({ maxSize:  5 * mbMultiplication }),
         new FileTypeValidator({ fileType: 'text/csv' }),
       ],
     }),
