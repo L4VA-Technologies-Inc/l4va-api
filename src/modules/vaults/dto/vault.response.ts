@@ -280,56 +280,56 @@ export class VaultFullResponse extends VaultShortResponse {
     transform: false,
     expose: true
   })
-  creation_threshold?: number;
+  creationThreshold?: number;
 
   @ApiProperty({ description: 'Start threshold', required: false })
   @DtoRepresent({
     transform: false,
     expose: true
   })
-  start_threshold?: number;
+  startThreshold?: number;
 
   @ApiProperty({ description: 'Vote threshold', required: false })
   @DtoRepresent({
     transform: false,
     expose: true
   })
-  vote_threshold?: number;
+  voteThreshold?: number;
 
   @ApiProperty({ description: 'Execution threshold', required: false })
   @DtoRepresent({
     transform: false,
     expose: true
   })
-  execution_threshold?: number;
+  executionThreshold?: number;
 
   @ApiProperty({ description: 'Cosigning threshold', required: false })
   @DtoRepresent({
     transform: false,
     expose: true
   })
-  cosigning_threshold?: number;
+  cosigningThreshold?: number;
 
   @ApiProperty({ description: 'Assets whitelist', type: [AssetsWhitelistEntity], required: false })
   @DtoRepresent({
     transform: false,
     expose: true
   })
-  assets_whitelist?: AssetsWhitelistEntity[];
+  assetsWhitelist?: AssetsWhitelistEntity[];
 
   @ApiProperty({ description: 'Investors whitelist', type: [InvestorsWhitelistEntity], required: false })
   @DtoRepresent({
     transform: false,
     expose: true
   })
-  investors_whitelist?: InvestorsWhitelistEntity[];
+  investorsWhitelist?: InvestorsWhitelistEntity[];
 
   @ApiProperty({ description: 'Contributor whitelist', type: [ContributorWhitelistEntity], required: false })
   @DtoRepresent({
     transform: false,
     expose: true
   })
-  contributor_whitelist?: ContributorWhitelistEntity[];
+  contributorWhitelist?: ContributorWhitelistEntity[];
 
   @ApiProperty({ description: 'Assets', type: [Asset], required: false })
   @DtoRepresent({
@@ -343,7 +343,7 @@ export class VaultFullResponse extends VaultShortResponse {
     transform: false,
     expose: true
   })
-  investors_whitelist_csv?: FileEntity;
+  investorsWhitelistCsv?: FileEntity;
 
   @ApiProperty({ description: 'Tags', type: [TagEntity], required: false })
   @DtoRepresent({
@@ -355,23 +355,25 @@ export class VaultFullResponse extends VaultShortResponse {
   @ApiProperty({ description: 'Contribution phase start time', required: false })
   @DtoRepresent({
     transform: ({ value }) => value ? new Date(value).toISOString() : null,
-    expose: true
+    expose: {
+      name: 'contributionPhaseStart'
+    }
   })
-  contribution_phase_start?: string;
+  contributionPhaseStart?: string;
 
   @ApiProperty({ description: 'Investment phase start time', required: false })
   @DtoRepresent({
     transform: ({ value }) => value ? new Date(value).toISOString() : null,
     expose: true
   })
-  investment_phase_start?: string;
+  investmentPhaseStart?: string;
 
   @ApiProperty({ description: 'Locked at time', required: false })
   @DtoRepresent({
     transform: ({ value }) => value ? new Date(value).toISOString() : null,
     expose: true
   })
-  locked_at?: string;
+  lockedAt?: string;
 
   @ApiProperty({ description: 'Creation timestamp' })
   @DtoRepresent({

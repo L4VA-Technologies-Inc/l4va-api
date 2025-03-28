@@ -498,20 +498,6 @@ export class VaultsService {
       throw new BadRequestException('Access denied: You are not the owner of this vault');
     }
 
-    const createdAt = new Date(vault.created_at);
-
-    if (vault.vault_status === VaultStatus.contribution && vault.contribution_duration) {
-      // In contribution phase - end time is start + duration
-      const endTime = new Date(createdAt.getTime() + Number(vault.contribution_duration));
-      vault['phaseEndTime'] = endTime.toISOString();
-    }
-    else if (vault.vault_status === VaultStatus.investment && vault.investment_window_duration) {
-      // In investment phase - end time is investment start + duration
-      const startTime = new Date(vault.investment_phase_start || createdAt);
-      const endTime = new Date(startTime.getTime() + Number(vault.investment_window_duration));
-      vault['phaseEndTime'] = endTime.toISOString();
-    }
-
     return plainToInstance(VaultFullResponse, classToPlain(vault), { excludeExtraneousValues: true });
   }
 
