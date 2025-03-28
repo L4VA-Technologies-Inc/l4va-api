@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { Vault } from '../../database/vault.entity';
-import { VaultStatus } from '../../types/vault.types';
+import { VaultStatus, ContributionWindowType, InvestmentWindowType } from '../../types/vault.types';
 
 @Injectable()
 export class LifecycleService {
@@ -18,7 +18,6 @@ export class LifecycleService {
   async handleVaultLifecycleTransitions() {
     this.logger.debug('Checking vault lifecycle transitions...');
 
-    // Handle published -> contribution transitions
     await this.handlePublishedToContribution();
 
     // Handle contribution -> investment transitions
@@ -29,21 +28,41 @@ export class LifecycleService {
   }
 
   private async handlePublishedToContribution() {
-    const publishedVaults = await this.vaultRepository
+    const now = new Date();
+
+    // Handle immediate start vaults
+    const immediateStartVaults = await this.vaultRepository
       .createQueryBuilder('vault')
       .where('vault.vault_status = :status', { status: VaultStatus.published })
-      .andWhere('vault.contribution_open_window_type = :type', { type: 'upon-vault-launch' })
+      .andWhere('vault.contribution_open_window_type = :type', { type: ContributionWindowType.uponVaultLaunch })
       .getMany();
 
-    for (const vault of publishedVaults) {
-      vault.contribution_phase_start = new Date().toISOString();
+    for (const vault of immediateStartVaults) {
+      vault.contribution_phase_start = now.toISOString();
       vault.vault_status = VaultStatus.contribution;
       await this.vaultRepository.save(vault);
-      this.logger.log(`Vault ${vault.id} moved to contribution phase`);
+      this.logger.log(`Vault ${vault.id} moved to contribution phase (immediate start)`);
+    }
+
+    // Handle custom start time vaults
+    const customStartVaults = await this.vaultRepository
+      .createQueryBuilder('vault')
+      .where('vault.vault_status = :status', { status: VaultStatus.published })
+      .andWhere('vault.contribution_open_window_type = :type', { type: ContributionWindowType.custom })
+      .andWhere('vault.contribution_open_window_time IS NOT NULL')
+      .andWhere('vault.contribution_open_window_time <= :now', { now: now.toISOString() })
+      .getMany();
+
+    for (const vault of customStartVaults) {
+      vault.contribution_phase_start = now.toISOString();
+      vault.vault_status = VaultStatus.contribution;
+      await this.vaultRepository.save(vault);
+      this.logger.log(`Vault ${vault.id} moved to contribution phase (custom start time)`);
     }
   }
 
   private async handleContributionToInvestment() {
+    const now = new Date();
     const contributionVaults = await this.vaultRepository
       .createQueryBuilder('vault')
       .where('vault.vault_status = :status', { status: VaultStatus.contribution })
@@ -51,17 +70,28 @@ export class LifecycleService {
       .andWhere('vault.contribution_duration IS NOT NULL')
       .getMany();
 
-    const now = new Date();
-
     for (const vault of contributionVaults) {
       const contributionStart = new Date(vault.contribution_phase_start);
-      const contributionEnd = new Date(contributionStart.getTime() + vault.contribution_duration);
+      const contributionDurationMs = Number(vault.contribution_duration);
+      const contributionEnd = new Date(contributionStart.getTime() + contributionDurationMs);
 
       if (now >= contributionEnd) {
-        vault.investment_phase_start = now.toISOString();
-        vault.vault_status = VaultStatus.investment;
-        await this.vaultRepository.save(vault);
-        this.logger.log(`Vault ${vault.id} moved to investment phase`);
+        // For immediate investment start
+        if (vault.investment_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
+          vault.investment_phase_start = now.toISOString();
+          vault.vault_status = VaultStatus.investment;
+          await this.vaultRepository.save(vault);
+          this.logger.log(`Vault ${vault.id} moved to investment phase (immediate start)`);
+        }
+        // For custom investment start time
+        else if (vault.investment_open_window_type === InvestmentWindowType.custom &&
+                 vault.investment_open_window_time &&
+                 now >= new Date(vault.investment_open_window_time)) {
+          vault.investment_phase_start = now.toISOString();
+          vault.vault_status = VaultStatus.investment;
+          await this.vaultRepository.save(vault);
+          this.logger.log(`Vault ${vault.id} moved to investment phase (custom start time)`);
+        }
       }
     }
   }
@@ -78,7 +108,8 @@ export class LifecycleService {
 
     for (const vault of investmentVaults) {
       const investmentStart = new Date(vault.investment_phase_start);
-      const investmentEnd = new Date(investmentStart.getTime() + vault.investment_window_duration);
+      const investmentDurationMs = Number(vault.investment_window_duration);
+      const investmentEnd = new Date(investmentStart.getTime() + investmentDurationMs);
 
       if (now >= investmentEnd) {
         vault.locked_at = now.toISOString();
