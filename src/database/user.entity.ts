@@ -32,6 +32,10 @@ export class User {
   @Column({ unique: true })
   address: string;
 
+  @Expose({ name: 'stakeAddress' })
+  @Column({ unique: true, nullable: true })
+  stake_address: string;
+
   @Expose({ name: 'description' })
   @Column({ nullable: true })
   description: string;

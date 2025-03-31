@@ -42,4 +42,14 @@ export class LoginReq {
     example: 'stake1uyrxqkj8778p6cy7feyp7ktjskxuv2qmmffqjh9gsq7we0q6wauv4'
   })
   stakeAddress: string;
+
+
+  @Expose()
+  @IsNotEmpty()
+  @IsString()
+  @ApiProperty({
+    description: 'Wallet address for the wallet',
+    example: 'addr1q934ccfkwy292....'
+  })
+  walletAddress: string;
 }

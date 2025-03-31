@@ -2,7 +2,12 @@ import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Buffer } from 'buffer';
 import { COSESign1, COSEKey, Label, Int, BigNum } from '@emurgo/cardano-message-signing-nodejs';
-import { Ed25519Signature, PublicKey, Address, RewardAddress } from '@emurgo/cardano-serialization-lib-nodejs';
+import {
+  Ed25519Signature,
+  PublicKey,
+  Address,
+  RewardAddress, BaseAddress
+} from '@emurgo/cardano-serialization-lib-nodejs';
 import { generateUsername } from 'unique-username-generator';
 
 import { UsersService } from '../users/users.service';
@@ -18,9 +23,9 @@ export class AuthService {
 
   async verifySignature(signatureData: LoginReq) {
     try {
-      const { signature, stakeAddress } = signatureData;
+      const { signature, stakeAddress, walletAddress } = signatureData;
 
-      // Your existing signature verification code...
+      // Verify the signature
       const decoded = COSESign1.from_bytes(Buffer.from(signature.signature, 'hex'));
       const headermap = decoded.headers().protected().deserialized_headers();
       const addressHex = Buffer.from(headermap.header(Label.new_text('address')).to_bytes())
@@ -52,14 +57,15 @@ export class AuthService {
         };
       }
 
-      // Find user in database
-      let user = await this.usersService.findByAddress(signerStakeAddrBech32);
+      // Find user in database by wallet address
+      let user = await this.usersService.findByAddress(walletAddress);
 
       // If user doesn't exist, create a new one
       if (!user) {
         try {
           user = await this.usersService.create({
-            address: signerStakeAddrBech32,
+            address: walletAddress,
+            stake_address: stakeAddress,
             name: generateUsername(),
           });
         } catch (error) {
