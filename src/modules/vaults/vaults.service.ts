@@ -1,7 +1,7 @@
 import {Injectable, BadRequestException, UnauthorizedException} from '@nestjs/common';
 import { ValuationType, VaultPrivacy, InvestmentWindowType } from '../../types/vault.types';
 import { InjectRepository } from '@nestjs/typeorm';
-import {In, Repository} from 'typeorm';
+import {In, Repository, Brackets} from 'typeorm';
 import { Vault } from '../../database/vault.entity';
 import { CreateVaultReq } from './dto/createVault.req';
 import { SaveDraftReq } from './dto/saveDraft.req';
@@ -515,7 +515,19 @@ export class VaultsService {
     return plainToInstance(VaultFullResponse, classToPlain(vault), { excludeExtraneousValues: true });
   }
 
-  async getVaults(filter?: VaultFilter, page: number = 1, limit: number = 10, sortBy?: VaultSortField, sortOrder: SortOrder = SortOrder.DESC): Promise<PaginatedResponseDto<VaultShortResponse>> {
+  async getVaults(userId: string, filter?: VaultFilter, page: number = 1, limit: number = 10, sortBy?: VaultSortField, sortOrder: SortOrder = SortOrder.DESC): Promise<PaginatedResponseDto<VaultShortResponse>> {
+    // Get user's wallet address
+    const user = await this.usersRepository.findOne({
+      where: { id: userId }
+    });
+
+    if (!user) {
+      throw new BadRequestException('User not found');
+    }
+
+    const userWalletAddress = user.address;
+
+    // Create base query for all vaults
     const queryBuilder = this.vaultsRepository.createQueryBuilder('vault')
       .leftJoinAndSelect('vault.social_links', 'social_links')
       .leftJoinAndSelect('vault.assets_whitelist', 'assets_whitelist')
@@ -523,29 +535,77 @@ export class VaultsService {
       .leftJoinAndSelect('vault.banner_image', 'banner_image')
       .leftJoinAndSelect('vault.ft_token_img', 'ft_token_img')
       .leftJoinAndSelect('vault.tags', 'tags')
+      .leftJoinAndSelect('vault.contributor_whitelist', 'contributor_whitelist')
+      .leftJoinAndSelect('vault.investors_whitelist', 'investors_whitelist')
       .where('vault.vault_status != :draftStatus', { draftStatus: VaultStatus.draft })
-      // Only show public vaults in the public listing
-      .andWhere('vault.privacy = :privacy', { privacy: VaultPrivacy.public });
+      // Get public vaults OR private vaults where user is whitelisted based on filter
+      .andWhere(new Brackets(qb => {
+        qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public })
+          .orWhere(
+            new Brackets(qb2 => {
+              qb2.where('vault.privacy = :privatePrivacy', { privatePrivacy: VaultPrivacy.private })
+                .andWhere(
+                  new Brackets(qb3 => {
+                    // Default case - check both whitelists if no filter
+                    qb3.where('(EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress) OR EXISTS (SELECT 1 FROM investors_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress))',
+                      { userWalletAddress });
+                  })
+                );
+            })
+          );
+      }));
 
-    // Apply status filter if provided
+    // Apply status filter and corresponding whitelist check
     if (filter) {
       switch (filter) {
         case VaultFilter.open:
-          queryBuilder.andWhere('vault.vault_status IN (:...statuses)', {
-            statuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.investment]
-          });
+          queryBuilder
+            .andWhere('vault.vault_status IN (:...statuses)', {
+              statuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.investment]
+            })
+            .andWhere(new Brackets(qb => {
+              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public })
+                .orWhere(
+                  'EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress)',
+                  { userWalletAddress }
+                );
+            }));
+          break;
+        case VaultFilter.contribution:
+          queryBuilder
+            .andWhere('vault.vault_status = :status', { status: VaultStatus.contribution })
+            .andWhere(new Brackets(qb => {
+              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public })
+                .orWhere(
+                  'EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress)',
+                  { userWalletAddress }
+                );
+            }));
+          break;
+        case VaultFilter.investment:
+          queryBuilder
+            .andWhere('vault.vault_status = :status', { status: VaultStatus.investment })
+            .andWhere(new Brackets(qb => {
+              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public })
+                .orWhere(
+                  'EXISTS (SELECT 1 FROM investors_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress)',
+                  { userWalletAddress }
+                );
+            }));
+          break;
+        case VaultFilter.governance:
+          queryBuilder
+            .andWhere('vault.vault_status = :status', { status: VaultStatus.governance })
+            .andWhere(new Brackets(qb => {
+              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public })
+                .orWhere(
+                  '(EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress) OR EXISTS (SELECT 1 FROM investors_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress))',
+                  { userWalletAddress }
+                );
+            }));
           break;
         case VaultFilter.locked:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked });
-          break;
-        case VaultFilter.contribution:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.contribution });
-          break;
-        case VaultFilter.investment:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.investment });
-          break;
-        case VaultFilter.governance:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.governance });
           break;
       }
     }
