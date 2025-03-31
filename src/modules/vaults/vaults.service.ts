@@ -437,14 +437,28 @@ export class VaultsService {
       order: {}
     };
 
-    if (filter === VaultFilter.open) {
-      query.where['vault_status'] = In([
-        VaultStatus.published,
-        VaultStatus.contribution,
-        VaultStatus.investment
-      ]);
-    } else if (filter === VaultFilter.locked) {
-      query.where['vault_status'] = VaultStatus.locked;
+    if (filter) {
+      switch (filter) {
+        case VaultFilter.open:
+          query.where['vault_status'] = In([
+            VaultStatus.published,
+            VaultStatus.contribution,
+            VaultStatus.investment
+          ]);
+          break;
+        case VaultFilter.locked:
+          query.where['vault_status'] = VaultStatus.locked;
+          break;
+        case VaultFilter.contribution:
+          query.where['vault_status'] = VaultStatus.contribution;
+          break;
+        case VaultFilter.investment:
+          query.where['vault_status'] = VaultStatus.investment;
+          break;
+        case VaultFilter.governance:
+          query.where['vault_status'] = VaultStatus.governance;
+          break;
+      }
     }
 
     // Add sorting if specified
@@ -514,12 +528,26 @@ export class VaultsService {
       .andWhere('vault.privacy = :privacy', { privacy: VaultPrivacy.public });
 
     // Apply status filter if provided
-    if (filter === VaultFilter.open) {
-      queryBuilder.andWhere('vault.vault_status IN (:...statuses)', {
-        statuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.investment]
-      });
-    } else if (filter === VaultFilter.locked) {
-      queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked });
+    if (filter) {
+      switch (filter) {
+        case VaultFilter.open:
+          queryBuilder.andWhere('vault.vault_status IN (:...statuses)', {
+            statuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.investment]
+          });
+          break;
+        case VaultFilter.locked:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked });
+          break;
+        case VaultFilter.contribution:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.contribution });
+          break;
+        case VaultFilter.investment:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.investment });
+          break;
+        case VaultFilter.governance:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.governance });
+          break;
+      }
     }
 
     // Apply sorting

@@ -1,11 +1,14 @@
-import { IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsEnum, IsOptional } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { PaginationDto } from './pagination.dto';
 import {Expose} from "class-transformer";
 
 export enum VaultFilter {
   open = 'open',
-  locked = 'locked'
+  locked = 'locked',
+  contribution = 'contribution',
+  investment = 'investment',
+  governance = 'governance'
 }
 
 export enum VaultSortField {
