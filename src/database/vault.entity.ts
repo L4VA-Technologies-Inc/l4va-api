@@ -328,6 +328,10 @@ export class Vault {
   @Column({ name: 'locked_at', type: 'timestamptz', nullable: true })
   locked_at?: string;
 
+  @Expose({ name: 'governancePhaseStart' })
+  @Column({ name: 'governance_phase_start', type: 'timestamptz', nullable: true })
+  governance_phase_start?: string;
+
   @BeforeInsert()
   setDate() {
     this.created_at = new Date().toISOString();

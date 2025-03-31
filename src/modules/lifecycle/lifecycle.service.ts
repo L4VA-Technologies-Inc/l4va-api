@@ -23,8 +23,8 @@ export class LifecycleService {
     // Handle contribution -> investment transitions
     await this.handleContributionToInvestment();
 
-    // Handle investment -> locked transitions
-    await this.handleInvestmentToLocked();
+    // Handle investment -> governance transitions
+    await this.handleInvestmentToGovernance();
   }
 
   private async handlePublishedToContribution() {
@@ -96,7 +96,7 @@ export class LifecycleService {
     }
   }
 
-  private async handleInvestmentToLocked() {
+  private async handleInvestmentToGovernance() {
     const investmentVaults = await this.vaultRepository
       .createQueryBuilder('vault')
       .where('vault.vault_status = :status', { status: VaultStatus.investment })
@@ -112,10 +112,10 @@ export class LifecycleService {
       const investmentEnd = new Date(investmentStart.getTime() + investmentDurationMs);
 
       if (now >= investmentEnd) {
-        vault.locked_at = now.toISOString();
-        vault.vault_status = VaultStatus.locked;
+        vault.governance_phase_start = now.toISOString();
+        vault.vault_status = VaultStatus.governance;
         await this.vaultRepository.save(vault);
-        this.logger.log(`Vault ${vault.id} has been locked`);
+        this.logger.log(`Vault ${vault.id} has moved to governance phase`);
       }
     }
   }
