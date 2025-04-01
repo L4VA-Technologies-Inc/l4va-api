@@ -111,9 +111,11 @@ export class VaultsController {
     description: 'Returns paginated list of all published vaults. Default page: 1, default limit: 10. Supports sorting by name, created_at, or updated_at. Response includes total count and total pages.',
     status: 200,
   })
+  @UseGuards(AuthGuard)
   @Get()
   getVaults(@Query() query: GetVaultsDto, @Request() req) {
     const userId = req.user.sub;
+
     return this.vaultsService.getVaults(
       userId,
       query.filter,
@@ -124,3 +126,4 @@ export class VaultsController {
     );
   }
 }
+
