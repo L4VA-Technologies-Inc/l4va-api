@@ -1,25 +1,24 @@
-import {Injectable, BadRequestException, UnauthorizedException} from '@nestjs/common';
-import { ValuationType, VaultPrivacy, InvestmentWindowType } from '../../types/vault.types';
-import { InjectRepository } from '@nestjs/typeorm';
-import {In, Repository, Brackets} from 'typeorm';
-import { Vault } from '../../database/vault.entity';
-import { CreateVaultReq } from './dto/createVault.req';
-import { SaveDraftReq } from './dto/saveDraft.req';
-import { User } from '../../database/user.entity';
-import { VaultStatus } from '../../types/vault.types';
-import { LinkEntity } from '../../database/link.entity';
-import { FileEntity } from '../../database/file.entity';
-import { AssetsWhitelistEntity } from '../../database/assetsWhitelist.entity';
-import { InvestorsWhitelistEntity } from '../../database/investorsWhitelist.entity';
+import {BadRequestException, Injectable, UnauthorizedException} from '@nestjs/common';
+import {ValuationType, VaultPrivacy, VaultStatus} from '../../types/vault.types';
+import {InjectRepository} from '@nestjs/typeorm';
+import {Brackets, In, Repository} from 'typeorm';
+import {Vault} from '../../database/vault.entity';
+import {CreateVaultReq} from './dto/createVault.req';
+import {SaveDraftReq} from './dto/saveDraft.req';
+import {User} from '../../database/user.entity';
+import {LinkEntity} from '../../database/link.entity';
+import {FileEntity} from '../../database/file.entity';
+import {AssetsWhitelistEntity} from '../../database/assetsWhitelist.entity';
+import {InvestorsWhitelistEntity} from '../../database/investorsWhitelist.entity';
 import * as csv from 'csv-parse';
-import { AwsService } from '../aws_bucket/aws.service';
-import { plainToInstance, classToPlain } from "class-transformer";
-import { VaultFilter, VaultSortField, SortOrder } from './dto/get-vaults.dto';
-import { PaginatedResponseDto } from './dto/paginated-response.dto';
-import { TagEntity } from '../../database/tag.entity';
-import { ContributorWhitelistEntity } from '../../database/contributorWhitelist.entity';
-import { transformToSnakeCase} from '../../helpers';
-import { VaultShortResponse, VaultFullResponse } from './dto/vault.response';
+import {AwsService} from '../aws_bucket/aws.service';
+import {classToPlain, plainToInstance} from "class-transformer";
+import {SortOrder, VaultFilter, VaultSortField} from './dto/get-vaults.dto';
+import {PaginatedResponseDto} from './dto/paginated-response.dto';
+import {TagEntity} from '../../database/tag.entity';
+import {ContributorWhitelistEntity} from '../../database/contributorWhitelist.entity';
+import {transformToSnakeCase} from '../../helpers';
+import {VaultFullResponse, VaultShortResponse} from './dto/vault.response';
 
 @Injectable()
 export class VaultsService {
@@ -508,7 +507,7 @@ export class VaultsService {
       throw new BadRequestException('Vault not found');
     }
 
-    if (vault.owner.id !== userId) {
+    if (vault.privacy !== VaultPrivacy.public &&  vault.owner.id !== userId) {
       throw new BadRequestException('Access denied: You are not the owner of this vault');
     }
 
