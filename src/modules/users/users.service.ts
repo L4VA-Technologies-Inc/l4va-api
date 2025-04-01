@@ -150,6 +150,14 @@ export class UsersService {
     return classToPlain(selectedUser, { excludeExtraneousValues: true } ) as User;
   }
 
+  async updateUserAddress(userId: string, address: string){
+    await this.usersRepository.update({
+      id: userId}, {
+      address: address
+    });
+  }
+
+
   async uploadProfileImage(userId: string, file: Express.Multer.File, host: string): Promise<User> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },

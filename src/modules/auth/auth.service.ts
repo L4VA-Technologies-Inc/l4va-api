@@ -59,6 +59,9 @@ export class AuthService {
 
       // Find user in database by wallet address
       let user = await this.usersService.findByAddress(stakeAddress);
+      if(!user.address){
+        await this.usersService.updateUserAddress(user.id, walletAddress)
+      }
 
       // If user doesn't exist, create a new one
       if (!user) {
