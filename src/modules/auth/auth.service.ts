@@ -59,7 +59,7 @@ export class AuthService {
 
       // Find user in database by wallet address
       let user = await this.usersService.findByAddress(stakeAddress);
-      if(!user.address){
+      if(!user.address || user.address.includes('stake1')){
         await this.usersService.updateUserAddress(user.id, walletAddress)
       }
 
