@@ -111,6 +111,13 @@ export class VaultShortResponse {
   })
   bannerImage?: FileEntity;
 
+  @ApiProperty({ description: 'Status of the vault', enum: VaultStatus })
+  @DtoRepresent({
+    transform: false,
+    expose: true
+  })
+  vaultStatus: VaultStatus;
+
   @ApiProperty({ description: 'Social links', type: [LinkEntity], required: false })
   @DtoRepresent({
     transform: false,
@@ -127,13 +134,6 @@ export class VaultFullResponse extends VaultShortResponse {
     expose: true
   })
   type: VaultType;
-
-  @ApiProperty({ description: 'Status of the vault', enum: VaultStatus })
-  @DtoRepresent({
-    transform: false,
-    expose: true
-  })
-  vaultStatus: VaultStatus;
 
   @ApiProperty({ description: 'Fractional token image '})
   @DtoRepresent({
