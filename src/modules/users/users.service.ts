@@ -25,7 +25,7 @@ export class UsersService {
   async findByAddress(address: string): Promise<User | undefined> {
     return this.usersRepository.findOne({
       where: {
-        address: address
+        stake_address: address
       },
       relations:['profile_image', 'banner_image', 'social_links']
     });
