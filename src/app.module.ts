@@ -6,26 +6,19 @@ import {ConfigModule, ConfigService} from '@nestjs/config';
 
 import { AuthModule } from './modules/auth/auth.module';
 import { VaultsModule } from './modules/vaults/vaults.module';
-import {AwsModule} from "./modules/aws_bucket/aws.module";
-import {UsersModule} from "./modules/users/users.module";
-import {SnakeNamingStrategy} from "typeorm-naming-strategies";
+import {AwsModule} from './modules/aws_bucket/aws.module';
+import {UsersModule} from './modules/users/users.module';
+import {SnakeNamingStrategy} from 'typeorm-naming-strategies';
 import { AssetsModule } from './modules/assets/assets.module';
 import { BlockchainModule } from './modules/blockchain/blockchain.module';
-import {JwtModule} from "@nestjs/jwt";
+import {ContributionModule} from './modules/contribution/contribution.module';
+import {TransactionsModule} from './modules/transactions/transactions.module';
+import {JwtGlobalModule} from "./modules/globals/jwt_global_module/jwt_global.module";
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-    }),
-    JwtModule.registerAsync({
-      imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
-        global: true,
-        secret: configService.get<string>('JWT_SECRET'),
-        signOptions: { expiresIn: '1d' },
-      }),
-      inject: [ConfigService],
     }),
     TypeOrmModule.forRoot({
       type: 'postgres',
@@ -39,14 +32,17 @@ import {JwtModule} from "@nestjs/jwt";
       autoLoadEntities: true,
       namingStrategy: new SnakeNamingStrategy(),
     }),
+    JwtGlobalModule,
     AuthModule,
     AssetsModule,
     BlockchainModule,
     VaultsModule,
     UsersModule,
     AwsModule,
+    ContributionModule,
+    TransactionsModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [AppService]
 })
 export class AppModule {}
