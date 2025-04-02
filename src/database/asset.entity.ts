@@ -11,6 +11,8 @@ import {
 import { Vault } from './vault.entity';
 import { AssetType, AssetStatus } from '../types/asset.types';
 import { Expose } from 'class-transformer';
+import {User} from "./user.entity";
+import {Transaction} from "./transaction.entity";
 
 @Entity('assets')
 export class Asset {
@@ -44,30 +46,30 @@ export class Asset {
   quantity: number;
 
   @Expose({ name: 'floorPrice' })
-  @Column({ 
+  @Column({
     name: 'floor_price',
     type: 'decimal',
     precision: 20,
     scale: 2,
-    nullable: true 
+    nullable: true
   })
   floor_price?: number;
 
   @Expose({ name: 'dexPrice' })
-  @Column({ 
+  @Column({
     name: 'dex_price',
     type: 'decimal',
     precision: 20,
     scale: 2,
-    nullable: true 
+    nullable: true
   })
   dex_price?: number;
 
   @Expose({ name: 'lastValuation' })
-  @Column({ 
+  @Column({
     name: 'last_valuation',
     type: 'timestamptz',
-    nullable: true 
+    nullable: true
   })
   last_valuation?: Date;
 
@@ -79,18 +81,18 @@ export class Asset {
   status: AssetStatus;
 
   @Expose({ name: 'lockedAt' })
-  @Column({ 
+  @Column({
     name: 'locked_at',
     type: 'timestamptz',
-    nullable: true 
+    nullable: true
   })
   locked_at?: Date;
 
   @Expose({ name: 'releasedAt' })
-  @Column({ 
+  @Column({
     name: 'released_at',
     type: 'timestamptz',
-    nullable: true 
+    nullable: true
   })
   released_at?: Date;
 
@@ -103,12 +105,18 @@ export class Asset {
     attributes: Record<string, any>;
   };
 
+
+  @Expose({ name: 'transaction' })
+  @ManyToOne(() => Transaction, (transaction: Transaction) => transaction.id)
+  @JoinColumn({ name: 'transaction_id' })
+  public transaction: Transaction;
+
   @Expose({ name: 'addedBy' })
   @Column({ name: 'added_by' })
   added_by: string;
 
   @Expose({ name: 'addedAt' })
-  @Column({ 
+  @Column({
     name: 'added_at',
     type: 'timestamptz',
     default: () => 'CURRENT_TIMESTAMP'
@@ -116,7 +124,7 @@ export class Asset {
   added_at: Date;
 
   @Expose({ name: 'updatedAt' })
-  @Column({ 
+  @Column({
     name: 'updated_at',
     type: 'timestamptz',
     default: () => 'CURRENT_TIMESTAMP'

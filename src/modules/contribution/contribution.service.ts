@@ -2,9 +2,11 @@ import {BadRequestException, Injectable, NotFoundException} from '@nestjs/common
 import {InjectRepository} from '@nestjs/typeorm';
 import {Repository} from 'typeorm';
 import {ContributeReq} from './dto/contribute.req';
-import {Vault} from "../../database/vault.entity";
-import {User} from "../../database/user.entity";
-import {VaultStatus} from "../../types/vault.types";
+import {Vault} from '../../database/vault.entity';
+import {User} from '../../database/user.entity';
+import {VaultStatus} from '../../types/vault.types';
+import {TransactionsService} from '../transactions/transactions.service';
+import {TransactionType} from '../../types/transaction.types';
 
 @Injectable()
 export class ContributionService {
@@ -12,7 +14,8 @@ export class ContributionService {
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(User)
-    private readonly usersRepository: Repository<User>
+    private readonly usersRepository: Repository<User>,
+    private readonly transactionsService: TransactionsService
   ) {}
 
   async contribute(vaultId: string, contributeReq: ContributeReq, userId: string) {
@@ -26,7 +29,7 @@ export class ContributionService {
 
 
     if(!user){
-      throw new NotFoundException("User not found");
+      throw new NotFoundException('User not found');
     }
 
     if (!vault) {
@@ -47,15 +50,23 @@ export class ContributionService {
       }
     }
 
+    // todo Create transaction,
+    const transaction = await this.transactionsService.createTransaction({
+      vault_id: vaultId,
+      type: TransactionType.contribute,
+      assets: []
+    });
+
+    // todo attach list of Assets to transaction
+
     // TODO: Implement blockchain integration for asset contribution
     // This will be implemented when blockchain module is ready
     // For now, just return success
     return {
       success: true,
-      message: 'Contribution request accepted',
+      message: 'Contribution request accepted, transaction created',
       vaultId,
-      contributorAddress: user.address,
-      assets: contributeReq.assets,
+      tx_id: transaction.id,
     };
   }
 }

@@ -26,6 +26,9 @@ class ContributionAsset {
 }
 
 export class ContributeReq {
+
+  txHash: string;
+
   @ApiProperty({
     type: [ContributionAsset],
     description: 'List of assets to contribute',

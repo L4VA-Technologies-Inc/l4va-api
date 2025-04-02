@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Transaction } from '../../database/transaction.entity';
 import { TransactionStatus, TransactionType } from '../../types/transaction.types';
+import {Asset} from '../../database/asset.entity';
 
 @Injectable()
 export class TransactionsService {
@@ -12,26 +13,16 @@ export class TransactionsService {
   ) {}
 
   async createTransaction(data: {
-    sender: string;
-    receiver: string;
+    vault_id: string;
     type: TransactionType;
-    fee: number;
-    txHash: string;
-    block: number;
-    metadata?: Record<string, any>;
+    assets: Asset[]
   }): Promise<Transaction> {
-    const transaction = this.transactionRepository.create({
-      sender: data.sender,
-      receiver: data.receiver,
+    return this.transactionRepository.save({
+      vault_id: data.vault_id,
       type: data.type,
-      fee: data.fee,
-      tx_hash: data.txHash,
-      block: data.block,
-      metadata: data.metadata,
-      status: TransactionStatus.created
+      status: TransactionStatus.created,
+      assets: data.assets
     });
-
-    return this.transactionRepository.save(transaction);
   }
 
   async updateTransactionStatus(
@@ -50,18 +41,20 @@ export class TransactionsService {
     return this.transactionRepository.save(transaction);
   }
 
-  async getTransactionsBySender(address: string): Promise<Transaction[]> {
-    return this.transactionRepository.find({
-      where: { sender: address },
-      order: { block: 'DESC' }
-    });
+  async getTransactionsBySender(address: string): Promise<null> {
+    // return this.transactionRepository.find({
+    //   where: { sender: address },
+    //   order: { block: 'DESC' }
+    // });
+    return null;
   }
 
-  async getTransactionsByReceiver(address: string): Promise<Transaction[]> {
-    return this.transactionRepository.find({
-      where: { receiver: address },
-      order: { block: 'DESC' }
-    });
+  async getTransactionsByReceiver(address: string) {
+    // return this.transactionRepository.find({
+    //   where: { receiver: address },
+    //   order: { block: 'DESC' }
+    // });
+    return null;
   }
 
   async getTransaction(txHash: string): Promise<Transaction | null> {

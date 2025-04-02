@@ -15,17 +15,20 @@ export class TransactionsController {
   @ApiOperation({ summary: 'Get transactions sent by the authenticated user' })
   async getSentTransactions() {
    // return this.transactionsService.getTransactionsBySender(address);
+    return null;
   }
 
   @Get('received')
   @ApiOperation({ summary: 'Get transactions received by the authenticated user' })
   async getReceivedTransactions() {
     // return this.transactionsService.getTransactionsByReceiver(address);
+    return null;
   }
 
   @Get(':txHash')
   @ApiOperation({ summary: 'Get transaction details by transaction hash' })
   async getTransaction(@Param('txHash') txHash: string) {
-    return this.transactionsService.getTransaction(txHash);
+    //return this.transactionsService.getTransaction(txHash);
+    return null;
   }
 }

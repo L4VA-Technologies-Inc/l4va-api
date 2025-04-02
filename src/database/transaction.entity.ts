@@ -1,7 +1,8 @@
-import {Column, Entity, PrimaryGeneratedColumn} from "typeorm";
-import {ApiProperty} from "@nestjs/swagger";
-import {Expose} from "class-transformer";
-import {TransactionStatus, TransactionType} from "../types/transaction.types";
+import {Column, Entity, OneToMany, PrimaryGeneratedColumn} from 'typeorm';
+import {ApiProperty} from '@nestjs/swagger';
+import {Exclude, Expose} from 'class-transformer';
+import {TransactionStatus, TransactionType} from '../types/transaction.types';
+import {Asset} from './asset.entity';
 
 
 @Entity('transactions')
@@ -11,13 +12,23 @@ export class Transaction {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Expose({ name: 'sender' })
-  @Column()
-  sender: string;
+  @Expose({ name: 'utxoInput' })
+  @Column({
+    nullable: true
+  })
+  utxo_input: string; // sender
 
-  @Expose({ name: 'receiver' })
-  @Column()
-  receiver: string;
+  @Expose({ name: 'utxoOutput' })
+  @Column({
+    nullable: true
+  })
+  utxo_output: string; // receiver
+
+  @Expose({ name: 'utxoRef' })
+  @Column({
+    nullable: true
+  })
+  utxo_ref: string;
 
   @Column({
     name: 'type',
@@ -27,16 +38,21 @@ export class Transaction {
   })
   type?: TransactionType;
 
-  @Column()
+  @Column({
+    nullable: true
+  })
+  amount: number;
+
+  @Column({
+    nullable: true
+  })
   fee: number;
 
   @Expose({ name: 'txHash' })
-  @Column()
-  tx_hash: string;
-
-  @Expose({ name: 'block' })
-  @Column()
-  block: number;
+  @Column({
+   nullable: true
+  })
+  tx_hash: string; // 1
 
   @Expose({ name: 'status'})
   @Column({
@@ -45,14 +61,10 @@ export class Transaction {
     enum: TransactionStatus,
     nullable: true
   })
-  status?: TransactionStatus;
+  status?: TransactionStatus; //
 
-  @Expose({ name: 'metadata' })
-  @Column({
-    name: 'metadata',
-    type: 'jsonb',
-    nullable: true
-  })
-  metadata: any;
+  @Exclude()
+  @OneToMany(() => Asset, (asset: Asset) => asset.transaction )
+  public assets: Asset [];
 
 }
