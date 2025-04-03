@@ -36,15 +36,15 @@ export class BlockchainService {
   @Cron(CronExpression.EVERY_MINUTE)
   async checkPendingTransactions() {
     this.logger.debug('Checking pending transactions...');
-    
+
     try {
       // Get all pending transactions
       const pendingTransactions = await this.transactionsService.getTransactionsByStatus(TransactionStatus.pending);
-      
+
       // Check each transaction's status on chain
       for (const transaction of pendingTransactions) {
         const status = await this.checkOnchainTransactionStatus(transaction.tx_hash);
-        
+
         // Map blockchain status to transaction status
         let newStatus: TransactionStatus;
         switch (status) {
@@ -61,7 +61,7 @@ export class BlockchainService {
             // For PENDING status, do nothing
             continue;
         }
-        
+
         // Update transaction status if changed
         await this.transactionsService.updateTransactionStatus(transaction.tx_hash, newStatus);
         this.logger.debug(`Updated transaction ${transaction.tx_hash} status to ${newStatus}`);

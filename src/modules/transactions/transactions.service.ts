@@ -55,12 +55,28 @@ export class TransactionsService {
     });
   }
 
-  async getTransactionsByReceiver(address: string) {
-    // return this.transactionRepository.find({
-    //   where: { receiver: address },
-    //   order: { block: 'DESC' }
-    // });
-    return null;
+  async getTransactionsByReceiver(address: string): Promise<Transaction[]> {
+    return this.transactionRepository.find({
+      where: { utxo_output: address },
+      order: { id: 'DESC' }
+    });
+  }
+
+  async findById(id: string): Promise<Transaction> {
+    return this.transactionRepository.findOne({
+      where: { id }
+    });
+  }
+
+  async updateTransactionHash(id: string, txHash: string): Promise<Transaction> {
+    const transaction = await this.findById(id);
+    if (!transaction) {
+      throw new Error(`Transaction with id ${id} not found`);
+    }
+
+    transaction.tx_hash = txHash;
+    transaction.status = TransactionStatus.pending;
+    return this.transactionRepository.save(transaction);
   }
 
   async getTransaction(txHash: string): Promise<Transaction | null> {

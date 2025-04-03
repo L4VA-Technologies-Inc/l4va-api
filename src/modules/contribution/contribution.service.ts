@@ -94,4 +94,19 @@ export class ContributionService {
       tx_id: transaction.id,
     };
   }
+
+  async updateTransactionHash(transactionId: string, txHash: string) {
+    const transaction = await this.transactionsService.findById(transactionId);
+    if (!transaction) {
+      throw new NotFoundException('Transaction not found');
+    }
+
+    await this.transactionsService.updateTransactionHash(transactionId, txHash);
+    return {
+      success: true,
+      message: 'Transaction hash updated',
+      tx_id: transactionId,
+      tx_hash: txHash
+    };
+  }
 }
