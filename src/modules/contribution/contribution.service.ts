@@ -7,6 +7,8 @@ import {User} from '../../database/user.entity';
 import {VaultStatus} from '../../types/vault.types';
 import {TransactionsService} from '../transactions/transactions.service';
 import {TransactionType} from '../../types/transaction.types';
+import {Asset} from '../../database/asset.entity';
+import {AssetStatus, AssetType} from '../../types/asset.types';
 
 @Injectable()
 export class ContributionService {
@@ -15,7 +17,9 @@ export class ContributionService {
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
-    private readonly transactionsService: TransactionsService
+    @InjectRepository(Asset)
+    private readonly assetRepository: Repository<Asset>,
+    private readonly transactionsService: TransactionsService,
   ) {}
 
   async contribute(vaultId: string, contributeReq: ContributeReq, userId: string) {
@@ -49,19 +53,24 @@ export class ContributionService {
         throw new BadRequestException('User is not in contributor whitelist');
       }
     }
-
-    // todo Create transaction,
     const transaction = await this.transactionsService.createTransaction({
       vault_id: vaultId,
       type: TransactionType.contribute,
       assets: []
     });
-
-    // todo attach list of Assets to transaction
-
-    // TODO: Implement blockchain integration for asset contribution
-    // This will be implemented when blockchain module is ready
-    // For now, just return success
+    if(contributeReq.assets.length > 0){
+      contributeReq.assets.map(assetItem => {
+        this.assetRepository.save({
+          transaction: transaction,
+          type: AssetType.NFT,
+          policy_id: assetItem.policyId,
+          asset_id: assetItem.assetId,
+          quantity: assetItem.quantity,
+          status: AssetStatus.PENDING,
+          added_by: user
+        });
+      });
+    }
     return {
       success: true,
       message: 'Contribution request accepted, transaction created',

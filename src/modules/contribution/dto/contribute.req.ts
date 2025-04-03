@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsArray, IsNotEmpty, ValidateNested } from 'class-validator';
-import { Type } from 'class-transformer';
+import {IsArray, IsNotEmpty, ValidateNested} from 'class-validator';
+import {Expose, Type} from 'class-transformer';
 
 class ContributionAsset {
   @ApiProperty({
@@ -8,6 +8,7 @@ class ContributionAsset {
     example: '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd',
   })
   @IsNotEmpty()
+  @Expose()
   policyId: string;
 
   @ApiProperty({
@@ -15,6 +16,7 @@ class ContributionAsset {
     example: 'Asset123',
   })
   @IsNotEmpty()
+  @Expose()
   assetId: string;
 
   @ApiProperty({
@@ -22,12 +24,11 @@ class ContributionAsset {
     example: 1,
   })
   @IsNotEmpty()
+  @Expose()
   quantity: number;
 }
 
 export class ContributeReq {
-
-  txHash: string;
 
   @ApiProperty({
     type: [ContributionAsset],
@@ -36,5 +37,6 @@ export class ContributeReq {
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => ContributionAsset)
+  @Expose()
   assets: ContributionAsset[];
 }

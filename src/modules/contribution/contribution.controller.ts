@@ -2,11 +2,10 @@ import {Body, Controller, Param, Post, Req, UseGuards} from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { ContributionService } from './contribution.service';
 import { ContributeReq } from './dto/contribute.req';
-import {AuthGuard} from "../auth/auth.guard";
-
+import {AuthGuard} from '../auth/auth.guard';
 
 @ApiTags('Contributions')
-@Controller('contributions')
+@Controller('contribute')
 export class ContributionController {
   constructor(private readonly contributionService: ContributionService) {}
 

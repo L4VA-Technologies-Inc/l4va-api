@@ -7,6 +7,7 @@ import { CreateAssetDto } from './dto/create-asset.dto';
 import { AssetStatus, AssetType } from '../../types/asset.types';
 import { VaultStatus } from '../../types/vault.types';
 import { classToPlain } from 'class-transformer';
+import {User} from '../../database/user.entity';
 
 @Injectable()
 export class AssetsService {
@@ -14,19 +15,31 @@ export class AssetsService {
     @InjectRepository(Asset)
     private readonly assetsRepository: Repository<Asset>,
     @InjectRepository(Vault)
-    private readonly vaultsRepository: Repository<Vault>
+    private readonly vaultsRepository: Repository<Vault>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>
   ) {}
 
   async addAssetToVault(userId: string, data: CreateAssetDto): Promise<any> {
     const vault = await this.vaultsRepository.findOne({
-      where: { 
+      where: {
         id: data.vaultId,
         owner: { id: userId }
       }
     });
 
+    const user = await this.userRepository.findOne({
+      where: {
+        id: userId,
+      }
+    });
+
     if (!vault) {
       throw new BadRequestException('Vault not found or access denied');
+    }
+
+    if(!user){
+      throw new BadRequestException('User not found or access denied');
     }
 
     if (vault.vault_status !== VaultStatus.contribution) {
@@ -44,17 +57,14 @@ export class AssetsService {
 
     // Create and save the asset
     const asset = this.assetsRepository.create({
-      vault_id: data.vaultId,
       type: data.type,
-      contract_address: data.contractAddress,
-      token_id: data.tokenId,
       quantity: data.quantity,
       floor_price: data.floorPrice,
       dex_price: data.dexPrice,
       last_valuation: new Date(),
       status: AssetStatus.PENDING,
       metadata: data.metadata,
-      added_by: userId
+      added_by: user
     });
 
     await this.assetsRepository.save(asset);
@@ -64,7 +74,7 @@ export class AssetsService {
   async getVaultAssets(userId: string, vaultId: string, page: number = 1, limit: number = 10): Promise<any> {
     // Verify vault ownership
     const vault = await this.vaultsRepository.findOne({
-      where: { 
+      where: {
         id: vaultId,
         owner: { id: userId }
       }
@@ -75,7 +85,11 @@ export class AssetsService {
     }
 
     const [assets, total] = await this.assetsRepository.findAndCount({
-      where: { vault_id: vaultId },
+      where: {
+        vault: {
+          id: vaultId,
+        }
+      },
       skip: (page - 1) * limit,
       take: limit,
       order: {

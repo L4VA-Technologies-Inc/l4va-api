@@ -6,27 +6,33 @@ import {
   JoinColumn,
   BeforeInsert,
   BeforeUpdate,
-  Index
 } from 'typeorm';
 import { Vault } from './vault.entity';
 import { AssetType, AssetStatus } from '../types/asset.types';
 import { Expose } from 'class-transformer';
+import {Transaction} from './transaction.entity';
 import {User} from "./user.entity";
-import {Transaction} from "./transaction.entity";
 
 @Entity('assets')
 export class Asset {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Index()
-  @Expose({ name: 'vaultId' })
-  @Column({ name: 'vault_id' })
-  vault_id: string;
-
   @ManyToOne(() => Vault, vault => vault.assets)
   @JoinColumn({ name: 'vault_id' })
-  vault: Vault;
+  vault: Vault; // nullable empty if joined to transaction
+
+  @Expose({ name: 'policyId' })
+  @Column({
+    name: 'policy_id'
+  })
+  policy_id: string;
+
+  @Expose({ name: 'assetId' })
+  @Column({
+    name: 'asset_id'
+  })
+  asset_id: string;
 
   @Column({
     type: 'enum',
@@ -35,12 +41,8 @@ export class Asset {
   type: AssetType;
 
   @Expose({ name: 'contractAddress' })
-  @Column({ name: 'contract_address' })
+  @Column({ name: 'contract_address', nullable: true })
   contract_address: string;
-
-  @Expose({ name: 'tokenId' })
-  @Column({ name: 'token_id', nullable: true })
-  token_id?: string;
 
   @Column({ type: 'decimal', precision: 20, scale: 2, default: 0 })
   quantity: number;
@@ -97,13 +99,7 @@ export class Asset {
   released_at?: Date;
 
   @Column({ type: 'jsonb' })
-  metadata: {
-    name: string;
-    description: string;
-    imageUrl: string;
-    category?: string;
-    attributes: Record<string, any>;
-  };
+  metadata: any;
 
 
   @Expose({ name: 'transaction' })
@@ -112,8 +108,9 @@ export class Asset {
   public transaction: Transaction;
 
   @Expose({ name: 'addedBy' })
-  @Column({ name: 'added_by' })
-  added_by: string;
+  @ManyToOne(() => User, (addedBy: User) => addedBy.id)
+  @JoinColumn({ name: 'added_by' })
+  public added_by: User; // added user owner
 
   @Expose({ name: 'addedAt' })
   @Column({
