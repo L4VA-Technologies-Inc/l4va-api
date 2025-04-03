@@ -4,7 +4,7 @@ import {Repository} from 'typeorm';
 import {ContributeReq} from './dto/contribute.req';
 import {Vault} from '../../database/vault.entity';
 import {User} from '../../database/user.entity';
-import {VaultStatus} from '../../types/vault.types';
+import {VaultPrivacy, VaultStatus} from '../../types/vault.types';
 import {TransactionsService} from '../transactions/transactions.service';
 import {TransactionType} from '../../types/transaction.types';
 import {Asset} from '../../database/asset.entity';
@@ -25,7 +25,7 @@ export class ContributionService {
   async contribute(vaultId: string, contributeReq: ContributeReq, userId: string) {
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
-      relations: ['contributor_whitelist'],
+      relations: ['contributor_whitelist', 'owner', 'assets_whitelist'],
     });
     const user = await this.usersRepository.findOne({
       where: { id: userId }
@@ -44,13 +44,29 @@ export class ContributionService {
       throw new BadRequestException('Vault is not in contribution phase');
     }
 
-    // Check if user is in contributor whitelist if vault has one
-    if (vault.contributor_whitelist?.length > 0) {
-      const isWhitelisted = vault.contributor_whitelist.some(
-        (entry) => entry.wallet_address === user.address,
-      );
-      if (!isWhitelisted) {
-        throw new BadRequestException('User is not in contributor whitelist');
+    // For private/semi-private vaults, validate assets against whitelist
+    if ((vault.privacy === VaultPrivacy.private || vault.privacy === VaultPrivacy.semiPrivate) && contributeReq.assets.length > 0) {
+      const invalidAssets = contributeReq.assets.filter(asset => {
+        return !vault.assets_whitelist?.some(whitelistedAsset => 
+          whitelistedAsset.policy_id === asset.policyId
+        );
+      });
+
+      if (invalidAssets.length > 0) {
+        throw new BadRequestException(`Some assets are not in the vault's whitelist: ${invalidAssets.map(a => a.policyId).join(', ')}`);
+      }
+    }
+
+    // Allow vault owner to bypass whitelist check
+    if (vault.owner.id !== userId) {
+      // Check whitelist only for non-owners
+      if (vault.contributor_whitelist?.length > 0) {
+        const isWhitelisted = vault.contributor_whitelist.some(
+          (entry) => entry.wallet_address === user.address,
+        );
+        if (!isWhitelisted) {
+          throw new BadRequestException('User is not in contributor whitelist');
+        }
       }
     }
     const transaction = await this.transactionsService.createTransaction({

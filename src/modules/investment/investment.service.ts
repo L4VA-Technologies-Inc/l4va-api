@@ -19,7 +19,7 @@ export class InvestmentService {
   async invest(vaultId: string, investReq: InvestReq, userId: string) {
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
-      relations: ['investors_whitelist'],
+      relations: ['investors_whitelist', 'owner'],
     });
 
     const user = await this.userRepository.findOne({
@@ -35,13 +35,16 @@ export class InvestmentService {
       throw new BadRequestException('Vault is not in investment phase');
     }
 
-    // Check if user is in investor whitelist if vault has one
-    if (vault.investors_whitelist?.length > 0) {
-      const isWhitelisted = vault.investors_whitelist.some(
-        (entry) => entry.wallet_address === user.address,
-      );
-      if (!isWhitelisted) {
-        throw new BadRequestException('User is not in investor whitelist');
+    // Allow vault owner to bypass whitelist check
+    if (vault.owner.id !== userId) {
+      // Check whitelist only for non-owners
+      if (vault.investors_whitelist?.length > 0) {
+        const isWhitelisted = vault.investors_whitelist.some(
+          (entry) => entry.wallet_address === user.address,
+        );
+        if (!isWhitelisted) {
+          throw new BadRequestException('User is not in investor whitelist');
+        }
       }
     }
 

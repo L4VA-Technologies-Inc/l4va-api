@@ -1,19 +1,14 @@
 import {
   Body,
   Controller,
-  Get,
   HttpCode,
   HttpStatus,
   Post,
-  Request,
-  UseGuards
 } from '@nestjs/common';
-
-import { AuthGuard } from './auth.guard';
 import { AuthService } from './auth.service';
-import {ApiOperation, ApiResponse, ApiTags} from "@nestjs/swagger";
-import {LoginReq} from "./dto/login.req";
-import {ApiDoc} from "../../decorators/api-doc.decorator";
+import {ApiTags} from '@nestjs/swagger';
+import {LoginReq} from './dto/login.req';
+import {ApiDoc} from '../../decorators/api-doc.decorator';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -28,7 +23,7 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @Post('login')
   async login(@Body() signatureData: LoginReq) {
-    console.log("signatureData", signatureData)
+    console.log('signatureData', signatureData);
     return this.authService.verifySignature(signatureData);
   }
 }

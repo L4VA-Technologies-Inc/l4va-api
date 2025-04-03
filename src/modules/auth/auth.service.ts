@@ -6,13 +6,13 @@ import {
   Ed25519Signature,
   PublicKey,
   Address,
-  RewardAddress, BaseAddress
+  RewardAddress
 } from '@emurgo/cardano-serialization-lib-nodejs';
 import { generateUsername } from 'unique-username-generator';
 
 import { UsersService } from '../users/users.service';
-import {LoginReq} from "./dto/login.req";
-import {transformImageToUrl} from "../../helpers";
+import {LoginReq} from './dto/login.req';
+import {transformImageToUrl} from '../../helpers';
 
 @Injectable()
 export class AuthService {
