@@ -1,69 +1,73 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { TransactionsService } from '../transactions/transactions.service';
+import { TransactionStatus } from '../../types/transaction.types';
+
+export enum OnchainTransactionStatus {
+  PENDING = 'pending',
+  CONFIRMED = 'confirmed',
+  FAILED = 'failed',
+  NOT_FOUND = 'not_found'
+}
 
 @Injectable()
 export class BlockchainService {
-  // Placeholder for blockchain connection configuration
+  private readonly logger = new Logger(BlockchainService.name);
+  constructor(
+    private readonly transactionsService: TransactionsService
+  ) {}
+
   private readonly config = {
-    // Will be populated with actual blockchain network details
     network: process.env.BLOCKCHAIN_NETWORK || 'testnet',
     rpcUrl: process.env.BLOCKCHAIN_RPC_URL,
-    contractAddresses: {
-      // Will store deployed smart contract addresses
-      vault: process.env.VAULT_CONTRACT_ADDRESS,
-      asset: process.env.ASSET_CONTRACT_ADDRESS,
-    }
   };
 
-  // Future methods for blockchain interactions
-  async connectToNetwork() {
-    // Will implement blockchain network connection
-    throw new Error('Method not implemented');
+  async checkOnchainTransactionStatus(txId: string): Promise<OnchainTransactionStatus> {
+    try {
+      // TODO: Implement actual blockchain transaction status check
+      // This is a placeholder implementation
+      return OnchainTransactionStatus.PENDING;
+    } catch (error) {
+      console.error(`Failed to check transaction status for hash ${txId}:`, error);
+      return OnchainTransactionStatus.NOT_FOUND;
+    }
   }
 
-  async getContractInstance(contractName: string) {
-    // Will return contract instance for interaction
-    throw new Error('Method not implemented');
-  }
-
-  async signTransaction(transaction: any) {
-    // Will handle transaction signing
-    throw new Error('Method not implemented');
-  }
-
-  async verifyTransaction(txHash: string) {
-    // Will verify transaction status
-    throw new Error('Method not implemented');
-  }
-
-  // Asset-related blockchain operations
-  async lockAssetOnChain(assetId: string, vaultId: string) {
-    // Will handle asset locking on blockchain
-    throw new Error('Method not implemented');
-  }
-
-  async releaseAssetOnChain(assetId: string, vaultId: string) {
-    // Will handle asset release on blockchain
-    throw new Error('Method not implemented');
-  }
-
-  async getAssetHistory(assetId: string) {
-    // Will fetch asset transaction history
-    throw new Error('Method not implemented');
-  }
-
-  // Vault-related blockchain operations
-  async deployVaultContract(vaultId: string) {
-    // Will deploy new vault contract
-    throw new Error('Method not implemented');
-  }
-
-  async getVaultStatus(vaultId: string) {
-    // Will fetch vault status from blockchain
-    throw new Error('Method not implemented');
-  }
-
-  async updateVaultMetadata(vaultId: string, metadata: any) {
-    // Will update vault metadata on blockchain
-    throw new Error('Method not implemented');
+  @Cron(CronExpression.EVERY_MINUTE)
+  async checkPendingTransactions() {
+    this.logger.debug('Checking pending transactions...');
+    
+    try {
+      // Get all pending transactions
+      const pendingTransactions = await this.transactionsService.getTransactionsByStatus(TransactionStatus.pending);
+      
+      // Check each transaction's status on chain
+      for (const transaction of pendingTransactions) {
+        const status = await this.checkOnchainTransactionStatus(transaction.tx_hash);
+        
+        // Map blockchain status to transaction status
+        let newStatus: TransactionStatus;
+        switch (status) {
+          case OnchainTransactionStatus.CONFIRMED:
+            newStatus = TransactionStatus.confirmed;
+            break;
+          case OnchainTransactionStatus.FAILED:
+            newStatus = TransactionStatus.failed;
+            break;
+          case OnchainTransactionStatus.NOT_FOUND:
+            newStatus = TransactionStatus.stuck;
+            break;
+          default:
+            // For PENDING status, do nothing
+            continue;
+        }
+        
+        // Update transaction status if changed
+        await this.transactionsService.updateTransactionStatus(transaction.tx_hash, newStatus);
+        this.logger.debug(`Updated transaction ${transaction.tx_hash} status to ${newStatus}`);
+      }
+    } catch (error) {
+      this.logger.error('Error checking pending transactions:', error);
+    }
   }
 }

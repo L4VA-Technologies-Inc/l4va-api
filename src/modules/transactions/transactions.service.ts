@@ -41,12 +41,18 @@ export class TransactionsService {
     return this.transactionRepository.save(transaction);
   }
 
-  async getTransactionsBySender(address: string): Promise<null> {
-    // return this.transactionRepository.find({
-    //   where: { sender: address },
-    //   order: { block: 'DESC' }
-    // });
-    return null;
+  async getTransactionsBySender(address: string): Promise<Transaction[]> {
+    return this.transactionRepository.find({
+      where: { utxo_input: address },
+      order: { id: 'DESC' }
+    });
+  }
+
+  async getTransactionsByStatus(status: TransactionStatus): Promise<Transaction[]> {
+    return this.transactionRepository.find({
+      where: { status },
+      order: { id: 'DESC' }
+    });
   }
 
   async getTransactionsByReceiver(address: string) {

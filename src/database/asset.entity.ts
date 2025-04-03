@@ -98,7 +98,7 @@ export class Asset {
   })
   released_at?: Date;
 
-  @Column({ type: 'jsonb' })
+  @Column({ type: 'jsonb', nullable: true })
   metadata: any;
 
 
