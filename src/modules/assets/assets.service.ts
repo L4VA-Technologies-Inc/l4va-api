@@ -182,4 +182,32 @@ export class AssetsService {
     await this.assetsRepository.save(asset);
     return classToPlain(asset);
   }
+
+  async updateTransactionAssets(transactionId: string, vaultId: string): Promise<void> {
+    const assets = await this.assetsRepository.find({
+      where: {
+        transaction: { id: transactionId }
+      }
+    });
+
+    if (!assets.length) {
+      return;
+    }
+
+    const vault = await this.vaultsRepository.findOne({
+      where: { id: vaultId }
+    });
+
+    if (!vault) {
+      throw new BadRequestException(`Vault with id ${vaultId} not found`);
+    }
+
+    // Update all assets to be linked to the vault
+    await Promise.all(assets.map(async (asset) => {
+      asset.vault = vault;
+      asset.status = AssetStatus.LOCKED;
+      asset.locked_at = new Date();
+      return this.assetsRepository.save(asset);
+    }));
+  }
 }

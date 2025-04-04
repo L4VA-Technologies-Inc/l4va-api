@@ -1,8 +1,9 @@
-import {Column, Entity, OneToMany, PrimaryGeneratedColumn} from 'typeorm';
+import {Column, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn} from 'typeorm';
 import {ApiProperty} from '@nestjs/swagger';
 import {Exclude, Expose} from 'class-transformer';
 import {TransactionStatus, TransactionType} from '../types/transaction.types';
 import {Asset} from './asset.entity';
+import {Vault} from './vault.entity';
 
 
 @Entity('transactions')
@@ -67,4 +68,10 @@ export class Transaction {
   @OneToMany(() => Asset, (asset: Asset) => asset.transaction )
   public assets: Asset [];
 
+  @ManyToOne(() => Vault)
+  @JoinColumn({ name: 'vault_id' })
+  vault: Vault;
+
+  @Column({ name: 'vault_id', nullable: true })
+  vault_id: string;
 }

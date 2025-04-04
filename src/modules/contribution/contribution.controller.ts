@@ -1,14 +1,18 @@
-import {Body, Controller, Param, Patch, Post, Req, UseGuards} from '@nestjs/common';
+import {Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards} from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { ContributionService } from './contribution.service';
 import { ContributeReq } from './dto/contribute.req';
 import {AuthGuard} from '../auth/auth.guard';
 import {TxUpdateReq} from "./dto/txUpdate.req";
+import {TransactionsService} from '../transactions/transactions.service';
 
 @ApiTags('Contributions')
 @Controller('contribute')
 export class ContributionController {
-  constructor(private readonly contributionService: ContributionService) {}
+  constructor(
+    private readonly contributionService: ContributionService,
+    private readonly transactionsService: TransactionsService
+  ) {}
 
   @Post(':vaultId')
   @ApiOperation({ summary: 'Contribute to a vault' })
@@ -32,5 +36,15 @@ export class ContributionController {
     @Body() txUpdate: TxUpdateReq
   ) {
     return this.contributionService.updateTransactionHash(txId, txUpdate.txHash);
+  }
+
+  @Get('transactions')
+  @ApiOperation({ summary: 'Get all contribution transactions' })
+  @UseGuards(AuthGuard)
+  @ApiResponse({ status: 200, description: 'Returns all contribution transactions' })
+  async getContributionTransactions(
+    @Query('vaultId') vaultId?: string
+  ) {
+    return this.transactionsService.getContributionTransactions(vaultId);
   }
 }

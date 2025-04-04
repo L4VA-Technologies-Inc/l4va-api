@@ -84,4 +84,17 @@ export class TransactionsService {
       where: { tx_hash: txHash }
     });
   }
+
+  async getContributionTransactions(vaultId?: string): Promise<Transaction[]> {
+    const where: any = { type: TransactionType.contribute };
+    if (vaultId) {
+      where.vault_id = vaultId;
+    }
+
+    return this.transactionRepository.find({
+      where,
+      order: { id: 'DESC' },
+      relations: ['assets']
+    });
+  }
 }

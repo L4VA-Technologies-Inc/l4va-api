@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { TransactionsService } from '../transactions/transactions.service';
-import { TransactionStatus } from '../../types/transaction.types';
+import { TransactionStatus, TransactionType } from '../../types/transaction.types';
+import { AssetsService } from '../assets/assets.service';
 
 export enum OnchainTransactionStatus {
   PENDING = 'pending',
@@ -14,7 +15,8 @@ export enum OnchainTransactionStatus {
 export class BlockchainService {
   private readonly logger = new Logger(BlockchainService.name);
   constructor(
-    private readonly transactionsService: TransactionsService
+    private readonly transactionsService: TransactionsService,
+    private readonly assetsService: AssetsService
   ) {}
 
   private readonly config = {
@@ -27,6 +29,7 @@ export class BlockchainService {
       // TODO: Implement actual blockchain transaction status check
       // This is a placeholder implementation
       return OnchainTransactionStatus.PENDING;
+
     } catch (error) {
       console.error(`Failed to check transaction status for hash ${txId}:`, error);
       return OnchainTransactionStatus.NOT_FOUND;
@@ -65,6 +68,16 @@ export class BlockchainService {
         // Update transaction status if changed
         await this.transactionsService.updateTransactionStatus(transaction.tx_hash, newStatus);
         this.logger.debug(`Updated transaction ${transaction.tx_hash} status to ${newStatus}`);
+
+        // If transaction is confirmed and it's a contribution transaction, update the assets
+        if (newStatus === TransactionStatus.confirmed && transaction.type === TransactionType.contribute) {
+          try {
+            await this.assetsService.updateTransactionAssets(transaction.id, transaction.vault_id);
+            this.logger.debug(`Updated assets for transaction ${transaction.tx_hash}`);
+          } catch (error) {
+            this.logger.error(`Failed to update assets for transaction ${transaction.tx_hash}:`, error);
+          }
+        }
       }
     } catch (error) {
       this.logger.error('Error checking pending transactions:', error);
