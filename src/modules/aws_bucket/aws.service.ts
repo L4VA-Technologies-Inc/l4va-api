@@ -8,7 +8,6 @@ import { ManagedUpload } from 'aws-sdk/clients/s3';
 import {getMimeTypeFromArrayBuffer} from "../../helpers";
 import {HttpService} from "@nestjs/axios";
 import * as process from "process";
-import {Express} from "express";
 import * as csv from 'csv-parse';
 import { BadRequestException } from '@nestjs/common';
 
@@ -17,6 +16,7 @@ export class AwsService {
   private s3: AWS.S3;
   private bucketName = process.env.AWS_BUCKET_NAME;
 
+  private readonly logger = new Logger(AwsService.name);
   constructor(
     @InjectRepository(FileEntity)
     private readonly fileRepository: Repository<FileEntity>,
@@ -138,7 +138,7 @@ export class AwsService {
       if (error instanceof BadRequestException) {
         throw error; // Re-throw validation errors
       }
-      Logger.error('Error uploading CSV file:', error);
+      this.logger.error('Error uploading CSV file:', error);
       throw new BadRequestException('Failed to upload CSV file');
     }
   }
@@ -165,7 +165,8 @@ export class AwsService {
         if (newFile) return newFile;
       }
     } catch (error) {
-      console.log('error with uploading file ', error);
+      this.logger.error('Error uploading image file:', error);
+      throw new BadRequestException('Failed to upload image file');
     }
   }
 }

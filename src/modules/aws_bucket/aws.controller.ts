@@ -2,7 +2,7 @@ import {
   ClassSerializerInterceptor,
   Controller,
   FileTypeValidator,
-  Get, MaxFileSizeValidator, Param, ParseFilePipe,
+  Get, Logger, MaxFileSizeValidator, Param, ParseFilePipe,
   Post, Req, Res,
   UploadedFile, UseGuards,
   UseInterceptors,
@@ -21,6 +21,7 @@ export const mbMultiplication =  1024 * 1024;
 @UseInterceptors(ClassSerializerInterceptor)
 export class AwsController {
 
+  private readonly logger = new Logger(AwsController.name);
   constructor(private readonly awsService: AwsService){}
 
   @ApiDoc({
@@ -86,7 +87,7 @@ export class AwsController {
     }),
   ) file: Express.Multer.File, @Req() req: Request){
     // todo need to validate and parse csv and then return list of asset whitelist id's
-    console.log('csv file received', file)
+    this.logger.log('csv file received', file)
     const {host} = req?.headers
 
     return await this.awsService.uploadCSV(file, host)

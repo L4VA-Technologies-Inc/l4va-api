@@ -24,10 +24,11 @@ export class BlockchainService {
     rpcUrl: process.env.BLOCKCHAIN_RPC_URL,
   };
 
-  async checkOnchainTransactionStatus(txId: string): Promise<OnchainTransactionStatus> {
+  async checkOnchainTransactionStatus(txId: string, type: TransactionType): Promise<OnchainTransactionStatus> {
     try {
       // TODO: Implement actual blockchain transaction status check
       // This is a placeholder implementation
+      // TODO need to check investment and contribute transactions in different way. 
       return OnchainTransactionStatus.PENDING;
 
     } catch (error) {
@@ -46,7 +47,7 @@ export class BlockchainService {
 
       // Check each transaction's status on chain
       for (const transaction of pendingTransactions) {
-        const status = await this.checkOnchainTransactionStatus(transaction.tx_hash);
+        const status = await this.checkOnchainTransactionStatus(transaction.tx_hash, transaction.type);
 
         // Map blockchain status to transaction status
         let newStatus: TransactionStatus;

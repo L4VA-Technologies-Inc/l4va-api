@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '../../database/user.entity';
@@ -12,6 +12,8 @@ import {PublicProfileRes} from "./dto/public-profile.res";
 
 @Injectable()
 export class UsersService {
+
+  private readonly logger = new Logger(UsersService.name);
   constructor(
     @InjectRepository(User)
     private usersRepository: Repository<User>,
@@ -36,7 +38,7 @@ export class UsersService {
       where: { id: userId },
       relations: ['profile_image', 'banner_image', 'social_links']
     });
-    console.log("USER" , user)
+    this.logger.log("USER" , user)
 
     if (!user) {
       throw new BadRequestException('User not found');

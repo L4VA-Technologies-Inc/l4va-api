@@ -6,12 +6,13 @@ import { CreateVaultReq } from "./dto/createVault.req";
 import { ApiTags } from "@nestjs/swagger";
 import { ApiDoc } from "../../decorators/api-doc.decorator";
 import { SaveDraftReq } from "./dto/saveDraft.req";
-import { PaginationDto } from "./dto/pagination.dto";
 import { GetVaultsDto } from "./dto/get-vaults.dto";
+import { Logger } from "@nestjs/common";
 
 @ApiTags('vaults')
 @Controller('vaults')
 export class VaultsController {
+  private readonly logger = new Logger(VaultsController.name);
   constructor(
     private readonly vaultsService: VaultsService,
     private readonly draftVaultsService: DraftVaultsService
@@ -46,7 +47,7 @@ export class VaultsController {
     data: SaveDraftReq,
   ) {
     const userId = req.user.sub;
-    console.log('drfat data ', data)
+    this.logger.log('drfat data ', data)
     return this.draftVaultsService.saveDraftVault(userId, data);
   }
 
