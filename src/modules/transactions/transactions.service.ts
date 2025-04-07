@@ -51,7 +51,8 @@ export class TransactionsService {
   async getTransactionsByStatus(status: TransactionStatus): Promise<Transaction[]> {
     return this.transactionRepository.find({
       where: { status },
-      order: { id: 'DESC' }
+      order: { id: 'DESC' },
+      relations: ['vault']
     });
   }
 

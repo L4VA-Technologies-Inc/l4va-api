@@ -1,4 +1,4 @@
-import {Column, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn} from 'typeorm';
+import {Column, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn, Index} from 'typeorm';
 import {ApiProperty} from '@nestjs/swagger';
 import {Exclude, Expose} from 'class-transformer';
 import {TransactionStatus, TransactionType} from '../types/transaction.types';
@@ -73,5 +73,6 @@ export class Transaction {
   vault: Vault;
 
   @Column({ name: 'vault_id', nullable: true })
+  @Index()
   vault_id: string;
 }
