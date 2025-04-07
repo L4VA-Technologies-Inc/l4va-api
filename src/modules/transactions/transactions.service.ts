@@ -15,13 +15,15 @@ export class TransactionsService {
   async createTransaction(data: {
     vault_id: string;
     type: TransactionType;
-    assets: Asset[]
+    assets: Asset[];
+    amount?: number;
   }): Promise<Transaction> {
     return this.transactionRepository.save({
       vault_id: data.vault_id,
       type: data.type,
       status: TransactionStatus.created,
-      assets: data.assets
+      assets: data.assets,
+      amount: data.amount
     });
   }
 
@@ -96,6 +98,19 @@ export class TransactionsService {
       where,
       order: { id: 'DESC' },
       relations: ['assets']
+    });
+  }
+
+  async getInvestmentTransactions(vaultId?: string): Promise<Transaction[]> {
+    const where: any = { type: TransactionType.investment };
+    if (vaultId) {
+      where.vault_id = vaultId;
+    }
+
+    return this.transactionRepository.find({
+      where,
+      order: { id: 'DESC' },
+      relations: ['vault']
     });
   }
 }

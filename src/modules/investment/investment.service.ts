@@ -2,9 +2,11 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { InvestReq } from './dto/invest.req';
-import {Vault} from "../../database/vault.entity";
-import {VaultStatus} from "../../types/vault.types";
-import {User} from "../../database/user.entity";
+import { Vault } from "../../database/vault.entity";
+import { VaultStatus } from "../../types/vault.types";
+import { User } from "../../database/user.entity";
+import { TransactionsService } from '../transactions/transactions.service';
+import { TransactionType } from '../../types/transaction.types';
 
 @Injectable()
 export class InvestmentService {
@@ -13,7 +15,7 @@ export class InvestmentService {
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-
+    private readonly transactionsService: TransactionsService,
   ) {}
 
   async invest(vaultId: string, investReq: InvestReq, userId: string) {
@@ -56,16 +58,36 @@ export class InvestmentService {
       // Additional validation for fixed valuation type can be added here
     }
 
-    // TODO: Implement blockchain integration for investment transaction
-    // This will be implemented when blockchain module is ready
-    // For now, just return success
+    // Create a transaction record for the investment
+    const transaction = await this.transactionsService.createTransaction({
+      vault_id: vaultId,
+      type: TransactionType.investment,
+      assets: [], // Investment transactions don't have assets, only ADA amount
+      amount: parseFloat(investReq.amount)
+    });
+
     return {
       success: true,
-      message: 'Investment request accepted',
+      message: 'Investment request accepted, transaction created',
       vaultId,
-      investorId: userId,
+      tx_id: transaction.id,
       amount: investReq.amount,
       currency: investReq.currency,
+    };
+  }
+
+  async updateTransactionHash(transactionId: string, txHash: string) {
+    const transaction = await this.transactionsService.findById(transactionId);
+    if (!transaction) {
+      throw new NotFoundException('Transaction not found');
+    }
+
+    await this.transactionsService.updateTransactionHash(transactionId, txHash);
+    return {
+      success: true,
+      message: 'Transaction hash updated',
+      tx_id: transactionId,
+      tx_hash: txHash
     };
   }
 }
