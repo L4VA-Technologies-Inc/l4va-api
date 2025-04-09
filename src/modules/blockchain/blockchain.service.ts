@@ -29,15 +29,21 @@ export class BlockchainService {
   private async checkInvestmentTransaction(txId: string): Promise<OnchainTransactionStatus> {
     try {
       const txDetails = await this.scannerService.getTransactionDetails(txId);
-      this.logger.log('TX dtail ', txDetails);
-      this.logger.debug(`Checking investment transaction ${txId}`);
+      this.logger.debug(`Checking investment transaction ${txId}`, txDetails);
 
       if (!txDetails) {
         return OnchainTransactionStatus.NOT_FOUND;
       }
 
+      // Check if transaction is confirmed based on block and contract validation
+      if (txDetails.block && 
+          txDetails.block_height && 
+          txDetails.valid_contract) {
+        return OnchainTransactionStatus.CONFIRMED;
+      }
+
       // TODO: Add validation for ADA-only and correct amount
-      return txDetails.confirmations > 0 ? OnchainTransactionStatus.CONFIRMED : OnchainTransactionStatus.PENDING;
+      return OnchainTransactionStatus.PENDING;
     } catch (error) {
       this.logger.error(`Failed to check investment transaction ${txId}:`, error);
       return OnchainTransactionStatus.NOT_FOUND;
@@ -47,15 +53,21 @@ export class BlockchainService {
   private async checkContributionTransaction(txId: string): Promise<OnchainTransactionStatus> {
     try {
       const txDetails = await this.scannerService.getTransactionDetails(txId);
-      console.log('Details ', txDetails);
-      this.logger.debug(`Checking contribution transaction ${txId}`);
+      this.logger.debug(`Checking contribution transaction ${txId}`, txDetails);
 
       if (!txDetails) {
         return OnchainTransactionStatus.NOT_FOUND;
       }
 
+      // Check if transaction is confirmed based on block and contract validation
+      if (txDetails.block && 
+          txDetails.block_height && 
+          txDetails.valid_contract) {
+        return OnchainTransactionStatus.CONFIRMED;
+      }
+
       // TODO: Add validation for NFT assets and correct vault address
-      return txDetails.confirmations > 0 ? OnchainTransactionStatus.CONFIRMED : OnchainTransactionStatus.PENDING;
+      return OnchainTransactionStatus.PENDING;
     } catch (error) {
       this.logger.error(`Failed to check contribution transaction ${txId}:`, error);
       return OnchainTransactionStatus.NOT_FOUND;
