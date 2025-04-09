@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { TransactionsService } from '../transactions/transactions.service';
 import { TransactionStatus, TransactionType } from '../../types/transaction.types';
 import { AssetsService } from '../assets/assets.service';
+import { BlockchainScannerService } from './blockchain-scanner.service';
 
 export enum OnchainTransactionStatus {
   PENDING = 'pending',
@@ -16,7 +17,8 @@ export class BlockchainService {
   private readonly logger = new Logger(BlockchainService.name);
   constructor(
     private readonly transactionsService: TransactionsService,
-    private readonly assetsService: AssetsService
+    private readonly assetsService: AssetsService,
+    private readonly scannerService: BlockchainScannerService
   ) {}
 
   private readonly config = {
@@ -26,13 +28,16 @@ export class BlockchainService {
 
   private async checkInvestmentTransaction(txId: string): Promise<OnchainTransactionStatus> {
     try {
-      // TODO: Implement actual blockchain transaction status check for investment
-      // This should verify:
-      // 1. Transaction exists on chain
-      // 2. Only contains ADA (no assets)
-      // 3. Correct amount is sent to vault address
+      const txDetails = await this.scannerService.getTransactionDetails(txId);
+      this.logger.log('TX dtail ', txDetails);
       this.logger.debug(`Checking investment transaction ${txId}`);
-      return OnchainTransactionStatus.PENDING;
+
+      if (!txDetails) {
+        return OnchainTransactionStatus.NOT_FOUND;
+      }
+
+      // TODO: Add validation for ADA-only and correct amount
+      return txDetails.confirmations > 0 ? OnchainTransactionStatus.CONFIRMED : OnchainTransactionStatus.PENDING;
     } catch (error) {
       this.logger.error(`Failed to check investment transaction ${txId}:`, error);
       return OnchainTransactionStatus.NOT_FOUND;
@@ -41,32 +46,35 @@ export class BlockchainService {
 
   private async checkContributionTransaction(txId: string): Promise<OnchainTransactionStatus> {
     try {
-      // TODO: Implement actual blockchain transaction status check for contribution
-      // This should verify:
-      // 1. Transaction exists on chain
-      // 2. Contains the correct NFT assets
-      // 3. Assets are sent to vault address
+      const txDetails = await this.scannerService.getTransactionDetails(txId);
+      console.log('Details ', txDetails);
       this.logger.debug(`Checking contribution transaction ${txId}`);
-      return OnchainTransactionStatus.PENDING;
+
+      if (!txDetails) {
+        return OnchainTransactionStatus.NOT_FOUND;
+      }
+
+      // TODO: Add validation for NFT assets and correct vault address
+      return txDetails.confirmations > 0 ? OnchainTransactionStatus.CONFIRMED : OnchainTransactionStatus.PENDING;
     } catch (error) {
       this.logger.error(`Failed to check contribution transaction ${txId}:`, error);
       return OnchainTransactionStatus.NOT_FOUND;
     }
   }
 
-  async checkOnchainTransactionStatus(txId: string, type: TransactionType): Promise<OnchainTransactionStatus> {
+  async checkOnchainTransactionStatus(txHash: string, type: TransactionType): Promise<OnchainTransactionStatus> {
     try {
       switch (type) {
         case TransactionType.investment:
-          return await this.checkInvestmentTransaction(txId);
+          return await this.checkInvestmentTransaction(txHash);
         case TransactionType.contribute:
-          return await this.checkContributionTransaction(txId);
+          return await this.checkContributionTransaction(txHash);
         default:
-          this.logger.warn(`Unsupported transaction type ${type} for tx ${txId}`);
+          this.logger.warn(`Unsupported transaction type ${type} for tx ${txHash}`);
           return OnchainTransactionStatus.NOT_FOUND;
       }
     } catch (error) {
-      this.logger.error(`Failed to check transaction status for hash ${txId}:`, error);
+      this.logger.error(`Failed to check transaction status for hash ${txHash}:`, error);
       return OnchainTransactionStatus.NOT_FOUND;
     }
   }
