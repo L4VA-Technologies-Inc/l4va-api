@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import {ConfigModule, ConfigService} from '@nestjs/config';
+import { ConfigModule } from '@nestjs/config';
 
 import { AuthModule } from './modules/auth/auth.module';
 import { VaultsModule } from './modules/vaults/vaults.module';
@@ -13,7 +13,8 @@ import { AssetsModule } from './modules/assets/assets.module';
 import { BlockchainModule } from './modules/blockchain/blockchain.module';
 import {ContributionModule} from './modules/contribution/contribution.module';
 import {TransactionsModule} from './modules/transactions/transactions.module';
-import {JwtGlobalModule} from "./modules/globals/jwt_global_module/jwt_global.module";
+import {JwtGlobalModule} from './modules/globals/jwt_global_module/jwt_global.module';
+import {InvestmentModule} from './modules/investment/investment.module';
 
 @Module({
   imports: [
@@ -40,6 +41,7 @@ import {JwtGlobalModule} from "./modules/globals/jwt_global_module/jwt_global.mo
     UsersModule,
     AwsModule,
     ContributionModule,
+    InvestmentModule,
     TransactionsModule,
   ],
   controllers: [AppController],

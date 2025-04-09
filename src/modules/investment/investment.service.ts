@@ -70,7 +70,7 @@ export class InvestmentService {
       success: true,
       message: 'Investment request accepted, transaction created',
       vaultId,
-      tx_id: transaction.id,
+      txId: transaction.id,
       amount: investReq.amount,
       currency: investReq.currency,
     };
@@ -86,8 +86,8 @@ export class InvestmentService {
     return {
       success: true,
       message: 'Transaction hash updated',
-      tx_id: transactionId,
-      tx_hash: txHash
+      txId: transactionId,
+      txHash: txHash
     };
   }
 }

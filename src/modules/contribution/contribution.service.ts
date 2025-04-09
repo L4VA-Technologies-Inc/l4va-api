@@ -47,7 +47,7 @@ export class ContributionService {
     // For private/semi-private vaults, validate assets against whitelist
     if ((vault.privacy === VaultPrivacy.private || vault.privacy === VaultPrivacy.semiPrivate) && contributeReq.assets.length > 0) {
       const invalidAssets = contributeReq.assets.filter(asset => {
-        return !vault.assets_whitelist?.some(whitelistedAsset => 
+        return !vault.assets_whitelist?.some(whitelistedAsset =>
           whitelistedAsset.policy_id === asset.policyId
         );
       });
@@ -91,7 +91,7 @@ export class ContributionService {
       success: true,
       message: 'Contribution request accepted, transaction created',
       vaultId,
-      tx_id: transaction.id,
+      txId: transaction.id,
     };
   }
 
@@ -105,8 +105,8 @@ export class ContributionService {
     return {
       success: true,
       message: 'Transaction hash updated',
-      tx_id: transactionId,
-      tx_hash: txHash
+      txId: transactionId,
+      txHash: txHash
     };
   }
 }

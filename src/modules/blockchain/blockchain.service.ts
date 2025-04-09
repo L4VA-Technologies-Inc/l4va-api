@@ -24,15 +24,49 @@ export class BlockchainService {
     rpcUrl: process.env.BLOCKCHAIN_RPC_URL,
   };
 
+  private async checkInvestmentTransaction(txId: string): Promise<OnchainTransactionStatus> {
+    try {
+      // TODO: Implement actual blockchain transaction status check for investment
+      // This should verify:
+      // 1. Transaction exists on chain
+      // 2. Only contains ADA (no assets)
+      // 3. Correct amount is sent to vault address
+      this.logger.debug(`Checking investment transaction ${txId}`);
+      return OnchainTransactionStatus.PENDING;
+    } catch (error) {
+      this.logger.error(`Failed to check investment transaction ${txId}:`, error);
+      return OnchainTransactionStatus.NOT_FOUND;
+    }
+  }
+
+  private async checkContributionTransaction(txId: string): Promise<OnchainTransactionStatus> {
+    try {
+      // TODO: Implement actual blockchain transaction status check for contribution
+      // This should verify:
+      // 1. Transaction exists on chain
+      // 2. Contains the correct NFT assets
+      // 3. Assets are sent to vault address
+      this.logger.debug(`Checking contribution transaction ${txId}`);
+      return OnchainTransactionStatus.PENDING;
+    } catch (error) {
+      this.logger.error(`Failed to check contribution transaction ${txId}:`, error);
+      return OnchainTransactionStatus.NOT_FOUND;
+    }
+  }
+
   async checkOnchainTransactionStatus(txId: string, type: TransactionType): Promise<OnchainTransactionStatus> {
     try {
-      // TODO: Implement actual blockchain transaction status check
-      // This is a placeholder implementation
-      // TODO need to check investment and contribute transactions in different way. 
-      return OnchainTransactionStatus.PENDING;
-
+      switch (type) {
+        case TransactionType.investment:
+          return await this.checkInvestmentTransaction(txId);
+        case TransactionType.contribute:
+          return await this.checkContributionTransaction(txId);
+        default:
+          this.logger.warn(`Unsupported transaction type ${type} for tx ${txId}`);
+          return OnchainTransactionStatus.NOT_FOUND;
+      }
     } catch (error) {
-      console.error(`Failed to check transaction status for hash ${txId}:`, error);
+      this.logger.error(`Failed to check transaction status for hash ${txId}:`, error);
       return OnchainTransactionStatus.NOT_FOUND;
     }
   }
