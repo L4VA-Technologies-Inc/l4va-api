@@ -73,7 +73,7 @@ export class AnvilApiService {
     witnessSet: string; // CBOR
   }> {
     return this.callAnvilApi({
-      endpoint: 'transactions/build',
+      endpoint: 'services/transactions/build',
       body: params,
     });
   }
@@ -85,7 +85,7 @@ export class AnvilApiService {
     txHash: string;
   }> {
     return this.callAnvilApi({
-      endpoint: 'transactions/submit',
+      endpoint: 'services/transactions/submit',
       body: params,
     });
   }
