@@ -1,10 +1,28 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { NftAsset } from './blockchain-transaction.service';
 
 interface AnvilApiConfig<T = Record<string, unknown>> {
   endpoint: string;
   method?: 'GET' | 'POST';
   body?: T;
+}
+
+interface BuildTransactionParams {
+  changeAddress: string;
+  txId: string;
+  outputs: {
+    address: string;
+    lovelace: number;
+    assets?: NftAsset[];
+  }[];
+}
+
+interface TransactionBuildResponse {
+  hash: string;
+  complete: string; // CBOR
+  stripped: string; // CBOR
+  witnessSet: string; // CBOR
 }
 
 @Injectable()
@@ -58,44 +76,38 @@ export class AnvilApiService {
     }
   }
 
-  async buildTransaction(params: {
-    changeAddress: string;
-    txId: string;
-    outputs: {
-      address: string;
-      lovelace: number;
-      assets?: Record<string, number>;
-    }[];
-  }): Promise<{
-    hash: string;
-    complete: string; // CBOR
-    stripped: string; // CBOR
-    witnessSet: string; // CBOR
-  }> {
-    // Filter out empty assets from outputs
-    const outputs = params.outputs.map(output => {
-      if (!output.assets || Object.keys(output.assets).length === 0) {
-        const { assets, ...rest } = output;
-        return rest;
-      }
-      return output;
-    });
-
-    // Create metadata with txId
+  async buildTransaction(params: BuildTransactionParams): Promise<TransactionBuildResponse> {
     const metadata = {
-      674: {
-        msg: [params.txId]
-      }
+      txId: params.txId
     };
+
+    // Transform outputs to match Anvil API format
+    const transformedOutputs = params.outputs.map(output => ({
+      address: output.address,
+      lovelace: output.lovelace ?? 0, // Default to 0 if not provided
+      assets: output.assets ? this.transformNftAssets(output.assets) : undefined
+    }));
 
     return this.callAnvilApi({
       endpoint: 'services/transactions/build',
       body: {
-        ...params,
-        outputs,
-        ...(metadata && { metadata }),
+        changeAddress: params.changeAddress,
+        outputs: transformedOutputs,
+        metadata
       },
     });
+  }
+
+  private transformNftAssets(assets: NftAsset[]): Record<string, number> {
+    const result: Record<string, number> = {};
+    
+    for (const asset of assets) {
+      // Format: policyId.assetName
+      const assetId = `${asset.policyId}.${asset.assetName}`;
+      result[assetId] = asset.quantity;
+    }
+    
+    return result;
   }
 
   async submitTransaction(params: {

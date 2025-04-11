@@ -2,14 +2,30 @@ import { ApiProperty } from '@nestjs/swagger';
 import { IsString, IsArray, IsNumber, IsOptional, ValidateNested, IsObject, IsUUID } from 'class-validator';
 import { Expose, Type } from 'class-transformer';
 
-export class AssetOutput {
+export class NftAsset {
   @ApiProperty({
-    description: 'Amount of the asset',
-    example: 1000000
+    description: 'Policy ID of the NFT',
+    example: '47642adf3fb7154f0880b916bc341aafa0fcdf1d49f67eac856987a2'
+  })
+  @IsString()
+  @Expose()
+  readonly policyId: string;
+
+  @ApiProperty({
+    description: 'Asset name',
+    example: 'l4vaaudiEngine'
+  })
+  @IsString()
+  @Expose()
+  readonly assetName: string;
+
+  @ApiProperty({
+    description: 'Quantity of the asset',
+    example: 1
   })
   @IsNumber()
   @Expose()
-  readonly amount: number;
+  readonly quantity: number;
 }
 
 export class TransactionOutput {
@@ -23,25 +39,25 @@ export class TransactionOutput {
 
   @ApiProperty({
     description: 'Amount in lovelace',
-    example: 1000000
-  })
-  @IsNumber()
-  @Expose()
-  readonly lovelace: number;
-
-  @ApiProperty({
-    description: 'Assets to send, keyed by asset ID',
-    example: {
-      'asset1abc...': 1000000
-    },
+    example: 1000000,
     required: false
   })
   @IsOptional()
-  @IsObject()
-  @ValidateNested()
-  @Type(() => AssetOutput)
+  @IsNumber()
   @Expose()
-  readonly assets?: Record<string, number>;
+  readonly lovelace?: number;
+
+  @ApiProperty({
+    description: 'NFT assets to send',
+    type: [NftAsset],
+    required: false
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => NftAsset)
+  @Expose()
+  readonly assets?: NftAsset[];
 }
 
 export class BuildTransactionDto {

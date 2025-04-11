@@ -2,14 +2,22 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { AnvilApiService } from './anvil-api.service';
 import { TransactionsService } from '../transactions/transactions.service';
 
+export interface NftAsset {
+  policyId: string;
+  assetName: string;
+  quantity: number;
+}
+
+export interface BuildTransactionOutput {
+  address: string;
+  lovelace?: number;
+  assets?: NftAsset[];
+}
+
 export interface BuildTransactionParams {
   changeAddress: string;
-  txId: string; // Outchain transaction ID
-  outputs: {
-    address: string;
-    lovelace: number;
-    assets?: Record<string, number>;
-  }[];
+  txId: string;
+  outputs: BuildTransactionOutput[];
 }
 
 export interface SubmitTransactionParams {
@@ -40,7 +48,16 @@ export class BlockchainTransactionService {
       // Validate that the transaction exists and get its current state
       await this.transactionsService.validateTransactionExists(params.txId);
 
-      const result = await this.anvilApiService.buildTransaction(params);
+      // Ensure each output has a lovelace value
+      const validatedParams = {
+        ...params,
+        outputs: params.outputs.map(output => ({
+          ...output,
+          lovelace: output.lovelace ?? 0 // Default to 0 if not provided
+        }))
+      };
+
+      const result = await this.anvilApiService.buildTransaction(validatedParams);
       
       // Update the outchain transaction with the onchain transaction hash
       await this.transactionsService.updateTransactionHash(params.txId, result.hash);
