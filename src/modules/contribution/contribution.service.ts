@@ -80,7 +80,7 @@ export class ContributionService {
           transaction: transaction,
           type: AssetType.NFT,
           policy_id: assetItem.policyId,
-          asset_id: assetItem.assetId,
+          asset_id: assetItem.assetName,
           quantity: assetItem.quantity,
           status: AssetStatus.PENDING,
           added_by: user

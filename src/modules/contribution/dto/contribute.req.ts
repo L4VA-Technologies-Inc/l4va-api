@@ -12,12 +12,12 @@ class ContributionAsset {
   policyId: string;
 
   @ApiProperty({
-    description: 'Asset name/ID within the policy',
-    example: 'Asset123',
+    description: 'Asset name within the policy',
+    example: 'l4vaaudiEngine',
   })
   @IsNotEmpty()
   @Expose()
-  assetId: string;
+  assetName: string;
 
   @ApiProperty({
     description: 'Quantity of assets to contribute',

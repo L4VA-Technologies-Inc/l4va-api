@@ -48,16 +48,7 @@ export class BlockchainTransactionService {
       // Validate that the transaction exists and get its current state
       await this.transactionsService.validateTransactionExists(params.txId);
 
-      // Ensure each output has a lovelace value
-      const validatedParams = {
-        ...params,
-        outputs: params.outputs.map(output => ({
-          ...output,
-          lovelace: output.lovelace ?? 0 // Default to 0 if not provided
-        }))
-      };
-
-      const result = await this.anvilApiService.buildTransaction(validatedParams);
+      const result = await this.anvilApiService.buildTransaction(params);
       
       // Update the outchain transaction with the onchain transaction hash
       await this.transactionsService.updateTransactionHash(params.txId, result.hash);

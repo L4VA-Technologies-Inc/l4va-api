@@ -38,9 +38,10 @@ export class TransactionOutput {
   readonly address: string;
 
   @ApiProperty({
-    description: 'Amount in lovelace',
+    description: 'Amount in lovelace (can be combined with NFT assets)',
     example: 1000000,
-    required: false
+    required: false,
+    type: Number
   })
   @IsOptional()
   @IsNumber()
@@ -48,9 +49,14 @@ export class TransactionOutput {
   readonly lovelace?: number;
 
   @ApiProperty({
-    description: 'NFT assets to send',
+    description: 'NFT assets to send (can be combined with lovelace)',
     type: [NftAsset],
-    required: false
+    required: false,
+    example: [{
+      policyId: '47642adf3fb7154f0880b916bc341aafa0fcdf1d49f67eac856987a2',
+      assetName: 'l4vaaudiEngine',
+      quantity: 1
+    }]
   })
   @IsOptional()
   @IsArray()
