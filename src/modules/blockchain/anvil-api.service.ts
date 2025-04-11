@@ -60,7 +60,6 @@ export class AnvilApiService {
 
   async buildTransaction(params: {
     changeAddress: string;
-    utxos: string[];
     outputs: {
       address: string;
       lovelace: number;
@@ -72,9 +71,21 @@ export class AnvilApiService {
     stripped: string; // CBOR
     witnessSet: string; // CBOR
   }> {
+    // Filter out empty assets from outputs
+    const outputs = params.outputs.map(output => {
+      if (!output.assets || Object.keys(output.assets).length === 0) {
+        const { assets, ...rest } = output;
+        return rest;
+      }
+      return output;
+    });
+
     return this.callAnvilApi({
       endpoint: 'services/transactions/build',
-      body: params,
+      body: {
+        ...params,
+        outputs,
+      },
     });
   }
 

@@ -3,7 +3,6 @@ import { AnvilApiService } from './anvil-api.service';
 
 export interface BuildTransactionParams {
   changeAddress: string;
-  utxos: string[];
   outputs: {
     address: string;
     lovelace: number;

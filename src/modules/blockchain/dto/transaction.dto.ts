@@ -54,15 +54,6 @@ export class BuildTransactionDto {
   readonly changeAddress: string;
 
   @ApiProperty({
-    description: 'Array of UTXO references',
-    example: ['txhash#index', 'txhash#index']
-  })
-  @IsArray()
-  @IsString({ each: true })
-  @Expose()
-  readonly utxos: string[];
-
-  @ApiProperty({
     description: 'Transaction outputs',
     type: [TransactionOutput]
   })
