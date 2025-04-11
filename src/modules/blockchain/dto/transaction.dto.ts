@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsArray, IsNumber, IsOptional, ValidateNested, IsObject } from 'class-validator';
+import { IsString, IsArray, IsNumber, IsOptional, ValidateNested, IsObject, IsUUID } from 'class-validator';
 import { Expose, Type } from 'class-transformer';
 
 export class AssetOutput {
@@ -54,10 +54,10 @@ export class BuildTransactionDto {
   readonly changeAddress: string;
 
   @ApiProperty({
-    description: 'Outchain transaction ID',
-    example: 'tx_123456789'
+    description: 'Outchain transaction ID (UUID)',
+    example: '123e4567-e89b-12d3-a456-426614174000'
   })
-  @IsString()
+  @IsUUID()
   @Expose({ name: 'txId' })
   readonly txId: string;
 

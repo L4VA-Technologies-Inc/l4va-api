@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { AnvilApiService } from './anvil-api.service';
 import { TransactionsService } from '../transactions/transactions.service';
 
@@ -36,12 +36,22 @@ export class BlockchainTransactionService {
   ) {}
 
   async buildTransaction(params: BuildTransactionParams): Promise<TransactionBuildResponse> {
-    const result = await this.anvilApiService.buildTransaction(params);
-    
-    // Update the outchain transaction with the onchain transaction hash
-    await this.transactionsService.updateTransactionHash(params.txId, result.hash);
-    
-    return result;
+    try {
+      // Validate that the transaction exists and get its current state
+      await this.transactionsService.validateTransactionExists(params.txId);
+
+      const result = await this.anvilApiService.buildTransaction(params);
+      
+      // Update the outchain transaction with the onchain transaction hash
+      await this.transactionsService.updateTransactionHash(params.txId, result.hash);
+      
+      return result;
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        throw new NotFoundException(error.message);
+      }
+      throw error;
+    }
   }
 
   async submitTransaction(params: SubmitTransactionParams): Promise<TransactionSubmitResponse> {

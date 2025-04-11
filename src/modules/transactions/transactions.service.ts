@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Transaction } from '../../database/transaction.entity';
@@ -48,6 +48,18 @@ export class TransactionsService {
       where: { utxo_input: address },
       order: { id: 'DESC' }
     });
+  }
+
+  async validateTransactionExists(id: string): Promise<Transaction> {
+    const transaction = await this.transactionRepository.findOne({
+      where: { id }
+    });
+
+    if (!transaction) {
+      throw new NotFoundException(`Outchain transaction with ID ${id} not found`);
+    }
+
+    return transaction;
   }
 
   async getTransactionsByStatus(status: TransactionStatus): Promise<Transaction[]> {
