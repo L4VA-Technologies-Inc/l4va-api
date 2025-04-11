@@ -54,6 +54,14 @@ export class BuildTransactionDto {
   readonly changeAddress: string;
 
   @ApiProperty({
+    description: 'Outchain transaction ID',
+    example: 'tx_123456789'
+  })
+  @IsString()
+  @Expose({ name: 'txId' })
+  readonly txId: string;
+
+  @ApiProperty({
     description: 'Transaction outputs',
     type: [TransactionOutput]
   })

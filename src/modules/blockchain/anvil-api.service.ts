@@ -60,6 +60,7 @@ export class AnvilApiService {
 
   async buildTransaction(params: {
     changeAddress: string;
+    txId: string;
     outputs: {
       address: string;
       lovelace: number;
@@ -80,11 +81,19 @@ export class AnvilApiService {
       return output;
     });
 
+    // Create metadata with txId
+    const metadata = {
+      674: {
+        msg: [params.txId]
+      }
+    };
+
     return this.callAnvilApi({
       endpoint: 'services/transactions/build',
       body: {
         ...params,
         outputs,
+        ...(metadata && { metadata }),
       },
     });
   }
