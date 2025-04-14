@@ -2,12 +2,14 @@ import {Controller, Post, Body, Get, Param, Request, UseGuards, Query, Validatio
 import { VaultsService } from './vaults.service';
 import { DraftVaultsService } from './draft-vaults.service';
 import { AuthGuard } from '../auth/auth.guard';
-import { CreateVaultReq } from "./dto/createVault.req";
-import { ApiTags } from "@nestjs/swagger";
-import { ApiDoc } from "../../decorators/api-doc.decorator";
-import { SaveDraftReq } from "./dto/saveDraft.req";
-import { GetVaultsDto } from "./dto/get-vaults.dto";
-import { Logger } from "@nestjs/common";
+import { CreateVaultReq } from './dto/createVault.req';
+import { ApiTags } from '@nestjs/swagger';
+import { ApiDoc } from '../../decorators/api-doc.decorator';
+import { SaveDraftReq } from './dto/saveDraft.req';
+import { GetVaultsDto } from './dto/get-vaults.dto';
+import { Logger } from '@nestjs/common';
+import { TransactionsService } from '../transactions/transactions.service';
+import { GetVaultTransactionsDto } from './dto/get-vault-transactions.dto';
 
 @ApiTags('vaults')
 @Controller('vaults')
@@ -15,7 +17,8 @@ export class VaultsController {
   private readonly logger = new Logger(VaultsController.name);
   constructor(
     private readonly vaultsService: VaultsService,
-    private readonly draftVaultsService: DraftVaultsService
+    private readonly draftVaultsService: DraftVaultsService,
+    private readonly transactionsService: TransactionsService
   ) {}
 
   @ApiDoc({
@@ -47,7 +50,7 @@ export class VaultsController {
     data: SaveDraftReq,
   ) {
     const userId = req.user.sub;
-    this.logger.log('drfat data ', data)
+    this.logger.log('drfat data ', data);
     return this.draftVaultsService.saveDraftVault(userId, data);
   }
 
@@ -125,6 +128,25 @@ export class VaultsController {
       query.sortBy,
       query.sortOrder
     );
+  }
+
+  @ApiDoc({
+    summary: 'Get vault transactions',
+    description: 'Returns list of vault transactions. By default shows only confirmed transactions.',
+    status: 200,
+  })
+  @UseGuards(AuthGuard)
+  @Get(':id/transactions')
+  async getVaultTransactions(
+    @Param('id') id: string,
+    @Query() query: GetVaultTransactionsDto,
+    @Request() req
+  ) {
+    const userId = req.user.sub;
+    // Verify vault exists and user has access
+    await this.vaultsService.getVaultById(id, userId);
+    console.log('query status ', query);
+    return this.transactionsService.getVaultTransactions(id, query.status, query.type);
   }
 }
 

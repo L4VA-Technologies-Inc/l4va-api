@@ -125,4 +125,24 @@ export class TransactionsService {
       relations: ['vault']
     });
   }
+
+  async getVaultTransactions(
+    vaultId: string,
+    status?: TransactionStatus,
+    type?: TransactionType
+  ): Promise<Transaction[]> {
+    const where: any = { vault_id: vaultId };
+    if (status) {
+      where.status = status;
+    }
+    if (type) {
+      where.type = type;
+    }
+
+    return this.transactionRepository.find({
+      where,
+      order: { id: 'DESC' },
+      relations: ['vault', 'assets']
+    });
+  }
 }

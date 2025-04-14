@@ -13,12 +13,19 @@ import {AwsModule} from '../aws_bucket/aws.module';
 import {TagEntity} from '../../database/tag.entity';
 import { DraftVaultsService } from './draft-vaults.service';
 import {ContributorWhitelistEntity} from '../../database/contributorWhitelist.entity';
+import {TransactionsModule} from '../transactions/transactions.module';
 
 @Module({
   imports: [
     AwsModule,
     LifecycleModule,
-    TypeOrmModule.forFeature([Vault, User, FileEntity, AssetsWhitelistEntity, LinkEntity, InvestorsWhitelistEntity, TagEntity, ContributorWhitelistEntity]),
+    TransactionsModule,
+    TypeOrmModule.forFeature([
+      Vault,
+      User,
+      FileEntity,
+      AssetsWhitelistEntity,
+      LinkEntity, InvestorsWhitelistEntity, TagEntity, ContributorWhitelistEntity]),
   ],
   providers: [VaultsService, DraftVaultsService],
   controllers: [VaultsController],
