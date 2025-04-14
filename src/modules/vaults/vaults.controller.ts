@@ -1,4 +1,4 @@
-import {Controller, Post, Body, Get, Param, Request, UseGuards, Query, ValidationPipe, Req} from '@nestjs/common';
+import {Controller, Post, Body, Get, Param, Request, UseGuards, Query} from '@nestjs/common';
 import { VaultsService } from './vaults.service';
 import { DraftVaultsService } from './draft-vaults.service';
 import { AuthGuard } from '../auth/auth.guard';

@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsArray, IsNumber, IsOptional, ValidateNested, IsObject, IsUUID } from 'class-validator';
+import { IsString, IsArray, IsNumber, IsOptional, ValidateNested, IsUUID } from 'class-validator';
 import { Expose, Type } from 'class-transformer';
 
 export class NftAsset {

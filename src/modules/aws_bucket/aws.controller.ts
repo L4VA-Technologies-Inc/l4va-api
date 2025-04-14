@@ -7,12 +7,12 @@ import {
   UploadedFile, UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import {ApiTags} from "@nestjs/swagger";
-import {AwsService} from "./aws.service";
-import {ApiDoc} from "../../decorators/api-doc.decorator";
-import {FileInterceptor} from "@nestjs/platform-express";
-import { Express, Response, Request } from 'express'
-import {AuthGuard} from "../auth/auth.guard";
+import {ApiTags} from '@nestjs/swagger';
+import {AwsService} from './aws.service';
+import {ApiDoc} from '../../decorators/api-doc.decorator';
+import {FileInterceptor} from '@nestjs/platform-express';
+import { Express, Response, Request } from 'express';
+import {AuthGuard} from '../auth/auth.guard';
 
 export const mbMultiplication =  1024 * 1024;
 
@@ -40,8 +40,8 @@ export class AwsController {
       ],
     }),
   ) file: Express.Multer.File, @Req() req: Request) {
-    const {host} = req?.headers
-   return await this.awsService.uploadImage(file, host)
+    const {host} = req?.headers;
+   return await this.awsService.uploadImage(file, host);
   }
 
   @ApiDoc({
@@ -51,7 +51,7 @@ export class AwsController {
   })
   @Get('/image/:id')
   async getImageFile(@Param('id') id,  @Res() res: Response ){
-    const response = await this.awsService.getImage(id)
+    const response = await this.awsService.getImage(id);
     res.setHeader('Content-Type', response.headers['content-type']);
     res.setHeader('Cache-Control', 'public, max-age=3600');
     response.data.pipe(res);
@@ -64,7 +64,7 @@ export class AwsController {
   })
   @Get('/csv/:id')
   async getCsvFile(@Param('id') id,  @Res() res: Response ){
-    const response = await this.awsService.getCsv(id)
+    const response = await this.awsService.getCsv(id);
     res.setHeader('Content-Type', response.headers['content-type']);
     res.setHeader('Cache-Control', 'public, max-age=3600');
     response.data.pipe(res);
@@ -87,9 +87,9 @@ export class AwsController {
     }),
   ) file: Express.Multer.File, @Req() req: Request){
     // todo need to validate and parse csv and then return list of asset whitelist id's
-    this.logger.log('csv file received', file)
-    const {host} = req?.headers
+    this.logger.log('csv file received', file);
+    const {host} = req?.headers;
 
-    return await this.awsService.uploadCSV(file, host)
+    return await this.awsService.uploadCSV(file, host);
   }
 }

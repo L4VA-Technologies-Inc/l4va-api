@@ -5,9 +5,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { FileEntity } from '../../database/file.entity';
 import { ManagedUpload } from 'aws-sdk/clients/s3';
-import {getMimeTypeFromArrayBuffer} from "../../helpers";
-import {HttpService} from "@nestjs/axios";
-import * as process from "process";
+import {HttpService} from '@nestjs/axios';
+import * as process from 'process';
 import * as csv from 'csv-parse';
 import { BadRequestException } from '@nestjs/common';
 
@@ -123,7 +122,7 @@ export class AwsService {
         `${uuid()}`,
         file.mimetype,
       );
-      const protocol = process.env.NODE_ENV === 'dev' ? 'http://' :'https://'
+      const protocol = process.env.NODE_ENV === 'dev' ? 'http://' :'https://';
       if (uploadResult) {
         const newFile = this.fileRepository.create({
           file_key: uploadResult.Key,
@@ -153,7 +152,7 @@ export class AwsService {
         `${uuid()}`,
         file.mimetype,
       );
-      const protocol = process.env.NODE_ENV === 'dev' ? 'http://' :'https://'
+      const protocol = process.env.NODE_ENV === 'dev' ? 'http://' :'https://';
       if (uploadResult) {
         const newFile = this.fileRepository.create({
           file_key: uploadResult.Key,

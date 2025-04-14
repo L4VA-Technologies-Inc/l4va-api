@@ -16,7 +16,7 @@ import { VaultSortField, SortOrder } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { AwsService } from '../aws_bucket/aws.service';
 import { transformImageToUrl } from '../../helpers';
-import {VaultFullResponse, VaultShortResponse} from './dto/vault.response';
+import {VaultShortResponse} from './dto/vault.response';
 
 @Injectable()
 export class DraftVaultsService {

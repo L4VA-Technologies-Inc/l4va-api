@@ -12,7 +12,7 @@ import {AssetsWhitelistEntity} from '../../database/assetsWhitelist.entity';
 import {InvestorsWhitelistEntity} from '../../database/investorsWhitelist.entity';
 import * as csv from 'csv-parse';
 import {AwsService} from '../aws_bucket/aws.service';
-import {classToPlain, plainToInstance} from "class-transformer";
+import {classToPlain, plainToInstance} from 'class-transformer';
 import {SortOrder, VaultFilter, VaultSortField} from './dto/get-vaults.dto';
 import {PaginatedResponseDto} from './dto/paginated-response.dto';
 import {TagEntity} from '../../database/tag.entity';
@@ -177,7 +177,7 @@ export class VaultsService {
       const investorsFromCsv = investorsWhitelistFile ?
         await this.parseCSVFromS3(investorsWhitelistFile.file_key) : [];
 
-      const investors = data.investorsWhitelist ? [...data.investorsWhitelist?.map(item => item.walletAddress)]: []
+      const investors = data.investorsWhitelist ? [...data.investorsWhitelist?.map(item => item.walletAddress)]: [];
 
 
       const allInvestors = new Set([
@@ -202,14 +202,14 @@ export class VaultsService {
           ...contributorList,
         ...contributorsFromCsv
       ]);
-      const contributorsArray = [...allContributors]
+      const contributorsArray = [...allContributors];
 
       contributorsArray.map(item => {
         return this.contributorWhitelistRepository.save({
           vault: newVault,
           wallet_address: item
         });
-      })
+      });
 
       // Handle tags
       if (data.tags?.length > 0) {
@@ -418,7 +418,7 @@ export class VaultsService {
         }
       }
 
-      return await this.prepareDraftResponse(vault.id)
+      return await this.prepareDraftResponse(vault.id);
     } catch (error) {
       console.error(error);
       throw new BadRequestException('Failed to create vault');

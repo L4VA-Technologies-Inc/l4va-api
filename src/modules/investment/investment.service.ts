@@ -2,9 +2,9 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { InvestReq } from './dto/invest.req';
-import { Vault } from "../../database/vault.entity";
-import { VaultStatus } from "../../types/vault.types";
-import { User } from "../../database/user.entity";
+import { Vault } from '../../database/vault.entity';
+import { VaultStatus } from '../../types/vault.types';
+import { User } from '../../database/user.entity';
 import { TransactionsService } from '../transactions/transactions.service';
 import { TransactionType } from '../../types/transaction.types';
 
