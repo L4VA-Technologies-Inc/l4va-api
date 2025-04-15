@@ -4,6 +4,10 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import * as bodyParser from 'body-parser';
 
 import { AppModule } from './app.module';
+import { webcrypto } from 'node:crypto';
+
+// @ts-ignore - Type mismatch between node:crypto and global Crypto
+globalThis.crypto = webcrypto;
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);

@@ -13,8 +13,10 @@ import {ApiDoc} from "../../decorators/api-doc.decorator";
 import {FileInterceptor} from "@nestjs/platform-express";
 import { Express, Response, Request } from 'express'
 import {AuthGuard} from "../auth/auth.guard";
+import { Multer } from 'multer';
 
 export const mbMultiplication =  1024 * 1024;
+
 
 @ApiTags('files')
 @Controller('')
