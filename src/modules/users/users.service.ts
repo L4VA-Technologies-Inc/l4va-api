@@ -8,7 +8,7 @@ import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AwsService } from '../aws_bucket/aws.service';
 import {classToPlain, plainToInstance} from 'class-transformer';
 import { transformImageToUrl } from '../../helpers';
-import {PublicProfileRes} from "./dto/public-profile.res";
+import {PublicProfileRes} from './dto/public-profile.res';
 
 @Injectable()
 export class UsersService {
@@ -38,7 +38,7 @@ export class UsersService {
       where: { id: userId },
       relations: ['profile_image', 'banner_image', 'social_links']
     });
-    this.logger.log("USER" , user)
+    this.logger.log('USER' , user);
 
     if (!user) {
       throw new BadRequestException('User not found');
@@ -51,7 +51,7 @@ export class UsersService {
       ...user,
       banner_image: user.banner_image.file_url,
       profile_image: user.profile_image.file_url
-    }
+    };
 
     // Transform to plain object and remove sensitive data
     const plainUser = classToPlain(userSource);
@@ -79,7 +79,7 @@ export class UsersService {
 
     // Calculate total_vaults from the vaults relation
     user.total_vaults = user.vaults?.length || 0;
-    const plainedUsers = classToPlain(user)
+    const plainedUsers = classToPlain(user);
     return plainToInstance(PublicProfileRes, plainedUsers , { excludeExtraneousValues: true });
   }
 
@@ -144,7 +144,7 @@ export class UsersService {
         });
       });
     }
-    let selectedUser = await this.usersRepository.save(user)
+    const selectedUser = await this.usersRepository.save(user);
 
     selectedUser.banner_image = transformImageToUrl(selectedUser.banner_image as FileEntity) as any;
     selectedUser.profile_image = transformImageToUrl(selectedUser.profile_image as FileEntity) as any;

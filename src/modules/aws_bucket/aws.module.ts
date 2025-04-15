@@ -4,8 +4,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { FileEntity } from '../../database/file.entity';
 import {AwsController} from './aws.controller';
 import {HttpModule} from '@nestjs/axios';
-import {JwtModule} from "@nestjs/jwt";
-import {ConfigModule, ConfigService} from "@nestjs/config";
+import {JwtModule} from '@nestjs/jwt';
+import {ConfigModule, ConfigService} from '@nestjs/config';
 
 @Module({
   imports: [TypeOrmModule.forFeature([FileEntity]), HttpModule,  JwtModule.registerAsync({

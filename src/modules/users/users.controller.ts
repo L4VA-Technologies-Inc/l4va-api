@@ -17,8 +17,8 @@ import { UsersService } from './users.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AuthGuard } from '../auth/auth.guard';
 import { ApiDoc } from '../../decorators/api-doc.decorator';
-import {Express} from "express";
-import {mbMultiplication} from "../aws_bucket/aws.controller";
+import {Express} from 'express';
+import {mbMultiplication} from '../aws_bucket/aws.controller';
 
 @ApiTags('users')
 @Controller('users')

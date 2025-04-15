@@ -20,7 +20,6 @@ export class BlockchainScannerService {
   }
 
   private async makeRequest<T>(endpoint: string): Promise<T> {
-    this.logger.log('URL AND key ', this.scannerKey, this.scannerUrl);
     try {
       const response = await axios.get(`${this.scannerUrl}${endpoint}`, {
         headers: {
