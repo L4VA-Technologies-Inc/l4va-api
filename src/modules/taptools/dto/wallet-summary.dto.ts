@@ -6,4 +6,10 @@ export class WalletSummaryDto {
   totalValueAda: number;
   totalValueUsd: number;
   lastUpdated: string;
+  summary: {
+    totalAssets: number;
+    nfts: number;
+    tokens: number;
+    ada: number;
+  };
 }
