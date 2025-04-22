@@ -2,12 +2,18 @@ import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import * as bodyParser from 'body-parser';
+import { json } from 'express';
 
 import { AppModule } from './app.module';
 
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  // Configure raw body parser for webhook endpoint
+  app.use('/blockchain/tx-webhook', bodyParser.raw({ type: 'application/json' }));
+  // Use regular JSON parser for all other routes
+  app.use(json());
 
   app.setGlobalPrefix('api');
   app.use(bodyParser.json({ limit: '50mb' }));
