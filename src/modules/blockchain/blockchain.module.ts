@@ -5,7 +5,9 @@ import { BlockchainTransactionService } from './blockchain-transaction.service';
 import { BlockchainController } from './blockchain.controller';
 import { AnvilApiService } from './anvil-api.service';
 import { WebhookVerificationService } from './webhook-verification.service';
+import { VaultContractService } from './vault-contract.service';
 import { TransactionsModule } from '../transactions/transactions.module';
+import {BlockchainScannerService} from './blockchain-scanner.service';
 
 @Module({
   imports: [ConfigModule, TransactionsModule],
@@ -14,12 +16,16 @@ import { TransactionsModule } from '../transactions/transactions.module';
     BlockchainService,
     BlockchainTransactionService,
     AnvilApiService,
-    WebhookVerificationService
+    BlockchainScannerService,
+    WebhookVerificationService,
+    VaultContractService
   ],
   exports: [
     BlockchainService,
     BlockchainTransactionService,
-    WebhookVerificationService
+    WebhookVerificationService,
+    VaultContractService,
+    BlockchainScannerService
   ]
 })
 export class BlockchainModule {}

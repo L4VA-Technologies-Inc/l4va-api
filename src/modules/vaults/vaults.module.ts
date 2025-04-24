@@ -14,12 +14,14 @@ import {TagEntity} from '../../database/tag.entity';
 import { DraftVaultsService } from './draft-vaults.service';
 import {ContributorWhitelistEntity} from '../../database/contributorWhitelist.entity';
 import {TransactionsModule} from '../transactions/transactions.module';
+import {BlockchainModule} from '../blockchain/blockchain.module';
 
 @Module({
   imports: [
     AwsModule,
     LifecycleModule,
     TransactionsModule,
+    BlockchainModule,
     TypeOrmModule.forFeature([
       Vault,
       User,

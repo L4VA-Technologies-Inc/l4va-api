@@ -24,14 +24,27 @@ export interface BlockchainTransactionResponse {
   }[];
 }
 
+export interface Asset {
+  unit: string;
+  quantity: string;
+}
+
+export interface BlockchainUtxo {
+  address: string;
+  tx_hash: string;
+  tx_index: number;
+  output_index: number;
+  amount: Asset[];
+  block: string;
+  data_hash: string | null;
+  inline_datum: string | null;
+  reference_script_hash: string | null;
+}
+
 export interface BlockchainAddressResponse {
   address: string;
-  balance: string;
-  assets?: Array<{
-    policyId: string;
-    assetName: string;
-    amount: string;
-  }>;
+  utxo_count: number;
+  utxos: BlockchainUtxo[];
 }
 
 export interface BlockchainContractResponse {

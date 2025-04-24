@@ -27,7 +27,7 @@
   "dependencies": {
     "@blockfrost/blockfrost-js": "^6.0.0",
     "@emurgo/cardano-message-signing-nodejs": "^1.1.0",
-    "@emurgo/cardano-serialization-lib-nodejs": "^13.2.0",
+    "@emurgo/cardano-serialization-lib-nodejs": "^14.1.0",
     "@nestjs/axios": "^4.0.0",
     "@nestjs/common": "^10.0.0",
     "@nestjs/config": "^3.3.0",

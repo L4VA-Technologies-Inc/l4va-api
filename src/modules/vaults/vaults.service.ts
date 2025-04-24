@@ -1,4 +1,4 @@
-import {BadRequestException, Injectable, UnauthorizedException} from '@nestjs/common';
+import {BadRequestException, Injectable, Logger, UnauthorizedException} from '@nestjs/common';
 import {ValuationType, VaultPrivacy, VaultStatus} from '../../types/vault.types';
 import {InjectRepository} from '@nestjs/typeorm';
 import {Brackets, In, Repository} from 'typeorm';
@@ -19,9 +19,12 @@ import {TagEntity} from '../../database/tag.entity';
 import {ContributorWhitelistEntity} from '../../database/contributorWhitelist.entity';
 import {transformToSnakeCase} from '../../helpers';
 import {VaultFullResponse, VaultShortResponse} from './dto/vault.response';
+import {VaultContractService} from '../blockchain/vault-contract.service';
 
 @Injectable()
 export class VaultsService {
+
+  private readonly logger = new Logger(VaultsService.name);
   constructor(
     @InjectRepository(Vault)
     private readonly vaultsRepository: Repository<Vault>,
@@ -39,7 +42,8 @@ export class VaultsService {
     private readonly tagsRepository: Repository<TagEntity>,
     @InjectRepository(ContributorWhitelistEntity)
     private readonly contributorWhitelistRepository: Repository<ContributorWhitelistEntity>,
-    private readonly awsService: AwsService
+    private readonly awsService: AwsService,
+    private readonly vaultContractService: VaultContractService
   ) {}
 
   private async parseCSVFromS3(file_key: string): Promise<string[]> {
@@ -134,7 +138,7 @@ export class VaultsService {
         investmentOpenWindowTime: new Date(data.investmentOpenWindowTime).toISOString(),
         contributionOpenWindowTime: new Date(data.contributionOpenWindowTime).toISOString(),
         timeElapsedIsEqualToTime: data.timeElapsedIsEqualToTime,
-        vaultStatus: VaultStatus.published,
+        vaultStatus: VaultStatus.created,
         vaultImage: vaultImg,
         bannerImage: bannerImg,
         ftTokenImg: ftTokenImg,
@@ -238,11 +242,65 @@ export class VaultsService {
       if (!finalVault) {
         throw new BadRequestException('Failed to retrieve created vault');
       }
-      return plainToInstance(VaultFullResponse, finalVault, {excludeExtraneousValues: true });
+
+      const ADMIN_KEY_HASH = 'ddd93c8dde5756752986fec0dc6fc8a688006786f201a40c3b50a3c3'; // like key for access to vault editing
+      const SC_POLICY_ID = '39478941fa99431e4d425430968be47e26af9690678668edd22ef462'
+
+      const builtTx = await this.vaultContractService.createOnChainVaultTx({
+        vaultName: finalVault.name,
+        customerAddress: owner.address,
+        contractType: 0,
+       valuationType: 0,
+       adminKeyHash: ADMIN_KEY_HASH,
+       policyId: SC_POLICY_ID,
+       allowedPolicies: []
+      });
+
+      // vaultName: string;
+      // customerAddress: string;
+      // adminKeyHash: string;
+      // policyId: string;
+      // allowedPolicies: string[];
+      // assetWindow?: {
+      //   start: number;
+      //   end: number;
+      // };
+      // investmentWindow?: {
+      //   start: number;
+      //   end: number;
+      // };
+      // contractType?: number; // 0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE
+      // valuationType?: number; // 0: FIXED | 1: LBE
+      // customMetadata?: [string, string][];
+
+      return {
+        vaultId: finalVault.id,
+        tx: builtTx
+      };
     } catch (error) {
       console.error(error);
       throw new BadRequestException('Failed to create vault');
     }
+  }
+
+  async publishVault(userId, signedTx){
+
+    console.log('vault id ', userId, signedTx.vaultId);
+    const vault = await this.vaultsRepository.findOne({ where: {
+     id: signedTx.vaultId,
+    },
+      relations: ['owner']
+    });
+    if(vault.owner.id !== userId){
+      throw new UnauthorizedException('You must be an owner of vault!');
+    }
+
+    const publishedTx =  await this.vaultContractService.submitOnChainVaultTx(signedTx);
+
+    // todo need to save in to vault hash
+    // todo need to change status to publish
+    // todo need to save admin key for update vault
+
   }
 
   async saveDraftVault(userId: string, data: SaveDraftReq): Promise<any> {

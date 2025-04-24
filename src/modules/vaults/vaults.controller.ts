@@ -10,6 +10,7 @@ import { GetVaultsDto } from './dto/get-vaults.dto';
 import { Logger } from '@nestjs/common';
 import { TransactionsService } from '../transactions/transactions.service';
 import { GetVaultTransactionsDto } from './dto/get-vault-transactions.dto';
+import {SubmitTransactionDto, SubmitVaultTxDto} from "../blockchain/dto/transaction.dto";
 
 @ApiTags('vaults')
 @Controller('vaults')
@@ -35,6 +36,22 @@ export class VaultsController {
   ) {
     const userId = req.user.sub;
     return this.vaultsService.createVault(userId, data);
+  }
+
+  @ApiDoc({
+    summary: 'Create vault',
+    description: 'Vault successfully created',
+    status: 200,
+  })
+  @UseGuards(AuthGuard)
+  @Post('/publish')
+  publishVault(
+    @Request() req,
+    @Body()
+      signedTx: SubmitVaultTxDto,
+  ) {
+    const userId = req.user.sub;
+    return this.vaultsService.publishVault(userId, signedTx);
   }
 
   @ApiDoc({

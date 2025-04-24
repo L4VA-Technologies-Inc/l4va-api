@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsArray, IsNumber, IsOptional, ValidateNested, IsUUID } from 'class-validator';
+import {IsString, IsArray, IsNumber, IsOptional, ValidateNested, IsUUID, IsNotEmpty} from 'class-validator';
 import { Expose, Type } from 'class-transformer';
 
 export class NftAsset {
@@ -113,6 +113,19 @@ export class SubmitTransactionDto {
   @IsString({ each: true })
   @Expose()
   readonly signatures?: string[];
+}
+
+export class SubmitVaultTxDto extends SubmitTransactionDto {
+
+  @ApiProperty({
+    description: 'Vault id',
+    example: ['84a400...'],
+    required: true
+  })
+  @IsNotEmpty()
+  @IsString()
+  @Expose()
+  vaultId: string;
 }
 
 export class TransactionBuildResponseDto {

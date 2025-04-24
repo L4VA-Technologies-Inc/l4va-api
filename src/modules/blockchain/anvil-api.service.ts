@@ -4,8 +4,9 @@ import { NftAsset } from './blockchain-transaction.service';
 
 interface AnvilApiConfig<T = Record<string, unknown>> {
   endpoint: string;
-  method?: 'GET' | 'POST';
+  method?: 'GET' | 'POST' | 'PATCH';
   body?: T;
+  params?: Record<string, string>;
 }
 
 interface BuildTransactionParams {
@@ -35,10 +36,35 @@ export class AnvilApiService {
     this.apiKey = this.configService.get<string>('ANVIL_API_KEY');
   }
 
+  async get<T>(endpoint: string, { params }: { params?: Record<string, string> } = {}): Promise<T> {
+    return this.callAnvilApi({
+      endpoint,
+      method: 'GET',
+      params
+    });
+  }
+
+  async post<T, B>(endpoint: string, body: B): Promise<T> {
+    return this.callAnvilApi({
+      endpoint,
+      method: 'POST',
+      body
+    });
+  }
+
+  async patch<T, B>(endpoint: string, body: B): Promise<T> {
+    return this.callAnvilApi({
+      endpoint,
+      method: 'PATCH',
+      body
+    });
+  }
+
   private async callAnvilApi<T, B = Record<string, unknown>>({
     endpoint,
     method = 'POST',
     body,
+    params,
   }: AnvilApiConfig<B>): Promise<T> {
     if (!this.baseUrl) {
       throw new Error('Anvil API base URL is not configured');
@@ -54,7 +80,20 @@ export class AnvilApiService {
     };
 
     try {
-      const response = await fetch(`${this.baseUrl}/${endpoint}`, {
+      const url = new URL(`${this.baseUrl}/${endpoint}`);
+      if (params) {
+        Object.entries(params).forEach(([key, value]) => {
+          url.searchParams.append(key, value);
+        });
+      }
+
+     console.log('Base url ', this.baseUrl);
+     console.log('Method ', method);
+     console.log('Headers ', headers);
+     console.log('body ', JSON.stringify(body, null, 2) );
+     console.log('endpoint ', endpoint);
+
+      const response = await fetch(url.toString(), {
         method,
         headers,
         body: body ? JSON.stringify(body) : undefined,

@@ -39,6 +39,7 @@ export enum TerminationType {
 
 export enum VaultStatus {
   draft = 'draft',
+  created = 'created',
   published = 'published',
   contribution = 'contribution',
   investment = 'investment',
