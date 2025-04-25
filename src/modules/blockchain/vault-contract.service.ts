@@ -153,7 +153,6 @@ export class VaultContractService {
   constructor(
     private readonly configService: ConfigService
   ) {
-    // this.anvilApi = 'https://preprod.api.ada-anvil.app/v2/services';
     this.anvilApiKey = this.configService.get<string>('ANVIL_API_KEY');
     this.anvilApi = this.configService.get<string>('ANVIL_API_URL') + '/services';
     this.scPolicyId = this.configService.get<string>('SC_POLICY_ID');
