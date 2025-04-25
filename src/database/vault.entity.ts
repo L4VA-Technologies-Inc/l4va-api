@@ -61,6 +61,14 @@ export class Vault {
   })
   valuation_type?: ValuationType;
 
+  @Expose({ name: 'publicationHash'})
+  @Column({
+    name: 'publication_hash',
+    type: 'varchar',
+    nullable: true
+  })
+  publication_hash: string;
+
   @Expose({ name: 'valuationCurrency'})
   @Column({
     name: 'valuation_currency',

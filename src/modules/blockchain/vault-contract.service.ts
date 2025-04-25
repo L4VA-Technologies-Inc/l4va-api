@@ -5,10 +5,11 @@ import {
   ScriptHash,
   Credential,
   Address,
-  FixedTransaction, PrivateKey
+  FixedTransaction, PrivateKey, Transaction, TransactionWitnessSet, Vkeywitnesses, Vkeywitness, Vkey, TransactionHash
 } from '@emurgo/cardano-serialization-lib-nodejs';
 import {Datum1} from './types/type';
 import {generate_assetname_from_txhash_index, getUtxos, toHex} from './utils/lib';
+import {Buffer} from 'node:buffer';
 
 interface TimeWindow {
   lower_bound: {
@@ -146,14 +147,18 @@ export class VaultContractService {
   private  scAddress: string;
   private readonly anvilApi: string;
   private readonly anvilApiKey: string;
-
+  private readonly scPolicyId: string;
+  private readonly adminHash: string;
+  private readonly adminSKey: string;
   constructor(
     private readonly configService: ConfigService
   ) {
-    this.anvilApi = 'https://preprod.api.ada-anvil.app/v2/services';
-    this.anvilApiKey = 'testnet_EJyBwUaUOLd1nVWFkkxsbdtfUgBbslF5HbVyjCN6';
-
-
+    // this.anvilApi = 'https://preprod.api.ada-anvil.app/v2/services';
+    this.anvilApiKey = this.configService.get<string>('ANVIL_API_KEY');
+    this.anvilApi = this.configService.get<string>('ANVIL_API_URL') + '/services';
+    this.scPolicyId = this.configService.get<string>('SC_POLICY_ID');
+    this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
+    this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
   }
 
   /**
@@ -165,7 +170,7 @@ export class VaultContractService {
 
     this.scAddress = EnterpriseAddress.new(
       0,
-      Credential.from_scripthash(ScriptHash.from_hex(vaultConfig.policyId)),
+      Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)),
     )
       .to_address()
       .to_bech32();
@@ -201,7 +206,7 @@ export class VaultContractService {
           {
             version: 'cip25',
             assetName: {name: assetName, format:'hex'},
-            policyId: vaultConfig.policyId,
+            policyId: this.scPolicyId,
             type: 'plutus',
             quantity: 1,
             metadata: {},
@@ -210,7 +215,7 @@ export class VaultContractService {
         scriptInteractions: [
           {
             purpose: 'mint',
-            hash: vaultConfig.policyId,
+            hash: this.scPolicyId,
             redeemer: {
               type: 'json',
               value: {
@@ -226,7 +231,7 @@ export class VaultContractService {
             assets: [
               {
                 assetName: {name:assetName, format:'hex'},
-                policyId: vaultConfig.policyId,
+                policyId: this.scPolicyId,
                 quantity: 1,
               },
             ],
@@ -284,11 +289,11 @@ export class VaultContractService {
                 //   reserve: 1,
                 //   liquidityPool: 1,
                 // },
-                admin: vaultConfig.adminKeyHash,
-                minting_key: vaultConfig.adminKeyHash
+                admin: this.adminHash,
+                minting_key: this.adminHash
               },
               shape: {
-                validatorHash: vaultConfig.policyId,
+                validatorHash: this.scPolicyId,
                 purpose: 'spend',
               },
             },
@@ -296,23 +301,33 @@ export class VaultContractService {
         ],
         requiredInputs: REQUIRED_INPUTS,
       };
-      console.log(JSON.stringify(input, null, 2));
-
       const headers = {
         'x-api-key': this.anvilApiKey,
         'Content-Type': 'application/json',
       };
 
+      // Build the transaction
       const contractDeployed = await fetch(`${this.anvilApi}/transactions/build`, {
         method: 'POST',
         headers,
         body: JSON.stringify(input),
       });
-      console.log('created tx', JSON.stringify(contractDeployed));
-      const transaction = await contractDeployed.json();
-      console.log('created tx', JSON.stringify(transaction));
 
-      return JSON.stringify(transaction);
+      const buildResponse = await contractDeployed.json();
+      console.log('Transaction response:', JSON.stringify(buildResponse));
+
+      if (!buildResponse.complete) {
+        throw new Error('Failed to build complete transaction');
+      }
+
+      const txToSubmitOnChain = FixedTransaction.from_bytes(
+        Buffer.from(buildResponse.complete, 'hex'),
+      );
+      txToSubmitOnChain.sign_and_add_vkey_signature(
+        PrivateKey.from_bech32(this.adminSKey),
+      );
+
+      return txToSubmitOnChain.to_hex();
 
     } catch (error) {
       this.logger.error('Failed to create vault:', error);
@@ -328,7 +343,6 @@ export class VaultContractService {
       'x-api-key': this.anvilApiKey,
       'Content-Type': 'application/json',
     };
-
 
     const urlSubmit = `${this.anvilApi}/transactions/submit`;
     const submitted = await fetch(urlSubmit, {

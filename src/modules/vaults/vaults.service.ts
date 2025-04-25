@@ -243,39 +243,19 @@ export class VaultsService {
         throw new BadRequestException('Failed to retrieve created vault');
       }
 
-      const ADMIN_KEY_HASH = 'ddd93c8dde5756752986fec0dc6fc8a688006786f201a40c3b50a3c3'; // like key for access to vault editing
-      const SC_POLICY_ID = '39478941fa99431e4d425430968be47e26af9690678668edd22ef462'
-
-      const builtTx = await this.vaultContractService.createOnChainVaultTx({
+      const presignedTx = await this.vaultContractService.createOnChainVaultTx({
         vaultName: finalVault.name,
         customerAddress: owner.address,
         contractType: 0,
        valuationType: 0,
-       adminKeyHash: ADMIN_KEY_HASH,
-       policyId: SC_POLICY_ID,
+       adminKeyHash: '',
+       policyId: '',
        allowedPolicies: []
       });
 
-      // vaultName: string;
-      // customerAddress: string;
-      // adminKeyHash: string;
-      // policyId: string;
-      // allowedPolicies: string[];
-      // assetWindow?: {
-      //   start: number;
-      //   end: number;
-      // };
-      // investmentWindow?: {
-      //   start: number;
-      //   end: number;
-      // };
-      // contractType?: number; // 0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE
-      // valuationType?: number; // 0: FIXED | 1: LBE
-      // customMetadata?: [string, string][];
-
       return {
         vaultId: finalVault.id,
-        tx: builtTx
+        presignedTx
       };
     } catch (error) {
       console.error(error);
@@ -296,7 +276,9 @@ export class VaultsService {
     }
 
     const publishedTx =  await this.vaultContractService.submitOnChainVaultTx(signedTx);
-
+    console.log('TXVAULt published ', publishedTx);
+    vault.vault_status = VaultStatus.published;
+    await this.vaultsRepository.save(vault);
     // todo need to save in to vault hash
     // todo need to change status to publish
     // todo need to save admin key for update vault
