@@ -39,7 +39,7 @@ export class VaultsController {
   }
 
   @ApiDoc({
-    summary: 'Create vault',
+    summary: 'Publish',
     description: 'Vault successfully created',
     status: 200,
   })
