@@ -313,7 +313,6 @@ export class VaultContractService {
       });
 
       const buildResponse = await contractDeployed.json();
-      console.log('Transaction response:', JSON.stringify(buildResponse));
 
       if (!buildResponse.complete) {
         throw new Error('Failed to build complete transaction');
