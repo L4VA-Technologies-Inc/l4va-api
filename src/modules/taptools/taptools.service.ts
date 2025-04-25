@@ -1,11 +1,15 @@
-import { Injectable, HttpException } from '@nestjs/common';
+import {Injectable, HttpException, Logger} from '@nestjs/common';
 import axios from 'axios';
 import * as NodeCache from 'node-cache';
 import { WalletSummaryDto } from './dto/wallet-summary.dto';
 import { AssetValueDto } from './dto/asset-value.dto';
+import {VaultContractService} from '../blockchain/vault-contract.service';
 
 @Injectable()
 export class TaptoolsService {
+
+  private readonly logger = new Logger(VaultContractService.name);
+
   private readonly baseUrl = 'https://openapi.taptools.io/api/v1';
   private readonly blockfrostTestnetUrl = 'https://cardano-preprod.blockfrost.io/api/v0/';
   private cache = new NodeCache({ stdTTL: 60 }); // cache for 60 seconds
@@ -26,7 +30,7 @@ export class TaptoolsService {
           vs_currencies: 'usd'
         }
       });
-      
+
       if (!response.data?.cardano?.usd) {
         throw new HttpException('Invalid price data from API', 400);
       }
@@ -44,7 +48,7 @@ export class TaptoolsService {
     const cacheKey = `wallet_summary_${walletAddress}`;
     const cached = this.cache.get<WalletSummaryDto>(cacheKey);
     if (cached) return cached;
-  
+
     try {
       const adaPriceUsd = await this.getAdaPrice();
 
@@ -84,8 +88,8 @@ export class TaptoolsService {
     }
 
     const processedAssets: AssetValueDto[] = [];
-    let totalAda = res.data.adaValue || 0;
-    let totalUsd = totalAda * adaPriceUsd;
+    const totalAda = res.data.adaValue || 0;
+    const totalUsd = totalAda * adaPriceUsd;
 
     // Process fungible tokens
     if (res.data.positionsFt) {
@@ -153,6 +157,28 @@ export class TaptoolsService {
   }
 
   private async getTestnetWalletSummary(walletAddress: string, adaPriceUsd: number): Promise<WalletSummaryDto> {
+    try{
+      await axios.get(`${this.blockfrostTestnetUrl}addresses/${walletAddress}`, {
+        headers: {
+          'project_id': process.env.BLOCKFROST_TESTNET_API_KEY,
+        },
+      });
+    }catch(err){
+      this.logger.log('Error ', err);
+      return {
+        wallet: '',
+        assets: [],
+        totalValueAda: 0,
+        totalValueUsd: 0,
+        lastUpdated: '',
+        summary: {
+          totalAssets: 0,
+          nfts: 0,
+          tokens: 0,
+          ada: 0
+        }
+      };
+    }
     try {
       // Get all assets in the wallet
       const assetsResponse = await axios.get(`${this.blockfrostTestnetUrl}addresses/${walletAddress}/total`, {
@@ -162,10 +188,10 @@ export class TaptoolsService {
       });
 
       const processedAssets: AssetValueDto[] = [];
-      
+
       // Calculate actual balances from received_sum and sent_sum
       const balances = new Map<string, number>();
-      
+
       // Process received amounts
       assetsResponse.data.received_sum.forEach(asset => {
         balances.set(asset.unit, Number(asset.quantity));
