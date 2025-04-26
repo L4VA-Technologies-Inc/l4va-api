@@ -1,7 +1,7 @@
 
 export const vault_sc_privacy = {
   private: 0,
-  public :1,
+  public: 1,
   semiPrivate: 2
 };
 
