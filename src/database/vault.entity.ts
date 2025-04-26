@@ -69,6 +69,14 @@ export class Vault {
   })
   publication_hash: string;
 
+  @Expose({ name: 'contractAddress'})
+  @Column({
+    name: 'contract_address',
+    type: 'varchar',
+    nullable: true
+  })
+  contract_address: string;
+
   @Expose({ name: 'valuationCurrency'})
   @Column({
     name: 'valuation_currency',

@@ -149,6 +149,13 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   valuationType?: ValuationType;
 
+  @ApiProperty({ description: 'Contract address', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'contractAddress' }
+  })
+  contractAddress: string;
+
   @ApiProperty({ description: 'Valuation currency', required: false })
   @DtoRepresent({
     transform: false,

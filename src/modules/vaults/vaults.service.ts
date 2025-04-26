@@ -243,7 +243,7 @@ export class VaultsService {
         throw new BadRequestException('Failed to retrieve created vault');
       }
 
-      const presignedTx = await this.vaultContractService.createOnChainVaultTx({
+      const { presignedTx, contractAddress } = await this.vaultContractService.createOnChainVaultTx({
         vaultName: finalVault.name,
         customerAddress: owner.address,
         contractType: 0,
@@ -252,6 +252,10 @@ export class VaultsService {
        policyId: '',
        allowedPolicies: []
       });
+
+      finalVault.contract_address = contractAddress;
+      await this.vaultsRepository.save(finalVault);
+      // todo save contract address
 
       return {
         vaultId: finalVault.id,
@@ -264,8 +268,6 @@ export class VaultsService {
   }
 
   async publishVault(userId, signedTx){
-
-    console.log('vault id ', userId, signedTx.vaultId);
     const vault = await this.vaultsRepository.findOne({ where: {
      id: signedTx.vaultId,
     },
@@ -276,13 +278,10 @@ export class VaultsService {
     }
 
     const publishedTx =  await this.vaultContractService.submitOnChainVaultTx(signedTx);
-    console.log('TXVAULt published ', publishedTx);
     vault.vault_status = VaultStatus.published;
+    vault.publication_hash = publishedTx.txHash;
     await this.vaultsRepository.save(vault);
-    // todo need to save in to vault hash
-    // todo need to change status to publish
-    // todo need to save admin key for update vault
-
+    return plainToInstance(VaultFullResponse, classToPlain(vault), { excludeExtraneousValues: true });
   }
 
   async saveDraftVault(userId: string, data: SaveDraftReq): Promise<any> {

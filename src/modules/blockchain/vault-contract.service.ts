@@ -325,7 +325,10 @@ export class VaultContractService {
         PrivateKey.from_bech32(this.adminSKey),
       );
 
-      return txToSubmitOnChain.to_hex();
+      return {
+        presignedTx: txToSubmitOnChain.to_hex(),
+        contractAddress: this.scAddress,
+      };
 
     } catch (error) {
       this.logger.error('Failed to create vault:', error);
@@ -334,31 +337,39 @@ export class VaultContractService {
   }
 
   async submitOnChainVaultTx(signedTx: {
-    tx: string,
+    transaction: string,
     signatures: string
   }) {
-    const headers = {
+    try{
+      const headers = {
       'x-api-key': this.anvilApiKey,
       'Content-Type': 'application/json',
     };
 
-    const urlSubmit = `${this.anvilApi}/transactions/submit`;
-    const submitted = await fetch(urlSubmit, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        signatures: signedTx.signatures, // no signature required as it is part of the `txToSubmitOnChain`.
-        transaction: signedTx.tx,
-      }),
-    });
+      const urlSubmit = `${this.anvilApi}/transactions/submit`;
+      console.log('URL ', urlSubmit);
+      console.log('Headers ', headers);
+      console.log('tx, signatures', signedTx);
 
-    const output = await submitted.json();
-    console.log('transaction was sent ', output);
-    return output;
+      const submitted = await fetch(urlSubmit, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          signatures: signedTx.signatures,
+          transaction: signedTx.transaction,
+        }),
+      });
 
-    // Output of published {
-    //   txHash: "f24ae82f6b5b7324e96e1d0ec03085bf852c935bcec18a51c2791dc501d17724"
-    // }
+      const output = await submitted.json();
+      return output;
 
+      // Output of published {
+      //   txHash: "f24ae82f6b5b7324e96e1d0ec03085bf852c935bcec18a51c2791dc501d17724"
+      // }
+
+    }catch(error){
+      this.logger.log('TX Error sending', error);
+      throw new Error('Failed to build complete transaction'+  JSON.stringify(error));
+    }
   }
 }
