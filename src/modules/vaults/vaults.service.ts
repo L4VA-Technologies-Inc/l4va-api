@@ -20,6 +20,8 @@ import {ContributorWhitelistEntity} from '../../database/contributorWhitelist.en
 import {transformToSnakeCase} from '../../helpers';
 import {VaultFullResponse, VaultShortResponse} from './dto/vault.response';
 import {VaultContractService} from '../blockchain/vault-contract.service';
+import {valuation_sc_type, vault_sc_privacy} from "../blockchain/types/vault-sc-type";
+import {VaultType} from "aws-sdk/clients/backup";
 
 @Injectable()
 export class VaultsService {
@@ -246,11 +248,11 @@ export class VaultsService {
       const { presignedTx, contractAddress } = await this.vaultContractService.createOnChainVaultTx({
         vaultName: finalVault.name,
         customerAddress: owner.address,
-        contractType: 0,
-       valuationType: 0,
-       adminKeyHash: '',
-       policyId: '',
-       allowedPolicies: []
+        contractType: vault_sc_privacy[finalVault.type as VaultType],
+        valuationType: valuation_sc_type[finalVault.valuation_type as ValuationType],
+        adminKeyHash: '',
+        policyId: '',
+        allowedPolicies: []
       });
 
       finalVault.contract_address = contractAddress;

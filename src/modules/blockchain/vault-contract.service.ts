@@ -5,7 +5,7 @@ import {
   ScriptHash,
   Credential,
   Address,
-  FixedTransaction, PrivateKey, Transaction, TransactionWitnessSet, Vkeywitnesses, Vkeywitness, Vkey, TransactionHash
+  FixedTransaction, PrivateKey,
 } from '@emurgo/cardano-serialization-lib-nodejs';
 import {Datum1} from './types/type';
 import {generate_assetname_from_txhash_index, getUtxos, toHex} from './utils/lib';
@@ -200,7 +200,7 @@ export class VaultContractService {
         requiredInputs: string[];
       } = {
         changeAddress: vaultConfig.customerAddress,
-        message: 'Vault',
+        message: vaultConfig.vaultName,
         mint: [
           {
             version: 'cip25',
@@ -237,7 +237,7 @@ export class VaultContractService {
             datum: {
               type: 'inline',
               value: {
-                contract_type: 0, // Represent an enum setup by L4VA (0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE)
+                contract_type: vaultConfig.contractType, // Represent an enum setup by L4VA (0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE)
                 asset_whitelist:[], // POLICIES_ALLOWED_IN_THE_VAULT,
                 // contributor_whitelist: [],
                 asset_window: {
@@ -262,7 +262,7 @@ export class VaultContractService {
                     is_inclusive: true,
                   },
                 },
-                valuation_type: 1, // Enum 0: 'FIXED' 1: 'LBE'
+                valuation_type: vaultConfig.valuationType, // Enum 0: 'FIXED' 1: 'LBE'
                 // fractionalization: {
                 //   percentage: 1,
                 //   token_supply: 1,
