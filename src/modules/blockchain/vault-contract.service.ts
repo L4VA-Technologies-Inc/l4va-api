@@ -265,9 +265,6 @@ export class VaultContractService {
     };
 
       const urlSubmit = `${this.anvilApi}/transactions/submit`;
-      console.log('URL ', urlSubmit);
-      console.log('Headers ', headers);
-      console.log('tx, signatures', signedTx);
 
       const submitted = await fetch(urlSubmit, {
         method: 'POST',

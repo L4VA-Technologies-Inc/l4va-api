@@ -11,7 +11,7 @@ export class AssetWhitelistDto {
   @Matches(/^[0-9a-fA-F]{56}$/, {
     message: 'Policy ID must be a 56-character hexadecimal string'
   })
-  id: string;
+  policyId: string;
 
   @ApiProperty({
     description: 'Minimum number of assets allowed',

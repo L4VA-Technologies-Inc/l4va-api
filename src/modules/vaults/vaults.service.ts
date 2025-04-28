@@ -1,5 +1,5 @@
 import {BadRequestException, Injectable, Logger, UnauthorizedException} from '@nestjs/common';
-import {ValuationType, VaultPrivacy, VaultStatus} from '../../types/vault.types';
+import {ContributionWindowType, InvestmentWindowType, ValuationType, VaultPrivacy, VaultStatus} from '../../types/vault.types';
 import {InjectRepository} from '@nestjs/typeorm';
 import {Brackets, In, Repository} from 'typeorm';
 import {Vault} from '../../database/vault.entity';
@@ -170,12 +170,14 @@ export class VaultsService {
       // Handle assets whitelist
       if (data.assetsWhitelist?.length > 0) {
         await Promise.all(data.assetsWhitelist.map(assetItem => {
-          return this.assetsWhitelistRepository.save({
-            vault: newVault,
-            policy_id: assetItem.id,
-            asset_count_cap_min: assetItem.countCapMin,
-            asset_count_cap_max: assetItem.countCapMax
-          });
+          if(assetItem.policyId){
+            return this.assetsWhitelistRepository.save({
+              vault: newVault,
+              policy_id: assetItem.policyId,
+              asset_count_cap_min: assetItem.countCapMin,
+              asset_count_cap_max: assetItem.countCapMax
+            });
+          }
         }));
       }
 
@@ -245,23 +247,56 @@ export class VaultsService {
         throw new BadRequestException('Failed to retrieve created vault');
       }
 
-     const privacy =  vault_sc_privacy[finalVault.privacy as VaultPrivacy];
+      const policyWhitelist = finalVault?.assets_whitelist.map(item => item.policy_id);
+
+      const privacy =  vault_sc_privacy[finalVault.privacy as VaultPrivacy];
       const valuationType = valuation_sc_type[finalVault.valuation_type as ValuationType];
+
+      // Calculate start time based on contribution window type
+      let startTime: number;
+      if (finalVault.contribution_open_window_type === ContributionWindowType.uponVaultLaunch) {
+        startTime = new Date().getTime();
+      } else if (finalVault.contribution_open_window_type === ContributionWindowType.custom && finalVault.contribution_open_window_time) {
+        // contribution_open_window_time is already in milliseconds due to @Transform in entity
+        startTime = Number(finalVault.contribution_open_window_time);
+      } else {
+        throw new BadRequestException('Invalid contribution window configuration');
+      }
+
+      const assetWindow = {
+        start: startTime,
+        end: startTime + Number(finalVault.contribution_duration)
+      };
+
+      // Calculate investment window start time
+      let investmentStartTime: number;
+      if (finalVault.investment_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
+        investmentStartTime = assetWindow.end;
+      } else if (finalVault.investment_open_window_type === InvestmentWindowType.custom && finalVault.investment_open_window_time) {
+        // investment_open_window_time is already in milliseconds due to @Transform in entity
+        investmentStartTime = Number(finalVault.investment_open_window_time);
+      } else {
+        throw new BadRequestException('Invalid investment window configuration');
+      }
+
+      const investmentWindow = {
+        start: investmentStartTime,
+        end: investmentStartTime + Number(finalVault.investment_window_duration)
+      };
+
       const { presignedTx, contractAddress } = await this.vaultContractService.createOnChainVaultTx({
-        vaultId: finalVault.id,
         vaultName: finalVault.name,
-        customerAddress: owner.address,
+        customerAddress: finalVault.owner.address,
+        vaultId: finalVault.id,
+        allowedPolicies: policyWhitelist,
         contractType: privacy,
         valuationType: valuationType,
-        adminKeyHash: '',
-        policyId: '',
-        allowedPolicies: []
+        assetWindow,
+        investmentWindow
       });
 
       finalVault.contract_address = contractAddress;
       await this.vaultsRepository.save(finalVault);
-      // todo save contract address
-
       return {
         vaultId: finalVault.id,
         presignedTx
