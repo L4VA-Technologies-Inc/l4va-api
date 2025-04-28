@@ -1,9 +1,5 @@
 import { Buffer } from 'node:buffer';
 import {
-  BlockFrostAPI,
-  BlockfrostServerError,
-} from '@blockfrost/blockfrost-js';
-import {
   Address,
   TransactionInput,
   TransactionOutput,
@@ -22,10 +18,6 @@ import {
   hash_plutus_data,
   PlutusList,
 } from '@emurgo/cardano-serialization-lib-nodejs';
-
-const blockfrost = new BlockFrostAPI({
-  projectId: 'preprod5TLteGqPH65jDOUvY35WA2jhQPjsOQO4',
-});
 
 interface Amount {
   unit: string;
@@ -74,7 +66,7 @@ const assetsToValue = (assets: Amount[]) => {
   return multiAssetsValue;
 };
 
-export const getUtxos = async (address: Address, min = 0) => {
+export const getUtxos = async (address: Address, min = 0, blockfrost) => {
   const utxos = await blockfrost.addressesUtxosAll(address.to_bech32());
   const parsedUtxos = TransactionUnspentOutputs.new();
   utxos.forEach((utxo: any) => {
@@ -108,37 +100,6 @@ export function generate_assetname_from_txhash_index(
   return hash.to_hex();
 }
 
-export async function getVaultUtxo(policyId: string, assetName: string) {
-  try {
-    const unit = policyId + assetName;
-    const assets = await blockfrost.assetsTransactions(unit, {
-      count: 1,
-      order: 'desc',
-    });
-
-    if (assets.length > 1) {
-      throw new Error('Must be one.');
-    }
-    const utxo = await blockfrost.txsUtxos(assets[0].tx_hash);
-
-    const index = utxo.outputs.findIndex((output) =>
-      output.amount.find((amount) => amount.unit === unit),
-    );
-
-    if (index === -1) {
-      throw new Error(
-        'Vault not found in transaction, your vault might be burned.',
-      );
-    }
-
-    return { txHash: utxo.hash, index: index };
-  } catch (e: unknown) {
-    if ((e as BlockfrostServerError).status_code === 404) {
-      throw new Error('Vault not found on chain.');
-    }
-    throw e;
-  }
-}
 
 export function toHex(str: string) {
   return Buffer.from(str).toString('hex');

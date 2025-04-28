@@ -10,101 +10,8 @@ import {
 import {Datum1} from './types/type';
 import {generate_assetname_from_txhash_index, getUtxos, toHex} from './utils/lib';
 import {Buffer} from 'node:buffer';
+import {BlockFrostAPI} from '@blockfrost/blockfrost-js';
 
-interface TimeWindow {
-  lower_bound: {
-    bound_type: number;
-    is_inclusive: boolean;
-  };
-  upper_bound: {
-    bound_type: number;
-    is_inclusive: boolean;
-  };
-}
-
-interface VaultDatum {
-  contract_type: number; // 0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE
-  asset_whitelist: string[];
-  asset_window: TimeWindow;
-  investment_window: TimeWindow;
-  valuation_type: number; // 0: FIXED | 1: LBE
-  custom_metadata: [string, string][];
-  admin: string;
-  minting_key: string;
-}
-
-interface AssetConfig {
-  assetName: {
-    name: string;
-    format: 'hex';
-  };
-  policyId: string;
-  quantity: number;
-}
-
-interface ScriptInteraction {
-  purpose: 'mint';
-  hash: string;
-  redeemer: {
-    type: 'json';
-    value: {
-      vault_token_index: number;
-      asset_name: string;
-    };
-  };
-}
-
-interface MintConfig extends AssetConfig {
-  version: 'cip25';
-  type: 'plutus';
-  metadata: Record<string, unknown>;
-}
-
-interface CreateVaultRequest {
-  changeAddress: string;
-  message: string;
-  mint: MintConfig[];
-  scriptInteractions: ScriptInteraction[];
-  outputs: {
-    address: string;
-    assets: AssetConfig[];
-    datum: {
-      type: 'inline';
-      value: VaultDatum;
-      shape: {
-        validatorHash: string;
-        purpose: 'spend';
-      };
-    };
-  }[];
-  requiredInputs: string[];
-}
-
-interface CreateVaultResponse {
-  txHash: string;
-  vaultId: string;
-}
-
-interface UpdateVaultResponse {
-  txHash: string;
-}
-
-interface ClaimVaultResponse {
-  txHash: string;
-}
-
-interface VaultResponse {
-  vaultId: string;
-  owner: string;
-  beneficiary: string;
-  unlockTime: number;
-  tokenAmount: string;
-  status: 'active' | 'unlocked' | 'claimed';
-  policyId?: string;
-  assetName?: string;
-  createdAt: number;
-  updatedAt: number;
-}
 
 export interface VaultConfig {
   vaultName: string;
@@ -125,18 +32,24 @@ export interface VaultConfig {
   customMetadata?: [string, string][];
 }
 
-export interface VaultMetadata {
+export interface VaultCreateConfig {
+  vaultName: string;
+  customerAddress: string;
   vaultId: string;
-  owner: string;
-  beneficiary: string;
-  unlockTime: number;
-  tokenAmount: string;
-  status: 'active' | 'unlocked' | 'claimed';
-  policyId?: string;
-  assetName?: string;
-  createdAt: number;
-  updatedAt: number;
+  allowedPolicies: string[];
+  assetWindow?: {
+    start: number;
+    end: number;
+  };
+  investmentWindow?: {
+    start: number;
+    end: number;
+  };
+  contractType?: number; // 0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE
+  valuationType?: number; // 0: FIXED | 1: LBE
+  customMetadata?: [string, string][];
 }
+
 
 const one_day = 24 * 60 * 60 * 1000;
 
@@ -150,6 +63,8 @@ export class VaultContractService {
   private readonly scPolicyId: string;
   private readonly adminHash: string;
   private readonly adminSKey: string;
+  private readonly blockfrost: any;
+
   constructor(
     private readonly configService: ConfigService
   ) {
@@ -158,6 +73,9 @@ export class VaultContractService {
     this.scPolicyId = this.configService.get<string>('SC_POLICY_ID');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
+    this.blockfrost = new BlockFrostAPI({
+      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY')
+    });
   }
 
   /**
@@ -165,7 +83,7 @@ export class VaultContractService {
    * @param config Vault configuration parameters
    * @returns Transaction hash and vault ID
    */
-  async createOnChainVaultTx(vaultConfig: VaultConfig): Promise<any> {
+  async createOnChainVaultTx(vaultConfig: VaultCreateConfig): Promise<any> {
 
     this.scAddress = EnterpriseAddress.new(
       0,
@@ -174,7 +92,7 @@ export class VaultContractService {
       .to_address()
       .to_bech32();
 
-    const utxos = await getUtxos(Address.from_bech32(vaultConfig.customerAddress)); // Any UTXO works.
+    const utxos = await getUtxos(Address.from_bech32(vaultConfig.customerAddress), 0, this.blockfrost); // Any UTXO works.
     if (utxos.len() === 0) {
       throw new Error('No UTXOs found.');
     }
@@ -237,8 +155,8 @@ export class VaultContractService {
             datum: {
               type: 'inline',
               value: {
-                contract_type: vaultConfig.contractType, // Represent an enum setup by L4VA (0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE)
-                asset_whitelist:[], // POLICIES_ALLOWED_IN_THE_VAULT,
+                contract_type: vaultConfig.contractType,
+                asset_whitelist: vaultConfig.allowedPolicies,
                 // contributor_whitelist: [],
                 asset_window: {
                   // Time allowed to upload NFT
@@ -277,7 +195,7 @@ export class VaultContractService {
                   // ],
                   [toHex('foo'), toHex('bar')],
                   [toHex('bar'), toHex('foo')],
-                  [toHex('inc'), toHex('1')],
+                  [toHex('vaultId'), toHex(vaultConfig.vaultId)],
                 ], // like a tuple
 
                 // termination: {

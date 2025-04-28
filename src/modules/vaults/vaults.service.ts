@@ -248,6 +248,7 @@ export class VaultsService {
      const privacy =  vault_sc_privacy[finalVault.privacy as VaultPrivacy];
       const valuationType = valuation_sc_type[finalVault.valuation_type as ValuationType];
       const { presignedTx, contractAddress } = await this.vaultContractService.createOnChainVaultTx({
+        vaultId: finalVault.id,
         vaultName: finalVault.name,
         customerAddress: owner.address,
         contractType: privacy,
