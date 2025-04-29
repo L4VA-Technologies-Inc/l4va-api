@@ -75,8 +75,7 @@ export class AssetsService {
     // Verify vault ownership
     const vault = await this.vaultsRepository.findOne({
       where: {
-        id: vaultId,
-        owner: { id: userId }
+        id: vaultId
       }
     });
 
