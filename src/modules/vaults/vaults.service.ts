@@ -284,7 +284,7 @@ export class VaultsService {
         end: investmentStartTime + Number(finalVault.investment_window_duration)
       };
 
-      const { presignedTx, contractAddress } = await this.vaultContractService.createOnChainVaultTx({
+      const { presignedTx, contractAddress, vaultAssetName } = await this.vaultContractService.createOnChainVaultTx({
         vaultName: finalVault.name,
         customerAddress: finalVault.owner.address,
         vaultId: finalVault.id,
@@ -296,6 +296,7 @@ export class VaultsService {
       });
 
       finalVault.contract_address = contractAddress;
+      finalVault.asset_vault_name = vaultAssetName;
       await this.vaultsRepository.save(finalVault);
       return {
         vaultId: finalVault.id,
