@@ -9,6 +9,7 @@ export class WebhookVerificationService {
   private readonly webhookAuthToken: string;
   private readonly maxEventAge: number;
 
+
   constructor(private readonly configService: ConfigService) {
     this.webhookAuthToken = this.configService.get<string>('BLOCKFROST_WEBHOOK_AUTH_TOKEN');
     this.maxEventAge = 600; // 10 minutes max age for webhook events
@@ -40,7 +41,7 @@ export class WebhookVerificationService {
 
       // Prepare the signature payload as per Blockfrost docs
       const signaturePayload = `${timestamp}.${payload}`;
-      
+
       // Compute HMAC
       const expectedSignature = crypto
         .createHmac('sha256', this.webhookAuthToken)
