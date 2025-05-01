@@ -586,7 +586,7 @@ export class VaultsService {
       throw new BadRequestException('Vault not found');
     }
 
-    if (vault.privacy !== VaultPrivacy.public &&  vault.owner.id !== userId) {
+    if (vault.privacy !== VaultPrivacy.public) {
       throw new BadRequestException('Access denied: You are not the owner of this vault');
     }
 

@@ -95,6 +95,15 @@ export class BuildTransactionDto {
 }
 
 export class SubmitTransactionDto {
+
+  @ApiProperty({
+    description: 'vault id ',
+    example: '83a400...'
+  })
+  @IsString()
+  @Expose()
+  vaultId: string;
+
   @ApiProperty({
     description: 'CBOR encoded transaction',
     example: '83a400...'

@@ -142,6 +142,13 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   ftTokenImg: FileEntity;
 
+  @ApiProperty({ description: 'Hash of publication tx' })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'publicationHash' }
+  })
+  publicationHash: string;
+
   @ApiProperty({ description: 'Valuation type', enum: ValuationType, required: false })
   @DtoRepresent({
     transform: false,

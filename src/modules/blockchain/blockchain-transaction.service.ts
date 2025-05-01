@@ -1,9 +1,14 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {Injectable, Logger, NotFoundException} from '@nestjs/common';
 import { AnvilApiService } from './anvil-api.service';
 import { TransactionsService } from '../transactions/transactions.service';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
 import { TransactionStatus } from '../../types/transaction.types';
+import {VaultsService} from '../vaults/vaults.service';
+import {BlockchainScannerService} from './blockchain-scanner.service';
+import {InjectRepository} from '@nestjs/typeorm';
+import {Vault} from '../../database/vault.entity';
+import {Repository} from 'typeorm';
 
 export interface NftAsset {
   policyId: string;
@@ -25,6 +30,7 @@ export interface BuildTransactionParams {
 
 export interface SubmitTransactionParams {
   transaction: string; // CBOR encoded transaction
+  vaultId: string;
   signatures?: string[]; // Optional array of signatures
 }
 
@@ -41,9 +47,14 @@ export interface TransactionSubmitResponse {
 
 @Injectable()
 export class BlockchainTransactionService {
+
+  private readonly logger = new Logger(BlockchainTransactionService.name);
   constructor(
+    @InjectRepository(Vault)
+    private readonly vaultsRepository: Repository<Vault>,
     private readonly anvilApiService: AnvilApiService,
-    private readonly transactionsService: TransactionsService
+    private readonly transactionsService: TransactionsService,
+    private readonly blockchainScanner: BlockchainScannerService
   ) {}
 
   async buildTransaction(params: BuildTransactionParams): Promise<TransactionBuildResponse> {
@@ -52,10 +63,10 @@ export class BlockchainTransactionService {
       await this.transactionsService.validateTransactionExists(params.txId);
 
       const result = await this.anvilApiService.buildTransaction(params);
-      
+
       // Update the outchain transaction with the onchain transaction hash
       await this.transactionsService.updateTransactionHash(params.txId, result.hash);
-      
+
       return result;
     } catch (error) {
       if (error instanceof NotFoundException) {
@@ -65,8 +76,27 @@ export class BlockchainTransactionService {
     }
   }
 
-  async submitTransaction(params: SubmitTransactionParams): Promise<TransactionSubmitResponse> {
-    return this.anvilApiService.submitTransaction(params);
+  async submitTransaction(params: SubmitTransactionParams): Promise<any> {
+
+    const vault = await this.vaultsRepository.findOne({
+      where: {
+        id: params.vaultId
+      }
+    });
+    if(!vault){
+      throw new Error('Vault is not defined!');
+    }
+    const txDetail = await this.blockchainScanner.getTransactionDetails(vault.publication_hash);
+
+    const { output_amount } = txDetail;
+    this.logger.log(JSON.stringify(output_amount[1].unit));
+
+    const vaultPolicyPlusName = output_amount[1].unit;
+    const policyId = vaultPolicyPlusName.slice(0,56);
+    const assetName = vault.asset_vault_name
+
+
+   // return this.anvilApiService.submitTransaction(params);
   }
 
   async handleBlockchainEvent(event: BlockchainWebhookDto): Promise<void> {
@@ -117,7 +147,7 @@ export class BlockchainTransactionService {
         // Analyze each output
         for (const output of outputs) {
           const { address, amount } = output;
-          
+
           // Skip change outputs (outputs back to sender)
           if (address === transferDetails.sender) {
             continue;

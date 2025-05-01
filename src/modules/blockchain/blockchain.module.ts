@@ -8,9 +8,14 @@ import { WebhookVerificationService } from './webhook-verification.service';
 import { VaultContractService } from './vault-contract.service';
 import { TransactionsModule } from '../transactions/transactions.module';
 import {BlockchainScannerService} from './blockchain-scanner.service';
+import {TypeOrmModule} from '@nestjs/typeorm';
+import {Vault} from '../../database/vault.entity';
 
 @Module({
-  imports: [ConfigModule, TransactionsModule],
+  imports: [ConfigModule, TransactionsModule,
+    TypeOrmModule.forFeature([
+        Vault,])
+  ],
   controllers: [BlockchainController],
   providers: [
     BlockchainService,
