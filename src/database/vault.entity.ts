@@ -77,6 +77,14 @@ export class Vault {
   })
   contract_address: string;
 
+  @Expose({ name: 'assetVaultName'})
+  @Column({
+    name: 'asset_vault_name',
+    type: 'varchar',
+    nullable: true
+  })
+  asset_vault_name: string;
+
   @Expose({ name: 'valuationCurrency'})
   @Column({
     name: 'valuation_currency',

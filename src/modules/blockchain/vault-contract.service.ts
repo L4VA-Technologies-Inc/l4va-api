@@ -246,6 +246,7 @@ export class VaultContractService {
       return {
         presignedTx: txToSubmitOnChain.to_hex(),
         contractAddress: this.scAddress,
+        vaultAssetName: assetName,
       };
 
     } catch (error) {
