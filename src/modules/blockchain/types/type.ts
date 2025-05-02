@@ -84,6 +84,11 @@ export interface Datum {
             }
       }
   datum_tag?: string
+  contributed_assets?: Array<{
+    policy_id: string
+    asset_name: string
+    quantity: number
+  }>
 }
 export interface Datum1 {
   contract_type: number

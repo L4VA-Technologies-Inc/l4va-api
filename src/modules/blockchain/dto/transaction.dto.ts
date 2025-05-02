@@ -105,6 +105,14 @@ export class SubmitTransactionDto {
   vaultId: string;
 
   @ApiProperty({
+    description: 'Outchain tx id  ',
+    example: '83a400...'
+  })
+  @IsString()
+  @Expose()
+  txId: string;
+
+  @ApiProperty({
     description: 'CBOR encoded transaction',
     example: '83a400...'
   })

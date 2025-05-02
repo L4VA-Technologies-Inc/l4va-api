@@ -4,11 +4,25 @@ import { TransactionsService } from '../transactions/transactions.service';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
 import { TransactionStatus } from '../../types/transaction.types';
-import {VaultsService} from '../vaults/vaults.service';
 import {BlockchainScannerService} from './blockchain-scanner.service';
 import {InjectRepository} from '@nestjs/typeorm';
 import {Vault} from '../../database/vault.entity';
 import {Repository} from 'typeorm';
+import {
+  EnterpriseAddress,
+  ScriptHash,
+  Credential,
+  FixedTransaction,
+  PrivateKey
+} from '@emurgo/cardano-serialization-lib-nodejs';
+import {applyContributeParams, toPreloadedScript} from './utils/apply_params';
+import {Datum} from './types/type';
+import {ConfigService} from '@nestjs/config';
+import {BlockFrostAPI} from '@blockfrost/blockfrost-js';
+import {Buffer} from 'node:buffer';
+import * as blueprint from './utils/blueprint.json';
+import {SubmitTransactionDto} from './dto/transaction.dto';
+
 
 export interface NftAsset {
   policyId: string;
@@ -49,25 +63,194 @@ export interface TransactionSubmitResponse {
 export class BlockchainTransactionService {
 
   private readonly logger = new Logger(BlockchainTransactionService.name);
+  private readonly adminHash: string;
+  private readonly anvilApi: string;
+  private readonly anvilApiKey: string;
+  private readonly adminSKey: string;
+  private blockfrost: any;
   constructor(
     @InjectRepository(Vault)
     private readonly vaultsRepository: Repository<Vault>,
     private readonly anvilApiService: AnvilApiService,
     private readonly transactionsService: TransactionsService,
-    private readonly blockchainScanner: BlockchainScannerService
-  ) {}
+    private readonly blockchainScanner: BlockchainScannerService,
+    private readonly configService: ConfigService
+  ) {
+    this.anvilApiKey = this.configService.get<string>('ANVIL_API_KEY');
+    this.anvilApi = this.configService.get<string>('ANVIL_API_URL') + '/services';
+    this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
+    this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
+    this.blockfrost = new BlockFrostAPI({
+      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY')
+    });
+  }
 
-  async buildTransaction(params: BuildTransactionParams): Promise<TransactionBuildResponse> {
+  async buildTransaction(params: BuildTransactionParams): Promise<any> {
     try {
       // Validate that the transaction exists and get its current state
-      await this.transactionsService.validateTransactionExists(params.txId);
+      const transaction = await this.transactionsService.validateTransactionExists(params.txId);
 
-      const result = await this.anvilApiService.buildTransaction(params);
+      const vault = await this.vaultsRepository.findOne({
+        where: {
+          id: transaction.vault_id,
+        }
+      });
 
-      // Update the outchain transaction with the onchain transaction hash
-      await this.transactionsService.updateTransactionHash(params.txId, result.hash);
+      const txDetail = await this.blockchainScanner.getTransactionDetails(vault.publication_hash);
 
-      return result;
+      const { output_amount } = txDetail;
+      this.logger.log(JSON.stringify(output_amount[1].unit));
+
+      const vaultPolicyPlusName = output_amount[1].unit;
+      const VAULT_POLICY_ID = vaultPolicyPlusName.slice(0,56);
+      const VAULT_ID = vaultPolicyPlusName.slice(56,vaultPolicyPlusName.length);
+
+      const parameterizedScript = applyContributeParams({
+        vault_policy_id: VAULT_POLICY_ID,
+        vault_id: VAULT_ID,
+      });
+      const POLICY_ID = parameterizedScript.validator.hash;
+      const SC_ADDRESS = EnterpriseAddress.new(
+        0,
+        Credential.from_scripthash(ScriptHash.from_hex(POLICY_ID))
+      )
+        .to_address()
+        .to_bech32();
+
+      const unparameterizedScript = blueprint.validators.find(
+        (v) => v.title === 'contribute.contribute'
+      );
+      if (!unparameterizedScript) {
+        throw new Error('Contribute validator not found');
+      }
+
+      const LAST_UPDATE_TX_HASH = vault.publication_hash; // todo need to understand where exactly we need to get it
+      const LAST_UPDATE_TX_INDEX = 0;
+
+      const input: {
+        changeAddress: string;
+        message: string;
+        mint: Array<object>;
+        scriptInteractions: object[];
+        outputs: {
+          address: string;
+          assets: object[];
+          lovelace: number;
+          datum: { type: 'inline'; value: Datum; shape: object };
+        }[];
+        requiredSigners: string[];
+        preloadedScripts: {
+          type: string;
+          blueprint: any;
+        }[];
+        referenceInputs: { txHash: string; index: number }[];
+        validityInterval: {
+          start: boolean;
+          end: boolean;
+        };
+        network: string;
+      } = {
+        changeAddress: params.changeAddress,
+        message: 'Contribution in ADA',
+        mint: [
+          {
+            version: 'cip25',
+            assetName: { name: VAULT_ID, format: 'hex' },
+            policyId: POLICY_ID,
+            type: 'plutus',
+            quantity: 1000,
+            metadata: {
+            },
+          },
+        ],
+        scriptInteractions: [
+          {
+            purpose: 'mint',
+            hash: POLICY_ID,
+            redeemer: {
+              type: 'json',
+              value: {
+                quantity: 1000,
+                output_index: 0,
+                contribution: 'Lovelace',
+              },
+            },
+          },
+        ],
+        outputs: [
+          {
+            address: SC_ADDRESS,
+            lovelace: 10000000,
+            assets: [
+              {
+                assetName: { name: VAULT_ID, format: 'hex' },
+                policyId: POLICY_ID,
+                quantity: 1000,
+              },
+            ],
+            datum: {
+              type: 'inline',
+              value: {
+                policy_id: POLICY_ID,
+                asset_name: VAULT_ID,
+                quantity: 1000,
+                owner: params.changeAddress,
+              },
+              shape: {
+                validatorHash: POLICY_ID,
+                purpose: 'spend',
+              },
+            },
+          },
+        ],
+        preloadedScripts: [
+          toPreloadedScript(blueprint, {
+            validators: [parameterizedScript.validator, unparameterizedScript],
+          }),
+        ],
+        requiredSigners: [this.adminHash],
+        referenceInputs: [
+          {
+            txHash: LAST_UPDATE_TX_HASH,
+            index: LAST_UPDATE_TX_INDEX,
+          },
+        ],
+        validityInterval: {
+          start: true,
+          end: true,
+        },
+        network: 'preprod',
+      };
+
+      const headers = {
+        'x-api-key': this.anvilApiKey,
+        'Content-Type': 'application/json',
+      };
+
+      const contractDeployed = await fetch(`${this.anvilApi}/transactions/build`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(input),
+      });
+
+      const buildResponse = await contractDeployed.json();
+      console.log('build response', buildResponse);
+
+      if (!buildResponse.complete) {
+        throw new Error('Failed to build complete transaction');
+      }
+
+
+      const txToSubmitOnChain = FixedTransaction.from_bytes(
+        Buffer.from(buildResponse.complete, 'hex'),
+      );
+      txToSubmitOnChain.sign_and_add_vkey_signature(
+        PrivateKey.from_bech32(this.adminSKey),
+      );
+
+      return {
+        presignedTx: txToSubmitOnChain.to_hex(),
+      };
     } catch (error) {
       if (error instanceof NotFoundException) {
         throw new NotFoundException(error.message);
@@ -76,28 +259,37 @@ export class BlockchainTransactionService {
     }
   }
 
-  async submitTransaction(params: SubmitTransactionParams): Promise<any> {
+  async submitTransaction(signedTx: SubmitTransactionDto): Promise<any> {
 
-    const vault = await this.vaultsRepository.findOne({
-      where: {
-        id: params.vaultId
-      }
-    });
-    if(!vault){
-      throw new Error('Vault is not defined!');
+    try{
+      const headers = {
+        'x-api-key': this.anvilApiKey,
+        'Content-Type': 'application/json',
+      };
+
+      const urlSubmit = `${this.anvilApi}/transactions/submit`;
+
+      const submitted = await fetch(urlSubmit, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          signatures: signedTx.signatures,
+          transaction: signedTx.transaction,
+        }),
+      });
+
+      const output = await submitted.json();
+      console.log('output', output);
+
+      await this.transactionsService.updateTransactionHash(signedTx.txId, output.txHash);
+      return output;
+    }catch(error){
+      this.logger.log('TX Error sending', error);
+      throw new Error('Failed to build complete transaction'+  JSON.stringify(error));
     }
-    const txDetail = await this.blockchainScanner.getTransactionDetails(vault.publication_hash);
-
-    const { output_amount } = txDetail;
-    this.logger.log(JSON.stringify(output_amount[1].unit));
-
-    const vaultPolicyPlusName = output_amount[1].unit;
-    const policyId = vaultPolicyPlusName.slice(0,56);
-    const assetName = vault.asset_vault_name
-
+  }
 
    // return this.anvilApiService.submitTransaction(params);
-  }
 
   async handleBlockchainEvent(event: BlockchainWebhookDto): Promise<void> {
     // Only handle transaction events
