@@ -106,11 +106,11 @@ export class SubmitTransactionDto {
 
   @ApiProperty({
     description: 'Outchain tx id  ',
-    example: '83a400...'
+    example: '83a400...',
+    required: false,
   })
-  @IsString()
   @Expose()
-  txId: string;
+  txId?: string;
 
   @ApiProperty({
     description: 'CBOR encoded transaction',

@@ -151,7 +151,7 @@ export class BlockchainTransactionService {
         network: string;
       } = {
         changeAddress: params.changeAddress,
-        message: 'Contribution in ADA',
+        message: 'Contribution NFT',
         mint: [
           {
             version: 'cip25',
@@ -187,6 +187,11 @@ export class BlockchainTransactionService {
                 policyId: POLICY_ID,
                 quantity: 1000,
               },
+              ...params.outputs[0].assets.map(asset => ({
+                assetName: { name: asset.assetName, format: 'hex' },
+                policyId: asset.policyId,
+                quantity: asset.quantity,
+              })),
             ],
             datum: {
               type: 'inline',
@@ -234,7 +239,7 @@ export class BlockchainTransactionService {
       });
 
       const buildResponse = await contractDeployed.json();
-      console.log('build response', buildResponse);
+      console.log('build response', JSON.stringify(buildResponse));
 
       if (!buildResponse.complete) {
         throw new Error('Failed to build complete transaction');
