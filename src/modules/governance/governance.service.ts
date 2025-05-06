@@ -26,7 +26,7 @@ export class GovernanceService {
       throw new BadRequestException('Governance is only available for locked vaults');
     }
 
-    // TODO: Check if user has sufficient voting power (based on contribution/investment)
+    // TODO: Check if user has sufficient voting power (based on contribution/acquire)
 
     // TODO: Implement blockchain integration for proposal creation
     // For now, return mock response

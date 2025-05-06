@@ -11,7 +11,7 @@ import { LinkEntity } from '../../../database/link.entity';
 import {FileEntity} from "../../../database/file.entity";
 import {User} from "../../../database/user.entity";
 import {AssetsWhitelistEntity} from "../../../database/assetsWhitelist.entity";
-import {InvestorsWhitelistEntity} from "../../../database/investorsWhitelist.entity";
+import {AcquirerWhitelistEntity} from "../../../database/acquirerWhitelist.entity";
 import {ContributorWhitelistEntity} from "../../../database/contributorWhitelist.entity";
 import {Asset} from "../../../database/asset.entity";
 import {TagEntity} from "../../../database/tag.entity";
@@ -187,9 +187,9 @@ export class VaultFullResponse extends VaultShortResponse {
   @ApiProperty({ description: 'Investment window duration in milliseconds', required: false })
   @DtoRepresent({
     transform: ({ value }) => value ? Number(value) : null,
-    expose: { name: 'investmentWindowDuration' }
+    expose: { name: 'acquireWindowDuration' }
   })
-  investmentWindowDuration?: number;
+  acquireWindowDuration?: number;
 
   @ApiProperty({ description: 'Time elapsed duration in milliseconds', required: false })
   @DtoRepresent({
@@ -217,14 +217,14 @@ export class VaultFullResponse extends VaultShortResponse {
     transform: false,
     expose: true
   })
-  investmentOpenWindowType: InvestmentWindowType;
+  acquireOpenWindowType: InvestmentWindowType;
 
   @ApiProperty({ description: 'Investment window time' })
   @DtoRepresent({
     transform: false,
     expose: true
   })
-  investmentOpenWindowTime: string;
+  acquireOpenWindowTime: string;
 
   @ApiProperty({ description: 'Number of assets offered' })
   @DtoRepresent({
@@ -233,7 +233,7 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   offAssetsOffered: number;
 
-  @ApiProperty({ description: 'FT investment reserve' })
+  @ApiProperty({ description: 'FT acquire reserve' })
   @DtoRepresent({
     transform: false,
     expose: true
@@ -331,12 +331,12 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   assetsWhitelist?: AssetsWhitelistEntity[];
 
-  @ApiProperty({ description: 'Investors whitelist', type: [InvestorsWhitelistEntity], required: false })
+  @ApiProperty({ description: 'Acquirer whitelist', type: [AcquirerWhitelistEntity], required: false })
   @DtoRepresent({
     transform: false,
     expose: true
   })
-  investorsWhitelist?: InvestorsWhitelistEntity[];
+  acquirerWhitelist?: AcquirerWhitelistEntity[];
 
   @ApiProperty({ description: 'Contributor whitelist', type: [ContributorWhitelistEntity], required: false })
   @DtoRepresent({
@@ -352,12 +352,12 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   assets?: Asset[];
 
-  @ApiProperty({ description: 'Investors whitelist CSV file', required: false })
+  @ApiProperty({ description: 'Acquirer whitelist CSV file', required: false })
   @DtoRepresent({
     transform: false,
     expose: true
   })
-  investorsWhitelistCsv?: FileEntity;
+  acquirerWhitelistCsv?: FileEntity;
 
   @ApiProperty({ description: 'Tags', type: [TagEntity], required: false })
   @DtoRepresent({
@@ -380,7 +380,7 @@ export class VaultFullResponse extends VaultShortResponse {
     transform: ({ value }) => value ? new Date(value).toISOString() : null,
     expose: true
   })
-  investmentPhaseStart?: string;
+  acquirePhaseStart?: string;
 
   @ApiProperty({ description: 'Locked at time', required: false })
   @DtoRepresent({

@@ -23,7 +23,7 @@ export interface VaultConfig {
     start: number;
     end: number;
   };
-  investmentWindow?: {
+  acquireWindow?: {
     start: number;
     end: number;
   };
@@ -41,7 +41,7 @@ export interface VaultCreateConfig {
     start: number;
     end: number;
   };
-  investmentWindow?: {
+  acquireWindow?: {
     start: number;
     end: number;
   };

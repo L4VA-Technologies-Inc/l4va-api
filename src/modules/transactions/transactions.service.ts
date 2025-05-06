@@ -113,8 +113,8 @@ export class TransactionsService {
     });
   }
 
-  async getInvestmentTransactions(vaultId?: string): Promise<Transaction[]> {
-    const where: any = { type: TransactionType.investment };
+  async getAcquireTransactions(vaultId?: string): Promise<Transaction[]> {
+    const where: any = { type: TransactionType.acquire };
     if (vaultId) {
       where.vault_id = vaultId;
     }

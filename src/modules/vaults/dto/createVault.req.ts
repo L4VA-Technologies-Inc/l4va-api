@@ -24,7 +24,7 @@ import {
   VaultPrivacy,
   VaultType
 } from '../../../types/vault.types';
-import {InvestorsWhitelist, ContributorWhitelist, SocialLink, InvestorsWhitelistCsv} from '../types';
+import {AcquirerWhitelist, ContributorWhitelist, SocialLink, AcquirerWhitelistCsv} from '../types';
 import { AssetWhitelistDto } from './assetWhitelist.dto';
 import { TagDto } from './tag.dto';
 
@@ -118,13 +118,13 @@ export class CreateVaultReq {
   bannerImage: string;
 
   @ApiProperty({
-    description: 'CSV file containing investors whitelist',
+    description: 'CSV file containing acquirer whitelist',
     required: false
   })
   @ValidateIf((o) => o.privacy !== VaultPrivacy.public)
   @IsOptional()
   @Expose()
-  investorsWhitelistCsv?: InvestorsWhitelistCsv;
+  acquirerWhitelistCsv?: AcquirerWhitelistCsv;
 
   @ApiProperty({
     description: 'CSV file containing contributors whitelist',
@@ -162,19 +162,19 @@ export class CreateVaultReq {
   @IsNotEmpty()
   @IsNumber()
   @Expose()
-  investmentWindowDuration: number;
+  acquireWindowDuration: number;
 
   @ApiProperty({ required: false, nullable: true, enum: InvestmentWindowType })
   @ValidateIf((o, v) => v !== null)
   @IsEnum(InvestmentWindowType)
   @Expose()
-  investmentOpenWindowType: string;
+  acquireOpenWindowType: string;
 
   @ApiProperty()
-  @ValidateIf((o) => o.investmentOpenWindowType === InvestmentWindowType.custom)
+  @ValidateIf((o) => o.acquireOpenWindowType === InvestmentWindowType.custom)
   @IsNotEmpty()
   @Expose()
-  investmentOpenWindowTime: string;
+  acquireOpenWindowTime: string;
 
   @ApiProperty({
     description: 'Percentage of assets offered',
@@ -186,7 +186,7 @@ export class CreateVaultReq {
   offAssetsOffered: number;
 
   @ApiProperty({
-    description: 'FT investment reverse percentage',
+    description: 'FT acquire reverse percentage',
     required: true
   })
   @IsNotEmpty()
@@ -357,13 +357,13 @@ export class CreateVaultReq {
   @Expose()
   assetsWhitelist?: AssetWhitelistDto[];
 
-  @ApiProperty({ required: false, nullable: true, type: [InvestorsWhitelist] })
-  @ValidateIf((o) => o.privacy !== VaultPrivacy.public && !o.investorsWhitelistCsv)
+  @ApiProperty({ required: false, nullable: true, type: [AcquirerWhitelist] })
+  @ValidateIf((o) => o.privacy !== VaultPrivacy.public && !o.acquirerWhitelistCsv)
   @IsArray()
   @ArrayNotEmpty()
   @IsObject({ each: true })
   @Expose()
-  investorsWhitelist: InvestorsWhitelist[];
+  acquirerWhitelist: AcquirerWhitelist[];
 
   @ApiProperty({
     description: 'List of contributor wallet addresses (required for private vaults)',

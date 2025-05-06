@@ -42,6 +42,7 @@ export enum VaultStatus {
   created = 'created',
   published = 'published',
   contribution = 'contribution',
+  acquire = 'acquire',
   investment = 'investment',
   locked = 'locked',
   governance = 'governance'

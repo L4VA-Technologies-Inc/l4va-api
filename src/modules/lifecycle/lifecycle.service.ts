@@ -20,10 +20,10 @@ export class LifecycleService {
 
     await this.handlePublishedToContribution();
 
-    // Handle contribution -> investment transitions
+    // Handle contribution -> acquire transitions
     await this.handleContributionToInvestment();
 
-    // Handle investment -> governance transitions
+    // Handle acquire -> governance transitions
     await this.handleInvestmentToGovernance();
   }
 
@@ -76,42 +76,42 @@ export class LifecycleService {
       const contributionEnd = new Date(contributionStart.getTime() + contributionDurationMs);
 
       if (now >= contributionEnd) {
-        // For immediate investment start
-        if (vault.investment_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
-          vault.investment_phase_start = now.toISOString();
-          vault.vault_status = VaultStatus.investment;
+        // For immediate acquire start
+        if (vault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
+          vault.acquire_phase_start = now.toISOString();
+          vault.vault_status = VaultStatus.acquire;
           await this.vaultRepository.save(vault);
-          this.logger.log(`Vault ${vault.id} moved to investment phase (immediate start)`);
+          this.logger.log(`Vault ${vault.id} moved to acquire phase (immediate start)`);
         }
-        // For custom investment start time
-        else if (vault.investment_open_window_type === InvestmentWindowType.custom &&
-                 vault.investment_open_window_time &&
-                 now >= new Date(vault.investment_open_window_time)) {
-          vault.investment_phase_start = now.toISOString();
-          vault.vault_status = VaultStatus.investment;
+        // For custom acquire start time
+        else if (vault.acquire_open_window_type === InvestmentWindowType.custom &&
+                 vault.acquire_open_window_time &&
+                 now >= new Date(vault.acquire_open_window_time)) {
+          vault.acquire_phase_start = now.toISOString();
+          vault.vault_status = VaultStatus.acquire;
           await this.vaultRepository.save(vault);
-          this.logger.log(`Vault ${vault.id} moved to investment phase (custom start time)`);
+          this.logger.log(`Vault ${vault.id} moved to acquire phase (custom start time)`);
         }
       }
     }
   }
 
   private async handleInvestmentToGovernance() {
-    const investmentVaults = await this.vaultRepository
+    const acquireVaults = await this.vaultRepository
       .createQueryBuilder('vault')
-      .where('vault.vault_status = :status', { status: VaultStatus.investment })
-      .andWhere('vault.investment_phase_start IS NOT NULL')
-      .andWhere('vault.investment_window_duration IS NOT NULL')
+      .where('vault.vault_status = :status', { status: VaultStatus.acquire })
+      .andWhere('vault.acquire_phase_start IS NOT NULL')
+      .andWhere('vault.acquire_window_duration IS NOT NULL')
       .getMany();
 
     const now = new Date();
 
-    for (const vault of investmentVaults) {
-      const investmentStart = new Date(vault.investment_phase_start);
-      const investmentDurationMs = Number(vault.investment_window_duration);
-      const investmentEnd = new Date(investmentStart.getTime() + investmentDurationMs);
+    for (const vault of acquireVaults) {
+      const acquireStart = new Date(vault.acquire_phase_start);
+      const acquireDurationMs = Number(vault.acquire_window_duration);
+      const acquireEnd = new Date(acquireStart.getTime() + acquireDurationMs);
 
-      if (now >= investmentEnd) {
+      if (now >= acquireEnd) {
         vault.governance_phase_start = now.toISOString();
         vault.vault_status = VaultStatus.governance;
         await this.vaultRepository.save(vault);

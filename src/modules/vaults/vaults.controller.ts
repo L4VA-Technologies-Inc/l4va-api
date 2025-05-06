@@ -73,7 +73,7 @@ export class VaultsController {
 
   @ApiDoc({
     summary: 'Select my vaults',
-    description: 'Returns list of my vaults. Can be filtered by status: open (published, contribution, investment) or locked. Supports sorting by name, created_at, or updated_at.',
+    description: 'Returns list of my vaults. Can be filtered by status: open (published, contribution, acquire) or locked. Supports sorting by name, created_at, or updated_at.',
     status: 200,
   })
   @UseGuards(AuthGuard)

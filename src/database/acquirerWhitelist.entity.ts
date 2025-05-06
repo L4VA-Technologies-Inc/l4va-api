@@ -8,8 +8,8 @@ import {
 import {Vault} from './vault.entity';
 import {Expose} from 'class-transformer';
 
-@Entity({ name: 'investors_whitelist' })
-export class InvestorsWhitelistEntity {
+@Entity({ name: 'acquirer_whitelist' })
+export class AcquirerWhitelistEntity {
 
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -18,7 +18,7 @@ export class InvestorsWhitelistEntity {
   @Column({ type: 'varchar', nullable: false })
   wallet_address: string;
 
-  @ManyToOne(() => Vault, (vault: Vault) => vault.investors_whitelist, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Vault, (vault: Vault) => vault.acquirer_whitelist, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'vault_id' })
   public vault: Vault;
 

@@ -16,8 +16,8 @@ export class GetVaultTransactionsDto {
   status?: TransactionStatus = TransactionStatus.confirmed;
 
   @ApiProperty({
-    enum: [TransactionType.contribute, TransactionType.investment],
-    description: 'Filter transactions by type (contribute or investment)',
+    enum: [TransactionType.contribute, TransactionType.acquire],
+    description: 'Filter transactions by type (contribute or acquire)',
     required: false
   })
   @IsOptional()

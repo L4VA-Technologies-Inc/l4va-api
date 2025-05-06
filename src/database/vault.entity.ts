@@ -21,7 +21,7 @@ import {
   VaultType
 } from '../types/vault.types';
 import {Expose, Transform} from 'class-transformer';
-import {InvestorsWhitelistEntity} from './investorsWhitelist.entity';
+import {AcquirerWhitelistEntity} from './acquirerWhitelist.entity';
 import {ContributorWhitelistEntity} from './contributorWhitelist.entity';
 import { Asset } from './asset.entity';
 import { TagEntity } from './tag.entity';
@@ -126,27 +126,27 @@ export class Vault {
     type: 'bigint', nullable: true})
   contribution_duration?: number;
 
-  @Expose({ name: 'investmentWindowDuration'})
+  @Expose({ name: 'acquireWindowDuration'})
   @Transform(({ value }) => value ? Number(value) : null)
-  @Column({name: 'investment_window_duration', type: 'bigint', nullable: true})
-  investment_window_duration?: number;
+  @Column({name: 'acquire_window_duration', type: 'bigint', nullable: true})
+  acquire_window_duration?: number;
 
-  @Expose({ name: 'investmentOpenWindowType'})
+  @Expose({ name: 'acquireOpenWindowType'})
   @Column({
-    name: 'investment_open_window_type',
+    name: 'acquire_open_window_type',
     type: 'enum',
     enum: InvestmentWindowType,
     nullable: true
   })
-  investment_open_window_type?: InvestmentWindowType;
+  acquire_open_window_type?: InvestmentWindowType;
 
-  @Expose({ name: 'investmentOpenWindowTime'})
+  @Expose({ name: 'acquireOpenWindowTime'})
   @Transform(({ value }) => value ? new Date(value).getTime() : null)
   @Column({
-    name: 'investment_open_window_time',
+    name: 'acquire_open_window_time',
     type: 'timestamptz', nullable: true
   })
-  investment_open_window_time?: string;
+  acquire_open_window_time?: string;
 
   @Expose({ name: 'offAssetsOffered'})
   @Transform(({ value }) => value ? Number(value) : null)
@@ -158,9 +158,9 @@ export class Vault {
   @Expose({ name: 'ftInvestmentReserve'})
   @Transform(({ value }) => value ? Number(value) : null)
   @Column({
-    name: 'ft_investment_reserve',
+    name: 'ft_acquire_reserve',
     type: 'numeric', nullable:true})
-  ft_investment_reserve?: number;
+  ft_acquire_reserve?: number;
 
   @Expose({ name: 'liquidityPoolContribution'})
   @Transform(({ value }) => value ? Number(value) : null)
@@ -273,9 +273,9 @@ export class Vault {
   @OneToMany(() => AssetsWhitelistEntity, (asset: AssetsWhitelistEntity) => asset.vault)
   assets_whitelist?: AssetsWhitelistEntity[];
 
-  @Expose({ name: 'investorsWhitelist' })
-  @OneToMany(() => InvestorsWhitelistEntity, (investor: InvestorsWhitelistEntity) => investor.vault)
-  investors_whitelist?: InvestorsWhitelistEntity[];
+  @Expose({ name: 'acquirerWhitelist' })
+  @OneToMany(() => AcquirerWhitelistEntity, (investor: AcquirerWhitelistEntity) => investor.vault)
+  acquirer_whitelist?: AcquirerWhitelistEntity[];
 
   @Expose({ name: 'contributorWhitelist' })
   @OneToMany(() => ContributorWhitelistEntity, (contributor: ContributorWhitelistEntity) => contributor.vault)
@@ -299,12 +299,12 @@ export class Vault {
   })
   banner_image?: FileEntity;
 
-  @Expose({ name: 'investorsWhitelistCsv'})
+  @Expose({ name: 'acquirerWhitelistCsv'})
   @OneToOne(() => FileEntity)
   @JoinColumn({
-    name: 'investors_whitelist_csv_id'
+    name: 'acquirer_whitelist_csv_id'
   })
-  investors_whitelist_csv?: FileEntity;
+  acquirer_whitelist_csv?: FileEntity;
 
   @Expose({ name: 'ftTokenImg' })
   @OneToOne(() => FileEntity)
@@ -344,9 +344,9 @@ export class Vault {
   @Column({ name: 'contribution_phase_start', type: 'timestamptz', nullable: true })
   contribution_phase_start?: string;
 
-  @Expose({ name: 'investmentPhaseStart' })
-  @Column({ name: 'investment_phase_start', type: 'timestamptz', nullable: true })
-  investment_phase_start?: string;
+  @Expose({ name: 'acquirePhaseStart' })
+  @Column({ name: 'acquire_phase_start', type: 'timestamptz', nullable: true })
+  acquire_phase_start?: string;
 
   @Expose({ name: 'lockedAt' })
   @Column({ name: 'locked_at', type: 'timestamptz', nullable: true })

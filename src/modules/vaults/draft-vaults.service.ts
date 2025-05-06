@@ -7,7 +7,7 @@ import { User } from '../../database/user.entity';
 import { FileEntity } from '../../database/file.entity';
 import { LinkEntity } from '../../database/link.entity';
 import { AssetsWhitelistEntity } from '../../database/assetsWhitelist.entity';
-import { InvestorsWhitelistEntity } from '../../database/investorsWhitelist.entity';
+import { AcquirerWhitelistEntity } from '../../database/acquirerWhitelist.entity';
 import { ContributorWhitelistEntity } from '../../database/contributorWhitelist.entity';
 import { TagEntity } from '../../database/tag.entity';
 import { SaveDraftReq } from './dto/saveDraft.req';
@@ -31,8 +31,8 @@ export class DraftVaultsService {
     private readonly filesRepository: Repository<FileEntity>,
     @InjectRepository(AssetsWhitelistEntity)
     private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
-    @InjectRepository(InvestorsWhitelistEntity)
-    private readonly investorsWhitelistRepository: Repository<InvestorsWhitelistEntity>,
+    @InjectRepository(AcquirerWhitelistEntity)
+    private readonly acquirerWhitelistRepository: Repository<AcquirerWhitelistEntity>,
     @InjectRepository(ContributorWhitelistEntity)
     private readonly contributorWhitelistRepository: Repository<ContributorWhitelistEntity>,
     @InjectRepository(TagEntity)
@@ -82,7 +82,7 @@ export class DraftVaultsService {
         vault_status: VaultStatus.draft,
         owner: { id: userId }
       },
-      relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'contributor_whitelist', 'vault_image', 'banner_image', 'ft_token_img', 'investors_whitelist_csv']
+      relations: ['owner', 'social_links', 'assets_whitelist', 'acquirer_whitelist', 'contributor_whitelist', 'vault_image', 'banner_image', 'ft_token_img', 'acquirer_whitelist_csv']
     });
 
     if (!vault) {
@@ -95,7 +95,7 @@ export class DraftVaultsService {
     vault.ft_token_img = transformImageToUrl(vault.ft_token_img as FileEntity) as any;
     delete vault.owner
     delete vault.contribution_phase_start
-    delete vault.investment_phase_start
+    delete vault.acquire_phase_start
     delete vault.locked_at
 
     // todo need to create additional model for remove owner, and transform image to link
@@ -112,7 +112,7 @@ export class DraftVaultsService {
           vault_status: VaultStatus.draft,
           owner: { id: userId }
         },
-        relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'investors_whitelist_csv', 'vault_image', 'banner_image', 'ft_token_img']
+        relations: ['owner', 'social_links', 'assets_whitelist', 'acquirer_whitelist', 'acquirer_whitelist_csv', 'vault_image', 'banner_image', 'ft_token_img']
       });
 
       if (existingVault && existingVault.vault_status !== VaultStatus.draft) {
@@ -126,8 +126,8 @@ export class DraftVaultsService {
         if (existingVault.assets_whitelist?.length > 0) {
           await this.assetsWhitelistRepository.remove(existingVault.assets_whitelist);
         }
-        if (existingVault.investors_whitelist?.length > 0) {
-          await this.investorsWhitelistRepository.remove(existingVault.investors_whitelist);
+        if (existingVault.acquirer_whitelist?.length > 0) {
+          await this.acquirerWhitelistRepository.remove(existingVault.acquirer_whitelist);
         }
         if (existingVault.contributor_whitelist?.length > 0) {
           await this.contributorWhitelistRepository.remove(existingVault.contributor_whitelist);
@@ -156,16 +156,16 @@ export class DraftVaultsService {
         where: { file_key: ftTokenImgKey }
       }) : null;
 
-      const investorsWhitelistCsvKey = data.investorsWhitelistCsv?.key;
-      const investorsWhitelistFile = investorsWhitelistCsvKey ? await this.filesRepository.findOne({
-        where: { file_key: investorsWhitelistCsvKey }
+      const acquirerWhitelistCsvKey = data.acquirerWhitelistCsv?.key;
+      const acquirerWhitelistFile = acquirerWhitelistCsvKey ? await this.filesRepository.findOne({
+        where: { file_key: acquirerWhitelistCsvKey }
       }) : null;
 
       // Check if the vault already has these files to avoid duplicate relations
       const hasVaultImage = existingVault?.vault_image?.file_key === imgKey;
       const hasBannerImage = existingVault?.banner_image?.file_key === bannerImgKey;
       const hasFtTokenImage = existingVault?.ft_token_img?.file_key === ftTokenImgKey;
-      const hasInvestorsWhitelistCsv = existingVault?.investors_whitelist_csv?.file_key === investorsWhitelistCsvKey;
+      const hasAcquirerWhitelistCsv = existingVault?.acquirer_whitelist_csv?.file_key === acquirerWhitelistCsvKey;
 
       const vaultData: any = {
         owner: owner,
@@ -185,7 +185,7 @@ export class DraftVaultsService {
       if(data.terminationType) vaultData.termination_type = data.terminationType;
       if(data.ftTokenTicker) vaultData.ft_token_ticker = data.ftTokenTicker;
       if(data.offAssetsOffered) vaultData.off_assets_offered = data.offAssetsOffered;
-      if(data.ftInvestmentReserve) vaultData.ft_investment_reserve = data.ftInvestmentReserve;
+      if(data.ftInvestmentReserve) vaultData.ft_acquire_reserve = data.ftInvestmentReserve;
       if(data.liquidityPoolContribution) vaultData.liquidity_pool_contribution = data.liquidityPoolContribution;
       if(data.creationThreshold) vaultData.creation_threshold = data.creationThreshold;
       if(data.startThreshold) vaultData.start_threshold = data.startThreshold;
@@ -198,14 +198,14 @@ export class DraftVaultsService {
       if (data.contributionDuration !== undefined) {
         vaultData.contribution_duration = data.contributionDuration;
       }
-      if (data.investmentWindowDuration !== undefined) {
-        vaultData.investment_window_duration = data.investmentWindowDuration;
+      if (data.acquireWindowDuration !== undefined) {
+        vaultData.acquire_window_duration = data.acquireWindowDuration;
       }
-      if (data.investmentOpenWindowTime !== undefined && data.investmentOpenWindowTime !== null) {
-        vaultData.investment_open_window_time = new Date(data.investmentOpenWindowTime).toISOString();
+      if (data.acquireOpenWindowTime !== undefined && data.acquireOpenWindowTime !== null) {
+        vaultData.acquire_open_window_time = new Date(data.acquireOpenWindowTime).toISOString();
       }
-      if (data.investmentOpenWindowType !== undefined && data.investmentOpenWindowType !== null) {
-        vaultData.investment_open_window_type = data.investmentOpenWindowType;
+      if (data.acquireOpenWindowType !== undefined && data.acquireOpenWindowType !== null) {
+        vaultData.acquire_open_window_type = data.acquireOpenWindowType;
       }
       if (data.contributionOpenWindowTime !== undefined && data.contributionOpenWindowTime !== null) {
         vaultData.contribution_open_window_time = new Date(data.contributionOpenWindowTime).toISOString();
@@ -221,7 +221,7 @@ export class DraftVaultsService {
       if (vaultImg && !hasVaultImage) vaultData.vault_image = vaultImg;
       if (bannerImg && !hasBannerImage) vaultData.banner_image = bannerImg;
       if (ftTokenImg && !hasFtTokenImage) vaultData.ft_token_img = ftTokenImg;
-      if (investorsWhitelistFile && !hasInvestorsWhitelistCsv) vaultData.investors_whitelist_csv = investorsWhitelistFile;
+      if (acquirerWhitelistFile && !hasAcquirerWhitelistCsv) vaultData.acquirer_whitelist_csv = acquirerWhitelistFile;
 
       let vault: Vault;
       if (existingVault) {
@@ -276,19 +276,19 @@ export class DraftVaultsService {
         }));
       }
 
-      // Handle investors whitelist only if provided
-      if (data.investorsWhitelist !== undefined && data.investorsWhitelist.length > 0) {
-        const manualInvestors = data.investorsWhitelist?.map(item => item.walletAddress) || [];
-        const allInvestors = new Set([...manualInvestors]);
+      // Handle acquirer whitelist only if provided
+      if (data.acquirerWhitelist !== undefined && data.acquirerWhitelist.length > 0) {
+        const manualAcquirer = data.acquirerWhitelist?.map(item => item.walletAddress) || [];
+        const allAcquirer = new Set([...manualAcquirer]);
 
-        if (allInvestors.size > 0) {
-          const investorItems = Array.from(allInvestors).map(walletAddress => {
-            return this.investorsWhitelistRepository.create({
+        if (allAcquirer.size > 0) {
+          const investorItems = Array.from(allAcquirer).map(walletAddress => {
+            return this.acquirerWhitelistRepository.create({
               vault: vault,
               wallet_address: walletAddress
             });
           });
-          await this.investorsWhitelistRepository.save(investorItems);
+          await this.acquirerWhitelistRepository.save(investorItems);
         }
       }
 

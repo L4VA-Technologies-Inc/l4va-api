@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { InvestReq } from './dto/invest.req';
+import { AcquireReq } from './dto/acquire.req';
 import { Vault } from '../../database/vault.entity';
 import { VaultStatus } from '../../types/vault.types';
 import { User } from '../../database/user.entity';
@@ -9,7 +9,7 @@ import { TransactionsService } from '../transactions/transactions.service';
 import { TransactionType } from '../../types/transaction.types';
 
 @Injectable()
-export class InvestmentService {
+export class AcquireService {
   constructor(
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
@@ -18,10 +18,10 @@ export class InvestmentService {
     private readonly transactionsService: TransactionsService,
   ) {}
 
-  async invest(vaultId: string, investReq: InvestReq, userId: string) {
+  async invest(vaultId: string, investReq: AcquireReq, userId: string) {
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
-      relations: ['investors_whitelist', 'owner'],
+      relations: ['acquirer_whitelist', 'owner'],
     });
 
     const user = await this.userRepository.findOne({
@@ -33,15 +33,15 @@ export class InvestmentService {
       throw new NotFoundException('Vault not found');
     }
 
-    if (vault.vault_status !== VaultStatus.investment) {
-      throw new BadRequestException('Vault is not in investment phase');
+    if (vault.vault_status !== VaultStatus.acquire) {
+      throw new BadRequestException('Vault is not in acquire phase');
     }
 
     // Allow vault owner to bypass whitelist check
     if (vault.owner.id !== userId) {
       // Check whitelist only for non-owners
-      if (vault.investors_whitelist?.length > 0) {
-        const isWhitelisted = vault.investors_whitelist.some(
+      if (vault.acquirer_whitelist?.length > 0) {
+        const isWhitelisted = vault.acquirer_whitelist.some(
           (entry) => entry.wallet_address === user.address,
         );
         if (!isWhitelisted) {
@@ -50,18 +50,18 @@ export class InvestmentService {
       }
     }
 
-    // Validate investment amount and currency based on vault settings
+    // Validate acquire amount and currency based on vault settings
     if (vault.valuation_type === 'fixed') {
       if (investReq.currency !== vault.valuation_currency) {
-        throw new BadRequestException('Invalid investment currency');
+        throw new BadRequestException('Invalid acquire currency');
       }
       // Additional validation for fixed valuation type can be added here
     }
 
-    // Create a transaction record for the investment
+    // Create a transaction record for the acquire
     const transaction = await this.transactionsService.createTransaction({
       vault_id: vaultId,
-      type: TransactionType.investment,
+      type: TransactionType.acquire,
       assets: [], // Investment transactions don't have assets, only ADA amount
       amount: parseFloat(investReq.amount)
     });

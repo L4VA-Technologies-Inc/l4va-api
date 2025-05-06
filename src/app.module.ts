@@ -15,7 +15,7 @@ import { BlockchainModule } from './modules/blockchain/blockchain.module';
 import {ContributionModule} from './modules/contribution/contribution.module';
 import {TransactionsModule} from './modules/transactions/transactions.module';
 import {JwtGlobalModule} from './modules/globals/jwt_global_module/jwt_global.module';
-import {InvestmentModule} from './modules/investment/investment.module';
+import {AcquireModule} from './modules/acquire/acquire.module';
 import { TaptoolsModule } from './modules/taptools/taptools.module';
 @Module({
   imports: [
@@ -43,7 +43,7 @@ import { TaptoolsModule } from './modules/taptools/taptools.module';
     UsersModule,
     AwsModule,
     ContributionModule,
-    InvestmentModule,
+    AcquireModule,
     TransactionsModule,
     TaptoolsModule,
   ],

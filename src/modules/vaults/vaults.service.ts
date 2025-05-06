@@ -9,7 +9,7 @@ import {User} from '../../database/user.entity';
 import {LinkEntity} from '../../database/link.entity';
 import {FileEntity} from '../../database/file.entity';
 import {AssetsWhitelistEntity} from '../../database/assetsWhitelist.entity';
-import {InvestorsWhitelistEntity} from '../../database/investorsWhitelist.entity';
+import {AcquirerWhitelistEntity} from '../../database/acquirerWhitelist.entity';
 import * as csv from 'csv-parse';
 import {AwsService} from '../aws_bucket/aws.service';
 import {classToPlain, plainToInstance} from 'class-transformer';
@@ -38,8 +38,8 @@ export class VaultsService {
     private readonly filesRepository: Repository<FileEntity>,
     @InjectRepository(AssetsWhitelistEntity)
     private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
-    @InjectRepository(InvestorsWhitelistEntity)
-    private readonly investorsWhitelistRepository: Repository<InvestorsWhitelistEntity>,
+    @InjectRepository(AcquirerWhitelistEntity)
+    private readonly acquirerWhitelistRepository: Repository<AcquirerWhitelistEntity>,
     @InjectRepository(TagEntity)
     private readonly tagsRepository: Repository<TagEntity>,
     @InjectRepository(ContributorWhitelistEntity)
@@ -121,9 +121,9 @@ export class VaultsService {
         where: { file_key: ftTokenImgKey }
       }) : null;
 
-      const investorsWhitelistCsvKey = data.investorsWhitelistCsv?.key;
-      const investorsWhitelistFile = investorsWhitelistCsvKey ? await this.filesRepository.findOne({
-        where: { file_key: investorsWhitelistCsvKey }
+      const acquirerWhitelistCsvKey = data.acquirerWhitelistCsv?.key;
+      const acquirerWhitelistFile = acquirerWhitelistCsvKey ? await this.filesRepository.findOne({
+        where: { file_key: acquirerWhitelistCsvKey }
       }) : null;
 
       const contributorWhitelistCsvKey = data.contributorWhitelistCsv?.split('csv/')[1];
@@ -136,20 +136,20 @@ export class VaultsService {
         ...data,
         owner: owner,
         contributionDuration: data.contributionDuration,
-        investmentWindowDuration: data.investmentWindowDuration,
-        investmentOpenWindowTime: new Date(data.investmentOpenWindowTime).toISOString(),
+        acquireWindowDuration: data.acquireWindowDuration,
+        acquireOpenWindowTime: new Date(data.acquireOpenWindowTime).toISOString(),
         contributionOpenWindowTime: new Date(data.contributionOpenWindowTime).toISOString(),
         timeElapsedIsEqualToTime: data.timeElapsedIsEqualToTime,
         vaultStatus: VaultStatus.created,
         vaultImage: vaultImg,
         bannerImage: bannerImg,
         ftTokenImg: ftTokenImg,
-        investorsWhitelistCsv: investorsWhitelistFile,
+        acquirerWhitelistCsv: acquirerWhitelistFile,
         contributorWhitelistCsv: contributorWhitelistFile
       });
 
       delete vaultData.assets_whitelist;
-      delete vaultData.investors_whitelist;
+      delete vaultData.acquirer_whitelist;
       delete vaultData.contributor_whitelist;
       delete vaultData.tags;
 
@@ -181,20 +181,20 @@ export class VaultsService {
         }));
       }
 
-      // Handle investors whitelist
-      const investorsFromCsv = investorsWhitelistFile ?
-        await this.parseCSVFromS3(investorsWhitelistFile.file_key) : [];
+      // Handle acquirer whitelist
+      const acquirerFromCsv = acquirerWhitelistFile ?
+        await this.parseCSVFromS3(acquirerWhitelistFile.file_key) : [];
 
-      const investors = data.investorsWhitelist ? [...data.investorsWhitelist?.map(item => item.walletAddress)]: [];
+      const acquirer = data.acquirerWhitelist ? [...data.acquirerWhitelist?.map(item => item.walletAddress)]: [];
 
 
-      const allInvestors = new Set([
-          ...investors,
-        ...investorsFromCsv
+      const allAcquirer = new Set([
+          ...acquirer,
+        ...acquirerFromCsv
       ]);
 
-      await Promise.all(Array.from(allInvestors).map(walletAddress => {
-        return this.investorsWhitelistRepository.save({
+      await Promise.all(Array.from(allAcquirer).map(walletAddress => {
+        return this.acquirerWhitelistRepository.save({
           vault: newVault,
           wallet_address: walletAddress
         });
@@ -240,7 +240,7 @@ export class VaultsService {
 
       const finalVault = await this.vaultsRepository.findOne({
         where: { id: newVault.id },
-        relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist', 'contributor_whitelist', 'tags', 'vault_image', 'banner_image', 'ft_token_img']
+        relations: ['owner', 'social_links', 'assets_whitelist', 'acquirer_whitelist', 'contributor_whitelist', 'tags', 'vault_image', 'banner_image', 'ft_token_img']
       });
 
       if (!finalVault) {
@@ -268,20 +268,20 @@ export class VaultsService {
         end: startTime + Number(finalVault.contribution_duration)
       };
 
-      // Calculate investment window start time
-      let investmentStartTime: number;
-      if (finalVault.investment_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
-        investmentStartTime = assetWindow.end;
-      } else if (finalVault.investment_open_window_type === InvestmentWindowType.custom && finalVault.investment_open_window_time) {
-        // investment_open_window_time is already in milliseconds due to @Transform in entity
-        investmentStartTime = Number(finalVault.investment_open_window_time);
+      // Calculate acquire window start time
+      let acquireStartTime: number;
+      if (finalVault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
+        acquireStartTime = assetWindow.end;
+      } else if (finalVault.acquire_open_window_type === InvestmentWindowType.custom && finalVault.acquire_open_window_time) {
+        // acquire_open_window_time is already in milliseconds due to @Transform in entity
+        acquireStartTime = Number(finalVault.acquire_open_window_time);
       } else {
-        throw new BadRequestException('Invalid investment window configuration');
+        throw new BadRequestException('Invalid acquire window configuration');
       }
 
-      const investmentWindow = {
-        start: investmentStartTime,
-        end: investmentStartTime + Number(finalVault.investment_window_duration)
+      const acquireWindow = {
+        start: acquireStartTime,
+        end: acquireStartTime + Number(finalVault.acquire_window_duration)
       };
 
       const { presignedTx, contractAddress, vaultAssetName } = await this.vaultContractService.createOnChainVaultTx({
@@ -292,7 +292,7 @@ export class VaultsService {
         contractType: privacy,
         valuationType: valuationType,
         assetWindow,
-        investmentWindow
+        acquireWindow
       });
 
       finalVault.contract_address = contractAddress;
@@ -336,7 +336,7 @@ export class VaultsService {
           vault_status: VaultStatus.draft,
           owner: { id: userId }
         },
-        relations: ['owner', 'social_links', 'assets_whitelist', 'investors_whitelist']
+        relations: ['owner', 'social_links', 'assets_whitelist', 'acquirer_whitelist']
       });
 
       // If found but not a draft, throw error
@@ -352,8 +352,8 @@ export class VaultsService {
         if (existingVault.assets_whitelist?.length > 0) {
           await this.assetsWhitelistRepository.remove(existingVault.assets_whitelist);
         }
-        if (existingVault.investors_whitelist?.length > 0) {
-          await this.investorsWhitelistRepository.remove(existingVault.investors_whitelist);
+        if (existingVault.acquirer_whitelist?.length > 0) {
+          await this.acquirerWhitelistRepository.remove(existingVault.acquirer_whitelist);
         }
       }
     }
@@ -378,9 +378,9 @@ export class VaultsService {
         where: { file_key: ftTokenImgKey }
       }) : null;
 
-      const investorsWhitelistCsvKey = data.investorsWhitelistCsv?.key;
-      const investorsWhitelistFile = investorsWhitelistCsvKey ? await this.filesRepository.findOne({
-        where: { file_key: investorsWhitelistCsvKey }
+      const acquirerWhitelistCsvKey = data.acquirerWhitelistCsv?.key;
+      const acquirerWhitelistFile = acquirerWhitelistCsvKey ? await this.filesRepository.findOne({
+        where: { file_key: acquirerWhitelistCsvKey }
       }) : null;
 
       // Prepare vault data with only the provided fields
@@ -398,17 +398,17 @@ export class VaultsService {
       if (data.valuationAmount !== undefined) vaultData.valuation_amount = data.valuationAmount;
       if (data.description !== undefined) vaultData.description = data.description;
       if(data.ftTokenDecimals) vaultData.ftToken_decimals = data.ftTokenDecimals;
-      if(data.investmentOpenWindowType) vaultData.investment_open_window_type = data.investmentOpenWindowType;
+      if(data.acquireOpenWindowType) vaultData.acquire_open_window_type = data.acquireOpenWindowType;
 
       // Handle date fields only if they are provided
       if (data.contributionDuration !== undefined) {
         vaultData.contribution_duration = data.contributionDuration;
       }
-      if (data.investmentWindowDuration !== undefined) {
-        vaultData.investment_window_duration = data.investmentWindowDuration;
+      if (data.acquireWindowDuration !== undefined) {
+        vaultData.acquire_window_duration = data.acquireWindowDuration;
       }
-      if (data.investmentOpenWindowTime !== undefined) {
-        vaultData.investment_open_window_time = new Date(data.investmentOpenWindowTime).toISOString();
+      if (data.acquireOpenWindowTime !== undefined) {
+        vaultData.acquire_open_window_time = new Date(data.acquireOpenWindowTime).toISOString();
       }
       if (data.contributionOpenWindowTime !== undefined) {
         vaultData.contribution_open_window_time = new Date(data.contributionOpenWindowTime).toISOString();
@@ -421,7 +421,7 @@ export class VaultsService {
       if (vaultImg) vaultData.vault_image = vaultImg;
       if (bannerImg) vaultData.banner_image = bannerImg;
       if (ftTokenImg) vaultData.ft_token_img = ftTokenImg;
-      if (investorsWhitelistFile) vaultData.investors_whitelist_csv = investorsWhitelistFile;
+      if (acquirerWhitelistFile) vaultData.acquirer_whitelist_csv = acquirerWhitelistFile;
 
       let vault: Vault;
       if (existingVault) {
@@ -479,22 +479,22 @@ export class VaultsService {
         }));
       }
 
-      // Handle investors whitelist only if provided
-      if (data.investorsWhitelist !== undefined || investorsWhitelistFile) {
-        const investorsFromCsv = investorsWhitelistFile ?
-          await this.parseCSVFromS3(investorsWhitelistFile.file_key) : [];
+      // Handle acquirer whitelist only if provided
+      if (data.acquirerWhitelist !== undefined || acquirerWhitelistFile) {
+        const acquirerFromCsv = acquirerWhitelistFile ?
+          await this.parseCSVFromS3(acquirerWhitelistFile.file_key) : [];
 
-        const manualInvestors = data.investorsWhitelist?.map(item => item.walletAddress) || [];
-        const allInvestors = new Set([...manualInvestors, ...investorsFromCsv]);
+        const manualAcquirer = data.acquirerWhitelist?.map(item => item.walletAddress) || [];
+        const allAcquirer = new Set([...manualAcquirer, ...acquirerFromCsv]);
 
-        if (allInvestors.size > 0) {
-          const investorItems = Array.from(allInvestors).map(walletAddress => {
-            return this.investorsWhitelistRepository.create({
+        if (allAcquirer.size > 0) {
+          const investorItems = Array.from(allAcquirer).map(walletAddress => {
+            return this.acquirerWhitelistRepository.create({
               vault: vault,
               wallet_address: walletAddress
             });
           });
-          await this.investorsWhitelistRepository.save(investorItems);
+          await this.acquirerWhitelistRepository.save(investorItems);
         }
       }
 
@@ -522,7 +522,7 @@ export class VaultsService {
           query.where['vault_status'] = In([
             VaultStatus.published,
             VaultStatus.contribution,
-            VaultStatus.investment
+            VaultStatus.acquire
           ]);
           break;
         case VaultFilter.locked:
@@ -531,8 +531,8 @@ export class VaultsService {
         case VaultFilter.contribution:
           query.where['vault_status'] = VaultStatus.contribution;
           break;
-        case VaultFilter.investment:
-          query.where['vault_status'] = VaultStatus.investment;
+        case VaultFilter.acquire:
+          query.where['vault_status'] = VaultStatus.acquire;
           break;
         case VaultFilter.governance:
           query.where['vault_status'] = VaultStatus.governance;
@@ -567,7 +567,7 @@ export class VaultsService {
   async prepareDraftResponse(id: string) {
     const vault = await this.vaultsRepository.findOne({
       where: { id },
-      relations: ['owner', 'social_links', 'investors_whitelist',
+      relations: ['owner', 'social_links', 'acquirer_whitelist',
         'tags', 'vault_image', 'banner_image', 'ft_token_img']
     });
 
@@ -581,12 +581,12 @@ export class VaultsService {
     const vault = await this.vaultsRepository.findOne({
       where: { id },
       relations: [
-        'owner', 
-        'social_links', 
-        'assets_whitelist', 
-        'investors_whitelist', 
-        'vault_image', 
-        'banner_image', 
+        'owner',
+        'social_links',
+        'assets_whitelist',
+        'acquirer_whitelist',
+        'vault_image',
+        'banner_image',
         'ft_token_img'
       ]
     });
@@ -623,7 +623,7 @@ export class VaultsService {
       .leftJoinAndSelect('vault.ft_token_img', 'ft_token_img')
       .leftJoinAndSelect('vault.tags', 'tags')
       .leftJoinAndSelect('vault.contributor_whitelist', 'contributor_whitelist')
-      .leftJoinAndSelect('vault.investors_whitelist', 'investors_whitelist')
+      .leftJoinAndSelect('vault.acquirer_whitelist', 'acquirer_whitelist')
       .where('vault.vault_status != :draftStatus', { draftStatus: VaultStatus.draft })
       // Get public vaults OR private vaults where user is whitelisted based on filter
       .andWhere(new Brackets(qb => {
@@ -634,7 +634,7 @@ export class VaultsService {
                 .andWhere(
                   new Brackets(qb3 => {
                     // Default case - check both whitelists if no filter
-                    qb3.where('(EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress) OR EXISTS (SELECT 1 FROM investors_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress))',
+                    qb3.where('(EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress) OR EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress))',
                       { userWalletAddress });
                   })
                 );
@@ -648,7 +648,7 @@ export class VaultsService {
         case VaultFilter.open:
           queryBuilder
             .andWhere('vault.vault_status IN (:...statuses)', {
-              statuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.investment]
+              statuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire]
             })
             .andWhere(new Brackets(qb => {
               qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public })
@@ -669,13 +669,13 @@ export class VaultsService {
                 );
             }));
           break;
-        case VaultFilter.investment:
+        case VaultFilter.acquire:
           queryBuilder
-            .andWhere('vault.vault_status = :status', { status: VaultStatus.investment })
+            .andWhere('vault.vault_status = :status', { status: VaultStatus.acquire })
             .andWhere(new Brackets(qb => {
               qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public })
                 .orWhere(
-                  'EXISTS (SELECT 1 FROM investors_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress)',
+                  'EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress)',
                   { userWalletAddress }
                 );
             }));
@@ -686,7 +686,7 @@ export class VaultsService {
             .andWhere(new Brackets(qb => {
               qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public })
                 .orWhere(
-                  '(EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress) OR EXISTS (SELECT 1 FROM investors_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress))',
+                  '(EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress) OR EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress))',
                   { userWalletAddress }
                 );
             }));

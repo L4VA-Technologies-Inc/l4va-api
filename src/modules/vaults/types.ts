@@ -64,19 +64,19 @@ export class ContributorWhitelist {
   }
 }
 
-export class InvestorsWhitelist {
+export class AcquirerWhitelist {
   @ApiProperty()
   @IsString()
   @Expose()
   walletAddress: string;
 
-  constructor(partial: Partial<InvestorsWhitelist>) {
+  constructor(partial: Partial<AcquirerWhitelist>) {
     Object.assign(this, partial);
   }
 }
 
 
-export class InvestorsWhitelistCsv {
+export class AcquirerWhitelistCsv {
   @ApiProperty()
   @IsString()
   @Expose()

@@ -8,7 +8,7 @@ import {User} from '../../database/user.entity';
 import {FileEntity} from '../../database/file.entity';
 import {AssetsWhitelistEntity} from '../../database/assetsWhitelist.entity';
 import {LinkEntity} from '../../database/link.entity';
-import {InvestorsWhitelistEntity} from '../../database/investorsWhitelist.entity';
+import {AcquirerWhitelistEntity} from '../../database/acquirerWhitelist.entity';
 import {AwsModule} from '../aws_bucket/aws.module';
 import {TagEntity} from '../../database/tag.entity';
 import { DraftVaultsService } from './draft-vaults.service';
@@ -27,7 +27,7 @@ import {BlockchainModule} from '../blockchain/blockchain.module';
       User,
       FileEntity,
       AssetsWhitelistEntity,
-      LinkEntity, InvestorsWhitelistEntity, TagEntity, ContributorWhitelistEntity]),
+      LinkEntity, AcquirerWhitelistEntity, TagEntity, ContributorWhitelistEntity]),
   ],
   providers: [VaultsService, DraftVaultsService],
   controllers: [VaultsController],
