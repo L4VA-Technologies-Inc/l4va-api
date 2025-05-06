@@ -14,7 +14,7 @@ export enum VaultPrivacy {
 }
 
 // step 2
-export enum ValuationType {
+export enum ValueMethod {
   lbe ='lbe',
   fixed = 'fixed'
 }

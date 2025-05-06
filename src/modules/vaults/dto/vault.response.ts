@@ -3,7 +3,7 @@ import {
   VaultPrivacy,
   VaultStatus,
   VaultType,
-  ValuationType,
+  ValueMethod,
   ContributionWindowType,
   InvestmentWindowType, TerminationType
 } from '../../../types/vault.types';
@@ -149,12 +149,12 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   publicationHash: string;
 
-  @ApiProperty({ description: 'Valuation type', enum: ValuationType, required: false })
+  @ApiProperty({ description: 'Valuation type', enum: ValueMethod, required: false })
   @DtoRepresent({
     transform: false,
-    expose: { name: 'valuationType' }
+    expose: { name: 'valueMethod' }
   })
-  valuationType?: ValuationType;
+  valueMethod?: ValueMethod;
 
   @ApiProperty({ description: 'Contract address', required: false })
   @DtoRepresent({
@@ -231,14 +231,14 @@ export class VaultFullResponse extends VaultShortResponse {
     transform: false,
     expose: true
   })
-  offAssetsOffered: number;
+  tokensForAcquires: number;
 
   @ApiProperty({ description: 'FT acquire reserve' })
   @DtoRepresent({
     transform: false,
     expose: true
   })
-  ftInvestmentReserve: number;
+  acquireReserve: number;
 
   @ApiProperty({ description: 'Liquidity pool contribution' })
   @DtoRepresent({
@@ -259,7 +259,7 @@ export class VaultFullResponse extends VaultShortResponse {
     transform: false,
     expose: true
   })
-  ftTokenTicker: string;
+  vaultTokenTicker: string;
 
   @ApiProperty({ description: 'FT token decimals' })
   @DtoRepresent({

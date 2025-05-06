@@ -1,5 +1,5 @@
 import {BadRequestException, Injectable, Logger, UnauthorizedException} from '@nestjs/common';
-import {ContributionWindowType, InvestmentWindowType, ValuationType, VaultPrivacy, VaultStatus} from '../../types/vault.types';
+import {ContributionWindowType, InvestmentWindowType, ValueMethod, VaultPrivacy, VaultStatus} from '../../types/vault.types';
 import {InjectRepository} from '@nestjs/typeorm';
 import {Brackets, In, Repository} from 'typeorm';
 import {Vault} from '../../database/vault.entity';
@@ -87,16 +87,16 @@ export class VaultsService {
       }
 
       // Validate valuation type based on privacy setting
-      if (data.privacy === VaultPrivacy.public && data.valuationType !== ValuationType.lbe) {
+      if (data.privacy === VaultPrivacy.public && data.valueMethod !== ValueMethod.lbe) {
         throw new BadRequestException('Public vaults can only use LBE valuation type');
       }
       if ((data.privacy === VaultPrivacy.private || data.privacy === VaultPrivacy.semiPrivate) &&
-          ![ValuationType.lbe, ValuationType.fixed].includes(data.valuationType)) {
+          ![ValueMethod.lbe, ValueMethod.fixed].includes(data.valueMethod)) {
         throw new BadRequestException('Private and semi-private vaults can use either LBE or fixed valuation type');
       }
 
       // Validate required fields for fixed valuation type
-      if (data.valuationType === ValuationType.fixed) {
+      if (data.valueMethod === ValueMethod.fixed) {
         if (!data.valuationCurrency) {
           throw new BadRequestException('Valuation currency is required when using fixed valuation type');
         }
@@ -109,11 +109,6 @@ export class VaultsService {
       const imgKey = data.vaultImage?.split('image/')[1];
       const vaultImg = imgKey ? await this.filesRepository.findOne({
         where: { file_key: imgKey }
-      }) : null;
-
-      const bannerImgKey = data.bannerImage?.split('image/')[1];
-      const bannerImg = bannerImgKey ? await this.filesRepository.findOne({
-        where: { file_key: bannerImgKey }
       }) : null;
 
       const ftTokenImgKey = data.ftTokenImg?.split('image/')[1];
@@ -142,7 +137,6 @@ export class VaultsService {
         timeElapsedIsEqualToTime: data.timeElapsedIsEqualToTime,
         vaultStatus: VaultStatus.created,
         vaultImage: vaultImg,
-        bannerImage: bannerImg,
         ftTokenImg: ftTokenImg,
         acquirerWhitelistCsv: acquirerWhitelistFile,
         contributorWhitelistCsv: contributorWhitelistFile
@@ -250,7 +244,7 @@ export class VaultsService {
       const policyWhitelist = finalVault?.assets_whitelist.map(item => item.policy_id);
 
       const privacy =  vault_sc_privacy[finalVault.privacy as VaultPrivacy];
-      const valuationType = valuation_sc_type[finalVault.valuation_type as ValuationType];
+      const valueMethod = valuation_sc_type[finalVault.value_method as ValueMethod];
 
       // Calculate start time based on contribution window type
       let startTime: number;
@@ -290,7 +284,7 @@ export class VaultsService {
         vaultId: finalVault.id,
         allowedPolicies: policyWhitelist,
         contractType: privacy,
-        valuationType: valuationType,
+        valueMethod: valueMethod,
         assetWindow,
         acquireWindow
       });
@@ -393,7 +387,7 @@ export class VaultsService {
       if (data.name !== undefined) vaultData.name = data.name;
       if (data.type !== undefined) vaultData.type = data.type;
       if (data.privacy !== undefined) vaultData.privacy = data.privacy;
-      if (data.valuationType !== undefined) vaultData.valuation_type = data.valuationType;
+      if (data.valueMethod !== undefined) vaultData.value_method = data.valueMethod;
       if (data.valuationCurrency !== undefined) vaultData.valuation_currency = data.valuationCurrency;
       if (data.valuationAmount !== undefined) vaultData.valuation_amount = data.valuationAmount;
       if (data.description !== undefined) vaultData.description = data.description;

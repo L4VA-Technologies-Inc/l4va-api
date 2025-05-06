@@ -13,7 +13,7 @@ import {
 import {
   ContributionWindowType,
   InvestmentWindowType, TerminationType,
-  ValuationType,
+  ValueMethod,
   VaultPrivacy,
   VaultType
 } from '../../../types/vault.types';
@@ -53,18 +53,18 @@ export class SaveDraftReq {
 
   @ApiProperty({
     description: 'Valuation type - public vaults can only use LBE, private/semi-private can use LBE or fixed',
-    enum: ValuationType,
+    enum: ValueMethod,
     required: false,
     nullable: true
   })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
-  @IsEnum(ValuationType)
+  @IsEnum(ValueMethod)
   @Expose()
-  valuationType?: ValuationType | null;
+  valueMethod?: ValueMethod | null;
 
   @ApiProperty({
-    description: 'Currency for fixed valuation (required when valuationType is fixed)',
+    description: 'Currency for fixed valuation (required when valueMethod is fixed)',
     required: false,
     nullable: true,
     example: 'ADA'
@@ -76,7 +76,7 @@ export class SaveDraftReq {
   valuationCurrency?: string | null;
 
   @ApiProperty({
-    description: 'Amount for fixed valuation (required when valuationType is fixed)',
+    description: 'Amount for fixed valuation (required when valueMethod is fixed)',
     required: false,
     nullable: true,
     example: '1000000'
@@ -165,14 +165,14 @@ export class SaveDraftReq {
   @ValidateIf((o, v) => v !== null)
   @IsNumber()
   @Expose()
-  offAssetsOffered?: number | null;
+  tokensForAcquires?: number | null;
 
   @ApiProperty({ required: false, nullable: true })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
   @IsNumber()
   @Expose()
-  ftInvestmentReserve?: number | null;
+  acquireReserve?: number | null;
 
   @ApiProperty({ required: false, nullable: true })
   @IsOptional()
@@ -193,7 +193,7 @@ export class SaveDraftReq {
   @ValidateIf((o, v) => v !== null)
   @IsString()
   @Expose()
-  ftTokenTicker?: string | null;
+  vaultTokenTicker?: string | null;
 
   @ApiProperty({ required: false, nullable: true })
   @IsOptional()

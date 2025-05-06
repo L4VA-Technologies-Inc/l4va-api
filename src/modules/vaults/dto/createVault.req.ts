@@ -20,7 +20,7 @@ import { Type } from 'class-transformer';
 import {
   ContributionWindowType, InvestmentWindowType,
   TerminationType,
-  ValuationType,
+  ValueMethod,
   VaultPrivacy,
   VaultType
 } from '../../../types/vault.types';
@@ -56,29 +56,29 @@ export class CreateVaultReq {
   @ApiProperty({
     required: true,
     description: 'Valuation type - public vaults can only use LBE, private/semi-private can use LBE or fixed',
-    enum: ValuationType
+    enum: ValueMethod
   })
   @IsNotEmpty()
-  @IsEnum(ValuationType)
+  @IsEnum(ValueMethod)
   @Expose()
-  valuationType: ValuationType;
+  valueMethod: ValueMethod;
 
   @ApiProperty({
-    description: 'Currency for fixed valuation (required when valuationType is fixed)',
+    description: 'Currency for fixed valuation (required when valueMethod is fixed)',
     required: false,
     example: 'ADA'
   })
-  @ValidateIf(o => o.valuationType === ValuationType.fixed)
+  @ValidateIf(o => o.valueMethod === ValueMethod.fixed)
   @IsString()
   @Expose()
   valuationCurrency?: string;
 
   @ApiProperty({
-    description: 'Amount for fixed valuation (required when valuationType is fixed)',
+    description: 'Amount for fixed valuation (required when valueMethod is fixed)',
     required: false,
     example: '1000000'
   })
-  @ValidateIf((o) => o.valuationType === ValuationType.fixed)
+  @ValidateIf((o) => o.valueMethod === ValueMethod.fixed)
   @IsString()
   @Expose()
   valuationAmount?: string;
@@ -110,12 +110,6 @@ export class CreateVaultReq {
   @IsString()
   @Expose()
   vaultImage: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  @Expose()
-  bannerImage: string;
 
   @ApiProperty({
     description: 'CSV file containing acquirer whitelist',
@@ -183,7 +177,7 @@ export class CreateVaultReq {
   @IsNotEmpty()
   @IsNumber()
   @Expose()
-  offAssetsOffered: number;
+  tokensForAcquires: number;
 
   @ApiProperty({
     description: 'FT acquire reverse percentage',
@@ -192,7 +186,7 @@ export class CreateVaultReq {
   @IsNotEmpty()
   @IsNumber()
   @Expose()
-  ftInvestmentReserve: number;
+  acquireReserve: number;
 
   @ApiProperty({
     description: 'Liquidity pool contribution percentage',
@@ -222,7 +216,7 @@ export class CreateVaultReq {
   @MinLength(1)
   @MaxLength(10)
   @Expose()
-  ftTokenTicker: string;
+  vaultTokenTicker: string;
 
   @ApiProperty({
     description: 'Number of decimal places for the FT token',
@@ -371,7 +365,7 @@ export class CreateVaultReq {
     required: false,
     nullable: true,
   })
-  @ValidateIf((o) => o.privacy !== VaultPrivacy.public && o.valuationType === ValuationType.lbe)
+  @ValidateIf((o) => o.privacy !== VaultPrivacy.public && o.valueMethod === ValueMethod.lbe)
   @IsArray()
   @ArrayNotEmpty()
   @IsObject({ each: true })

@@ -28,7 +28,7 @@ export interface VaultConfig {
     end: number;
   };
   contractType?: number; // 0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE
-  valuationType?: number; // 0: FIXED | 1: LBE
+  valueMethod?: number; // 0: FIXED | 1: LBE
   customMetadata?: [string, string][];
 }
 
@@ -46,7 +46,7 @@ export interface VaultCreateConfig {
     end: number;
   };
   contractType?: number; // 0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE
-  valuationType?: number; // 0: FIXED | 1: LBE
+  valueMethod?: number; // 0: FIXED | 1: LBE
   customMetadata?: [string, string][];
 }
 
@@ -180,7 +180,7 @@ export class VaultContractService {
                     is_inclusive: true,
                   },
                 },
-                valuation_type: vaultConfig.valuationType, // Enum 0: 'FIXED' 1: 'LBE'
+                valuation_type: vaultConfig.valueMethod, // Enum 0: 'FIXED' 1: 'LBE'
                 // fractionalization: {
                 //   percentage: 1,
                 //   token_supply: 1,

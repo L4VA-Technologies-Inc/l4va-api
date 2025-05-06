@@ -16,7 +16,7 @@ import {LinkEntity} from './link.entity';
 import {
   ContributionWindowType,
   InvestmentWindowType, TerminationType,
-  ValuationType,
+  ValueMethod,
   VaultPrivacy, VaultStatus,
   VaultType
 } from '../types/vault.types';
@@ -52,14 +52,14 @@ export class Vault {
   @Column({ nullable: true })
   description?: string;
 
-  @Expose({ name: 'valuationType'})
+  @Expose({ name: 'valueMethod'})
   @Column({
     type: 'enum',
-    name: 'valuation_type',
-    enum: ValuationType,
+    name: 'value_method',
+    enum: ValueMethod,
     nullable: true
   })
-  valuation_type?: ValuationType;
+  value_method?: ValueMethod;
 
   @Expose({ name: 'publicationHash'})
   @Column({
@@ -148,19 +148,19 @@ export class Vault {
   })
   acquire_open_window_time?: string;
 
-  @Expose({ name: 'offAssetsOffered'})
+  @Expose({ name: 'tokensForAcquires'})
   @Transform(({ value }) => value ? Number(value) : null)
   @Column({
-    name: 'off_assets_offered',
+    name: 'tokens_for_acquires',
     type: 'numeric', nullable:true})
-  off_assets_offered?: number;
+  tokens_for_acquires?: number;
 
-  @Expose({ name: 'ftInvestmentReserve'})
+  @Expose({ name: 'acquireReserve'})
   @Transform(({ value }) => value ? Number(value) : null)
   @Column({
-    name: 'ft_acquire_reserve',
+    name: 'acquire_reserve',
     type: 'numeric', nullable:true})
-  ft_acquire_reserve?: number;
+  acquire_reserve?: number;
 
   @Expose({ name: 'liquidityPoolContribution'})
   @Transform(({ value }) => value ? Number(value) : null)
@@ -175,9 +175,9 @@ export class Vault {
     type: 'numeric',  nullable:true})
   ft_token_supply?: number;
 
-  @Expose({ name: 'ftTokenTicker'})
-  @Column({name: 'ft_token_ticker', nullable:true})
-  ft_token_ticker?: string;
+  @Expose({ name: 'vaultTokenTicker'})
+  @Column({name: 'vault_token_ticker', nullable:true})
+  vault_token_ticker?: string;
 
   @Expose({ name: 'ftTokenDecimals'})
   @Column({name: 'ft_token_decimals',

@@ -51,7 +51,7 @@ export class AcquireService {
     }
 
     // Validate acquire amount and currency based on vault settings
-    if (vault.valuation_type === 'fixed') {
+    if (vault.value_method === 'fixed') {
       if (investReq.currency !== vault.valuation_currency) {
         throw new BadRequestException('Invalid acquire currency');
       }
