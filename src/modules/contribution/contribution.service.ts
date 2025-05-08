@@ -79,7 +79,7 @@ export class ContributionService {
         this.assetRepository.save({
           transaction: transaction,
           type: AssetType.NFT,
-          policy_id: assetItem.policyId,
+          policy_id: assetItem.policyId ? assetItem.policyId : "",
           asset_id: assetItem.assetName,
           quantity: assetItem.quantity,
           status: AssetStatus.PENDING,

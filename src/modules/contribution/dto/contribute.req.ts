@@ -7,7 +7,6 @@ class ContributionAsset {
     description: 'Policy ID of the asset (56-character hex string)',
     example: '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd',
   })
-  @IsNotEmpty()
   @Expose()
   policyId: string;
 

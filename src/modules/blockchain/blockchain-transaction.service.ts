@@ -126,6 +126,10 @@ export class BlockchainTransactionService {
 
       const LAST_UPDATE_TX_HASH = vault.publication_hash; // todo need to understand where exactly we need to get it
       const LAST_UPDATE_TX_INDEX = 0;
+      let quantity = 0;
+      if(params.outputs[0].assets[0].assetName === 'lovelace'){
+        quantity = params.outputs[0].assets[0].quantity * 1000000;
+      }
 
       const input: {
         changeAddress: string;
@@ -151,7 +155,7 @@ export class BlockchainTransactionService {
         network: string;
       } = {
         changeAddress: params.changeAddress,
-        message: 'Contribution NFT',
+        message: 'Contribution ADA',
         mint: [
           {
             version: 'cip25',
@@ -165,14 +169,14 @@ export class BlockchainTransactionService {
         ],
         scriptInteractions: [
           {
-            purpose: 'mint',
+            purpose: "mint",
             hash: POLICY_ID,
             redeemer: {
-              type: 'json',
+              type: "json",
               value: {
                 quantity: 1000,
                 output_index: 0,
-                contribution: 'Lovelace',
+                contribution: "Lovelace",
               },
             },
           },
@@ -180,21 +184,16 @@ export class BlockchainTransactionService {
         outputs: [
           {
             address: SC_ADDRESS,
-            lovelace: 10000000,
+            lovelace: quantity > 0 ? quantity: 10000000,
             assets: [
               {
-                assetName: { name: VAULT_ID, format: 'hex' },
+                assetName: { name: VAULT_ID, format: "hex" },
                 policyId: POLICY_ID,
                 quantity: 1000,
               },
-              ...params.outputs[0].assets.map(asset => ({
-                assetName: { name: asset.assetName, format: 'hex' },
-                policyId: asset.policyId,
-                quantity: asset.quantity,
-              })),
             ],
             datum: {
-              type: 'inline',
+              type: "inline",
               value: {
                 policy_id: POLICY_ID,
                 asset_name: VAULT_ID,
@@ -203,7 +202,7 @@ export class BlockchainTransactionService {
               },
               shape: {
                 validatorHash: POLICY_ID,
-                purpose: 'spend',
+                purpose: "spend",
               },
             },
           },
