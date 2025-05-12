@@ -33,6 +33,34 @@ export class BlockchainScannerService {
     }
   }
 
+  private async makePostRequest<T>(endpoint: string, payload: {
+    address: string
+  }): Promise<T> {
+    try {
+      const response = await axios.post(`${this.scannerUrl}${endpoint}`, {
+        ...payload,
+      },   {
+        headers: {
+          'Authorization': `Bearer ${this.scannerKey}`
+        }}  );
+      return response.data;
+    } catch (error) {
+      this.logger.error(`Scanner request failed for ${endpoint}:`, error);
+      throw error;
+    }
+  }
+
+
+
+  async registerTrackingAddress(vaultAddress: string = '', vaultName: string){
+    const payload = {
+      address:  vaultAddress,
+      name:  vaultName,
+      description: "Monitoring vault address"
+    }
+    return this.makePostRequest(`/monitoring/addresses`, payload);
+  }
+
   async getAddressBalance(address: string): Promise<BlockchainAddressResponse> {
     return this.makeRequest(`/blockchain/addresses/${address}/balance`);
   }

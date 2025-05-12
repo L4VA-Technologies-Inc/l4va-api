@@ -1,7 +1,12 @@
-import {BadRequestException, Injectable, Logger, UnauthorizedException} from '@nestjs/common';
+import {BadRequestException, Injectable, Logger, NotFoundException, UnauthorizedException} from '@nestjs/common';
 import {ContributionWindowType, InvestmentWindowType, ValueMethod, VaultPrivacy, VaultStatus} from '../../types/vault.types';
 import {InjectRepository} from '@nestjs/typeorm';
+import {ConfigService} from '@nestjs/config';
 import {Brackets, In, Repository} from 'typeorm';
+import {plainToInstance} from 'class-transformer';
+import {classToPlain} from 'class-transformer';
+import {SortOrder, VaultFilter, VaultSortField} from './dto/get-vaults.dto';
+import {PaginatedResponseDto} from './dto/paginated-response.dto';
 import {Vault} from '../../database/vault.entity';
 import {CreateVaultReq} from './dto/createVault.req';
 import {SaveDraftReq} from './dto/saveDraft.req';
@@ -10,23 +15,25 @@ import {LinkEntity} from '../../database/link.entity';
 import {FileEntity} from '../../database/file.entity';
 import {AssetsWhitelistEntity} from '../../database/assetsWhitelist.entity';
 import {AcquirerWhitelistEntity} from '../../database/acquirerWhitelist.entity';
-import * as csv from 'csv-parse';
-import {AwsService} from '../aws_bucket/aws.service';
-import {classToPlain, plainToInstance} from 'class-transformer';
-import {SortOrder, VaultFilter, VaultSortField} from './dto/get-vaults.dto';
-import {PaginatedResponseDto} from './dto/paginated-response.dto';
 import {TagEntity} from '../../database/tag.entity';
 import {ContributorWhitelistEntity} from '../../database/contributorWhitelist.entity';
 import {transformToSnakeCase} from '../../helpers';
 import {VaultFullResponse, VaultShortResponse} from './dto/vault.response';
 import {VaultContractService} from '../blockchain/vault-contract.service';
 import {valuation_sc_type, vault_sc_privacy} from '../blockchain/types/vault-sc-type';
-import {VaultType} from 'aws-sdk/clients/backup';
+import {BlockchainScannerService} from "../blockchain/blockchain-scanner.service";
+import {applyContributeParams} from "../blockchain/utils/apply_params";
+import {Credential, EnterpriseAddress, ScriptHash} from "@emurgo/cardano-serialization-lib-nodejs";
+import * as csv from 'csv-parse';
+import {AwsService} from '../aws_bucket/aws.service';
 
 @Injectable()
 export class VaultsService {
 
   private readonly logger = new Logger(VaultsService.name);
+  private readonly MAX_RETRIES = 10;
+  private readonly INITIAL_RETRY_DELAY = 3000; // 3 seconds
+
   constructor(
     @InjectRepository(Vault)
     private readonly vaultsRepository: Repository<Vault>,
@@ -45,8 +52,63 @@ export class VaultsService {
     @InjectRepository(ContributorWhitelistEntity)
     private readonly contributorWhitelistRepository: Repository<ContributorWhitelistEntity>,
     private readonly awsService: AwsService,
-    private readonly vaultContractService: VaultContractService
+    private readonly vaultContractService: VaultContractService,
+    private readonly blockchainScannerService: BlockchainScannerService,
+    private readonly configService: ConfigService,
   ) {}
+
+  private async wait(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  private async confirmAndProcessTransaction(txHash: string, vault: Vault, attempt = 0): Promise<void> {
+    try {
+      this.logger.log(`Checking transaction status (attempt ${attempt + 1}): ${txHash}`);
+      
+      const txDetail = await this.blockchainScannerService.getTransactionDetails(txHash);
+      
+      if (!txDetail || !txDetail.output_amount || txDetail.output_amount.length < 2) {
+        throw new Error('Transaction output not found or invalid format');
+      }
+
+      const { output_amount } = txDetail;
+      const vaultPolicyPlusName = output_amount[1].unit;
+      const VAULT_POLICY_ID = vaultPolicyPlusName.slice(0, 56);
+      const VAULT_ID = vaultPolicyPlusName.slice(56);
+
+      const parameterizedScript = applyContributeParams({
+        vault_policy_id: VAULT_POLICY_ID,
+        vault_id: VAULT_ID,
+      });
+      
+      const POLICY_ID = parameterizedScript.validator.hash;
+      const SC_ADDRESS = EnterpriseAddress.new(
+        0,
+        Credential.from_scripthash(ScriptHash.from_hex(POLICY_ID))
+      )
+        .to_address()
+        .to_bech32();
+
+      vault.contract_address = SC_ADDRESS;
+      await this.vaultsRepository.save(vault);
+      await this.blockchainScannerService.registerTrackingAddress(SC_ADDRESS, vault.name);
+      
+      this.logger.log(`Successfully processed transaction ${txHash} for vault ${vault.id}`);
+      
+    } catch (error) {
+      if (attempt >= this.MAX_RETRIES - 1) {
+        this.logger.error(`Max retries reached for transaction ${txHash}:`, error);
+        return;
+      }
+
+      // Exponential backoff: 3s, 6s, 12s, 24s, etc.
+      const delay = this.INITIAL_RETRY_DELAY * Math.pow(2, attempt);
+      this.logger.log(`Retrying in ${delay}ms...`);
+      
+      await this.wait(delay);
+      return this.confirmAndProcessTransaction(txHash, vault, attempt + 1);
+    }
+  }
 
   private async parseCSVFromS3(file_key: string): Promise<string[]> {
     try {
@@ -315,7 +377,11 @@ export class VaultsService {
     const publishedTx =  await this.vaultContractService.submitOnChainVaultTx(signedTx);
     vault.vault_status = VaultStatus.published;
     vault.publication_hash = publishedTx.txHash;
-    await this.vaultsRepository.save(vault);
+// Start transaction confirmation process in background
+this.confirmAndProcessTransaction(publishedTx.txHash, vault).catch(error => {
+  this.logger.error(`Failed to process transaction ${publishedTx.txHash}:`, error);
+});
+
     return plainToInstance(VaultFullResponse, classToPlain(vault), { excludeExtraneousValues: true });
   }
 

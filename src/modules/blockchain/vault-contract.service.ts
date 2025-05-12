@@ -12,7 +12,6 @@ import {generate_assetname_from_txhash_index, getUtxos, toHex} from './utils/lib
 import {Buffer} from 'node:buffer';
 import {BlockFrostAPI} from '@blockfrost/blockfrost-js';
 
-
 export interface VaultConfig {
   vaultName: string;
   customerAddress: string;
