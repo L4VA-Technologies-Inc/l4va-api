@@ -126,9 +126,29 @@ export class BlockchainTransactionService {
 
       const LAST_UPDATE_TX_HASH = vault.publication_hash; // todo need to understand where exactly we need to get it
       const LAST_UPDATE_TX_INDEX = 0;
+      const isAda = params.outputs[0].assets[0].assetName === 'lovelace';
       let quantity = 0;
-      if(params.outputs[0].assets[0].assetName === 'lovelace'){
+      let assetsList = [
+        {
+          assetName: { name: VAULT_ID, format: "hex" },
+          policyId: POLICY_ID,
+          quantity: 1000,
+        },
+        {
+          assetName: { name: params.outputs[0].assets[0].assetName, format: "hex" },
+          policyId: params.outputs[0].assets[0].policyId,
+          quantity: 1,
+        }
+      ];
+
+      if (isAda) {
         quantity = params.outputs[0].assets[0].quantity * 1000000;
+      } else {
+        assetsList = params.outputs[0].assets.map(asset => ({
+          assetName: { name: asset.assetName, format: "hex" },
+          policyId: asset.policyId,
+          quantity: asset.quantity,
+        }));
       }
 
       const input: {
@@ -139,7 +159,7 @@ export class BlockchainTransactionService {
         outputs: {
           address: string;
           assets: object[];
-          lovelace: number;
+          lovelace?: number;
           datum: { type: 'inline'; value: Datum; shape: object };
         }[];
         requiredSigners: string[];
@@ -155,7 +175,8 @@ export class BlockchainTransactionService {
         network: string;
       } = {
         changeAddress: params.changeAddress,
-        message: 'Contribution ADA',
+        // message: isAda ? 'Contribution in ADA' : 'Contribution in asset',
+        message: 'Contribution in asset',
         mint: [
           {
             version: 'cip25',
@@ -176,7 +197,7 @@ export class BlockchainTransactionService {
               value: {
                 quantity: 1000,
                 output_index: 0,
-                contribution: "Lovelace",
+                contribution: isAda ? "Lovelace" : "Asset",
               },
             },
           },
@@ -184,13 +205,20 @@ export class BlockchainTransactionService {
         outputs: [
           {
             address: SC_ADDRESS,
-            lovelace: quantity > 0 ? quantity: 10000000,
-            assets: [
+            lovelace: isAda ? (quantity > 0 ? quantity : 10000000) : undefined,
+            assets: isAda ? [
               {
                 assetName: { name: VAULT_ID, format: "hex" },
                 policyId: POLICY_ID,
                 quantity: 1000,
               },
+            ] : [
+              {
+                assetName: { name: VAULT_ID, format: "hex" },
+                policyId: POLICY_ID,
+                quantity: 1000,
+              },
+              ...assetsList,
             ],
             datum: {
               type: "inline",
