@@ -43,6 +43,37 @@ export class BlockchainController {
     return this.transactionService.submitTransaction(params);
   }
 
+  @Post('scanner-wh')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Webhook endpoint for scanner events' })
+  @ApiResponse({
+    status: 200,
+    description: 'Blockchain event processed successfully',
+    type: Object
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Invalid webhook signature'
+  })
+  async scannerWh(@Body() event: any, @Request() req): Promise<any> {
+    try {
+      await this.transactionService.handleScannerEvent(event);
+
+      return {
+        status: 'success',
+        details: 'txSummary'
+      };
+    } catch (error) {
+      console.error('Error processing webhook:', error);
+      return {
+        status: 'error',
+        details: error.message
+      };
+    }
+  }
+
+
+
   @Post('tx-webhook')
   @HttpCode(200)
   @ApiOperation({ summary: 'Webhook endpoint for blockchain events' })
@@ -57,7 +88,7 @@ export class BlockchainController {
   })
   async handleWebhook(@Body() event: BlockchainWebhookDto, @Request() req): Promise<{ status: string; details: any }> {
     const signature = req.headers['blockfrost-signature'];
-    
+
     // Get raw body from the request
     let rawBody: string;
     if (Buffer.isBuffer(req.body)) {

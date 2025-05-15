@@ -99,9 +99,9 @@ export class Asset {
   released_at?: Date;
 
   @Column({ type: 'jsonb', nullable: true })
+  @Expose({ name: 'metadata' })
   metadata: any;
-
-
+  
   @Expose({ name: 'transaction' })
   @ManyToOne(() => Transaction, (transaction: Transaction) => transaction.id)
   @JoinColumn({ name: 'transaction_id' })

@@ -1,15 +1,21 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Transaction } from '../../database/transaction.entity';
-import { TransactionStatus, TransactionType } from '../../types/transaction.types';
+import {Injectable, NotFoundException} from '@nestjs/common';
+import {InjectRepository} from '@nestjs/typeorm';
+import {Repository} from 'typeorm';
+import {Transaction} from '../../database/transaction.entity';
+import {TransactionStatus, TransactionType} from '../../types/transaction.types';
 import {Asset} from '../../database/asset.entity';
+import {Vault} from "../../database/vault.entity";
+import {AssetStatus} from "../../types/asset.types";
 
 @Injectable()
 export class TransactionsService {
   constructor(
     @InjectRepository(Transaction)
-    private readonly transactionRepository: Repository<Transaction>
+    private readonly transactionRepository: Repository<Transaction>,
+    @InjectRepository(Vault)
+    private readonly vaultRepository: Repository<Vault>,
+    @InjectRepository(Asset)
+    private readonly assetRepository: Repository<Asset>,
   ) {}
 
   async createTransaction(data: {
@@ -32,14 +38,31 @@ export class TransactionsService {
     status: TransactionStatus
   ): Promise<Transaction> {
     const transaction = await this.transactionRepository.findOne({
-      where: { tx_hash: txHash }
+      where: { tx_hash: txHash },
+      relations: ['assets']
     });
+    console.log("tx", transaction)
 
     if (!transaction) {
       throw new Error(`Transaction with hash ${txHash} not found`);
     }
 
+    const vault = await this.vaultRepository.findOne({where: {
+        id: transaction.vault_id
+      }})
+
+    transaction.assets.map(async item => {
+     const asset = await this.assetRepository.findOne({where: {
+     id: item.id
+     }
+     })
+      asset.vault = vault;
+      asset.status = AssetStatus.LOCKED;
+     await this.assetRepository.save(asset)
+    })
+
     transaction.status = status;
+
     return this.transactionRepository.save(transaction);
   }
 

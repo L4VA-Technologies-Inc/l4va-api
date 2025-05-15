@@ -4,10 +4,11 @@ import { Transaction } from '../../database/transaction.entity';
 import { TransactionsService } from './transactions.service';
 import { TransactionsController } from './transactions.controller';
 import {Asset} from '../../database/asset.entity';
+import {Vault} from "../../database/vault.entity";
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Transaction, Asset])
+    TypeOrmModule.forFeature([Transaction, Asset, Vault])
   ],
   providers: [TransactionsService],
   controllers: [TransactionsController],

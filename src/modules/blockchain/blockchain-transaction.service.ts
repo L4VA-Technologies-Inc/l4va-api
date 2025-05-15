@@ -321,6 +321,33 @@ export class BlockchainTransactionService {
     }
   }
 
+  async handleScannerEvent(event: any){
+    console.log('event from scanner ', event.data )
+    // Determine transaction status based on blockchain data
+    const tx = event.data.tx;
+    let status: OnchainTransactionStatus;
+    if (!tx.block || !tx.block_height) {
+      status = OnchainTransactionStatus.PENDING;
+    } else if (tx.valid_contract === false) {
+      status = OnchainTransactionStatus.FAILED;
+    } else if (tx.valid_contract === true) {
+      status = OnchainTransactionStatus.CONFIRMED;
+    } else {
+      status = OnchainTransactionStatus.PENDING;
+    }
+
+    // Map onchain status to internal transaction status
+    const statusMap: Record<OnchainTransactionStatus, TransactionStatus> = {
+      [OnchainTransactionStatus.PENDING]: TransactionStatus.pending,
+      [OnchainTransactionStatus.CONFIRMED]: TransactionStatus.confirmed,
+      [OnchainTransactionStatus.FAILED]: TransactionStatus.failed,
+      [OnchainTransactionStatus.NOT_FOUND]: TransactionStatus.stuck
+    };
+
+    const internalStatus = statusMap[status];
+    await this.transactionsService.updateTransactionStatus(tx.hash, internalStatus);
+  }
+
    // return this.anvilApiService.submitTransaction(params);
 
   async handleBlockchainEvent(event: BlockchainWebhookDto): Promise<void> {

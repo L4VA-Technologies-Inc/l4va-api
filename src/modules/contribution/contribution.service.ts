@@ -83,7 +83,8 @@ export class ContributionService {
           asset_id: assetItem.assetName,
           quantity: assetItem.quantity,
           status: AssetStatus.PENDING,
-          added_by: user
+          added_by: user,
+          metadata: assetItem?.metadata
         });
       });
     }

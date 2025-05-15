@@ -25,6 +25,13 @@ class ContributionAsset {
   @IsNotEmpty()
   @Expose()
   quantity: number;
+
+  @ApiProperty({
+    description: 'JSON object with metadata ',
+    example: 1,
+  })
+  @Expose()
+  metadata: any;
 }
 
 export class ContributeReq {
