@@ -38,8 +38,7 @@ export class TransactionsService {
     status: TransactionStatus
   ): Promise<Transaction> {
     const transaction = await this.transactionRepository.findOne({
-      where: { tx_hash: txHash },
-      relations: ['assets']
+      where: { tx_hash: txHash }
     });
     console.log("tx", transaction)
 
@@ -51,7 +50,13 @@ export class TransactionsService {
         id: transaction.vault_id
       }})
 
-    transaction.assets.map(async item => {
+    const assets = await this.assetRepository.findBy({
+      transaction: {
+        id: transaction.id,
+      }
+    })
+
+    assets.map(async item => {
      const asset = await this.assetRepository.findOne({where: {
      id: item.id
      }
@@ -114,7 +119,7 @@ export class TransactionsService {
 
     transaction.tx_hash = txHash;
     transaction.status = TransactionStatus.pending;
-    return this.transactionRepository.save(transaction);
+    return await this.transactionRepository.save(transaction);
   }
 
   async getTransaction(txHash: string): Promise<Transaction | null> {

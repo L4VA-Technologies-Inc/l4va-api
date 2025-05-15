@@ -6,9 +6,10 @@ import {Vault} from '../../database/vault.entity';
 import {TransactionsModule} from '../transactions/transactions.module';
 import {User} from '../../database/user.entity';
 import {Asset} from '../../database/asset.entity';
+import {Transaction} from "../../database/transaction.entity";
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Vault, User, Asset]), TransactionsModule],
+  imports: [TypeOrmModule.forFeature([Vault, User, Asset, Transaction]), TransactionsModule],
   controllers: [ContributionController],
   providers: [ContributionService],
   exports: [ContributionService],

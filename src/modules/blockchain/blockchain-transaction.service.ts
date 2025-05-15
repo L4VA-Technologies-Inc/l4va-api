@@ -310,10 +310,13 @@ export class BlockchainTransactionService {
         }),
       });
 
-      const output = await submitted.json();
-      console.log('output', output);
+     const output = await submitted.json();
 
       await this.transactionsService.updateTransactionHash(signedTx.txId, output.txHash);
+      const vault  = await this.vaultsRepository.findOne({where: {
+          id: signedTx.vaultId,
+        }})
+      await this.blockchainScanner.checkMonitoringAddress(vault.contract_address, vault.name);
       return output;
     }catch(error){
       this.logger.log('TX Error sending', error);

@@ -64,9 +64,9 @@ export class VaultsService {
   private async confirmAndProcessTransaction(txHash: string, vault: Vault, attempt = 0): Promise<void> {
     try {
       this.logger.log(`Checking transaction status (attempt ${attempt + 1}): ${txHash}`);
-      
+
       const txDetail = await this.blockchainScannerService.getTransactionDetails(txHash);
-      
+
       if (!txDetail || !txDetail.output_amount || txDetail.output_amount.length < 2) {
         throw new Error('Transaction output not found or invalid format');
       }
@@ -80,7 +80,7 @@ export class VaultsService {
         vault_policy_id: VAULT_POLICY_ID,
         vault_id: VAULT_ID,
       });
-      
+
       const POLICY_ID = parameterizedScript.validator.hash;
       const SC_ADDRESS = EnterpriseAddress.new(
         0,
@@ -91,11 +91,11 @@ export class VaultsService {
 
       vault.contract_address = SC_ADDRESS;
       await this.vaultsRepository.save(vault);
-      await this.blockchainScannerService.registerTrackingAddress(SC_ADDRESS, vault.name);
-      
+
       this.logger.log(`Successfully processed transaction ${txHash} for vault ${vault.id}`);
-      
+
     } catch (error) {
+      this.logger.log('Publication tx failed ')
       if (attempt >= this.MAX_RETRIES - 1) {
         this.logger.error(`Max retries reached for transaction ${txHash}:`, error);
         return;
@@ -104,9 +104,9 @@ export class VaultsService {
       // Exponential backoff: 3s, 6s, 12s, 24s, etc.
       const delay = this.INITIAL_RETRY_DELAY * Math.pow(2, attempt);
       this.logger.log(`Retrying in ${delay}ms...`);
-      
+
       await this.wait(delay);
-      return this.confirmAndProcessTransaction(txHash, vault, attempt + 1);
+     return this.confirmAndProcessTransaction(txHash, vault, attempt + 1);
     }
   }
 
@@ -377,10 +377,10 @@ export class VaultsService {
     const publishedTx =  await this.vaultContractService.submitOnChainVaultTx(signedTx);
     vault.vault_status = VaultStatus.published;
     vault.publication_hash = publishedTx.txHash;
-// Start transaction confirmation process in background
-this.confirmAndProcessTransaction(publishedTx.txHash, vault).catch(error => {
-  this.logger.error(`Failed to process transaction ${publishedTx.txHash}:`, error);
-});
+  // Start transaction confirmation process in background
+    this.confirmAndProcessTransaction(publishedTx.txHash, vault).catch(error => {
+      this.logger.error(`Failed to process transaction ${publishedTx.txHash}:`, error);
+    });
 
     return plainToInstance(VaultFullResponse, classToPlain(vault), { excludeExtraneousValues: true });
   }

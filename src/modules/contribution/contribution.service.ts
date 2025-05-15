@@ -1,4 +1,4 @@
-import {BadRequestException, Injectable, NotFoundException} from '@nestjs/common';
+import {BadRequestException, Injectable, Logger, NotFoundException} from '@nestjs/common';
 import {InjectRepository} from '@nestjs/typeorm';
 import {Repository} from 'typeorm';
 import {ContributeReq} from './dto/contribute.req';
@@ -9,10 +9,15 @@ import {TransactionsService} from '../transactions/transactions.service';
 import {TransactionType} from '../../types/transaction.types';
 import {Asset} from '../../database/asset.entity';
 import {AssetStatus, AssetType} from '../../types/asset.types';
+import {Transaction} from '../../database/transaction.entity';
 
 @Injectable()
 export class ContributionService {
+  private readonly logger = new Logger(ContributionService.name);
+
   constructor(
+    @InjectRepository(Transaction)
+    private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(User)
@@ -74,19 +79,39 @@ export class ContributionService {
       type: TransactionType.contribute,
       assets: []
     });
-    if(contributeReq.assets.length > 0){
-      contributeReq.assets.map(assetItem => {
-        this.assetRepository.save({
-          transaction: transaction,
-          type: AssetType.NFT,
-          policy_id: assetItem.policyId ? assetItem.policyId : "",
-          asset_id: assetItem.assetName,
-          quantity: assetItem.quantity,
-          status: AssetStatus.PENDING,
-          added_by: user,
-          metadata: assetItem?.metadata
+    if (contributeReq.assets.length > 0) {
+      try {
+        // First, ensure the transaction exists and is loaded with relations if needed
+        const savedTransaction = await this.transactionRepository.findOneOrFail({
+          where: { id: transaction.id },
+          relations: ['assets']
         });
-      });
+
+        // Create and save all assets
+        const assets = await Promise.all(
+          contributeReq.assets.map(async (assetItem) => {
+            const asset = this.assetRepository.create({
+              transaction: savedTransaction,
+              type: AssetType.NFT,
+              policy_id: assetItem.policyId || '',
+              asset_id: assetItem.assetName,
+              quantity: assetItem.quantity,
+              status: AssetStatus.PENDING,
+              added_by: user,
+              metadata: assetItem?.metadata || {}
+            });
+            
+            const savedAsset = await this.assetRepository.save(asset);
+            this.logger.log(`Created asset ${savedAsset.id} for transaction ${savedTransaction.id}`);
+            return savedAsset;
+          })
+        );
+        
+        this.logger.log(`Successfully created ${assets.length} assets for transaction ${savedTransaction.id}`);
+      } catch (error) {
+        this.logger.error(`Failed to save assets for transaction ${transaction.id}`, error);
+        throw new Error(`Failed to save contribution assets: ${error.message}`);
+      }
     }
     return {
       success: true,
