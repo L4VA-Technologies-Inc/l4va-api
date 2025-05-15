@@ -291,36 +291,76 @@ export class BlockchainTransactionService {
     }
   }
 
-  async submitTransaction(signedTx: SubmitTransactionDto): Promise<any> {
+  async submitTransaction(signedTx: SubmitTransactionDto): Promise<TransactionSubmitResponse> {
+    if (!signedTx.txId) {
+      throw new Error('Transaction ID is required');
+    }
 
-    try{
+    if (!signedTx.transaction) {
+      throw new Error('Transaction data is required');
+    }
+
+    try {
       const headers = {
         'x-api-key': this.anvilApiKey,
         'Content-Type': 'application/json',
       };
 
       const urlSubmit = `${this.anvilApi}/transactions/submit`;
+      this.logger.log(`Submitting transaction ${signedTx.txId} to blockchain`);
 
-      const submitted = await fetch(urlSubmit, {
+      const response = await fetch(urlSubmit, {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          signatures: signedTx.signatures,
+          signatures: signedTx.signatures || [],
           transaction: signedTx.transaction,
         }),
       });
 
-     const output = await submitted.json();
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Blockchain submission failed with status ${response.status}: ${errorText}`);
+      }
 
-      await this.transactionsService.updateTransactionHash(signedTx.txId, output.txHash);
-      const vault  = await this.vaultsRepository.findOne({where: {
-          id: signedTx.vaultId,
-        }})
-      await this.blockchainScanner.checkMonitoringAddress(vault.contract_address, vault.name);
-      return output;
-    }catch(error){
+      const output = await response.json();
+     
+      if (!output?.txHash) {
+        throw new Error('No transaction hash returned from blockchain');
+      }
+
+      this.logger.log(`Updating transaction ${signedTx.txId} with hash ${output.txHash}`);
+      
+      try {
+        // Update the transaction hash in our database
+        const updatedTx = await this.transactionsService.updateTransactionHash(signedTx.txId, output.txHash);
+        this.logger.log(`Successfully updated transaction ${signedTx.txId} with hash ${output.txHash}`);
+        
+        // Update monitoring for the vault if it exists
+        if (signedTx.vaultId) {
+          const vault = await this.vaultsRepository.findOne({
+            where: { id: signedTx.vaultId },
+            select: ['contract_address', 'name']
+          });
+          
+          if (!vault) {
+            this.logger.warn(`Vault ${signedTx.vaultId} not found when updating monitoring address`);
+          } else if (vault.contract_address) {
+            await this.blockchainScanner.checkMonitoringAddress(vault.contract_address, vault.name);
+          }
+        }
+        
+        return output;
+      } catch (updateError) {
+        this.logger.error(
+          `Failed to update transaction ${signedTx.txId} with hash ${output.txHash}`, 
+          updateError.stack
+        );
+        throw new Error(`Transaction submitted but failed to update local record: ${updateError.message}`);
+      }  
+    } catch (error) {
       this.logger.log('TX Error sending', error);
-      throw new Error('Failed to build complete transaction'+  JSON.stringify(error));
+      throw new Error('Failed to build complete transaction' + JSON.stringify(error));
     }
   }
 
