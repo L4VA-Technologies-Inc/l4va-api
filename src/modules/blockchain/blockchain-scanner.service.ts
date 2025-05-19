@@ -25,6 +25,8 @@ export class BlockchainScannerService {
   }
 
   private async makeRequest<T>(endpoint: string): Promise<T> {
+    this.logger.log(`Scanner URL ${this.scannerUrl}${endpoint}`)
+    this.logger.log(`Scanner KEY ${this.scannerKey}`)
     try {
       const response = await axios.get(`${this.scannerUrl}${endpoint}`, {
         headers: {
@@ -68,9 +70,9 @@ export class BlockchainScannerService {
 
   private async withRetry<T>(
     operation: () => Promise<T>,
-    options: { 
-      maxRetries?: number; 
-      initialDelayMs?: number; 
+    options: {
+      maxRetries?: number;
+      initialDelayMs?: number;
       maxDelayMs?: number;
       shouldRetry?: (error: Error) => boolean;
     } = {}
@@ -89,7 +91,7 @@ export class BlockchainScannerService {
         return await operation();
       } catch (error) {
         lastError = error as Error;
-        
+
         if (attempt === maxRetries || !shouldRetry(error as Error)) {
           throw lastError;
         }
@@ -98,7 +100,7 @@ export class BlockchainScannerService {
         const baseDelay = Math.min(initialDelayMs * Math.pow(2, attempt), maxDelayMs);
         const jitter = Math.random() * baseDelay * 0.2; // Add up to 20% jitter
         const delay = Math.min(baseDelay + jitter, maxDelayMs);
-        
+
         this.logger.warn(
           `Attempt ${attempt + 1}/${maxRetries} failed. Retrying in ${Math.round(delay)}ms...`,
           { error: error.message }
@@ -133,7 +135,7 @@ export class BlockchainScannerService {
       }
 
       this.logger.log(`Address ${vaultAddress} is not registered, attempting to register...`);
-      
+
       try {
         await this.withRetry(
           () => this.registerTrackingAddress(vaultAddress, vaultName),
