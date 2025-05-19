@@ -21,7 +21,7 @@ export class PublishVaultDto {
   transaction: string;
 
   @ApiProperty({
-    description: 'Array of CBOR encoded signatures',
+    description: 'Array of CBOR  encoded signatures',
     example: ['84a400...'],
     required: false,
   })
