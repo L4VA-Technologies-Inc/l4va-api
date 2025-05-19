@@ -10,7 +10,7 @@ import { GetVaultsDto } from './dto/get-vaults.dto';
 import { Logger } from '@nestjs/common';
 import { TransactionsService } from '../transactions/transactions.service';
 import { GetVaultTransactionsDto } from './dto/get-vault-transactions.dto';
-import {SubmitTransactionDto, SubmitVaultTxDto} from "../blockchain/dto/transaction.dto";
+import { PublishVaultDto } from './dto/publish-vault.dto';
 
 @ApiTags('vaults')
 @Controller('vaults')
@@ -39,19 +39,23 @@ export class VaultsController {
   }
 
   @ApiDoc({
-    summary: 'Publish',
-    description: 'Vault successfully created',
+    summary: 'Publish vault',
+    description: 'Publishes a vault with the provided transaction',
     status: 200,
   })
   @UseGuards(AuthGuard)
   @Post('/publish')
-  publishVault(
+  async publishVault(
     @Request() req,
-    @Body()
-      signedTx: SubmitVaultTxDto,
-  ) {
+    @Body() publishDto: PublishVaultDto,
+  ): Promise<any> {
     const userId = req.user.sub;
-    return this.vaultsService.publishVault(userId, signedTx);
+    try {
+      return await this.vaultsService.publishVault(userId, publishDto);
+    } catch (error) {
+      this.logger.error('Error publishing vault', error);
+      throw error;
+    }
   }
 
   @ApiDoc({
