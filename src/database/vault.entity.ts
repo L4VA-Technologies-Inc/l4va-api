@@ -255,6 +255,26 @@ export class Vault {
   })
   cosigning_threshold?: number;
 
+  @Expose({ name: 'totalAssetsCostUsd' })
+  @Transform(({ value }) => value ? Number(value) : null)
+  @Column({
+    name: 'total_assets_cost_usd',
+    type: 'numeric',
+    nullable: true,
+    default: 0
+  })
+  total_assets_cost_usd: number;
+
+  @Expose({ name: 'totalAssetsCostAda' })
+  @Transform(({ value }) => value ? Number(value) : null)
+  @Column({
+    name: 'total_assets_cost_ada',
+    type: 'numeric',
+    nullable: true,
+    default: 0
+  })
+  total_assets_cost_ada: number;
+
   @Expose({ name: 'vaultStatus'})
   @Column({
     name: 'vault_status',

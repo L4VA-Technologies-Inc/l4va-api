@@ -1,18 +1,33 @@
-import {Injectable, HttpException, Logger} from '@nestjs/common';
+import { Injectable, HttpException, Logger, NotFoundException, Inject } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import axios from 'axios';
 import * as NodeCache from 'node-cache';
 import { WalletSummaryDto } from './dto/wallet-summary.dto';
 import { AssetValueDto } from './dto/asset-value.dto';
-import {VaultContractService} from '../blockchain/vault-contract.service';
+import { Vault } from '../../database/vault.entity';
+import { Asset } from '../../database/asset.entity';
+import { AssetStatus, AssetType } from '../../types/asset.types';
+import { VaultAssetsSummaryDto } from '../transactions/dto/vault-assets-summary.dto';
 
 @Injectable()
 export class TaptoolsService {
 
-  private readonly logger = new Logger(VaultContractService.name);
+  private readonly logger = new Logger(TaptoolsService.name);
 
   private readonly baseUrl = 'https://openapi.taptools.io/api/v1';
   private readonly blockfrostTestnetUrl = 'https://cardano-preprod.blockfrost.io/api/v0/';
   private cache = new NodeCache({ stdTTL: 60 }); // cache for 60 seconds
+  private readonly taptoolsApiKey: string;
+
+  constructor(
+    @InjectRepository(Vault)
+    private readonly vaultRepository: Repository<Vault>,
+    @InjectRepository(Asset)
+    private readonly assetRepository: Repository<Asset>,
+  ) {
+    this.taptoolsApiKey = process.env.TAPTOOLS_API_KEY || '';
+  }
 
   private isTestnetAddress(address: string): boolean {
     return address.startsWith('addr_test');
@@ -309,5 +324,156 @@ export class TaptoolsService {
       }
       throw new HttpException('Failed to fetch or process testnet wallet assets', 500);
     }
+  }
+
+  /**
+   * Get the value of an asset in ADA and USD
+   * @param policyId The policy ID of the asset
+   * @param assetName The asset name (hex encoded)
+   * @returns Promise with the asset value in ADA and USD
+   */
+  async getAssetValue(policyId: string, assetName: string): Promise<{ priceAda: number; priceUsd: number }> {
+    const cacheKey = `asset_value_${policyId}_${assetName}`;
+    const cached = this.cache.get<{ priceAda: number; priceUsd: number }>(cacheKey);
+    
+    if (cached) return cached;
+
+    try {
+      const response = await axios.get(`${this.baseUrl}/token/price`, {
+        headers: {
+          'x-api-key': this.taptoolsApiKey
+        },
+        params: {
+          policy: policyId,
+          name: assetName,
+          currency: 'usd,ada'
+        }
+      });
+
+      if (!response.data?.data) {
+        throw new Error('Invalid response from TapTools API');
+      }
+
+      const result = {
+        priceAda: Number(response.data.data.ada) || 0,
+        priceUsd: Number(response.data.data.usd) || 0
+      };
+
+      this.cache.set(cacheKey, result);
+      return result;
+    } catch (error) {
+      console.error(`Error fetching asset value for ${policyId}.${assetName}:`, error.message);
+      // Return zero values if the asset is not found or there's an error
+      return { priceAda: 0, priceUsd: 0 };
+    }
+  }
+
+  /**
+   * Calculate the total value of all assets in a vault
+   * @param vaultId The ID of the vault
+   * @returns Promise with the vault assets summary
+   */
+  async calculateVaultAssetsValue(vaultId: string): Promise<VaultAssetsSummaryDto> {
+    // Get the vault to verify it exists
+    const vault = await this.vaultRepository.findOne({ 
+      where: { id: vaultId },
+      relations: ['assets']
+    });
+
+    if (!vault) {
+      throw new NotFoundException(`Vault with ID ${vaultId} not found`);
+    }
+
+    // Group assets by policyId and assetId to handle quantities
+    const assetMap = new Map<string, { 
+      policyId: string; 
+      assetId: string; 
+      quantity: number; 
+      isNft: boolean;
+      metadata?: Record<string, any>;
+    }>();
+
+    // Process each asset in the vault
+    for (const asset of vault.assets) {
+      // Skip assets that are not in a valid status for valuation
+      if (asset.status !== AssetStatus.PENDING && asset.status !== AssetStatus.LOCKED) {
+        continue;
+      }
+
+      const key = `${asset.policy_id}_${asset.asset_id}`;
+      const existingAsset = assetMap.get(key);
+
+      if (existingAsset) {
+        // Sum quantities for fungible tokens
+        existingAsset.quantity += 1;
+      } else {
+        assetMap.set(key, {
+          policyId: asset.policy_id,
+          assetId: asset.asset_id,
+          quantity: 1,
+          isNft: asset.type === AssetType.NFT,
+          metadata: asset.metadata || {}
+        });
+      }
+    }
+
+    // Convert map to array for processing
+    const assets = Array.from(assetMap.values());
+    
+    // Get asset values from TapTools
+    const assetsWithValues = [];
+    let totalValueAda = 0;
+    let totalValueUsd = 0;
+
+    for (const asset of assets) {
+      try {
+        // Get asset value in ADA
+        const assetValue = await this.getAssetValue(
+          asset.policyId, 
+          asset.assetId
+        );
+
+        const valueAda = assetValue?.priceAda || 0;
+        const valueUsd = assetValue?.priceUsd || 0;
+        
+        // Calculate total value for this asset
+        const totalAssetValueAda = valueAda * asset.quantity;
+        const totalAssetValueUsd = valueUsd * asset.quantity;
+
+        assetsWithValues.push({
+          ...asset,
+          assetName: asset.assetId, // Using assetId as assetName for backward compatibility
+          valueAda: totalAssetValueAda,
+          valueUsd: totalAssetValueUsd
+        });
+
+        totalValueAda += totalAssetValueAda;
+        totalValueUsd += totalAssetValueUsd;
+      } catch (error) {
+        // Skip assets that can't be valued
+        console.warn(`Could not value asset ${asset.policyId}.${asset.assetId}:`, error.message);
+      }
+    }
+
+    // Create and return the summary
+    const summary: VaultAssetsSummaryDto = {
+      totalValueAda: +totalValueAda.toFixed(6),
+      totalValueUsd: +totalValueUsd.toFixed(2),
+      totalAssets: assetsWithValues.length,
+      nfts: assetsWithValues.filter(a => a.isNft).length,
+      tokens: assetsWithValues.filter(a => !a.isNft).length,
+      lastUpdated: new Date().toISOString(),
+      assets: assetsWithValues.map(asset => ({
+        policyId: asset.policyId,
+        assetName: asset.assetId, // Using assetId as assetName for backward compatibility
+        quantity: asset.quantity,
+        valueAda: asset.valueAda,
+        valueUsd: asset.valueUsd,
+        isNft: asset.isNft,
+        metadata: asset.metadata
+      }))
+    };
+
+    return summary;
   }
 }

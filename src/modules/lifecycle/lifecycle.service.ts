@@ -6,6 +6,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { Vault } from '../../database/vault.entity';
 import { ContributionService } from '../contribution/contribution.service';
 import { VaultStatus, ContributionWindowType, InvestmentWindowType } from '../../types/vault.types';
+import { TaptoolsService } from '../taptools/taptools.service';
 
 @Injectable()
 export class LifecycleService {
@@ -16,6 +17,7 @@ export class LifecycleService {
     private readonly vaultRepository: Repository<Vault>,
     @Inject(forwardRef(() => ContributionService))
     private readonly contributionService: ContributionService,
+    private readonly taptoolsService: TaptoolsService,
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -88,7 +90,20 @@ export class LifecycleService {
             vault.vault_status = VaultStatus.acquire;
             // Sync transactions before checking contribution end time
             await this.contributionService.syncContributionTransactions(vault.id);
-            this.logger.log(`Synced transactions for vault ${vault.id} before contribution phase check`);
+
+            // TODO: need save this data to vault;
+            // Calculate total value of assets in the vault
+            try {
+              const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
+              this.logger.log(`Vault ${vault.id} total assets value: ${assetsValue.totalValueAda} ADA (${assetsValue.totalValueUsd} USD)`);
+              // You can store this information in the vault if needed
+              // vault.totalValueAda = assetsValue.totalValueAda;
+              // vault.totalValueUsd = assetsValue.totalValueUsd;
+            } catch (error) {
+              this.logger.error(`Failed to calculate assets value for vault ${vault.id}:`, error);
+              // Continue with the transition even if we couldn't calculate the value
+            }
+
             await this.vaultRepository.save(vault);
             this.logger.log(`Vault ${vault.id} moved to acquire phase (immediate start)`);
           }
@@ -100,7 +115,20 @@ export class LifecycleService {
             vault.vault_status = VaultStatus.acquire;
             // Sync transactions before checking contribution end time
             await this.contributionService.syncContributionTransactions(vault.id);
-            this.logger.log(`Synced transactions for vault ${vault.id} before contribution phase check`);
+
+            // TODO: need save this data to vault;
+            // Calculate total value of assets in the vault
+            try {
+              const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
+              this.logger.log(`Vault ${vault.id} total assets value: ${assetsValue.totalValueAda} ADA (${assetsValue.totalValueUsd} USD)`);
+              // You can store this information in the vault if needed
+              // vault.totalValueAda = assetsValue.totalValueAda;
+              // vault.totalValueUsd = assetsValue.totalValueUsd;
+            } catch (error) {
+              this.logger.error(`Failed to calculate assets value for vault ${vault.id}:`, error);
+              // Continue with the transition even if we couldn't calculate the value
+            }
+
             await this.vaultRepository.save(vault);
             this.logger.log(`Vault ${vault.id} moved to acquire phase (custom start time)`);
           }
