@@ -17,6 +17,7 @@ const DEFAULT_MAX_DELAY_MS = 30000; // 30 seconds
 export class BlockchainScannerService {
   private readonly logger = new Logger(BlockchainScannerService.name);
   private readonly scannerUrl: string;
+
   private readonly scannerKey: string;
 
   constructor(private readonly configService: ConfigService) {
