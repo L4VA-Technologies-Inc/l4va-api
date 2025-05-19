@@ -87,11 +87,11 @@ export class AnvilApiService {
         });
       }
 
-     console.log('Base url ', this.baseUrl);
-     console.log('Method ', method);
-     console.log('Headers ', headers);
-     console.log('body ', JSON.stringify(body, null, 2) );
-     console.log('endpoint ', endpoint);
+     // console.log('Base url ', this.baseUrl);
+     // console.log('Method ', method);
+     // console.log('Headers ', headers);
+     // console.log('body ', JSON.stringify(body, null, 2) );
+     // console.log('endpoint ', endpoint);
 
       const response = await fetch(url.toString(), {
         method,
