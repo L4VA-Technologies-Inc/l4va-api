@@ -17,6 +17,7 @@ import {TransactionsModule} from './modules/transactions/transactions.module';
 import {JwtGlobalModule} from './modules/globals/jwt_global_module/jwt_global.module';
 import {AcquireModule} from './modules/acquire/acquire.module';
 import { TaptoolsModule } from './modules/taptools/taptools.module';
+
 @Module({
   imports: [
     ScheduleModule.forRoot(),
