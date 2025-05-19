@@ -1,4 +1,4 @@
-import {BadRequestException, Injectable, Logger, NotFoundException} from '@nestjs/common';
+import {BadRequestException, Inject, Injectable, Logger, NotFoundException, forwardRef} from '@nestjs/common';
 import {InjectRepository} from '@nestjs/typeorm';
 import {Repository} from 'typeorm';
 import {ContributeReq} from './dto/contribute.req';
@@ -6,10 +6,12 @@ import {Vault} from '../../database/vault.entity';
 import {User} from '../../database/user.entity';
 import {VaultPrivacy, VaultStatus} from '../../types/vault.types';
 import {TransactionsService} from '../transactions/transactions.service';
-import {TransactionType} from '../../types/transaction.types';
+import {TransactionStatus, TransactionType} from '../../types/transaction.types';
 import {Asset} from '../../database/asset.entity';
 import {AssetStatus, AssetType} from '../../types/asset.types';
 import {Transaction} from '../../database/transaction.entity';
+import {BlockchainScannerService} from '../blockchain/blockchain-scanner.service';
+import {BlockchainTransactionResponse, BlockchainTransactionListItem} from '../../types/blockchain.types';
 
 @Injectable()
 export class ContributionService {
@@ -24,8 +26,102 @@ export class ContributionService {
     private readonly usersRepository: Repository<User>,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
+    @Inject(forwardRef(() => TransactionsService))
     private readonly transactionsService: TransactionsService,
+    private readonly blockchainScanner: BlockchainScannerService,
   ) {}
+
+  /**
+   * Syncs contribution transactions for a vault by comparing on-chain transactions
+   * with the transactions stored in the database
+   * @param vaultId - The ID of the vault to sync transactions for
+   * @returns An object containing processed blockchain transactions and database transactions
+   */
+  async syncContributionTransactions(vaultId: string): Promise<{
+    processedBlockchainTxs: Array<{
+      tx: BlockchainTransactionListItem;
+      dbTx: Transaction | null;
+      statusUpdated: boolean;
+    }>;
+    databaseTxs: Transaction[];
+  }> {
+    try {
+      // Get the vault with contract address
+      const vault = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        select: ['id', 'contract_address']
+      });
+
+      if (!vault) {
+        throw new NotFoundException('Vault not found');
+      }
+
+      if (!vault.contract_address) {
+        throw new BadRequestException('Vault does not have a contract address');
+      }
+
+      // Get transactions from blockchain and process them
+      const blockchainTxs = await this.blockchainScanner.getAddressTransactions(vault.contract_address);
+
+      // Process blockchain transactions
+      const processedBlockchainTxs = await Promise.all(
+        blockchainTxs
+          // Filter out transactions without block height
+          .filter(tx => tx.block_height != null)
+          // Process each transaction
+          .map(async (tx) => {
+            // Find corresponding transaction in database
+            const dbTx = await this.transactionRepository.findOne({
+              where: { tx_hash: tx.tx_hash }
+            });
+
+            let statusUpdated = false;
+
+            // If transaction exists in DB and status is not confirmed, update it
+            if (dbTx && dbTx.status !== 'confirmed') {
+              try {
+                await this.transactionsService.updateTransactionStatus(
+                  tx.tx_hash,
+                  'confirmed' as TransactionStatus
+                );
+                statusUpdated = true;
+                this.logger.log(`Updated transaction ${tx.tx_hash} status to confirmed`);
+              } catch (updateError) {
+                this.logger.error(
+                  `Failed to update transaction ${tx.tx_hash} status`,
+                  updateError
+                );
+              }
+            }
+
+            return {
+              tx,
+              dbTx: dbTx || null,
+              statusUpdated
+            };
+          })
+      );
+
+      // Get all transactions from database for this vault
+      const databaseTxs = await this.transactionRepository.find({
+        where: {
+          vault_id: vaultId,
+          type: TransactionType.contribute,
+        },
+        order: {
+          id: 'DESC' as const, // Using id as a proxy for creation order
+        },
+      });
+
+      return {
+        processedBlockchainTxs,
+        databaseTxs,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to sync contribution transactions for vault ${vaultId}`, error);
+      throw error;
+    }
+  }
 
   async contribute(vaultId: string, contributeReq: ContributeReq, userId: string) {
     const vault = await this.vaultRepository.findOne({
@@ -100,13 +196,13 @@ export class ContributionService {
               added_by: user,
               metadata: assetItem?.metadata || {}
             });
-            
+
             const savedAsset = await this.assetRepository.save(asset);
             this.logger.log(`Created asset ${savedAsset.id} for transaction ${savedTransaction.id}`);
             return savedAsset;
           })
         );
-        
+
         this.logger.log(`Successfully created ${assets.length} assets for transaction ${savedTransaction.id}`);
       } catch (error) {
         this.logger.error(`Failed to save assets for transaction ${transaction.id}`, error);
@@ -135,4 +231,8 @@ export class ContributionService {
       txHash: txHash
     };
   }
+
+
+
+
 }

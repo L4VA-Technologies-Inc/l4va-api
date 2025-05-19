@@ -1,3 +1,17 @@
+export interface BlockchainTransactionListItem {
+  tx_hash: string;
+  tx_index: number;
+  block_height: number;
+  block_time: number;
+}
+
+export interface BlockchainTransactionListResponse {
+  address: string;
+  page: number;
+  count: number;
+  transactions: BlockchainTransactionListItem[];
+}
+
 export interface BlockchainTransactionResponse {
   hash: string;
   block: string;

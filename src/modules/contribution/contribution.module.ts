@@ -7,9 +7,10 @@ import {TransactionsModule} from '../transactions/transactions.module';
 import {User} from '../../database/user.entity';
 import {Asset} from '../../database/asset.entity';
 import {Transaction} from "../../database/transaction.entity";
+import {BlockchainModule} from "../blockchain/blockchain.module";
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Vault, User, Asset, Transaction]), TransactionsModule],
+  imports: [BlockchainModule, TypeOrmModule.forFeature([Vault, User, Asset, Transaction]), TransactionsModule],
   controllers: [ContributionController],
   providers: [ContributionService],
   exports: [ContributionService],

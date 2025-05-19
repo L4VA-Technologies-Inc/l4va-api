@@ -1,8 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { Vault } from '../../database/vault.entity';
+import { ContributionService } from '../contribution/contribution.service';
 import { VaultStatus, ContributionWindowType, InvestmentWindowType } from '../../types/vault.types';
 
 @Injectable()
@@ -12,6 +14,8 @@ export class LifecycleService {
   constructor(
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
+    @Inject(forwardRef(() => ContributionService))
+    private readonly contributionService: ContributionService,
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -71,27 +75,40 @@ export class LifecycleService {
       .getMany();
 
     for (const vault of contributionVaults) {
-      const contributionStart = new Date(vault.contribution_phase_start);
-      const contributionDurationMs = Number(vault.contribution_duration);
-      const contributionEnd = new Date(contributionStart.getTime() + contributionDurationMs);
+      try {
 
-      if (now >= contributionEnd) {
-        // For immediate acquire start
-        if (vault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
-          vault.acquire_phase_start = now.toISOString();
-          vault.vault_status = VaultStatus.acquire;
-          await this.vaultRepository.save(vault);
-          this.logger.log(`Vault ${vault.id} moved to acquire phase (immediate start)`);
+        const contributionStart = new Date(vault.contribution_phase_start);
+        const contributionDurationMs = Number(vault.contribution_duration);
+        const contributionEnd = new Date(contributionStart.getTime() + contributionDurationMs);
+
+        if (now >= contributionEnd) {
+          // For immediate acquire start
+          if (vault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
+            vault.acquire_phase_start = now.toISOString();
+            vault.vault_status = VaultStatus.acquire;
+            // Sync transactions before checking contribution end time
+            await this.contributionService.syncContributionTransactions(vault.id);
+            this.logger.log(`Synced transactions for vault ${vault.id} before contribution phase check`);
+            await this.vaultRepository.save(vault);
+            this.logger.log(`Vault ${vault.id} moved to acquire phase (immediate start)`);
+          }
+          // For custom acquire start time
+          else if (vault.acquire_open_window_type === InvestmentWindowType.custom &&
+                  vault.acquire_open_window_time &&
+                  now >= new Date(vault.acquire_open_window_time)) {
+            vault.acquire_phase_start = now.toISOString();
+            vault.vault_status = VaultStatus.acquire;
+            // Sync transactions before checking contribution end time
+            await this.contributionService.syncContributionTransactions(vault.id);
+            this.logger.log(`Synced transactions for vault ${vault.id} before contribution phase check`);
+            await this.vaultRepository.save(vault);
+            this.logger.log(`Vault ${vault.id} moved to acquire phase (custom start time)`);
+          }
         }
-        // For custom acquire start time
-        else if (vault.acquire_open_window_type === InvestmentWindowType.custom &&
-                 vault.acquire_open_window_time &&
-                 now >= new Date(vault.acquire_open_window_time)) {
-          vault.acquire_phase_start = now.toISOString();
-          vault.vault_status = VaultStatus.acquire;
-          await this.vaultRepository.save(vault);
-          this.logger.log(`Vault ${vault.id} moved to acquire phase (custom start time)`);
-        }
+      } catch (error) {
+        this.logger.error(`Error processing vault ${vault.id} in handleContributionToInvestment`, error);
+        // Continue with the next vault even if one fails
+        continue;
       }
     }
   }
