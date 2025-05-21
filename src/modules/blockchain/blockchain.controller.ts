@@ -10,6 +10,7 @@ import {
   TransactionBuildResponseDto,
   TransactionSubmitResponseDto
 } from './dto/transaction.dto';
+import {CreateVaultReq} from "../vaults/dto/createVault.req";
 
 @ApiTags('blockchain')
 @Controller('blockchain')
@@ -30,6 +31,21 @@ export class BlockchainController {
   async buildTransaction(@Body() params: BuildTransactionDto): Promise<TransactionBuildResponseDto> {
     return this.transactionService.buildTransaction(params);
   }
+  @Post('burn-vault')
+  @ApiOperation({ summary: 'Build a Cardano transaction for burn vault' })
+  @ApiResponse({
+    status: 200,
+    description: 'Transaction built successfully',
+    type: TransactionBuildResponseDto
+  })
+  @UseGuards(AuthGuard)
+  async burnVault(@Request() req,
+                  @Body() data: any
+  ): Promise<any> {
+    const userId = req.user.sub;
+    return this.transactionService.handleBurnVault(userId, data.vaultId);
+  }
+
 
   @Post('transaction/submit')
   @ApiOperation({ summary: 'Submit a signed Cardano transaction' })
@@ -71,7 +87,6 @@ export class BlockchainController {
       };
     }
   }
-
 
 
   @Post('tx-webhook')

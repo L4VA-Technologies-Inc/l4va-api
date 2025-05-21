@@ -484,4 +484,7 @@ export class BlockchainTransactionService {
       }
     }
   }
+
+  async handleBurnVault(userId: string, vaultId: string) {}
+
 }
