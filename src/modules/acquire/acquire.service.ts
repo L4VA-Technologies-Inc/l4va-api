@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AcquireReq } from './dto/acquire.req';
@@ -7,18 +7,25 @@ import { VaultStatus } from '../../types/vault.types';
 import { User } from '../../database/user.entity';
 import { TransactionsService } from '../transactions/transactions.service';
 import { TransactionType } from '../../types/transaction.types';
+import { Asset } from '../../database/asset.entity';
+import { AssetType, AssetStatus } from '../../types/asset.types';
+import { ContributionAsset } from '../contribution/dto/contribute.req';
 
 @Injectable()
 export class AcquireService {
+  private readonly logger = new Logger(AcquireService.name);
+
   constructor(
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(Asset)
+    private readonly assetRepository: Repository<Asset>,
     private readonly transactionsService: TransactionsService,
   ) {}
 
-  async invest(vaultId: string, investReq: AcquireReq, userId: string) {
+  async acquire(vaultId: string, acquireReq: AcquireReq, userId: string) {
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
       relations: ['acquirer_whitelist', 'owner'],
@@ -28,13 +35,17 @@ export class AcquireService {
       where: { id: userId },
     });
 
-
     if (!vault) {
       throw new NotFoundException('Vault not found');
     }
 
     if (vault.vault_status !== VaultStatus.acquire) {
       throw new BadRequestException('Vault is not in acquire phase');
+    }
+
+    // Validate assets
+    if (!acquireReq.assets || !Array.isArray(acquireReq.assets) || acquireReq.assets.length === 0) {
+      throw new BadRequestException('At least one asset is required');
     }
 
     // Allow vault owner to bypass whitelist check
@@ -50,29 +61,53 @@ export class AcquireService {
       }
     }
 
-    // Validate acquire amount and currency based on vault settings
+    // Validate assets against vault settings if needed
     if (vault.value_method === 'fixed') {
-      if (investReq.currency !== vault.valuation_currency) {
-        throw new BadRequestException('Invalid acquire currency');
-      }
-      // Additional validation for fixed valuation type can be added here
+      // Add any specific validation for fixed valuation type here
     }
 
     // Create a transaction record for the acquire
     const transaction = await this.transactionsService.createTransaction({
       vault_id: vaultId,
       type: TransactionType.acquire,
-      assets: [], // Investment transactions don't have assets, only ADA amount
-      amount: parseFloat(investReq.amount)
+      assets: [],
     });
+
+    // Create assets for the transaction
+    if (acquireReq.assets.length > 0) {
+      try {
+        // Ensure the transaction exists and is loaded with relations if needed
+        const savedTransaction = await this.transactionsService.findById(transaction.id);
+
+        // Create and save all assets
+        await Promise.all(
+          acquireReq.assets.map(async (assetItem) => {
+            const asset = this.assetRepository.create({
+              transaction: savedTransaction,
+              type: AssetType.CNT, // Using CNT type for acquire
+              policy_id: assetItem.policyId || '',
+              asset_id: assetItem.assetName,
+              quantity: assetItem.quantity,
+              status: AssetStatus.PENDING,
+              added_by: user,
+              metadata: assetItem?.metadata || {}
+            });
+
+            await this.assetRepository.save(asset);
+          })
+        );
+      } catch (error) {
+        this.logger.error(`Error creating assets for acquire transaction ${transaction.id}:`, error);
+        throw new BadRequestException('Failed to create assets for the transaction');
+      }
+    }
 
     return {
       success: true,
-      message: 'Investment request accepted, transaction created',
+      message: 'Acquire request accepted, transaction created',
       vaultId,
       txId: transaction.id,
-      amount: investReq.amount,
-      currency: investReq.currency,
+      assets: acquireReq.assets,
     };
   }
 

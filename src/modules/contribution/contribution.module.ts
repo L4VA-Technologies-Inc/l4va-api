@@ -8,9 +8,14 @@ import {User} from '../../database/user.entity';
 import {Asset} from '../../database/asset.entity';
 import {Transaction} from "../../database/transaction.entity";
 import {BlockchainModule} from "../blockchain/blockchain.module";
+import {TaptoolsModule} from "../taptools/taptools.module";
 
 @Module({
-  imports: [BlockchainModule, TypeOrmModule.forFeature([Vault, User, Asset, Transaction]), TransactionsModule],
+  imports: [
+    TaptoolsModule,
+    BlockchainModule,
+    TypeOrmModule.forFeature([Vault, User, Asset, Transaction]),
+    TransactionsModule],
   controllers: [ContributionController],
   providers: [ContributionService],
   exports: [ContributionService],

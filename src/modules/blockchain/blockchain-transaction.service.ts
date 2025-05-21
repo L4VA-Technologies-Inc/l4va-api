@@ -1,4 +1,4 @@
-import {Injectable, Logger, NotFoundException} from '@nestjs/common';
+import {ForbiddenException, Injectable, Logger, NotFoundException} from '@nestjs/common';
 import { AnvilApiService } from './anvil-api.service';
 import { TransactionsService } from '../transactions/transactions.service';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
@@ -259,14 +259,16 @@ export class BlockchainTransactionService {
         'Content-Type': 'application/json',
       };
 
-      const contractDeployed = await fetch(`${this.anvilApi}/transactions/build`, {
+      const txDeployed = await fetch(`${this.anvilApi}/transactions/build`, {
         method: 'POST',
         headers,
         body: JSON.stringify(input),
       });
 
-      const buildResponse = await contractDeployed.json();
-     // console.log('build response', JSON.stringify(buildResponse));
+      const buildResponse = await txDeployed.json();
+     if(!!JSON.stringify(buildResponse).includes('UNPROCESSABLE_CONTENT')){
+       throw new ForbiddenException('Failed to build complete transaction, you cant attach to the vault this kid of assets, or you cant attach to this vault at all!');
+     }
 
       if (!buildResponse.complete) {
         throw new Error('Failed to build complete transaction');
@@ -365,7 +367,6 @@ export class BlockchainTransactionService {
   }
 
   async handleScannerEvent(event: any){
-    console.log('event from scanner ', event.data )
     // Determine transaction status based on blockchain data
     const tx = event.data.tx;
     let status: OnchainTransactionStatus;

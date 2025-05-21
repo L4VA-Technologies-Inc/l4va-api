@@ -97,13 +97,16 @@ export class LifecycleService {
               const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
               this.logger.log(`Vault ${vault.id} total assets value: ${assetsValue.totalValueAda} ADA (${assetsValue.totalValueUsd} USD)`);
               // You can store this information in the vault if needed
-              // vault.totalValueAda = assetsValue.totalValueAda;
-              // vault.totalValueUsd = assetsValue.totalValueUsd;
+              vault.total_assets_cost_ada = assetsValue.totalValueAda;
+              vault.total_assets_cost_usd = assetsValue.totalValueUsd;
+
+              //  todo calculate threshold Price
+              vault.require_reserved_cost_ada  = assetsValue.totalValueAda *  (vault.acquire_reserve * 0.01);
+              vault.require_reserved_cost_usd = assetsValue.totalValueUsd *  (vault.acquire_reserve * 0.01);
             } catch (error) {
               this.logger.error(`Failed to calculate assets value for vault ${vault.id}:`, error);
               // Continue with the transition even if we couldn't calculate the value
             }
-
             await this.vaultRepository.save(vault);
             this.logger.log(`Vault ${vault.id} moved to acquire phase (immediate start)`);
           }

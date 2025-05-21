@@ -42,7 +42,7 @@ class OnchainMetadata {
   description: string;
 }
 
-class ContributionAsset {
+export class ContributionAsset {
   @ApiProperty({
     description: 'Policy ID of the asset (56-character hex string)',
     example: '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd',

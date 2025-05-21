@@ -149,6 +149,20 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   publicationHash: string;
 
+  @ApiProperty({ description: 'Required values cost for success acquire phase in ada' })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'requireReservedCostAda' }
+  })
+  requireReservedCostAda: number;
+
+  @ApiProperty({ description: 'Required values cost for success acquire phase in usd' })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'requireReservedCostUsd' }
+  })
+  requireReservedCostUsd: number;
+
   @ApiProperty({ description: 'Valuation type', enum: ValueMethod, required: false })
   @DtoRepresent({
     transform: false,

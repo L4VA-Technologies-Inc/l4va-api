@@ -275,6 +275,26 @@ export class Vault {
   })
   total_assets_cost_ada: number;
 
+  @Expose({ name: 'requireReservedCostUsd' })
+  @Transform(({ value }) => value ? Number(value) : null)
+  @Column({
+    name: 'require_reserved_cost_usd',
+    type: 'numeric',
+    nullable: true,
+    default: 0
+  })
+  require_reserved_cost_usd: number;
+
+  @Expose({ name: 'requireReservedCostAda' })
+  @Transform(({ value }) => value ? Number(value) : null)
+  @Column({
+    name: 'require_reserved_cost_ada',
+    type: 'numeric',
+    nullable: true,
+    default: 0
+  })
+  require_reserved_cost_ada: number;
+
   @Expose({ name: 'vaultStatus'})
   @Column({
     name: 'vault_status',

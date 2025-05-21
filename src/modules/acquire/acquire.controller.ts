@@ -24,7 +24,7 @@ export class AcquireController {
     @Body() acquireReq: AcquireReq,
   ) {
     const userId = req.user.sub;
-    return this.acquireService.invest(vaultId, acquireReq, userId);
+    return this.acquireService.acquire(vaultId, acquireReq, userId);
   }
 
   @Patch('transaction/:txId/hash')
