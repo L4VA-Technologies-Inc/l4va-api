@@ -485,6 +485,14 @@ export class BlockchainTransactionService {
     }
   }
 
-  async handleBurnVault(userId: string, vaultId: string) {}
+  async handleBurnVault(userId: string, vaultId: string) {
+    // todo need to check if user is owner and if vault is exists
+    this.logger.log(`Run delete vault process for  vaultId: ${vaultId}  by user with userId: ${userId}`)
+
+    // todo need to create tx for extract vaults
+    // todo then need to burn LP tokens
+    // todo then need to burn vault
+    // todo then need to mark vaults as deleted
+  }
 
 }
