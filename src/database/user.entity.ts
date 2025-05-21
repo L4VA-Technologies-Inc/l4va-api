@@ -66,6 +66,9 @@ export class User {
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
   gains: number;
 
+  @Column({ name: 'deleted', type: 'boolean', nullable: false, default: false })
+  deleted: boolean;
+
   @Expose({ name: 'createdAt'})
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   created_at: string;

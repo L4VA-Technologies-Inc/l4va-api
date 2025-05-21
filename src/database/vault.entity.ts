@@ -392,6 +392,9 @@ export class Vault {
   @Column({ name: 'locked_at', type: 'timestamptz', nullable: true })
   locked_at?: string;
 
+  @Column({ name: 'deleted', type: 'boolean', nullable: false, default: false })
+  deleted: boolean;
+
   @Expose({ name: 'governancePhaseStart' })
   @Column({ name: 'governance_phase_start', type: 'timestamptz', nullable: true })
   governance_phase_start?: string;

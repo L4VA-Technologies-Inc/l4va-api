@@ -67,6 +67,9 @@ export class Asset {
   })
   dex_price?: number;
 
+  @Column({ name: 'deleted', type: 'boolean', nullable: false, default: false })
+  deleted: boolean;
+
   @Expose({ name: 'lastValuation' })
   @Column({
     name: 'last_valuation',
@@ -101,7 +104,7 @@ export class Asset {
   @Column({ type: 'jsonb', nullable: true })
   @Expose({ name: 'metadata' })
   metadata: any;
-  
+
   @Expose({ name: 'transaction' })
   @ManyToOne(() => Transaction, (transaction: Transaction) => transaction.id)
   @JoinColumn({ name: 'transaction_id' })
