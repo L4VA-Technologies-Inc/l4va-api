@@ -12,6 +12,8 @@ import {CreateVaultReq} from './dto/createVault.req';
 import {SaveDraftReq} from './dto/saveDraft.req';
 import {User} from '../../database/user.entity';
 import {LinkEntity} from '../../database/link.entity';
+import {Asset} from '../../database/asset.entity';
+import {AssetStatus} from '../../types/asset.types';
 import {FileEntity} from '../../database/file.entity';
 import {AssetsWhitelistEntity} from '../../database/assetsWhitelist.entity';
 import {AcquirerWhitelistEntity} from '../../database/acquirerWhitelist.entity';
@@ -51,6 +53,8 @@ export class VaultsService {
     private readonly tagsRepository: Repository<TagEntity>,
     @InjectRepository(ContributorWhitelistEntity)
     private readonly contributorWhitelistRepository: Repository<ContributorWhitelistEntity>,
+    @InjectRepository(Asset)
+    private readonly assetsRepository: Repository<Asset>,
     private readonly awsService: AwsService,
     private readonly vaultContractService: VaultContractService,
     private readonly blockchainScannerService: BlockchainScannerService,
@@ -666,8 +670,22 @@ export class VaultsService {
       throw new BadRequestException('Access denied: You are not the owner of this vault');
     }
 
+    // Get count of locked assets for this vault
+    const lockedAssetsCount = await this.assetsRepository.count({
+      where: {
+        vault: { id },
+        status: AssetStatus.LOCKED
+      }
+    });
 
-    return plainToInstance(VaultFullResponse, classToPlain(vault), { excludeExtraneousValues: true });
+    // Add the count to the vault object
+    const vaultWithCount = {
+      ...vault,
+      maxContributeAssets: Number(vault.max_contribute_assets),
+      assetsCount: lockedAssetsCount
+    };
+
+    return plainToInstance(VaultFullResponse, classToPlain(vaultWithCount), { excludeExtraneousValues: true });
   }
 
   async getVaults(userId: string, filter?: VaultFilter, page: number = 1, limit: number = 10, sortBy?: VaultSortField, sortOrder: SortOrder = SortOrder.DESC): Promise<PaginatedResponseDto<VaultShortResponse>> {

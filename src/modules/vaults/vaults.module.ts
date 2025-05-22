@@ -15,6 +15,7 @@ import { DraftVaultsService } from './draft-vaults.service';
 import {ContributorWhitelistEntity} from '../../database/contributorWhitelist.entity';
 import {TransactionsModule} from '../transactions/transactions.module';
 import {BlockchainModule} from '../blockchain/blockchain.module';
+import {Asset} from "../../database/asset.entity";
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import {BlockchainModule} from '../blockchain/blockchain.module';
       Vault,
       User,
       FileEntity,
+      Asset,
       AssetsWhitelistEntity,
       LinkEntity, AcquirerWhitelistEntity, TagEntity, ContributorWhitelistEntity]),
   ],

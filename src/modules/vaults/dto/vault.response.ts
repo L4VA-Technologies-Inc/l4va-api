@@ -156,6 +156,20 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   requireReservedCostAda: number;
 
+  @ApiProperty({ description: 'Count of contributed assets  ' })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'assetsCount' }
+  })
+  assetsCount: number;
+
+  @ApiProperty({ description: 'Max count of contributed count ' })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'maxContributeAssets' }
+  })
+  maxContributeAssets: number;
+
   @ApiProperty({ description: 'Required values cost for success acquire phase in usd' })
   @DtoRepresent({
     transform: false,

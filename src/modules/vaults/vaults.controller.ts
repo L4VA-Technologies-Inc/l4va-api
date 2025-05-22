@@ -125,6 +125,7 @@ export class VaultsController {
       return await this.draftVaultsService.getDraftVaultById(id, userId);
     } catch (error) {
       if (error?.message === 'Draft vault not found') {
+        
         return this.vaultsService.getVaultById(id, userId);
       }
       throw error;
