@@ -224,9 +224,14 @@ export class VaultsService {
       }
 
       // Handle assets whitelist
+      let maxCountOf = 0;
       if (data.assetsWhitelist?.length > 0) {
         await Promise.all(data.assetsWhitelist.map(assetItem => {
           if(assetItem.policyId){
+            // Sum up the countCapMax values
+            if (assetItem.countCapMax) {
+              maxCountOf += assetItem.countCapMax;
+            }
             return this.assetsWhitelistRepository.save({
               vault: newVault,
               policy_id: assetItem.policyId,
@@ -237,6 +242,8 @@ export class VaultsService {
         }));
       }
 
+      newVault.max_contribute_assets = Number(maxCountOf) || 0;
+      await this.vaultsRepository.save(newVault);
       // Handle acquirer whitelist
       const acquirerFromCsv = acquirerWhitelistFile ?
         await this.parseCSVFromS3(acquirerWhitelistFile.file_key) : [];
@@ -658,6 +665,7 @@ export class VaultsService {
     if (vault.privacy !== VaultPrivacy.public) {
       throw new BadRequestException('Access denied: You are not the owner of this vault');
     }
+
 
     return plainToInstance(VaultFullResponse, classToPlain(vault), { excludeExtraneousValues: true });
   }

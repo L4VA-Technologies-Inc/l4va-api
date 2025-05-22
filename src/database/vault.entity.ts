@@ -162,6 +162,13 @@ export class Vault {
     type: 'numeric', nullable:true})
   acquire_reserve?: number;
 
+  @Expose({ name: 'maxContributeAssets'})
+  @Transform(({ value }) => value ? Number(value) : null)
+  @Column({
+    name: 'max_contribute_assets',
+    type: 'numeric', default: 0 })
+  max_contribute_assets?: number;
+
   @Expose({ name: 'liquidityPoolContribution'})
   @Transform(({ value }) => value ? Number(value) : null)
   @Column({
