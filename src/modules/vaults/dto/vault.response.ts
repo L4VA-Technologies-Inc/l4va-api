@@ -163,6 +163,13 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   assetsCount: number;
 
+  @ApiProperty({ description: 'Response with list of assets prices  ' })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'assetsPrices' }
+  })
+  assetsPrices?: any;
+
   @ApiProperty({ description: 'Max count of contributed count ' })
   @DtoRepresent({
     transform: false,

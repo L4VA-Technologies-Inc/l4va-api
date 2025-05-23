@@ -16,9 +16,11 @@ import {ContributorWhitelistEntity} from '../../database/contributorWhitelist.en
 import {TransactionsModule} from '../transactions/transactions.module';
 import {BlockchainModule} from '../blockchain/blockchain.module';
 import {Asset} from "../../database/asset.entity";
+import {TaptoolsModule} from "../taptools/taptools.module";
 
 @Module({
   imports: [
+    TaptoolsModule,
     AwsModule,
     LifecycleModule,
     TransactionsModule,

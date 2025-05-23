@@ -28,6 +28,7 @@ import {applyContributeParams} from "../blockchain/utils/apply_params";
 import {Credential, EnterpriseAddress, ScriptHash} from "@emurgo/cardano-serialization-lib-nodejs";
 import * as csv from 'csv-parse';
 import {AwsService} from '../aws_bucket/aws.service';
+import {TaptoolsService} from "../taptools/taptools.service";
 
 @Injectable()
 export class VaultsService {
@@ -58,6 +59,7 @@ export class VaultsService {
     private readonly awsService: AwsService,
     private readonly vaultContractService: VaultContractService,
     private readonly blockchainScannerService: BlockchainScannerService,
+    private readonly taptoolsService: TaptoolsService,
     private readonly configService: ConfigService,
   ) {}
 
@@ -678,11 +680,16 @@ export class VaultsService {
       }
     });
 
+    const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(id)
+
     // Add the count to the vault object
     const vaultWithCount = {
       ...vault,
       maxContributeAssets: Number(vault.max_contribute_assets),
-      assetsCount: lockedAssetsCount
+      assetsCount: lockedAssetsCount,
+      assetsPrices: assetsPrices,
+      requireReservedCostAda: assetsPrices.totalValueAda *  (vault.acquire_reserve * 0.01),
+      requireReservedCostUsd: assetsPrices.totalValueUsd *  (vault.acquire_reserve * 0.01)
     };
 
     return plainToInstance(VaultFullResponse, classToPlain(vaultWithCount), { excludeExtraneousValues: true });
