@@ -145,13 +145,6 @@ export class LifecycleService {
   }
 
   private async handleInvestmentToGovernance() {
-    // todo here we need sync tx one more time
-    // todo then we need select contributed assets and get it's total price
-    // todo then we need to use threshold percent to get required value, then
-    // todo we need select invested size of assets, and compare required sum and invested
-    // todo if there is enough ada to lunch vault, then we need mint token and lunch
-    // todo in other cases we need burn vault and refund assets
-
     const acquireVaults = await this.vaultRepository
       .createQueryBuilder('vault')
       .where('vault.vault_status = :status', { status: VaultStatus.acquire })
@@ -167,6 +160,14 @@ export class LifecycleService {
       const acquireEnd = new Date(acquireStart.getTime() + acquireDurationMs);
 
       if (now >= acquireEnd) {
+        // todo here we need sync tx one more time
+        await this.contributionService.syncContributionTransactions(vault.id);
+        // todo then we need select contributed assets and get it's total price
+
+        // todo then we need to use threshold percent to get required value, then
+        // todo we need select invested size of assets, and compare required sum and invested
+        // todo if there is enough ada to lunch vault, then we need mint token and lunch
+        // todo in other cases we need burn vault and refund assets
         vault.governance_phase_start = now.toISOString();
         vault.vault_status = VaultStatus.governance;
         await this.vaultRepository.save(vault);
