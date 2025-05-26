@@ -8,7 +8,7 @@ import {
   BeforeUpdate,
 } from 'typeorm';
 import { Vault } from './vault.entity';
-import { AssetType, AssetStatus } from '../types/asset.types';
+import { AssetType, AssetStatus, AssetOriginType } from '../types/asset.types';
 import { Expose } from 'class-transformer';
 import {Transaction} from './transaction.entity';
 import {User} from "./user.entity";
@@ -100,6 +100,16 @@ export class Asset {
     nullable: true
   })
   released_at?: Date;
+
+  @Expose({ name: 'originType' })
+  @Column({
+    name: 'origin_type',
+    type: 'enum',
+    enum: AssetOriginType,
+    nullable: true,
+    comment: 'Source or origin type of the asset (INVESTED, CONTRIBUTED)'
+  })
+  origin_type?: AssetOriginType;
 
   @Column({ type: 'jsonb', nullable: true })
   @Expose({ name: 'metadata' })

@@ -1,10 +1,15 @@
-import {BadRequestException, Injectable, Logger, NotFoundException, UnauthorizedException} from '@nestjs/common';
-import {ContributionWindowType, InvestmentWindowType, ValueMethod, VaultPrivacy, VaultStatus} from '../../types/vault.types';
+import {BadRequestException, Injectable, Logger, UnauthorizedException} from '@nestjs/common';
+import {
+  ContributionWindowType,
+  InvestmentWindowType,
+  ValueMethod,
+  VaultPrivacy,
+  VaultStatus
+} from '../../types/vault.types';
 import {InjectRepository} from '@nestjs/typeorm';
 import {ConfigService} from '@nestjs/config';
 import {Brackets, In, Repository} from 'typeorm';
-import {plainToInstance} from 'class-transformer';
-import {classToPlain} from 'class-transformer';
+import {classToPlain, plainToInstance} from 'class-transformer';
 import {SortOrder, VaultFilter, VaultSortField} from './dto/get-vaults.dto';
 import {PaginatedResponseDto} from './dto/paginated-response.dto';
 import {Vault} from '../../database/vault.entity';
@@ -13,7 +18,7 @@ import {SaveDraftReq} from './dto/saveDraft.req';
 import {User} from '../../database/user.entity';
 import {LinkEntity} from '../../database/link.entity';
 import {Asset} from '../../database/asset.entity';
-import {AssetStatus} from '../../types/asset.types';
+import {AssetStatus, AssetType} from '../../types/asset.types';
 import {FileEntity} from '../../database/file.entity';
 import {AssetsWhitelistEntity} from '../../database/assetsWhitelist.entity';
 import {AcquirerWhitelistEntity} from '../../database/acquirerWhitelist.entity';
@@ -676,7 +681,8 @@ export class VaultsService {
     const lockedAssetsCount = await this.assetsRepository.count({
       where: {
         vault: { id },
-        status: AssetStatus.LOCKED
+        status: AssetStatus.LOCKED,
+        type: AssetType.NFT,
       }
     });
 

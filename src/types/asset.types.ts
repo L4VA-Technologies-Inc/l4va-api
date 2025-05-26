@@ -9,3 +9,8 @@ export enum AssetStatus {
   LOCKED = 'locked',
   RELEASED = 'released'
 }
+
+export enum AssetOriginType {
+  INVESTED = 'invested',
+  CONTRIBUTED = 'contributed'
+}

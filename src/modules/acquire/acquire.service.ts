@@ -8,7 +8,7 @@ import { User } from '../../database/user.entity';
 import { TransactionsService } from '../transactions/transactions.service';
 import { TransactionType } from '../../types/transaction.types';
 import { Asset } from '../../database/asset.entity';
-import { AssetType, AssetStatus } from '../../types/asset.types';
+import { AssetType, AssetStatus, AssetOriginType } from '../../types/asset.types';
 import { ContributionAsset } from '../contribution/dto/contribute.req';
 
 @Injectable()
@@ -89,6 +89,7 @@ export class AcquireService {
               asset_id: assetItem.assetName,
               quantity: assetItem.quantity,
               status: AssetStatus.PENDING,
+              origin_type: AssetOriginType.INVESTED,
               added_by: user,
               metadata: assetItem?.metadata || {}
             });

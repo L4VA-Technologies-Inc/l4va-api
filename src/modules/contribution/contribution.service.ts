@@ -8,7 +8,7 @@ import {VaultPrivacy, VaultStatus} from '../../types/vault.types';
 import {TransactionsService} from '../transactions/transactions.service';
 import {TransactionStatus, TransactionType} from '../../types/transaction.types';
 import {Asset} from '../../database/asset.entity';
-import {AssetStatus, AssetType} from '../../types/asset.types';
+import {AssetStatus, AssetType, AssetOriginType} from '../../types/asset.types';
 import {Transaction} from '../../database/transaction.entity';
 import {BlockchainScannerService} from '../blockchain/blockchain-scanner.service';
 import {BlockchainTransactionResponse, BlockchainTransactionListItem} from '../../types/blockchain.types';
@@ -193,6 +193,7 @@ export class ContributionService {
               asset_id: assetItem.assetName,
               quantity: assetItem.quantity,
               status: AssetStatus.PENDING,
+              origin_type: AssetOriginType.CONTRIBUTED,
               added_by: user,
               metadata: assetItem?.metadata || {}
             });
