@@ -692,6 +692,9 @@ export class VaultsService {
 
 
     // todo for calculate how much ada already invested we need to select assets with INVESTED origin type.
+    // todo and here we got how much invested now
+    const investedAssetsPrice = await this.taptoolsService.calculateVaultAssetsValue(id, 'acquire')
+
 
     // Add the count to the vault object
     const vaultWithCount = {
