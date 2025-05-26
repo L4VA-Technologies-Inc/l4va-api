@@ -18,7 +18,7 @@ import {SaveDraftReq} from './dto/saveDraft.req';
 import {User} from '../../database/user.entity';
 import {LinkEntity} from '../../database/link.entity';
 import {Asset} from '../../database/asset.entity';
-import {AssetStatus, AssetType} from '../../types/asset.types';
+import {AssetOriginType, AssetStatus, AssetType} from '../../types/asset.types';
 import {FileEntity} from '../../database/file.entity';
 import {AssetsWhitelistEntity} from '../../database/assetsWhitelist.entity';
 import {AcquirerWhitelistEntity} from '../../database/acquirerWhitelist.entity';
@@ -683,6 +683,7 @@ export class VaultsService {
         vault: { id },
         status: AssetStatus.LOCKED,
         type: AssetType.NFT,
+        origin_type: AssetOriginType.CONTRIBUTED,
       }
     });
 
