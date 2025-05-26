@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import axios from 'axios';
 import * as NodeCache from 'node-cache';
+import { AssetOriginType } from '../../types/asset.types';
 import { WalletSummaryDto } from './dto/wallet-summary.dto';
 import { AssetValueDto } from './dto/asset-value.dto';
 import { Vault } from '../../database/vault.entity';
@@ -371,9 +372,10 @@ export class TaptoolsService {
   /**
    * Calculate the total value of all assets in a vault
    * @param vaultId The ID of the vault
+   * @param phase The phase to filter assets by - 'contribute' for contributed assets, 'acquire' for invested assets
    * @returns Promise with the vault assets summary
    */
-  async calculateVaultAssetsValue(vaultId: string): Promise<VaultAssetsSummaryDto> {
+  async calculateVaultAssetsValue(vaultId: string, phase: 'contribute' | 'acquire' = 'contribute'): Promise<VaultAssetsSummaryDto> {
     // Get the vault to verify it exists
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
@@ -395,8 +397,16 @@ export class TaptoolsService {
 
     // Process each asset in the vault
     for (const asset of vault.assets) {
-      // Skip assets that are not in a valid status for valuation
+      // Skip assets that are not in a valid status for valuation or don't match the phase
       if (asset.status !== AssetStatus.PENDING && asset.status !== AssetStatus.LOCKED) {
+        continue;
+      }
+
+      // Filter assets based on phase
+      if (
+        (phase === 'contribute' && asset.origin_type !== AssetOriginType.CONTRIBUTED) ||
+        (phase === 'acquire' && asset.origin_type !== AssetOriginType.INVESTED)
+      ) {
         continue;
       }
 

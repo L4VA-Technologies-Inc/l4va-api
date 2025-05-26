@@ -687,7 +687,11 @@ export class VaultsService {
       }
     });
 
+    // todo this is ok for contribution phase, but we need to calculate only assets with origin type CONTRIBUTED
     const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(id)
+
+
+    // todo for calculate how much ada already invested we need to select assets with INVESTED origin type.
 
     // Add the count to the vault object
     const vaultWithCount = {
