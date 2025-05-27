@@ -707,7 +707,7 @@ export class VaultsService {
 
     // First transform the vault to plain object with class-transformer
     const plainVault = classToPlain(vault);
-    
+
     // Then merge with additional data
     const result = {
       ...plainVault,
@@ -740,6 +740,7 @@ export class VaultsService {
       .leftJoinAndSelect('vault.contributor_whitelist', 'contributor_whitelist')
       .leftJoinAndSelect('vault.acquirer_whitelist', 'acquirer_whitelist')
       .where('vault.vault_status != :draftStatus', { draftStatus: VaultStatus.draft })
+      .andWhere('vault.vault_status != :createdStatus', { createdStatus: VaultStatus.created })
       // Get public vaults OR private vaults where user is whitelisted based on filter
       .andWhere(new Brackets(qb => {
         qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public })
