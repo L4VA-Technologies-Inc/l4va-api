@@ -696,17 +696,25 @@ export class VaultsService {
     const investedAssetsPrice = await this.taptoolsService.calculateVaultAssetsValue(id, 'acquire')
 
 
-    // Add the count to the vault object
-    const vaultWithCount = {
-      ...vault,
+    // Create a new plain object with the additional properties
+    const additionalData = {
       maxContributeAssets: Number(vault.max_contribute_assets),
       assetsCount: lockedAssetsCount,
       assetsPrices: assetsPrices,
-      requireReservedCostAda: assetsPrices.totalValueAda *  (vault.acquire_reserve * 0.01),
-      requireReservedCostUsd: assetsPrices.totalValueUsd *  (vault.acquire_reserve * 0.01)
+      requireReservedCostAda: assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01),
+      requireReservedCostUsd: assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01)
     };
 
-    return plainToInstance(VaultFullResponse, classToPlain(vaultWithCount), { excludeExtraneousValues: true });
+    // First transform the vault to plain object with class-transformer
+    const plainVault = classToPlain(vault);
+    
+    // Then merge with additional data
+    const result = {
+      ...plainVault,
+      ...additionalData
+    };
+
+    return plainToInstance(VaultFullResponse, result, { excludeExtraneousValues: true });
   }
 
   async getVaults(userId: string, filter?: VaultFilter, page: number = 1, limit: number = 10, sortBy?: VaultSortField, sortOrder: SortOrder = SortOrder.DESC): Promise<PaginatedResponseDto<VaultShortResponse>> {
