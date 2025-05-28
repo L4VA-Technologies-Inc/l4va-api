@@ -17,8 +17,8 @@ export class AssetsController {
     status: 200,
   })
   @UseGuards(AuthGuard)
-  @Get('vault/:vaultId')
-  getVaultAssets(
+  @Get('contributed/:vaultId')
+  getContributedAssets(
     @Request() req,
     @Param('vaultId') vaultId: string,
     @Query() query: PaginationDto
@@ -27,5 +27,21 @@ export class AssetsController {
     return this.assetsService.getVaultAssets(userId, vaultId, query.page, query.limit);
   }
 
+
+  @ApiDoc({
+    summary: 'Get vault assets',
+    description: 'Get paginated list of assets for a specific vault',
+    status: 200,
+  })
+  @UseGuards(AuthGuard)
+  @Get('acquired/:vaultId')
+  getInvestedAssets(
+    @Request() req,
+    @Param('vaultId') vaultId: string,
+    @Query() query: PaginationDto
+  ) {
+    const userId = req.user.sub;
+    return this.assetsService.getAcquiredAssets(userId, vaultId, query.page, query.limit);
+  }
 
 }

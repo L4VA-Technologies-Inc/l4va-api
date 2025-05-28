@@ -405,7 +405,7 @@ export class TaptoolsService {
       // Filter assets based on phase
       if (
         (phase === 'contribute' && asset.origin_type !== AssetOriginType.CONTRIBUTED) ||
-        (phase === 'acquire' && asset.origin_type !== AssetOriginType.INVESTED)
+        (phase === 'acquire' && asset.origin_type !== AssetOriginType.ACQUIRED)
       ) {
         continue;
       }

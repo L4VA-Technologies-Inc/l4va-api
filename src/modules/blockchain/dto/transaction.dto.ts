@@ -33,9 +33,8 @@ export class TransactionOutput {
     description: 'Destination address',
     example: 'addr1qy2k4r9...'
   })
-  @IsString()
   @Expose()
-  readonly address: string;
+  readonly address?: string;
 
   @ApiProperty({
     description: 'Amount in lovelace (can be combined with NFT assets)',

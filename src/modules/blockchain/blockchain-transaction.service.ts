@@ -31,7 +31,7 @@ export interface NftAsset {
 }
 
 export interface BuildTransactionOutput {
-  address: string;
+  address?: string;
   lovelace?: number;
   assets?: NftAsset[];
 }

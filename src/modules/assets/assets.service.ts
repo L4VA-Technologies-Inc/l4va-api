@@ -1,12 +1,12 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Asset } from '../../database/asset.entity';
-import { Vault } from '../../database/vault.entity';
-import { CreateAssetDto } from './dto/create-asset.dto';
-import { AssetStatus, AssetType } from '../../types/asset.types';
-import { VaultStatus } from '../../types/vault.types';
-import { classToPlain } from 'class-transformer';
+import {BadRequestException, Injectable} from '@nestjs/common';
+import {InjectRepository} from '@nestjs/typeorm';
+import {Repository} from 'typeorm';
+import {Asset} from '../../database/asset.entity';
+import {Vault} from '../../database/vault.entity';
+import {CreateAssetDto} from './dto/create-asset.dto';
+import {AssetOriginType, AssetStatus, AssetType} from '../../types/asset.types';
+import {VaultStatus} from '../../types/vault.types';
+import {classToPlain} from 'class-transformer';
 import {User} from '../../database/user.entity';
 
 @Injectable()
@@ -87,7 +87,42 @@ export class AssetsService {
       where: {
         vault: {
           id: vaultId,
-        }
+        },
+        origin_type: AssetOriginType.CONTRIBUTED,
+      },
+      skip: (page - 1) * limit,
+      take: limit,
+      order: {
+        added_at: 'DESC'
+      }
+    });
+
+    return {
+      items: assets.map(asset => classToPlain(asset)),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit)
+    };
+  }
+  async getAcquiredAssets(userId: string, vaultId: string, page: number = 1, limit: number = 10): Promise<any> {
+    // Verify vault ownership
+    const vault = await this.vaultsRepository.findOne({
+      where: {
+        id: vaultId
+      }
+    });
+
+    if (!vault) {
+      throw new BadRequestException('Vault not found or access denied');
+    }
+
+    const [assets, total] = await this.assetsRepository.findAndCount({
+      where: {
+        vault: {
+          id: vaultId,
+        },
+        origin_type: AssetOriginType.ACQUIRED,
       },
       skip: (page - 1) * limit,
       take: limit,

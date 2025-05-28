@@ -89,7 +89,7 @@ export class AcquireService {
               asset_id: assetItem.assetName,
               quantity: assetItem.quantity,
               status: AssetStatus.PENDING,
-              origin_type: AssetOriginType.INVESTED,
+              origin_type: AssetOriginType.ACQUIRED,
               added_by: user,
               metadata: assetItem?.metadata || {}
             });

@@ -12,5 +12,6 @@ export enum AssetStatus {
 
 export enum AssetOriginType {
   INVESTED = 'invested',
+  ACQUIRED = 'acquired',
   CONTRIBUTED = 'contributed'
 }
