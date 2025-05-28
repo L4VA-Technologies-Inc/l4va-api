@@ -183,7 +183,7 @@ export class BlockchainTransactionService {
             assetName: { name: VAULT_ID, format: 'hex' },
             policyId: POLICY_ID,
             type: 'plutus',
-            quantity: 1000,
+            quantity: 1000, // todo need to change this mint value to calculated value based on price
             metadata: {
             },
           },
@@ -195,7 +195,7 @@ export class BlockchainTransactionService {
             redeemer: {
               type: "json",
               value: {
-                quantity: 1000,
+                quantity: 1000, // todo need to change this mint value to calculate value based on price
                 output_index: 0,
                 contribution: isAda ? "Lovelace" : "Asset",
               },
