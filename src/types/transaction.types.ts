@@ -16,5 +16,7 @@ export enum TransactionType {
   investment = 'investment',
   burn ='burn',
   swap = 'swap',
-  stake ='stake'
+  stake ='stake',
+  extractLp = 'extract-lp',
+  distributeLp = 'distribute-lp'
 }

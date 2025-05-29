@@ -1,5 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { BlockchainService } from './blockchain.service';
 import {
   EnterpriseAddress,
   ScriptHash,
@@ -54,21 +55,19 @@ const one_day = 24 * 60 * 60 * 1000;
 
 
 @Injectable()
-export class VaultContractService {
-  private readonly logger = new Logger(VaultContractService.name);
+export class VaultManagingService {
+  private readonly logger = new Logger(VaultManagingService.name);
   private  scAddress: string;
-  private readonly anvilApi: string;
-  private readonly anvilApiKey: string;
   private readonly scPolicyId: string;
   private readonly adminHash: string;
   private readonly adminSKey: string;
   private readonly blockfrost: any;
 
   constructor(
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    @Inject(BlockchainService)
+    private readonly blockchainService: BlockchainService
   ) {
-    this.anvilApiKey = this.configService.get<string>('ANVIL_API_KEY');
-    this.anvilApi = this.configService.get<string>('ANVIL_API_URL') + '/services';
     this.scPolicyId = this.configService.get<string>('SC_POLICY_ID');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
@@ -217,24 +216,10 @@ export class VaultContractService {
         ],
         requiredInputs: REQUIRED_INPUTS,
       };
-      const headers = {
-        'x-api-key': this.anvilApiKey,
-        'Content-Type': 'application/json',
-      };
+      // Build the transaction using BlockchainService
+      const buildResponse = await this.blockchainService.buildTransaction(input);
 
-      // Build the transaction
-      const contractDeployed = await fetch(`${this.anvilApi}/transactions/build`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(input),
-      });
-
-      const buildResponse = await contractDeployed.json();
-
-      if (!buildResponse.complete) {
-        throw new Error('Failed to build complete transaction');
-      }
-
+      // Sign the transaction
       const txToSubmitOnChain = FixedTransaction.from_bytes(
         Buffer.from(buildResponse.complete, 'hex'),
       );
@@ -254,37 +239,30 @@ export class VaultContractService {
     }
   }
 
+  /**
+   * Submit a signed vault transaction to the blockchain
+   * @param signedTx Object containing the transaction and signatures
+   * @returns Transaction hash
+   */
   async submitOnChainVaultTx(signedTx: {
-    transaction: string,
-    signatures: string
+    transaction: string;
+    signatures: string | string[];
   }) {
-    try{
-      const headers = {
-      'x-api-key': this.anvilApiKey,
-      'Content-Type': 'application/json',
-    };
+    try {
+      // Ensure signatures is always an array
+      const signatures = Array.isArray(signedTx.signatures) 
+        ? signedTx.signatures 
+        : [signedTx.signatures];
 
-      const urlSubmit = `${this.anvilApi}/transactions/submit`;
-
-      const submitted = await fetch(urlSubmit, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          signatures: signedTx.signatures,
-          transaction: signedTx.transaction,
-        }),
+      const result = await this.blockchainService.submitTransaction({
+        transaction: signedTx.transaction,
+        signatures
       });
 
-      const output = await submitted.json();
-      return output;
-
-      // Output of published {
-      //   txHash: "f24ae82f6b5b7324e96e1d0ec03085bf852c935bcec18a51c2791dc501d17724"
-      // }
-
-    }catch(error){
-      this.logger.log('TX Error sending', error);
-      throw new Error('Failed to build complete transaction'+  JSON.stringify(error));
+      return { txHash: result.txHash };
+    } catch (error) {
+      this.logger.error('Failed to submit vault transaction', error);
+      throw new Error(`Failed to submit transaction: ${error.message}`);
     }
   }
 }

@@ -26,7 +26,7 @@ import {TagEntity} from '../../database/tag.entity';
 import {ContributorWhitelistEntity} from '../../database/contributorWhitelist.entity';
 import {transformToSnakeCase} from '../../helpers';
 import {VaultFullResponse, VaultShortResponse} from './dto/vault.response';
-import {VaultContractService} from '../blockchain/vault-contract.service';
+import {VaultManagingService} from '../blockchain/vault-managing.service';
 import {valuation_sc_type, vault_sc_privacy} from '../blockchain/types/vault-sc-type';
 import {BlockchainScannerService} from "../blockchain/blockchain-scanner.service";
 import {applyContributeParams} from "../blockchain/utils/apply_params";
@@ -62,7 +62,7 @@ export class VaultsService {
     @InjectRepository(Asset)
     private readonly assetsRepository: Repository<Asset>,
     private readonly awsService: AwsService,
-    private readonly vaultContractService: VaultContractService,
+    private readonly vaultContractService: VaultManagingService,
     private readonly blockchainScannerService: BlockchainScannerService,
     private readonly taptoolsService: TaptoolsService,
     private readonly configService: ConfigService,

@@ -1,5 +1,5 @@
 import { Body, Controller, Post, UseGuards, HttpCode, Request, UnauthorizedException } from '@nestjs/common';
-import { BlockchainTransactionService } from './blockchain-transaction.service';
+import { VaultInsertingService } from './vault-inserting.service';
 import { WebhookVerificationService } from './webhook-verification.service';
 import { AuthGuard } from '../auth/auth.guard';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
@@ -10,13 +10,12 @@ import {
   TransactionBuildResponseDto,
   TransactionSubmitResponseDto
 } from './dto/transaction.dto';
-import {CreateVaultReq} from "../vaults/dto/createVault.req";
 
 @ApiTags('blockchain')
 @Controller('blockchain')
 export class BlockchainController {
   constructor(
-    private readonly transactionService: BlockchainTransactionService,
+    private readonly transactionService: VaultInsertingService,
     private readonly webhookVerificationService: WebhookVerificationService,
   ) {}
 

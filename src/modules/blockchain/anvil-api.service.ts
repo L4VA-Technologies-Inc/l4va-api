@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { NftAsset } from './blockchain-transaction.service';
+import { NftAsset } from './vault-inserting.service';
 
 interface AnvilApiConfig<T = Record<string, unknown>> {
   endpoint: string;

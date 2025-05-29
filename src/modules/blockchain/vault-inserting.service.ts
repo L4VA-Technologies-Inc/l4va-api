@@ -1,13 +1,14 @@
-import {ForbiddenException, Injectable, Logger, NotFoundException} from '@nestjs/common';
+import { ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { AnvilApiService } from './anvil-api.service';
 import { TransactionsService } from '../transactions/transactions.service';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
 import { TransactionStatus } from '../../types/transaction.types';
-import {BlockchainScannerService} from './blockchain-scanner.service';
-import {InjectRepository} from '@nestjs/typeorm';
-import {Vault} from '../../database/vault.entity';
-import {Repository} from 'typeorm';
+import { BlockchainScannerService } from './blockchain-scanner.service';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Vault } from '../../database/vault.entity';
+import { Repository } from 'typeorm';
+import { BlockchainService } from './blockchain.service';
 import {
   EnterpriseAddress,
   ScriptHash,
@@ -60,24 +61,21 @@ export interface TransactionSubmitResponse {
 }
 
 @Injectable()
-export class BlockchainTransactionService {
+export class VaultInsertingService {
 
-  private readonly logger = new Logger(BlockchainTransactionService.name);
+  private readonly logger = new Logger(VaultInsertingService.name);
   private readonly adminHash: string;
-  private readonly anvilApi: string;
-  private readonly anvilApiKey: string;
   private readonly adminSKey: string;
   private blockfrost: any;
   constructor(
     @InjectRepository(Vault)
     private readonly vaultsRepository: Repository<Vault>,
-    private readonly anvilApiService: AnvilApiService,
     private readonly transactionsService: TransactionsService,
     private readonly blockchainScanner: BlockchainScannerService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    @Inject(BlockchainService)
+    private readonly blockchainService: BlockchainService
   ) {
-    this.anvilApiKey = this.configService.get<string>('ANVIL_API_KEY');
-    this.anvilApi = this.configService.get<string>('ANVIL_API_URL') + '/services';
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.blockfrost = new BlockFrostAPI({
@@ -254,27 +252,10 @@ export class BlockchainTransactionService {
         network: 'preprod',
       };
 
-      const headers = {
-        'x-api-key': this.anvilApiKey,
-        'Content-Type': 'application/json',
-      };
+      // Build the transaction using BlockchainService
+      const buildResponse = await this.blockchainService.buildTransaction(input);
 
-      const txDeployed = await fetch(`${this.anvilApi}/transactions/build`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(input),
-      });
-
-      const buildResponse = await txDeployed.json();
-     if(!!JSON.stringify(buildResponse).includes('UNPROCESSABLE_CONTENT')){
-       throw new ForbiddenException('Failed to build complete transaction, you cant attach to the vault this kid of assets, or you cant attach to this vault at all!');
-     }
-
-      if (!buildResponse.complete) {
-        throw new Error('Failed to build complete transaction');
-      }
-
-
+      // Sign the transaction
       const txToSubmitOnChain = FixedTransaction.from_bytes(
         Buffer.from(buildResponse.complete, 'hex'),
       );
@@ -293,6 +274,11 @@ export class BlockchainTransactionService {
     }
   }
 
+  /**
+   * Submit a signed transaction to the blockchain
+   * @param signedTx Object containing the transaction and signatures
+   * @returns Transaction hash
+   */
   async submitTransaction(signedTx: SubmitTransactionDto): Promise<TransactionSubmitResponse> {
     if (!signedTx.txId) {
       throw new Error('Transaction ID is required');
@@ -303,40 +289,20 @@ export class BlockchainTransactionService {
     }
 
     try {
-      const headers = {
-        'x-api-key': this.anvilApiKey,
-        'Content-Type': 'application/json',
-      };
-
-      const urlSubmit = `${this.anvilApi}/transactions/submit`;
       this.logger.log(`Submitting transaction ${signedTx.txId} to blockchain`);
-
-      const response = await fetch(urlSubmit, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          signatures: signedTx.signatures || [],
-          transaction: signedTx.transaction,
-        }),
+      
+      // Submit the transaction using BlockchainService
+      const result = await this.blockchainService.submitTransaction({
+        transaction: signedTx.transaction,
+        signatures: signedTx.signatures || []
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Blockchain submission failed with status ${response.status}: ${errorText}`);
-      }
-
-      const output = await response.json();
-
-      if (!output?.txHash) {
-        throw new Error('No transaction hash returned from blockchain');
-      }
-
-      this.logger.log(`Updating transaction ${signedTx.txId} with hash ${output.txHash}`);
+      this.logger.log(`Updating transaction ${signedTx.txId} with hash ${result.txHash}`);
 
       try {
         // Update the transaction hash in our database
-        const updatedTx = await this.transactionsService.updateTransactionHash(signedTx.txId, output.txHash);
-        this.logger.log(`Successfully updated transaction ${signedTx.txId} with hash ${output.txHash}`);
+        await this.transactionsService.updateTransactionHash(signedTx.txId, result.txHash);
+        this.logger.log(`Successfully updated transaction ${signedTx.txId} with hash ${result.txHash}`);
 
         // Update monitoring for the vault if it exists
         if (signedTx.vaultId) {
@@ -352,17 +318,17 @@ export class BlockchainTransactionService {
           }
         }
 
-        return output;
+        return { txHash: result.txHash };
       } catch (updateError) {
         this.logger.error(
-          `Failed to update transaction ${signedTx.txId} with hash ${output.txHash}`,
+          `Failed to update transaction ${signedTx.txId} with hash ${result.txHash}`,
           updateError.stack
         );
         throw new Error(`Transaction submitted but failed to update local record: ${updateError.message}`);
       }
     } catch (error) {
-      this.logger.log('TX Error sending', error);
-      throw new Error('Failed to build complete transaction' + JSON.stringify(error));
+      this.logger.error('Error submitting transaction', error);
+      throw new Error(`Failed to submit transaction: ${error.message}`);
     }
   }
 
