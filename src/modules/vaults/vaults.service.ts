@@ -395,6 +395,7 @@ export class VaultsService {
     const publishedTx =  await this.vaultContractService.submitOnChainVaultTx(signedTx);
     vault.vault_status = VaultStatus.published;
     vault.publication_hash = publishedTx.txHash;
+    await this.vaultsRepository.save(vault);
   // Start transaction confirmation process in background
     this.confirmAndProcessTransaction(publishedTx.txHash, vault).catch(error => {
       this.logger.error(`Failed to process transaction ${publishedTx.txHash}:`, error);

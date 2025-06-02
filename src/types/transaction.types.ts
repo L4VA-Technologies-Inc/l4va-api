@@ -18,5 +18,6 @@ export enum TransactionType {
   swap = 'swap',
   stake ='stake',
   extractLp = 'extract-lp',
-  distributeLp = 'distribute-lp'
+  distributeLp = 'distribute-lp',
+  updateVault = 'update-vault'  // Vault metadata update transaction
 }

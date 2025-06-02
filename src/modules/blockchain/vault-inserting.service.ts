@@ -193,7 +193,7 @@ export class VaultInsertingService {
             redeemer: {
               type: "json",
               value: {
-                quantity: 1000, // todo need to change this mint value to calculate value based on price
+                quantity: 1000,
                 output_index: 0,
                 contribution: isAda ? "Lovelace" : "Asset",
               },
@@ -252,6 +252,8 @@ export class VaultInsertingService {
         network: 'preprod',
       };
 
+      console.log('INPUT ', input)
+
       // Build the transaction using BlockchainService
       const buildResponse = await this.blockchainService.buildTransaction(input);
 
@@ -290,7 +292,7 @@ export class VaultInsertingService {
 
     try {
       this.logger.log(`Submitting transaction ${signedTx.txId} to blockchain`);
-      
+
       // Submit the transaction using BlockchainService
       const result = await this.blockchainService.submitTransaction({
         transaction: signedTx.transaction,

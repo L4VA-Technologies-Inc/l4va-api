@@ -25,10 +25,10 @@
     "migration:revert": "npm run typeorm migration:revert -- -d src/config/typeorm.config.ts"
   },
   "dependencies": {
-    "@blaze-cardano/uplc": "^0.3.0",
+    "@blaze-cardano/uplc": "0.3.0",
     "@blockfrost/blockfrost-js": "^6.0.0",
+    "@emurgo/cardano-serialization-lib-nodejs": "^14.1.2",
     "@emurgo/cardano-message-signing-nodejs": "^1.1.0",
-    "@emurgo/cardano-serialization-lib-nodejs": "^14.1.0",
     "@nestjs/axios": "^4.0.0",
     "@nestjs/common": "^10.0.0",
     "@nestjs/config": "^3.3.0",

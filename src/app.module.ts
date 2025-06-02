@@ -17,6 +17,7 @@ import {TransactionsModule} from './modules/transactions/transactions.module';
 import {JwtGlobalModule} from './modules/globals/jwt_global_module/jwt_global.module';
 import {AcquireModule} from './modules/acquire/acquire.module';
 import { TaptoolsModule } from './modules/taptools/taptools.module';
+import {LpTokensModule} from "./modules/lp-tokens/lp-tokens.module";
 @Module({
   imports: [
     ScheduleModule.forRoot(),
@@ -46,6 +47,7 @@ import { TaptoolsModule } from './modules/taptools/taptools.module';
     AcquireModule,
     TransactionsModule,
     TaptoolsModule,
+    LpTokensModule
   ],
   controllers: [AppController],
   providers: [AppService]

@@ -70,12 +70,12 @@ export class Vault {
   publication_hash: string;
 
   @Expose({ name: 'contractAddress'})
-  @Column({
-    name: 'contract_address',
-    type: 'varchar',
-    nullable: true
-  })
+  @Column({ name: 'contract_address', nullable: true })
   contract_address: string;
+
+  @Expose({ name: 'policyId' })
+  @Column({ name: 'policy_id', nullable: true })
+  policy_id: string;
 
   @Expose({ name: 'assetVaultName'})
   @Column({

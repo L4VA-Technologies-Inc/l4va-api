@@ -173,4 +173,21 @@ export class TransactionsService {
       relations: ['vault', 'assets']
     });
   }
+
+  /**
+   * Get the last update transaction for a vault
+   * @param vaultId The ID of the vault
+   * @returns The most recent update transaction or null if none found
+   */
+  async getLastVaultUpdate(vaultId: string): Promise<Transaction | null> {
+    const transactions = await this.transactionRepository.find({
+      where: {
+        vault_id: vaultId,
+      },
+      order: { id: 'DESC' },
+      take: 1
+    });
+
+    return transactions.length > 0 ? transactions[0] : null;
+  }
 }

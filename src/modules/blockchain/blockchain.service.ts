@@ -40,24 +40,27 @@ export class BlockchainService {
    */
   async buildTransaction(txData: any): Promise<TransactionBuildResponse> {
     try {
-      const response = await firstValueFrom(
-        this.httpService.post<TransactionBuildResponse>(
-          `${this.anvilApi}/transactions/build`,
-          txData,
-          {
-            headers: {
-              'x-api-key': this.anvilApiKey,
-              'Content-Type': 'application/json',
-            },
-          }
-        )
-      );
+      const headers = {
+        'x-api-key': this.anvilApiKey,
+        'Content-Type': 'application/json',
+      };
 
-      if (!response.data.complete) {
-        throw new Error('Failed to build complete transaction');
+      // Build the transaction
+      const contractDeployed = await fetch(`${this.anvilApi}/transactions/build`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(txData),
+      });
+
+      const buildResponse = await contractDeployed.json();
+
+      console.log('error', buildResponse)
+
+      if (!buildResponse.complete) {
+        throw new Error('Failed to build complete transaction' +  JSON.stringify(buildResponse));
       }
 
-      return response.data;
+      return buildResponse
     } catch (error) {
       this.logger.error('Error building transaction', error);
       throw new Error(`Failed to build transaction: ${error.message}`);

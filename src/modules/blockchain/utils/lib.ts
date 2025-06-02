@@ -83,6 +83,7 @@ export const getUtxos = async (address: Address, min = 0, blockfrost) => {
   return parsedUtxos;
 };
 
+
 export function generate_assetname_from_txhash_index(
   txHash: string,
   txOutputIdx: number,
@@ -100,6 +101,20 @@ export function generate_assetname_from_txhash_index(
   return hash.to_hex();
 }
 
+
+export function generate_tag_from_txhash_index(tx_hash: string, tx_output_idx: number) {
+  const plutusList = PlutusList.new();
+  plutusList.add(PlutusData.new_bytes(Buffer.from(tx_hash, 'hex')));
+
+  plutusList.add(PlutusData.new_integer(BigInt.from_str(String(tx_output_idx))));
+
+  const plutusData = PlutusData.new_constr_plutus_data(
+    ConstrPlutusData.new(BigNum.zero(), plutusList),
+  );
+  const hash = hash_plutus_data(plutusData);
+
+  return hash.to_hex();
+}
 
 export function toHex(str: string) {
   return Buffer.from(str).toString('hex');
