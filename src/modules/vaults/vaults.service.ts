@@ -591,7 +591,8 @@ export class VaultsService {
   async getMyVaults(userId: string, filter?: VaultFilter, page: number = 1, limit: number = 10, sortBy?: VaultSortField, sortOrder: SortOrder = SortOrder.DESC): Promise<PaginatedResponseDto<VaultShortResponse>> {
     const query = {
       where: {
-        owner: { id: userId }
+        owner: { id: userId },
+        deleted: false
       },
       relations: ['social_links', 'vault_image', 'banner_image'],
       skip: (page - 1) * limit,
@@ -662,7 +663,7 @@ export class VaultsService {
 
   async getVaultById(id: string, userId: string): Promise<VaultFullResponse> {
     const vault = await this.vaultsRepository.findOne({
-      where: { id },
+      where: { id, deleted: false },
       relations: [
         'owner',
         'social_links',
@@ -745,6 +746,7 @@ export class VaultsService {
       .leftJoinAndSelect('vault.contributor_whitelist', 'contributor_whitelist')
       .leftJoinAndSelect('vault.acquirer_whitelist', 'acquirer_whitelist')
       .where('vault.vault_status != :draftStatus', { draftStatus: VaultStatus.draft })
+      .andWhere('vault.deleted != :deleted', { deleted: true })
       .andWhere('vault.vault_status != :createdStatus', { createdStatus: VaultStatus.created })
       // Get public vaults OR private vaults where user is whitelisted based on filter
       .andWhere(new Brackets(qb => {

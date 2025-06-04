@@ -167,7 +167,6 @@ export class VaultsController {
     const userId = req.user.sub;
     // Verify vault exists and user has access
     await this.vaultsService.getVaultById(id, userId);
-    console.log('query status ', query);
     return this.transactionsService.getVaultTransactions(id, query.status, query.type);
   }
 
