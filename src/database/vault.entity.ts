@@ -186,6 +186,10 @@ export class Vault {
   @Column({name: 'vault_token_ticker', nullable:true})
   vault_token_ticker?: string;
 
+  @Expose({ name: 'liquidationHash'})
+  @Column({name: 'liquidation_hash', nullable:true})
+  liquidation_hash?: string;
+
   @Expose({ name: 'ftTokenDecimals'})
   @Column({name: 'ft_token_decimals',
     type: 'smallint', default: 1,  nullable:true })

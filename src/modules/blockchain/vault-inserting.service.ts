@@ -97,7 +97,7 @@ export class VaultInsertingService {
       const txDetail = await this.blockchainScanner.getTransactionDetails(vault.publication_hash);
 
       const { output_amount } = txDetail;
-      this.logger.log(JSON.stringify(output_amount[output_amount.length -1 ].unit));
+      this.logger.log(JSON.stringify(output_amount[output_amount.length -1].unit));
 
       const vaultPolicyPlusName = output_amount[output_amount.length - 1].unit;
       const VAULT_POLICY_ID = vaultPolicyPlusName.slice(0,56);

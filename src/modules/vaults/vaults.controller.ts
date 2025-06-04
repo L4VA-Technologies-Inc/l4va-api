@@ -1,4 +1,4 @@
-import {Controller, Post, Body, Get, Param, Request, UseGuards, Query} from '@nestjs/common';
+import {Controller, Post, Body, Get, Param, Request, UseGuards, Query, Delete} from '@nestjs/common';
 import { VaultsService } from './vaults.service';
 import { DraftVaultsService } from './draft-vaults.service';
 import { AuthGuard } from '../auth/auth.guard';
@@ -125,7 +125,7 @@ export class VaultsController {
       return await this.draftVaultsService.getDraftVaultById(id, userId);
     } catch (error) {
       if (error?.message === 'Draft vault not found') {
-        
+
         return this.vaultsService.getVaultById(id, userId);
       }
       throw error;
@@ -170,5 +170,41 @@ export class VaultsController {
     console.log('query status ', query);
     return this.transactionsService.getVaultTransactions(id, query.status, query.type);
   }
+
+  @ApiDoc({
+    summary: 'Burn vault',
+    description: 'Returns list of vault transactions. By default shows only confirmed transactions.',
+    status: 200,
+  })
+  @UseGuards(AuthGuard)
+  @Post('burn-build/:id')
+  async burnVaultAttempt(
+    @Param('id') id: string,
+    @Query() query: GetVaultTransactionsDto,
+    @Request() req
+  ) {
+    const userId = req.user.sub;
+   return await this.vaultsService.burnVaultAttempt(id, userId)
+  }
+
+
+  @ApiDoc({
+    summary: 'Burn vault',
+    description: 'Returns list of vault transactions. By default shows only confirmed transactions.',
+    status: 200,
+  })
+  @UseGuards(AuthGuard)
+  @Post('burn-publish/:id')
+  async burnPublishAtempt(
+    @Param('id') id: string,
+    @Query() query: GetVaultTransactionsDto,
+    @Body() publishDto: PublishVaultDto,
+    @Request() req
+  ) {
+    const userId = req.user.sub;
+
+    return await this.vaultsService.burnVaultPublishTx(id, userId, publishDto)
+  }
+
 }
 

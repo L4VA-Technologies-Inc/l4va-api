@@ -34,6 +34,9 @@ import {Credential, EnterpriseAddress, ScriptHash} from "@emurgo/cardano-seriali
 import * as csv from 'csv-parse';
 import {AwsService} from '../aws_bucket/aws.service';
 import {TaptoolsService} from "../taptools/taptools.service";
+import {PublishVaultDto} from "./dto/publish-vault.dto";
+import {TransactionType} from "../../types/transaction.types";
+import {TransactionsService} from "../transactions/transactions.service";
 
 @Injectable()
 export class VaultsService {
@@ -65,6 +68,7 @@ export class VaultsService {
     private readonly vaultContractService: VaultManagingService,
     private readonly blockchainScannerService: BlockchainScannerService,
     private readonly taptoolsService: TaptoolsService,
+    private readonly transactionsService: TransactionsService,
     private readonly configService: ConfigService,
   ) {}
 
@@ -83,7 +87,7 @@ export class VaultsService {
       }
 
       const { output_amount } = txDetail;
-      const vaultPolicyPlusName = output_amount[1].unit;
+      const vaultPolicyPlusName = output_amount[output_amount.length - 1].unit;
       const VAULT_POLICY_ID = vaultPolicyPlusName.slice(0, 56);
       const VAULT_ID = vaultPolicyPlusName.slice(56);
 
@@ -840,5 +844,65 @@ export class VaultsService {
       limit,
       totalPages: Math.ceil(total / limit)
     };
+  }
+
+  async burnVaultAttempt(vaultId: string, userId: string){
+    const vault = await this.vaultsRepository.findOne({
+      where: {
+        id: vaultId,
+        owner: {
+          id: userId,
+        }
+      },
+      relations: ['assets', 'owner']
+    });
+    if(!vault){
+      throw new Error("Vault is not found or you are not owner of this vault!")
+    }
+    if(vault.assets.length !== 0){
+      throw new Error("The vault cant be burned it need to extract and refound assets ")
+    }
+    const transaction = await this.transactionsService.createTransaction({
+      vault_id: vaultId,
+      type: TransactionType.burn,
+      assets: []
+    });
+   const result =  await this.vaultContractService.createBurnTx({
+     assetVaultName: vault.asset_vault_name,
+     customerAddress: vault.owner.address
+   })
+
+    return {
+     ...result,
+      txId: transaction.id,
+    }
+  }
+
+  async burnVaultPublishTx(vaultId, userId, publishDto: PublishVaultDto){
+    const { txHash } = await this.vaultContractService.submitOnChainVaultTx({
+      transaction: publishDto.transaction,
+      signatures: publishDto.signatures
+    })
+
+    const vault = await this.vaultsRepository.findOne({
+      where: {
+        id: vaultId,
+        owner: {
+          id: userId,
+        }
+      },
+      relations: ['assets', 'owner']
+    });
+    if(!vault){
+      throw new Error("Vault is not found or you are not owner of this vault!")
+    }
+    if(vault.assets.length !== 0){
+      throw new Error("The vault cant be burned it need to extract and refound assets ")
+    }
+    vault.deleted = true;
+    vault.liquidation_hash = txHash;
+    // todo need to wait tx approvement from scanner ?
+   await this.transactionsService.updateTransactionHash(publishDto.txId, txHash)
+   await this.vaultsRepository.save(vault)
   }
 }

@@ -9,7 +9,7 @@ import {
   FixedTransaction, PrivateKey,
 } from '@emurgo/cardano-serialization-lib-nodejs';
 import {Datum1} from './types/type';
-import {generate_assetname_from_txhash_index, getUtxos, toHex} from './utils/lib';
+import {generate_assetname_from_txhash_index, getUtxos, getVaultUtxo, toHex} from './utils/lib';
 import {Buffer} from 'node:buffer';
 import {BlockFrostAPI} from '@blockfrost/blockfrost-js';
 
@@ -239,6 +239,61 @@ export class VaultManagingService {
     }
   }
 
+
+  async createBurnTx(burnConfig: {
+    customerAddress: string,
+    assetVaultName: string
+  }) {
+    const vaultUtxo = await getVaultUtxo(this.scPolicyId, burnConfig.assetVaultName, this.blockfrost);
+    const input = {
+      changeAddress: burnConfig.customerAddress,
+      message: "Vault Burn",
+      scriptInteractions: [
+        {
+          purpose: "spend",
+          outputRef: vaultUtxo,
+          hash: this.scPolicyId,
+          redeemer: {
+            type: "json",
+            value: "VaultBurn",
+          },
+        },
+        {
+          purpose: "mint",
+          hash: this.scPolicyId,
+          redeemer: {
+            type: "json",
+            value: "VaultBurn",
+          },
+        },
+      ],
+      mint: [
+        {
+          version: "cip25",
+          assetName: {name: burnConfig.assetVaultName, format:"hex"},
+          policyId: this.scPolicyId,
+          type: "plutus",
+          quantity: -1,
+        },
+      ],
+      requiredSigners: [this.adminHash],
+    };
+    const buildResponse = await this.blockchainService.buildTransaction(input);
+
+    // Sign the transaction
+    const txToSubmitOnChain = FixedTransaction.from_bytes(
+      Buffer.from(buildResponse.complete, 'hex'),
+    );
+    txToSubmitOnChain.sign_and_add_vkey_signature(
+      PrivateKey.from_bech32(this.adminSKey),
+    );
+
+    return {
+      presignedTx: txToSubmitOnChain.to_hex(),
+      contractAddress: this.scAddress,
+    };
+  }
+
   /**
    * Submit a signed vault transaction to the blockchain
    * @param signedTx Object containing the transaction and signatures
@@ -250,8 +305,8 @@ export class VaultManagingService {
   }) {
     try {
       // Ensure signatures is always an array
-      const signatures = Array.isArray(signedTx.signatures) 
-        ? signedTx.signatures 
+      const signatures = Array.isArray(signedTx.signatures)
+        ? signedTx.signatures
         : [signedTx.signatures];
 
       const result = await this.blockchainService.submitTransaction({
