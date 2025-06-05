@@ -26,17 +26,17 @@ import {TagEntity} from '../../database/tag.entity';
 import {ContributorWhitelistEntity} from '../../database/contributorWhitelist.entity';
 import {transformToSnakeCase} from '../../helpers';
 import {VaultFullResponse, VaultShortResponse} from './dto/vault.response';
-import {VaultManagingService} from '../blockchain/vault-managing.service';
-import {valuation_sc_type, vault_sc_privacy} from '../blockchain/types/vault-sc-type';
-import {BlockchainScannerService} from "../blockchain/blockchain-scanner.service";
-import {applyContributeParams} from "../blockchain/utils/apply_params";
+import {VaultManagingService} from './processing-tx/onchain/vault-managing.service';
+import {valuation_sc_type, vault_sc_privacy} from './processing-tx/onchain/types/vault-sc-type';
+import {BlockchainScannerService} from "./processing-tx/onchain/blockchain-scanner.service";
+import {applyContributeParams} from "./processing-tx/onchain/utils/apply_params";
 import {Credential, EnterpriseAddress, ScriptHash} from "@emurgo/cardano-serialization-lib-nodejs";
 import * as csv from 'csv-parse';
 import {AwsService} from '../aws_bucket/aws.service';
 import {TaptoolsService} from "../taptools/taptools.service";
 import {PublishVaultDto} from "./dto/publish-vault.dto";
 import {TransactionType} from "../../types/transaction.types";
-import {TransactionsService} from "../transactions/transactions.service";
+import {TransactionsService} from "./processing-tx/offchain-tx/transactions.service";
 
 @Injectable()
 export class VaultsService {

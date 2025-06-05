@@ -8,7 +8,7 @@ import { ApiDoc } from '../../decorators/api-doc.decorator';
 import { SaveDraftReq } from './dto/saveDraft.req';
 import { GetVaultsDto } from './dto/get-vaults.dto';
 import { Logger } from '@nestjs/common';
-import { TransactionsService } from '../transactions/transactions.service';
+import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { GetVaultTransactionsDto } from './dto/get-vault-transactions.dto';
 import { PublishVaultDto } from './dto/publish-vault.dto';
 

@@ -10,14 +10,14 @@ import { VaultsModule } from './modules/vaults/vaults.module';
 import {AwsModule} from './modules/aws_bucket/aws.module';
 import {UsersModule} from './modules/users/users.module';
 import {SnakeNamingStrategy} from 'typeorm-naming-strategies';
-import { AssetsModule } from './modules/assets/assets.module';
-import { BlockchainModule } from './modules/blockchain/blockchain.module';
-import {ContributionModule} from './modules/contribution/contribution.module';
-import {TransactionsModule} from './modules/transactions/transactions.module';
+import { AssetsModule } from './modules/vaults/processing-tx/assets/assets.module';
+import { BlockchainModule } from './modules/vaults/processing-tx/onchain/blockchain.module';
+import {ContributionModule} from './modules/vaults/phase-management/contribution/contribution.module';
+import {TransactionsModule} from './modules/vaults/processing-tx/offchain-tx/transactions.module';
 import {JwtGlobalModule} from './modules/globals/jwt_global_module/jwt_global.module';
-import {AcquireModule} from './modules/acquire/acquire.module';
+import {AcquireModule} from './modules/vaults/phase-management/acquire/acquire.module';
 import { TaptoolsModule } from './modules/taptools/taptools.module';
-import {LpTokensModule} from "./modules/lp-tokens/lp-tokens.module";
+import {LpTokensModule} from "./modules/vaults/lp-tokens/lp-tokens.module";
 @Module({
   imports: [
     ScheduleModule.forRoot(),

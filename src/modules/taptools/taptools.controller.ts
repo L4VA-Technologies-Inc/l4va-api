@@ -3,7 +3,7 @@ import { TaptoolsService } from './taptools.service';
 import { AuthGuard } from '../auth/auth.guard';
 import { ApiDoc } from '../../decorators/api-doc.decorator';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
-import { VaultAssetsSummaryDto } from '../transactions/dto/vault-assets-summary.dto';
+import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
 
 @Controller('taptools')
 @ApiTags('TapTools')

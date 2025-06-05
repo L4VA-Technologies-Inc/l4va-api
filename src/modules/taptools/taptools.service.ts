@@ -9,7 +9,7 @@ import { AssetValueDto } from './dto/asset-value.dto';
 import { Vault } from '../../database/vault.entity';
 import { Asset } from '../../database/asset.entity';
 import { AssetStatus, AssetType } from '../../types/asset.types';
-import { VaultAssetsSummaryDto } from '../transactions/dto/vault-assets-summary.dto';
+import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
 
 @Injectable()
 export class TaptoolsService {
