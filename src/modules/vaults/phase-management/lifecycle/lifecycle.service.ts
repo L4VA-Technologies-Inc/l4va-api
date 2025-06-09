@@ -102,25 +102,25 @@ export class LifecycleService {
       if (!hasAssets) {
         try {
           this.logger.log(`Vault ${vault.id} has no assets and contribution period has ended. Burning vault...`);
-
-          // Use admin wallet to burn the vault
-          const burnTx = await this.vaultContractService.createBurnTx({
-            customerAddress: vault.owner.address, // Still track the original owner
-            assetVaultName: vault.asset_vault_name
-          });
-
-          // Submit the transaction using admin wallet
-          const { txHash } = await this.vaultContractService.submitOnChainVaultTx({
-            transaction: burnTx.presignedTx,
-            signatures: [] // Admin signature is already included in presignedTx
-          });
-
-          // Update vault status
-          vault.deleted = true;
-          vault.liquidation_hash = txHash;
-          await this.vaultRepository.save(vault);
-
-          this.logger.log(`Successfully burned empty vault ${vault.id} in transaction ${txHash}`);
+          //
+          // // Use admin wallet to burn the vault
+          // const burnTx = await this.vaultContractService.createBurnTx({
+          //   customerAddress: vault.owner.address, // Still track the original owner
+          //   assetVaultName: vault.asset_vault_name
+          // });
+          //
+          // // Submit the transaction using admin wallet
+          // const { txHash } = await this.vaultContractService.submitOnChainVaultTx({
+          //   transaction: burnTx.presignedTx,
+          //   signatures: [] // Admin signature is already included in presignedTx
+          // });
+          //
+          // // Update vault status
+          // vault.deleted = true;
+          // vault.liquidation_hash = txHash;
+          // await this.vaultRepository.save(vault);
+          //
+          // this.logger.log(`Successfully burned empty vault ${vault.id} in transaction ${txHash}`);
           continue;
         } catch (error) {
           this.logger.error(`Failed to burn empty vault ${vault.id}:`, error.message);
