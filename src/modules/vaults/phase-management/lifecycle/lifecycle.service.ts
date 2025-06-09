@@ -121,6 +121,7 @@ export class LifecycleService {
           // await this.vaultRepository.save(vault);
           //
           // this.logger.log(`Successfully burned empty vault ${vault.id} in transaction ${txHash}`);
+
           continue;
         } catch (error) {
           this.logger.error(`Failed to burn empty vault ${vault.id}:`, error.message);
