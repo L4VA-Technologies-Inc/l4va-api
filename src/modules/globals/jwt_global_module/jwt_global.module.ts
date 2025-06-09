@@ -2,6 +2,7 @@
 import { Global, Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import {TaptoolsModule} from "../../taptools/taptools.module";
 
 @Global()
 @Module({
@@ -14,7 +15,8 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
       }),
       inject: [ConfigService],
     }),
+    TaptoolsModule,
   ],
-  exports: [JwtModule], // Експортуємо JwtModule, щоб він був доступний у всіх модулях
+  exports: [JwtModule, TaptoolsModule], // Експортуємо JwtModule, щоб він був доступний у всіх модулях
 })
 export class JwtGlobalModule {}

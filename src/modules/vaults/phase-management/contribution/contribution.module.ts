@@ -8,11 +8,9 @@ import {User} from '../../../../database/user.entity';
 import {Asset} from '../../../../database/asset.entity';
 import {Transaction} from "../../../../database/transaction.entity";
 import {BlockchainModule} from "../../processing-tx/onchain/blockchain.module";
-import {TaptoolsModule} from "../../../taptools/taptools.module";
 
 @Module({
   imports: [
-    TaptoolsModule,
     BlockchainModule,
     TypeOrmModule.forFeature([Vault, User, Asset, Transaction]),
     TransactionsModule],

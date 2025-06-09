@@ -16,7 +16,6 @@ import {ContributionModule} from './modules/vaults/phase-management/contribution
 import {TransactionsModule} from './modules/vaults/processing-tx/offchain-tx/transactions.module';
 import {JwtGlobalModule} from './modules/globals/jwt_global_module/jwt_global.module';
 import {AcquireModule} from './modules/vaults/phase-management/acquire/acquire.module';
-import { TaptoolsModule } from './modules/taptools/taptools.module';
 import {LpTokensModule} from "./modules/vaults/lp-tokens/lp-tokens.module";
 @Module({
   imports: [
@@ -46,7 +45,6 @@ import {LpTokensModule} from "./modules/vaults/lp-tokens/lp-tokens.module";
     ContributionModule,
     AcquireModule,
     TransactionsModule,
-    TaptoolsModule,
     LpTokensModule
   ],
   controllers: [AppController],
