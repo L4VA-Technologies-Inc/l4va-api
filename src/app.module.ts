@@ -18,6 +18,8 @@ import {JwtGlobalModule} from './modules/globals/jwt_global_module/jwt_global.mo
 import {AcquireModule} from './modules/acquire/acquire.module';
 import { TaptoolsModule } from './modules/taptools/taptools.module';
 import {LpTokensModule} from "./modules/lp-tokens/lp-tokens.module";
+import {VyfiModule} from "./modules/vyfi/vyfi.module";
+
 @Module({
   imports: [
     ScheduleModule.forRoot(),
@@ -47,7 +49,8 @@ import {LpTokensModule} from "./modules/lp-tokens/lp-tokens.module";
     AcquireModule,
     TransactionsModule,
     TaptoolsModule,
-    LpTokensModule
+    LpTokensModule,
+    VyfiModule
   ],
   controllers: [AppController],
   providers: [AppService]

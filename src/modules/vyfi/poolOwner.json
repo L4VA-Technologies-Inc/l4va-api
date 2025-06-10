@@ -1,0 +1,17 @@
+{
+    "skey": "ed25519e_sk1eqleq0gr7awjymmkcehm4pza8ffq385fyxkntqe74u384fgfs4w7vncmhdlc2u2l78g4r82ctfw6s36dnuguadxh3lggluy9pwansegfprll7",
+    "skey_hex": "c83f903d03f75d226f76c66fba845d3a52089e8921ad35833eaf227aa509855de64f1bbb7f85715ff1d1519d585a5da8474d9f11ceb4d78fd08ff0850bbb3865",
+    "pkey": "ed25519_pk1d70wgjreu5aw3guw8wfvv4etv689t096mcs34gzfl7x297ycrxmqv8dpyd",
+    "pkey_hex": "6f9ee44879e53ae8a38e3b92c6572b668e55bcbade211aa049ff8ca2f89819b6",
+    "key_hash": "255eb2c9db29a0660197bbd0dc0b8a62c6a6f926816a7f3a87882dc8",
+    "base_address_mainnet": "addr1qyj4avkfmv56qespj7aaphqt3f3vdfhey6qk5le6s7yzmjp9t6evnkef5pnqr9am6rwqhznzc6n0jf5pdfln4pug9hyqqjywf2",
+    "base_address_preprod": "addr_test1qqj4avkfmv56qespj7aaphqt3f3vdfhey6qk5le6s7yzmjp9t6evnkef5pnqr9am6rwqhznzc6n0jf5pdfln4pug9hyqryew94",
+    "base_address_preview": "addr_test1qqj4avkfmv56qespj7aaphqt3f3vdfhey6qk5le6s7yzmjp9t6evnkef5pnqr9am6rwqhznzc6n0jf5pdfln4pug9hyqryew94",
+    "enterprise_address_mainnet": "addr1vyj4avkfmv56qespj7aaphqt3f3vdfhey6qk5le6s7yzmjqq4wdt7",
+    "enterprise_address_preprod": "addr_test1vqj4avkfmv56qespj7aaphqt3f3vdfhey6qk5le6s7yzmjqma63ym",
+    "enterprise_address_preview": "addr_test1vqj4avkfmv56qespj7aaphqt3f3vdfhey6qk5le6s7yzmjqma63ym",
+    "reward_address_mainnet": "stake1uyj4avkfmv56qespj7aaphqt3f3vdfhey6qk5le6s7yzmjqulwthv",
+    "reward_address_preprod": "stake_test1uqj4avkfmv56qespj7aaphqt3f3vdfhey6qk5le6s7yzmjqm4yfn3",
+    "reward_address_preview": "stake_test1uqj4avkfmv56qespj7aaphqt3f3vdfhey6qk5le6s7yzmjqm4yfn3",
+    "mnemonic": "honey please six minute arena renew switch wave witness evolve salon power case hair chaos piano cart claim spin voyage fantasy wife offer boy"
+  }
