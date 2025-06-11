@@ -1,22 +1,24 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 import { classToPlain, plainToInstance } from 'class-transformer';
-import { Vault } from '../../database/vault.entity';
-import { User } from '../../database/user.entity';
+import { Repository } from 'typeorm';
+
+import { AcquirerWhitelistEntity } from '../../database/acquirerWhitelist.entity';
+import { AssetsWhitelistEntity } from '../../database/assetsWhitelist.entity';
+import { ContributorWhitelistEntity } from '../../database/contributorWhitelist.entity';
 import { FileEntity } from '../../database/file.entity';
 import { LinkEntity } from '../../database/link.entity';
-import { AssetsWhitelistEntity } from '../../database/assetsWhitelist.entity';
-import { AcquirerWhitelistEntity } from '../../database/acquirerWhitelist.entity';
-import { ContributorWhitelistEntity } from '../../database/contributorWhitelist.entity';
 import { TagEntity } from '../../database/tag.entity';
-import { SaveDraftReq } from './dto/saveDraft.req';
+import { User } from '../../database/user.entity';
+import { Vault } from '../../database/vault.entity';
+import { transformImageToUrl } from '../../helpers';
 import { VaultStatus } from '../../types/vault.types';
+import { AwsService } from '../aws_bucket/aws.service';
+
 import { VaultSortField, SortOrder } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
-import { AwsService } from '../aws_bucket/aws.service';
-import { transformImageToUrl } from '../../helpers';
-import {VaultShortResponse} from './dto/vault.response';
+import { SaveDraftReq } from './dto/saveDraft.req';
+import { VaultShortResponse } from './dto/vault.response';
 
 @Injectable()
 export class DraftVaultsService {
@@ -40,17 +42,22 @@ export class DraftVaultsService {
     private readonly awsService: AwsService
   ) {}
 
-
-  async getMyDraftVaults(userId: string, page: number = 1, limit: number = 10, sortBy?: VaultSortField, sortOrder: SortOrder = SortOrder.DESC): Promise<PaginatedResponseDto<VaultShortResponse>> {
+  async getMyDraftVaults(
+    userId: string,
+    page: number = 1,
+    limit: number = 10,
+    sortBy?: VaultSortField,
+    sortOrder: SortOrder = SortOrder.DESC
+  ): Promise<PaginatedResponseDto<VaultShortResponse>> {
     const query = {
       where: {
         owner: { id: userId },
-        vault_status: VaultStatus.draft
+        vault_status: VaultStatus.draft,
       },
       relations: ['social_links', 'vault_image', 'banner_image', 'ft_token_img'],
       skip: (page - 1) * limit,
       take: limit,
-      order: {}
+      order: {},
     };
 
     // Add sorting if specified
@@ -71,7 +78,7 @@ export class DraftVaultsService {
       total,
       page,
       limit,
-      totalPages: Math.ceil(total / limit)
+      totalPages: Math.ceil(total / limit),
     };
   }
 
@@ -80,9 +87,19 @@ export class DraftVaultsService {
       where: {
         id,
         vault_status: VaultStatus.draft,
-        owner: { id: userId }
+        owner: { id: userId },
       },
-      relations: ['owner', 'social_links', 'assets_whitelist', 'acquirer_whitelist', 'contributor_whitelist', 'vault_image', 'banner_image', 'ft_token_img', 'acquirer_whitelist_csv']
+      relations: [
+        'owner',
+        'social_links',
+        'assets_whitelist',
+        'acquirer_whitelist',
+        'contributor_whitelist',
+        'vault_image',
+        'banner_image',
+        'ft_token_img',
+        'acquirer_whitelist_csv',
+      ],
     });
 
     if (!vault) {
@@ -93,10 +110,10 @@ export class DraftVaultsService {
     vault.vault_image = transformImageToUrl(vault.vault_image as FileEntity) as any;
     vault.banner_image = transformImageToUrl(vault.banner_image as FileEntity) as any;
     vault.ft_token_img = transformImageToUrl(vault.ft_token_img as FileEntity) as any;
-    delete vault.owner
-    delete vault.contribution_phase_start
-    delete vault.acquire_phase_start
-    delete vault.locked_at
+    delete vault.owner;
+    delete vault.contribution_phase_start;
+    delete vault.acquire_phase_start;
+    delete vault.locked_at;
 
     // todo need to create additional model for remove owner, and transform image to link
     return classToPlain(vault);
@@ -110,9 +127,18 @@ export class DraftVaultsService {
         where: {
           id: data.id,
           vault_status: VaultStatus.draft,
-          owner: { id: userId }
+          owner: { id: userId },
         },
-        relations: ['owner', 'social_links', 'assets_whitelist', 'acquirer_whitelist', 'acquirer_whitelist_csv', 'vault_image', 'banner_image', 'ft_token_img']
+        relations: [
+          'owner',
+          'social_links',
+          'assets_whitelist',
+          'acquirer_whitelist',
+          'acquirer_whitelist_csv',
+          'vault_image',
+          'banner_image',
+          'ft_token_img',
+        ],
       });
 
       if (existingVault && existingVault.vault_status !== VaultStatus.draft) {
@@ -137,29 +163,37 @@ export class DraftVaultsService {
 
     try {
       const owner = await this.usersRepository.findOne({
-        where: { id: userId }
+        where: { id: userId },
       });
 
       // Process image files
       const imgKey = data.vaultImage?.split('image/')[1];
-      const vaultImg = imgKey ? await this.filesRepository.findOne({
-        where: { file_key: imgKey }
-      }) : null;
+      const vaultImg = imgKey
+        ? await this.filesRepository.findOne({
+            where: { file_key: imgKey },
+          })
+        : null;
 
       const bannerImgKey = data.bannerImage?.split('image/')[1];
-      const bannerImg = bannerImgKey ? await this.filesRepository.findOne({
-        where: { file_key: bannerImgKey }
-      }) : null;
+      const bannerImg = bannerImgKey
+        ? await this.filesRepository.findOne({
+            where: { file_key: bannerImgKey },
+          })
+        : null;
 
       const ftTokenImgKey = data.ftTokenImg?.split('image/')[1];
-      const ftTokenImg = ftTokenImgKey ? await this.filesRepository.findOne({
-        where: { file_key: ftTokenImgKey }
-      }) : null;
+      const ftTokenImg = ftTokenImgKey
+        ? await this.filesRepository.findOne({
+            where: { file_key: ftTokenImgKey },
+          })
+        : null;
 
       const acquirerWhitelistCsvKey = data.acquirerWhitelistCsv?.key;
-      const acquirerWhitelistFile = acquirerWhitelistCsvKey ? await this.filesRepository.findOne({
-        where: { file_key: acquirerWhitelistCsvKey }
-      }) : null;
+      const acquirerWhitelistFile = acquirerWhitelistCsvKey
+        ? await this.filesRepository.findOne({
+            where: { file_key: acquirerWhitelistCsvKey },
+          })
+        : null;
 
       // Check if the vault already has these files to avoid duplicate relations
       const hasVaultImage = existingVault?.vault_image?.file_key === imgKey;
@@ -169,7 +203,7 @@ export class DraftVaultsService {
 
       const vaultData: any = {
         owner: owner,
-        vault_status: VaultStatus.draft
+        vault_status: VaultStatus.draft,
       };
 
       // Only include fields that are actually provided
@@ -180,20 +214,19 @@ export class DraftVaultsService {
       if (data.valuationCurrency !== undefined) vaultData.valuation_currency = data.valuationCurrency;
       if (data.valuationAmount !== undefined) vaultData.valuation_amount = data.valuationAmount;
       if (data.description !== undefined) vaultData.description = data.description;
-      if(data.ftTokenDecimals) vaultData.ft_token_decimals = data.ftTokenDecimals;
-      if(data.ftTokenSupply) vaultData.ft_token_supply = data.ftTokenSupply;
-      if(data.terminationType) vaultData.termination_type = data.terminationType;
-      if(data.vaultTokenTicker) vaultData.vault_token_ticker = data.vaultTokenTicker;
-      if(data.tokensForAcquires) vaultData.tokens_for_acquires = data.tokensForAcquires;
-      if(data.acquireReserve) vaultData.acquire_reserve = data.acquireReserve;
-      if(data.liquidityPoolContribution) vaultData.liquidity_pool_contribution = data.liquidityPoolContribution;
-      if(data.creationThreshold) vaultData.creation_threshold = data.creationThreshold;
-      if(data.startThreshold) vaultData.start_threshold = data.startThreshold;
-      if(data.voteThreshold) vaultData.vote_threshold = data.voteThreshold;
-      if(data.executionThreshold) vaultData.execution_threshold = data.executionThreshold;
-      if(data.cosigningThreshold) vaultData.cosigning_threshold = data.cosigningThreshold;
-      if(data.vaultAppreciation) vaultData.vault_appreciation = data.vaultAppreciation
-
+      if (data.ftTokenDecimals) vaultData.ft_token_decimals = data.ftTokenDecimals;
+      if (data.ftTokenSupply) vaultData.ft_token_supply = data.ftTokenSupply;
+      if (data.terminationType) vaultData.termination_type = data.terminationType;
+      if (data.vaultTokenTicker) vaultData.vault_token_ticker = data.vaultTokenTicker;
+      if (data.tokensForAcquires) vaultData.tokens_for_acquires = data.tokensForAcquires;
+      if (data.acquireReserve) vaultData.acquire_reserve = data.acquireReserve;
+      if (data.liquidityPoolContribution) vaultData.liquidity_pool_contribution = data.liquidityPoolContribution;
+      if (data.creationThreshold) vaultData.creation_threshold = data.creationThreshold;
+      if (data.startThreshold) vaultData.start_threshold = data.startThreshold;
+      if (data.voteThreshold) vaultData.vote_threshold = data.voteThreshold;
+      if (data.executionThreshold) vaultData.execution_threshold = data.executionThreshold;
+      if (data.cosigningThreshold) vaultData.cosigning_threshold = data.cosigningThreshold;
+      if (data.vaultAppreciation) vaultData.vault_appreciation = data.vaultAppreciation;
 
       if (data.contributionDuration !== undefined) {
         vaultData.contribution_duration = data.contributionDuration;
@@ -211,7 +244,7 @@ export class DraftVaultsService {
         vaultData.contribution_open_window_time = new Date(data.contributionOpenWindowTime).toISOString();
       }
       if (data.contributionOpenWindowType !== undefined && data.contributionOpenWindowType !== null) {
-        vaultData.contribution_open_window_type = data.contributionOpenWindowType
+        vaultData.contribution_open_window_type = data.contributionOpenWindowType;
       }
       if (data.timeElapsedIsEqualToTime !== undefined && data.timeElapsedIsEqualToTime !== null) {
         vaultData.time_elapsed_is_equal_to_time = data.timeElapsedIsEqualToTime;
@@ -225,10 +258,10 @@ export class DraftVaultsService {
 
       let vault: Vault;
       if (existingVault) {
-        vault = await this.vaultsRepository.save({
+        vault = (await this.vaultsRepository.save({
           ...existingVault,
-          ...vaultData
-        }) as Vault;
+          ...vaultData,
+        })) as Vault;
       } else {
         vault = await this.vaultsRepository.save(vaultData as Vault);
       }
@@ -239,7 +272,7 @@ export class DraftVaultsService {
           return this.linksRepository.create({
             vault: vault,
             name: linkItem.name,
-            url: linkItem.url
+            url: linkItem.url,
           });
         });
         await this.linksRepository.save(links);
@@ -248,13 +281,13 @@ export class DraftVaultsService {
       // Handle tags if provided
       if (data.tags?.length > 0) {
         const tags = await Promise.all(
-          data.tags.map(async (tagData) => {
+          data.tags.map(async tagData => {
             let tag = await this.tagsRepository.findOne({
-              where: { name: tagData.name }
+              where: { name: tagData.name },
             });
             if (!tag) {
               tag = await this.tagsRepository.save({
-                name: tagData.name
+                name: tagData.name,
               });
             }
             return tag;
@@ -266,14 +299,16 @@ export class DraftVaultsService {
 
       // Handle assets whitelist only if provided
       if (data.assetsWhitelist !== undefined && data.assetsWhitelist.length > 0) {
-        await Promise.all(data.assetsWhitelist.map(whitelistItem => {
-          return this.assetsWhitelistRepository.save({
-            vault: vault,
-            policy_id: whitelistItem.policyId,
-            asset_count_cap_min: whitelistItem?.countCapMin,
-            asset_count_cap_max: whitelistItem?.countCapMax
-          });
-        }));
+        await Promise.all(
+          data.assetsWhitelist.map(whitelistItem => {
+            return this.assetsWhitelistRepository.save({
+              vault: vault,
+              policy_id: whitelistItem.policyId,
+              asset_count_cap_min: whitelistItem?.countCapMin,
+              asset_count_cap_max: whitelistItem?.countCapMax,
+            });
+          })
+        );
       }
 
       // Handle acquirer whitelist only if provided
@@ -285,7 +320,7 @@ export class DraftVaultsService {
           const investorItems = Array.from(allAcquirer).map(walletAddress => {
             return this.acquirerWhitelistRepository.create({
               vault: vault,
-              wallet_address: walletAddress
+              wallet_address: walletAddress,
             });
           });
           await this.acquirerWhitelistRepository.save(investorItems);
@@ -297,7 +332,7 @@ export class DraftVaultsService {
         const contributorItems = data.whitelistContributors.map(item => {
           return this.contributorWhitelistRepository.create({
             vault: vault,
-            wallet_address: item.policyId
+            wallet_address: item.policyId,
           });
         });
         await this.contributorWhitelistRepository.save(contributorItems);

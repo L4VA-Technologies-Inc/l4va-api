@@ -1,14 +1,14 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { verifyWebhookSignature, SignatureVerificationError } from '@blockfrost/blockfrost-js';
-import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
+
+import { verifyWebhookSignature, SignatureVerificationError } from '@blockfrost/blockfrost-js';
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class WebhookVerificationService {
   private readonly logger = new Logger(WebhookVerificationService.name);
   private readonly webhookAuthToken: string;
   private readonly maxEventAge: number;
-
 
   constructor(private readonly configService: ConfigService) {
     this.webhookAuthToken = this.configService.get<string>('BLOCKFROST_WEBHOOK_AUTH_TOKEN');
@@ -36,7 +36,7 @@ export class WebhookVerificationService {
       this.logger.debug('Parsed signature components:', {
         timestamp,
         signature,
-        payloadLength: payload.length
+        payloadLength: payload.length,
       });
 
       // Prepare the signature payload as per Blockfrost docs
@@ -52,7 +52,7 @@ export class WebhookVerificationService {
       this.logger.debug('Computed signature:', {
         expectedSignature,
         receivedSignature: signature,
-        match: expectedSignature === signature
+        match: expectedSignature === signature,
       });
 
       // Verify timestamp is within tolerance
@@ -63,7 +63,7 @@ export class WebhookVerificationService {
         this.logger.error('Webhook event is too old:', {
           eventTime: timestamp,
           currentTime,
-          maxAge: this.maxEventAge
+          maxAge: this.maxEventAge,
         });
         return false;
       }
@@ -76,13 +76,13 @@ export class WebhookVerificationService {
 
       this.logger.error('Signature mismatch:', {
         expected: expectedSignature,
-        received: signature
+        received: signature,
       });
       return false;
     } catch (error) {
       this.logger.error('Error during signature verification:', {
         error: error.message,
-        signatureHeader
+        signatureHeader,
       });
       return false;
     }

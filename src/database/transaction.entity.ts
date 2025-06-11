@@ -1,33 +1,33 @@
-import {Column, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn, Index} from 'typeorm';
-import {ApiProperty} from '@nestjs/swagger';
-import {Exclude, Expose} from 'class-transformer';
-import {TransactionStatus, TransactionType} from '../types/transaction.types';
-import {Asset} from './asset.entity';
-import {Vault} from './vault.entity';
+import { ApiProperty } from '@nestjs/swagger';
+import { Exclude, Expose } from 'class-transformer';
+import { Column, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn, Index } from 'typeorm';
 
+import { TransactionStatus, TransactionType } from '../types/transaction.types';
+
+import { Asset } from './asset.entity';
+import { Vault } from './vault.entity';
 
 @Entity('transactions')
 export class Transaction {
-
   @ApiProperty({ description: 'Unique identifier of the transaction' })
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
   @Expose({ name: 'utxoInput' })
   @Column({
-    nullable: true
+    nullable: true,
   })
   utxo_input: string; // sender
 
   @Expose({ name: 'utxoOutput' })
   @Column({
-    nullable: true
+    nullable: true,
   })
   utxo_output: string; // receiver
 
   @Expose({ name: 'utxoRef' })
   @Column({
-    nullable: true
+    nullable: true,
   })
   utxo_ref: string;
 
@@ -35,38 +35,38 @@ export class Transaction {
     name: 'type',
     type: 'enum',
     enum: TransactionType,
-    nullable: true
+    nullable: true,
   })
   type?: TransactionType;
 
   @Column({
-    nullable: true
+    nullable: true,
   })
   amount: number;
 
   @Column({
-    nullable: true
+    nullable: true,
   })
   fee: number;
 
   @Expose({ name: 'txHash' })
   @Column({
-   nullable: true
+    nullable: true,
   })
   tx_hash: string; // 1
 
-  @Expose({ name: 'status'})
+  @Expose({ name: 'status' })
   @Column({
     name: 'status',
     type: 'enum',
     enum: TransactionStatus,
-    nullable: true
+    nullable: true,
   })
   status?: TransactionStatus; //
 
   @Exclude()
-  @OneToMany(() => Asset, (asset: Asset) => asset.transaction )
-  public assets: Asset [];
+  @OneToMany(() => Asset, (asset: Asset) => asset.transaction)
+  public assets: Asset[];
 
   @ManyToOne(() => Vault)
   @JoinColumn({ name: 'vault_id' })

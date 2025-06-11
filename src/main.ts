@@ -6,7 +6,6 @@ import { json } from 'express';
 
 import { AppModule } from './app.module';
 
-
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
@@ -30,15 +29,17 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api', app, document);
 
-  app.useGlobalPipes(new ValidationPipe({
-    whitelist: true,
-    forbidNonWhitelisted: false,
-    transform: true,
-    transformOptions: { excludeExtraneousValues: true }
-  }));
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: false,
+      transform: true,
+      transformOptions: { excludeExtraneousValues: true },
+    })
+  );
 
-  await app.listen(process.env.PORT ?? 3000).then((() => {
+  await app.listen(process.env.PORT ?? 3000).then(() => {
     console.log(`Server started on port: ${process.env.PORT ?? 3000}`);
-  }));
+  });
 }
 bootstrap();

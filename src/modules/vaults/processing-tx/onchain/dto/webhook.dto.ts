@@ -1,12 +1,13 @@
 import { ApiProperty } from '@nestjs/swagger';
-import {Expose, Type} from 'class-transformer';
+import { Expose, Type } from 'class-transformer';
 import { IsArray, IsEnum, IsNumber, IsObject, IsOptional, IsString, ValidateNested } from 'class-validator';
+
 import { OnchainTransactionStatus } from '../types/transaction-status.enum';
 
 class BlockfrostAmount {
   @ApiProperty({
     description: 'The unit of the value',
-    example: 'lovelace'
+    example: 'lovelace',
   })
   @IsString()
   @Expose()
@@ -14,7 +15,7 @@ class BlockfrostAmount {
 
   @ApiProperty({
     description: 'The quantity of the unit',
-    example: '1664454750'
+    example: '1664454750',
   })
   @IsString()
   @Expose()
@@ -24,7 +25,7 @@ class BlockfrostAmount {
 class BlockfrostTxInput {
   @ApiProperty({
     description: 'Input address',
-    example: 'addr1q8suxg555ynm66ykapc2999hzyxnmre70xf6p20pa2z269agynrj803a45k5zqg2usxju3wk5gywqjdtd59salr9mpzq9g4r8a'
+    example: 'addr1q8suxg555ynm66ykapc2999hzyxnmre70xf6p20pa2z269agynrj803a45k5zqg2usxju3wk5gywqjdtd59salr9mpzq9g4r8a',
   })
   @IsString()
   @Expose()
@@ -32,7 +33,7 @@ class BlockfrostTxInput {
 
   @ApiProperty({
     description: 'Input amounts',
-    type: [BlockfrostAmount]
+    type: [BlockfrostAmount],
   })
   @IsArray()
   @ValidateNested({ each: true })
@@ -42,7 +43,7 @@ class BlockfrostTxInput {
 
   @ApiProperty({
     description: 'Hash of the transaction',
-    example: 'c4ca612037927bb6276a3742ce7ecadbaa18c91f1c756563f63dc10c8d03ef75'
+    example: 'c4ca612037927bb6276a3742ce7ecadbaa18c91f1c756563f63dc10c8d03ef75',
   })
   @IsString()
   @Expose()
@@ -50,7 +51,7 @@ class BlockfrostTxInput {
 
   @ApiProperty({
     description: 'Index of the output',
-    example: 0
+    example: 0,
   })
   @IsNumber()
   @Expose()
@@ -58,7 +59,7 @@ class BlockfrostTxInput {
 
   @ApiProperty({
     description: 'Whether this is a collateral input',
-    example: false
+    example: false,
   })
   @IsOptional()
   @Expose()
@@ -66,7 +67,7 @@ class BlockfrostTxInput {
 
   @ApiProperty({
     description: 'The hash of the transaction data',
-    example: null
+    example: null,
   })
   @IsOptional()
   @Expose()
@@ -76,7 +77,7 @@ class BlockfrostTxInput {
 class BlockfrostTxOutput {
   @ApiProperty({
     description: 'Output address',
-    example: 'addr1q9zyjm3lkfjhgt2g6cyqts8kpwppl3l5ud8afpgqxzygrhgv45sex0xp482gdrnnkzdlajwc9zalzx8zvcvum2qvkqzsln7sdv'
+    example: 'addr1q9zyjm3lkfjhgt2g6cyqts8kpwppl3l5ud8afpgqxzygrhgv45sex0xp482gdrnnkzdlajwc9zalzx8zvcvum2qvkqzsln7sdv',
   })
   @IsString()
   @Expose()
@@ -84,7 +85,7 @@ class BlockfrostTxOutput {
 
   @ApiProperty({
     description: 'Output amounts',
-    type: [BlockfrostAmount]
+    type: [BlockfrostAmount],
   })
   @IsArray()
   @ValidateNested({ each: true })
@@ -94,7 +95,7 @@ class BlockfrostTxOutput {
 
   @ApiProperty({
     description: 'Index of the output',
-    example: 0
+    example: 0,
   })
   @IsNumber()
   @Expose()
@@ -102,7 +103,7 @@ class BlockfrostTxOutput {
 
   @ApiProperty({
     description: 'The hash of the transaction data',
-    example: null
+    example: null,
   })
   @IsOptional()
   @Expose()
@@ -112,7 +113,7 @@ class BlockfrostTxOutput {
 class BlockfrostTransaction {
   @ApiProperty({
     description: 'Transaction hash',
-    example: '9358fccf785f40d5507ed81b38f16b03148baf341e1de4d511689eebb436dd4b'
+    example: '9358fccf785f40d5507ed81b38f16b03148baf341e1de4d511689eebb436dd4b',
   })
   @IsString()
   @Expose()
@@ -120,7 +121,7 @@ class BlockfrostTransaction {
 
   @ApiProperty({
     description: 'Block hash',
-    example: '3e0f394b2601b99b26761bbceab1063bc7fa29578165cd840c3dee6d286e98be'
+    example: '3e0f394b2601b99b26761bbceab1063bc7fa29578165cd840c3dee6d286e98be',
   })
   @IsString()
   @Expose()
@@ -128,7 +129,7 @@ class BlockfrostTransaction {
 
   @ApiProperty({
     description: 'Block number',
-    example: 7012249
+    example: 7012249,
   })
   @IsNumber()
   @Expose()
@@ -136,7 +137,7 @@ class BlockfrostTransaction {
 
   @ApiProperty({
     description: 'Block creation time',
-    example: 1647611205
+    example: 1647611205,
   })
   @IsNumber()
   @Expose()
@@ -144,7 +145,7 @@ class BlockfrostTransaction {
 
   @ApiProperty({
     description: 'Slot number',
-    example: 56044914
+    example: 56044914,
   })
   @IsNumber()
   @Expose()
@@ -152,7 +153,7 @@ class BlockfrostTransaction {
 
   @ApiProperty({
     description: 'Transaction index within the block',
-    example: 0
+    example: 0,
   })
   @IsNumber()
   @Expose()
@@ -160,7 +161,7 @@ class BlockfrostTransaction {
 
   @ApiProperty({
     description: 'Output amounts',
-    type: [BlockfrostAmount]
+    type: [BlockfrostAmount],
   })
   @IsArray()
   @ValidateNested({ each: true })
@@ -170,7 +171,7 @@ class BlockfrostTransaction {
 
   @ApiProperty({
     description: 'Fees for the transaction',
-    example: '174345'
+    example: '174345',
   })
   @IsString()
   @Expose()
@@ -178,7 +179,7 @@ class BlockfrostTransaction {
 
   @ApiProperty({
     description: 'Deposit',
-    example: '0'
+    example: '0',
   })
   @IsString()
   @Expose()
@@ -186,7 +187,7 @@ class BlockfrostTransaction {
 
   @ApiProperty({
     description: 'Size in bytes',
-    example: 426
+    example: 426,
   })
   @IsNumber()
   @Expose()
@@ -194,7 +195,7 @@ class BlockfrostTransaction {
 
   @ApiProperty({
     description: 'Invalid before slot',
-    example: null
+    example: null,
   })
   @IsOptional()
   @Expose()
@@ -202,7 +203,7 @@ class BlockfrostTransaction {
 
   @ApiProperty({
     description: 'Invalid after slot',
-    example: 56051594
+    example: 56051594,
   })
   @IsOptional()
   @Expose()
@@ -210,7 +211,7 @@ class BlockfrostTransaction {
 
   @ApiProperty({
     description: 'Count of UTXOs',
-    example: 4
+    example: 4,
   })
   @IsNumber()
   @Expose()
@@ -218,7 +219,7 @@ class BlockfrostTransaction {
 
   @ApiProperty({
     description: 'Whether the contract is valid',
-    example: true
+    example: true,
   })
   @IsOptional()
   @Expose()
@@ -228,7 +229,7 @@ class BlockfrostTransaction {
 class BlockfrostTransactionEvent {
   @ApiProperty({
     description: 'Transaction details',
-    type: BlockfrostTransaction
+    type: BlockfrostTransaction,
   })
   @IsObject()
   @ValidateNested()
@@ -238,7 +239,7 @@ class BlockfrostTransactionEvent {
 
   @ApiProperty({
     description: 'Transaction inputs',
-    type: [BlockfrostTxInput]
+    type: [BlockfrostTxInput],
   })
   @IsArray()
   @ValidateNested({ each: true })
@@ -248,7 +249,7 @@ class BlockfrostTransactionEvent {
 
   @ApiProperty({
     description: 'Transaction outputs',
-    type: [BlockfrostTxOutput]
+    type: [BlockfrostTxOutput],
   })
   @IsArray()
   @ValidateNested({ each: true })
@@ -260,7 +261,7 @@ class BlockfrostTransactionEvent {
 export class BlockchainWebhookDto {
   @ApiProperty({
     description: 'Unique identifier of the webhook request',
-    example: 'cd153e0a-2561-4761-9fa1-98b62937438e'
+    example: 'cd153e0a-2561-4761-9fa1-98b62937438e',
   })
   @IsString()
   @Expose()
@@ -268,7 +269,7 @@ export class BlockchainWebhookDto {
 
   @ApiProperty({
     description: 'Identifier of the Webhook',
-    example: 'cf68eb9c-635f-415e-a5a8-6233638f28d6'
+    example: 'cf68eb9c-635f-415e-a5a8-6233638f28d6',
   })
   @IsString()
   @Expose()
@@ -276,7 +277,7 @@ export class BlockchainWebhookDto {
 
   @ApiProperty({
     description: 'Unix timestamp when the event was detected',
-    example: 1647611209
+    example: 1647611209,
   })
   @IsNumber()
   @Expose()
@@ -284,7 +285,7 @@ export class BlockchainWebhookDto {
 
   @ApiProperty({
     description: 'Version of Event objects',
-    example: 1
+    example: 1,
   })
   @IsNumber()
   @Expose()
@@ -292,7 +293,7 @@ export class BlockchainWebhookDto {
 
   @ApiProperty({
     description: 'Type of the event',
-    example: 'transaction'
+    example: 'transaction',
   })
   @IsString()
   @Expose()
@@ -300,7 +301,7 @@ export class BlockchainWebhookDto {
 
   @ApiProperty({
     description: 'Array of transaction events',
-    type: [BlockfrostTransactionEvent]
+    type: [BlockfrostTransactionEvent],
   })
   @IsArray()
   @ValidateNested({ each: true })

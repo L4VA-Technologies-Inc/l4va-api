@@ -1,18 +1,12 @@
-import {
-  BeforeInsert,
-  BeforeUpdate,
-  Column,
-  Entity, JoinColumn, ManyToOne,
-  PrimaryGeneratedColumn,
-} from 'typeorm';
-import { Vault } from './vault.entity';
-import { User } from './user.entity';
 import { Expose } from 'class-transformer';
+import { BeforeInsert, BeforeUpdate, Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
+
+import { User } from './user.entity';
+import { Vault } from './vault.entity';
 
 @Entity({ name: 'links' })
 export class LinkEntity {
-
-  @Expose({ name: 'id'})
+  @Expose({ name: 'id' })
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
@@ -34,11 +28,11 @@ export class LinkEntity {
   @JoinColumn({ name: 'user_id' })
   user: User;
 
-  @Expose({ name: 'updatedAt'})
+  @Expose({ name: 'updatedAt' })
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   updated_at: string;
 
-  @Expose({ name: 'createdAt'})
+  @Expose({ name: 'createdAt' })
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   created_at: string;
 

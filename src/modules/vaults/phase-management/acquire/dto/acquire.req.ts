@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsArray, ValidateNested } from 'class-validator';
 import { Expose, Type } from 'class-transformer';
+import { IsArray, ValidateNested } from 'class-validator';
+
 import { ContributionAsset } from '../../contribution/dto/contribute.req';
 
 export class AcquireReq {

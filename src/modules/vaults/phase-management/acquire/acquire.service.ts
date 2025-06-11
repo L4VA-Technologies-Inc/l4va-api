@@ -1,15 +1,17 @@
 import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { AcquireReq } from './dto/acquire.req';
-import { Vault } from '../../../../database/vault.entity';
-import { VaultStatus } from '../../../../types/vault.types';
-import { User } from '../../../../database/user.entity';
-import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
-import { TransactionType } from '../../../../types/transaction.types';
+
 import { Asset } from '../../../../database/asset.entity';
+import { User } from '../../../../database/user.entity';
+import { Vault } from '../../../../database/vault.entity';
 import { AssetType, AssetStatus, AssetOriginType } from '../../../../types/asset.types';
+import { TransactionType } from '../../../../types/transaction.types';
+import { VaultStatus } from '../../../../types/vault.types';
+import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
 import { ContributionAsset } from '../contribution/dto/contribute.req';
+
+import { AcquireReq } from './dto/acquire.req';
 
 @Injectable()
 export class AcquireService {
@@ -22,7 +24,7 @@ export class AcquireService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
-    private readonly transactionsService: TransactionsService,
+    private readonly transactionsService: TransactionsService
   ) {}
 
   async acquire(vaultId: string, acquireReq: AcquireReq, userId: string) {
@@ -52,9 +54,7 @@ export class AcquireService {
     if (vault.owner.id !== userId) {
       // Check whitelist only for non-owners
       if (vault.acquirer_whitelist?.length > 0) {
-        const isWhitelisted = vault.acquirer_whitelist.some(
-          (entry) => entry.wallet_address === user.address,
-        );
+        const isWhitelisted = vault.acquirer_whitelist.some(entry => entry.wallet_address === user.address);
         if (!isWhitelisted) {
           throw new BadRequestException('User is not in investor whitelist');
         }
@@ -81,7 +81,7 @@ export class AcquireService {
 
         // Create and save all assets
         await Promise.all(
-          acquireReq.assets.map(async (assetItem) => {
+          acquireReq.assets.map(async assetItem => {
             const asset = this.assetRepository.create({
               transaction: savedTransaction,
               type: AssetType.CNT, // Using CNT type for acquire
@@ -91,7 +91,7 @@ export class AcquireService {
               status: AssetStatus.PENDING,
               origin_type: AssetOriginType.ACQUIRED,
               added_by: user,
-              metadata: assetItem?.metadata || {}
+              metadata: assetItem?.metadata || {},
             });
 
             await this.assetRepository.save(asset);
@@ -123,7 +123,7 @@ export class AcquireService {
       success: true,
       message: 'Transaction hash updated',
       txId: transactionId,
-      txHash: txHash
+      txHash: txHash,
     };
   }
 }

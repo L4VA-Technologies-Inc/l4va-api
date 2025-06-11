@@ -1,6 +1,6 @@
-import { IsNumber, IsOptional, Min } from 'class-validator';
-import {Expose, Type} from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
+import { Expose, Type } from 'class-transformer';
+import { IsNumber, IsOptional, Min } from 'class-validator';
 
 export class PaginationDto {
   @IsNumber()

@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Expose } from 'class-transformer';
+import { Expose, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayNotEmpty,
@@ -14,17 +14,20 @@ import {
   MinLength,
   Min,
   Max,
-  ValidateNested, ValidateIf,
+  ValidateNested,
+  ValidateIf,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+
 import {
-  ContributionWindowType, InvestmentWindowType,
+  ContributionWindowType,
+  InvestmentWindowType,
   TerminationType,
   ValueMethod,
   VaultPrivacy,
-  VaultType
+  VaultType,
 } from '../../../types/vault.types';
-import {AcquirerWhitelist, ContributorWhitelist, SocialLink, AcquirerWhitelistCsv} from '../types';
+import { AcquirerWhitelist, ContributorWhitelist, SocialLink, AcquirerWhitelistCsv } from '../types';
+
 import { AssetWhitelistDto } from './assetWhitelist.dto';
 import { TagDto } from './tag.dto';
 
@@ -35,7 +38,7 @@ export class CreateVaultReq {
   @Expose()
   id?: string;
 
-  @ApiProperty({ required: true})
+  @ApiProperty({ required: true })
   @IsNotEmpty()
   @IsString()
   @Expose()
@@ -56,7 +59,7 @@ export class CreateVaultReq {
   @ApiProperty({
     required: true,
     description: 'Valuation type - public vaults can only use LBE, private/semi-private can use LBE or fixed',
-    enum: ValueMethod
+    enum: ValueMethod,
   })
   @IsNotEmpty()
   @IsEnum(ValueMethod)
@@ -66,7 +69,7 @@ export class CreateVaultReq {
   @ApiProperty({
     description: 'Currency for fixed valuation (required when valueMethod is fixed)',
     required: false,
-    example: 'ADA'
+    example: 'ADA',
   })
   @ValidateIf(o => o.valueMethod === ValueMethod.fixed)
   @IsString()
@@ -76,15 +79,15 @@ export class CreateVaultReq {
   @ApiProperty({
     description: 'Amount for fixed valuation (required when valueMethod is fixed)',
     required: false,
-    example: '1000000'
+    example: '1000000',
   })
-  @ValidateIf((o) => o.valueMethod === ValueMethod.fixed)
+  @ValidateIf(o => o.valueMethod === ValueMethod.fixed)
   @IsString()
   @Expose()
   valuationAmount?: string;
 
   @ApiProperty({
-    required: true
+    required: true,
   })
   @IsNotEmpty()
   @IsEnum(ContributionWindowType)
@@ -92,20 +95,20 @@ export class CreateVaultReq {
   contributionOpenWindowType: ContributionWindowType;
 
   @ApiProperty()
-  @ValidateIf((o) => o.contributionOpenWindowType === ContributionWindowType.custom)
+  @ValidateIf(o => o.contributionOpenWindowType === ContributionWindowType.custom)
   @IsNotEmpty()
   @Expose()
   contributionOpenWindowTime: number;
 
   @ApiProperty({
-    required: false
+    required: false,
   })
   @IsOptional()
   @IsString()
   @Expose()
   description: string;
 
-  @ApiProperty({ required: true})
+  @ApiProperty({ required: true })
   @IsNotEmpty()
   @IsString()
   @Expose()
@@ -113,16 +116,16 @@ export class CreateVaultReq {
 
   @ApiProperty({
     description: 'CSV file containing acquirer whitelist',
-    required: false
+    required: false,
   })
-  @ValidateIf((o) => o.privacy !== VaultPrivacy.public)
+  @ValidateIf(o => o.privacy !== VaultPrivacy.public)
   @IsOptional()
   @Expose()
   acquirerWhitelistCsv?: AcquirerWhitelistCsv;
 
   @ApiProperty({
     description: 'CSV file containing contributors whitelist',
-    required: false
+    required: false,
   })
   @IsOptional()
   @IsString()
@@ -132,7 +135,7 @@ export class CreateVaultReq {
   @ApiProperty({
     description: 'List of contributor wallet addresses',
     required: false,
-    type: [ContributorWhitelist]
+    type: [ContributorWhitelist],
   })
   @IsOptional()
   @IsArray()
@@ -142,7 +145,7 @@ export class CreateVaultReq {
 
   @ApiProperty({
     required: true,
-    description: 'Duration in milliseconds'
+    description: 'Duration in milliseconds',
   })
   @IsNotEmpty()
   @IsNumber()
@@ -151,7 +154,7 @@ export class CreateVaultReq {
 
   @ApiProperty({
     required: true,
-    description: 'Duration in milliseconds'
+    description: 'Duration in milliseconds',
   })
   @IsNotEmpty()
   @IsNumber()
@@ -165,14 +168,14 @@ export class CreateVaultReq {
   acquireOpenWindowType: string;
 
   @ApiProperty()
-  @ValidateIf((o) => o.acquireOpenWindowType === InvestmentWindowType.custom)
+  @ValidateIf(o => o.acquireOpenWindowType === InvestmentWindowType.custom)
   @IsNotEmpty()
   @Expose()
   acquireOpenWindowTime: string;
 
   @ApiProperty({
     description: 'Percentage of assets offered',
-    required: true
+    required: true,
   })
   @IsNotEmpty()
   @IsNumber()
@@ -181,7 +184,7 @@ export class CreateVaultReq {
 
   @ApiProperty({
     description: 'FT acquire reverse percentage',
-    required: true
+    required: true,
   })
   @IsNotEmpty()
   @IsNumber()
@@ -190,7 +193,7 @@ export class CreateVaultReq {
 
   @ApiProperty({
     description: 'Liquidity pool contribution percentage',
-    required: true
+    required: true,
   })
   @IsNotEmpty()
   @IsNumber()
@@ -200,7 +203,7 @@ export class CreateVaultReq {
   @ApiProperty({
     description: 'Total supply of FT tokens',
     required: true,
-    default: '100000000'
+    default: '100000000',
   })
   @IsNotEmpty()
   @IsNumber()
@@ -209,7 +212,7 @@ export class CreateVaultReq {
 
   @ApiProperty({
     required: true,
-    description: 'Should be 1-10 characters'
+    description: 'Should be 1-10 characters',
   })
   @IsNotEmpty()
   @IsString()
@@ -221,7 +224,7 @@ export class CreateVaultReq {
   @ApiProperty({
     description: 'Number of decimal places for the FT token',
     required: true,
-    default: 2
+    default: 2,
   })
   @IsNotEmpty()
   @IsNumber()
@@ -236,9 +239,9 @@ export class CreateVaultReq {
 
   @ApiProperty({
     description: 'Duration in milliseconds',
-    required: true
+    required: true,
   })
-  @ValidateIf((o) => o.terminationType === TerminationType.programmed)
+  @ValidateIf(o => o.terminationType === TerminationType.programmed)
   @IsNotEmpty()
   @IsNumber()
   @Expose()
@@ -249,9 +252,9 @@ export class CreateVaultReq {
     required: true,
     minimum: 0,
     maximum: 100,
-    type: Number
+    type: Number,
   })
-  @ValidateIf((o) => o.terminationType === TerminationType.programmed)
+  @ValidateIf(o => o.terminationType === TerminationType.programmed)
   @IsNotEmpty()
   @IsNumber()
   @Min(0)
@@ -264,7 +267,7 @@ export class CreateVaultReq {
     required: true,
     minimum: 0,
     maximum: 100,
-    type: Number
+    type: Number,
   })
   @IsNotEmpty()
   @IsNumber()
@@ -278,7 +281,7 @@ export class CreateVaultReq {
     required: true,
     minimum: 0,
     maximum: 100,
-    type: Number
+    type: Number,
   })
   @IsNotEmpty()
   @IsNumber()
@@ -292,7 +295,7 @@ export class CreateVaultReq {
     required: true,
     minimum: 0,
     maximum: 100,
-    type: Number
+    type: Number,
   })
   @IsNotEmpty()
   @IsNumber()
@@ -306,7 +309,7 @@ export class CreateVaultReq {
     required: true,
     minimum: 0,
     maximum: 100,
-    type: Number
+    type: Number,
   })
   @IsNotEmpty()
   @IsNumber()
@@ -320,7 +323,7 @@ export class CreateVaultReq {
     required: true,
     minimum: 0,
     maximum: 100,
-    type: Number
+    type: Number,
   })
   @IsNotEmpty()
   @IsNumber()
@@ -338,11 +341,13 @@ export class CreateVaultReq {
     description: 'List of whitelisted assets with their policy IDs and optional count caps (max 10 assets)',
     type: [AssetWhitelistDto],
     required: false,
-    example: [{
-      id: '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd',
-      countCapMin: 1,
-      countCapMax: 10
-    }]
+    example: [
+      {
+        id: '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd',
+        countCapMin: 1,
+        countCapMax: 10,
+      },
+    ],
   })
   @IsOptional()
   @IsArray()
@@ -352,7 +357,7 @@ export class CreateVaultReq {
   assetsWhitelist?: AssetWhitelistDto[];
 
   @ApiProperty({ required: false, nullable: true, type: [AcquirerWhitelist] })
-  @ValidateIf((o) => o.privacy !== VaultPrivacy.public && !o.acquirerWhitelistCsv)
+  @ValidateIf(o => o.privacy !== VaultPrivacy.public && !o.acquirerWhitelistCsv)
   @IsArray()
   @ArrayNotEmpty()
   @IsObject({ each: true })
@@ -365,7 +370,7 @@ export class CreateVaultReq {
     required: false,
     nullable: true,
   })
-  @ValidateIf((o) => o.privacy !== VaultPrivacy.public && o.valueMethod === ValueMethod.lbe)
+  @ValidateIf(o => o.privacy !== VaultPrivacy.public && o.valueMethod === ValueMethod.lbe)
   @IsArray()
   @ArrayNotEmpty()
   @IsObject({ each: true })
@@ -373,7 +378,7 @@ export class CreateVaultReq {
   whitelistContributors?: ContributorWhitelist[];
 
   @ApiProperty({
-    required: false
+    required: false,
   })
   @IsOptional()
   @IsArray()
@@ -384,7 +389,7 @@ export class CreateVaultReq {
   @ApiProperty({
     description: 'List of tags for the vault',
     type: [TagDto],
-    required: false
+    required: false,
   })
   @IsArray()
   @IsOptional()

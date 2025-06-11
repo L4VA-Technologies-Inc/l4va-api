@@ -1,19 +1,14 @@
-import {
-  BeforeInsert,
-  BeforeUpdate,
-  Column,
-  Entity, JoinColumn, ManyToOne,
-  PrimaryGeneratedColumn,
-} from 'typeorm';
-import {Vault} from './vault.entity';
-import {Expose} from 'class-transformer';
+import { Expose } from 'class-transformer';
+import { BeforeInsert, BeforeUpdate, Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
+
+import { Vault } from './vault.entity';
 
 @Entity({ name: 'contributor_whitelist' })
 export class ContributorWhitelistEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Expose({ name: 'walletAddress'})
+  @Expose({ name: 'walletAddress' })
   @Column({ type: 'varchar', nullable: false })
   wallet_address: string;
 
@@ -21,11 +16,11 @@ export class ContributorWhitelistEntity {
   @JoinColumn({ name: 'vault_id' })
   public vault: Vault;
 
-  @Expose({ name: 'updatedAt'})
+  @Expose({ name: 'updatedAt' })
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   updated_at: string;
 
-  @Expose({ name: 'createdAt'})
+  @Expose({ name: 'createdAt' })
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   created_at: string;
 

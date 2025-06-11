@@ -1,24 +1,18 @@
-import {
-  BeforeInsert,
-  BeforeUpdate,
-  Column,
-  Entity, JoinColumn, ManyToOne,
-  PrimaryGeneratedColumn,
-} from 'typeorm';
-import {Vault} from './vault.entity';
-import {Expose} from 'class-transformer';
-import {Matches} from 'class-validator';
+import { Expose } from 'class-transformer';
+import { Matches } from 'class-validator';
+import { BeforeInsert, BeforeUpdate, Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
+
+import { Vault } from './vault.entity';
 
 @Entity({ name: 'assets_whitelist' })
 export class AssetsWhitelistEntity {
-
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
   @Expose({ name: 'policyId' })
   @Column({ type: 'varchar', length: 56, nullable: false })
   @Matches(/^[0-9a-fA-F]{56}$/, {
-    message: 'Policy ID must be a 56-character hexadecimal string'
+    message: 'Policy ID must be a 56-character hexadecimal string',
   })
   policy_id: string;
 
@@ -26,7 +20,7 @@ export class AssetsWhitelistEntity {
   @Column({
     name: 'asset_count_cap_min',
     type: 'integer',
-    nullable: true
+    nullable: true,
   })
   asset_count_cap_min?: number;
 
@@ -34,7 +28,7 @@ export class AssetsWhitelistEntity {
   @Column({
     name: 'asset_count_cap_max',
     type: 'integer',
-    nullable: true
+    nullable: true,
   })
   asset_count_cap_max?: number;
 
@@ -42,11 +36,11 @@ export class AssetsWhitelistEntity {
   @JoinColumn({ name: 'vault_id' })
   public vault: Vault;
 
-  @Expose({ name: 'updatedAt'})
+  @Expose({ name: 'updatedAt' })
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   updated_at: string;
 
-  @Expose({ name: 'createdAt'})
+  @Expose({ name: 'createdAt' })
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   created_at: string;
 
