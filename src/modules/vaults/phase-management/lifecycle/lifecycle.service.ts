@@ -9,7 +9,7 @@ import { VaultManagingService } from '../../processing-tx/onchain/vault-managing
 import { Vault } from '../../../../database/vault.entity';
 import { ContributionService } from '../contribution/contribution.service';
 import { VaultStatus, ContributionWindowType, InvestmentWindowType } from '../../../../types/vault.types';
-import { AssetOriginType, AssetStatus, AssetType } from '../../../../types/asset.types';
+import { AssetOriginType, AssetStatus } from '../../../../types/asset.types';
 
 @Injectable()
 export class LifecycleService {

@@ -163,18 +163,18 @@ export class VaultManagingService {
                     is_inclusive: true,
                   },
                   upper_bound: {
-                    bound_type: new Date().getTime() + one_day * 7,
+                    bound_type: new Date().getTime() + one_day,
                     is_inclusive: true,
                   },
                 },
                 investment_window: {
                   // Time allowed to upload ADA
                   lower_bound: {
-                    bound_type: new Date().getTime()  ,
+                    bound_type: new Date().getTime(),
                     is_inclusive: true,
                   },
                   upper_bound: {
-                    bound_type: new Date().getTime() + one_day * 7,
+                    bound_type: new Date().getTime()  + one_day,
                     is_inclusive: true,
                   },
                 },
