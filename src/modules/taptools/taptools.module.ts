@@ -1,14 +1,14 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { TaptoolsService } from './taptools.service';
-import { TaptoolsController } from './taptools.controller';
-import { Vault } from '../../database/vault.entity';
+
 import { Asset } from '../../database/asset.entity';
+import { Vault } from '../../database/vault.entity';
+
+import { TaptoolsController } from './taptools.controller';
+import { TaptoolsService } from './taptools.service';
 
 @Module({
-  imports: [
-    TypeOrmModule.forFeature([Vault, Asset]),
-  ],
+  imports: [TypeOrmModule.forFeature([Vault, Asset])],
   providers: [TaptoolsService],
   exports: [TaptoolsService],
   controllers: [TaptoolsController],

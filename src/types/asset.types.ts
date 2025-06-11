@@ -7,11 +7,11 @@ export enum AssetType {
 export enum AssetStatus {
   PENDING = 'pending',
   LOCKED = 'locked',
-  RELEASED = 'released'
+  RELEASED = 'released',
 }
 
 export enum AssetOriginType {
   INVESTED = 'invested',
   ACQUIRED = 'acquired',
-  CONTRIBUTED = 'contributed'
+  CONTRIBUTED = 'contributed',
 }

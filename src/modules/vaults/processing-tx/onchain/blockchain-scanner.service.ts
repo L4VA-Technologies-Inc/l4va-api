@@ -1,7 +1,9 @@
+import { setTimeout } from 'timers/promises';
+
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosError } from 'axios';
-import { setTimeout } from 'timers/promises';
+
 import {
   BlockchainTransactionResponse,
   BlockchainAddressResponse,
@@ -27,13 +29,13 @@ export class BlockchainScannerService {
   }
 
   private async makeRequest<T>(endpoint: string): Promise<T> {
-    this.logger.log(`Scanner URL ${this.scannerUrl}${endpoint}`)
-    this.logger.log(`Scanner KEY ${this.scannerKey}`)
+    this.logger.log(`Scanner URL ${this.scannerUrl}${endpoint}`);
+    this.logger.log(`Scanner KEY ${this.scannerKey}`);
     try {
       const response = await axios.get(`${this.scannerUrl}${endpoint}`, {
         headers: {
-          'Authorization': `Bearer ${this.scannerKey}`
-        }
+          Authorization: `Bearer ${this.scannerKey}`,
+        },
       });
       return response.data;
     } catch (error) {
@@ -42,16 +44,24 @@ export class BlockchainScannerService {
     }
   }
 
-  private async makePostRequest<T>(endpoint: string, payload: {
-    address: string
-  }): Promise<T> {
+  private async makePostRequest<T>(
+    endpoint: string,
+    payload: {
+      address: string;
+    }
+  ): Promise<T> {
     try {
-      const response = await axios.post(`${this.scannerUrl}${endpoint}`, {
-        ...payload,
-      },   {
-        headers: {
-          'Authorization': `Bearer ${this.scannerKey}`
-        }}  );
+      const response = await axios.post(
+        `${this.scannerUrl}${endpoint}`,
+        {
+          ...payload,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${this.scannerKey}`,
+          },
+        }
+      );
       return response.data;
     } catch (error) {
       this.logger.error(`Scanner request failed for ${endpoint}:`, error);
@@ -59,14 +69,12 @@ export class BlockchainScannerService {
     }
   }
 
-
-
-  async registerTrackingAddress(vaultAddress: string = '', vaultName: string){
+  async registerTrackingAddress(vaultAddress: string = '', vaultName: string) {
     const payload = {
-      address:  vaultAddress,
-      name:  vaultName,
-      description: "Monitoring vault address"
-    }
+      address: vaultAddress,
+      name: vaultName,
+      description: 'Monitoring vault address',
+    };
     return this.makePostRequest(`/monitoring/addresses`, payload);
   }
 
@@ -83,7 +91,7 @@ export class BlockchainScannerService {
       maxRetries = DEFAULT_MAX_RETRIES,
       initialDelayMs = DEFAULT_INITIAL_DELAY_MS,
       maxDelayMs = DEFAULT_MAX_DELAY_MS,
-      shouldRetry = () => true
+      shouldRetry = () => true,
     } = options;
 
     let lastError: Error | null = null;
@@ -103,10 +111,9 @@ export class BlockchainScannerService {
         const jitter = Math.random() * baseDelay * 0.2; // Add up to 20% jitter
         const delay = Math.min(baseDelay + jitter, maxDelayMs);
 
-        this.logger.warn(
-          `Attempt ${attempt + 1}/${maxRetries} failed. Retrying in ${Math.round(delay)}ms...`,
-          { error: error.message }
-        );
+        this.logger.warn(`Attempt ${attempt + 1}/${maxRetries} failed. Retrying in ${Math.round(delay)}ms...`, {
+          error: error.message,
+        });
 
         await setTimeout(delay);
       }
@@ -139,15 +146,12 @@ export class BlockchainScannerService {
       this.logger.log(`Address ${vaultAddress} is not registered, attempting to register...`);
 
       try {
-        await this.withRetry(
-          () => this.registerTrackingAddress(vaultAddress, vaultName),
-          {
-            shouldRetry: (err) => {
-              // Only retry on network or server errors
-              return this.isRetryableError(err);
-            }
-          }
-        );
+        await this.withRetry(() => this.registerTrackingAddress(vaultAddress, vaultName), {
+          shouldRetry: err => {
+            // Only retry on network or server errors
+            return this.isRetryableError(err);
+          },
+        });
         this.logger.log(`Successfully registered address ${vaultAddress} for monitoring`);
         return true;
       } catch (error) {

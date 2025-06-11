@@ -1,16 +1,17 @@
-import {Controller, Post, Body, Get, Param, Request, UseGuards, Query, Delete} from '@nestjs/common';
-import { VaultsService } from './vaults.service';
-import { DraftVaultsService } from './draft-vaults.service';
-import { AuthGuard } from '../auth/auth.guard';
-import { CreateVaultReq } from './dto/createVault.req';
+import { Controller, Post, Body, Get, Param, Request, UseGuards, Query, Delete, Logger } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+
 import { ApiDoc } from '../../decorators/api-doc.decorator';
-import { SaveDraftReq } from './dto/saveDraft.req';
-import { GetVaultsDto } from './dto/get-vaults.dto';
-import { Logger } from '@nestjs/common';
-import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
+import { AuthGuard } from '../auth/auth.guard';
+
+import { DraftVaultsService } from './draft-vaults.service';
+import { CreateVaultReq } from './dto/createVault.req';
 import { GetVaultTransactionsDto } from './dto/get-vault-transactions.dto';
+import { GetVaultsDto } from './dto/get-vaults.dto';
 import { PublishVaultDto } from './dto/publish-vault.dto';
+import { SaveDraftReq } from './dto/saveDraft.req';
+import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
+import { VaultsService } from './vaults.service';
 
 @ApiTags('vaults')
 @Controller('vaults')
@@ -32,7 +33,7 @@ export class VaultsController {
   createVault(
     @Request() req,
     @Body()
-    data: CreateVaultReq,
+    data: CreateVaultReq
   ) {
     const userId = req.user.sub;
     return this.vaultsService.createVault(userId, data);
@@ -45,10 +46,7 @@ export class VaultsController {
   })
   @UseGuards(AuthGuard)
   @Post('/publish')
-  async publishVault(
-    @Request() req,
-    @Body() publishDto: PublishVaultDto,
-  ): Promise<any> {
+  async publishVault(@Request() req, @Body() publishDto: PublishVaultDto): Promise<any> {
     const userId = req.user.sub;
     try {
       return await this.vaultsService.publishVault(userId, publishDto);
@@ -68,7 +66,7 @@ export class VaultsController {
   saveDraft(
     @Request() req,
     @Body()
-    data: SaveDraftReq,
+    data: SaveDraftReq
   ) {
     const userId = req.user.sub;
     this.logger.log('drfat data ', data);
@@ -77,21 +75,15 @@ export class VaultsController {
 
   @ApiDoc({
     summary: 'Select my vaults',
-    description: 'Returns list of my vaults. Can be filtered by status: open (published, contribution, acquire) or locked. Supports sorting by name, created_at, or updated_at.',
+    description:
+      'Returns list of my vaults. Can be filtered by status: open (published, contribution, acquire) or locked. Supports sorting by name, created_at, or updated_at.',
     status: 200,
   })
   @UseGuards(AuthGuard)
   @Get('my')
   getMyVaults(@Request() req, @Query() query: GetVaultsDto) {
     const userId = req.user.sub;
-    return this.vaultsService.getMyVaults(
-      userId,
-      query.filter,
-      query.page,
-      query.limit,
-      query.sortBy,
-      query.sortOrder
-    );
+    return this.vaultsService.getMyVaults(userId, query.filter, query.page, query.limit, query.sortBy, query.sortOrder);
   }
 
   @ApiDoc({
@@ -103,13 +95,7 @@ export class VaultsController {
   @Get('my/drafts')
   getMyDraftVaults(@Request() req, @Query() query: GetVaultsDto) {
     const userId = req.user.sub;
-    return this.draftVaultsService.getMyDraftVaults(
-      userId,
-      query.page,
-      query.limit,
-      query.sortBy,
-      query.sortOrder
-    );
+    return this.draftVaultsService.getMyDraftVaults(userId, query.page, query.limit, query.sortBy, query.sortOrder);
   }
 
   @ApiDoc({
@@ -125,7 +111,6 @@ export class VaultsController {
       return await this.draftVaultsService.getDraftVaultById(id, userId);
     } catch (error) {
       if (error?.message === 'Draft vault not found') {
-
         return this.vaultsService.getVaultById(id, userId);
       }
       throw error;
@@ -134,7 +119,8 @@ export class VaultsController {
 
   @ApiDoc({
     summary: 'List of public vaults',
-    description: 'Returns paginated list of all published vaults. Default page: 1, default limit: 10. Supports sorting by name, created_at, or updated_at. Response includes total count and total pages.',
+    description:
+      'Returns paginated list of all published vaults. Default page: 1, default limit: 10. Supports sorting by name, created_at, or updated_at. Response includes total count and total pages.',
     status: 200,
   })
   @UseGuards(AuthGuard)
@@ -142,14 +128,7 @@ export class VaultsController {
   getVaults(@Query() query: GetVaultsDto, @Request() req) {
     const userId = req.user.sub;
 
-    return this.vaultsService.getVaults(
-      userId,
-      query.filter,
-      query.page,
-      query.limit,
-      query.sortBy,
-      query.sortOrder
-    );
+    return this.vaultsService.getVaults(userId, query.filter, query.page, query.limit, query.sortBy, query.sortOrder);
   }
 
   @ApiDoc({
@@ -159,11 +138,7 @@ export class VaultsController {
   })
   @UseGuards(AuthGuard)
   @Get(':id/transactions')
-  async getVaultTransactions(
-    @Param('id') id: string,
-    @Query() query: GetVaultTransactionsDto,
-    @Request() req
-  ) {
+  async getVaultTransactions(@Param('id') id: string, @Query() query: GetVaultTransactionsDto, @Request() req) {
     const userId = req.user.sub;
     // Verify vault exists and user has access
     await this.vaultsService.getVaultById(id, userId);
@@ -177,15 +152,10 @@ export class VaultsController {
   })
   @UseGuards(AuthGuard)
   @Post('burn-build/:id')
-  async burnVaultAttempt(
-    @Param('id') id: string,
-    @Query() query: GetVaultTransactionsDto,
-    @Request() req
-  ) {
+  async burnVaultAttempt(@Param('id') id: string, @Query() query: GetVaultTransactionsDto, @Request() req) {
     const userId = req.user.sub;
-   return await this.vaultsService.burnVaultAttempt(id, userId)
+    return await this.vaultsService.burnVaultAttempt(id, userId);
   }
-
 
   @ApiDoc({
     summary: 'Burn vault',
@@ -202,8 +172,6 @@ export class VaultsController {
   ) {
     const userId = req.user.sub;
 
-    return await this.vaultsService.burnVaultPublishTx(id, userId, publishDto)
+    return await this.vaultsService.burnVaultPublishTx(id, userId, publishDto);
   }
-
 }
-

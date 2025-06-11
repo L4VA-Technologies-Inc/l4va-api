@@ -1,15 +1,15 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Cron, CronExpression } from '@nestjs/schedule';
-import { TaptoolsService } from '../../../taptools/taptools.service';
-import { VaultsService } from '../../vaults.service';
-import { VaultManagingService } from '../../processing-tx/onchain/vault-managing.service';
+
 import { Vault } from '../../../../database/vault.entity';
-import { ContributionService } from '../contribution/contribution.service';
+import { AssetOriginType, AssetStatus, AssetType } from '../../../../types/asset.types';
 import { VaultStatus, ContributionWindowType, InvestmentWindowType } from '../../../../types/vault.types';
-import { AssetOriginType, AssetStatus } from '../../../../types/asset.types';
+import { TaptoolsService } from '../../../taptools/taptools.service';
+import { VaultManagingService } from '../../processing-tx/onchain/vault-managing.service';
+import { VaultsService } from '../../vaults.service';
+import { ContributionService } from '../contribution/contribution.service';
 
 @Injectable()
 export class LifecycleService {
@@ -24,7 +24,7 @@ export class LifecycleService {
     @Inject(forwardRef(() => VaultsService))
     private readonly vaultsService: VaultsService,
     @Inject(forwardRef(() => VaultManagingService))
-    private readonly vaultContractService: VaultManagingService,
+    private readonly vaultContractService: VaultManagingService
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -147,14 +147,16 @@ export class LifecycleService {
             // Calculate total value of assets in the vault
             try {
               const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
-              this.logger.log(`Vault ${vault.id} total assets value: ${assetsValue.totalValueAda} ADA (${assetsValue.totalValueUsd} USD)`);
+              this.logger.log(
+                `Vault ${vault.id} total assets value: ${assetsValue.totalValueAda} ADA (${assetsValue.totalValueUsd} USD)`
+              );
               // You can store this information in the vault if needed
               vault.total_assets_cost_ada = assetsValue.totalValueAda;
               vault.total_assets_cost_usd = assetsValue.totalValueUsd;
 
               //  todo calculate threshold Price
-              vault.require_reserved_cost_ada  = assetsValue.totalValueAda *  (vault.acquire_reserve * 0.01);
-              vault.require_reserved_cost_usd = assetsValue.totalValueUsd *  (vault.acquire_reserve * 0.01);
+              vault.require_reserved_cost_ada = assetsValue.totalValueAda * (vault.acquire_reserve * 0.01);
+              vault.require_reserved_cost_usd = assetsValue.totalValueUsd * (vault.acquire_reserve * 0.01);
             } catch (error) {
               this.logger.error(`Failed to calculate assets value for vault ${vault.id}:`, error);
               // Continue with the transition even if we couldn't calculate the value
@@ -163,9 +165,11 @@ export class LifecycleService {
             this.logger.log(`Vault ${vault.id} moved to acquire phase (immediate start)`);
           }
           // For custom acquire start time
-          else if (vault.acquire_open_window_type === InvestmentWindowType.custom &&
-                  vault.acquire_open_window_time &&
-                  now >= new Date(vault.acquire_open_window_time)) {
+          else if (
+            vault.acquire_open_window_type === InvestmentWindowType.custom &&
+            vault.acquire_open_window_time &&
+            now >= new Date(vault.acquire_open_window_time)
+          ) {
             vault.acquire_phase_start = now.toISOString();
             vault.vault_status = VaultStatus.acquire;
             // Sync transactions before checking contribution end time
@@ -175,7 +179,9 @@ export class LifecycleService {
             // Calculate total value of assets in the vault
             try {
               const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
-              this.logger.log(`Vault ${vault.id} total assets value: ${assetsValue.totalValueAda} ADA (${assetsValue.totalValueUsd} USD)`);
+              this.logger.log(
+                `Vault ${vault.id} total assets value: ${assetsValue.totalValueAda} ADA (${assetsValue.totalValueUsd} USD)`
+              );
               // You can store this information in the vault if needed
               // vault.totalValueAda = assetsValue.totalValueAda;
               // vault.totalValueUsd = assetsValue.totalValueUsd;
@@ -217,11 +223,13 @@ export class LifecycleService {
         await this.contributionService.syncContributionTransactions(vault.id);
 
         // Get all contributed assets for this vault
-        const contributedAssets = vault.assets?.filter(asset =>
-          asset.origin_type === AssetOriginType.CONTRIBUTED &&
-          asset.status === AssetStatus.PENDING &&
-          !asset.deleted
-        ) || [];
+        const contributedAssets =
+          vault.assets?.filter(
+            asset =>
+              asset.origin_type === AssetOriginType.CONTRIBUTED &&
+              asset.status === AssetStatus.PENDING &&
+              !asset.deleted
+          ) || [];
 
         // Calculate total value of contributed assets in ADA using Taptools
         let totalContributedValueAda = 0;
@@ -236,10 +244,7 @@ export class LifecycleService {
             }
 
             // Get asset value from Taptools
-            const assetValue = await this.taptoolsService.getAssetValue(
-              asset.policy_id,
-              asset.asset_id
-            );
+            const assetValue = await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_id);
 
             // Calculate total value for this asset (price * quantity)
             const quantity = asset.quantity || 1;
@@ -248,7 +253,7 @@ export class LifecycleService {
 
             this.logger.debug(
               `Asset ${asset.policy_id}.${asset.asset_id}: ` +
-              `${quantity} x ${assetValue.priceAda} ADA = ${assetValueAda} ADA`
+                `${quantity} x ${assetValue.priceAda} ADA = ${assetValueAda} ADA`
             );
           } catch (error) {
             this.logger.error(
@@ -267,16 +272,20 @@ export class LifecycleService {
 
         // Log the decision
         if (meetsThreshold) {
-          this.logger.log(`Vault ${vault.id} meets the threshold: ` +
-            `Total contributed: ${totalContributedValueAda} ADA, ` +
-            `Required: ${requiredThresholdAda} ADA`);
+          this.logger.log(
+            `Vault ${vault.id} meets the threshold: ` +
+              `Total contributed: ${totalContributedValueAda} ADA, ` +
+              `Required: ${requiredThresholdAda} ADA`
+          );
 
           // TODO: Mint tokens and launch the vault
           this.logger.log(`Vault ${vault.id} is ready to be launched`);
         } else {
-          this.logger.warn(`Vault ${vault.id} does not meet the threshold: ` +
-            `Total contributed: ${totalContributedValueAda} ADA, ` +
-            `Required: ${requiredThresholdAda} ADA`);
+          this.logger.warn(
+            `Vault ${vault.id} does not meet the threshold: ` +
+              `Total contributed: ${totalContributedValueAda} ADA, ` +
+              `Required: ${requiredThresholdAda} ADA`
+          );
 
           // TODO: Burn the vault and refund assets
           this.logger.warn(`Vault ${vault.id} needs to be burned and assets refunded`);
@@ -293,5 +302,4 @@ export class LifecycleService {
       }
     }
   }
-
 }

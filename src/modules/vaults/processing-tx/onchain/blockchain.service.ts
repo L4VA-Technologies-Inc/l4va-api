@@ -1,13 +1,13 @@
+import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger, Inject } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 
 export enum OnchainTransactionStatus {
   PENDING = 'pending',
   CONFIRMED = 'confirmed',
   FAILED = 'failed',
-  NOT_FOUND = 'not_found'
+  NOT_FOUND = 'not_found',
 }
 
 export interface TransactionBuildResponse {
@@ -54,13 +54,13 @@ export class BlockchainService {
 
       const buildResponse = await contractDeployed.json();
 
-      console.log('error', buildResponse)
+      console.log('error', buildResponse);
 
       if (!buildResponse.complete) {
-        throw new Error('Failed to build complete transaction' +  JSON.stringify(buildResponse));
+        throw new Error('Failed to build complete transaction' + JSON.stringify(buildResponse));
       }
 
-      return buildResponse
+      return buildResponse;
     } catch (error) {
       this.logger.error('Error building transaction', error);
       throw new Error(`Failed to build transaction: ${error.message}`);

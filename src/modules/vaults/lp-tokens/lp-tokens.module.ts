@@ -1,19 +1,21 @@
 import { Module, forwardRef } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { LpTokensService } from './services/lp-tokens.service';
-import { LpTokensController } from './lp-tokens.controller';
+
 import { Transaction } from '../../../database/transaction.entity';
 import { Vault } from '../../../database/vault.entity';
 import { TransactionsModule } from '../processing-tx/offchain-tx/transactions.module';
 import { BlockchainModule } from '../processing-tx/onchain/blockchain.module';
-import { ConfigModule } from '@nestjs/config';
+
+import { LpTokensController } from './lp-tokens.controller';
+import { LpTokensService } from './services/lp-tokens.service';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Transaction, Vault]),
     forwardRef(() => TransactionsModule),
     BlockchainModule,
-    ConfigModule
+    ConfigModule,
   ],
   controllers: [LpTokensController],
   providers: [LpTokensService],

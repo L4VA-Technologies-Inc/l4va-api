@@ -1,14 +1,15 @@
-import { Injectable, Logger } from '@nestjs/common';
-import AWS, { S3 } from 'aws-sdk';
-import { v4 as uuid } from 'uuid';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { FileEntity } from '../../database/file.entity';
-import { ManagedUpload } from 'aws-sdk/clients/s3';
-import {HttpService} from '@nestjs/axios';
 import * as process from 'process';
+
+import { HttpService } from '@nestjs/axios';
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import AWS, { S3 } from 'aws-sdk';
+import { ManagedUpload } from 'aws-sdk/clients/s3';
 import * as csv from 'csv-parse';
-import { BadRequestException } from '@nestjs/common';
+import { Repository } from 'typeorm';
+import { v4 as uuid } from 'uuid';
+
+import { FileEntity } from '../../database/file.entity';
 
 @Injectable()
 export class AwsService {
@@ -70,45 +71,47 @@ export class AwsService {
     return s3.getSignedUrlPromise('getObject', params);
   }
 
-
   async getImage(bucketKey: string) {
-
-    const preSignedUrl =  await this.getPreSignedURL(this.bucketName, bucketKey, 'image/jpeg');
+    const preSignedUrl = await this.getPreSignedURL(this.bucketName, bucketKey, 'image/jpeg');
     return this.httpService.get(preSignedUrl, { responseType: 'stream' }).toPromise();
   }
 
-  async getCsv(bucketKey: string){
-    const preSignedUrl =  await this.getPreSignedURL(this.bucketName, bucketKey, 'text/csv');
+  async getCsv(bucketKey: string) {
+    const preSignedUrl = await this.getPreSignedURL(this.bucketName, bucketKey, 'text/csv');
     return this.httpService.get(preSignedUrl, { responseType: 'stream' }).toPromise();
   }
-
 
   private async validateCsvAddresses(buffer: Buffer): Promise<void> {
     return new Promise((resolve, reject) => {
       const addresses: string[] = [];
       const cardanoAddressRegex = /^addr1[a-zA-Z0-9]{98}$/;
 
-      csv.parse(buffer.toString(), {
-        columns: false,
-        skip_empty_lines: true,
-        trim: true
-      })
-      .on('data', (data) => {
-        const address = data[0];
-        if (!address || typeof address !== 'string' || !cardanoAddressRegex.test(address)) {
-          reject(new BadRequestException(`Invalid Cardano address format found in CSV: ${address}. Address must be a valid Cardano Shelley address starting with 'addr1' and containing 98 alphanumeric characters`));
-        }
-        addresses.push(address);
-      })
-      .on('end', () => {
-        if (addresses.length === 0) {
-          reject(new BadRequestException('CSV file is empty or contains no valid addresses'));
-        }
-        resolve();
-      })
-      .on('error', (error) => {
-        reject(new BadRequestException(`Error parsing CSV: ${error.message}`));
-      });
+      csv
+        .parse(buffer.toString(), {
+          columns: false,
+          skip_empty_lines: true,
+          trim: true,
+        })
+        .on('data', data => {
+          const address = data[0];
+          if (!address || typeof address !== 'string' || !cardanoAddressRegex.test(address)) {
+            reject(
+              new BadRequestException(
+                `Invalid Cardano address format found in CSV: ${address}. Address must be a valid Cardano Shelley address starting with 'addr1' and containing 98 alphanumeric characters`
+              )
+            );
+          }
+          addresses.push(address);
+        })
+        .on('end', () => {
+          if (addresses.length === 0) {
+            reject(new BadRequestException('CSV file is empty or contains no valid addresses'));
+          }
+          resolve();
+        })
+        .on('error', error => {
+          reject(new BadRequestException(`Error parsing CSV: ${error.message}`));
+        });
     });
   }
 
@@ -117,12 +120,8 @@ export class AwsService {
       // Validate CSV content before uploading
       await this.validateCsvAddresses(file.buffer);
 
-      const uploadResult = await this.uploadS3(
-        file.buffer,
-        `${uuid()}`,
-        file.mimetype,
-      );
-      const protocol = process.env.NODE_ENV === 'dev' ? 'http://' :'https://';
+      const uploadResult = await this.uploadS3(file.buffer, `${uuid()}`, file.mimetype);
+      const protocol = process.env.NODE_ENV === 'dev' ? 'http://' : 'https://';
       if (uploadResult) {
         const newFile = this.fileRepository.create({
           file_key: uploadResult.Key,
@@ -142,17 +141,10 @@ export class AwsService {
     }
   }
 
-  async uploadImage(
-    file: Express.Multer.File ,
-    host: string
-  ) {
+  async uploadImage(file: Express.Multer.File, host: string) {
     try {
-      const uploadResult = await this.uploadS3(
-        file.buffer,
-        `${uuid()}`,
-        file.mimetype,
-      );
-      const protocol = process.env.NODE_ENV === 'dev' ? 'http://' :'https://';
+      const uploadResult = await this.uploadS3(file.buffer, `${uuid()}`, file.mimetype);
+      const protocol = process.env.NODE_ENV === 'dev' ? 'http://' : 'https://';
       if (uploadResult) {
         const newFile = this.fileRepository.create({
           file_key: uploadResult.Key,

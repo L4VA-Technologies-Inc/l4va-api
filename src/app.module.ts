@@ -1,22 +1,23 @@
 import { Module } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
-import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { SnakeNamingStrategy } from 'typeorm-naming-strategies';
 
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
 import { AuthModule } from './modules/auth/auth.module';
-import { VaultsModule } from './modules/vaults/vaults.module';
-import {AwsModule} from './modules/aws_bucket/aws.module';
-import {UsersModule} from './modules/users/users.module';
-import {SnakeNamingStrategy} from 'typeorm-naming-strategies';
+import { AwsModule } from './modules/aws_bucket/aws.module';
+import { JwtGlobalModule } from './modules/globals/jwt_global_module/jwt_global.module';
+import { UsersModule } from './modules/users/users.module';
+import { LpTokensModule } from './modules/vaults/lp-tokens/lp-tokens.module';
+import { AcquireModule } from './modules/vaults/phase-management/acquire/acquire.module';
+import { ContributionModule } from './modules/vaults/phase-management/contribution/contribution.module';
 import { AssetsModule } from './modules/vaults/processing-tx/assets/assets.module';
+import { TransactionsModule } from './modules/vaults/processing-tx/offchain-tx/transactions.module';
 import { BlockchainModule } from './modules/vaults/processing-tx/onchain/blockchain.module';
-import {ContributionModule} from './modules/vaults/phase-management/contribution/contribution.module';
-import {TransactionsModule} from './modules/vaults/processing-tx/offchain-tx/transactions.module';
-import {JwtGlobalModule} from './modules/globals/jwt_global_module/jwt_global.module';
-import {AcquireModule} from './modules/vaults/phase-management/acquire/acquire.module';
-import {LpTokensModule} from "./modules/vaults/lp-tokens/lp-tokens.module";
+import { VaultsModule } from './modules/vaults/vaults.module';
+
 @Module({
   imports: [
     ScheduleModule.forRoot(),
@@ -45,9 +46,9 @@ import {LpTokensModule} from "./modules/vaults/lp-tokens/lp-tokens.module";
     ContributionModule,
     AcquireModule,
     TransactionsModule,
-    LpTokensModule
+    LpTokensModule,
   ],
   controllers: [AppController],
-  providers: [AppService]
+  providers: [AppService],
 })
 export class AppModule {}

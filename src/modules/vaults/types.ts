@@ -1,6 +1,6 @@
-import { IsString, IsNumber, IsOptional, IsUrl } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
+import { IsString, IsNumber, IsOptional, IsUrl } from 'class-validator';
 
 export class SocialLink {
   @ApiProperty()
@@ -75,7 +75,6 @@ export class AcquirerWhitelist {
   }
 }
 
-
 export class AcquirerWhitelistCsv {
   @ApiProperty()
   @IsString()
@@ -88,13 +87,13 @@ export class AcquirerWhitelistCsv {
   @ApiProperty()
   @IsString()
   @Expose()
-  id: string
+  id: string;
   @ApiProperty()
   @IsString()
   @Expose()
-  key: string
+  key: string;
   @ApiProperty()
   @IsString()
   @Expose()
-  url: string
+  url: string;
 }

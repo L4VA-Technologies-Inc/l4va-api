@@ -19,7 +19,7 @@ export class RawBodyMiddleware implements NestMiddleware {
       // Log the raw body for debugging
       this.logger.debug('Raw webhook body:', {
         length: rawText.length,
-        preview: rawText.substring(0, 100) + '...'
+        preview: rawText.substring(0, 100) + '...',
       });
 
       // Re-create the body stream

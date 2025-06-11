@@ -1,4 +1,6 @@
 import { Buffer } from 'node:buffer';
+
+import { BlockfrostServerError } from '@blockfrost/blockfrost-js';
 import {
   Address,
   TransactionInput,
@@ -18,7 +20,6 @@ import {
   hash_plutus_data,
   PlutusList,
 } from '@emurgo/cardano-serialization-lib-nodejs';
-import {BlockfrostServerError} from "@blockfrost/blockfrost-js";
 
 interface Amount {
   unit: string;
@@ -27,42 +28,26 @@ interface Amount {
 
 const assetsToValue = (assets: Amount[]) => {
   const multiAsset = MultiAsset.new();
-  const lovelace = assets.find((asset) => asset.unit === 'lovelace');
-  const policies = assets
-    .filter((asset) => asset.unit !== 'lovelace')
-    .map((asset) => asset.unit.slice(0, 56));
+  const lovelace = assets.find(asset => asset.unit === 'lovelace');
+  const policies = assets.filter(asset => asset.unit !== 'lovelace').map(asset => asset.unit.slice(0, 56));
 
   if (!policies.length && lovelace) {
-    return Value.new(
-      BigNum.from_str(
-        String(
-          Number(lovelace.quantity) < 1000000 ? 1000000 : lovelace.quantity,
-        ),
-      ),
-    );
+    return Value.new(BigNum.from_str(String(Number(lovelace.quantity) < 1000000 ? 1000000 : lovelace.quantity)));
   }
-  policies.forEach((policy) => {
-    const policyAssets = assets.filter(
-      (asset) => asset.unit.slice(0, 56) === policy,
-    );
+  policies.forEach(policy => {
+    const policyAssets = assets.filter(asset => asset.unit.slice(0, 56) === policy);
     const assetsValue = Assets.new();
-    policyAssets.forEach((asset) => {
+    policyAssets.forEach(asset => {
       if (Number(asset.quantity) > 0)
         assetsValue.insert(
           AssetName.new(Buffer.from(asset.unit.slice(56), 'hex')),
-          BigNum.from_str(String(asset.quantity)),
+          BigNum.from_str(String(asset.quantity))
         );
     });
-    if (assetsValue.len() > 0)
-      multiAsset.insert(
-        ScriptHash.from_bytes(Buffer.from(policy, 'hex')),
-        assetsValue,
-      );
+    if (assetsValue.len() > 0) multiAsset.insert(ScriptHash.from_bytes(Buffer.from(policy, 'hex')), assetsValue);
   });
 
-  const multiAssetsValue = Value.new(
-    BigNum.from_str(lovelace ? String(lovelace.quantity) : '0'),
-  );
+  const multiAssetsValue = Value.new(BigNum.from_str(lovelace ? String(lovelace.quantity) : '0'));
   multiAssetsValue.set_multiasset(multiAsset);
   return multiAssetsValue;
 };
@@ -76,32 +61,25 @@ export const getUtxos = async (address: Address, min = 0, blockfrost) => {
       parsedUtxos.add(
         TransactionUnspentOutput.new(
           TransactionInput.new(TransactionHash.from_hex(tx_hash), output_index),
-          TransactionOutput.new(address, assetsToValue(amount)),
-        ),
+          TransactionOutput.new(address, assetsToValue(amount))
+        )
       );
     }
   });
   return parsedUtxos;
 };
 
-
-export function generate_assetname_from_txhash_index(
-  txHash: string,
-  txOutputIdx: number,
-) {
+export function generate_assetname_from_txhash_index(txHash: string, txOutputIdx: number) {
   const plutusList = PlutusList.new();
   plutusList.add(PlutusData.new_bytes(Buffer.from(txHash, 'hex')));
 
   plutusList.add(PlutusData.new_integer(BigInt.from_str(String(txOutputIdx))));
 
-  const plutusData = PlutusData.new_constr_plutus_data(
-    ConstrPlutusData.new(BigNum.zero(), plutusList),
-  );
+  const plutusData = PlutusData.new_constr_plutus_data(ConstrPlutusData.new(BigNum.zero(), plutusList));
   const hash = hash_plutus_data(plutusData);
 
   return hash.to_hex();
 }
-
 
 export function generate_tag_from_txhash_index(tx_hash: string, tx_output_idx: number) {
   const plutusList = PlutusList.new();
@@ -109,9 +87,7 @@ export function generate_tag_from_txhash_index(tx_hash: string, tx_output_idx: n
 
   plutusList.add(PlutusData.new_integer(BigInt.from_str(String(tx_output_idx))));
 
-  const plutusData = PlutusData.new_constr_plutus_data(
-    ConstrPlutusData.new(BigNum.zero(), plutusList),
-  );
+  const plutusData = PlutusData.new_constr_plutus_data(ConstrPlutusData.new(BigNum.zero(), plutusList));
   const hash = hash_plutus_data(plutusData);
 
   return hash.to_hex();
@@ -122,33 +98,28 @@ export async function getVaultUtxo(policyId: string, assetName: string, blockfro
     const unit = policyId + assetName;
     const assets = await blockfrost.assetsTransactions(unit, {
       count: 1,
-      order: "desc",
+      order: 'desc',
     });
 
     if (assets.length > 1) {
-      throw new Error("Must be one.");
+      throw new Error('Must be one.');
     }
     const utxo = await blockfrost.txsUtxos(assets[0].tx_hash);
 
-    const index = utxo.outputs.findIndex((output) =>
-      output.amount.find((amount) => amount.unit === unit),
-    );
+    const index = utxo.outputs.findIndex(output => output.amount.find(amount => amount.unit === unit));
 
     if (index === -1) {
-      throw new Error(
-        "Vault not found in transaction, your vault might be burned.",
-      );
+      throw new Error('Vault not found in transaction, your vault might be burned.');
     }
 
     return { txHash: utxo.hash, index: index };
   } catch (e: unknown) {
     if ((e as BlockfrostServerError).status_code === 404) {
-      throw new Error("Vault not found on chain.");
+      throw new Error('Vault not found on chain.');
     }
     throw e;
   }
 }
-
 
 export function toHex(str: string) {
   return Buffer.from(str).toString('hex');

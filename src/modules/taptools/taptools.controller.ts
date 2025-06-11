@@ -1,9 +1,11 @@
 import { Controller, Get, Param, UseGuards, NotFoundException, Query } from '@nestjs/common';
-import { TaptoolsService } from './taptools.service';
-import { AuthGuard } from '../auth/auth.guard';
-import { ApiDoc } from '../../decorators/api-doc.decorator';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+
+import { ApiDoc } from '../../decorators/api-doc.decorator';
+import { AuthGuard } from '../auth/auth.guard';
 import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
+
+import { TaptoolsService } from './taptools.service';
 
 @Controller('taptools')
 @ApiTags('TapTools')

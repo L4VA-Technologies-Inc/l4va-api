@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+
 import { NftAsset } from './vault-inserting.service';
 
 interface AnvilApiConfig<T = Record<string, unknown>> {
@@ -40,7 +41,7 @@ export class AnvilApiService {
     return this.callAnvilApi({
       endpoint,
       method: 'GET',
-      params
+      params,
     });
   }
 
@@ -48,7 +49,7 @@ export class AnvilApiService {
     return this.callAnvilApi({
       endpoint,
       method: 'POST',
-      body
+      body,
     });
   }
 
@@ -56,7 +57,7 @@ export class AnvilApiService {
     return this.callAnvilApi({
       endpoint,
       method: 'PATCH',
-      body
+      body,
     });
   }
 
@@ -87,11 +88,11 @@ export class AnvilApiService {
         });
       }
 
-     // console.log('Base url ', this.baseUrl);
-     // console.log('Method ', method);
-     // console.log('Headers ', headers);
-     // console.log('body ', JSON.stringify(body, null, 2) );
-     // console.log('endpoint ', endpoint);
+      // console.log('Base url ', this.baseUrl);
+      // console.log('Method ', method);
+      // console.log('Headers ', headers);
+      // console.log('body ', JSON.stringify(body, null, 2) );
+      // console.log('endpoint ', endpoint);
 
       const response = await fetch(url.toString(), {
         method,
@@ -100,12 +101,8 @@ export class AnvilApiService {
       });
 
       if (!response.ok) {
-        const errorData = await response
-          .json()
-          .catch(() => ({ message: 'Unknown error' }));
-        throw new Error(
-          `Anvil API Error (${response.status}): ${errorData.message || 'Unknown error'}`,
-        );
+        const errorData = await response.json().catch(() => ({ message: 'Unknown error' }));
+        throw new Error(`Anvil API Error (${response.status}): ${errorData.message || 'Unknown error'}`);
       }
 
       return (await response.json()) as T;
@@ -117,14 +114,14 @@ export class AnvilApiService {
 
   async buildTransaction(params: BuildTransactionParams): Promise<TransactionBuildResponse> {
     const metadata = {
-      txId: params.txId
+      txId: params.txId,
     };
 
     return this.callAnvilApi({
       endpoint: 'services/transactions/build',
       body: {
         ...params,
-        metadata
+        metadata,
       },
     });
   }

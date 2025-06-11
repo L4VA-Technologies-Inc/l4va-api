@@ -1,12 +1,7 @@
-import {
-  Entity,
-  PrimaryGeneratedColumn,
-  Column,
-  ManyToMany,
-  JoinTable,
-} from 'typeorm';
-import { Vault } from './vault.entity';
 import { Expose } from 'class-transformer';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToMany, JoinTable } from 'typeorm';
+
+import { Vault } from './vault.entity';
 
 @Entity('tags')
 export class TagEntity {
@@ -22,12 +17,12 @@ export class TagEntity {
     name: 'vault_tags',
     joinColumn: {
       name: 'tag_id',
-      referencedColumnName: 'id'
+      referencedColumnName: 'id',
     },
     inverseJoinColumn: {
       name: 'vault_id',
-      referencedColumnName: 'id'
-    }
+      referencedColumnName: 'id',
+    },
   })
   vaults: Vault[];
 }

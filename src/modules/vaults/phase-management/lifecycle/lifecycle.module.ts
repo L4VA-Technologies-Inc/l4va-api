@@ -1,11 +1,13 @@
-import {forwardRef, Module} from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
+import { forwardRef, Module } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
+import { TypeOrmModule } from '@nestjs/typeorm';
+
 import { Vault } from '../../../../database/vault.entity';
-import { LifecycleService } from './lifecycle.service';
+import { BlockchainModule } from '../../processing-tx/onchain/blockchain.module';
+import { VaultsModule } from '../../vaults.module';
 import { ContributionModule } from '../contribution/contribution.module';
-import {VaultsModule} from "../../vaults.module";
-import {BlockchainModule} from "../../processing-tx/onchain/blockchain.module";
+
+import { LifecycleService } from './lifecycle.service';
 
 @Module({
   imports: [
@@ -13,7 +15,7 @@ import {BlockchainModule} from "../../processing-tx/onchain/blockchain.module";
     TypeOrmModule.forFeature([Vault]),
     ScheduleModule.forRoot(),
     forwardRef(() => VaultsModule),
-    forwardRef(() => BlockchainModule)
+    forwardRef(() => BlockchainModule),
   ],
   providers: [LifecycleService],
   exports: [LifecycleService],
