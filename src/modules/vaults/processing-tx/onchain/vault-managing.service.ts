@@ -160,7 +160,7 @@ export class VaultManagingService {
                     is_inclusive: true,
                   },
                   upper_bound: {
-                    bound_type: new Date().getTime() + one_day * 7,
+                    bound_type: new Date().getTime() + one_day,
                     is_inclusive: true,
                   },
                 },
@@ -171,7 +171,7 @@ export class VaultManagingService {
                     is_inclusive: true,
                   },
                   upper_bound: {
-                    bound_type: new Date().getTime() + one_day * 7,
+                    bound_type: new Date().getTime()  + one_day,
                     is_inclusive: true,
                   },
                 },
