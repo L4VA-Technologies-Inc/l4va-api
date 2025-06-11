@@ -1,17 +1,17 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+
+import { Asset } from '../../database/asset.entity';
 import { Transaction } from '../../database/transaction.entity';
-import { TransactionsService } from './transactions.service';
+import { Vault } from '../../database/vault.entity';
+
 import { TransactionsController } from './transactions.controller';
-import {Asset} from '../../database/asset.entity';
-import {Vault} from "../../database/vault.entity";
+import { TransactionsService } from './transactions.service';
 
 @Module({
-  imports: [
-    TypeOrmModule.forFeature([Transaction, Asset, Vault])
-  ],
+  imports: [TypeOrmModule.forFeature([Transaction, Asset, Vault])],
   providers: [TransactionsService],
   controllers: [TransactionsController],
-  exports: [TransactionsService]
+  exports: [TransactionsService],
 })
 export class TransactionsModule {}

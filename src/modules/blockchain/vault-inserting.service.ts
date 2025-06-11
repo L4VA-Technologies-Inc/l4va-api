@@ -1,29 +1,37 @@
-import { ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { AnvilApiService } from './anvil-api.service';
-import { TransactionsService } from '../transactions/transactions.service';
-import { BlockchainWebhookDto } from './dto/webhook.dto';
-import { OnchainTransactionStatus } from './types/transaction-status.enum';
-import { TransactionStatus } from '../../types/transaction.types';
-import { BlockchainScannerService } from './blockchain-scanner.service';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Vault } from '../../database/vault.entity';
-import { Repository } from 'typeorm';
-import { BlockchainService } from './blockchain.service';
+import { Buffer } from 'node:buffer';
+
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import {
   EnterpriseAddress,
   ScriptHash,
   Credential,
   FixedTransaction,
-  PrivateKey
+  PrivateKey,
 } from '@emurgo/cardano-serialization-lib-nodejs';
-import {applyContributeParams, toPreloadedScript} from './utils/apply_params';
-import {Datum} from './types/type';
-import {ConfigService} from '@nestjs/config';
-import {BlockFrostAPI} from '@blockfrost/blockfrost-js';
-import {Buffer} from 'node:buffer';
-import * as blueprint from './utils/blueprint.json';
-import {SubmitTransactionDto} from './dto/transaction.dto';
+import { ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 
+import { Vault } from '../../database/vault.entity';
+import { TransactionStatus } from '../../types/transaction.types';
+import { TransactionsService } from '../transactions/transactions.service';
+
+import { AnvilApiService } from './anvil-api.service';
+import { BlockchainScannerService } from './blockchain-scanner.service';
+import { BlockchainWebhookDto } from './dto/webhook.dto';
+import { OnchainTransactionStatus } from './types/transaction-status.enum';
+
+
+
+
+
+
+import { BlockchainService } from './blockchain.service';
+import { Datum } from './types/type';
+import { applyContributeParams, toPreloadedScript } from './utils/apply_params';
+import * as blueprint from './utils/blueprint.json';
+import { SubmitTransactionDto } from './dto/transaction.dto';
 
 export interface NftAsset {
   policyId: string;
@@ -62,7 +70,6 @@ export interface TransactionSubmitResponse {
 
 @Injectable()
 export class VaultInsertingService {
-
   private readonly logger = new Logger(VaultInsertingService.name);
   private readonly adminHash: string;
   private readonly adminSKey: string;
@@ -79,7 +86,7 @@ export class VaultInsertingService {
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.blockfrost = new BlockFrostAPI({
-      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY')
+      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
     });
   }
 
@@ -91,33 +98,28 @@ export class VaultInsertingService {
       const vault = await this.vaultsRepository.findOne({
         where: {
           id: transaction.vault_id,
-        }
+        },
       });
 
       const txDetail = await this.blockchainScanner.getTransactionDetails(vault.publication_hash);
 
       const { output_amount } = txDetail;
-      this.logger.log(JSON.stringify(output_amount[output_amount.length -1].unit));
+      this.logger.log(JSON.stringify(output_amount[output_amount.length - 1].unit));
 
       const vaultPolicyPlusName = output_amount[output_amount.length - 1].unit;
-      const VAULT_POLICY_ID = vaultPolicyPlusName.slice(0,56);
-      const VAULT_ID = vaultPolicyPlusName.slice(56,vaultPolicyPlusName.length);
+      const VAULT_POLICY_ID = vaultPolicyPlusName.slice(0, 56);
+      const VAULT_ID = vaultPolicyPlusName.slice(56, vaultPolicyPlusName.length);
 
       const parameterizedScript = applyContributeParams({
         vault_policy_id: VAULT_POLICY_ID,
         vault_id: VAULT_ID,
       });
       const POLICY_ID = parameterizedScript.validator.hash;
-      const SC_ADDRESS = EnterpriseAddress.new(
-        0,
-        Credential.from_scripthash(ScriptHash.from_hex(POLICY_ID))
-      )
+      const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(POLICY_ID)))
         .to_address()
         .to_bech32();
 
-      const unparameterizedScript = blueprint.validators.find(
-        (v) => v.title === 'contribute.contribute'
-      );
+      const unparameterizedScript = blueprint.validators.find(v => v.title === 'contribute.contribute');
       if (!unparameterizedScript) {
         throw new Error('Contribute validator not found');
       }
@@ -128,22 +130,22 @@ export class VaultInsertingService {
       let quantity = 0;
       let assetsList = [
         {
-          assetName: { name: VAULT_ID, format: "hex" },
+          assetName: { name: VAULT_ID, format: 'hex' },
           policyId: POLICY_ID,
           quantity: 1000,
         },
         {
-          assetName: { name: params.outputs[0].assets[0].assetName, format: "hex" },
+          assetName: { name: params.outputs[0].assets[0].assetName, format: 'hex' },
           policyId: params.outputs[0].assets[0].policyId,
           quantity: 1,
-        }
+        },
       ];
 
       if (isAda) {
         quantity = params.outputs[0].assets[0].quantity * 1000000;
       } else {
         assetsList = params.outputs[0].assets.map(asset => ({
-          assetName: { name: asset.assetName, format: "hex" },
+          assetName: { name: asset.assetName, format: 'hex' },
           policyId: asset.policyId,
           quantity: asset.quantity,
         }));
@@ -182,20 +184,19 @@ export class VaultInsertingService {
             policyId: POLICY_ID,
             type: 'plutus',
             quantity: 1000, // todo need to change this mint value to calculated value based on price
-            metadata: {
-            },
+            metadata: {},
           },
         ],
         scriptInteractions: [
           {
-            purpose: "mint",
+            purpose: 'mint',
             hash: POLICY_ID,
             redeemer: {
-              type: "json",
+              type: 'json',
               value: {
                 quantity: 1000,
                 output_index: 0,
-                contribution: isAda ? "Lovelace" : "Asset",
+                contribution: isAda ? 'Lovelace' : 'Asset',
               },
             },
           },
@@ -204,22 +205,24 @@ export class VaultInsertingService {
           {
             address: SC_ADDRESS,
             lovelace: isAda ? (quantity > 0 ? quantity : 10000000) : undefined,
-            assets: isAda ? [
-              {
-                assetName: { name: VAULT_ID, format: "hex" },
-                policyId: POLICY_ID,
-                quantity: 1000,
-              },
-            ] : [
-              {
-                assetName: { name: VAULT_ID, format: "hex" },
-                policyId: POLICY_ID,
-                quantity: 1000,
-              },
-              ...assetsList,
-            ],
+            assets: isAda
+              ? [
+                  {
+                    assetName: { name: VAULT_ID, format: 'hex' },
+                    policyId: POLICY_ID,
+                    quantity: 1000,
+                  },
+                ]
+              : [
+                  {
+                    assetName: { name: VAULT_ID, format: 'hex' },
+                    policyId: POLICY_ID,
+                    quantity: 1000,
+                  },
+                  ...assetsList,
+                ],
             datum: {
-              type: "inline",
+              type: 'inline',
               value: {
                 policy_id: POLICY_ID,
                 asset_name: VAULT_ID,
@@ -228,7 +231,7 @@ export class VaultInsertingService {
               },
               shape: {
                 validatorHash: POLICY_ID,
-                purpose: "spend",
+                purpose: 'spend',
               },
             },
           },
@@ -252,18 +255,14 @@ export class VaultInsertingService {
         network: 'preprod',
       };
 
-      console.log('INPUT ', input)
+      console.log('INPUT ', input);
 
       // Build the transaction using BlockchainService
       const buildResponse = await this.blockchainService.buildTransaction(input);
 
       // Sign the transaction
-      const txToSubmitOnChain = FixedTransaction.from_bytes(
-        Buffer.from(buildResponse.complete, 'hex'),
-      );
-      txToSubmitOnChain.sign_and_add_vkey_signature(
-        PrivateKey.from_bech32(this.adminSKey),
-      );
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
       return {
         presignedTx: txToSubmitOnChain.to_hex(),
@@ -296,7 +295,7 @@ export class VaultInsertingService {
       // Submit the transaction using BlockchainService
       const result = await this.blockchainService.submitTransaction({
         transaction: signedTx.transaction,
-        signatures: signedTx.signatures || []
+        signatures: signedTx.signatures || [],
       });
 
       this.logger.log(`Updating transaction ${signedTx.txId} with hash ${result.txHash}`);
@@ -310,7 +309,7 @@ export class VaultInsertingService {
         if (signedTx.vaultId) {
           const vault = await this.vaultsRepository.findOne({
             where: { id: signedTx.vaultId },
-            select: ['contract_address', 'name']
+            select: ['contract_address', 'name'],
           });
 
           if (!vault) {
@@ -334,7 +333,7 @@ export class VaultInsertingService {
     }
   }
 
-  async handleScannerEvent(event: any){
+  async handleScannerEvent(event: any) {
     // Determine transaction status based on blockchain data
     const tx = event.data.tx;
     let status: OnchainTransactionStatus;
@@ -353,14 +352,14 @@ export class VaultInsertingService {
       [OnchainTransactionStatus.PENDING]: TransactionStatus.pending,
       [OnchainTransactionStatus.CONFIRMED]: TransactionStatus.confirmed,
       [OnchainTransactionStatus.FAILED]: TransactionStatus.failed,
-      [OnchainTransactionStatus.NOT_FOUND]: TransactionStatus.stuck
+      [OnchainTransactionStatus.NOT_FOUND]: TransactionStatus.stuck,
     };
 
     const internalStatus = statusMap[status];
     await this.transactionsService.updateTransactionStatus(tx.hash, internalStatus);
   }
 
-   // return this.anvilApiService.submitTransaction(params);
+  // return this.anvilApiService.submitTransaction(params);
 
   async handleBlockchainEvent(event: BlockchainWebhookDto): Promise<void> {
     // Only handle transaction events
@@ -389,7 +388,7 @@ export class VaultInsertingService {
         [OnchainTransactionStatus.PENDING]: TransactionStatus.pending,
         [OnchainTransactionStatus.CONFIRMED]: TransactionStatus.confirmed,
         [OnchainTransactionStatus.FAILED]: TransactionStatus.failed,
-        [OnchainTransactionStatus.NOT_FOUND]: TransactionStatus.stuck
+        [OnchainTransactionStatus.NOT_FOUND]: TransactionStatus.stuck,
       };
 
       // Update transaction status
@@ -404,7 +403,7 @@ export class VaultInsertingService {
           timestamp: tx.block_time,
           fee: tx.fees,
           sender: inputs[0]?.address, // Usually the first input is the sender
-          transfers: []
+          transfers: [],
         };
 
         // Analyze each output
@@ -424,7 +423,7 @@ export class VaultInsertingService {
                 type: 'ADA',
                 recipient: address,
                 amount: (parseInt(asset.quantity) / 1_000_000).toString(), // Convert lovelace to ADA
-                unit: 'ADA'
+                unit: 'ADA',
               });
             } else if (asset.quantity === '1') {
               // NFT transfer
@@ -433,7 +432,7 @@ export class VaultInsertingService {
                 recipient: address,
                 policyId: asset.unit.slice(0, 56),
                 assetName: asset.unit.slice(56),
-                unit: asset.unit
+                unit: asset.unit,
               });
             } else {
               // Other token transfer
@@ -441,21 +440,21 @@ export class VaultInsertingService {
                 type: 'TOKEN',
                 recipient: address,
                 amount: asset.quantity,
-                unit: asset.unit
+                unit: asset.unit,
               });
             }
           }
         }
 
         // Log transfer details
-       // console.log('Transaction details:', JSON.stringify(transferDetails, null, 2));
+        // console.log('Transaction details:', JSON.stringify(transferDetails, null, 2));
       }
     }
   }
 
   async handleBurnVault(userId: string, vaultId: string) {
     // todo need to check if user is owner and if vault is exists
-    this.logger.log(`Run delete vault process for  vaultId: ${vaultId}  by user with userId: ${userId}`)
+    this.logger.log(`Run delete vault process for  vaultId: ${vaultId}  by user with userId: ${userId}`);
 
     // todo need to create tx for extract vaults
     // todo then need to burn LP tokens
@@ -468,32 +467,32 @@ export class VaultInsertingService {
     // input for burn vault
     const input = {
       changeAddress: CUSTOMER_ADDRESS,
-      message: "Vault Burn",
+      message: 'Vault Burn',
       scriptInteractions: [
         {
-          purpose: "spend",
+          purpose: 'spend',
           outputRef: vaultUtxo,
           hash: POLICY_ID,
           redeemer: {
-            type: "json",
-            value: "VaultBurn",
+            type: 'json',
+            value: 'VaultBurn',
           },
         },
         {
-          purpose: "mint",
+          purpose: 'mint',
           hash: POLICY_ID,
           redeemer: {
-            type: "json",
-            value: "VaultBurn",
+            type: 'json',
+            value: 'VaultBurn',
           },
         },
       ],
       mint: [
         {
-          version: "cip25",
-          assetName: {name:VAULT_ID, format:"hex"},
+          version: 'cip25',
+          assetName: { name: VAULT_ID, format: 'hex' },
           policyId: POLICY_ID,
-          type: "plutus",
+          type: 'plutus',
           quantity: -1,
         },
       ],
@@ -501,5 +500,4 @@ export class VaultInsertingService {
     };
     // todo then need to mark vaults as deleted
   }
-
 }

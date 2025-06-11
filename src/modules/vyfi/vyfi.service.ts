@@ -1,14 +1,17 @@
-import { Injectable } from '@nestjs/common';
-import { HttpService } from '@nestjs/axios';
-import { firstValueFrom } from 'rxjs';
-import { CreatePoolDto } from './dto/create-pool.dto';
-import { Address, FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
-import { ConfigService } from '@nestjs/config';
 import { Buffer } from 'buffer';
 
+import { Address, FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
+import { HttpService } from '@nestjs/axios';
+import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { firstValueFrom } from 'rxjs';
+
+import { CreatePoolDto } from './dto/create-pool.dto';
+
 const poolOwner = {
-  'skey': 'ed25519e_sk1eqleq0gr7awjymmkcehm4pza8ffq385fyxkntqe74u384fgfs4w7vncmhdlc2u2l78g4r82ctfw6s36dnuguadxh3lggluy9pwansegfprll7',
-  'base_address_preprod': 'addr_test1qpjavykfl5n4t47xklzyuccevgple0e4c7mke2m6cd0z0fwy0pq8p292lgrquq7hx75c4wpvz0h8cjp69mp7men3nw8s46zete',
+  skey: 'ed25519e_sk1eqleq0gr7awjymmkcehm4pza8ffq385fyxkntqe74u384fgfs4w7vncmhdlc2u2l78g4r82ctfw6s36dnuguadxh3lggluy9pwansegfprll7',
+  base_address_preprod:
+    'addr_test1qpjavykfl5n4t47xklzyuccevgple0e4c7mke2m6cd0z0fwy0pq8p292lgrquq7hx75c4wpvz0h8cjp69mp7men3nw8s46zete',
 };
 
 // Constants for VyFi pool creation
@@ -17,7 +20,8 @@ const VYFI_CONSTANTS = {
   MIN_POOL_ADA: 2000000, // 2 ADA in lovelace
   MIN_RETURN_ADA: 2000000, // 2 ADA in lovelace
   TOTAL_REQUIRED_ADA: 5900000, // 5.9 ADA in lovelace
-  POOL_ADDRESS: 'addr1qy5dasujdtm4hzrtamca9sjetu78hgqt8rkqs9tu69n0vq47wr70fcgkj4fe9tyr6z2jz8qvwvrc2gq04ltky960fw0smcuf0t',
+  POOL_ADDRESS:
+    'addr1qy5dasujdtm4hzrtamca9sjetu78hgqt8rkqs9tu69n0vq47wr70fcgkj4fe9tyr6z2jz8qvwvrc2gq04ltky960fw0smcuf0t',
   METADATA_LABEL: '53554741',
 };
 
@@ -29,16 +33,12 @@ export class VyfiService {
 
   constructor(
     private readonly httpService: HttpService,
-    private readonly configService: ConfigService,
+    private readonly configService: ConfigService
   ) {
     this.poolOwner = poolOwner;
   }
 
-  async checkPool(params: {
-    networkId: number;
-    tokenAUnit: string;
-    tokenBUnit: string;
-  }) {
+  async checkPool(params: { networkId: number; tokenAUnit: string; tokenBUnit: string }) {
     const { networkId, tokenAUnit, tokenBUnit } = params;
     const url = `${this.vyfiApiUrl}/lp`;
     const queryParams = new URLSearchParams({
@@ -49,9 +49,7 @@ export class VyfiService {
     });
 
     try {
-      const response = await firstValueFrom(
-        this.httpService.get(`${url}?${queryParams.toString()}`)
-      );
+      const response = await firstValueFrom(this.httpService.get(`${url}?${queryParams.toString()}`));
       return {
         exists: true,
         data: response.data,
@@ -67,18 +65,17 @@ export class VyfiService {
     }
   }
 
-  private formatMetadataText(tokenA: { policyId?: string; assetName: string }, tokenB: { policyId?: string; assetName: string }): string {
+  private formatMetadataText(
+    tokenA: { policyId?: string; assetName: string },
+    tokenB: { policyId?: string; assetName: string }
+  ): string {
     const shortA = tokenA.policyId ? tokenA.policyId.substring(0, 8) : 'lovelace';
     const shortB = tokenB.policyId ? tokenB.policyId.substring(0, 8) : 'lovelace';
     return `VyFi: LP Factory Create Pool Order Request -- /${VYFI_CONSTANTS.METADATA_LABEL} ${shortA}/${shortB}`;
   }
 
   async createLiquidityPool(createPoolDto: CreatePoolDto) {
-    const {
-      networkId,
-      tokenA,
-      tokenB,
-    } = createPoolDto;
+    const { networkId, tokenA, tokenB } = createPoolDto;
 
     // First check if pool exists
     const poolCheck = await this.checkPool({
@@ -141,28 +138,20 @@ export class VyfiService {
 
     // Build the transaction
     const buildResponse = await firstValueFrom(
-      this.httpService.post(
-        `${this.adaAnvilApiUrl}/build`,
-        input,
-        {
-          headers: {
-            'x-api-key': apiKey,
-            'Content-Type': 'application/json',
-          },
-        }
-      )
+      this.httpService.post(`${this.adaAnvilApiUrl}/build`, input, {
+        headers: {
+          'x-api-key': apiKey,
+          'Content-Type': 'application/json',
+        },
+      })
     );
 
     const transaction = buildResponse.data;
 
     // Sign the transaction
-    const txToSubmitOnChain = FixedTransaction.from_bytes(
-      Buffer.from(transaction.complete, 'hex')
-    );
+    const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(transaction.complete, 'hex'));
 
-    txToSubmitOnChain.sign_and_add_vkey_signature(
-      PrivateKey.from_bech32(this.poolOwner.skey)
-    );
+    txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.poolOwner.skey));
 
     // Submit the transaction
     const submitResponse = await firstValueFrom(
@@ -201,14 +190,11 @@ export class VyfiService {
 
     try {
       const response = await firstValueFrom(
-        this.httpService.get(
-          `https://cardano-preprod.blockfrost.io/api/v0/addresses/${address.to_bech32()}/utxos`,
-          {
-            headers: {
-              'project_id': apiKey,
-            },
-          }
-        )
+        this.httpService.get(`https://cardano-preprod.blockfrost.io/api/v0/addresses/${address.to_bech32()}/utxos`, {
+          headers: {
+            project_id: apiKey,
+          },
+        })
       );
       return response.data;
     } catch (error) {
@@ -218,12 +204,10 @@ export class VyfiService {
 
   async getPoolInfo(poolId: string) {
     try {
-      const response = await firstValueFrom(
-        this.httpService.get(`${this.vyfiApiUrl}/pool/${poolId}`)
-      );
+      const response = await firstValueFrom(this.httpService.get(`${this.vyfiApiUrl}/pool/${poolId}`));
       return response.data;
     } catch (error) {
       throw new Error(`Failed to get VyFi pool info: ${error.message}`);
     }
   }
-} 
+}

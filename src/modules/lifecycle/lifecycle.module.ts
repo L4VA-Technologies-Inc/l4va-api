@@ -1,18 +1,15 @@
 import { Module } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
 import { ScheduleModule } from '@nestjs/schedule';
+import { TypeOrmModule } from '@nestjs/typeorm';
+
 import { Vault } from '../../database/vault.entity';
-import { LifecycleService } from './lifecycle.service';
 import { ContributionModule } from '../contribution/contribution.module';
 import { TaptoolsModule } from '../taptools/taptools.module';
 
+import { LifecycleService } from './lifecycle.service';
+
 @Module({
-  imports: [
-    ContributionModule,
-    TypeOrmModule.forFeature([Vault]),
-    ScheduleModule.forRoot(),
-    TaptoolsModule,
-  ],
+  imports: [ContributionModule, TypeOrmModule.forFeature([Vault]), ScheduleModule.forRoot(), TaptoolsModule],
   providers: [LifecycleService],
   exports: [LifecycleService],
 })

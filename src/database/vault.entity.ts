@@ -1,3 +1,4 @@
+import { Expose, Transform } from 'class-transformer';
 import {
   Entity,
   PrimaryGeneratedColumn,
@@ -6,29 +7,34 @@ import {
   BeforeInsert,
   BeforeUpdate,
   JoinColumn,
-  OneToOne, OneToMany, Check,
-  ManyToMany, JoinTable
+  OneToOne,
+  OneToMany,
+  Check,
+  ManyToMany,
+  JoinTable,
 } from 'typeorm';
-import { User } from './user.entity';
-import {FileEntity} from './file.entity';
-import {AssetsWhitelistEntity} from './assetsWhitelist.entity';
-import {LinkEntity} from './link.entity';
+
 import {
   ContributionWindowType,
-  InvestmentWindowType, TerminationType,
+  InvestmentWindowType,
+  TerminationType,
   ValueMethod,
-  VaultPrivacy, VaultStatus,
-  VaultType
+  VaultPrivacy,
+  VaultStatus,
+  VaultType,
 } from '../types/vault.types';
-import {Expose, Transform} from 'class-transformer';
-import {AcquirerWhitelistEntity} from './acquirerWhitelist.entity';
-import {ContributorWhitelistEntity} from './contributorWhitelist.entity';
+
+import { AcquirerWhitelistEntity } from './acquirerWhitelist.entity';
 import { Asset } from './asset.entity';
+import { AssetsWhitelistEntity } from './assetsWhitelist.entity';
+import { ContributorWhitelistEntity } from './contributorWhitelist.entity';
+import { FileEntity } from './file.entity';
+import { LinkEntity } from './link.entity';
 import { TagEntity } from './tag.entity';
+import { User } from './user.entity';
 
 @Entity('vaults')
 export class Vault {
-
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
@@ -38,38 +44,38 @@ export class Vault {
   @Column({
     type: 'enum',
     enum: VaultType,
-    nullable: true
+    nullable: true,
   })
   type: VaultType;
 
   @Column({
     type: 'enum',
     enum: VaultPrivacy,
-    nullable: true
+    nullable: true,
   })
   privacy: VaultPrivacy;
 
   @Column({ nullable: true })
   description?: string;
 
-  @Expose({ name: 'valueMethod'})
+  @Expose({ name: 'valueMethod' })
   @Column({
     type: 'enum',
     name: 'value_method',
     enum: ValueMethod,
-    nullable: true
+    nullable: true,
   })
   value_method?: ValueMethod;
 
-  @Expose({ name: 'publicationHash'})
+  @Expose({ name: 'publicationHash' })
   @Column({
     name: 'publication_hash',
     type: 'varchar',
-    nullable: true
+    nullable: true,
   })
   publication_hash: string;
 
-  @Expose({ name: 'contractAddress'})
+  @Expose({ name: 'contractAddress' })
   @Column({ name: 'contract_address', nullable: true })
   contract_address: string;
 
@@ -77,152 +83,164 @@ export class Vault {
   @Column({ name: 'policy_id', nullable: true })
   policy_id: string;
 
-  @Expose({ name: 'assetVaultName'})
+  @Expose({ name: 'assetVaultName' })
   @Column({
     name: 'asset_vault_name',
     type: 'varchar',
-    nullable: true
+    nullable: true,
   })
   asset_vault_name: string;
 
-  @Expose({ name: 'valuationCurrency'})
+  @Expose({ name: 'valuationCurrency' })
   @Column({
     name: 'valuation_currency',
     type: 'varchar',
-    nullable: true
+    nullable: true,
   })
   valuation_currency?: string;
 
-  @Expose({ name: 'valuationAmount'})
+  @Expose({ name: 'valuationAmount' })
   @Column({
     name: 'valuation_amount',
     type: 'numeric',
-    nullable: true
+    nullable: true,
   })
   valuation_amount?: number;
 
-  @Expose({ name: 'contributionOpenWindowType'})
+  @Expose({ name: 'contributionOpenWindowType' })
   @Column({
     type: 'enum',
     name: 'contribution_open_window_type',
     enum: ContributionWindowType,
-    nullable: true
+    nullable: true,
   })
   contribution_open_window_type?: ContributionWindowType;
 
-  @Expose({ name: 'contributionOpenWindowTime'})
-  @Transform(({ value }) => value ? new Date(value).getTime() : null)
+  @Expose({ name: 'contributionOpenWindowTime' })
+  @Transform(({ value }) => (value ? new Date(value).getTime() : null))
   @Column({
     name: 'contribution_open_window_time',
     type: 'timestamptz',
-    nullable: true
+    nullable: true,
   })
-  contribution_open_window_time?:string;
+  contribution_open_window_time?: string;
 
-  @Expose({ name: 'contributionDuration'})
-  @Transform(({ value }) => value ? Number(value) : null)
+  @Expose({ name: 'contributionDuration' })
+  @Transform(({ value }) => (value ? Number(value) : null))
   @Column({
     name: 'contribution_duration',
-    type: 'bigint', nullable: true})
+    type: 'bigint',
+    nullable: true,
+  })
   contribution_duration?: number;
 
-  @Expose({ name: 'acquireWindowDuration'})
-  @Transform(({ value }) => value ? Number(value) : null)
-  @Column({name: 'acquire_window_duration', type: 'bigint', nullable: true})
+  @Expose({ name: 'acquireWindowDuration' })
+  @Transform(({ value }) => (value ? Number(value) : null))
+  @Column({ name: 'acquire_window_duration', type: 'bigint', nullable: true })
   acquire_window_duration?: number;
 
-  @Expose({ name: 'acquireOpenWindowType'})
+  @Expose({ name: 'acquireOpenWindowType' })
   @Column({
     name: 'acquire_open_window_type',
     type: 'enum',
     enum: InvestmentWindowType,
-    nullable: true
+    nullable: true,
   })
   acquire_open_window_type?: InvestmentWindowType;
 
-  @Expose({ name: 'acquireOpenWindowTime'})
-  @Transform(({ value }) => value ? new Date(value).getTime() : null)
+  @Expose({ name: 'acquireOpenWindowTime' })
+  @Transform(({ value }) => (value ? new Date(value).getTime() : null))
   @Column({
     name: 'acquire_open_window_time',
-    type: 'timestamptz', nullable: true
+    type: 'timestamptz',
+    nullable: true,
   })
   acquire_open_window_time?: string;
 
-  @Expose({ name: 'tokensForAcquires'})
-  @Transform(({ value }) => value ? Number(value) : null)
+  @Expose({ name: 'tokensForAcquires' })
+  @Transform(({ value }) => (value ? Number(value) : null))
   @Column({
     name: 'tokens_for_acquires',
-    type: 'numeric', nullable:true})
+    type: 'numeric',
+    nullable: true,
+  })
   tokens_for_acquires?: number;
 
-  @Expose({ name: 'acquireReserve'})
-  @Transform(({ value }) => value ? Number(value) : null)
+  @Expose({ name: 'acquireReserve' })
+  @Transform(({ value }) => (value ? Number(value) : null))
   @Column({
     name: 'acquire_reserve',
-    type: 'numeric', nullable:true})
+    type: 'numeric',
+    nullable: true,
+  })
   acquire_reserve?: number;
 
-  @Expose({ name: 'maxContributeAssets'})
-  @Transform(({ value }) => value ? Number(value) : null)
+  @Expose({ name: 'maxContributeAssets' })
+  @Transform(({ value }) => (value ? Number(value) : null))
   @Column({
     name: 'max_contribute_assets',
-    type: 'numeric', default: 0 })
+    type: 'numeric',
+    default: 0,
+  })
   max_contribute_assets?: number;
 
-  @Expose({ name: 'liquidityPoolContribution'})
-  @Transform(({ value }) => value ? Number(value) : null)
+  @Expose({ name: 'liquidityPoolContribution' })
+  @Transform(({ value }) => (value ? Number(value) : null))
   @Column({
     name: 'liquidity_pool_contribution',
-    type: 'numeric', nullable:true })
+    type: 'numeric',
+    nullable: true,
+  })
   liquidity_pool_contribution?: number;
 
-  @Expose({ name: 'ftTokenSupply'})
-  @Transform(({ value }) => value ? Number(value) : null)
-  @Column({name: 'ft_token_supply',
-    type: 'numeric',  nullable:true})
+  @Expose({ name: 'ftTokenSupply' })
+  @Transform(({ value }) => (value ? Number(value) : null))
+  @Column({ name: 'ft_token_supply', type: 'numeric', nullable: true })
   ft_token_supply?: number;
 
-  @Expose({ name: 'vaultTokenTicker'})
-  @Column({name: 'vault_token_ticker', nullable:true})
+  @Expose({ name: 'vaultTokenTicker' })
+  @Column({ name: 'vault_token_ticker', nullable: true })
   vault_token_ticker?: string;
 
-  @Expose({ name: 'liquidationHash'})
-  @Column({name: 'liquidation_hash', nullable:true})
+  @Expose({ name: 'liquidationHash' })
+  @Column({ name: 'liquidation_hash', nullable: true })
   liquidation_hash?: string;
 
-  @Expose({ name: 'ftTokenDecimals'})
-  @Column({name: 'ft_token_decimals',
-    type: 'smallint', default: 1,  nullable:true })
-  @Transform(({ value }) => value ? Number(value) : null)
+  @Expose({ name: 'ftTokenDecimals' })
+  @Column({ name: 'ft_token_decimals', type: 'smallint', default: 1, nullable: true })
+  @Transform(({ value }) => (value ? Number(value) : null))
   @Check('"ft_token_decimals" BETWEEN 1 AND 9')
   ft_token_decimals?: number;
 
-  @Expose({ name: 'terminationType'})
+  @Expose({ name: 'terminationType' })
   @Column({
     name: 'termination_type',
     type: 'enum',
     enum: TerminationType,
-    nullable: true
+    nullable: true,
   })
   termination_type?: TerminationType;
 
-  @Expose({ name: 'timeElapsedIsEqualToTime'})
-  @Transform(({ value }) => value ? Number(value) : null)
+  @Expose({ name: 'timeElapsedIsEqualToTime' })
+  @Transform(({ value }) => (value ? Number(value) : null))
   @Column({
     name: 'time_elapsed_is_equal_to_time',
-    type: 'bigint', nullable: true})
+    type: 'bigint',
+    nullable: true,
+  })
   time_elapsed_is_equal_to_time?: number;
 
-  @Expose({ name: 'vaultAppreciation'})
-  @Transform(({ value }) => value ? Number(value) : null)
+  @Expose({ name: 'vaultAppreciation' })
+  @Transform(({ value }) => (value ? Number(value) : null))
   @Column({
     name: 'vault_appreciation',
     type: 'numeric',
-    nullable:true })
+    nullable: true,
+  })
   vault_appreciation?: number;
 
   @Expose({ name: 'creationThreshold' })
-  @Transform(({ value }) => value ? Number(value) : null)
+  @Transform(({ value }) => (value ? Number(value) : null))
   @Column({
     name: 'creation_threshold',
     type: 'numeric',
@@ -231,7 +249,7 @@ export class Vault {
   creation_threshold?: number;
 
   @Expose({ name: 'startThreshold' })
-  @Transform(({ value }) => value ? Number(value) : null)
+  @Transform(({ value }) => (value ? Number(value) : null))
   @Column({
     name: 'start_threshold',
     type: 'numeric',
@@ -240,7 +258,7 @@ export class Vault {
   start_threshold?: number;
 
   @Expose({ name: 'voteThreshold' })
-  @Transform(({ value }) => value ? Number(value) : null)
+  @Transform(({ value }) => (value ? Number(value) : null))
   @Column({
     name: 'vote_threshold',
     type: 'numeric',
@@ -249,7 +267,7 @@ export class Vault {
   vote_threshold?: number;
 
   @Expose({ name: 'executionThreshold' })
-  @Transform(({ value }) => value ? Number(value) : null)
+  @Transform(({ value }) => (value ? Number(value) : null))
   @Column({
     name: 'execution_threshold',
     type: 'numeric',
@@ -258,7 +276,7 @@ export class Vault {
   execution_threshold?: number;
 
   @Expose({ name: 'cosigningThreshold' })
-  @Transform(({ value }) => value ? Number(value) : null)
+  @Transform(({ value }) => (value ? Number(value) : null))
   @Column({
     name: 'cosigning_threshold',
     type: 'numeric',
@@ -267,51 +285,51 @@ export class Vault {
   cosigning_threshold?: number;
 
   @Expose({ name: 'totalAssetsCostUsd' })
-  @Transform(({ value }) => value ? Number(value) : null)
+  @Transform(({ value }) => (value ? Number(value) : null))
   @Column({
     name: 'total_assets_cost_usd',
     type: 'numeric',
     nullable: true,
-    default: 0
+    default: 0,
   })
   total_assets_cost_usd: number;
 
   @Expose({ name: 'totalAssetsCostAda' })
-  @Transform(({ value }) => value ? Number(value) : null)
+  @Transform(({ value }) => (value ? Number(value) : null))
   @Column({
     name: 'total_assets_cost_ada',
     type: 'numeric',
     nullable: true,
-    default: 0
+    default: 0,
   })
   total_assets_cost_ada: number;
 
   @Expose({ name: 'requireReservedCostUsd' })
-  @Transform(({ value }) => value ? Number(value) : null)
+  @Transform(({ value }) => (value ? Number(value) : null))
   @Column({
     name: 'require_reserved_cost_usd',
     type: 'numeric',
     nullable: true,
-    default: 0
+    default: 0,
   })
   require_reserved_cost_usd: number;
 
   @Expose({ name: 'requireReservedCostAda' })
-  @Transform(({ value }) => value ? Number(value) : null)
+  @Transform(({ value }) => (value ? Number(value) : null))
   @Column({
     name: 'require_reserved_cost_ada',
     type: 'numeric',
     nullable: true,
-    default: 0
+    default: 0,
   })
   require_reserved_cost_ada: number;
 
-  @Expose({ name: 'vaultStatus'})
+  @Expose({ name: 'vaultStatus' })
   @Column({
     name: 'vault_status',
     type: 'enum',
     enum: VaultStatus,
-    nullable: true
+    nullable: true,
   })
   vault_status: VaultStatus;
 
@@ -339,28 +357,28 @@ export class Vault {
   @Expose({ name: 'vaultImage' })
   @OneToOne(() => FileEntity)
   @JoinColumn({
-    name: 'vault_image_id'
+    name: 'vault_image_id',
   })
   vault_image?: FileEntity;
 
   @Expose({ name: 'bannerImage' })
   @OneToOne(() => FileEntity)
   @JoinColumn({
-    name: 'banner_image_id'
+    name: 'banner_image_id',
   })
   banner_image?: FileEntity;
 
-  @Expose({ name: 'acquirerWhitelistCsv'})
+  @Expose({ name: 'acquirerWhitelistCsv' })
   @OneToOne(() => FileEntity)
   @JoinColumn({
-    name: 'acquirer_whitelist_csv_id'
+    name: 'acquirer_whitelist_csv_id',
   })
   acquirer_whitelist_csv?: FileEntity;
 
   @Expose({ name: 'ftTokenImg' })
   @OneToOne(() => FileEntity)
   @JoinColumn({
-    name: 'ft_token_img_id'
+    name: 'ft_token_img_id',
   })
   ft_token_img?: FileEntity;
 
@@ -374,12 +392,12 @@ export class Vault {
     name: 'vault_tags',
     joinColumn: {
       name: 'vault_id',
-      referencedColumnName: 'id'
+      referencedColumnName: 'id',
     },
     inverseJoinColumn: {
       name: 'tag_id',
-      referencedColumnName: 'id'
-    }
+      referencedColumnName: 'id',
+    },
   })
   tags?: TagEntity[];
 

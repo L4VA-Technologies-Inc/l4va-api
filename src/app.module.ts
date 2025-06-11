@@ -1,24 +1,23 @@
 import { Module } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
-import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { SnakeNamingStrategy } from 'typeorm-naming-strategies';
 
-import { AuthModule } from './modules/auth/auth.module';
-import { VaultsModule } from './modules/vaults/vaults.module';
-import {AwsModule} from './modules/aws_bucket/aws.module';
-import {UsersModule} from './modules/users/users.module';
-import {SnakeNamingStrategy} from 'typeorm-naming-strategies';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
+import { AcquireModule } from './modules/acquire/acquire.module';
 import { AssetsModule } from './modules/assets/assets.module';
+import { AuthModule } from './modules/auth/auth.module';
+import { AwsModule } from './modules/aws_bucket/aws.module';
 import { BlockchainModule } from './modules/blockchain/blockchain.module';
-import {ContributionModule} from './modules/contribution/contribution.module';
-import {TransactionsModule} from './modules/transactions/transactions.module';
-import {JwtGlobalModule} from './modules/globals/jwt_global_module/jwt_global.module';
-import {AcquireModule} from './modules/acquire/acquire.module';
+import { ContributionModule } from './modules/contribution/contribution.module';
+import { JwtGlobalModule } from './modules/globals/jwt_global_module/jwt_global.module';
 import { TaptoolsModule } from './modules/taptools/taptools.module';
-import {LpTokensModule} from "./modules/lp-tokens/lp-tokens.module";
-import {VyfiModule} from "./modules/vyfi/vyfi.module";
+import { TransactionsModule } from './modules/transactions/transactions.module';
+import { UsersModule } from './modules/users/users.module';
+import { VaultsModule } from './modules/vaults/vaults.module';
+import { VyfiModule } from './modules/vyfi/vyfi.module';
 
 @Module({
   imports: [
@@ -50,9 +49,9 @@ import {VyfiModule} from "./modules/vyfi/vyfi.module";
     TransactionsModule,
     TaptoolsModule,
     LpTokensModule,
-    VyfiModule
+    VyfiModule,
   ],
   controllers: [AppController],
-  providers: [AppService]
+  providers: [AppService],
 })
 export class AppModule {}

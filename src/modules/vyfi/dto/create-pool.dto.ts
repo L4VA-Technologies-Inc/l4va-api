@@ -40,4 +40,4 @@ export class CreatePoolDto {
   @ApiProperty({ description: 'Pool factory address' })
   @IsString()
   poolFactoryAddress: string;
-} 
+}

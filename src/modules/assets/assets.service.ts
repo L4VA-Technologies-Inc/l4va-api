@@ -1,13 +1,15 @@
-import {BadRequestException, Injectable} from '@nestjs/common';
-import {InjectRepository} from '@nestjs/typeorm';
-import {Repository} from 'typeorm';
-import {Asset} from '../../database/asset.entity';
-import {Vault} from '../../database/vault.entity';
-import {CreateAssetDto} from './dto/create-asset.dto';
-import {AssetOriginType, AssetStatus, AssetType} from '../../types/asset.types';
-import {VaultStatus} from '../../types/vault.types';
-import {classToPlain} from 'class-transformer';
-import {User} from '../../database/user.entity';
+import { BadRequestException, Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { classToPlain } from 'class-transformer';
+import { Repository } from 'typeorm';
+
+import { Asset } from '../../database/asset.entity';
+import { User } from '../../database/user.entity';
+import { Vault } from '../../database/vault.entity';
+import { AssetOriginType, AssetStatus, AssetType } from '../../types/asset.types';
+import { VaultStatus } from '../../types/vault.types';
+
+import { CreateAssetDto } from './dto/create-asset.dto';
 
 @Injectable()
 export class AssetsService {
@@ -24,21 +26,21 @@ export class AssetsService {
     const vault = await this.vaultsRepository.findOne({
       where: {
         id: data.vaultId,
-        owner: { id: userId }
-      }
+        owner: { id: userId },
+      },
     });
 
     const user = await this.userRepository.findOne({
       where: {
         id: userId,
-      }
+      },
     });
 
     if (!vault) {
       throw new BadRequestException('Vault not found or access denied');
     }
 
-    if(!user){
+    if (!user) {
       throw new BadRequestException('User not found or access denied');
     }
 
@@ -64,7 +66,7 @@ export class AssetsService {
       last_valuation: new Date(),
       status: AssetStatus.PENDING,
       metadata: data.metadata,
-      added_by: user
+      added_by: user,
     });
 
     await this.assetsRepository.save(asset);
@@ -75,8 +77,8 @@ export class AssetsService {
     // Verify vault ownership
     const vault = await this.vaultsRepository.findOne({
       where: {
-        id: vaultId
-      }
+        id: vaultId,
+      },
     });
 
     if (!vault) {
@@ -93,8 +95,8 @@ export class AssetsService {
       skip: (page - 1) * limit,
       take: limit,
       order: {
-        added_at: 'DESC'
-      }
+        added_at: 'DESC',
+      },
     });
 
     return {
@@ -102,15 +104,15 @@ export class AssetsService {
       total,
       page,
       limit,
-      totalPages: Math.ceil(total / limit)
+      totalPages: Math.ceil(total / limit),
     };
   }
   async getAcquiredAssets(userId: string, vaultId: string, page: number = 1, limit: number = 10): Promise<any> {
     // Verify vault ownership
     const vault = await this.vaultsRepository.findOne({
       where: {
-        id: vaultId
-      }
+        id: vaultId,
+      },
     });
 
     if (!vault) {
@@ -127,8 +129,8 @@ export class AssetsService {
       skip: (page - 1) * limit,
       take: limit,
       order: {
-        added_at: 'DESC'
-      }
+        added_at: 'DESC',
+      },
     });
 
     return {
@@ -136,14 +138,14 @@ export class AssetsService {
       total,
       page,
       limit,
-      totalPages: Math.ceil(total / limit)
+      totalPages: Math.ceil(total / limit),
     };
   }
 
   async lockAsset(userId: string, assetId: string): Promise<any> {
     const asset = await this.assetsRepository.findOne({
       where: { id: assetId },
-      relations: ['vault', 'vault.owner']
+      relations: ['vault', 'vault.owner'],
     });
 
     if (!asset || asset.vault.owner.id !== userId) {
@@ -168,7 +170,7 @@ export class AssetsService {
   async releaseAsset(userId: string, assetId: string): Promise<any> {
     const asset = await this.assetsRepository.findOne({
       where: { id: assetId },
-      relations: ['vault', 'vault.owner']
+      relations: ['vault', 'vault.owner'],
     });
 
     if (!asset || asset.vault.owner.id !== userId) {
@@ -193,7 +195,7 @@ export class AssetsService {
   async updateAssetValuation(userId: string, assetId: string, floorPrice?: number, dexPrice?: number): Promise<any> {
     const asset = await this.assetsRepository.findOne({
       where: { id: assetId },
-      relations: ['vault', 'vault.owner']
+      relations: ['vault', 'vault.owner'],
     });
 
     if (!asset || asset.vault.owner.id !== userId) {
@@ -220,8 +222,8 @@ export class AssetsService {
   async updateTransactionAssets(transactionId: string, vaultId: string): Promise<void> {
     const assets = await this.assetsRepository.find({
       where: {
-        transaction: { id: transactionId }
-      }
+        transaction: { id: transactionId },
+      },
     });
 
     if (!assets.length) {
@@ -229,7 +231,7 @@ export class AssetsService {
     }
 
     const vault = await this.vaultsRepository.findOne({
-      where: { id: vaultId }
+      where: { id: vaultId },
     });
 
     if (!vault) {
@@ -237,11 +239,13 @@ export class AssetsService {
     }
 
     // Update all assets to be linked to the vault
-    await Promise.all(assets.map(async (asset) => {
-      asset.vault = vault;
-      asset.status = AssetStatus.LOCKED;
-      asset.locked_at = new Date();
-      return this.assetsRepository.save(asset);
-    }));
+    await Promise.all(
+      assets.map(async asset => {
+        asset.vault = vault;
+        asset.status = AssetStatus.LOCKED;
+        asset.locked_at = new Date();
+        return this.assetsRepository.save(asset);
+      })
+    );
   }
 }

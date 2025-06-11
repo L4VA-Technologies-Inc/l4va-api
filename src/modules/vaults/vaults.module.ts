@@ -1,22 +1,24 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { VaultsService } from './vaults.service';
-import { VaultsController } from './vaults.controller';
-import { LifecycleModule } from '../lifecycle/lifecycle.module';
-import { Vault } from '../../database/vault.entity';
-import {User} from '../../database/user.entity';
-import {FileEntity} from '../../database/file.entity';
-import {AssetsWhitelistEntity} from '../../database/assetsWhitelist.entity';
-import {LinkEntity} from '../../database/link.entity';
-import {AcquirerWhitelistEntity} from '../../database/acquirerWhitelist.entity';
-import {AwsModule} from '../aws_bucket/aws.module';
-import {TagEntity} from '../../database/tag.entity';
+
+import { AcquirerWhitelistEntity } from '../../database/acquirerWhitelist.entity';
 import { DraftVaultsService } from './draft-vaults.service';
 import {ContributorWhitelistEntity} from '../../database/contributorWhitelist.entity';
 import {TransactionsModule} from '../transactions/transactions.module';
 import {BlockchainModule} from '../blockchain/blockchain.module';
 import {Asset} from "../../database/asset.entity";
-import {TaptoolsModule} from "../taptools/taptools.module";
+import {AssetsWhitelistEntity} from '../../database/assetsWhitelist.entity';
+import { FileEntity } from '../../database/file.entity';
+import {LinkEntity} from '../../database/link.entity';
+import {TagEntity} from '../../database/tag.entity';
+import { User } from '../../database/user.entity';
+import { Vault } from '../../database/vault.entity';
+import { AwsModule } from '../aws_bucket/aws.module';
+import { LifecycleModule } from '../lifecycle/lifecycle.module';
+import { TaptoolsModule } from '../taptools/taptools.module';
+
+import { VaultsController } from './vaults.controller';
+import { VaultsService } from './vaults.service';
 
 @Module({
   imports: [
@@ -31,7 +33,11 @@ import {TaptoolsModule} from "../taptools/taptools.module";
       FileEntity,
       Asset,
       AssetsWhitelistEntity,
-      LinkEntity, AcquirerWhitelistEntity, TagEntity, ContributorWhitelistEntity]),
+      LinkEntity,
+      AcquirerWhitelistEntity,
+      TagEntity,
+      ContributorWhitelistEntity,
+    ]),
   ],
   providers: [VaultsService, DraftVaultsService],
   controllers: [VaultsController],

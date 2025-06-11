@@ -1,28 +1,20 @@
 import { ApiProperty } from '@nestjs/swagger';
-import {
-  IsArray,
-  IsEnum,
-  IsNumber,
-  IsObject,
-  IsOptional,
-  IsString,
-  ValidateIf,
-  Min,
-  Max,
-} from 'class-validator';
+import { Expose, Type, plainToInstance } from 'class-transformer';
+import { IsArray, IsEnum, IsNumber, IsObject, IsOptional, IsString, ValidateIf, Min, Max } from 'class-validator';
+
 import {
   ContributionWindowType,
-  InvestmentWindowType, TerminationType,
+  InvestmentWindowType,
+  TerminationType,
   ValueMethod,
   VaultPrivacy,
-  VaultType
+  VaultType,
 } from '../../../types/vault.types';
-import {AssetWhitelist, ContributorWhitelist, AcquirerWhitelist, AcquirerWhitelistCsv, SocialLink} from '../types';
+import { AssetWhitelist, ContributorWhitelist, AcquirerWhitelist, AcquirerWhitelistCsv, SocialLink } from '../types';
+
 import { TagDto } from './tag.dto';
-import { Expose, Type, plainToInstance } from 'class-transformer';
 
 export class SaveDraftReq {
-
   @ApiProperty({ required: false, nullable: true })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
@@ -55,7 +47,7 @@ export class SaveDraftReq {
     description: 'Valuation type - public vaults can only use LBE, private/semi-private can use LBE or fixed',
     enum: ValueMethod,
     required: false,
-    nullable: true
+    nullable: true,
   })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
@@ -67,7 +59,7 @@ export class SaveDraftReq {
     description: 'Currency for fixed valuation (required when valueMethod is fixed)',
     required: false,
     nullable: true,
-    example: 'ADA'
+    example: 'ADA',
   })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
@@ -79,7 +71,7 @@ export class SaveDraftReq {
     description: 'Amount for fixed valuation (required when valueMethod is fixed)',
     required: false,
     nullable: true,
-    example: '1000000'
+    example: '1000000',
   })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
@@ -117,7 +109,7 @@ export class SaveDraftReq {
   @ApiProperty({
     description: 'CSV file containing acquirer whitelist',
     required: false,
-    nullable: true
+    nullable: true,
   })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
@@ -127,7 +119,7 @@ export class SaveDraftReq {
   @ApiProperty({
     required: false,
     nullable: true,
-    description: 'Duration in milliseconds'
+    description: 'Duration in milliseconds',
   })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
@@ -138,7 +130,7 @@ export class SaveDraftReq {
   @ApiProperty({
     required: false,
     nullable: true,
-    description: 'Duration in milliseconds'
+    description: 'Duration in milliseconds',
   })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
@@ -212,7 +204,7 @@ export class SaveDraftReq {
   @ApiProperty({
     required: false,
     nullable: true,
-    description: 'Duration in milliseconds'
+    description: 'Duration in milliseconds',
   })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
@@ -226,7 +218,7 @@ export class SaveDraftReq {
     nullable: true,
     minimum: 0,
     maximum: 100,
-    type: Number
+    type: Number,
   })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
@@ -242,7 +234,7 @@ export class SaveDraftReq {
     description: 'Threshold value between 0.00 and 100.00',
     minimum: 0,
     maximum: 100,
-    type: Number
+    type: Number,
   })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
@@ -258,7 +250,7 @@ export class SaveDraftReq {
     description: 'Threshold value between 0.00 and 100.00',
     minimum: 0,
     maximum: 100,
-    type: Number
+    type: Number,
   })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
@@ -274,7 +266,7 @@ export class SaveDraftReq {
     description: 'Threshold value between 0.00 and 100.00',
     minimum: 0,
     maximum: 100,
-    type: Number
+    type: Number,
   })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
@@ -290,7 +282,7 @@ export class SaveDraftReq {
     description: 'Threshold value between 0.00 and 100.00',
     minimum: 0,
     maximum: 100,
-    type: Number
+    type: Number,
   })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
@@ -306,7 +298,7 @@ export class SaveDraftReq {
     description: 'Threshold value between 0.00 and 100.00',
     minimum: 0,
     maximum: 100,
-    type: Number
+    type: Number,
   })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
@@ -357,7 +349,7 @@ export class SaveDraftReq {
     description: 'List of contributor wallet addresses (required for private vaults)',
     type: [ContributorWhitelist],
     required: false,
-    nullable: true
+    nullable: true,
   })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
@@ -378,7 +370,7 @@ export class SaveDraftReq {
     description: 'List of tags for the vault',
     type: [TagDto],
     required: false,
-    nullable: true
+    nullable: true,
   })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)

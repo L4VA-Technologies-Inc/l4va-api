@@ -1,22 +1,24 @@
 import { Body, Controller, Post, UseGuards, HttpCode, Request, UnauthorizedException } from '@nestjs/common';
-import { VaultInsertingService } from './vault-inserting.service';
-import { WebhookVerificationService } from './webhook-verification.service';
-import { AuthGuard } from '../auth/auth.guard';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { BlockchainWebhookDto } from './dto/webhook.dto';
+
+import { AuthGuard } from '../auth/auth.guard';
+
 import {
   BuildTransactionDto,
   SubmitTransactionDto,
   TransactionBuildResponseDto,
-  TransactionSubmitResponseDto
+  TransactionSubmitResponseDto,
 } from './dto/transaction.dto';
+import { BlockchainWebhookDto } from './dto/webhook.dto';
+import { VaultInsertingService } from './vault-inserting.service';
+import { WebhookVerificationService } from './webhook-verification.service';
 
 @ApiTags('blockchain')
 @Controller('blockchain')
 export class BlockchainController {
   constructor(
     private readonly transactionService: VaultInsertingService,
-    private readonly webhookVerificationService: WebhookVerificationService,
+    private readonly webhookVerificationService: WebhookVerificationService
   ) {}
 
   @Post('transaction/build')
@@ -24,7 +26,7 @@ export class BlockchainController {
   @ApiResponse({
     status: 200,
     description: 'Transaction built successfully',
-    type: TransactionBuildResponseDto
+    type: TransactionBuildResponseDto,
   })
   @UseGuards(AuthGuard)
   async buildTransaction(@Body() params: BuildTransactionDto): Promise<TransactionBuildResponseDto> {
@@ -35,23 +37,20 @@ export class BlockchainController {
   @ApiResponse({
     status: 200,
     description: 'Transaction built successfully',
-    type: TransactionBuildResponseDto
+    type: TransactionBuildResponseDto,
   })
   @UseGuards(AuthGuard)
-  async burnVault(@Request() req,
-                  @Body() data: any
-  ): Promise<any> {
+  async burnVault(@Request() req, @Body() data: any): Promise<any> {
     const userId = req.user.sub;
     return this.transactionService.handleBurnVault(userId, data.vaultId);
   }
-
 
   @Post('transaction/submit')
   @ApiOperation({ summary: 'Submit a signed Cardano transaction' })
   @ApiResponse({
     status: 200,
     description: 'Transaction submitted successfully',
-    type: TransactionSubmitResponseDto
+    type: TransactionSubmitResponseDto,
   })
   @UseGuards(AuthGuard)
   async submitTransaction(@Body() params: SubmitTransactionDto): Promise<TransactionSubmitResponseDto> {
@@ -64,11 +63,11 @@ export class BlockchainController {
   @ApiResponse({
     status: 200,
     description: 'Blockchain event processed successfully',
-    type: Object
+    type: Object,
   })
   @ApiResponse({
     status: 401,
-    description: 'Invalid webhook signature'
+    description: 'Invalid webhook signature',
   })
   async scannerWh(@Body() event: any, @Request() req): Promise<any> {
     try {
@@ -76,17 +75,16 @@ export class BlockchainController {
 
       return {
         status: 'success',
-        details: 'txSummary'
+        details: 'txSummary',
       };
     } catch (error) {
       console.error('Error processing webhook:', error);
       return {
         status: 'error',
-        details: error.message
+        details: error.message,
       };
     }
   }
-
 
   @Post('tx-webhook')
   @HttpCode(200)
@@ -94,11 +92,11 @@ export class BlockchainController {
   @ApiResponse({
     status: 200,
     description: 'Blockchain event processed successfully',
-    type: Object
+    type: Object,
   })
   @ApiResponse({
     status: 401,
-    description: 'Invalid webhook signature'
+    description: 'Invalid webhook signature',
   })
   async handleWebhook(@Body() event: BlockchainWebhookDto, @Request() req): Promise<{ status: string; details: any }> {
     const signature = req.headers['blockfrost-signature'];
@@ -122,7 +120,7 @@ export class BlockchainController {
       eventId: event.id,
       webhookId: event.webhook_id,
       rawBodyLength: rawBody.length,
-      rawBodyPreview: rawBody.substring(0, 100) + '...'
+      rawBodyPreview: rawBody.substring(0, 100) + '...',
     });
 
     // Verify webhook signature using the raw body
@@ -132,7 +130,7 @@ export class BlockchainController {
         signature,
         eventId: event.id,
         webhookId: event.webhook_id,
-        rawBodyPreview: rawBody.substring(0, 100) + '...'
+        rawBodyPreview: rawBody.substring(0, 100) + '...',
       });
       throw new UnauthorizedException('Invalid webhook signature');
     }
@@ -152,21 +150,20 @@ export class BlockchainController {
           assets: output.amount.map(asset => ({
             unit: asset.unit,
             quantity: asset.quantity,
-            type: asset.unit === 'lovelace' ? 'ADA' :
-                  (asset.quantity === '1' ? 'NFT' : 'TOKEN')
-          }))
-        }))
+            type: asset.unit === 'lovelace' ? 'ADA' : asset.quantity === '1' ? 'NFT' : 'TOKEN',
+          })),
+        })),
       }));
 
       return {
         status: 'success',
-        details: txSummary
+        details: txSummary,
       };
     } catch (error) {
       console.error('Error processing webhook:', error);
       return {
         status: 'error',
-        details: error.message
+        details: error.message,
       };
     }
   }

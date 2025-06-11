@@ -1,3 +1,7 @@
+import { Buffer } from 'node:buffer';
+
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
+import { FixedTransaction, PlutusData, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import {
   Injectable,
   Logger,
@@ -5,25 +9,23 @@ import {
   forwardRef,
   BadRequestException,
   NotFoundException,
-  InternalServerErrorException
+  InternalServerErrorException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+
 import { Transaction } from '../../../database/transaction.entity';
 import { Vault } from '../../../database/vault.entity';
-import { LpTokenOperationResult, ExtractLpTokensParams } from '../types/lp-token.types';
 import { TransactionType, TransactionStatus } from '../../../types/transaction.types';
-import { TransactionsService } from '../../transactions/transactions.service';
+import { BlockchainScannerService } from '../../blockchain/blockchain-scanner.service';
 import { BlockchainService } from '../../blockchain/blockchain.service';
-import { ConfigService } from '@nestjs/config';
-import {FixedTransaction, PlutusData, PrivateKey} from '@emurgo/cardano-serialization-lib-nodejs';
-import {Buffer} from "node:buffer";
-import {Datum, Redeemer1} from "../../blockchain/types/type";
-import {applyContributeParams, toPreloadedScript} from "../../blockchain/utils/apply_params";
-import {BlockchainScannerService} from "../../blockchain/blockchain-scanner.service";
-import {BlockFrostAPI} from "@blockfrost/blockfrost-js";
-import {generate_tag_from_txhash_index} from "../../blockchain/utils/lib";
-import blueprint from "../../blockchain/utils/blueprint.json";
+import { Datum, Redeemer1 } from '../../blockchain/types/type';
+import { applyContributeParams, toPreloadedScript } from '../../blockchain/utils/apply_params';
+import blueprint from '../../blockchain/utils/blueprint.json';
+import { generate_tag_from_txhash_index } from '../../blockchain/utils/lib';
+import { TransactionsService } from '../../transactions/transactions.service';
+import { LpTokenOperationResult, ExtractLpTokensParams } from '../types/lp-token.types';
 
 @Injectable()
 export class LpTokensService {
@@ -50,7 +52,7 @@ export class LpTokensService {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.scPolicyId = this.configService.get<string>('SC_POLICY_ID');
     this.blockfrost = new BlockFrostAPI({
-      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY')
+      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
     });
   }
   private readonly logger = new Logger(LpTokensService.name);
@@ -84,7 +86,7 @@ export class LpTokensService {
       vault_id: vaultId,
       type: TransactionType.extractLp,
       assets: [], // No assets for LP extraction, just the transaction
-      amount: amount
+      amount: amount,
     });
 
     this.logger.log(`Created extract LP transaction ${transaction.id} for vault ${vaultId}`);
@@ -105,11 +107,8 @@ export class LpTokensService {
       }
       const LAST_UPDATE_TX_INDEX = 0; // The index off the output in the transaction
 
-      const TX_HASH_INDEX_WITH_LPS_TO_COLLECT =
-        "904bebf8c7f5d9ee343147cf8bbee24ec1beafe1e73c7d0a1c74b83c4f7a0b35#2";
-      const LAST_UPDATE_TX_HASH =
-        "b255d78aaf821388e00cbc03e09add05810e346b2b1f2a5db236752aec116a50";
-
+      const TX_HASH_INDEX_WITH_LPS_TO_COLLECT = '904bebf8c7f5d9ee343147cf8bbee24ec1beafe1e73c7d0a1c74b83c4f7a0b35#2';
+      const LAST_UPDATE_TX_HASH = 'b255d78aaf821388e00cbc03e09add05810e346b2b1f2a5db236752aec116a50';
 
       // Get transaction details and extract policy information
       this.logger.log(`Getting transaction details for publication hash: ${vault.publication_hash}`);
@@ -122,8 +121,8 @@ export class LpTokensService {
       this.logger.log(JSON.stringify(output_amount[1].unit));
 
       const vaultPolicyPlusName = output_amount[1].unit;
-      const VAULT_POLICY_ID = vaultPolicyPlusName.slice(0,56);
-      const VAULT_ID = vaultPolicyPlusName.slice(56,vaultPolicyPlusName.length);
+      const VAULT_POLICY_ID = vaultPolicyPlusName.slice(0, 56);
+      const VAULT_ID = vaultPolicyPlusName.slice(56, vaultPolicyPlusName.length);
 
       this.logger.log(`Extracted - Policy ID: ${VAULT_POLICY_ID}, Vault ID: ${VAULT_ID}`);
 
@@ -148,27 +147,22 @@ export class LpTokensService {
       const lpsUnit = parameterizedScript.validator.hash + VAULT_ID;
 
       const POLICY_ID = parameterizedScript.validator.hash;
-      const [tx_hash, index] = TX_HASH_INDEX_WITH_LPS_TO_COLLECT.split("#");
+      const [tx_hash, index] = TX_HASH_INDEX_WITH_LPS_TO_COLLECT.split('#');
       const txUtxos = await this.blockfrost.txsUtxos(tx_hash);
       const output = txUtxos.outputs[index];
       if (!output) {
-        throw new Error("No output found");
+        throw new Error('No output found');
       }
-      const amountOfLpsToClaim = output.amount.find(
-        (a: { unit: string; quantity: string }) => a.unit === lpsUnit
-      );
+      const amountOfLpsToClaim = output.amount.find((a: { unit: string; quantity: string }) => a.unit === lpsUnit);
       const datumTag = generate_tag_from_txhash_index(tx_hash, Number(index));
       if (!amountOfLpsToClaim) {
         console.log(JSON.stringify(output));
-        throw new Error("No lps to claim.");
+        throw new Error('No lps to claim.');
       }
 
-
-      const unparameterizedScript = blueprint.validators.find(
-        (v) => v.title === "contribute.contribute"
-      );
+      const unparameterizedScript = blueprint.validators.find(v => v.title === 'contribute.contribute');
       if (!unparameterizedScript) {
-        throw new Error("Contribute validator not found");
+        throw new Error('Contribute validator not found');
       }
 
       // 3. Prepare transaction input for LP token extraction
@@ -181,7 +175,7 @@ export class LpTokensService {
           address: string;
           assets?: object[];
           lovelace?: number;
-          datum?: { type: "inline"; value: string | Datum; shape?: object };
+          datum?: { type: 'inline'; value: string | Datum; shape?: object };
         }[];
         requiredSigners: string[];
         preloadedScripts: {
@@ -196,19 +190,19 @@ export class LpTokensService {
         network: string;
       } = {
         changeAddress: walletAddress,
-        message: "Admin extract asset",
+        message: 'Admin extract asset',
         scriptInteractions: [
           {
-            purpose: "spend",
+            purpose: 'spend',
             hash: POLICY_ID,
             outputRef: {
               txHash: tx_hash,
               index: index,
             },
             redeemer: {
-              type: "json",
+              type: 'json',
               value: {
-                __variant: "ExtractAsset",
+                __variant: 'ExtractAsset',
                 __data: {
                   lp_output_index: 0,
                 },
@@ -221,14 +215,14 @@ export class LpTokensService {
             address: walletAddress,
             assets: [
               {
-                assetName: { name: VAULT_ID, format: "hex" },
+                assetName: { name: VAULT_ID, format: 'hex' },
                 policyId: parameterizedScript.validator.hash,
                 quantity: 1000,
               },
             ],
             datum: {
-              type: "inline",
-              value: PlutusData.new_bytes(Buffer.from(datumTag, "hex")).to_hex(),
+              type: 'inline',
+              value: PlutusData.new_bytes(Buffer.from(datumTag, 'hex')).to_hex(),
             },
           },
         ],
@@ -248,7 +242,7 @@ export class LpTokensService {
           start: true,
           end: true,
         },
-        network: "preprod",
+        network: 'preprod',
       };
 
       const inputWithNoPreloaded = { ...txInput };
@@ -260,14 +254,10 @@ export class LpTokensService {
       const buildResponse = await this.blockchainService.buildTransaction(txInput);
 
       // 5. Sign the transaction with admin key
-      const txToSubmitOnChain = FixedTransaction.from_bytes(
-        Buffer.from(buildResponse.complete, 'hex'),
-      );
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
 
       // Sign with both admin and customer keys if needed
-      txToSubmitOnChain.sign_and_add_vkey_signature(
-        PrivateKey.from_bech32(this.adminSKey),
-      );
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
       // If customer signature is needed:
       // txToSubmitOnChain.sign_and_add_vkey_signature(
       //   PrivateKey.from_bech32(customerSKey),
@@ -276,27 +266,21 @@ export class LpTokensService {
       // 6. Submit the signed transaction
       const submitResponse = await this.blockchainService.submitTransaction({
         transaction: txToSubmitOnChain.to_hex(),
-        signatures: [] // Signatures are already added to the transaction
+        signatures: [], // Signatures are already added to the transaction
       });
 
       // 7. Update the transaction with the hash
-      await this.transactionsService.updateTransactionHash(
-        transaction.id,
-        submitResponse.txHash
-      );
+      await this.transactionsService.updateTransactionHash(transaction.id, submitResponse.txHash);
 
       const result: LpTokenOperationResult = {
         success: true,
         transactionId: submitResponse.txHash,
         message: 'LP tokens extracted successfully',
-        transaction: await this.transactionsService.getTransaction(submitResponse.txHash)
+        transaction: await this.transactionsService.getTransaction(submitResponse.txHash),
       };
       return result;
     } catch (error) {
-      this.logger.error(
-        `Failed to extract LP tokens: ${error.message}`,
-        error.stack,
-      );
+      this.logger.error(`Failed to extract LP tokens: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Failed to process LP token extraction');
     }
   }
@@ -322,9 +306,7 @@ export class LpTokensService {
     }
 
     try {
-      this.logger.log(
-        `Burning ${amount} LP tokens from wallet ${walletAddress}`,
-      );
+      this.logger.log(`Burning ${amount} LP tokens from wallet ${walletAddress}`);
 
       // TODO: Implement actual LP token burning logic
       // This is a placeholder implementation
@@ -333,14 +315,11 @@ export class LpTokensService {
       const result: LpTokenOperationResult = {
         success: true,
         transactionId: transactionHash,
-        message: 'LP tokens burned successfully'
+        message: 'LP tokens burned successfully',
       };
       return result;
     } catch (error) {
-      this.logger.error(
-        `Failed to burn LP tokens: ${error.message}`,
-        error.stack,
-      );
+      this.logger.error(`Failed to burn LP tokens: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Failed to process LP token burn');
     }
   }
@@ -369,9 +348,7 @@ export class LpTokensService {
     }
 
     try {
-      this.logger.log(
-        `Dropping ${amount} LP tokens to wallet ${walletAddress}`,
-      );
+      this.logger.log(`Dropping ${amount} LP tokens to wallet ${walletAddress}`);
 
       // TODO: Implement actual LP token dropping logic
       // This is a placeholder implementation
@@ -380,14 +357,11 @@ export class LpTokensService {
       const result: LpTokenOperationResult = {
         success: true,
         transactionId: transactionHash,
-        message: 'LP tokens distributed successfully'
+        message: 'LP tokens distributed successfully',
       };
       return result;
     } catch (error) {
-      this.logger.error(
-        `Failed to drop LP tokens: ${error.message}`,
-        error.stack,
-      );
+      this.logger.error(`Failed to drop LP tokens: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Failed to process LP token drop');
     }
   }
@@ -400,11 +374,13 @@ export class LpTokensService {
   private isValidAddress(address: string): boolean {
     // Basic validation for Cardano addresses
     // Supports both mainnet (addr1) and testnet (addr_test1) addresses
-    return typeof address === 'string' &&
-           (address.startsWith('addr1') ||
-            address.startsWith('addr_test1') ||
-            address.startsWith('stake1') ||
-            address.startsWith('stake_test1'));
+    return (
+      typeof address === 'string' &&
+      (address.startsWith('addr1') ||
+        address.startsWith('addr_test1') ||
+        address.startsWith('stake1') ||
+        address.startsWith('stake_test1'))
+    );
   }
 
   /**

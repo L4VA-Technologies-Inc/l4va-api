@@ -1,24 +1,21 @@
+import { Buffer } from 'buffer';
+
+import { COSESign1, COSEKey, Label, Int, BigNum } from '@emurgo/cardano-message-signing-nodejs';
+import { Ed25519Signature, PublicKey, Address, RewardAddress } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { Buffer } from 'buffer';
-import { COSESign1, COSEKey, Label, Int, BigNum } from '@emurgo/cardano-message-signing-nodejs';
-import {
-  Ed25519Signature,
-  PublicKey,
-  Address,
-  RewardAddress
-} from '@emurgo/cardano-serialization-lib-nodejs';
 import { generateUsername } from 'unique-username-generator';
 
+import { transformImageToUrl } from '../../helpers';
 import { UsersService } from '../users/users.service';
-import {LoginReq} from './dto/login.req';
-import {transformImageToUrl} from '../../helpers';
+
+import { LoginReq } from './dto/login.req';
 
 @Injectable()
 export class AuthService {
   constructor(
     private usersService: UsersService,
-    private jwtService: JwtService,
+    private jwtService: JwtService
   ) {}
 
   async verifySignature(signatureData: LoginReq) {
@@ -75,14 +72,14 @@ export class AuthService {
           };
         }
       }
-      if(!user?.address || user?.address?.includes('stake1')){
+      if (!user?.address || user?.address?.includes('stake1')) {
         await this.usersService.updateUserAddress(user.id, walletAddress);
       }
       // Generate JWT token
       const jwtPayload = {
         sub: user.id,
         address: user.address,
-        name: user.name
+        name: user.name,
       };
 
       const profileImage = transformImageToUrl(user.profile_image);
@@ -102,9 +99,8 @@ export class AuthService {
           gains: user.gains,
           profileImage: profileImage,
           bannerImage: bannerImage,
-        }
+        },
       };
-
     } catch (error) {
       return {
         success: false,

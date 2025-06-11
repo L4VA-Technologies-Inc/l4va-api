@@ -1,19 +1,19 @@
 import { Injectable, HttpException, Logger, NotFoundException, Inject } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 import axios from 'axios';
 import * as NodeCache from 'node-cache';
-import { AssetOriginType } from '../../types/asset.types';
-import { WalletSummaryDto } from './dto/wallet-summary.dto';
-import { AssetValueDto } from './dto/asset-value.dto';
-import { Vault } from '../../database/vault.entity';
+import { Repository } from 'typeorm';
+
 import { Asset } from '../../database/asset.entity';
-import { AssetStatus, AssetType } from '../../types/asset.types';
+import { Vault } from '../../database/vault.entity';
+import { AssetOriginType, AssetStatus, AssetType } from '../../types/asset.types';
 import { VaultAssetsSummaryDto } from '../transactions/dto/vault-assets-summary.dto';
+
+import { AssetValueDto } from './dto/asset-value.dto';
+import { WalletSummaryDto } from './dto/wallet-summary.dto';
 
 @Injectable()
 export class TaptoolsService {
-
   private readonly logger = new Logger(TaptoolsService.name);
 
   private readonly baseUrl = 'https://openapi.taptools.io/api/v1';
@@ -25,7 +25,7 @@ export class TaptoolsService {
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(Asset)
-    private readonly assetRepository: Repository<Asset>,
+    private readonly assetRepository: Repository<Asset>
   ) {
     this.taptoolsApiKey = process.env.TAPTOOLS_API_KEY || '';
   }
@@ -43,8 +43,8 @@ export class TaptoolsService {
       const response = await axios.get('https://api.coingecko.com/api/v3/simple/price', {
         params: {
           ids: 'cardano',
-          vs_currencies: 'usd'
-        }
+          vs_currencies: 'usd',
+        },
       });
 
       if (!response.data?.cardano?.usd) {
@@ -78,7 +78,6 @@ export class TaptoolsService {
 
       this.cache.set(cacheKey, summary);
       return summary;
-
     } catch (err) {
       console.error('Error fetching wallet summary:', err.message);
       if (axios.isAxiosError(err)) {
@@ -154,7 +153,7 @@ export class TaptoolsService {
         nfts: processedAssets.filter(a => a.isNft).length,
         tokens: processedAssets.filter(a => a.isFungibleToken).length,
         ada: totalAda,
-      }
+      },
     };
   }
 
@@ -162,7 +161,7 @@ export class TaptoolsService {
     try {
       const response = await axios.get(`${this.blockfrostTestnetUrl}/assets/${assetId}`, {
         headers: {
-          'project_id': process.env.BLOCKFROST_TESTNET_API_KEY,
+          project_id: process.env.BLOCKFROST_TESTNET_API_KEY,
         },
       });
       return response.data;
@@ -173,13 +172,13 @@ export class TaptoolsService {
   }
 
   private async getTestnetWalletSummary(walletAddress: string, adaPriceUsd: number): Promise<WalletSummaryDto> {
-    try{
+    try {
       await axios.get(`${this.blockfrostTestnetUrl}addresses/${walletAddress}`, {
         headers: {
-          'project_id': process.env.BLOCKFROST_TESTNET_API_KEY,
+          project_id: process.env.BLOCKFROST_TESTNET_API_KEY,
         },
       });
-    }catch(err){
+    } catch (err) {
       this.logger.log('Error ', err);
       return {
         wallet: '',
@@ -191,15 +190,15 @@ export class TaptoolsService {
           totalAssets: 0,
           nfts: 0,
           tokens: 0,
-          ada: 0
-        }
+          ada: 0,
+        },
       };
     }
     try {
       // Get all assets in the wallet
       const assetsResponse = await axios.get(`${this.blockfrostTestnetUrl}addresses/${walletAddress}/total`, {
         headers: {
-          'project_id': process.env.BLOCKFROST_TESTNET_API_KEY,
+          project_id: process.env.BLOCKFROST_TESTNET_API_KEY,
         },
       });
 
@@ -232,12 +231,12 @@ export class TaptoolsService {
       const batchSize = 10;
       for (let i = 0; i < nonAdaAssets.length; i += batchSize) {
         const batch = nonAdaAssets.slice(i, i + batchSize);
-        const batchPromises = batch.map(async (asset) => {
+        const batchPromises = batch.map(async asset => {
           try {
             // Get asset details
             const assetDetails = await axios.get(`${this.blockfrostTestnetUrl}assets/${asset.unit}`, {
               headers: {
-                'project_id': process.env.BLOCKFROST_TESTNET_API_KEY,
+                project_id: process.env.BLOCKFROST_TESTNET_API_KEY,
               },
             });
 
@@ -310,11 +309,10 @@ export class TaptoolsService {
           nfts: processedAssets.filter(a => a.isNft).length,
           tokens: processedAssets.filter(a => a.isFungibleToken).length,
           ada: totalAda,
-        }
+        },
       };
 
       return summary;
-
     } catch (err) {
       console.error('Error fetching testnet wallet summary:', err.message);
       if (axios.isAxiosError(err)) {
@@ -342,13 +340,13 @@ export class TaptoolsService {
     try {
       const response = await axios.get(`${this.baseUrl}/token/price`, {
         headers: {
-          'x-api-key': this.taptoolsApiKey
+          'x-api-key': this.taptoolsApiKey,
         },
         params: {
           policy: policyId,
           name: assetName,
-          currency: 'usd,ada'
-        }
+          currency: 'usd,ada',
+        },
       });
 
       if (!response.data?.data) {
@@ -357,7 +355,7 @@ export class TaptoolsService {
 
       const result = {
         priceAda: Number(response.data.data.ada) || 0,
-        priceUsd: Number(response.data.data.usd) || 0
+        priceUsd: Number(response.data.data.usd) || 0,
       };
 
       this.cache.set(cacheKey, result);
@@ -375,11 +373,14 @@ export class TaptoolsService {
    * @param phase The phase to filter assets by - 'contribute' for contributed assets, 'acquire' for invested assets
    * @returns Promise with the vault assets summary
    */
-  async calculateVaultAssetsValue(vaultId: string, phase: 'contribute' | 'acquire' = 'contribute'): Promise<VaultAssetsSummaryDto> {
+  async calculateVaultAssetsValue(
+    vaultId: string,
+    phase: 'contribute' | 'acquire' = 'contribute'
+  ): Promise<VaultAssetsSummaryDto> {
     // Get the vault to verify it exists
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
-      relations: ['assets']
+      relations: ['assets'],
     });
 
     if (!vault) {
@@ -387,13 +388,16 @@ export class TaptoolsService {
     }
 
     // Group assets by policyId and assetId to handle quantities
-    const assetMap = new Map<string, {
-      policyId: string;
-      assetId: string;
-      quantity: number;
-      isNft: boolean;
-      metadata?: Record<string, any>;
-    }>();
+    const assetMap = new Map<
+      string,
+      {
+        policyId: string;
+        assetId: string;
+        quantity: number;
+        isNft: boolean;
+        metadata?: Record<string, any>;
+      }
+    >();
 
     // Process each asset in the vault
     for (const asset of vault.assets) {
@@ -422,7 +426,7 @@ export class TaptoolsService {
           assetId: asset.asset_id,
           quantity: 1,
           isNft: asset.type === AssetType.NFT,
-          metadata: asset.metadata || {}
+          metadata: asset.metadata || {},
         });
       }
     }
@@ -438,10 +442,7 @@ export class TaptoolsService {
     for (const asset of assets) {
       try {
         // Get asset value in ADA
-        const assetValue = await this.getAssetValue(
-          asset.policyId,
-          asset.assetId
-        );
+        const assetValue = await this.getAssetValue(asset.policyId, asset.assetId);
 
         const valueAda = assetValue?.priceAda || 0;
         const valueUsd = assetValue?.priceUsd || 0;
@@ -454,7 +455,7 @@ export class TaptoolsService {
           ...asset,
           assetName: asset.assetId, // Using assetId as assetName for backward compatibility
           valueAda: totalAssetValueAda,
-          valueUsd: totalAssetValueUsd
+          valueUsd: totalAssetValueUsd,
         });
 
         totalValueAda += totalAssetValueAda;
@@ -480,8 +481,8 @@ export class TaptoolsService {
         valueAda: asset.valueAda,
         valueUsd: asset.valueUsd,
         isNft: asset.isNft,
-        metadata: asset.metadata
-      }))
+        metadata: asset.metadata,
+      })),
     };
 
     return summary;

@@ -1,4 +1,15 @@
-import {BadRequestException, Injectable, Logger, UnauthorizedException} from '@nestjs/common';
+import { Credential, EnterpriseAddress, ScriptHash } from '@emurgo/cardano-serialization-lib-nodejs';
+import { BadRequestException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
+import { classToPlain, plainToInstance } from 'class-transformer';
+import * as csv from 'csv-parse';
+import { Brackets, In, Repository } from 'typeorm';
+
+import { Asset } from '../../database/asset.entity';
+import { LinkEntity } from '../../database/link.entity';
+import { User } from '../../database/user.entity';
+import {Vault} from '../../database/vault.entity';
 import {
   ContributionWindowType,
   InvestmentWindowType,
@@ -6,41 +17,36 @@ import {
   VaultPrivacy,
   VaultStatus
 } from '../../types/vault.types';
-import {InjectRepository} from '@nestjs/typeorm';
-import {ConfigService} from '@nestjs/config';
-import {Brackets, In, Repository} from 'typeorm';
-import {classToPlain, plainToInstance} from 'class-transformer';
+
+import { BlockchainScannerService } from '../blockchain/blockchain-scanner.service';
+import { valuation_sc_type, vault_sc_privacy } from '../blockchain/types/vault-sc-type';
+import { VaultManagingService } from '../blockchain/vault-managing.service';
+import {CreateVaultReq} from './dto/createVault.req';
 import {SortOrder, VaultFilter, VaultSortField} from './dto/get-vaults.dto';
 import {PaginatedResponseDto} from './dto/paginated-response.dto';
-import {Vault} from '../../database/vault.entity';
-import {CreateVaultReq} from './dto/createVault.req';
-import {SaveDraftReq} from './dto/saveDraft.req';
-import {User} from '../../database/user.entity';
-import {LinkEntity} from '../../database/link.entity';
-import {Asset} from '../../database/asset.entity';
-import {AssetOriginType, AssetStatus, AssetType} from '../../types/asset.types';
-import {FileEntity} from '../../database/file.entity';
-import {AssetsWhitelistEntity} from '../../database/assetsWhitelist.entity';
-import {AcquirerWhitelistEntity} from '../../database/acquirerWhitelist.entity';
-import {TagEntity} from '../../database/tag.entity';
-import {ContributorWhitelistEntity} from '../../database/contributorWhitelist.entity';
-import {transformToSnakeCase} from '../../helpers';
-import {VaultFullResponse, VaultShortResponse} from './dto/vault.response';
-import {VaultManagingService} from '../blockchain/vault-managing.service';
-import {valuation_sc_type, vault_sc_privacy} from '../blockchain/types/vault-sc-type';
-import {BlockchainScannerService} from "../blockchain/blockchain-scanner.service";
-import {applyContributeParams} from "../blockchain/utils/apply_params";
-import {Credential, EnterpriseAddress, ScriptHash} from "@emurgo/cardano-serialization-lib-nodejs";
-import * as csv from 'csv-parse';
-import {AwsService} from '../aws_bucket/aws.service';
-import {TaptoolsService} from "../taptools/taptools.service";
-import {PublishVaultDto} from "./dto/publish-vault.dto";
-import {TransactionType} from "../../types/transaction.types";
-import {TransactionsService} from "../transactions/transactions.service";
+import { SaveDraftReq } from './dto/saveDraft.req';
+
+import { AssetOriginType, AssetStatus, AssetType } from '../../types/asset.types';
+import { FileEntity } from '../../database/file.entity';
+import { AssetsWhitelistEntity } from '../../database/assetsWhitelist.entity';
+import { AcquirerWhitelistEntity } from '../../database/acquirerWhitelist.entity';
+import { TagEntity } from '../../database/tag.entity';
+import { ContributorWhitelistEntity } from '../../database/contributorWhitelist.entity';
+import { transformToSnakeCase } from '../../helpers';
+
+import { VaultFullResponse, VaultShortResponse } from './dto/vault.response';
+
+import { applyContributeParams } from '../blockchain/utils/apply_params';
+import { AwsService } from '../aws_bucket/aws.service';
+import { TaptoolsService } from '../taptools/taptools.service';
+
+import { PublishVaultDto } from './dto/publish-vault.dto';
+
+import { TransactionType } from '../../types/transaction.types';
+import { TransactionsService } from '../transactions/transactions.service';
 
 @Injectable()
 export class VaultsService {
-
   private readonly logger = new Logger(VaultsService.name);
   private readonly MAX_RETRIES = 10;
   private readonly INITIAL_RETRY_DELAY = 3000; // 3 seconds
@@ -69,7 +75,7 @@ export class VaultsService {
     private readonly blockchainScannerService: BlockchainScannerService,
     private readonly taptoolsService: TaptoolsService,
     private readonly transactionsService: TransactionsService,
-    private readonly configService: ConfigService,
+    private readonly configService: ConfigService
   ) {}
 
   private async wait(ms: number): Promise<void> {
@@ -97,10 +103,7 @@ export class VaultsService {
       });
 
       const POLICY_ID = parameterizedScript.validator.hash;
-      const SC_ADDRESS = EnterpriseAddress.new(
-        0,
-        Credential.from_scripthash(ScriptHash.from_hex(POLICY_ID))
-      )
+      const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(POLICY_ID)))
         .to_address()
         .to_bech32();
 
@@ -108,9 +111,8 @@ export class VaultsService {
       await this.vaultsRepository.save(vault);
 
       this.logger.log(`Successfully processed transaction ${txHash} for vault ${vault.id}`);
-
     } catch (error) {
-      this.logger.log('Publication tx failed ')
+      this.logger.log('Publication tx failed ');
       if (attempt >= this.MAX_RETRIES - 1) {
         this.logger.error(`Max retries reached for transaction ${txHash}:`, error);
         return;
@@ -121,7 +123,7 @@ export class VaultsService {
       this.logger.log(`Retrying in ${delay}ms...`);
 
       await this.wait(delay);
-     return this.confirmAndProcessTransaction(txHash, vault, attempt + 1);
+      return this.confirmAndProcessTransaction(txHash, vault, attempt + 1);
     }
   }
 
@@ -133,19 +135,20 @@ export class VaultsService {
 
       return new Promise((resolve, reject) => {
         const results: string[] = [];
-        csv.parse(csvString, {
-          columns: false,
-          skip_empty_lines: true,
-          trim: true
-        })
-        .on('data', (data) => {
-          const address = data[0];
-          if (address && typeof address === 'string' && /^addr1[a-zA-Z0-9]{98}$/.test(address)) {
-            results.push(address);
-          }
-        })
-        .on('end', () => resolve(results))
-        .on('error', (error) => reject(error));
+        csv
+          .parse(csvString, {
+            columns: false,
+            skip_empty_lines: true,
+            trim: true,
+          })
+          .on('data', data => {
+            const address = data[0];
+            if (address && typeof address === 'string' && /^addr1[a-zA-Z0-9]{98}$/.test(address)) {
+              results.push(address);
+            }
+          })
+          .on('end', () => resolve(results))
+          .on('error', error => reject(error));
       });
     } catch (error) {
       console.error('Error parsing CSV from S3:', error);
@@ -156,7 +159,7 @@ export class VaultsService {
   async createVault(userId: string, data: CreateVaultReq): Promise<any> {
     try {
       const owner = await this.usersRepository.findOne({
-        where: { id: userId }
+        where: { id: userId },
       });
 
       if (!owner) {
@@ -167,8 +170,10 @@ export class VaultsService {
       if (data.privacy === VaultPrivacy.public && data.valueMethod !== ValueMethod.lbe) {
         throw new BadRequestException('Public vaults can only use LBE valuation type');
       }
-      if ((data.privacy === VaultPrivacy.private || data.privacy === VaultPrivacy.semiPrivate) &&
-          ![ValueMethod.lbe, ValueMethod.fixed].includes(data.valueMethod)) {
+      if (
+        (data.privacy === VaultPrivacy.private || data.privacy === VaultPrivacy.semiPrivate) &&
+        ![ValueMethod.lbe, ValueMethod.fixed].includes(data.valueMethod)
+      ) {
         throw new BadRequestException('Private and semi-private vaults can use either LBE or fixed valuation type');
       }
 
@@ -184,24 +189,32 @@ export class VaultsService {
 
       // Process image files
       const imgKey = data.vaultImage?.split('image/')[1];
-      const vaultImg = imgKey ? await this.filesRepository.findOne({
-        where: { file_key: imgKey }
-      }) : null;
+      const vaultImg = imgKey
+        ? await this.filesRepository.findOne({
+            where: { file_key: imgKey },
+          })
+        : null;
 
       const ftTokenImgKey = data.ftTokenImg?.split('image/')[1];
-      const ftTokenImg = ftTokenImgKey ? await this.filesRepository.findOne({
-        where: { file_key: ftTokenImgKey }
-      }) : null;
+      const ftTokenImg = ftTokenImgKey
+        ? await this.filesRepository.findOne({
+            where: { file_key: ftTokenImgKey },
+          })
+        : null;
 
       const acquirerWhitelistCsvKey = data.acquirerWhitelistCsv?.key;
-      const acquirerWhitelistFile = acquirerWhitelistCsvKey ? await this.filesRepository.findOne({
-        where: { file_key: acquirerWhitelistCsvKey }
-      }) : null;
+      const acquirerWhitelistFile = acquirerWhitelistCsvKey
+        ? await this.filesRepository.findOne({
+            where: { file_key: acquirerWhitelistCsvKey },
+          })
+        : null;
 
       const contributorWhitelistCsvKey = data.contributorWhitelistCsv?.split('csv/')[1];
-      const contributorWhitelistFile = contributorWhitelistCsvKey ? await this.filesRepository.findOne({
-        where: { file_key: contributorWhitelistCsvKey }
-      }) : null;
+      const contributorWhitelistFile = contributorWhitelistCsvKey
+        ? await this.filesRepository.findOne({
+            where: { file_key: contributorWhitelistCsvKey },
+          })
+        : null;
 
       // Prepare vault data
       const vaultData = transformToSnakeCase({
@@ -216,7 +229,7 @@ export class VaultsService {
         vaultImage: vaultImg,
         ftTokenImg: ftTokenImg,
         acquirerWhitelistCsv: acquirerWhitelistFile,
-        contributorWhitelistCsv: contributorWhitelistFile
+        contributorWhitelistCsv: contributorWhitelistFile,
       });
 
       delete vaultData.assets_whitelist;
@@ -232,7 +245,7 @@ export class VaultsService {
           return this.linksRepository.create({
             vault: newVault,
             name: linkItem.name,
-            url: linkItem.url
+            url: linkItem.url,
           });
         });
         await this.linksRepository.save(links);
@@ -241,72 +254,71 @@ export class VaultsService {
       // Handle assets whitelist
       let maxCountOf = 0;
       if (data.assetsWhitelist?.length > 0) {
-        await Promise.all(data.assetsWhitelist.map(assetItem => {
-          if(assetItem.policyId){
-            // Sum up the countCapMax values
-            if (assetItem.countCapMax) {
-              maxCountOf += assetItem.countCapMax;
+        await Promise.all(
+          data.assetsWhitelist.map(assetItem => {
+            if (assetItem.policyId) {
+              // Sum up the countCapMax values
+              if (assetItem.countCapMax) {
+                maxCountOf += assetItem.countCapMax;
+              }
+              return this.assetsWhitelistRepository.save({
+                vault: newVault,
+                policy_id: assetItem.policyId,
+                asset_count_cap_min: assetItem.countCapMin,
+                asset_count_cap_max: assetItem.countCapMax,
+              });
             }
-            return this.assetsWhitelistRepository.save({
-              vault: newVault,
-              policy_id: assetItem.policyId,
-              asset_count_cap_min: assetItem.countCapMin,
-              asset_count_cap_max: assetItem.countCapMax
-            });
-          }
-        }));
+          })
+        );
       }
 
       newVault.max_contribute_assets = Number(maxCountOf) || 0;
       await this.vaultsRepository.save(newVault);
       // Handle acquirer whitelist
-      const acquirerFromCsv = acquirerWhitelistFile ?
-        await this.parseCSVFromS3(acquirerWhitelistFile.file_key) : [];
+      const acquirerFromCsv = acquirerWhitelistFile ? await this.parseCSVFromS3(acquirerWhitelistFile.file_key) : [];
 
-      const acquirer = data.acquirerWhitelist ? [...data.acquirerWhitelist?.map(item => item.walletAddress)]: [];
+      const acquirer = data.acquirerWhitelist ? [...data.acquirerWhitelist?.map(item => item.walletAddress)] : [];
 
+      const allAcquirer = new Set([...acquirer, ...acquirerFromCsv]);
 
-      const allAcquirer = new Set([
-          ...acquirer,
-        ...acquirerFromCsv
-      ]);
-
-      await Promise.all(Array.from(allAcquirer).map(walletAddress => {
-        return this.acquirerWhitelistRepository.save({
-          vault: newVault,
-          wallet_address: walletAddress
-        });
-      }));
+      await Promise.all(
+        Array.from(allAcquirer).map(walletAddress => {
+          return this.acquirerWhitelistRepository.save({
+            vault: newVault,
+            wallet_address: walletAddress,
+          });
+        })
+      );
 
       // Handle contributors whitelist
-      const contributorsFromCsv = contributorWhitelistFile ?
-        await this.parseCSVFromS3(contributorWhitelistFile.file_key) : [];
+      const contributorsFromCsv = contributorWhitelistFile
+        ? await this.parseCSVFromS3(contributorWhitelistFile.file_key)
+        : [];
 
-      const contributorList = data.contributorWhitelist ? [...(data.contributorWhitelist.map(item => item.policyId) || [])] : [];
+      const contributorList = data.contributorWhitelist
+        ? [...(data.contributorWhitelist.map(item => item.policyId) || [])]
+        : [];
 
-      const allContributors = new Set([
-          ...contributorList,
-        ...contributorsFromCsv
-      ]);
+      const allContributors = new Set([...contributorList, ...contributorsFromCsv]);
       const contributorsArray = [...allContributors];
 
       contributorsArray.map(item => {
         return this.contributorWhitelistRepository.save({
           vault: newVault,
-          wallet_address: item
+          wallet_address: item,
         });
       });
 
       // Handle tags
       if (data.tags?.length > 0) {
         const tags = await Promise.all(
-          data.tags.map(async (tagData) => {
+          data.tags.map(async tagData => {
             let tag = await this.tagsRepository.findOne({
-              where: { name: tagData.name }
+              where: { name: tagData.name },
             });
             if (!tag) {
               tag = await this.tagsRepository.save({
-                name: tagData.name
+                name: tagData.name,
               });
             }
             return tag;
@@ -318,7 +330,17 @@ export class VaultsService {
 
       const finalVault = await this.vaultsRepository.findOne({
         where: { id: newVault.id },
-        relations: ['owner', 'social_links', 'assets_whitelist', 'acquirer_whitelist', 'contributor_whitelist', 'tags', 'vault_image', 'banner_image', 'ft_token_img']
+        relations: [
+          'owner',
+          'social_links',
+          'assets_whitelist',
+          'acquirer_whitelist',
+          'contributor_whitelist',
+          'tags',
+          'vault_image',
+          'banner_image',
+          'ft_token_img',
+        ],
       });
 
       if (!finalVault) {
@@ -327,14 +349,17 @@ export class VaultsService {
 
       const policyWhitelist = finalVault?.assets_whitelist.map(item => item.policy_id);
 
-      const privacy =  vault_sc_privacy[finalVault.privacy as VaultPrivacy];
+      const privacy = vault_sc_privacy[finalVault.privacy as VaultPrivacy];
       const valueMethod = valuation_sc_type[finalVault.value_method as ValueMethod];
 
       // Calculate start time based on contribution window type
       let startTime: number;
       if (finalVault.contribution_open_window_type === ContributionWindowType.uponVaultLaunch) {
         startTime = new Date().getTime();
-      } else if (finalVault.contribution_open_window_type === ContributionWindowType.custom && finalVault.contribution_open_window_time) {
+      } else if (
+        finalVault.contribution_open_window_type === ContributionWindowType.custom &&
+        finalVault.contribution_open_window_time
+      ) {
         // contribution_open_window_time is already in milliseconds due to @Transform in entity
         startTime = Number(finalVault.contribution_open_window_time);
       } else {
@@ -343,14 +368,17 @@ export class VaultsService {
 
       const assetWindow = {
         start: startTime,
-        end: startTime + Number(finalVault.contribution_duration)
+        end: startTime + Number(finalVault.contribution_duration),
       };
 
       // Calculate acquire window start time
       let acquireStartTime: number;
       if (finalVault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
         acquireStartTime = assetWindow.end;
-      } else if (finalVault.acquire_open_window_type === InvestmentWindowType.custom && finalVault.acquire_open_window_time) {
+      } else if (
+        finalVault.acquire_open_window_type === InvestmentWindowType.custom &&
+        finalVault.acquire_open_window_time
+      ) {
         // acquire_open_window_time is already in milliseconds due to @Transform in entity
         acquireStartTime = Number(finalVault.acquire_open_window_time);
       } else {
@@ -359,7 +387,7 @@ export class VaultsService {
 
       const acquireWindow = {
         start: acquireStartTime,
-        end: acquireStartTime + Number(finalVault.acquire_window_duration)
+        end: acquireStartTime + Number(finalVault.acquire_window_duration),
       };
 
       const { presignedTx, contractAddress, vaultAssetName } = await this.vaultContractService.createOnChainVaultTx({
@@ -370,7 +398,7 @@ export class VaultsService {
         contractType: privacy,
         valueMethod: valueMethod,
         assetWindow,
-        acquireWindow
+        acquireWindow,
       });
 
       finalVault.contract_address = contractAddress;
@@ -378,7 +406,7 @@ export class VaultsService {
       await this.vaultsRepository.save(finalVault);
       return {
         vaultId: finalVault.id,
-        presignedTx
+        presignedTx,
       };
     } catch (error) {
       console.error(error);
@@ -386,21 +414,22 @@ export class VaultsService {
     }
   }
 
-  async publishVault(userId, signedTx){
-    const vault = await this.vaultsRepository.findOne({ where: {
-     id: signedTx.vaultId,
-    },
-      relations: ['owner']
+  async publishVault(userId, signedTx) {
+    const vault = await this.vaultsRepository.findOne({
+      where: {
+        id: signedTx.vaultId,
+      },
+      relations: ['owner'],
     });
-    if(vault.owner.id !== userId){
+    if (vault.owner.id !== userId) {
       throw new UnauthorizedException('You must be an owner of vault!');
     }
 
-    const publishedTx =  await this.vaultContractService.submitOnChainVaultTx(signedTx);
+    const publishedTx = await this.vaultContractService.submitOnChainVaultTx(signedTx);
     vault.vault_status = VaultStatus.published;
     vault.publication_hash = publishedTx.txHash;
     await this.vaultsRepository.save(vault);
-  // Start transaction confirmation process in background
+    // Start transaction confirmation process in background
     this.confirmAndProcessTransaction(publishedTx.txHash, vault).catch(error => {
       this.logger.error(`Failed to process transaction ${publishedTx.txHash}:`, error);
     });
@@ -417,9 +446,9 @@ export class VaultsService {
         where: {
           id: data.id,
           vault_status: VaultStatus.draft,
-          owner: { id: userId }
+          owner: { id: userId },
         },
-        relations: ['owner', 'social_links', 'assets_whitelist', 'acquirer_whitelist']
+        relations: ['owner', 'social_links', 'assets_whitelist', 'acquirer_whitelist'],
       });
 
       // If found but not a draft, throw error
@@ -442,34 +471,42 @@ export class VaultsService {
     }
     try {
       const owner = await this.usersRepository.findOne({
-        where: { id: userId }
+        where: { id: userId },
       });
 
       // Process image files
       const imgKey = data.vaultImage?.split('image/')[1];
-      const vaultImg = imgKey ? await this.filesRepository.findOne({
-        where: { file_key: imgKey }
-      }) : null;
+      const vaultImg = imgKey
+        ? await this.filesRepository.findOne({
+            where: { file_key: imgKey },
+          })
+        : null;
 
       const bannerImgKey = data.bannerImage?.split('image/')[1];
-      const bannerImg = bannerImgKey ? await this.filesRepository.findOne({
-        where: { file_key: bannerImgKey }
-      }) : null;
+      const bannerImg = bannerImgKey
+        ? await this.filesRepository.findOne({
+            where: { file_key: bannerImgKey },
+          })
+        : null;
 
       const ftTokenImgKey = data.ftTokenImg?.split('image/')[1];
-      const ftTokenImg = ftTokenImgKey ? await this.filesRepository.findOne({
-        where: { file_key: ftTokenImgKey }
-      }) : null;
+      const ftTokenImg = ftTokenImgKey
+        ? await this.filesRepository.findOne({
+            where: { file_key: ftTokenImgKey },
+          })
+        : null;
 
       const acquirerWhitelistCsvKey = data.acquirerWhitelistCsv?.key;
-      const acquirerWhitelistFile = acquirerWhitelistCsvKey ? await this.filesRepository.findOne({
-        where: { file_key: acquirerWhitelistCsvKey }
-      }) : null;
+      const acquirerWhitelistFile = acquirerWhitelistCsvKey
+        ? await this.filesRepository.findOne({
+            where: { file_key: acquirerWhitelistCsvKey },
+          })
+        : null;
 
       // Prepare vault data with only the provided fields
       const vaultData: any = {
         owner: owner,
-        vault_status: VaultStatus.draft
+        vault_status: VaultStatus.draft,
       };
 
       // Only include fields that are actually provided
@@ -480,8 +517,8 @@ export class VaultsService {
       if (data.valuationCurrency !== undefined) vaultData.valuation_currency = data.valuationCurrency;
       if (data.valuationAmount !== undefined) vaultData.valuation_amount = data.valuationAmount;
       if (data.description !== undefined) vaultData.description = data.description;
-      if(data.ftTokenDecimals) vaultData.ftToken_decimals = data.ftTokenDecimals;
-      if(data.acquireOpenWindowType) vaultData.acquire_open_window_type = data.acquireOpenWindowType;
+      if (data.ftTokenDecimals) vaultData.ftToken_decimals = data.ftTokenDecimals;
+      if (data.acquireOpenWindowType) vaultData.acquire_open_window_type = data.acquireOpenWindowType;
 
       // Handle date fields only if they are provided
       if (data.contributionDuration !== undefined) {
@@ -509,10 +546,10 @@ export class VaultsService {
       let vault: Vault;
       if (existingVault) {
         // Update only the provided fields in existing draft vault
-        vault = await this.vaultsRepository.save({
+        vault = (await this.vaultsRepository.save({
           ...existingVault,
-          ...vaultData
-        }) as Vault;
+          ...vaultData,
+        })) as Vault;
       } else {
         // Create new draft vault with provided fields
         vault = await this.vaultsRepository.save(vaultData as Vault);
@@ -525,7 +562,7 @@ export class VaultsService {
             return this.linksRepository.create({
               vault: vault,
               name: linkItem.name,
-              url: linkItem.url
+              url: linkItem.url,
             });
           });
           await this.linksRepository.save(links);
@@ -534,13 +571,13 @@ export class VaultsService {
 
       if (data.tags?.length > 0) {
         const tags = await Promise.all(
-          data.tags.map(async (tagData) => {
+          data.tags.map(async tagData => {
             let tag = await this.tagsRepository.findOne({
-              where: { name: tagData.name }
+              where: { name: tagData.name },
             });
             if (!tag) {
               tag = await this.tagsRepository.save({
-                name: tagData.name
+                name: tagData.name,
               });
             }
             return tag;
@@ -552,20 +589,21 @@ export class VaultsService {
 
       // Handle assets whitelist only if provided
       if (data.assetsWhitelist !== undefined && data.assetsWhitelist.length > 0) {
-        await Promise.all(data.assetsWhitelist.map(whitelistItem => {
-          return this.assetsWhitelistRepository.save({
-            vault: vault,
-            policy_id: whitelistItem.policyId,
-            asset_count_cap_min: whitelistItem?.countCapMin,
-            asset_count_cap_max: whitelistItem?.countCapMax
-          });
-        }));
+        await Promise.all(
+          data.assetsWhitelist.map(whitelistItem => {
+            return this.assetsWhitelistRepository.save({
+              vault: vault,
+              policy_id: whitelistItem.policyId,
+              asset_count_cap_min: whitelistItem?.countCapMin,
+              asset_count_cap_max: whitelistItem?.countCapMax,
+            });
+          })
+        );
       }
 
       // Handle acquirer whitelist only if provided
       if (data.acquirerWhitelist !== undefined || acquirerWhitelistFile) {
-        const acquirerFromCsv = acquirerWhitelistFile ?
-          await this.parseCSVFromS3(acquirerWhitelistFile.file_key) : [];
+        const acquirerFromCsv = acquirerWhitelistFile ? await this.parseCSVFromS3(acquirerWhitelistFile.file_key) : [];
 
         const manualAcquirer = data.acquirerWhitelist?.map(item => item.walletAddress) || [];
         const allAcquirer = new Set([...manualAcquirer, ...acquirerFromCsv]);
@@ -574,7 +612,7 @@ export class VaultsService {
           const investorItems = Array.from(allAcquirer).map(walletAddress => {
             return this.acquirerWhitelistRepository.create({
               vault: vault,
-              wallet_address: walletAddress
+              wallet_address: walletAddress,
             });
           });
           await this.acquirerWhitelistRepository.save(investorItems);
@@ -588,26 +626,29 @@ export class VaultsService {
     }
   }
 
-  async getMyVaults(userId: string, filter?: VaultFilter, page: number = 1, limit: number = 10, sortBy?: VaultSortField, sortOrder: SortOrder = SortOrder.DESC): Promise<PaginatedResponseDto<VaultShortResponse>> {
+  async getMyVaults(
+    userId: string,
+    filter?: VaultFilter,
+    page: number = 1,
+    limit: number = 10,
+    sortBy?: VaultSortField,
+    sortOrder: SortOrder = SortOrder.DESC
+  ): Promise<PaginatedResponseDto<VaultShortResponse>> {
     const query = {
       where: {
         owner: { id: userId },
-        deleted: false
+        deleted: false,
       },
       relations: ['social_links', 'vault_image', 'banner_image'],
       skip: (page - 1) * limit,
       take: limit,
-      order: {}
+      order: {},
     };
 
     if (filter) {
       switch (filter) {
         case VaultFilter.open:
-          query.where['vault_status'] = In([
-            VaultStatus.published,
-            VaultStatus.contribution,
-            VaultStatus.acquire
-          ]);
+          query.where['vault_status'] = In([VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire]);
           break;
         case VaultFilter.locked:
           query.where['vault_status'] = VaultStatus.locked;
@@ -644,21 +685,20 @@ export class VaultsService {
       total,
       page,
       limit,
-      totalPages: Math.ceil(total / limit)
+      totalPages: Math.ceil(total / limit),
     };
   }
 
   async prepareDraftResponse(id: string) {
     const vault = await this.vaultsRepository.findOne({
       where: { id },
-      relations: ['owner', 'social_links', 'acquirer_whitelist',
-        'tags', 'vault_image', 'banner_image', 'ft_token_img']
+      relations: ['owner', 'social_links', 'acquirer_whitelist', 'tags', 'vault_image', 'banner_image', 'ft_token_img'],
     });
 
     if (!vault) {
       throw new BadRequestException('Vault not found');
     }
-    return plainToInstance(VaultFullResponse, vault, { excludeExtraneousValues: true});
+    return plainToInstance(VaultFullResponse, vault, { excludeExtraneousValues: true });
   }
 
   async getVaultById(id: string, userId: string): Promise<VaultFullResponse> {
@@ -671,8 +711,8 @@ export class VaultsService {
         'acquirer_whitelist',
         'vault_image',
         'banner_image',
-        'ft_token_img'
-      ]
+        'ft_token_img',
+      ],
     });
 
     if (!vault) {
@@ -690,17 +730,15 @@ export class VaultsService {
         status: AssetStatus.LOCKED,
         type: AssetType.NFT,
         origin_type: AssetOriginType.CONTRIBUTED,
-      }
+      },
     });
 
     // todo this is ok for contribution phase, but we need to calculate only assets with origin type CONTRIBUTED
-    const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(id)
-
+    const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(id);
 
     // todo for calculate how much ada already invested we need to select assets with INVESTED origin type.
     // todo and here we got how much invested now
-    const investedAssetsPrice = await this.taptoolsService.calculateVaultAssetsValue(id, 'acquire')
-
+    const investedAssetsPrice = await this.taptoolsService.calculateVaultAssetsValue(id, 'acquire');
 
     // Create a new plain object with the additional properties
     const additionalData = {
@@ -708,7 +746,7 @@ export class VaultsService {
       assetsCount: lockedAssetsCount,
       assetsPrices: assetsPrices,
       requireReservedCostAda: assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01),
-      requireReservedCostUsd: assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01)
+      requireReservedCostUsd: assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01),
     };
 
     // First transform the vault to plain object with class-transformer
@@ -717,16 +755,23 @@ export class VaultsService {
     // Then merge with additional data
     const result = {
       ...plainVault,
-      ...additionalData
+      ...additionalData,
     };
 
     return plainToInstance(VaultFullResponse, result, { excludeExtraneousValues: true });
   }
 
-  async getVaults(userId: string, filter?: VaultFilter, page: number = 1, limit: number = 10, sortBy?: VaultSortField, sortOrder: SortOrder = SortOrder.DESC): Promise<PaginatedResponseDto<VaultShortResponse>> {
+  async getVaults(
+    userId: string,
+    filter?: VaultFilter,
+    page: number = 1,
+    limit: number = 10,
+    sortBy?: VaultSortField,
+    sortOrder: SortOrder = SortOrder.DESC
+  ): Promise<PaginatedResponseDto<VaultShortResponse>> {
     // Get user's wallet address
     const user = await this.usersRepository.findOne({
-      where: { id: userId }
+      where: { id: userId },
     });
 
     if (!user) {
@@ -736,7 +781,8 @@ export class VaultsService {
     const userWalletAddress = user.address;
 
     // Create base query for all vaults
-    const queryBuilder = this.vaultsRepository.createQueryBuilder('vault')
+    const queryBuilder = this.vaultsRepository
+      .createQueryBuilder('vault')
       .leftJoinAndSelect('vault.social_links', 'social_links')
       .leftJoinAndSelect('vault.assets_whitelist', 'assets_whitelist')
       .leftJoinAndSelect('vault.vault_image', 'vault_image')
@@ -749,21 +795,23 @@ export class VaultsService {
       .andWhere('vault.deleted != :deleted', { deleted: true })
       .andWhere('vault.vault_status != :createdStatus', { createdStatus: VaultStatus.created })
       // Get public vaults OR private vaults where user is whitelisted based on filter
-      .andWhere(new Brackets(qb => {
-        qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public })
-          .orWhere(
+      .andWhere(
+        new Brackets(qb => {
+          qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
             new Brackets(qb2 => {
-              qb2.where('vault.privacy = :privatePrivacy', { privatePrivacy: VaultPrivacy.private })
-                .andWhere(
-                  new Brackets(qb3 => {
-                    // Default case - check both whitelists if no filter
-                    qb3.where('(EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress) OR EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress))',
-                      { userWalletAddress });
-                  })
-                );
+              qb2.where('vault.privacy = :privatePrivacy', { privatePrivacy: VaultPrivacy.private }).andWhere(
+                new Brackets(qb3 => {
+                  // Default case - check both whitelists if no filter
+                  qb3.where(
+                    '(EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress) OR EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress))',
+                    { userWalletAddress }
+                  );
+                })
+              );
             })
           );
-      }));
+        })
+      );
 
     // Apply status filter and corresponding whitelist check
     if (filter) {
@@ -771,48 +819,46 @@ export class VaultsService {
         case VaultFilter.open:
           queryBuilder
             .andWhere('vault.vault_status IN (:...statuses)', {
-              statuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire]
+              statuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire],
             })
-            .andWhere(new Brackets(qb => {
-              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public })
-                .orWhere(
+            .andWhere(
+              new Brackets(qb => {
+                qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
                   'EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress)',
                   { userWalletAddress }
                 );
-            }));
+              })
+            );
           break;
         case VaultFilter.contribution:
-          queryBuilder
-            .andWhere('vault.vault_status = :status', { status: VaultStatus.contribution })
-            .andWhere(new Brackets(qb => {
-              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public })
-                .orWhere(
-                  'EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress)',
-                  { userWalletAddress }
-                );
-            }));
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.contribution }).andWhere(
+            new Brackets(qb => {
+              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
+                'EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress)',
+                { userWalletAddress }
+              );
+            })
+          );
           break;
         case VaultFilter.acquire:
-          queryBuilder
-            .andWhere('vault.vault_status = :status', { status: VaultStatus.acquire })
-            .andWhere(new Brackets(qb => {
-              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public })
-                .orWhere(
-                  'EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress)',
-                  { userWalletAddress }
-                );
-            }));
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.acquire }).andWhere(
+            new Brackets(qb => {
+              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
+                'EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress)',
+                { userWalletAddress }
+              );
+            })
+          );
           break;
         case VaultFilter.governance:
-          queryBuilder
-            .andWhere('vault.vault_status = :status', { status: VaultStatus.governance })
-            .andWhere(new Brackets(qb => {
-              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public })
-                .orWhere(
-                  '(EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress) OR EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress))',
-                  { userWalletAddress }
-                );
-            }));
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.governance }).andWhere(
+            new Brackets(qb => {
+              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
+                '(EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress) OR EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress))',
+                { userWalletAddress }
+              );
+            })
+          );
           break;
         case VaultFilter.locked:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked });
@@ -844,67 +890,67 @@ export class VaultsService {
       total,
       page,
       limit,
-      totalPages: Math.ceil(total / limit)
+      totalPages: Math.ceil(total / limit),
     };
   }
 
-  async burnVaultAttempt(vaultId: string, userId: string){
+  async burnVaultAttempt(vaultId: string, userId: string) {
     const vault = await this.vaultsRepository.findOne({
       where: {
         id: vaultId,
         owner: {
           id: userId,
-        }
+        },
       },
-      relations: ['assets', 'owner']
+      relations: ['assets', 'owner'],
     });
-    if(!vault){
-      throw new Error("Vault is not found or you are not owner of this vault!")
+    if (!vault) {
+      throw new Error('Vault is not found or you are not owner of this vault!');
     }
-    if(vault.assets.length !== 0){
-      throw new Error("The vault cant be burned it need to extract and refound assets ")
+    if (vault.assets.length !== 0) {
+      throw new Error('The vault cant be burned it need to extract and refound assets ');
     }
     const transaction = await this.transactionsService.createTransaction({
       vault_id: vaultId,
       type: TransactionType.burn,
-      assets: []
+      assets: [],
     });
-   const result =  await this.vaultContractService.createBurnTx({
-     assetVaultName: vault.asset_vault_name,
-     customerAddress: vault.owner.address
-   })
+    const result = await this.vaultContractService.createBurnTx({
+      assetVaultName: vault.asset_vault_name,
+      customerAddress: vault.owner.address,
+    });
 
     return {
-     ...result,
+      ...result,
       txId: transaction.id,
-    }
+    };
   }
 
-  async burnVaultPublishTx(vaultId, userId, publishDto: PublishVaultDto){
+  async burnVaultPublishTx(vaultId, userId, publishDto: PublishVaultDto) {
     const { txHash } = await this.vaultContractService.submitOnChainVaultTx({
       transaction: publishDto.transaction,
-      signatures: publishDto.signatures
-    })
+      signatures: publishDto.signatures,
+    });
 
     const vault = await this.vaultsRepository.findOne({
       where: {
         id: vaultId,
         owner: {
           id: userId,
-        }
+        },
       },
-      relations: ['assets', 'owner']
+      relations: ['assets', 'owner'],
     });
-    if(!vault){
-      throw new Error("Vault is not found or you are not owner of this vault!")
+    if (!vault) {
+      throw new Error('Vault is not found or you are not owner of this vault!');
     }
-    if(vault.assets.length !== 0){
-      throw new Error("The vault cant be burned it need to extract and refound assets ")
+    if (vault.assets.length !== 0) {
+      throw new Error('The vault cant be burned it need to extract and refound assets ');
     }
     vault.deleted = true;
     vault.liquidation_hash = txHash;
     // todo need to wait tx approvement from scanner ?
-   await this.transactionsService.updateTransactionHash(publishDto.txId, txHash)
-   await this.vaultsRepository.save(vault)
+    await this.transactionsService.updateTransactionHash(publishDto.txId, txHash);
+    await this.vaultsRepository.save(vault);
   }
 }

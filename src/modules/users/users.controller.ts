@@ -1,4 +1,3 @@
-import { ApiTags, ApiConsumes } from '@nestjs/swagger';
 import {
   Controller,
   Get,
@@ -10,15 +9,20 @@ import {
   UseInterceptors,
   UploadedFile,
   Param,
-  ParseFilePipe, MaxFileSizeValidator, FileTypeValidator
+  ParseFilePipe,
+  MaxFileSizeValidator,
+  FileTypeValidator,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { UsersService } from './users.service';
-import { UpdateProfileDto } from './dto/update-profile.dto';
-import { AuthGuard } from '../auth/auth.guard';
+import { ApiTags, ApiConsumes } from '@nestjs/swagger';
+import { Express } from 'express';
+
 import { ApiDoc } from '../../decorators/api-doc.decorator';
-import {Express} from 'express';
-import {mbMultiplication} from '../aws_bucket/aws.controller';
+import { AuthGuard } from '../auth/auth.guard';
+import { mbMultiplication } from '../aws_bucket/aws.controller';
+
+import { UpdateProfileDto } from './dto/update-profile.dto';
+import { UsersService } from './users.service';
 
 @ApiTags('users')
 @Controller('users')
@@ -27,7 +31,7 @@ export class UsersController {
 
   @ApiDoc({
     summary: 'Get user profile',
-    description: 'Returns the authenticated user\'s profile information',
+    description: "Returns the authenticated user's profile information",
     status: 200,
   })
   @UseGuards(AuthGuard)
@@ -39,7 +43,7 @@ export class UsersController {
 
   @ApiDoc({
     summary: 'Get public user profile',
-    description: 'Returns a user\'s public profile information by ID (excludes sensitive data)',
+    description: "Returns a user's public profile information by ID (excludes sensitive data)",
     status: 200,
   })
   @Get('/profile/:id')
@@ -49,22 +53,19 @@ export class UsersController {
 
   @ApiDoc({
     summary: 'Update user profile',
-    description: 'Update the authenticated user\'s profile information',
+    description: "Update the authenticated user's profile information",
     status: 200,
   })
   @UseGuards(AuthGuard)
   @Patch('profile')
-  async updateProfile(
-    @Request() req,
-    @Body() updateData: UpdateProfileDto,
-  ) {
+  async updateProfile(@Request() req, @Body() updateData: UpdateProfileDto) {
     const userId = req.user.sub;
     return this.usersService.updateProfile(userId, updateData);
   }
 
   @ApiDoc({
     summary: 'Upload profile image',
-    description: 'Upload and update user\'s profile image',
+    description: "Upload and update user's profile image",
     status: 200,
   })
   @ApiConsumes('multipart/form-data')
@@ -79,8 +80,9 @@ export class UsersController {
           new MaxFileSizeValidator({ maxSize: 5 * mbMultiplication }), // 5mb
           new FileTypeValidator({ fileType: 'image/*' }),
         ],
-      }),
-    ) file: Express.Multer.File
+      })
+    )
+    file: Express.Multer.File
   ) {
     const userId = req.user.sub;
     return this.usersService.uploadProfileImage(userId, file, req.get('host'));
@@ -88,7 +90,7 @@ export class UsersController {
 
   @ApiDoc({
     summary: 'Upload banner image',
-    description: 'Upload and update user\'s banner image',
+    description: "Upload and update user's banner image",
     status: 200,
   })
   @ApiConsumes('multipart/form-data')
@@ -103,11 +105,11 @@ export class UsersController {
           new MaxFileSizeValidator({ maxSize: 5 * mbMultiplication }), // 5mb
           new FileTypeValidator({ fileType: 'image/*' }),
         ],
-      }),
-    ) file: Express.Multer.File
+      })
+    )
+    file: Express.Multer.File
   ) {
     const userId = req.user.sub;
     return this.usersService.uploadBannerImage(userId, file, req.get('host'));
   }
-
 }

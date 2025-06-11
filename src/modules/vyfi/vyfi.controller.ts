@@ -1,7 +1,8 @@
 import { Controller, Get, Post, Body, Query } from '@nestjs/common';
-import { VyfiService } from './vyfi.service';
 import { ApiTags, ApiOperation, ApiQuery, ApiBody } from '@nestjs/swagger';
+
 import { CreatePoolDto } from './dto/create-pool.dto';
+import { VyfiService } from './vyfi.service';
 
 @ApiTags('VyFi')
 @Controller('vyfi')
@@ -16,7 +17,7 @@ export class VyfiController {
   async checkPool(
     @Query('networkId') networkId: number,
     @Query('tokenAUnit') tokenAUnit: string,
-    @Query('tokenBUnit') tokenBUnit: string,
+    @Query('tokenBUnit') tokenBUnit: string
   ) {
     return this.vyfiService.checkPool({
       networkId,
@@ -37,4 +38,4 @@ export class VyfiController {
   async getPoolInfo(@Query('poolId') poolId: string) {
     return this.vyfiService.getPoolInfo(poolId);
   }
-} 
+}

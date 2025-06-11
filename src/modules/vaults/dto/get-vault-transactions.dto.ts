@@ -1,14 +1,15 @@
-import { IsEnum, IsOptional } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
+import { Expose } from 'class-transformer';
+import { IsEnum, IsOptional } from 'class-validator';
+
 import { TransactionStatus, TransactionType } from '../../../types/transaction.types';
-import {Expose} from 'class-transformer';
 
 export class GetVaultTransactionsDto {
   @ApiProperty({
     enum: TransactionStatus,
     description: 'Filter transactions by status',
     required: false,
-    default: TransactionStatus.confirmed
+    default: TransactionStatus.confirmed,
   })
   @IsOptional()
   @IsEnum(TransactionStatus)
@@ -18,7 +19,7 @@ export class GetVaultTransactionsDto {
   @ApiProperty({
     enum: [TransactionType.contribute, TransactionType.acquire],
     description: 'Filter transactions by type (contribute or acquire)',
-    required: false
+    required: false,
   })
   @IsOptional()
   @IsEnum(TransactionType)

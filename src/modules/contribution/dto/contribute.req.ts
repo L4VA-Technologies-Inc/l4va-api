@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsArray, IsNotEmpty, IsOptional, ValidateNested, IsString, IsNumber, IsObject } from 'class-validator';
 import { Expose, Type, Transform } from 'class-transformer';
+import { IsArray, IsNotEmpty, IsOptional, ValidateNested, IsString, IsNumber, IsObject } from 'class-validator';
 
 class MetadataFile {
   @ApiProperty()
@@ -78,28 +78,32 @@ export class ContributionAsset {
       description: '',
       image: 'ipfs://QmcqzB25HmkAnEnZs8ZQAsL6J6Jrsh4grN6HZPd5UasaRw',
       mediaType: 'image/png',
-      files: [{
-        src: 'ipfs://QmcqzB25HmkAnEnZs8ZQAsL6J6Jrsh4grN6HZPd5UasaRw',
-        name: 'Igor 3',
-        mediaType: 'image/png'
-      }],
+      files: [
+        {
+          src: 'ipfs://QmcqzB25HmkAnEnZs8ZQAsL6J6Jrsh4grN6HZPd5UasaRw',
+          name: 'Igor 3',
+          mediaType: 'image/png',
+        },
+      ],
       attributes: {},
       assetName: '4c34766149676f722033',
       mintTx: '98ec166ee46a4e56d9cadf28848a99e28ea4703f478c6c3aef4bd1553866667c',
       mintQuantity: '1',
       onchainMetadata: {
         name: 'Igor 3',
-        files: [{
-          src: 'ipfs://QmcqzB25HmkAnEnZs8ZQAsL6J6Jrsh4grN6HZPd5UasaRw',
-          name: 'Igor 3',
-          mediaType: 'image/png'
-        }],
+        files: [
+          {
+            src: 'ipfs://QmcqzB25HmkAnEnZs8ZQAsL6J6Jrsh4grN6HZPd5UasaRw',
+            name: 'Igor 3',
+            mediaType: 'image/png',
+          },
+        ],
         image: 'ipfs://QmcqzB25HmkAnEnZs8ZQAsL6J6Jrsh4grN6HZPd5UasaRw',
         owner: 'L4va',
         mediaType: 'image/png',
-        description: ''
-      }
-    }
+        description: '',
+      },
+    },
   })
   @Expose()
   @IsOptional()
@@ -117,7 +121,6 @@ export class ContributionAsset {
 }
 
 export class ContributeReq {
-
   @ApiProperty({
     type: [ContributionAsset],
     description: 'List of assets to contribute',

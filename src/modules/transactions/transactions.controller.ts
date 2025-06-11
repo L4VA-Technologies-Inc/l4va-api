@@ -1,7 +1,9 @@
 import { Controller, Get, Param, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+
+import { AuthGuard } from '../auth/auth.guard';
+
 import { TransactionsService } from './transactions.service';
-import {AuthGuard} from '../auth/auth.guard';
 
 @ApiTags('Transactions')
 @Controller('transactions')
@@ -13,7 +15,7 @@ export class TransactionsController {
   @Get('sent')
   @ApiOperation({ summary: 'Get transactions sent by the authenticated user' })
   async getSentTransactions() {
-   // return this.transactionsService.getTransactionsBySender(address);
+    // return this.transactionsService.getTransactionsBySender(address);
     return null;
   }
 

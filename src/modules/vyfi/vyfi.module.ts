@@ -1,16 +1,14 @@
-import { Module } from '@nestjs/common';
-import { VyfiService } from './vyfi.service';
-import { VyfiController } from './vyfi.controller';
 import { HttpModule } from '@nestjs/axios';
+import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 
+import { VyfiController } from './vyfi.controller';
+import { VyfiService } from './vyfi.service';
+
 @Module({
-  imports: [
-    HttpModule,
-    ConfigModule,
-  ],
+  imports: [HttpModule, ConfigModule],
   controllers: [VyfiController],
   providers: [VyfiService],
   exports: [VyfiService],
 })
-export class VyfiModule {} 
+export class VyfiModule {}
