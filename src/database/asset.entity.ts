@@ -1,17 +1,11 @@
-import {
-  Entity,
-  PrimaryGeneratedColumn,
-  Column,
-  ManyToOne,
-  JoinColumn,
-  BeforeInsert,
-  BeforeUpdate,
-} from 'typeorm';
-import { Vault } from './vault.entity';
-import { AssetType, AssetStatus, AssetOriginType } from '../types/asset.types';
 import { Expose } from 'class-transformer';
-import {Transaction} from './transaction.entity';
-import {User} from "./user.entity";
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, BeforeInsert, BeforeUpdate } from 'typeorm';
+
+import { AssetType, AssetStatus, AssetOriginType } from '../types/asset.types';
+
+import { Transaction } from './transaction.entity';
+import { User } from './user.entity';
+import { Vault } from './vault.entity';
 
 @Entity('assets')
 export class Asset {
@@ -24,19 +18,19 @@ export class Asset {
 
   @Expose({ name: 'policyId' })
   @Column({
-    name: 'policy_id'
+    name: 'policy_id',
   })
   policy_id: string;
 
   @Expose({ name: 'assetId' })
   @Column({
-    name: 'asset_id'
+    name: 'asset_id',
   })
   asset_id: string;
 
   @Column({
     type: 'enum',
-    enum: AssetType
+    enum: AssetType,
   })
   type: AssetType;
 
@@ -53,7 +47,7 @@ export class Asset {
     type: 'decimal',
     precision: 20,
     scale: 2,
-    nullable: true
+    nullable: true,
   })
   floor_price?: number;
 
@@ -63,7 +57,7 @@ export class Asset {
     type: 'decimal',
     precision: 20,
     scale: 2,
-    nullable: true
+    nullable: true,
   })
   dex_price?: number;
 
@@ -74,14 +68,14 @@ export class Asset {
   @Column({
     name: 'last_valuation',
     type: 'timestamptz',
-    nullable: true
+    nullable: true,
   })
   last_valuation?: Date;
 
   @Column({
     type: 'enum',
     enum: AssetStatus,
-    default: AssetStatus.PENDING
+    default: AssetStatus.PENDING,
   })
   status: AssetStatus;
 
@@ -89,7 +83,7 @@ export class Asset {
   @Column({
     name: 'locked_at',
     type: 'timestamptz',
-    nullable: true
+    nullable: true,
   })
   locked_at?: Date;
 
@@ -97,7 +91,7 @@ export class Asset {
   @Column({
     name: 'released_at',
     type: 'timestamptz',
-    nullable: true
+    nullable: true,
   })
   released_at?: Date;
 
@@ -107,7 +101,7 @@ export class Asset {
     type: 'enum',
     enum: AssetOriginType,
     nullable: true,
-    comment: 'Source or origin type of the asset (INVESTED, CONTRIBUTED)'
+    comment: 'Source or origin type of the asset (INVESTED, CONTRIBUTED)',
   })
   origin_type?: AssetOriginType;
 
@@ -129,7 +123,7 @@ export class Asset {
   @Column({
     name: 'added_at',
     type: 'timestamptz',
-    default: () => 'CURRENT_TIMESTAMP'
+    default: () => 'CURRENT_TIMESTAMP',
   })
   added_at: Date;
 
@@ -137,7 +131,7 @@ export class Asset {
   @Column({
     name: 'updated_at',
     type: 'timestamptz',
-    default: () => 'CURRENT_TIMESTAMP'
+    default: () => 'CURRENT_TIMESTAMP',
   })
   updated_at: Date;
 

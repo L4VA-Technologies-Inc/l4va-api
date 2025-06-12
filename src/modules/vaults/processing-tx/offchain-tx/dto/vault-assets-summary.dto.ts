@@ -19,7 +19,7 @@ export class VaultAssetsSummaryDto {
   @ApiProperty({ description: 'Timestamp of the last update' })
   lastUpdated: string;
 
-  @ApiProperty({ 
+  @ApiProperty({
     description: 'List of assets with their values',
     type: 'array',
     items: {
@@ -31,9 +31,9 @@ export class VaultAssetsSummaryDto {
         valueAda: { type: 'number' },
         valueUsd: { type: 'number' },
         isNft: { type: 'boolean' },
-        metadata: { type: 'object' }
-      }
-    }
+        metadata: { type: 'object' },
+      },
+    },
   })
   assets: Array<{
     policyId: string;

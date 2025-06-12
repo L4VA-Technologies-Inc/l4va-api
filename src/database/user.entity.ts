@@ -1,3 +1,4 @@
+import { Exclude, Expose } from 'class-transformer';
 import {
   Entity,
   PrimaryGeneratedColumn,
@@ -6,16 +7,15 @@ import {
   OneToOne,
   BeforeInsert,
   BeforeUpdate,
-  JoinColumn
+  JoinColumn,
 } from 'typeorm';
-import { Vault } from './vault.entity';
-import {Exclude, Expose} from 'class-transformer';
+
 import { FileEntity } from './file.entity';
 import { LinkEntity } from './link.entity';
+import { Vault } from './vault.entity';
 
 @Entity('users')
 export class User {
-
   @Expose({ name: 'id' })
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -69,11 +69,11 @@ export class User {
   @Column({ name: 'deleted', type: 'boolean', nullable: false, default: false })
   deleted: boolean;
 
-  @Expose({ name: 'createdAt'})
+  @Expose({ name: 'createdAt' })
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   created_at: string;
 
-  @Expose({ name: 'updatedAt'})
+  @Expose({ name: 'updatedAt' })
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   updated_at: string;
 
@@ -86,5 +86,4 @@ export class User {
   updateDate() {
     this.updated_at = new Date().toISOString();
   }
-
 }

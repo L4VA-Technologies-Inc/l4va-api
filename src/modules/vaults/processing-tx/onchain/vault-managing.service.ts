@@ -1,17 +1,20 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { BlockchainService } from './blockchain.service';
+import { Buffer } from 'node:buffer';
+
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import {
   EnterpriseAddress,
   ScriptHash,
   Credential,
   Address,
-  FixedTransaction, PrivateKey,
+  FixedTransaction,
+  PrivateKey,
 } from '@emurgo/cardano-serialization-lib-nodejs';
-import {Datum1} from './types/type';
-import {generate_assetname_from_txhash_index, getUtxos, getVaultUtxo, toHex} from './utils/lib';
-import {Buffer} from 'node:buffer';
-import {BlockFrostAPI} from '@blockfrost/blockfrost-js';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+
+import { BlockchainService } from './blockchain.service';
+import { Datum1 } from './types/type';
+import { generate_assetname_from_txhash_index, getUtxos, getVaultUtxo, toHex } from './utils/lib';
 
 export interface VaultConfig {
   vaultName: string;
@@ -50,14 +53,12 @@ export interface VaultCreateConfig {
   customMetadata?: [string, string][];
 }
 
-
 const one_day = 24 * 60 * 60 * 1000;
-
 
 @Injectable()
 export class VaultManagingService {
   private readonly logger = new Logger(VaultManagingService.name);
-  private  scAddress: string;
+  private scAddress: string;
   private readonly scPolicyId: string;
   private readonly adminHash: string;
   private readonly adminSKey: string;
@@ -72,7 +73,7 @@ export class VaultManagingService {
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.blockfrost = new BlockFrostAPI({
-      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY')
+      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
     });
   }
 
@@ -82,11 +83,7 @@ export class VaultManagingService {
    * @returns Transaction hash and vault ID
    */
   async createOnChainVaultTx(vaultConfig: VaultCreateConfig): Promise<any> {
-
-    this.scAddress = EnterpriseAddress.new(
-      0,
-      Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)),
-    )
+    this.scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
       .to_address()
       .to_bech32();
 
@@ -99,7 +96,7 @@ export class VaultManagingService {
     const REQUIRED_INPUTS = [selectedUtxo.to_hex()];
     const assetName = generate_assetname_from_txhash_index(
       selectedUtxo.input().transaction_id().to_hex(),
-      selectedUtxo.input().index(),
+      selectedUtxo.input().index()
     );
 
     try {
@@ -120,7 +117,7 @@ export class VaultManagingService {
         mint: [
           {
             version: 'cip25',
-            assetName: {name: assetName, format:'hex'},
+            assetName: { name: assetName, format: 'hex' },
             policyId: this.scPolicyId,
             type: 'plutus',
             quantity: 1,
@@ -145,7 +142,7 @@ export class VaultManagingService {
             address: this.scAddress,
             assets: [
               {
-                assetName: {name:assetName, format:'hex'},
+                assetName: { name: assetName, format: 'hex' },
                 policyId: this.scPolicyId,
                 quantity: 1,
               },
@@ -159,7 +156,7 @@ export class VaultManagingService {
                 asset_window: {
                   // Time allowed to upload NFT
                   lower_bound: {
-                    bound_type: new Date().getTime() ,
+                    bound_type: new Date().getTime(),
                     is_inclusive: true,
                   },
                   upper_bound: {
@@ -205,7 +202,7 @@ export class VaultManagingService {
                 //   liquidityPool: 1,
                 // },
                 admin: this.adminHash,
-                minting_key: this.adminHash
+                minting_key: this.adminHash,
               },
               shape: {
                 validatorHash: this.scPolicyId,
@@ -220,59 +217,50 @@ export class VaultManagingService {
       const buildResponse = await this.blockchainService.buildTransaction(input);
 
       // Sign the transaction
-      const txToSubmitOnChain = FixedTransaction.from_bytes(
-        Buffer.from(buildResponse.complete, 'hex'),
-      );
-      txToSubmitOnChain.sign_and_add_vkey_signature(
-        PrivateKey.from_bech32(this.adminSKey),
-      );
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
       return {
         presignedTx: txToSubmitOnChain.to_hex(),
         contractAddress: this.scAddress,
         vaultAssetName: assetName,
       };
-
     } catch (error) {
       this.logger.error('Failed to create vault:', error);
       throw error;
     }
   }
 
-
-  async createBurnTx(burnConfig: {
-    customerAddress: string,
-    assetVaultName: string
-  }) {
+  async createBurnTx(burnConfig: { customerAddress: string; assetVaultName: string }) {
     const vaultUtxo = await getVaultUtxo(this.scPolicyId, burnConfig.assetVaultName, this.blockfrost);
     const input = {
       changeAddress: burnConfig.customerAddress,
-      message: "Vault Burn",
+      message: 'Vault Burn',
       scriptInteractions: [
         {
-          purpose: "spend",
+          purpose: 'spend',
           outputRef: vaultUtxo,
           hash: this.scPolicyId,
           redeemer: {
-            type: "json",
-            value: "VaultBurn",
+            type: 'json',
+            value: 'VaultBurn',
           },
         },
         {
-          purpose: "mint",
+          purpose: 'mint',
           hash: this.scPolicyId,
           redeemer: {
-            type: "json",
-            value: "VaultBurn",
+            type: 'json',
+            value: 'VaultBurn',
           },
         },
       ],
       mint: [
         {
-          version: "cip25",
-          assetName: {name: burnConfig.assetVaultName, format:"hex"},
+          version: 'cip25',
+          assetName: { name: burnConfig.assetVaultName, format: 'hex' },
           policyId: this.scPolicyId,
-          type: "plutus",
+          type: 'plutus',
           quantity: -1,
         },
       ],
@@ -281,12 +269,8 @@ export class VaultManagingService {
     const buildResponse = await this.blockchainService.buildTransaction(input);
 
     // Sign the transaction
-    const txToSubmitOnChain = FixedTransaction.from_bytes(
-      Buffer.from(buildResponse.complete, 'hex'),
-    );
-    txToSubmitOnChain.sign_and_add_vkey_signature(
-      PrivateKey.from_bech32(this.adminSKey),
-    );
+    const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+    txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
     return {
       presignedTx: txToSubmitOnChain.to_hex(),
@@ -299,19 +283,14 @@ export class VaultManagingService {
    * @param signedTx Object containing the transaction and signatures
    * @returns Transaction hash
    */
-  async submitOnChainVaultTx(signedTx: {
-    transaction: string;
-    signatures: string | string[];
-  }) {
+  async submitOnChainVaultTx(signedTx: { transaction: string; signatures: string | string[] }) {
     try {
       // Ensure signatures is always an array
-      const signatures = Array.isArray(signedTx.signatures)
-        ? signedTx.signatures
-        : [signedTx.signatures];
+      const signatures = Array.isArray(signedTx.signatures) ? signedTx.signatures : [signedTx.signatures];
 
       const result = await this.blockchainService.submitTransaction({
         transaction: signedTx.transaction,
-        signatures
+        signatures,
       });
 
       return { txHash: result.txHash };

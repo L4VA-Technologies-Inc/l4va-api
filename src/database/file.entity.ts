@@ -1,15 +1,8 @@
-import {
-  BeforeInsert,
-  BeforeUpdate,
-  Column,
-  Entity,
-  PrimaryGeneratedColumn,
-} from 'typeorm';
-import {Expose} from 'class-transformer';
+import { Expose } from 'class-transformer';
+import { BeforeInsert, BeforeUpdate, Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
 
 @Entity({ name: 'files' })
 export class FileEntity {
-
   @PrimaryGeneratedColumn('uuid')
   id: string;
 

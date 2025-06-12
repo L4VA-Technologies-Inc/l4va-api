@@ -1,16 +1,18 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+
+import { Vault } from '../../../../database/vault.entity';
+import { VaultStatus } from '../../../../types/vault.types';
+
 import { CreateProposalReq } from './dto/create-proposal.req';
 import { VoteReq } from './dto/vote.req';
-import {Vault} from '../../../../database/vault.entity';
-import {VaultStatus} from '../../../../types/vault.types';
 
 @Injectable()
 export class GovernanceService {
   constructor(
     @InjectRepository(Vault)
-    private readonly vaultRepository: Repository<Vault>,
+    private readonly vaultRepository: Repository<Vault>
   ) {}
 
   async createProposal(vaultId: string, createProposalReq: CreateProposalReq, userId: string) {

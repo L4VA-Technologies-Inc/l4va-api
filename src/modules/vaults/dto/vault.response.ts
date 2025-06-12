@@ -1,86 +1,85 @@
 import { ApiProperty } from '@nestjs/swagger';
+
+import { AcquirerWhitelistEntity } from '../../../database/acquirerWhitelist.entity';
+import { Asset } from '../../../database/asset.entity';
+import { AssetsWhitelistEntity } from '../../../database/assetsWhitelist.entity';
+import { ContributorWhitelistEntity } from '../../../database/contributorWhitelist.entity';
+import { FileEntity } from '../../../database/file.entity';
+import { LinkEntity } from '../../../database/link.entity';
+import { TagEntity } from '../../../database/tag.entity';
+import { User } from '../../../database/user.entity';
+import { DtoRepresent } from '../../../decorators/dto-represents.decorator';
 import {
   VaultPrivacy,
   VaultStatus,
   VaultType,
   ValueMethod,
   ContributionWindowType,
-  InvestmentWindowType, TerminationType
+  InvestmentWindowType,
+  TerminationType,
 } from '../../../types/vault.types';
-import { LinkEntity } from '../../../database/link.entity';
-import {FileEntity} from "../../../database/file.entity";
-import {User} from "../../../database/user.entity";
-import {AssetsWhitelistEntity} from "../../../database/assetsWhitelist.entity";
-import {AcquirerWhitelistEntity} from "../../../database/acquirerWhitelist.entity";
-import {ContributorWhitelistEntity} from "../../../database/contributorWhitelist.entity";
-import {Asset} from "../../../database/asset.entity";
-import {TagEntity} from "../../../database/tag.entity";
-import {DtoRepresent} from "../../../decorators/dto-represents.decorator";
 
 export class VaultShortResponse {
   @ApiProperty({ description: 'Unique identifier of the vault' })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   id: string;
 
   @ApiProperty({ description: 'Name of the vault' })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   name: string;
 
   @ApiProperty({ description: 'Description of the vault', required: false })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   description?: string;
 
-  @ApiProperty({ description: 'Tvl', required: false})
+  @ApiProperty({ description: 'Tvl', required: false })
   @DtoRepresent({
-    transform: ({ value }) => value ? Number(value) : null,
-    expose: true
+    transform: ({ value }) => (value ? Number(value) : null),
+    expose: true,
   })
   tvl?: number;
 
-
-  @ApiProperty({ description: 'Tvl', required: false})
+  @ApiProperty({ description: 'Tvl', required: false })
   @DtoRepresent({
-    transform: ({ value }) => value ? Number(value) : null,
-    expose: true
+    transform: ({ value }) => (value ? Number(value) : null),
+    expose: true,
   })
-  baseAllocation?:number;
+  baseAllocation?: number;
 
-
-  @ApiProperty({ description: 'Tvl', required: false})
+  @ApiProperty({ description: 'Tvl', required: false })
   @DtoRepresent({
-    transform: ({ value }) => value ? Number(value) : null,
-    expose: true
+    transform: ({ value }) => (value ? Number(value) : null),
+    expose: true,
   })
   total?: number;
 
-
-  @ApiProperty({ description: 'Tvl', required: false})
+  @ApiProperty({ description: 'Tvl', required: false })
   @DtoRepresent({
-    transform: ({ value }) => value ? Number(value) : null,
-    expose: true
+    transform: ({ value }) => (value ? Number(value) : null),
+    expose: true,
   })
   invested?: number;
 
   @ApiProperty({ description: 'Privacy setting of the vault', enum: VaultPrivacy })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   privacy: VaultPrivacy;
 
   @ApiProperty({ description: 'Timestamp when current phase ends', required: false })
   @DtoRepresent({
-    transform: ({ value }) => value ? new Date(value).toISOString() : null,
-    expose: true
+    transform: ({ value }) => (value ? new Date(value).toISOString() : null),
+    expose: true,
   })
   phaseEndTime?: string;
 
@@ -93,348 +92,347 @@ export class VaultShortResponse {
       const diff = endTime.getTime() - now.getTime();
       return diff > 0 ? diff : 0;
     },
-    expose: true
+    expose: true,
   })
   timeRemaining?: number;
 
   @ApiProperty({ description: 'Vault image', required: true })
   @DtoRepresent({
-    transform: ({ value }) => value ? value.url : null,
+    transform: ({ value }) => (value ? value.url : null),
     expose: true,
   })
   vaultImage?: FileEntity;
 
-  @ApiProperty({ description: 'Banner image', required:true })
+  @ApiProperty({ description: 'Banner image', required: true })
   @DtoRepresent({
-    transform: ({ value }) => value ? value.url : null,
-    expose: true
+    transform: ({ value }) => (value ? value.url : null),
+    expose: true,
   })
   bannerImage?: FileEntity;
 
   @ApiProperty({ description: 'Status of the vault', enum: VaultStatus })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   vaultStatus: VaultStatus;
 
   @ApiProperty({ description: 'Social links', type: [LinkEntity], required: false })
   @DtoRepresent({
     transform: false,
-    expose: { name: 'socialLinks'},
+    expose: { name: 'socialLinks' },
   })
   socialLinks?: LinkEntity[];
 }
 
 export class VaultFullResponse extends VaultShortResponse {
-
   @ApiProperty({ description: 'Type of the vault', enum: VaultType })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   type: VaultType;
 
-  @ApiProperty({ description: 'Fractional token image '})
+  @ApiProperty({ description: 'Fractional token image ' })
   @DtoRepresent({
-    transform: ({ value }) => value ? value.url : null,
-    expose: true
+    transform: ({ value }) => (value ? value.url : null),
+    expose: true,
   })
   ftTokenImg: FileEntity;
 
   @ApiProperty({ description: 'Hash of publication tx' })
   @DtoRepresent({
     transform: false,
-    expose: { name: 'publicationHash' }
+    expose: { name: 'publicationHash' },
   })
   publicationHash: string;
 
   @ApiProperty({ description: 'Required values cost for success acquire phase in ada' })
   @DtoRepresent({
     transform: false,
-    expose: { name: 'requireReservedCostAda' }
+    expose: { name: 'requireReservedCostAda' },
   })
   requireReservedCostAda: number;
 
   @ApiProperty({ description: 'Count of contributed assets  ' })
   @DtoRepresent({
     transform: false,
-    expose: { name: 'assetsCount' }
+    expose: { name: 'assetsCount' },
   })
   assetsCount: number;
 
   @ApiProperty({ description: 'Response with list of assets prices  ' })
   @DtoRepresent({
     transform: false,
-    expose: { name: 'assetsPrices' }
+    expose: { name: 'assetsPrices' },
   })
   assetsPrices?: any;
 
   @ApiProperty({ description: 'Max count of contributed count ' })
   @DtoRepresent({
     transform: false,
-    expose: { name: 'maxContributeAssets' }
+    expose: { name: 'maxContributeAssets' },
   })
   maxContributeAssets: number;
 
   @ApiProperty({ description: 'Required values cost for success acquire phase in usd' })
   @DtoRepresent({
     transform: false,
-    expose: { name: 'requireReservedCostUsd' }
+    expose: { name: 'requireReservedCostUsd' },
   })
   requireReservedCostUsd: number;
 
   @ApiProperty({ description: 'Valuation type', enum: ValueMethod, required: false })
   @DtoRepresent({
     transform: false,
-    expose: { name: 'valueMethod' }
+    expose: { name: 'valueMethod' },
   })
   valueMethod?: ValueMethod;
 
   @ApiProperty({ description: 'Contract address', required: false })
   @DtoRepresent({
     transform: false,
-    expose: { name: 'contractAddress' }
+    expose: { name: 'contractAddress' },
   })
   contractAddress: string;
 
   @ApiProperty({ description: 'Valuation currency', required: false })
   @DtoRepresent({
     transform: false,
-    expose: { name: 'valuationCurrency' }
+    expose: { name: 'valuationCurrency' },
   })
   valuationCurrency?: string;
 
   @ApiProperty({ description: 'Valuation amount', required: false })
   @DtoRepresent({
-    transform: ({ value }) => value ? Number(value) : null,
-    expose: { name: 'valuationAmount' }
+    transform: ({ value }) => (value ? Number(value) : null),
+    expose: { name: 'valuationAmount' },
   })
   valuationAmount?: number;
 
   @ApiProperty({ description: 'Contribution duration in milliseconds', required: false })
   @DtoRepresent({
-    transform: ({ value }) => value ? Number(value) : null,
-    expose: { name: 'contributionDuration' }
+    transform: ({ value }) => (value ? Number(value) : null),
+    expose: { name: 'contributionDuration' },
   })
   contributionDuration?: number;
 
   @ApiProperty({ description: 'Investment window duration in milliseconds', required: false })
   @DtoRepresent({
-    transform: ({ value }) => value ? Number(value) : null,
-    expose: { name: 'acquireWindowDuration' }
+    transform: ({ value }) => (value ? Number(value) : null),
+    expose: { name: 'acquireWindowDuration' },
   })
   acquireWindowDuration?: number;
 
   @ApiProperty({ description: 'Time elapsed duration in milliseconds', required: false })
   @DtoRepresent({
-    transform: ({ value }) => value ? Number(value) : null,
-    expose: { name: 'timeElapsedIsEqualToTime' }
+    transform: ({ value }) => (value ? Number(value) : null),
+    expose: { name: 'timeElapsedIsEqualToTime' },
   })
   timeElapsedIsEqualToTime?: number;
 
   @ApiProperty({ description: 'Contribution window type', enum: ContributionWindowType })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   contributionOpenWindowType: ContributionWindowType;
 
   @ApiProperty({ description: 'Contribution window time' })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   contributionOpenWindowTime: string;
 
   @ApiProperty({ description: 'Investment window type', enum: InvestmentWindowType })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   acquireOpenWindowType: InvestmentWindowType;
 
   @ApiProperty({ description: 'Investment window time' })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   acquireOpenWindowTime: string;
 
   @ApiProperty({ description: 'Number of assets offered' })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   tokensForAcquires: number;
 
   @ApiProperty({ description: 'FT acquire reserve' })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   acquireReserve: number;
 
   @ApiProperty({ description: 'Liquidity pool contribution' })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   liquidityPoolContribution: number;
 
   @ApiProperty({ description: 'FT token supply' })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   ftTokenSupply: number;
 
   @ApiProperty({ description: 'FT token ticker' })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   vaultTokenTicker: string;
 
   @ApiProperty({ description: 'FT token decimals' })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   ftTokenDecimals: number;
 
   @ApiProperty({ description: 'Termination type', enum: TerminationType })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   terminationType: TerminationType;
 
   @ApiProperty({ description: 'Vault appreciation' })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   vaultAppreciation: number;
 
   @ApiProperty({ description: 'Vault owner', type: () => User })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   owner: User;
 
   @ApiProperty({ description: 'Creation threshold', required: false })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   creationThreshold?: number;
 
   @ApiProperty({ description: 'Start threshold', required: false })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   startThreshold?: number;
 
   @ApiProperty({ description: 'Vote threshold', required: false })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   voteThreshold?: number;
 
   @ApiProperty({ description: 'Execution threshold', required: false })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   executionThreshold?: number;
 
   @ApiProperty({ description: 'Cosigning threshold', required: false })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   cosigningThreshold?: number;
 
   @ApiProperty({ description: 'Assets whitelist', type: [AssetsWhitelistEntity], required: false })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   assetsWhitelist?: AssetsWhitelistEntity[];
 
   @ApiProperty({ description: 'Acquirer whitelist', type: [AcquirerWhitelistEntity], required: false })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   acquirerWhitelist?: AcquirerWhitelistEntity[];
 
   @ApiProperty({ description: 'Contributor whitelist', type: [ContributorWhitelistEntity], required: false })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   contributorWhitelist?: ContributorWhitelistEntity[];
 
   @ApiProperty({ description: 'Assets', type: [Asset], required: false })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   assets?: Asset[];
 
   @ApiProperty({ description: 'Acquirer whitelist CSV file', required: false })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   acquirerWhitelistCsv?: FileEntity;
 
   @ApiProperty({ description: 'Tags', type: [TagEntity], required: false })
   @DtoRepresent({
     transform: false,
-    expose: true
+    expose: true,
   })
   tags?: TagEntity[];
 
   @ApiProperty({ description: 'Contribution phase start time', required: false })
   @DtoRepresent({
-    transform: ({ value }) => value ? new Date(value).toISOString() : null,
+    transform: ({ value }) => (value ? new Date(value).toISOString() : null),
     expose: {
-      name: 'contributionPhaseStart'
-    }
+      name: 'contributionPhaseStart',
+    },
   })
   contributionPhaseStart?: string;
 
   @ApiProperty({ description: 'Investment phase start time', required: false })
   @DtoRepresent({
-    transform: ({ value }) => value ? new Date(value).toISOString() : null,
-    expose: true
+    transform: ({ value }) => (value ? new Date(value).toISOString() : null),
+    expose: true,
   })
   acquirePhaseStart?: string;
 
   @ApiProperty({ description: 'Locked at time', required: false })
   @DtoRepresent({
-    transform: ({ value }) => value ? new Date(value).toISOString() : null,
-    expose: true
+    transform: ({ value }) => (value ? new Date(value).toISOString() : null),
+    expose: true,
   })
   lockedAt?: string;
 
   @ApiProperty({ description: 'Creation timestamp' })
   @DtoRepresent({
-    transform: ({ value }) => value ? new Date(value).toISOString() : null,
-    expose: true
+    transform: ({ value }) => (value ? new Date(value).toISOString() : null),
+    expose: true,
   })
   createdAt: string;
 
   @ApiProperty({ description: 'Last update timestamp' })
   @DtoRepresent({
-    transform: ({ value }) => value ? new Date(value).toISOString() : null,
-    expose: true
+    transform: ({ value }) => (value ? new Date(value).toISOString() : null),
+    expose: true,
   })
   updatedAt: string;
 }

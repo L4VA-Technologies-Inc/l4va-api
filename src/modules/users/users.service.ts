@@ -1,18 +1,19 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { classToPlain, plainToInstance } from 'class-transformer';
 import { Repository } from 'typeorm';
-import { User } from '../../database/user.entity';
+
 import { FileEntity } from '../../database/file.entity';
 import { LinkEntity } from '../../database/link.entity';
-import { UpdateProfileDto } from './dto/update-profile.dto';
-import { AwsService } from '../aws_bucket/aws.service';
-import {classToPlain, plainToInstance} from 'class-transformer';
+import { User } from '../../database/user.entity';
 import { transformImageToUrl } from '../../helpers';
-import {PublicProfileRes} from './dto/public-profile.res';
+import { AwsService } from '../aws_bucket/aws.service';
+
+import { PublicProfileRes } from './dto/public-profile.res';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 
 @Injectable()
 export class UsersService {
-
   private readonly logger = new Logger(UsersService.name);
   constructor(
     @InjectRepository(User)
@@ -21,24 +22,24 @@ export class UsersService {
     private filesRepository: Repository<FileEntity>,
     @InjectRepository(LinkEntity)
     private linksRepository: Repository<LinkEntity>,
-    private readonly awsService: AwsService,
+    private readonly awsService: AwsService
   ) {}
 
   async findByAddress(address: string): Promise<User | undefined> {
     return this.usersRepository.findOne({
       where: {
-        stake_address: address
+        stake_address: address,
       },
-      relations:['profile_image', 'banner_image', 'social_links']
+      relations: ['profile_image', 'banner_image', 'social_links'],
     });
   }
 
   async getPublicProfile(userId: string): Promise<any> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
-      relations: ['profile_image', 'banner_image', 'social_links']
+      relations: ['profile_image', 'banner_image', 'social_links'],
     });
-    this.logger.log('USER' , user);
+    this.logger.log('USER', user);
 
     if (!user) {
       throw new BadRequestException('User not found');
@@ -47,10 +48,10 @@ export class UsersService {
     // Calculate total_vaults from the vaults relation
     user.total_vaults = user.vaults?.length || 0;
 
-    const userSource =  {
+    const userSource = {
       ...user,
       banner_image: user.banner_image.file_url,
-      profile_image: user.profile_image.file_url
+      profile_image: user.profile_image.file_url,
     };
 
     // Transform to plain object and remove sensitive data
@@ -70,7 +71,7 @@ export class UsersService {
   async getProfile(userId: string): Promise<any> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
-      relations: ['profile_image', 'banner_image', 'social_links']
+      relations: ['profile_image', 'banner_image', 'social_links'],
     });
 
     if (!user) {
@@ -80,13 +81,13 @@ export class UsersService {
     // Calculate total_vaults from the vaults relation
     user.total_vaults = user.vaults?.length || 0;
     const plainedUsers = classToPlain(user);
-    return plainToInstance(PublicProfileRes, plainedUsers , { excludeExtraneousValues: true });
+    return plainToInstance(PublicProfileRes, plainedUsers, { excludeExtraneousValues: true });
   }
 
   async updateProfile(userId: string, updateData: UpdateProfileDto): Promise<User> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
-      relations: ['profile_image', 'banner_image', 'social_links']
+      relations: ['profile_image', 'banner_image', 'social_links'],
     });
 
     if (!user) {
@@ -107,7 +108,7 @@ export class UsersService {
       const profileImgKey = updateData.profileImage.split('image/')[1];
       if (profileImgKey) {
         const profileImg = await this.filesRepository.findOne({
-          where: { file_key: profileImgKey }
+          where: { file_key: profileImgKey },
         });
         if (profileImg) {
           user.profile_image = profileImg;
@@ -120,7 +121,7 @@ export class UsersService {
       const bannerImgKey = updateData.bannerImage.split('image/')[1];
       if (bannerImgKey) {
         const bannerImg = await this.filesRepository.findOne({
-          where: { file_key: bannerImgKey }
+          where: { file_key: bannerImgKey },
         });
         if (bannerImg) {
           user.banner_image = bannerImg;
@@ -140,7 +141,7 @@ export class UsersService {
         return this.linksRepository.save({
           user: user,
           name: linkData.name,
-          url: linkData.url
+          url: linkData.url,
         });
       });
     }
@@ -149,21 +150,24 @@ export class UsersService {
     selectedUser.banner_image = transformImageToUrl(selectedUser.banner_image as FileEntity) as any;
     selectedUser.profile_image = transformImageToUrl(selectedUser.profile_image as FileEntity) as any;
 
-    return classToPlain(selectedUser, { excludeExtraneousValues: true } ) as User;
+    return classToPlain(selectedUser, { excludeExtraneousValues: true }) as User;
   }
 
-  async updateUserAddress(userId: string, address: string){
-    await this.usersRepository.update({
-      id: userId}, {
-      address: address
-    });
+  async updateUserAddress(userId: string, address: string) {
+    await this.usersRepository.update(
+      {
+        id: userId,
+      },
+      {
+        address: address,
+      }
+    );
   }
-
 
   async uploadProfileImage(userId: string, file: Express.Multer.File, host: string): Promise<User> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
-      relations: ['profile_image']
+      relations: ['profile_image'],
     });
 
     if (!user) {
@@ -180,8 +184,8 @@ export class UsersService {
       file_type: file.mimetype,
       file_name: file.originalname,
       metadata: {
-        size: file.size
-      }
+        size: file.size,
+      },
     });
     await this.filesRepository.save(fileEntity);
 
@@ -193,7 +197,7 @@ export class UsersService {
   async uploadBannerImage(userId: string, file: Express.Multer.File, host: string): Promise<User> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
-      relations: ['banner_image']
+      relations: ['banner_image'],
     });
 
     if (!user) {
@@ -210,8 +214,8 @@ export class UsersService {
       file_type: file.mimetype,
       file_name: file.originalname,
       metadata: {
-        size: file.size
-      }
+        size: file.size,
+      },
     });
     await this.filesRepository.save(fileEntity);
 

@@ -1,9 +1,11 @@
 import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { GovernanceService } from './governance.service';
+
+import { AuthGuard } from '../../../auth/auth.guard';
+
 import { CreateProposalReq } from './dto/create-proposal.req';
 import { VoteReq } from './dto/vote.req';
-import { AuthGuard } from '../../../auth/auth.guard';
+import { GovernanceService } from './governance.service';
 
 @ApiTags('Governance')
 @Controller('governance')
@@ -14,11 +16,7 @@ export class GovernanceController {
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Create a new proposal' })
   @ApiResponse({ status: 201, description: 'Proposal created successfully' })
-  async createProposal(
-    @Req() req,
-    @Param('vaultId') vaultId: string,
-    @Body() createProposalReq: CreateProposalReq,
-  ) {
+  async createProposal(@Req() req, @Param('vaultId') vaultId: string, @Body() createProposalReq: CreateProposalReq) {
     const userId = req.user.sub;
     return this.governanceService.createProposal(vaultId, createProposalReq, userId);
   }
@@ -35,11 +33,7 @@ export class GovernanceController {
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Vote on a proposal' })
   @ApiResponse({ status: 201, description: 'Vote recorded successfully' })
-  async vote(
-    @Req() req,
-    @Param('proposalId') proposalId: string,
-    @Body() voteReq: VoteReq,
-  ) {
+  async vote(@Req() req, @Param('proposalId') proposalId: string, @Body() voteReq: VoteReq) {
     const userId = req.user.sub;
     return this.governanceService.vote(proposalId, voteReq, userId);
   }

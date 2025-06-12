@@ -1,23 +1,22 @@
-
 export enum TransactionStatus {
   created = 'created',
   pending = 'pending',
-  submitted ='submitted',
+  submitted = 'submitted',
   confirmed = 'confirmed',
   failed = 'failed',
-  stuck = 'stuck'
+  stuck = 'stuck',
 }
 
 export enum TransactionType {
   mint = 'mint',
   payment = 'payment',
-  contribute = 'contribute',  // Contains NFTs
-  acquire = 'acquire',  // Contains only lovelace (ADA)
+  contribute = 'contribute', // Contains NFTs
+  acquire = 'acquire', // Contains only lovelace (ADA)
   investment = 'investment',
-  burn ='burn',
+  burn = 'burn',
   swap = 'swap',
-  stake ='stake',
+  stake = 'stake',
   extractLp = 'extract-lp',
   distributeLp = 'distribute-lp',
-  updateVault = 'update-vault'  // Vault metadata update transaction
+  updateVault = 'update-vault', // Vault metadata update transaction
 }

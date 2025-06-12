@@ -36,7 +36,7 @@ export interface BlockchainTransactionResponse {
       amount: string;
     }>;
   }[];
-  output_amount?: {unit: string; quantity: string }[];
+  output_amount?: { unit: string; quantity: string }[];
   metadata?: any;
 }
 
