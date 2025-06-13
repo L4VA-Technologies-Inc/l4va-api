@@ -1,6 +1,6 @@
-import { IsNotEmpty, IsString, IsNumber, IsOptional } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
-import {Expose} from "class-transformer";
+import { Expose } from 'class-transformer';
+import { IsNotEmpty, IsString, IsNumber, IsOptional } from 'class-validator';
 
 export class ExtractLpTokensDto {
   @ApiProperty({ description: 'The ID of the vault to extract tokens from' })
@@ -23,7 +23,7 @@ export class ExtractLpTokensDto {
 
   @ApiProperty({
     description: 'Transaction hash (optional)',
-    required: false
+    required: false,
   })
   @IsString()
   @IsOptional()
@@ -33,7 +33,7 @@ export class ExtractLpTokensDto {
   @ApiProperty({
     description: 'Transaction index (optional)',
     required: false,
-    type: Number
+    type: Number,
   })
   @IsNumber()
   @IsOptional()
