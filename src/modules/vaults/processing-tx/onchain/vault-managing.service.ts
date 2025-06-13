@@ -82,7 +82,7 @@ export class VaultManagingService {
    * @param config Vault configuration parameters
    * @returns Transaction hash and vault ID
    */
-  async createOnChainVaultTx(vaultConfig: VaultCreateConfig): Promise<any> {
+  async createOnChainVaultTx(vaultConfig: VaultCreateConfig) {
     this.scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
       .to_address()
       .to_bech32();
@@ -276,6 +276,85 @@ export class VaultManagingService {
       presignedTx: txToSubmitOnChain.to_hex(),
       contractAddress: this.scAddress,
     };
+  }
+
+  // Create a transaction to update the vault's metadata
+  async updateVaultMetadataTx(vaultConfig: VaultConfig) {
+    this.scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
+      .to_address()
+      .to_bech32();
+    const vaultUtxo = await getVaultUtxo(this.scPolicyId, vaultConfig.vaultName, this.blockfrost);
+    const input = {
+      changeAddress: vaultConfig.customerAddress,
+      message: 'Vault Update',
+      scriptInteractions: [
+        {
+          purpose: 'spend',
+          outputRef: vaultUtxo,
+          hash: this.scPolicyId,
+          redeemer: {
+            type: 'json',
+            value: {
+              vault_token_index: 0, // must fit the ordering defined in the outputs array
+              asset_name: vaultConfig.vaultName,
+            },
+          },
+        },
+      ],
+      outputs: [
+        {
+          address: this.scAddress,
+          assets: [
+            {
+              assetName: vaultConfig.vaultName,
+              policyId: this.scPolicyId,
+              quantity: 1,
+            },
+          ],
+          datum: {
+            type: 'inline',
+            value: {
+              contract_type: vaultConfig.contractType, // Represent an enum setup by L4VA (0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE)
+              asset_whitelist: vaultConfig.allowedPolicies,
+              // contributor_whitelist: [],
+              asset_window: vaultConfig.assetWindow,
+              acquire_window: vaultConfig.acquireWindow,
+              valuation_type: vaultConfig.valueMethod, // Enum 0: 'FIXED' 1: 'LBE'
+              custom_metadata: vaultConfig.customMetadata || [],
+              admin: this.adminHash,
+              minting_key: this.adminHash,
+            },
+            shape: {
+              validatorHash: this.scPolicyId,
+              purpose: 'spend',
+            },
+          },
+        },
+      ],
+    };
+
+    try {
+      // Build the transaction using BlockchainService
+      const buildResponse = await this.blockchainService.buildTransaction(input);
+
+      // Sign the transaction
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+      // submit the transaction
+      await this.blockchainService.submitTransaction({
+        transaction: txToSubmitOnChain.to_hex(),
+        signatures: [this.adminSKey],
+      });
+
+      return {
+        presignedTx: txToSubmitOnChain.to_hex(),
+        contractAddress: this.scAddress,
+      };
+    } catch (error) {
+      this.logger.error('Failed to update vault metadata:', error);
+      throw error;
+    }
   }
 
   /**
