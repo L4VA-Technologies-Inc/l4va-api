@@ -1,6 +1,5 @@
 import * as crypto from 'crypto';
 
-import { verifyWebhookSignature, SignatureVerificationError } from '@blockfrost/blockfrost-js';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 

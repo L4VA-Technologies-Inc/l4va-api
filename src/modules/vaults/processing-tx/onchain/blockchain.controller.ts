@@ -69,7 +69,7 @@ export class BlockchainController {
     status: 401,
     description: 'Invalid webhook signature',
   })
-  async scannerWh(@Body() event: any, @Request() req): Promise<any> {
+  async scannerWh(@Body() event: any, @Request() _req) {
     try {
       await this.transactionService.handleScannerEvent(event);
 

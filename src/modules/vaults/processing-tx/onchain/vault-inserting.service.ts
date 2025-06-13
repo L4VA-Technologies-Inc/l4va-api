@@ -8,7 +8,7 @@ import {
   FixedTransaction,
   PrivateKey,
 } from '@emurgo/cardano-serialization-lib-nodejs';
-import { ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -17,7 +17,6 @@ import { Vault } from '../../../../database/vault.entity';
 import { TransactionStatus } from '../../../../types/transaction.types';
 import { TransactionsService } from '../offchain-tx/transactions.service';
 
-import { AnvilApiService } from './anvil-api.service';
 import { BlockchainScannerService } from './blockchain-scanner.service';
 import { BlockchainService } from './blockchain.service';
 import { SubmitTransactionDto } from './dto/transaction.dto';

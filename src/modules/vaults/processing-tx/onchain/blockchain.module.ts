@@ -25,9 +25,9 @@ import { WebhookVerificationService } from './webhook-verification.service';
   ],
   controllers: [BlockchainController],
   providers: [
+    AnvilApiService,
     BlockchainService,
     VaultInsertingService,
-    AnvilApiService,
     BlockchainScannerService,
     WebhookVerificationService,
     VaultManagingService,
@@ -35,9 +35,9 @@ import { WebhookVerificationService } from './webhook-verification.service';
   exports: [
     BlockchainService,
     VaultInsertingService,
+    BlockchainScannerService,
     WebhookVerificationService,
     VaultManagingService,
-    BlockchainScannerService,
   ],
 })
 export class BlockchainModule {}
