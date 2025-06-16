@@ -26,6 +26,8 @@ import { Datum } from './types/type';
 import { applyContributeParams, toPreloadedScript } from './utils/apply_params';
 import * as blueprint from './utils/blueprint.json';
 
+// Investment and Contribution
+
 export interface NftAsset {
   policyId: string;
   assetName: string;
