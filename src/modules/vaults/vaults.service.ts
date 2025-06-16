@@ -272,7 +272,7 @@ export class VaultsService {
       // Handle acquirer whitelist
       const acquirerFromCsv = acquirerWhitelistFile ? await this.parseCSVFromS3(acquirerWhitelistFile.file_key) : [];
 
-      const acquirer = data.acquirerWhitelist ? [...data.acquirerWhitelist?.map(item => item.walletAddress)] : [];
+      const acquirer = data.acquirerWhitelist ? [...data.acquirerWhitelist.map(item => item.walletAddress)] : [];
 
       const allAcquirer = new Set([...acquirer, ...acquirerFromCsv]);
 
@@ -696,7 +696,7 @@ export class VaultsService {
     return plainToInstance(VaultFullResponse, vault, { excludeExtraneousValues: true });
   }
 
-  async getVaultById(id: string, userId: string): Promise<VaultFullResponse> {
+  async getVaultById(id: string, _userId: string): Promise<VaultFullResponse> {
     const vault = await this.vaultsRepository.findOne({
       where: { id, deleted: false },
       relations: [
