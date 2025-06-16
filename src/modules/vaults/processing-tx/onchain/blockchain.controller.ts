@@ -11,6 +11,7 @@ import {
 } from './dto/transaction.dto';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
 import { VaultInsertingService } from './vault-inserting.service';
+import { VaultConfig, VaultManagingService } from './vault-managing.service';
 import { WebhookVerificationService } from './webhook-verification.service';
 
 @ApiTags('blockchain')
@@ -18,7 +19,8 @@ import { WebhookVerificationService } from './webhook-verification.service';
 export class BlockchainController {
   constructor(
     private readonly transactionService: VaultInsertingService,
-    private readonly webhookVerificationService: WebhookVerificationService
+    private readonly webhookVerificationService: WebhookVerificationService,
+    private readonly vaultManagingService: VaultManagingService
   ) {}
 
   @Post('transaction/build')
@@ -43,6 +45,21 @@ export class BlockchainController {
   async burnVault(@Request() req, @Body() data: any): Promise<any> {
     const userId = req.user.sub;
     return this.transactionService.handleBurnVault(userId, data.vaultId);
+  }
+
+  @Post('vault/update')
+  @ApiOperation({ summary: 'Update vault metadata' })
+  @ApiResponse({
+    status: 200,
+    description: 'Vault updated successfully',
+    type: Object,
+  })
+  @UseGuards(AuthGuard)
+  async updateVaultMetadata(@Body() params: VaultConfig): Promise<{
+    unsignedTx: string;
+    contractAddress: string;
+  }> {
+    return this.vaultManagingService.updateVaultMetadataTx(params);
   }
 
   @Post('transaction/submit')

@@ -82,7 +82,11 @@ export class VaultManagingService {
    * @param config Vault configuration parameters
    * @returns Transaction hash and vault ID
    */
-  async createOnChainVaultTx(vaultConfig: VaultCreateConfig) {
+  async createOnChainVaultTx(vaultConfig: VaultCreateConfig): Promise<{
+    presignedTx: string;
+    contractAddress: string;
+    vaultAssetName: string;
+  }> {
     this.scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
       .to_address()
       .to_bech32();
@@ -231,7 +235,10 @@ export class VaultManagingService {
     }
   }
 
-  async createBurnTx(burnConfig: { customerAddress: string; assetVaultName: string }) {
+  async createBurnTx(burnConfig: { customerAddress: string; assetVaultName: string }): Promise<{
+    presignedTx: string;
+    contractAddress: string;
+  }> {
     const vaultUtxo = await getVaultUtxo(this.scPolicyId, burnConfig.assetVaultName, this.blockfrost);
     const input = {
       changeAddress: burnConfig.customerAddress,
@@ -279,7 +286,10 @@ export class VaultManagingService {
   }
 
   // Create a transaction to update the vault's metadata
-  async updateVaultMetadataTx(vaultConfig: VaultConfig) {
+  async updateVaultMetadataTx(vaultConfig: VaultConfig): Promise<{
+    unsignedTx: string;
+    contractAddress: string;
+  }> {
     this.scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
       .to_address()
       .to_bech32();
@@ -337,22 +347,12 @@ export class VaultManagingService {
       // Build the transaction using BlockchainService
       const buildResponse = await this.blockchainService.buildTransaction(input);
 
-      // Sign the transaction
-      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
-
-      // submit the transaction
-      await this.blockchainService.submitTransaction({
-        transaction: txToSubmitOnChain.to_hex(),
-        signatures: [this.adminSKey],
-      });
-
       return {
-        presignedTx: txToSubmitOnChain.to_hex(),
+        unsignedTx: buildResponse.complete, // hex string
         contractAddress: this.scAddress,
       };
     } catch (error) {
-      this.logger.error('Failed to update vault metadata:', error);
+      this.logger.error('Failed to build vault update tx:', error);
       throw error;
     }
   }
@@ -362,7 +362,9 @@ export class VaultManagingService {
    * @param signedTx Object containing the transaction and signatures
    * @returns Transaction hash
    */
-  async submitOnChainVaultTx(signedTx: { transaction: string; signatures: string | string[] }) {
+  async submitOnChainVaultTx(signedTx: { transaction: string; signatures: string | string[] }): Promise<{
+    txHash: string;
+  }> {
     try {
       // Ensure signatures is always an array
       const signatures = Array.isArray(signedTx.signatures) ? signedTx.signatures : [signedTx.signatures];
