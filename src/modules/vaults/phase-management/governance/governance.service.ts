@@ -2,7 +2,7 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { Vault } from '../../../../database/vault.entity';
+import { Vault } from 'src/database/vault.entity';
 import { VaultStatus } from '../../../../types/vault.types';
 
 import { CreateProposalReq } from './dto/create-proposal.req';

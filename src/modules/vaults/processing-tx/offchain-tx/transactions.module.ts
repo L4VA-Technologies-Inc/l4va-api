@@ -1,9 +1,9 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { Asset } from '../../../../database/asset.entity';
-import { Transaction } from '../../../../database/transaction.entity';
-import { Vault } from '../../../../database/vault.entity';
+import { Asset } from 'src/database/asset.entity';
+import { Transaction } from 'src/database/transaction.entity';
+import { Vault } from 'src/database/vault.entity';
 
 import { TransactionsController } from './transactions.controller';
 import { TransactionsService } from './transactions.service';

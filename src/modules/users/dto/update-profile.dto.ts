@@ -1,8 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Expose, Type } from 'class-transformer';
-import { IsString, IsOptional, IsArray, ValidateNested, IsNumber, ArrayNotEmpty, IsObject } from 'class-validator';
-
-import { SocialLink } from '../../vaults/types';
+import { Expose } from 'class-transformer';
+import { IsString, IsOptional, IsArray, IsNumber, IsObject } from 'class-validator';
+import { SocialLink } from 'src/modules/vaults/types';
 
 export class SocialLinkDto {
   @ApiProperty({

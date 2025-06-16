@@ -1,8 +1,7 @@
 import { Global, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
-
-import { TaptoolsModule } from '../../taptools/taptools.module';
+import { TaptoolsModule } from 'src/modules/taptools/taptools.module';
 
 @Global()
 @Module({

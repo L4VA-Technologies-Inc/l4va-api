@@ -13,7 +13,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { Vault } from '../../../../database/vault.entity';
+import { Vault } from 'src/database/vault.entity';
 import { TransactionStatus } from '../../../../types/transaction.types';
 import { TransactionsService } from '../offchain-tx/transactions.service';
 

@@ -2,9 +2,9 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { Asset } from '../../../../database/asset.entity';
-import { Transaction } from '../../../../database/transaction.entity';
-import { Vault } from '../../../../database/vault.entity';
+import { Asset } from 'src/database/asset.entity';
+import { Transaction } from 'src/database/transaction.entity';
+import { Vault } from 'src/database/vault.entity';
 import { AssetStatus } from '../../../../types/asset.types';
 import { TransactionStatus, TransactionType } from '../../../../types/transaction.types';
 

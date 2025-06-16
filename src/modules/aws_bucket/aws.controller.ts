@@ -19,7 +19,8 @@ import { ApiTags } from '@nestjs/swagger';
 import { Express, Response, Request } from 'express';
 import { Multer } from 'multer';
 
-import { ApiDoc } from '../../decorators/api-doc.decorator';
+import { ApiDoc } from 'src/decorators/api-doc.decorator';
+
 import { AuthGuard } from '../auth/auth.guard';
 
 import { AwsService } from './aws.service';

@@ -3,7 +3,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { Vault } from '../../../../database/vault.entity';
+import { Vault } from 'src/database/vault.entity';
 import { TransactionsModule } from '../offchain-tx/transactions.module';
 
 import { AnvilApiService } from './anvil-api.service';

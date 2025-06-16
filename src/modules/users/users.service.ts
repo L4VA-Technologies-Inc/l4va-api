@@ -3,9 +3,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { classToPlain, plainToInstance } from 'class-transformer';
 import { Repository } from 'typeorm';
 
-import { FileEntity } from '../../database/file.entity';
-import { LinkEntity } from '../../database/link.entity';
-import { User } from '../../database/user.entity';
+import { FileEntity } from 'src/database/file.entity';
+import { LinkEntity } from 'src/database/link.entity';
+import { User } from 'src/database/user.entity';
 import { transformImageToUrl } from '../../helpers';
 import { AwsService } from '../aws_bucket/aws.service';
 
