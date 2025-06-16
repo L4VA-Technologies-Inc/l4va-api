@@ -286,13 +286,11 @@ export class VaultManagingService {
   }
 
   // Create a transaction to update the vault's metadata
-  async updateVaultMetadataTx(vaultConfig: VaultConfig): Promise<{
-    unsignedTx: string;
-    contractAddress: string;
-  }> {
+  async updateVaultMetadataTx(vaultConfig: VaultConfig) {
     this.scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
       .to_address()
       .to_bech32();
+
     const vaultUtxo = await getVaultUtxo(this.scPolicyId, vaultConfig.vaultName, this.blockfrost);
     const input = {
       changeAddress: vaultConfig.customerAddress,
@@ -347,8 +345,11 @@ export class VaultManagingService {
       // Build the transaction using BlockchainService
       const buildResponse = await this.blockchainService.buildTransaction(input);
 
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
       return {
-        unsignedTx: buildResponse.complete, // hex string
+        presignedTx: txToSubmitOnChain.to_hex(),
         contractAddress: this.scAddress,
       };
     } catch (error) {

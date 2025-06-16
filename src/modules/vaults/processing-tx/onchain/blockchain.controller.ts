@@ -55,10 +55,7 @@ export class BlockchainController {
     type: Object,
   })
   @UseGuards(AuthGuard)
-  async updateVaultMetadata(@Body() params: VaultConfig): Promise<{
-    unsignedTx: string;
-    contractAddress: string;
-  }> {
+  async updateVaultMetadata(@Body() params: VaultConfig) {
     return this.vaultManagingService.updateVaultMetadataTx(params);
   }
 
