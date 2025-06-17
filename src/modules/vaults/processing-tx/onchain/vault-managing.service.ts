@@ -82,7 +82,11 @@ export class VaultManagingService {
    * @param config Vault configuration parameters
    * @returns Transaction hash and vault ID
    */
-  async createOnChainVaultTx(vaultConfig: VaultCreateConfig): Promise<any> {
+  async createOnChainVaultTx(vaultConfig: VaultCreateConfig): Promise<{
+    presignedTx: string;
+    contractAddress: string;
+    vaultAssetName: string;
+  }> {
     this.scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
       .to_address()
       .to_bech32();
@@ -171,7 +175,7 @@ export class VaultManagingService {
                     is_inclusive: true,
                   },
                   upper_bound: {
-                    bound_type: new Date().getTime()  + one_day,
+                    bound_type: new Date().getTime() + one_day,
                     is_inclusive: true,
                   },
                 },
@@ -231,7 +235,10 @@ export class VaultManagingService {
     }
   }
 
-  async createBurnTx(burnConfig: { customerAddress: string; assetVaultName: string }) {
+  async createBurnTx(burnConfig: { customerAddress: string; assetVaultName: string }): Promise<{
+    presignedTx: string;
+    contractAddress: string;
+  }> {
     const vaultUtxo = await getVaultUtxo(this.scPolicyId, burnConfig.assetVaultName, this.blockfrost);
     const input = {
       changeAddress: burnConfig.customerAddress,
@@ -278,12 +285,87 @@ export class VaultManagingService {
     };
   }
 
+  // Create a transaction to update the vault's metadata
+  async updateVaultMetadataTx(vaultConfig: VaultConfig) {
+    this.scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
+      .to_address()
+      .to_bech32();
+
+    const vaultUtxo = await getVaultUtxo(this.scPolicyId, vaultConfig.vaultName, this.blockfrost);
+    const input = {
+      changeAddress: vaultConfig.customerAddress,
+      message: 'Vault Update',
+      scriptInteractions: [
+        {
+          purpose: 'spend',
+          outputRef: vaultUtxo,
+          hash: this.scPolicyId,
+          redeemer: {
+            type: 'json',
+            value: {
+              vault_token_index: 0, // must fit the ordering defined in the outputs array
+              asset_name: vaultConfig.vaultName,
+            },
+          },
+        },
+      ],
+      outputs: [
+        {
+          address: this.scAddress,
+          assets: [
+            {
+              assetName: vaultConfig.vaultName,
+              policyId: this.scPolicyId,
+              quantity: 1,
+            },
+          ],
+          datum: {
+            type: 'inline',
+            value: {
+              contract_type: vaultConfig.contractType, // Represent an enum setup by L4VA (0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE)
+              asset_whitelist: vaultConfig.allowedPolicies,
+              // contributor_whitelist: [],
+              asset_window: vaultConfig.assetWindow,
+              acquire_window: vaultConfig.acquireWindow,
+              valuation_type: vaultConfig.valueMethod, // Enum 0: 'FIXED' 1: 'LBE'
+              custom_metadata: vaultConfig.customMetadata || [],
+              admin: this.adminHash,
+              minting_key: this.adminHash,
+            },
+            shape: {
+              validatorHash: this.scPolicyId,
+              purpose: 'spend',
+            },
+          },
+        },
+      ],
+    };
+
+    try {
+      // Build the transaction using BlockchainService
+      const buildResponse = await this.blockchainService.buildTransaction(input);
+
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+      return {
+        presignedTx: txToSubmitOnChain.to_hex(),
+        contractAddress: this.scAddress,
+      };
+    } catch (error) {
+      this.logger.error('Failed to build vault update tx:', error);
+      throw error;
+    }
+  }
+
   /**
    * Submit a signed vault transaction to the blockchain
    * @param signedTx Object containing the transaction and signatures
    * @returns Transaction hash
    */
-  async submitOnChainVaultTx(signedTx: { transaction: string; signatures: string | string[] }) {
+  async submitOnChainVaultTx(signedTx: { transaction: string; signatures: string | string[] }): Promise<{
+    txHash: string;
+  }> {
     try {
       // Ensure signatures is always an array
       const signatures = Array.isArray(signedTx.signatures) ? signedTx.signatures : [signedTx.signatures];

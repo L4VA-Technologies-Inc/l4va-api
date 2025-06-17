@@ -39,13 +39,14 @@ export default tseslint.config(
       'prettier/prettier': [
         'error',
         {
-          semi: true,
           singleQuote: true,
-          tabWidth: 2,
           trailingComma: 'es5',
           printWidth: 120,
-          bracketSpacing: true,
+          tabWidth: 2,
+          semi: true,
           arrowParens: 'avoid',
+          endOfLine: 'lf',
+          bracketSpacing: true
         },
       ],
       '@typescript-eslint/explicit-function-return-type': 'warn',

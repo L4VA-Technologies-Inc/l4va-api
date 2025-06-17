@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, Param, Request, UseGuards, Query, Delete, Logger } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Request, UseGuards, Query, Logger } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 
 import { ApiDoc } from '../../decorators/api-doc.decorator';

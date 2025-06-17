@@ -2,7 +2,7 @@ import { setTimeout } from 'timers/promises';
 
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import axios, { AxiosError } from 'axios';
+import axios from 'axios';
 
 import {
   BlockchainTransactionResponse,

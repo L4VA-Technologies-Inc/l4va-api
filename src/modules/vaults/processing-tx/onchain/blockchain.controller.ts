@@ -1,7 +1,6 @@
 import { Body, Controller, Post, UseGuards, HttpCode, Request, UnauthorizedException } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-
-import { AuthGuard } from '../../../auth/auth.guard';
+import { AuthGuard } from '@/modules/auth/auth.guard';
 
 import {
   BuildTransactionDto,
@@ -11,6 +10,7 @@ import {
 } from './dto/transaction.dto';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
 import { VaultInsertingService } from './vault-inserting.service';
+import { VaultConfig, VaultManagingService } from './vault-managing.service';
 import { WebhookVerificationService } from './webhook-verification.service';
 
 @ApiTags('blockchain')
@@ -18,7 +18,8 @@ import { WebhookVerificationService } from './webhook-verification.service';
 export class BlockchainController {
   constructor(
     private readonly transactionService: VaultInsertingService,
-    private readonly webhookVerificationService: WebhookVerificationService
+    private readonly webhookVerificationService: WebhookVerificationService,
+    private readonly vaultManagingService: VaultManagingService
   ) {}
 
   @Post('transaction/build')
@@ -45,6 +46,18 @@ export class BlockchainController {
     return this.transactionService.handleBurnVault(userId, data.vaultId);
   }
 
+  @Post('vault/update')
+  @ApiOperation({ summary: 'Update vault metadata' })
+  @ApiResponse({
+    status: 200,
+    description: 'Vault updated successfully',
+    type: Object,
+  })
+  @UseGuards(AuthGuard)
+  async updateVaultMetadata(@Body() params: VaultConfig) {
+    return this.vaultManagingService.updateVaultMetadataTx(params);
+  }
+
   @Post('transaction/submit')
   @ApiOperation({ summary: 'Submit a signed Cardano transaction' })
   @ApiResponse({
@@ -69,7 +82,7 @@ export class BlockchainController {
     status: 401,
     description: 'Invalid webhook signature',
   })
-  async scannerWh(@Body() event: any, @Request() req): Promise<any> {
+  async scannerWh(@Body() event: any, @Request() _req) {
     try {
       await this.transactionService.handleScannerEvent(event);
 

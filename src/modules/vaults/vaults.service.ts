@@ -1,30 +1,30 @@
 import { Credential, EnterpriseAddress, ScriptHash } from '@emurgo/cardano-serialization-lib-nodejs';
+import { transformToSnakeCase } from '@helpers';
 import { BadRequestException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { classToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
-import { Brackets, In, Repository } from 'typeorm';
-
-import { AcquirerWhitelistEntity } from '../../database/acquirerWhitelist.entity';
-import { Asset } from '../../database/asset.entity';
-import { AssetsWhitelistEntity } from '../../database/assetsWhitelist.entity';
-import { ContributorWhitelistEntity } from '../../database/contributorWhitelist.entity';
-import { FileEntity } from '../../database/file.entity';
-import { LinkEntity } from '../../database/link.entity';
-import { TagEntity } from '../../database/tag.entity';
-import { User } from '../../database/user.entity';
-import { Vault } from '../../database/vault.entity';
-import { transformToSnakeCase } from '../../helpers';
-import { AssetOriginType, AssetStatus, AssetType } from '../../types/asset.types';
-import { TransactionType } from '../../types/transaction.types';
+import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
+import { Asset } from '@/database/asset.entity';
+import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
+import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
+import { FileEntity } from '@/database/file.entity';
+import { LinkEntity } from '@/database/link.entity';
+import { TagEntity } from '@/database/tag.entity';
+import { User } from '@/database/user.entity';
+import { Vault } from '@/database/vault.entity';
+import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
+import { TransactionType } from '@/types/transaction.types';
 import {
   ContributionWindowType,
   InvestmentWindowType,
   ValueMethod,
   VaultPrivacy,
   VaultStatus,
-} from '../../types/vault.types';
+} from '@/types/vault.types';
+import { Brackets, In, Repository } from 'typeorm';
+
 import { AwsService } from '../aws_bucket/aws.service';
 import { TaptoolsService } from '../taptools/taptools.service';
 
@@ -272,7 +272,7 @@ export class VaultsService {
       // Handle acquirer whitelist
       const acquirerFromCsv = acquirerWhitelistFile ? await this.parseCSVFromS3(acquirerWhitelistFile.file_key) : [];
 
-      const acquirer = data.acquirerWhitelist ? [...data.acquirerWhitelist?.map(item => item.walletAddress)] : [];
+      const acquirer = data.acquirerWhitelist ? [...data.acquirerWhitelist.map(item => item.walletAddress)] : [];
 
       const allAcquirer = new Set([...acquirer, ...acquirerFromCsv]);
 
@@ -696,7 +696,7 @@ export class VaultsService {
     return plainToInstance(VaultFullResponse, vault, { excludeExtraneousValues: true });
   }
 
-  async getVaultById(id: string, userId: string): Promise<VaultFullResponse> {
+  async getVaultById(id: string, _userId: string): Promise<VaultFullResponse> {
     const vault = await this.vaultsRepository.findOne({
       where: { id, deleted: false },
       relations: [
@@ -733,7 +733,7 @@ export class VaultsService {
 
     // todo for calculate how much ada already invested we need to select assets with INVESTED origin type.
     // todo and here we got how much invested now
-    const investedAssetsPrice = await this.taptoolsService.calculateVaultAssetsValue(id, 'acquire');
+    // const investedAssetsPrice = await this.taptoolsService.calculateVaultAssetsValue(id, 'acquire');
 
     // Create a new plain object with the additional properties
     const additionalData = {

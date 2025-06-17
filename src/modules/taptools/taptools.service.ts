@@ -1,12 +1,12 @@
-import { Injectable, HttpException, Logger, NotFoundException, Inject } from '@nestjs/common';
+import { Injectable, HttpException, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import axios from 'axios';
 import * as NodeCache from 'node-cache';
+import { Asset } from '@/database/asset.entity';
+import { Vault } from '@/database/vault.entity';
+import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { Repository } from 'typeorm';
 
-import { Asset } from '../../database/asset.entity';
-import { Vault } from '../../database/vault.entity';
-import { AssetOriginType, AssetStatus, AssetType } from '../../types/asset.types';
 import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
 
 import { AssetValueDto } from './dto/asset-value.dto';

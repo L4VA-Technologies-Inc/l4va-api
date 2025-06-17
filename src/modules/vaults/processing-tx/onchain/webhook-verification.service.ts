@@ -1,8 +1,11 @@
 import * as crypto from 'crypto';
 
-import { verifyWebhookSignature, SignatureVerificationError } from '@blockfrost/blockfrost-js';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+
+// TODO: refactor or remove this service. Webhook verification is not used in the current implementation.
+// It was initially intended to verify Blockfrost webhook signatures, but the current setup does not utilize webhooks.
+// Used scanner service instead for processing transactions and events.
 
 @Injectable()
 export class WebhookVerificationService {

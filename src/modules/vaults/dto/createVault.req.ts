@@ -14,10 +14,8 @@ import {
   MinLength,
   Min,
   Max,
-  ValidateNested,
   ValidateIf,
 } from 'class-validator';
-
 import {
   ContributionWindowType,
   InvestmentWindowType,
@@ -25,7 +23,8 @@ import {
   ValueMethod,
   VaultPrivacy,
   VaultType,
-} from '../../../types/vault.types';
+} from '@/types/vault.types';
+
 import { AcquirerWhitelist, ContributorWhitelist, SocialLink, AcquirerWhitelistCsv } from '../types';
 
 import { AssetWhitelistDto } from './assetWhitelist.dto';

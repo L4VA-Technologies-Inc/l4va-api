@@ -2,7 +2,7 @@ import { forwardRef, Module } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { Vault } from '../../../../database/vault.entity';
+import { Vault } from '@/database/vault.entity';
 import { BlockchainModule } from '../../processing-tx/onchain/blockchain.module';
 import { VaultsModule } from '../../vaults.module';
 import { ContributionModule } from '../contribution/contribution.module';

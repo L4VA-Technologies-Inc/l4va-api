@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { Vault } from '../../../../database/vault.entity';
+import { Vault } from '@/database/vault.entity';
 
 import { GovernanceController } from './governance.controller';
 import { GovernanceService } from './governance.service';

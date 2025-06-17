@@ -3,7 +3,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { Vault } from '../../../../database/vault.entity';
+import { Vault } from '@/database/vault.entity';
 import { TransactionsModule } from '../offchain-tx/transactions.module';
 
 import { AnvilApiService } from './anvil-api.service';
@@ -25,9 +25,9 @@ import { WebhookVerificationService } from './webhook-verification.service';
   ],
   controllers: [BlockchainController],
   providers: [
+    AnvilApiService,
     BlockchainService,
     VaultInsertingService,
-    AnvilApiService,
     BlockchainScannerService,
     WebhookVerificationService,
     VaultManagingService,
@@ -35,9 +35,9 @@ import { WebhookVerificationService } from './webhook-verification.service';
   exports: [
     BlockchainService,
     VaultInsertingService,
+    BlockchainScannerService,
     WebhookVerificationService,
     VaultManagingService,
-    BlockchainScannerService,
   ],
 })
 export class BlockchainModule {}

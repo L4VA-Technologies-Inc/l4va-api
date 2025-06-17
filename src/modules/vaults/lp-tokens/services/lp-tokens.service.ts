@@ -13,11 +13,11 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
+import { Transaction } from '@/database/transaction.entity';
+import { Vault } from '@/database/vault.entity';
+import { TransactionType } from '@/types/transaction.types';
 import { Repository } from 'typeorm';
 
-import { Transaction } from '../../../../database/transaction.entity';
-import { Vault } from '../../../../database/vault.entity';
-import { TransactionType, TransactionStatus } from '../../../../types/transaction.types';
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
 import { BlockchainScannerService } from '../../processing-tx/onchain/blockchain-scanner.service';
 import { BlockchainService } from '../../processing-tx/onchain/blockchain.service';

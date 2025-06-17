@@ -1,8 +1,8 @@
 import { Controller, Get, Query, Param, Request, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { ApiDoc } from '@/decorators/api-doc.decorator';
+import { AuthGuard } from '@/modules/auth/auth.guard';
 
-import { ApiDoc } from '../../../../decorators/api-doc.decorator';
-import { AuthGuard } from '../../../auth/auth.guard';
 import { PaginationDto } from '../../dto/pagination.dto';
 
 import { AssetsService } from './assets.service';

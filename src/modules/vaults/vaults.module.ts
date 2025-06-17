@@ -1,15 +1,15 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { AcquirerWhitelistEntity } from '../../database/acquirerWhitelist.entity';
-import { Asset } from '../../database/asset.entity';
-import { AssetsWhitelistEntity } from '../../database/assetsWhitelist.entity';
-import { ContributorWhitelistEntity } from '../../database/contributorWhitelist.entity';
-import { FileEntity } from '../../database/file.entity';
-import { LinkEntity } from '../../database/link.entity';
-import { TagEntity } from '../../database/tag.entity';
-import { User } from '../../database/user.entity';
-import { Vault } from '../../database/vault.entity';
+import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
+import { Asset } from '@/database/asset.entity';
+import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
+import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
+import { FileEntity } from '@/database/file.entity';
+import { LinkEntity } from '@/database/link.entity';
+import { TagEntity } from '@/database/tag.entity';
+import { User } from '@/database/user.entity';
+import { Vault } from '@/database/vault.entity';
 import { AwsModule } from '../aws_bucket/aws.module';
 
 import { DraftVaultsService } from './draft-vaults.service';
