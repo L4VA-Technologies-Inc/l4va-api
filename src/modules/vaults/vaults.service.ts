@@ -1,5 +1,5 @@
 import { Credential, EnterpriseAddress, ScriptHash } from '@emurgo/cardano-serialization-lib-nodejs';
-import { transformToSnakeCase } from '@helpers';
+import { transformToSnakeCase } from '@/helpers';
 import { BadRequestException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';

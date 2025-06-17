@@ -2,7 +2,7 @@ import { Buffer } from 'buffer';
 
 import { COSESign1, COSEKey, Label, Int, BigNum } from '@emurgo/cardano-message-signing-nodejs';
 import { Ed25519Signature, PublicKey, Address, RewardAddress } from '@emurgo/cardano-serialization-lib-nodejs';
-import { transformImageToUrl } from '@helpers';
+import { transformImageToUrl } from '@/helpers';
 import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { generateUsername } from 'unique-username-generator';

@@ -9,7 +9,7 @@ export class RenameFields1746536544579 implements MigrationInterface {
     await queryRunner.query(`ALTER TABLE "vault_tags" DROP CONSTRAINT "FK_2b3fd4667b2be7a2d7a329083cc"`);
     await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN "valuation_type"`);
     await queryRunner.query(`DROP TYPE "public"."vaults_valuation_type_enum"`);
-    await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN "off_assets_offered"`);
+    await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN IF EXIST "off_assets_offered"`);
     await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN "ft_token_ticker"`);
     await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN "ft_acquire_reserve"`);
     await queryRunner.query(`CREATE TYPE "public"."vaults_value_method_enum" AS ENUM('lbe', 'fixed')`);
