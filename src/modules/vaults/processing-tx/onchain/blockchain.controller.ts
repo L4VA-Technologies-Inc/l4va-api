@@ -1,6 +1,6 @@
 import { Body, Controller, Post, UseGuards, HttpCode, Request, UnauthorizedException } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { AuthGuard } from 'src/modules/auth/auth.guard';
+import { AuthGuard } from '@/modules/auth/auth.guard';
 
 import {
   BuildTransactionDto,

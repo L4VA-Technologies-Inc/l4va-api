@@ -1,6 +1,6 @@
 import { Controller, Post, Body, UseGuards, BadRequestException, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
-import { AuthGuard } from 'src/modules/auth/auth.guard';
+import { AuthGuard } from '@/modules/auth/auth.guard';
 
 import { ExtractLpTokensDto } from './dto/extract-lp-tokens.dto';
 import { LpTokensService } from './services/lp-tokens.service';

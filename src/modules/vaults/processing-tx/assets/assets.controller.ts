@@ -1,7 +1,7 @@
 import { Controller, Get, Query, Param, Request, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { ApiDoc } from 'src/decorators/api-doc.decorator';
-import { AuthGuard } from 'src/modules/auth/auth.guard';
+import { ApiDoc } from '@/decorators/api-doc.decorator';
+import { AuthGuard } from '@/modules/auth/auth.guard';
 
 import { PaginationDto } from '../../dto/pagination.dto';
 

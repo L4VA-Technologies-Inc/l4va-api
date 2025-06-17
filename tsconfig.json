@@ -20,14 +20,7 @@
     "resolveJsonModule": true,
     "types": ["node"],
     "paths": {
-      "@app": ["./src/app"],
-      "@common": ["./src/common"],
-      "@config": ["./src/config"],
-      "@database": ["./src/database"],
-      "@decorators": ["./src/decorators"],
-      "@helpers": ["./src/helpers"],
-      "@modules": ["./src/modules"],
-      "@types": ["./src/types"]
-    }
+      "@/*": ["./src/*"],
+    },
   }
 }

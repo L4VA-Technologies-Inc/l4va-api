@@ -9,7 +9,7 @@ import * as csv from 'csv-parse';
 import { Repository } from 'typeorm';
 import { v4 as uuid } from 'uuid';
 
-import { FileEntity } from 'src/database/file.entity';
+import { FileEntity } from '@/database/file.entity';
 
 @Injectable()
 export class AwsService {

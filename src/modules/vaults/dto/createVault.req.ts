@@ -23,7 +23,7 @@ import {
   ValueMethod,
   VaultPrivacy,
   VaultType,
-} from 'src/types/vault.types';
+} from '@/types/vault.types';
 
 import { AcquirerWhitelist, ContributorWhitelist, SocialLink, AcquirerWhitelistCsv } from '../types';
 

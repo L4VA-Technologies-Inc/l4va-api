@@ -1,13 +1,13 @@
 import { ApiProperty } from '@nestjs/swagger';
 
-import { AcquirerWhitelistEntity } from 'src/database/acquirerWhitelist.entity';
-import { Asset } from 'src/database/asset.entity';
-import { AssetsWhitelistEntity } from 'src/database/assetsWhitelist.entity';
-import { ContributorWhitelistEntity } from 'src/database/contributorWhitelist.entity';
-import { FileEntity } from 'src/database/file.entity';
-import { LinkEntity } from 'src/database/link.entity';
-import { TagEntity } from 'src/database/tag.entity';
-import { User } from 'src/database/user.entity';
+import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
+import { Asset } from '@/database/asset.entity';
+import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
+import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
+import { FileEntity } from '@/database/file.entity';
+import { LinkEntity } from '@/database/link.entity';
+import { TagEntity } from '@/database/tag.entity';
+import { User } from '@/database/user.entity';
 import { DtoRepresent } from '../../../decorators/dto-represents.decorator';
 import {
   VaultPrivacy,

@@ -3,7 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { Vault } from 'src/database/vault.entity';
+import { Vault } from '@/database/vault.entity';
 import { AssetOriginType, AssetStatus, AssetType } from '../../../../types/asset.types';
 import { VaultStatus, ContributionWindowType, InvestmentWindowType } from '../../../../types/vault.types';
 import { TaptoolsService } from '../../../taptools/taptools.service';

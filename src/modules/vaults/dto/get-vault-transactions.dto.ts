@@ -1,7 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose } from 'class-transformer';
 import { IsEnum, IsOptional } from 'class-validator';
-import { TransactionStatus, TransactionType } from 'src/types/transaction.types';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
 export class GetVaultTransactionsDto {
   @ApiProperty({

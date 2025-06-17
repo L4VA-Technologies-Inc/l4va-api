@@ -13,9 +13,9 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Transaction } from 'src/database/transaction.entity';
-import { Vault } from 'src/database/vault.entity';
-import { TransactionType } from 'src/types/transaction.types';
+import { Transaction } from '@/database/transaction.entity';
+import { Vault } from '@/database/vault.entity';
+import { TransactionType } from '@/types/transaction.types';
 import { Repository } from 'typeorm';
 
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';

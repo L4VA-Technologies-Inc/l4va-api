@@ -1,6 +1,6 @@
 import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { ApiDoc } from 'src/decorators/api-doc.decorator';
+import { ApiDoc } from '@/decorators/api-doc.decorator';
 
 import { AuthService } from './auth.service';
 import { LoginReq } from './dto/login.req';

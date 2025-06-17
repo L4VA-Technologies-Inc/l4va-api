@@ -1,4 +1,4 @@
-import { Transaction } from 'src/database/transaction.entity';
+import { Transaction } from '@/database/transaction.entity';
 
 export interface LpTokenOperationResult {
   success: boolean;

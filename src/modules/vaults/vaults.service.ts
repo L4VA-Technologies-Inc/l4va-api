@@ -5,24 +5,24 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { classToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
-import { AcquirerWhitelistEntity } from 'src/database/acquirerWhitelist.entity';
-import { Asset } from 'src/database/asset.entity';
-import { AssetsWhitelistEntity } from 'src/database/assetsWhitelist.entity';
-import { ContributorWhitelistEntity } from 'src/database/contributorWhitelist.entity';
-import { FileEntity } from 'src/database/file.entity';
-import { LinkEntity } from 'src/database/link.entity';
-import { TagEntity } from 'src/database/tag.entity';
-import { User } from 'src/database/user.entity';
-import { Vault } from 'src/database/vault.entity';
-import { AssetOriginType, AssetStatus, AssetType } from 'src/types/asset.types';
-import { TransactionType } from 'src/types/transaction.types';
+import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
+import { Asset } from '@/database/asset.entity';
+import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
+import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
+import { FileEntity } from '@/database/file.entity';
+import { LinkEntity } from '@/database/link.entity';
+import { TagEntity } from '@/database/tag.entity';
+import { User } from '@/database/user.entity';
+import { Vault } from '@/database/vault.entity';
+import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
+import { TransactionType } from '@/types/transaction.types';
 import {
   ContributionWindowType,
   InvestmentWindowType,
   ValueMethod,
   VaultPrivacy,
   VaultStatus,
-} from 'src/types/vault.types';
+} from '@/types/vault.types';
 import { Brackets, In, Repository } from 'typeorm';
 
 import { AwsService } from '../aws_bucket/aws.service';

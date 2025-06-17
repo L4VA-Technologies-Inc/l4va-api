@@ -2,10 +2,10 @@ import { BadRequestException, Inject, Injectable, Logger, NotFoundException, for
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { Asset } from 'src/database/asset.entity';
-import { Transaction } from 'src/database/transaction.entity';
-import { User } from 'src/database/user.entity';
-import { Vault } from 'src/database/vault.entity';
+import { Asset } from '@/database/asset.entity';
+import { Transaction } from '@/database/transaction.entity';
+import { User } from '@/database/user.entity';
+import { Vault } from '@/database/vault.entity';
 import { AssetStatus, AssetType, AssetOriginType } from '../../../../types/asset.types';
 import { BlockchainTransactionResponse, BlockchainTransactionListItem } from '../../../../types/blockchain.types';
 import { TransactionStatus, TransactionType } from '../../../../types/transaction.types';

@@ -1,9 +1,9 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { FileEntity } from 'src/database/file.entity';
-import { LinkEntity } from 'src/database/link.entity';
-import { User } from 'src/database/user.entity';
+import { FileEntity } from '@/database/file.entity';
+import { LinkEntity } from '@/database/link.entity';
+import { User } from '@/database/user.entity';
 import { AwsModule } from '../aws_bucket/aws.module';
 
 import { UsersController } from './users.controller';

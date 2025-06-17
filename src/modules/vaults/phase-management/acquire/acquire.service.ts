@@ -1,11 +1,11 @@
 import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Asset } from 'src/database/asset.entity';
-import { User } from 'src/database/user.entity';
-import { Vault } from 'src/database/vault.entity';
-import { AssetType, AssetStatus, AssetOriginType } from 'src/types/asset.types';
-import { TransactionType } from 'src/types/transaction.types';
-import { VaultStatus } from 'src/types/vault.types';
+import { Asset } from '@/database/asset.entity';
+import { User } from '@/database/user.entity';
+import { Vault } from '@/database/vault.entity';
+import { AssetType, AssetStatus, AssetOriginType } from '@/types/asset.types';
+import { TransactionType } from '@/types/transaction.types';
+import { VaultStatus } from '@/types/vault.types';
 import { Repository } from 'typeorm';
 
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
