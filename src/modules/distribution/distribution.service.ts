@@ -28,7 +28,7 @@ export class DistributionService {
   ) {}
 
   private round6(amount: number): number {
-    return Math.floor(amount * 1e6) / 1e6;
+    return Math.round(amount * 1e6) / 1e6;
   }
 
   private calculateAcquireAdaValuation(adaSent: number): number {
@@ -45,41 +45,6 @@ export class DistributionService {
 
   private calculateTotalValueRetained(netAda: number, vtAda: number, lpAda: number, lpVtAda: number): number {
     return this.round6(netAda + vtAda + lpAda + lpVtAda);
-  }
-
-  calculateNetAdaAfterLp(adaSent: number): number {
-    return this.round6(adaSent - this.liquidityPoolService.calculateLpAda(adaSent));
-  }
-
-  calculateLpMarketcapRatio(lpAda: number, adaValuation: number): number {
-    return this.round6((lpAda * 2) / adaValuation);
-  }
-
-  calculateVtAvailableToAcquirers(lpVt: number): number {
-    return this.VT_SUPPLY - lpVt;
-  }
-
-  calculateVtForAcquirer(vtAvailable: number, adaPortionPercent: number): number {
-    return this.round6(vtAvailable * adaPortionPercent);
-  }
-
-  calculateContributorAdaShare(assetValue: number, totalAssetTVL: number, netAdaProceeds: number): number {
-    return this.round6((assetValue / totalAssetTVL) * netAdaProceeds);
-  }
-
-  calculateContributorVtShare(assetValue: number, totalAssetTVL: number, vtAvailable: number): number {
-    return this.round6((assetValue / totalAssetTVL) * vtAvailable);
-  }
-
-  calculateLockMetrics({ adaSent, assetTVL }: { adaSent: number; assetTVL: number }): {
-    adaValuation: number;
-    lockSuccess: boolean;
-    vtPrice: number;
-  } {
-    const adaValuation = this.calculateAcquireAdaValuation(adaSent);
-    const lockSuccess = this.checkLockStatus(adaValuation, assetTVL);
-    const vtPrice = this.calculateVtPrice(adaSent);
-    return { adaValuation, lockSuccess, vtPrice };
   }
 
   calculateContributorExample(params: {
