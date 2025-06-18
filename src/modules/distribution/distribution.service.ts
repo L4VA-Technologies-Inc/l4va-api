@@ -2,8 +2,6 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { LiquidityPoolService } from './lp.service';
-
 import { Vault } from '@/database/vault.entity';
 
 /**
@@ -20,11 +18,11 @@ export class DistributionService {
   private readonly ASSETS_OFFERED_PERCENT = 0.99;
   private readonly RESERVE_RATIO = 0.9;
   private readonly INITIAL_LP_MARKETCAP_PERCENT = 0.08;
+  private readonly LP_PERCENT = 0.04; // % of ADA sent by Acquirers to send to LP (should also show LP % of Total Estimated Market Cap)
 
   constructor(
     @InjectRepository(Vault)
-    private readonly vaultsRepository: Repository<Vault>,
-    private readonly liquidityPoolService: LiquidityPoolService
+    private readonly vaultsRepository: Repository<Vault>
   ) {}
 
   private round6(amount: number): number {
@@ -35,16 +33,20 @@ export class DistributionService {
     return this.round6(adaSent / this.ASSETS_OFFERED_PERCENT);
   }
 
-  private checkLockStatus(adaValuation: number, assetTVL: number): boolean {
-    return adaValuation / assetTVL > this.RESERVE_RATIO;
-  }
-
   private calculateVtPrice(adaSent: number): number {
-    return this.round6(this.calculateAcquireAdaValuation(adaSent) / this.VT_SUPPLY);
+    return adaSent / this.ASSETS_OFFERED_PERCENT / this.VT_SUPPLY;
   }
 
   private calculateTotalValueRetained(netAda: number, vtAda: number, lpAda: number, lpVtAda: number): number {
     return this.round6(netAda + vtAda + lpAda + lpVtAda);
+  }
+
+  private calculateLpAda(adaSent: number): number {
+    return adaSent * this.LP_PERCENT;
+  }
+
+  private calculateLpVt(lpAda: number, vtPrice: number): number {
+    return (lpAda / vtPrice) * this.LP_PERCENT;
   }
 
   calculateContributorExample(params: {
@@ -63,8 +65,8 @@ export class DistributionService {
     const impliedAdaValuation = this.round6(this.calculateAcquireAdaValuation(adaSent));
     const vtPrice = this.round6(this.calculateVtPrice(adaSent));
 
-    const lpAda = this.round6(this.liquidityPoolService.calculateLpAda(adaSent));
-    const lpVt = this.round6(this.liquidityPoolService.calculateLpVt(lpAda, vtPrice));
+    const lpAda = this.round6(this.calculateLpAda(adaSent));
+    const lpVt = this.round6(this.calculateLpVt(lpAda, vtPrice));
 
     const vtRetained = this.round6(this.VT_SUPPLY * (1 - this.ASSETS_OFFERED_PERCENT) * contributorPercentVt);
     const lpVtRetained = this.round6(lpVt * contributorLpPercent);
@@ -110,10 +112,10 @@ export class DistributionService {
 
     const percentOfTotalAcquireAdaSent = this.round6(adaSent / totalAcquireAdaSent);
 
-    const vtPrice = this.round6(this.liquidityPoolService.calculateVtPrice(totalAcquireAdaSent));
+    const vtPrice = this.round6(this.calculateVtPrice(totalAcquireAdaSent));
 
     const lpAda = this.round6(lpOfAdaSent * totalAcquireAdaSent);
-    const lpVt = this.round6(this.liquidityPoolService.calculateLpVt(lpAda, vtPrice));
+    const lpVt = this.round6(this.calculateLpVt(lpAda, vtPrice));
 
     const vtAvailableToAcquirers = this.round6(vtSupply * percentAssetsOffered - lpVt);
 
