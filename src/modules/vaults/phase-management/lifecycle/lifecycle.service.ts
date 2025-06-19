@@ -3,13 +3,14 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { Vault } from '@/database/vault.entity';
-import { AssetOriginType, AssetStatus, AssetType } from '../../../../types/asset.types';
+import { AssetOriginType, AssetStatus } from '../../../../types/asset.types';
 import { VaultStatus, ContributionWindowType, InvestmentWindowType } from '../../../../types/vault.types';
 import { TaptoolsService } from '../../../taptools/taptools.service';
 import { VaultManagingService } from '../../processing-tx/onchain/vault-managing.service';
 import { VaultsService } from '../../vaults.service';
 import { ContributionService } from '../contribution/contribution.service';
+
+import { Vault } from '@/database/vault.entity';
 
 @Injectable()
 export class LifecycleService {
@@ -223,19 +224,17 @@ export class LifecycleService {
         await this.contributionService.syncContributionTransactions(vault.id);
 
         // Get all contributed assets for this vault
-        const contributedAssets =
+        const acquiredAssets =
           vault.assets?.filter(
             asset =>
-              asset.origin_type === AssetOriginType.CONTRIBUTED &&
-              asset.status === AssetStatus.PENDING &&
-              !asset.deleted
+              asset.origin_type === AssetOriginType.ACQUIRED && asset.status === AssetStatus.PENDING && !asset.deleted
           ) || [];
 
         // Calculate total value of contributed assets in ADA using Taptools
-        let totalContributedValueAda = 0;
+        let totalAcquiredValueAda = 0;
 
         // Process each asset to get its value from Taptools
-        for (const asset of contributedAssets) {
+        for (const asset of acquiredAssets) {
           try {
             // Skip if no policy_id or asset_id
             if (!asset.policy_id || !asset.asset_id) {
@@ -249,7 +248,7 @@ export class LifecycleService {
             // Calculate total value for this asset (price * quantity)
             const quantity = asset.quantity || 1;
             const assetValueAda = assetValue.priceAda * quantity;
-            totalContributedValueAda += assetValueAda;
+            totalAcquiredValueAda += assetValueAda;
 
             this.logger.debug(
               `Asset ${asset.policy_id}.${asset.asset_id}: ` +
@@ -268,13 +267,13 @@ export class LifecycleService {
         const requiredThresholdAda = vault.require_reserved_cost_ada || 0;
 
         // Check if the vault meets the threshold
-        const meetsThreshold = totalContributedValueAda >= requiredThresholdAda;
+        const meetsThreshold = totalAcquiredValueAda >= requiredThresholdAda;
 
         // Log the decision
         if (meetsThreshold) {
           this.logger.log(
             `Vault ${vault.id} meets the threshold: ` +
-              `Total contributed: ${totalContributedValueAda} ADA, ` +
+              `Total contributed: ${totalAcquiredValueAda} ADA, ` +
               `Required: ${requiredThresholdAda} ADA`
           );
 
@@ -283,7 +282,7 @@ export class LifecycleService {
         } else {
           this.logger.warn(
             `Vault ${vault.id} does not meet the threshold: ` +
-              `Total contributed: ${totalContributedValueAda} ADA, ` +
+              `Total contributed: ${totalAcquiredValueAda} ADA, ` +
               `Required: ${requiredThresholdAda} ADA`
           );
 
@@ -295,7 +294,7 @@ export class LifecycleService {
         // In a real implementation, you might want to handle success/failure differently
         vault.governance_phase_start = now.toISOString();
         vault.vault_status = VaultStatus.governance;
-        vault.total_assets_cost_ada = totalContributedValueAda;
+        vault.total_assets_cost_ada = totalAcquiredValueAda;
 
         await this.vaultRepository.save(vault);
         this.logger.log(`Vault ${vault.id} has moved to governance phase`);
