@@ -3,14 +3,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { classToPlain, plainToInstance } from 'class-transformer';
 import { Repository } from 'typeorm';
 
-import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
-import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
-import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
-import { FileEntity } from '@/database/file.entity';
-import { LinkEntity } from '@/database/link.entity';
-import { TagEntity } from '@/database/tag.entity';
-import { User } from '@/database/user.entity';
-import { Vault } from '@/database/vault.entity';
 import { transformImageToUrl } from '../../helpers';
 import { VaultStatus } from '../../types/vault.types';
 import { AwsService } from '../aws_bucket/aws.service';
@@ -19,6 +11,15 @@ import { VaultSortField, SortOrder } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { SaveDraftReq } from './dto/saveDraft.req';
 import { VaultShortResponse } from './dto/vault.response';
+
+import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
+import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
+import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
+import { FileEntity } from '@/database/file.entity';
+import { LinkEntity } from '@/database/link.entity';
+import { TagEntity } from '@/database/tag.entity';
+import { User } from '@/database/user.entity';
+import { Vault } from '@/database/vault.entity';
 
 @Injectable()
 export class DraftVaultsService {
