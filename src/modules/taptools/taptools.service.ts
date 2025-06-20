@@ -2,15 +2,16 @@ import { Injectable, HttpException, Logger, NotFoundException } from '@nestjs/co
 import { InjectRepository } from '@nestjs/typeorm';
 import axios from 'axios';
 import * as NodeCache from 'node-cache';
-import { Asset } from '@/database/asset.entity';
-import { Vault } from '@/database/vault.entity';
-import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { Repository } from 'typeorm';
 
 import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
 
 import { AssetValueDto } from './dto/asset-value.dto';
 import { WalletSummaryDto } from './dto/wallet-summary.dto';
+
+import { Asset } from '@/database/asset.entity';
+import { Vault } from '@/database/vault.entity';
+import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 
 @Injectable()
 export class TaptoolsService {
@@ -441,6 +442,24 @@ export class TaptoolsService {
 
     for (const asset of assets) {
       try {
+        // TODO: Test this
+        if (asset.assetId === 'lovelace') {
+          // Special case for ADA
+
+          const adaPrice = await this.getAdaPrice();
+          const totalAdaValue = asset.quantity * 1e-6; // Convert lovelace to ADA
+          console.log('Is value in Ada or Lovelace?', totalAdaValue, adaPrice, asset.quantity);
+
+          assetsWithValues.push({
+            ...asset,
+            assetName: 'ADA',
+            valueAda: totalAdaValue,
+            valueUsd: totalAdaValue * adaPrice,
+          });
+          totalValueAda += totalAdaValue;
+          totalValueUsd += totalAdaValue * adaPrice;
+          continue;
+        }
         // Get asset value in ADA
         const assetValue = await this.getAssetValue(asset.policyId, asset.assetId);
 
