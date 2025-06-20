@@ -10,6 +10,7 @@ import { VaultManagingService } from '../../processing-tx/onchain/vault-managing
 import { VaultsService } from '../../vaults.service';
 import { ContributionService } from '../contribution/contribution.service';
 
+import { Asset } from '@/database/asset.entity';
 import { Vault } from '@/database/vault.entity';
 
 @Injectable()
@@ -17,6 +18,8 @@ export class LifecycleService {
   private readonly logger = new Logger(LifecycleService.name);
 
   constructor(
+    @InjectRepository(Asset)
+    private readonly assetsRepository: Repository<Asset>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     @Inject(forwardRef(() => ContributionService))
@@ -82,7 +85,6 @@ export class LifecycleService {
       .where('vault.vault_status = :status', { status: VaultStatus.contribution })
       .andWhere('vault.contribution_phase_start IS NOT NULL')
       .andWhere('vault.contribution_duration IS NOT NULL')
-      .leftJoinAndSelect('vault.assets', 'assets')
       .leftJoinAndSelect('vault.owner', 'owner')
       .getMany();
 
@@ -96,31 +98,37 @@ export class LifecycleService {
         continue;
       }
 
+      await this.contributionService.syncContributionTransactions(vault.id);
+
+      const assets = await this.assetsRepository.find({ where: { vault: { id: vault.id }, deleted: false } });
       // Check if vault has any non-deleted assets
-      const hasAssets = vault.assets?.some(asset => !asset.deleted) || false;
+      const hasAssets = assets?.some(asset => !asset.deleted) || false;
 
       // If no assets, burn the vault using admin wallet
       if (!hasAssets) {
         try {
           this.logger.log(`Vault ${vault.id} has no assets and contribution period has ended. Burning vault...`);
-          //
+          // Update vault status to failed
+          vault.vault_status = VaultStatus.failed;
+          await this.vaultRepository.save(vault);
+
           // // Use admin wallet to burn the vault
           // const burnTx = await this.vaultContractService.createBurnTx({
           //   customerAddress: vault.owner.address, // Still track the original owner
-          //   assetVaultName: vault.asset_vault_name
+          //   assetVaultName: vault.asset_vault_name,
           // });
-          //
+
           // // Submit the transaction using admin wallet
           // const { txHash } = await this.vaultContractService.submitOnChainVaultTx({
           //   transaction: burnTx.presignedTx,
-          //   signatures: [] // Admin signature is already included in presignedTx
+          //   signatures: [], // Admin signature is already included in presignedTx
           // });
-          //
+
           // // Update vault status
           // vault.deleted = true;
           // vault.liquidation_hash = txHash;
           // await this.vaultRepository.save(vault);
-          //
+
           // this.logger.log(`Successfully burned empty vault ${vault.id} in transaction ${txHash}`);
 
           continue;
@@ -142,7 +150,6 @@ export class LifecycleService {
             vault.acquire_phase_start = now.toISOString();
             vault.vault_status = VaultStatus.acquire;
             // Sync transactions before checking contribution end time
-            await this.contributionService.syncContributionTransactions(vault.id);
 
             // TODO: need save this data to vault;
             // Calculate total value of assets in the vault
