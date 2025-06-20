@@ -1,9 +1,9 @@
 import { applyDecorators } from '@nestjs/common';
-import { Expose, ExposeOptions, Transform } from 'class-transformer';
+import { Expose, Transform } from 'class-transformer';
 
 interface DtoRepresentsType {
   transform: any;
-  expose: ExposeOptions;
+  expose: any;
 }
 
 export function DtoRepresent({ transform, expose }: DtoRepresentsType) {
