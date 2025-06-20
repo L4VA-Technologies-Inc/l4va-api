@@ -44,7 +44,7 @@ export class DistributionService {
   }
 
   async calculateContributorExample(params: {
-    vaultId: number;
+    vaultId: string;
     adaSent: number;
     contributorPercentVt: number;
     contributorLpPercent: number;
@@ -58,7 +58,7 @@ export class DistributionService {
     const { adaSent, contributorPercentVt, contributorLpPercent, vaultId } = params;
 
     // Fetch vault from DB
-    const vault = await this.vaultsRepository.findOneByOrFail({ id: vaultId.toString() });
+    const vault = await this.vaultsRepository.findOneByOrFail({ id: vaultId });
 
     const VT_SUPPLY = vault.ft_token_supply;
     const ASSETS_OFFERED_PERCENT = vault.tokens_for_acquires;
@@ -87,7 +87,7 @@ export class DistributionService {
   }
 
   async calculateAcquirerExample(params: {
-    vaultId: number;
+    vaultId: string;
     adaSent: number;
     numAcquirers: number;
     totalAcquiredValueAda: number;
@@ -108,7 +108,7 @@ export class DistributionService {
     const { vaultId, adaSent, totalAcquiredValueAda } = params;
 
     // Fetch vault from DB
-    const vault = await this.vaultsRepository.findOneByOrFail({ id: vaultId.toString() });
+    const vault = await this.vaultsRepository.findOneByOrFail({ id: vaultId });
 
     const VT_SUPPLY = vault.ft_token_supply;
     const ASSETS_OFFERED_PERCENT = vault.tokens_for_acquires;
@@ -149,7 +149,7 @@ export class DistributionService {
       totalAcquireAdaSent: this.round6(totalAcquiredValueAda),
       percentOfTotalAcquireAdaSent,
       percentOfTotalVtNetOfLp,
-      vtReceived,
+      vtReceived: Math.round(vtReceived),
       vtValueInAda,
       lpAdaInitialShare,
       lpVtInitialShare,

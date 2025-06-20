@@ -12,6 +12,7 @@ import { ContributionService } from '../contribution/contribution.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Vault } from '@/database/vault.entity';
+import { DistributionService } from '@/modules/distribution/distribution.service';
 
 @Injectable()
 export class LifecycleService {
@@ -23,6 +24,7 @@ export class LifecycleService {
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     @Inject(forwardRef(() => ContributionService))
+    private readonly distributionService: DistributionService,
     private readonly contributionService: ContributionService,
     private readonly taptoolsService: TaptoolsService,
     @Inject(forwardRef(() => VaultsService))
@@ -283,6 +285,27 @@ export class LifecycleService {
               `Total contributed: ${totalAcquiredValueAda} ADA, ` +
               `Required: ${requiredThresholdAda} ADA`
           );
+
+          // // 1. Get all acquirer users and their ADA sent for this vault
+          // // (Replace this with your actual logic to fetch acquirer users and their ADA sent)
+          // const acquirers = await this.contributionService.getAcquirersWithAdaSent(vault.id);
+          // // acquirers: Array<{ userId: string, adaSent: number }>
+
+          // // 2. For each acquirer, calculate VT received
+          // for (const acquirer of acquirers) {
+          //   const vtResult = await this.distributionService.calculateAcquirerExample({
+          //     vaultId: vault.id,
+          //     adaSent: acquirer.adaSent,
+          //     numAcquirers: acquirers.length,
+          //     totalAcquiredValueAda: totalAcquiredValueAda,
+          //   });
+
+          //   this.logger.log(
+          //     `User ${acquirer.userId} will receive VT: ${vtResult.vtReceived} (for ADA sent: ${acquirer.adaSent})`
+          //   );
+
+          //   // Optionally: Save this info to DB or further process it
+          // }
 
           // TODO: Mint tokens and launch the vault
           this.logger.log(`Vault ${vault.id} is ready to be launched`);

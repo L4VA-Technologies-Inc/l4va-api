@@ -1,8 +1,9 @@
 import { ApiProperty } from '@nestjs/swagger';
 
+import { DtoRepresent } from '../../../decorators/dto-represents.decorator';
+
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
-import { DtoRepresent } from '../../../decorators/dto-represents.decorator';
 
 export class PublicProfileRes {
   @ApiProperty()
