@@ -224,6 +224,8 @@ export class LifecycleService {
         added_at: string;
         quantity: number;
         origin_type: AssetOriginType;
+        policy_id: string;
+        asset_name: string;
       }[];
     }[]
   > {
@@ -238,8 +240,10 @@ export class LifecycleService {
             'type', a.type,
             'contract_address', a.contract_address,
             'added_at', a.added_at,
-              'quantity', a.quantity,
-          'origin_type', a.origin_type
+            'quantity', a.quantity,
+            'origin_type', a.origin_type,
+            'policy_id', a.policy_id,
+            'asset_name', a.asset_id
           )
         ) as assets
       FROM
@@ -278,87 +282,104 @@ export class LifecycleService {
         // Sync transactions one more time
         await this.contributionService.syncContributionTransactions(vault.id);
 
-        // Calculate total value of contributed assets in ADA using Taptools
-        let totalAcquiredValueAda = 0;
-        const userAdaMap: Record<string, number> = {};
-
-        // Group assets by user
+        // 1. Group assets by user
         const assetsByUsers = await this.getAssetsGroupedByUser(vault.id);
+        const acquirerAdaMap: Record<string, number> = {};
+        const contributorValueMap: Record<string, number> = {};
+        let totalAcquiredAda = 0;
+        let totalContributedValueAda = 0;
 
-        // Iterate over each user's assets and calculate their contribution in ADA
+        // 2. Iterate over each user's assets and split by phase
         for (const userAssets of assetsByUsers) {
           const userId = userAssets.user_id;
-          const userWallet = userAssets.user_wallet;
-          const totalAssets = userAssets.total_assets;
           const assets = userAssets.assets;
-          this.logger.log(
-            `User ${userId} (${userWallet}) has ${totalAssets} assets in vault ${vault.id}: ${JSON.stringify(assets)}`
-          );
+          let userAcquiredAda = 0;
+          let userContributedValueAda = 0;
 
-          let userValueInAda = 0; // <-- Reset for each user
+          this.logger.log(
+            `User ${userId} (${userAssets.user_wallet}) has ${userAssets.total_assets} assets in vault ${vault.id}: ${JSON.stringify(assets)}`
+          );
 
           for (const asset of assets) {
             // Only ADA in acquired assets
             if (asset.origin_type === AssetOriginType.ACQUIRED) {
-              if (!asset.id) {
-                this.logger.warn(`Skipping asset with missing id for user ${userId} in vault ${vault.id}`);
-                continue;
-              }
+              userAcquiredAda += asset.quantity || 1;
+              this.logger.debug(`User ${userId} asset ${asset.id}: ${asset.quantity} ADA`);
+            }
+            if (asset.origin_type === AssetOriginType.CONTRIBUTED) {
               try {
-                // Get asset value from Taptools
-                // const { priceAda } = await this.taptoolsService.getAssetValue(asset.contract_address, asset.id);
-                // const quantity = asset.quantity || 1;
-                // const assetValueAda = priceAda * quantity;
-
-                userValueInAda += asset.quantity || 1;
-                this.logger.debug(`User ${userId} asset ${asset.id}: ${asset.quantity || 1} ADA`);
+                const { priceAda } = await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_name);
+                const quantity = asset.quantity || 1;
+                userContributedValueAda += priceAda * quantity;
               } catch (error) {
                 this.logger.error(
-                  `Error getting price for asset ${asset.contract_address}.${asset.id} for user ${userId} in vault ${vault.id}:`,
+                  `Error getting price for asset ${asset.policy_id}.${asset.asset_name} for user ${userId} in vault ${vault.id}:`,
                   error.message
                 );
               }
             }
+
+            if (userAcquiredAda > 0) {
+              acquirerAdaMap[userId] = userAcquiredAda;
+              totalAcquiredAda += userAcquiredAda;
+            }
+            if (userContributedValueAda > 0) {
+              contributorValueMap[userId] = userContributedValueAda;
+              totalContributedValueAda += userContributedValueAda;
+            }
           }
-          userAdaMap[userId] = userValueInAda;
-          totalAcquiredValueAda += userValueInAda;
-          this.logger.log(`User ${userId} total ADA sent: ${userValueInAda}`);
         }
+        this.logger.log(
+          `Total acquired ADA across all users in vault ${vault.id}: ${totalAcquiredAda}, ` +
+            `Total contributed value ADA: ${totalContributedValueAda}`
+        );
 
         const requiredThresholdAda = vault.require_reserved_cost_ada || 0;
-        const meetsThreshold = totalAcquiredValueAda >= requiredThresholdAda;
+        const meetsThreshold = totalAcquiredAda >= requiredThresholdAda;
 
-        vault.total_acquired_value_ada = totalAcquiredValueAda;
+        vault.total_acquired_value_ada = totalAcquiredAda;
         await this.vaultRepository.save(vault);
 
         this.logger.log(
           `Vault ${vault.id} meets the threshold: ` +
-            `Total contributed: ${totalAcquiredValueAda} ADA, ` +
+            `Total contributed: ${totalAcquiredAda} ADA, ` +
             `Required: ${requiredThresholdAda} ADA`
         );
 
         if (meetsThreshold) {
           // TODO: Mint tokens and launch the vault
           // For each user, calculate VT received
-          const userIds = Object.keys(userAdaMap);
 
-          for (const userId of userIds) {
-            const adaSent = userAdaMap[userId];
+          // 3. Calculate VT for acquirers
+          for (const [userId, adaSent] of Object.entries(acquirerAdaMap)) {
             const vtResult = await this.distributionService.calculateAcquirerExample({
               vaultId: vault.id,
               adaSent,
-              numAcquirers: userIds.length,
-              totalAcquiredValueAda: totalAcquiredValueAda,
+              numAcquirers: Object.keys(acquirerAdaMap).length,
+              totalAcquiredValueAda: totalAcquiredAda,
             });
-            this.logger.log(`User ${userId} will receive VT: ${vtResult.vtReceived} (for ADA sent: ${adaSent})`);
-            // Optionally: Save this info to DB or further process it
+            this.logger.debug(
+              `--- Acquirer ${userId} will receive VT: ${vtResult.vtReceived} (for ADA sent: ${adaSent})`
+            );
+          }
+
+          // 4. Calculate VT for contributors
+          for (const [userId, valueAda] of Object.entries(contributorValueMap)) {
+            const vtResult = await this.distributionService.calculateContributorExample({
+              vaultId: vault.id,
+              valueContributed: valueAda,
+              totalTvl: totalContributedValueAda,
+            });
+            this.logger.debug(
+              `--- Contributor ${userId} will receive VT: ${vtResult.vtRetained} (for value contributed: ${valueAda})`
+            );
           }
 
           this.logger.log(`Vault ${vault.id} is ready to be launched`);
         } else {
           this.logger.warn(
             `Vault ${vault.id} does not meet the threshold: ` +
-              `Total contributed: ${totalAcquiredValueAda} ADA, ` +
+              `Total contributed: ${totalAcquiredAda} ADA, ` +
               `Required: ${requiredThresholdAda} ADA`
           );
 
@@ -370,7 +391,6 @@ export class LifecycleService {
         // In a real implementation, you might want to handle success/failure differently
         vault.governance_phase_start = now.toISOString();
         vault.vault_status = VaultStatus.governance;
-        vault.total_assets_cost_ada = totalAcquiredValueAda;
 
         await this.vaultRepository.save(vault);
         this.logger.log(`Vault ${vault.id} has moved to governance phase`);
