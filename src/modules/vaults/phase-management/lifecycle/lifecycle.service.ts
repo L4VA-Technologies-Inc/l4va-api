@@ -212,6 +212,52 @@ export class LifecycleService {
     }
   }
 
+  async getAssetsGroupedByUser(vaultId: string): Promise<
+    {
+      user_id: string;
+      user_wallet: string;
+      total_assets: string;
+      assets: {
+        id: string;
+        type: string;
+        contract_address: string | null;
+        added_at: string;
+        quantity: number;
+        origin_type: AssetOriginType;
+      }[];
+    }[]
+  > {
+    const query = `
+      SELECT
+        u.id as user_id,
+        u.address as user_wallet,
+        COUNT(a.id) as total_assets,
+        json_agg(
+          json_build_object(
+            'id', a.id,
+            'type', a.type,
+            'contract_address', a.contract_address,
+            'added_at', a.added_at,
+              'quantity', a.quantity,
+          'origin_type', a.origin_type
+          )
+        ) as assets
+      FROM
+        assets a
+      JOIN
+        users u ON u.id = a.added_by
+      WHERE
+        a.vault_id = $1
+      GROUP BY
+        u.id, u.address
+      ORDER BY
+        u.address ASC
+    `;
+
+    const result = await this.assetsRepository.query(query, [vaultId]);
+    return result;
+  }
+
   private async handleInvestmentToGovernance() {
     const acquireVaults = await this.vaultRepository
       .createQueryBuilder('vault')
@@ -232,81 +278,81 @@ export class LifecycleService {
         // Sync transactions one more time
         await this.contributionService.syncContributionTransactions(vault.id);
 
-        // Get all contributed assets for this vault
-        const acquiredAssets =
-          vault.assets?.filter(
-            asset =>
-              asset.origin_type === AssetOriginType.ACQUIRED && asset.status === AssetStatus.PENDING && !asset.deleted
-          ) || [];
-
         // Calculate total value of contributed assets in ADA using Taptools
         let totalAcquiredValueAda = 0;
+        const userAdaMap: Record<string, number> = {};
 
-        // Process each asset to get its value from Taptools
-        for (const asset of acquiredAssets) {
-          try {
-            // Skip if no policy_id or asset_id
-            if (!asset.policy_id || !asset.asset_id) {
-              this.logger.warn(`Skipping asset with missing policy_id or asset_id in vault ${vault.id}`);
-              continue;
-            }
+        // Group assets by user
+        const assetsByUsers = await this.getAssetsGroupedByUser(vault.id);
 
-            // Get asset value from Taptools
-            const assetValue = await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_id);
-
-            // Calculate total value for this asset (price * quantity)
-            const quantity = asset.quantity || 1;
-            const assetValueAda = assetValue.priceAda * quantity;
-            totalAcquiredValueAda += assetValueAda;
-
-            this.logger.debug(
-              `Asset ${asset.policy_id}.${asset.asset_id}: ` +
-                `${quantity} x ${assetValue.priceAda} ADA = ${assetValueAda} ADA`
-            );
-          } catch (error) {
-            this.logger.error(
-              `Error getting price for asset ${asset.policy_id}.${asset.asset_id} in vault ${vault.id}:`,
-              error.message
-            );
-            // Continue processing other assets even if one fails
-          }
-        }
-
-        // Get the required threshold value (in ADA)
-        const requiredThresholdAda = vault.require_reserved_cost_ada || 0;
-
-        // Check if the vault meets the threshold
-        const meetsThreshold = totalAcquiredValueAda >= requiredThresholdAda;
-
-        // Log the decision
-        if (meetsThreshold) {
+        // Iterate over each user's assets and calculate their contribution in ADA
+        for (const userAssets of assetsByUsers) {
+          const userId = userAssets.user_id;
+          const userWallet = userAssets.user_wallet;
+          const totalAssets = userAssets.total_assets;
+          const assets = userAssets.assets;
           this.logger.log(
-            `Vault ${vault.id} meets the threshold: ` +
-              `Total contributed: ${totalAcquiredValueAda} ADA, ` +
-              `Required: ${requiredThresholdAda} ADA`
+            `User ${userId} (${userWallet}) has ${totalAssets} assets in vault ${vault.id}: ${JSON.stringify(assets)}`
           );
 
-          // // 1. Get all acquirer users and their ADA sent for this vault
-          // // (Replace this with your actual logic to fetch acquirer users and their ADA sent)
-          // const acquirers = await this.contributionService.getAcquirersWithAdaSent(vault.id);
-          // // acquirers: Array<{ userId: string, adaSent: number }>
+          let userValueInAda = 0; // <-- Reset for each user
 
-          // // 2. For each acquirer, calculate VT received
-          // for (const acquirer of acquirers) {
-          //   const vtResult = await this.distributionService.calculateAcquirerExample({
-          //     vaultId: vault.id,
-          //     adaSent: acquirer.adaSent,
-          //     numAcquirers: acquirers.length,
-          //     totalAcquiredValueAda: totalAcquiredValueAda,
-          //   });
+          for (const asset of assets) {
+            if (asset.origin_type === AssetOriginType.ACQUIRED) {
+              if (!asset.contract_address || !asset.id) {
+                this.logger.warn(
+                  `Skipping asset with missing contract_address or id for user ${userId} in vault ${vault.id}`
+                );
+                continue;
+              }
+              try {
+                // Get asset value from Taptools
+                const { priceAda } = await this.taptoolsService.getAssetValue(asset.contract_address, asset.id);
+                const quantity = asset.quantity || 1;
+                const assetValueAda = priceAda * quantity;
 
-          //   this.logger.log(
-          //     `User ${acquirer.userId} will receive VT: ${vtResult.vtReceived} (for ADA sent: ${acquirer.adaSent})`
-          //   );
+                userValueInAda += assetValueAda;
+                this.logger.debug(
+                  `User ${userId} asset ${asset.id}: ${quantity} x ${priceAda} ADA = ${assetValueAda} ADA`
+                );
+              } catch (error) {
+                this.logger.error(
+                  `Error getting price for asset ${asset.contract_address}.${asset.id} for user ${userId} in vault ${vault.id}:`,
+                  error.message
+                );
+              }
+            }
+          }
+          userAdaMap[userId] = userValueInAda;
+          totalAcquiredValueAda += userValueInAda;
+          this.logger.log(`User ${userId} total ADA sent: ${userValueInAda}`);
+        }
 
-          //   // Optionally: Save this info to DB or further process it
-          // }
+        // For each user, calculate VT received
+        const userIds = Object.keys(userAdaMap);
 
+        for (const userId of userIds) {
+          const adaSent = userAdaMap[userId];
+          const vtResult = await this.distributionService.calculateAcquirerExample({
+            vaultId: vault.id,
+            adaSent,
+            numAcquirers: userIds.length,
+            totalAcquiredValueAda: totalAcquiredValueAda,
+          });
+          this.logger.log(`User ${userId} will receive VT: ${vtResult.vtReceived} (for ADA sent: ${adaSent})`);
+          // Optionally: Save this info to DB or further process it
+        }
+
+        const requiredThresholdAda = vault.require_reserved_cost_ada || 0;
+        const meetsThreshold = totalAcquiredValueAda >= requiredThresholdAda;
+
+        this.logger.log(
+          `Vault ${vault.id} meets the threshold: ` +
+            `Total contributed: ${totalAcquiredValueAda} ADA, ` +
+            `Required: ${requiredThresholdAda} ADA`
+        );
+
+        if (meetsThreshold) {
           // TODO: Mint tokens and launch the vault
           this.logger.log(`Vault ${vault.id} is ready to be launched`);
         } else {
