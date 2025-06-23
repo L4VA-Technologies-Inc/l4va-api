@@ -3,7 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { AssetOriginType, AssetStatus } from '../../../../types/asset.types';
+import { AssetOriginType } from '../../../../types/asset.types';
 import { VaultStatus, ContributionWindowType, InvestmentWindowType } from '../../../../types/vault.types';
 import { TaptoolsService } from '../../../taptools/taptools.service';
 import { VaultManagingService } from '../../processing-tx/onchain/vault-managing.service';
@@ -34,7 +34,7 @@ export class LifecycleService {
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
-  async handleVaultLifecycleTransitions() {
+  async handleVaultLifecycleTransitions(): Promise<void> {
     // this.logger.debug('Checking vault lifecycle transitions...');
 
     await this.handlePublishedToContribution();
@@ -46,7 +46,7 @@ export class LifecycleService {
     await this.handleInvestmentToGovernance();
   }
 
-  private async handlePublishedToContribution() {
+  private async handlePublishedToContribution(): Promise<void> {
     const now = new Date();
 
     // Handle immediate start vaults
@@ -80,7 +80,7 @@ export class LifecycleService {
     }
   }
 
-  private async handleContributionToInvestment() {
+  private async handleContributionToInvestment(): Promise<void> {
     const now = new Date();
     const contributionVaults = await this.vaultRepository
       .createQueryBuilder('vault')
@@ -258,7 +258,7 @@ export class LifecycleService {
     return result;
   }
 
-  private async handleInvestmentToGovernance() {
+  private async handleInvestmentToGovernance(): Promise<void> {
     const acquireVaults = await this.vaultRepository
       .createQueryBuilder('vault')
       .where('vault.vault_status = :status', { status: VaultStatus.acquire })
@@ -328,23 +328,11 @@ export class LifecycleService {
           this.logger.log(`User ${userId} total ADA sent: ${userValueInAda}`);
         }
 
-        // For each user, calculate VT received
-        const userIds = Object.keys(userAdaMap);
-
-        for (const userId of userIds) {
-          const adaSent = userAdaMap[userId];
-          const vtResult = await this.distributionService.calculateAcquirerExample({
-            vaultId: vault.id,
-            adaSent,
-            numAcquirers: userIds.length,
-            totalAcquiredValueAda: totalAcquiredValueAda,
-          });
-          this.logger.log(`User ${userId} will receive VT: ${vtResult.vtReceived} (for ADA sent: ${adaSent})`);
-          // Optionally: Save this info to DB or further process it
-        }
-
         const requiredThresholdAda = vault.require_reserved_cost_ada || 0;
         const meetsThreshold = totalAcquiredValueAda >= requiredThresholdAda;
+
+        vault.total_acquired_value_ada = totalAcquiredValueAda;
+        await this.vaultRepository.save(vault);
 
         this.logger.log(
           `Vault ${vault.id} meets the threshold: ` +
@@ -354,6 +342,21 @@ export class LifecycleService {
 
         if (meetsThreshold) {
           // TODO: Mint tokens and launch the vault
+          // For each user, calculate VT received
+          const userIds = Object.keys(userAdaMap);
+
+          for (const userId of userIds) {
+            const adaSent = userAdaMap[userId];
+            const vtResult = await this.distributionService.calculateAcquirerExample({
+              vaultId: vault.id,
+              adaSent,
+              numAcquirers: userIds.length,
+              totalAcquiredValueAda: totalAcquiredValueAda,
+            });
+            this.logger.log(`User ${userId} will receive VT: ${vtResult.vtReceived} (for ADA sent: ${adaSent})`);
+            // Optionally: Save this info to DB or further process it
+          }
+
           this.logger.log(`Vault ${vault.id} is ready to be launched`);
         } else {
           this.logger.warn(
