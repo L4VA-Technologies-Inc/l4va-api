@@ -10,10 +10,12 @@ import { LifecycleService } from './lifecycle.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Vault } from '@/database/vault.entity';
+import { DistributionModule } from '@/modules/distribution/distribution.module';
 
 @Module({
   imports: [
     ContributionModule,
+    DistributionModule,
     TypeOrmModule.forFeature([Vault, Asset]),
     ScheduleModule.forRoot(),
     forwardRef(() => VaultsModule),

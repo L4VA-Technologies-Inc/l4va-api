@@ -298,23 +298,20 @@ export class LifecycleService {
           let userValueInAda = 0; // <-- Reset for each user
 
           for (const asset of assets) {
+            // Only ADA in acquired assets
             if (asset.origin_type === AssetOriginType.ACQUIRED) {
-              if (!asset.contract_address || !asset.id) {
-                this.logger.warn(
-                  `Skipping asset with missing contract_address or id for user ${userId} in vault ${vault.id}`
-                );
+              if (!asset.id) {
+                this.logger.warn(`Skipping asset with missing id for user ${userId} in vault ${vault.id}`);
                 continue;
               }
               try {
                 // Get asset value from Taptools
-                const { priceAda } = await this.taptoolsService.getAssetValue(asset.contract_address, asset.id);
-                const quantity = asset.quantity || 1;
-                const assetValueAda = priceAda * quantity;
+                // const { priceAda } = await this.taptoolsService.getAssetValue(asset.contract_address, asset.id);
+                // const quantity = asset.quantity || 1;
+                // const assetValueAda = priceAda * quantity;
 
-                userValueInAda += assetValueAda;
-                this.logger.debug(
-                  `User ${userId} asset ${asset.id}: ${quantity} x ${priceAda} ADA = ${assetValueAda} ADA`
-                );
+                userValueInAda += asset.quantity || 1;
+                this.logger.debug(`User ${userId} asset ${asset.id}: ${asset.quantity || 1} ADA`);
               } catch (error) {
                 this.logger.error(
                   `Error getting price for asset ${asset.contract_address}.${asset.id} for user ${userId} in vault ${vault.id}:`,
