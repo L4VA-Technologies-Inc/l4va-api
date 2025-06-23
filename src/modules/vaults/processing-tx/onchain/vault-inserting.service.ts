@@ -13,7 +13,6 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { Vault } from '@/database/vault.entity';
 import { TransactionStatus } from '../../../../types/transaction.types';
 import { TransactionsService } from '../offchain-tx/transactions.service';
 
@@ -25,6 +24,8 @@ import { OnchainTransactionStatus } from './types/transaction-status.enum';
 import { Datum } from './types/type';
 import { applyContributeParams, toPreloadedScript } from './utils/apply_params';
 import * as blueprint from './utils/blueprint.json';
+
+import { Vault } from '@/database/vault.entity';
 
 // Investment and Contribution
 
