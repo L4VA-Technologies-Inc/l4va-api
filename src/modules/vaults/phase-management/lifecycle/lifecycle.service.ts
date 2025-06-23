@@ -5,6 +5,7 @@ import { Repository } from 'typeorm';
 
 import { AssetOriginType } from '../../../../types/asset.types';
 import { VaultStatus, ContributionWindowType, InvestmentWindowType } from '../../../../types/vault.types';
+import { DistributionService } from '../../../distribution/distribution.service';
 import { TaptoolsService } from '../../../taptools/taptools.service';
 import { VaultManagingService } from '../../processing-tx/onchain/vault-managing.service';
 import { VaultsService } from '../../vaults.service';
@@ -12,7 +13,6 @@ import { ContributionService } from '../contribution/contribution.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Vault } from '@/database/vault.entity';
-import { DistributionService } from '@/modules/distribution/distribution.service';
 
 @Injectable()
 export class LifecycleService {
@@ -24,8 +24,8 @@ export class LifecycleService {
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     @Inject(forwardRef(() => ContributionService))
-    private readonly distributionService: DistributionService,
     private readonly contributionService: ContributionService,
+    private readonly distributionService: DistributionService,
     private readonly taptoolsService: TaptoolsService,
     @Inject(forwardRef(() => VaultsService))
     private readonly vaultsService: VaultsService,
