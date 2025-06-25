@@ -8,7 +8,6 @@ import { VaultStatus, ContributionWindowType, InvestmentWindowType } from '../..
 import { DistributionService } from '../../../distribution/distribution.service';
 import { TaptoolsService } from '../../../taptools/taptools.service';
 import { VaultManagingService } from '../../processing-tx/onchain/vault-managing.service';
-import { VaultsService } from '../../vaults.service';
 import { ContributionService } from '../contribution/contribution.service';
 
 import { Asset } from '@/database/asset.entity';
@@ -27,8 +26,6 @@ export class LifecycleService {
     private readonly contributionService: ContributionService,
     private readonly distributionService: DistributionService,
     private readonly taptoolsService: TaptoolsService,
-    @Inject(forwardRef(() => VaultsService))
-    private readonly vaultsService: VaultsService,
     @Inject(forwardRef(() => VaultManagingService))
     private readonly vaultContractService: VaultManagingService
   ) {}
