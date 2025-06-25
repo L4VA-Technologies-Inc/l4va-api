@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, Logger, NotFoundException, forwardRef } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -29,7 +29,6 @@ export class ContributionService {
     private readonly usersRepository: Repository<User>,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
-    @Inject(forwardRef(() => TransactionsService))
     private readonly transactionsService: TransactionsService,
     private readonly blockchainScanner: BlockchainScannerService
   ) {}

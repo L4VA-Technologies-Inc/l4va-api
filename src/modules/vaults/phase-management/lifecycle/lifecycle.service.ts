@@ -1,4 +1,4 @@
-import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -22,11 +22,9 @@ export class LifecycleService {
     private readonly assetsRepository: Repository<Asset>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
-    @Inject(forwardRef(() => ContributionService))
     private readonly contributionService: ContributionService,
     private readonly distributionService: DistributionService,
     private readonly taptoolsService: TaptoolsService,
-    @Inject(forwardRef(() => VaultManagingService))
     private readonly vaultContractService: VaultManagingService
   ) {}
 
