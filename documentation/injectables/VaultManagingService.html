@@ -1,0 +1,1208 @@
+<!doctype html>
+<html class="no-js" lang="">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="x-ua-compatible" content="ie=edge">
+        <title>project-name documentation</title>
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+
+        <link rel="icon" type="image/x-icon" href="../images/favicon.ico">
+	   <link rel="stylesheet" href="../styles/style.css">
+        <link rel="stylesheet" href="../styles/dark.css">
+    </head>
+    <body>
+          <script>
+               // Blocking script to avoid flickering dark mode
+               // Dark mode toggle button
+               var useDark = window.matchMedia('(prefers-color-scheme: dark)');
+               var darkModeState = useDark.matches;
+               var $darkModeToggleSwitchers = document.querySelectorAll('.dark-mode-switch input');
+               var $darkModeToggles = document.querySelectorAll('.dark-mode-switch');
+               var darkModeStateLocal = localStorage.getItem('compodoc_darkmode-state');
+
+               function checkToggle(check) {
+                    for (var i = 0; i < $darkModeToggleSwitchers.length; i++) {
+                         $darkModeToggleSwitchers[i].checked = check;
+                    }
+               }
+
+               function toggleDarkMode(state) {
+                    if (window.localStorage) {
+                         localStorage.setItem('compodoc_darkmode-state', state);
+                    }
+
+                    checkToggle(state);
+
+                    const hasClass = document.body.classList.contains('dark');
+
+                    if (state) {
+                         for (var i = 0; i < $darkModeToggles.length; i++) {
+                              $darkModeToggles[i].classList.add('dark');
+                         }
+                         if (!hasClass) {
+                              document.body.classList.add('dark');
+                         }
+                    } else {
+                         for (var i = 0; i < $darkModeToggles.length; i++) {
+                              $darkModeToggles[i].classList.remove('dark');
+                         }
+                         if (hasClass) {
+                              document.body.classList.remove('dark');
+                         }
+                    }
+               }
+
+               useDark.addEventListener('change', function (evt) {
+                    toggleDarkMode(evt.matches);
+               });
+               if (darkModeStateLocal) {
+                    darkModeState = darkModeStateLocal === 'true';
+               }
+               toggleDarkMode(darkModeState);
+          </script>
+
+        <div class="navbar navbar-default navbar-fixed-top d-md-none p-0">
+               <div class="d-flex">
+                    <a href="../" class="navbar-brand">project-name documentation</a>
+                    <button type="button" class="btn btn-default btn-menu ion-ios-menu" id="btn-menu"></button>
+               </div>
+        </div>
+
+        <div class="xs-menu menu" id="mobile-menu">
+                <div id="book-search-input" role="search"><input type="text" placeholder="Type to search"></div>            <compodoc-menu></compodoc-menu>
+        </div>
+
+        <div class="container-fluid main">
+           <div class="row main">
+               <div class="d-none d-md-block menu">
+                   <compodoc-menu mode="normal"></compodoc-menu>
+               </div>
+               <!-- START CONTENT -->
+               <div class="content injectable">
+                   <div class="content-data">
+
+
+
+
+
+
+
+
+<ol class="breadcrumb">
+  <li class="breadcrumb-item">Injectables</li>
+  <li class="breadcrumb-item" >VaultManagingService</li>
+</ol>
+
+<ul class="nav nav-tabs" role="tablist">
+        <li class="nav-item">
+            <a href="#info" 
+                class="nav-link"
+                class="nav-link active"
+                role="tab" id="info-tab" data-bs-toggle="tab" data-link="info">Info</a>
+        </li>
+        <li class="nav-item">
+            <a href="#source" 
+                class="nav-link"
+                
+                role="tab" id="source-tab" data-bs-toggle="tab" data-link="source">Source</a>
+        </li>
+</ul>
+
+<div class="tab-content">
+    <div class="tab-pane fade active in" id="info">
+        <p class="comment">
+            <h3>File</h3>
+        </p>
+        <p class="comment">
+            <code>src/modules/vaults/processing-tx/onchain/vault-managing.service.ts</code>
+        </p>
+
+
+
+
+
+            <section data-compodoc="block-index">
+    <h3 id="index">Index</h3>
+    <table class="table table-sm table-bordered index-table">
+        <tbody>
+                <tr>
+                    <td class="col-md-4">
+                        <h6><b>Properties</b></h6>
+                    </td>
+                </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <ul class="index-list">
+                            <li>
+                                    <span class="modifier">Private</span>
+                                    <span class="modifier">Readonly</span>
+                                <a href="#adminHash" >adminHash</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Private</span>
+                                    <span class="modifier">Readonly</span>
+                                <a href="#adminSKey" >adminSKey</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Private</span>
+                                    <span class="modifier">Readonly</span>
+                                <a href="#blockfrost" >blockfrost</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Private</span>
+                                    <span class="modifier">Readonly</span>
+                                <a href="#logger" >logger</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Private</span>
+                                <a href="#scAddress" >scAddress</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Private</span>
+                                    <span class="modifier">Readonly</span>
+                                <a href="#scPolicyId" >scPolicyId</a>
+                            </li>
+                        </ul>
+                    </td>
+                </tr>
+
+                <tr>
+                    <td class="col-md-4">
+                        <h6><b>Methods</b></h6>
+                    </td>
+                </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <ul class="index-list">
+                            <li>
+                                    <span class="modifier">Async</span>
+                                <a href="#createBurnTx" >createBurnTx</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Async</span>
+                                <a href="#createOnChainVaultTx" >createOnChainVaultTx</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Async</span>
+                                <a href="#submitOnChainVaultTx" >submitOnChainVaultTx</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Async</span>
+                                <a href="#updateVaultMetadataTx" >updateVaultMetadataTx</a>
+                            </li>
+                        </ul>
+                    </td>
+                </tr>
+
+
+
+
+
+        </tbody>
+    </table>
+</section>
+
+            <section data-compodoc="block-constructor">
+    <h3 id="constructor">Constructor</h3>
+        <table class="table table-sm table-bordered">
+            <tbody>
+                <tr>
+                    <td class="col-md-4">
+<code>constructor(configService: ConfigService, blockchainService: <a href="../injectables/BlockchainService.html" target="_self">BlockchainService</a>)</code>
+                    </td>
+                </tr>
+                        <tr>
+                            <td class="col-md-4">
+                                <div class="io-line">Defined in <a href="" data-line="65" class="link-to-prism">src/modules/vaults/processing-tx/onchain/vault-managing.service.ts:65</a></div>
+                            </td>
+                        </tr>
+
+                <tr>
+                    <td class="col-md-4">
+                            <div>
+                                    <b>Parameters :</b>
+                                    <table class="params">
+                                        <thead>
+                                            <tr>
+                                                <td>Name</td>
+                                                    <td>Type</td>
+                                                <td>Optional</td>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                                <tr>
+                                                        <td>configService</td>
+                                                  
+                                                        <td>
+                                                                    <code>ConfigService</code>
+                                                        </td>
+                                                  
+                                                    <td>
+                                                            No
+                                                    </td>
+                                                    
+                                                </tr>
+                                                <tr>
+                                                        <td>blockchainService</td>
+                                                  
+                                                        <td>
+                                                                        <code><a href="../injectables/BlockchainService.html" target="_self" >BlockchainService</a></code>
+                                                        </td>
+                                                  
+                                                    <td>
+                                                            No
+                                                    </td>
+                                                    
+                                                </tr>
+                                        </tbody>
+                                    </table>
+                            </div>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+</section>
+
+            <section data-compodoc="block-methods">
+    
+    <h3 id="methods">
+        Methods
+    </h3>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="createBurnTx"></a>
+                    <span class="name">
+                            <span class="modifier">Async</span>
+                        <span ><b>createBurnTx</b></span>
+                        <a href="#createBurnTx"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>createBurnTx(burnConfig: literal type)</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="238"
+                                    class="link-to-prism">src/modules/vaults/processing-tx/onchain/vault-managing.service.ts:238</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>burnConfig</td>
+                                            <td>
+                                                        <code>literal type</code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>Promise&lt;literal type&gt;</code>
+
+                        </div>
+                            <div class="io-description">
+                                
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="createOnChainVaultTx"></a>
+                    <span class="name">
+                            <span class="modifier">Async</span>
+                        <span ><b>createOnChainVaultTx</b></span>
+                        <a href="#createOnChainVaultTx"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>createOnChainVaultTx(vaultConfig: <a href="../interfaces/VaultCreateConfig.html" target="_self">VaultCreateConfig</a>)</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="85"
+                                    class="link-to-prism">src/modules/vaults/processing-tx/onchain/vault-managing.service.ts:85</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+                        <div class="io-description"><p>Create a new vault with the specified configuration</p>
+</div>
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>vaultConfig</td>
+                                            <td>
+                                                            <code><a href="../interfaces/VaultCreateConfig.html" target="_self" >VaultCreateConfig</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>Promise&lt;literal type&gt;</code>
+
+                        </div>
+                            <div class="io-description">
+                                <p>Transaction hash and vault ID</p>
+
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="submitOnChainVaultTx"></a>
+                    <span class="name">
+                            <span class="modifier">Async</span>
+                        <span ><b>submitOnChainVaultTx</b></span>
+                        <a href="#submitOnChainVaultTx"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>submitOnChainVaultTx(signedTx: literal type)</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="366"
+                                    class="link-to-prism">src/modules/vaults/processing-tx/onchain/vault-managing.service.ts:366</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+                        <div class="io-description"><p>Submit a signed vault transaction to the blockchain</p>
+</div>
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                                <td>Description</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>signedTx</td>
+                                            <td>
+                                                        <code>literal type</code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                            <td>
+                                                    <p>Object containing the transaction and signatures</p>
+
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>Promise&lt;literal type&gt;</code>
+
+                        </div>
+                            <div class="io-description">
+                                <p>Transaction hash</p>
+
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="updateVaultMetadataTx"></a>
+                    <span class="name">
+                            <span class="modifier">Async</span>
+                        <span ><b>updateVaultMetadataTx</b></span>
+                        <a href="#updateVaultMetadataTx"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>updateVaultMetadataTx(vaultConfig: <a href="../interfaces/VaultConfig.html" target="_self">VaultConfig</a>)</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="289"
+                                    class="link-to-prism">src/modules/vaults/processing-tx/onchain/vault-managing.service.ts:289</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>vaultConfig</td>
+                                            <td>
+                                                            <code><a href="../interfaces/VaultConfig.html" target="_self" >VaultConfig</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>unknown</code>
+
+                        </div>
+                            <div class="io-description">
+                                
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+</section>
+            <section data-compodoc="block-properties">
+    
+    <h3 id="inputs">
+        Properties
+    </h3>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="adminHash"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                            <span class="modifier">Readonly</span>
+                        <span ><b>adminHash</b></span>
+                        <a href="#adminHash"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <i>Type : </i>        <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank" >string</a></code>
+
+                    </td>
+                </tr>
+                    <tr>
+                        <td class="col-md-4">
+                                <div class="io-line">Defined in <a href="" data-line="63" class="link-to-prism">src/modules/vaults/processing-tx/onchain/vault-managing.service.ts:63</a></div>
+                        </td>
+                    </tr>
+
+
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="adminSKey"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                            <span class="modifier">Readonly</span>
+                        <span ><b>adminSKey</b></span>
+                        <a href="#adminSKey"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <i>Type : </i>        <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank" >string</a></code>
+
+                    </td>
+                </tr>
+                    <tr>
+                        <td class="col-md-4">
+                                <div class="io-line">Defined in <a href="" data-line="64" class="link-to-prism">src/modules/vaults/processing-tx/onchain/vault-managing.service.ts:64</a></div>
+                        </td>
+                    </tr>
+
+
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="blockfrost"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                            <span class="modifier">Readonly</span>
+                        <span ><b>blockfrost</b></span>
+                        <a href="#blockfrost"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <i>Type : </i>        <code><a href="https://www.typescriptlang.org/docs/handbook/basic-types.html" target="_blank" >any</a></code>
+
+                    </td>
+                </tr>
+                    <tr>
+                        <td class="col-md-4">
+                                <div class="io-line">Defined in <a href="" data-line="65" class="link-to-prism">src/modules/vaults/processing-tx/onchain/vault-managing.service.ts:65</a></div>
+                        </td>
+                    </tr>
+
+
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="logger"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                            <span class="modifier">Readonly</span>
+                        <span ><b>logger</b></span>
+                        <a href="#logger"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <i>Default value : </i><code>new Logger(VaultManagingService.name)</code>
+                    </td>
+                </tr>
+                    <tr>
+                        <td class="col-md-4">
+                                <div class="io-line">Defined in <a href="" data-line="60" class="link-to-prism">src/modules/vaults/processing-tx/onchain/vault-managing.service.ts:60</a></div>
+                        </td>
+                    </tr>
+
+
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="scAddress"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                        <span ><b>scAddress</b></span>
+                        <a href="#scAddress"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <i>Type : </i>        <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank" >string</a></code>
+
+                    </td>
+                </tr>
+                    <tr>
+                        <td class="col-md-4">
+                                <div class="io-line">Defined in <a href="" data-line="61" class="link-to-prism">src/modules/vaults/processing-tx/onchain/vault-managing.service.ts:61</a></div>
+                        </td>
+                    </tr>
+
+
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="scPolicyId"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                            <span class="modifier">Readonly</span>
+                        <span ><b>scPolicyId</b></span>
+                        <a href="#scPolicyId"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <i>Type : </i>        <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank" >string</a></code>
+
+                    </td>
+                </tr>
+                    <tr>
+                        <td class="col-md-4">
+                                <div class="io-line">Defined in <a href="" data-line="62" class="link-to-prism">src/modules/vaults/processing-tx/onchain/vault-managing.service.ts:62</a></div>
+                        </td>
+                    </tr>
+
+
+        </tbody>
+    </table>
+</section>
+
+    </div>
+
+
+    <div class="tab-pane fade  tab-source-code" id="source">
+        <pre class="line-numbers compodoc-sourcecode"><code class="language-typescript">import { Buffer } from &#x27;node:buffer&#x27;;
+
+import { BlockFrostAPI } from &#x27;@blockfrost/blockfrost-js&#x27;;
+import {
+  EnterpriseAddress,
+  ScriptHash,
+  Credential,
+  Address,
+  FixedTransaction,
+  PrivateKey,
+} from &#x27;@emurgo/cardano-serialization-lib-nodejs&#x27;;
+import { Inject, Injectable, Logger } from &#x27;@nestjs/common&#x27;;
+import { ConfigService } from &#x27;@nestjs/config&#x27;;
+
+import { BlockchainService } from &#x27;./blockchain.service&#x27;;
+import { Datum1 } from &#x27;./types/type&#x27;;
+import { generate_assetname_from_txhash_index, getUtxos, getVaultUtxo, toHex } from &#x27;./utils/lib&#x27;;
+
+export interface VaultConfig {
+  vaultName: string;
+  customerAddress: string;
+  adminKeyHash: string;
+  policyId: string;
+  allowedPolicies: string[];
+  assetWindow?: {
+    start: number;
+    end: number;
+  };
+  acquireWindow?: {
+    start: number;
+    end: number;
+  };
+  contractType?: number; // 0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE
+  valueMethod?: number; // 0: FIXED | 1: LBE
+  customMetadata?: [string, string][];
+}
+
+export interface VaultCreateConfig {
+  vaultName: string;
+  customerAddress: string;
+  vaultId: string;
+  allowedPolicies: string[];
+  assetWindow?: {
+    start: number;
+    end: number;
+  };
+  acquireWindow?: {
+    start: number;
+    end: number;
+  };
+  contractType?: number; // 0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE
+  valueMethod?: number; // 0: FIXED | 1: LBE
+  customMetadata?: [string, string][];
+}
+
+const one_day &#x3D; 24 * 60 * 60 * 1000;
+
+@Injectable()
+export class VaultManagingService {
+  private readonly logger &#x3D; new Logger(VaultManagingService.name);
+  private scAddress: string;
+  private readonly scPolicyId: string;
+  private readonly adminHash: string;
+  private readonly adminSKey: string;
+  private readonly blockfrost: any;
+
+  constructor(
+    private readonly configService: ConfigService,
+    @Inject(BlockchainService)
+    private readonly blockchainService: BlockchainService
+  ) {
+    this.scPolicyId &#x3D; this.configService.get&lt;string&gt;(&#x27;SC_POLICY_ID&#x27;);
+    this.adminHash &#x3D; this.configService.get&lt;string&gt;(&#x27;ADMIN_KEY_HASH&#x27;);
+    this.adminSKey &#x3D; this.configService.get&lt;string&gt;(&#x27;ADMIN_S_KEY&#x27;);
+    this.blockfrost &#x3D; new BlockFrostAPI({
+      projectId: this.configService.get&lt;string&gt;(&#x27;BLOCKFROST_TESTNET_API_KEY&#x27;),
+    });
+  }
+
+  /**
+   * Create a new vault with the specified configuration
+   * @param config Vault configuration parameters
+   * @returns Transaction hash and vault ID
+   */
+  async createOnChainVaultTx(vaultConfig: VaultCreateConfig): Promise&lt;{
+    presignedTx: string;
+    contractAddress: string;
+    vaultAssetName: string;
+  }&gt; {
+    this.scAddress &#x3D; EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
+      .to_address()
+      .to_bech32();
+
+    const utxos &#x3D; await getUtxos(Address.from_bech32(vaultConfig.customerAddress), 0, this.blockfrost); // Any UTXO works.
+    if (utxos.len() &#x3D;&#x3D;&#x3D; 0) {
+      throw new Error(&#x27;No UTXOs found.&#x27;);
+    }
+
+    const selectedUtxo &#x3D; utxos.get(0);
+    const REQUIRED_INPUTS &#x3D; [selectedUtxo.to_hex()];
+    const assetName &#x3D; generate_assetname_from_txhash_index(
+      selectedUtxo.input().transaction_id().to_hex(),
+      selectedUtxo.input().index()
+    );
+
+    try {
+      const input: {
+        changeAddress: string;
+        message: string;
+        mint: Array&lt;object&gt;;
+        scriptInteractions: object[];
+        outputs: {
+          address: string;
+          assets: object[];
+          datum: { type: &#x27;inline&#x27;; value: Datum1; shape: object };
+        }[];
+        requiredInputs: string[];
+      } &#x3D; {
+        changeAddress: vaultConfig.customerAddress,
+        message: vaultConfig.vaultName,
+        mint: [
+          {
+            version: &#x27;cip25&#x27;,
+            assetName: { name: assetName, format: &#x27;hex&#x27; },
+            policyId: this.scPolicyId,
+            type: &#x27;plutus&#x27;,
+            quantity: 1,
+            metadata: {},
+          },
+        ],
+        scriptInteractions: [
+          {
+            purpose: &#x27;mint&#x27;,
+            hash: this.scPolicyId,
+            redeemer: {
+              type: &#x27;json&#x27;,
+              value: {
+                vault_token_index: 0,
+                asset_name: assetName,
+              },
+            },
+          },
+        ],
+        outputs: [
+          {
+            address: this.scAddress,
+            assets: [
+              {
+                assetName: { name: assetName, format: &#x27;hex&#x27; },
+                policyId: this.scPolicyId,
+                quantity: 1,
+              },
+            ],
+            datum: {
+              type: &#x27;inline&#x27;,
+              value: {
+                contract_type: vaultConfig.contractType,
+                asset_whitelist: vaultConfig.allowedPolicies,
+                // contributor_whitelist: [],
+                asset_window: {
+                  // Time allowed to upload NFT
+                  lower_bound: {
+                    bound_type: new Date().getTime(),
+                    is_inclusive: true,
+                  },
+                  upper_bound: {
+                    bound_type: new Date().getTime() + one_day,
+                    is_inclusive: true,
+                  },
+                },
+                investment_window: {
+                  // Time allowed to upload ADA
+                  lower_bound: {
+                    bound_type: new Date().getTime(),
+                    is_inclusive: true,
+                  },
+                  upper_bound: {
+                    bound_type: new Date().getTime() + one_day,
+                    is_inclusive: true,
+                  },
+                },
+                valuation_type: vaultConfig.valueMethod, // Enum 0: &#x27;FIXED&#x27; 1: &#x27;LBE&#x27;
+                // fractionalization: {
+                //   percentage: 1,
+                //   token_supply: 1,
+                //   token_decimals: 1,
+                //   token_policy: &quot;&quot;,
+                // },
+                custom_metadata: [
+                  // &lt;Data,Data&gt;
+                  // [
+                  //   PlutusData.new_bytes(Buffer.from(&quot;foo&quot;)).to_hex(),
+                  //   PlutusData.new_bytes(Buffer.from(&quot;bar&quot;)).to_hex(),
+                  // ],
+                  [toHex(&#x27;foo&#x27;), toHex(&#x27;bar&#x27;)],
+                  [toHex(&#x27;bar&#x27;), toHex(&#x27;foo&#x27;)],
+                  [toHex(&#x27;vaultId&#x27;), toHex(vaultConfig.vaultId)],
+                ], // like a tuple
+
+                // termination: {
+                //   termination_type: 1,
+                //   fdp: 1,
+                // },
+                // investment: {
+                //   reserve: 1,
+                //   liquidityPool: 1,
+                // },
+                admin: this.adminHash,
+                minting_key: this.adminHash,
+              },
+              shape: {
+                validatorHash: this.scPolicyId,
+                purpose: &#x27;spend&#x27;,
+              },
+            },
+          },
+        ],
+        requiredInputs: REQUIRED_INPUTS,
+      };
+      // Build the transaction using BlockchainService
+      const buildResponse &#x3D; await this.blockchainService.buildTransaction(input);
+
+      // Sign the transaction
+      const txToSubmitOnChain &#x3D; FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, &#x27;hex&#x27;));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+      return {
+        presignedTx: txToSubmitOnChain.to_hex(),
+        contractAddress: this.scAddress,
+        vaultAssetName: assetName,
+      };
+    } catch (error) {
+      this.logger.error(&#x27;Failed to create vault:&#x27;, error);
+      throw error;
+    }
+  }
+
+  async createBurnTx(burnConfig: { customerAddress: string; assetVaultName: string }): Promise&lt;{
+    presignedTx: string;
+    contractAddress: string;
+  }&gt; {
+    const vaultUtxo &#x3D; await getVaultUtxo(this.scPolicyId, burnConfig.assetVaultName, this.blockfrost);
+    const input &#x3D; {
+      changeAddress: burnConfig.customerAddress,
+      message: &#x27;Vault Burn&#x27;,
+      scriptInteractions: [
+        {
+          purpose: &#x27;spend&#x27;,
+          outputRef: vaultUtxo,
+          hash: this.scPolicyId,
+          redeemer: {
+            type: &#x27;json&#x27;,
+            value: &#x27;VaultBurn&#x27;,
+          },
+        },
+        {
+          purpose: &#x27;mint&#x27;,
+          hash: this.scPolicyId,
+          redeemer: {
+            type: &#x27;json&#x27;,
+            value: &#x27;VaultBurn&#x27;,
+          },
+        },
+      ],
+      mint: [
+        {
+          version: &#x27;cip25&#x27;,
+          assetName: { name: burnConfig.assetVaultName, format: &#x27;hex&#x27; },
+          policyId: this.scPolicyId,
+          type: &#x27;plutus&#x27;,
+          quantity: -1,
+        },
+      ],
+      requiredSigners: [this.adminHash],
+    };
+    const buildResponse &#x3D; await this.blockchainService.buildTransaction(input);
+
+    // Sign the transaction
+    const txToSubmitOnChain &#x3D; FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, &#x27;hex&#x27;));
+    txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+    return {
+      presignedTx: txToSubmitOnChain.to_hex(),
+      contractAddress: this.scAddress,
+    };
+  }
+
+  // Create a transaction to update the vault&#x27;s metadata
+  async updateVaultMetadataTx(vaultConfig: VaultConfig) {
+    this.scAddress &#x3D; EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
+      .to_address()
+      .to_bech32();
+
+    const vaultUtxo &#x3D; await getVaultUtxo(this.scPolicyId, vaultConfig.vaultName, this.blockfrost);
+    const input &#x3D; {
+      changeAddress: vaultConfig.customerAddress,
+      message: &#x27;Vault Update&#x27;,
+      scriptInteractions: [
+        {
+          purpose: &#x27;spend&#x27;,
+          outputRef: vaultUtxo,
+          hash: this.scPolicyId,
+          redeemer: {
+            type: &#x27;json&#x27;,
+            value: {
+              vault_token_index: 0, // must fit the ordering defined in the outputs array
+              asset_name: vaultConfig.vaultName,
+            },
+          },
+        },
+      ],
+      outputs: [
+        {
+          address: this.scAddress,
+          assets: [
+            {
+              assetName: vaultConfig.vaultName,
+              policyId: this.scPolicyId,
+              quantity: 1,
+            },
+          ],
+          datum: {
+            type: &#x27;inline&#x27;,
+            value: {
+              contract_type: vaultConfig.contractType, // Represent an enum setup by L4VA (0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE)
+              asset_whitelist: vaultConfig.allowedPolicies,
+              // contributor_whitelist: [],
+              asset_window: vaultConfig.assetWindow,
+              acquire_window: vaultConfig.acquireWindow,
+              valuation_type: vaultConfig.valueMethod, // Enum 0: &#x27;FIXED&#x27; 1: &#x27;LBE&#x27;
+              custom_metadata: vaultConfig.customMetadata || [],
+              admin: this.adminHash,
+              minting_key: this.adminHash,
+            },
+            shape: {
+              validatorHash: this.scPolicyId,
+              purpose: &#x27;spend&#x27;,
+            },
+          },
+        },
+      ],
+    };
+
+    try {
+      // Build the transaction using BlockchainService
+      const buildResponse &#x3D; await this.blockchainService.buildTransaction(input);
+
+      const txToSubmitOnChain &#x3D; FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, &#x27;hex&#x27;));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+      return {
+        presignedTx: txToSubmitOnChain.to_hex(),
+        contractAddress: this.scAddress,
+      };
+    } catch (error) {
+      this.logger.error(&#x27;Failed to build vault update tx:&#x27;, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Submit a signed vault transaction to the blockchain
+   * @param signedTx Object containing the transaction and signatures
+   * @returns Transaction hash
+   */
+  async submitOnChainVaultTx(signedTx: { transaction: string; signatures: string | string[] }): Promise&lt;{
+    txHash: string;
+  }&gt; {
+    try {
+      // Ensure signatures is always an array
+      const signatures &#x3D; Array.isArray(signedTx.signatures) ? signedTx.signatures : [signedTx.signatures];
+
+      const result &#x3D; await this.blockchainService.submitTransaction({
+        transaction: signedTx.transaction,
+        signatures,
+      });
+
+      return { txHash: result.txHash };
+    } catch (error) {
+      this.logger.error(&#x27;Failed to submit vault transaction&#x27;, error);
+      throw new Error(&#x60;Failed to submit transaction: ${error.message}&#x60;);
+    }
+  }
+}
+</code></pre>
+    </div>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+                   </div><div class="search-results">
+    <div class="has-results">
+        <h1 class="search-results-title"><span class='search-results-count'></span> results matching "<span class='search-query'></span>"</h1>
+        <ul class="search-results-list"></ul>
+    </div>
+    <div class="no-results">
+        <h1 class="search-results-title">No results matching "<span class='search-query'></span>"</h1>
+    </div>
+</div>
+</div>
+               <!-- END CONTENT -->
+           </div>
+       </div>
+
+          <label class="dark-mode-switch">
+               <input type="checkbox">
+               <span class="slider">
+                    <svg class="slider-icon" viewBox="0 0 24 24" fill="none" height="20" stroke="#000" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" width="20" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"></path>
+                    </svg>
+               </span>
+          </label>
+
+       <script>
+            var COMPODOC_CURRENT_PAGE_DEPTH = 1;
+            var COMPODOC_CURRENT_PAGE_CONTEXT = 'injectable';
+            var COMPODOC_CURRENT_PAGE_URL = 'VaultManagingService.html';
+            var MAX_SEARCH_RESULTS = 15;
+       </script>
+
+       <script>
+               $darkModeToggleSwitchers = document.querySelectorAll('.dark-mode-switch input');
+               checkToggle(darkModeState);
+               if ($darkModeToggleSwitchers.length > 0) {
+                    for (var i = 0; i < $darkModeToggleSwitchers.length; i++) {
+                         $darkModeToggleSwitchers[i].addEventListener('change', function (event) {
+                              darkModeState = !darkModeState;
+                              toggleDarkMode(darkModeState);
+                         });
+                    }
+               }
+          </script>
+
+       <script src="../js/libs/custom-elements.min.js"></script>
+       <script src="../js/libs/lit-html.js"></script>
+
+       <script src="../js/menu-wc.js" defer></script>
+       <script nomodule src="../js/menu-wc_es5.js" defer></script>
+
+       <script src="../js/libs/bootstrap-native.js"></script>
+
+       <script src="../js/libs/es6-shim.min.js"></script>
+       <script src="../js/libs/EventDispatcher.js"></script>
+       <script src="../js/libs/promise.min.js"></script>
+
+       <script src="../js/compodoc.js"></script>
+
+       <script src="../js/tabs.js"></script>
+       <script src="../js/menu.js"></script>
+       <script src="../js/libs/clipboard.min.js"></script>
+       <script src="../js/libs/prism.js"></script>
+       <script src="../js/sourceCode.js"></script>
+          <script src="../js/search/search.js"></script>
+          <script src="../js/search/lunr.min.js"></script>
+          <script src="../js/search/search-lunr.js"></script>
+          <script src="../js/search/search_index.js"></script>
+       <script src="../js/lazy-load-graphs.js"></script>
+
+
+    </body>
+</html>

@@ -1,0 +1,1002 @@
+<!doctype html>
+<html class="no-js" lang="">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="x-ua-compatible" content="ie=edge">
+        <title>project-name documentation</title>
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+
+        <link rel="icon" type="image/x-icon" href="../images/favicon.ico">
+	   <link rel="stylesheet" href="../styles/style.css">
+        <link rel="stylesheet" href="../styles/dark.css">
+    </head>
+    <body>
+          <script>
+               // Blocking script to avoid flickering dark mode
+               // Dark mode toggle button
+               var useDark = window.matchMedia('(prefers-color-scheme: dark)');
+               var darkModeState = useDark.matches;
+               var $darkModeToggleSwitchers = document.querySelectorAll('.dark-mode-switch input');
+               var $darkModeToggles = document.querySelectorAll('.dark-mode-switch');
+               var darkModeStateLocal = localStorage.getItem('compodoc_darkmode-state');
+
+               function checkToggle(check) {
+                    for (var i = 0; i < $darkModeToggleSwitchers.length; i++) {
+                         $darkModeToggleSwitchers[i].checked = check;
+                    }
+               }
+
+               function toggleDarkMode(state) {
+                    if (window.localStorage) {
+                         localStorage.setItem('compodoc_darkmode-state', state);
+                    }
+
+                    checkToggle(state);
+
+                    const hasClass = document.body.classList.contains('dark');
+
+                    if (state) {
+                         for (var i = 0; i < $darkModeToggles.length; i++) {
+                              $darkModeToggles[i].classList.add('dark');
+                         }
+                         if (!hasClass) {
+                              document.body.classList.add('dark');
+                         }
+                    } else {
+                         for (var i = 0; i < $darkModeToggles.length; i++) {
+                              $darkModeToggles[i].classList.remove('dark');
+                         }
+                         if (hasClass) {
+                              document.body.classList.remove('dark');
+                         }
+                    }
+               }
+
+               useDark.addEventListener('change', function (evt) {
+                    toggleDarkMode(evt.matches);
+               });
+               if (darkModeStateLocal) {
+                    darkModeState = darkModeStateLocal === 'true';
+               }
+               toggleDarkMode(darkModeState);
+          </script>
+
+        <div class="navbar navbar-default navbar-fixed-top d-md-none p-0">
+               <div class="d-flex">
+                    <a href="../" class="navbar-brand">project-name documentation</a>
+                    <button type="button" class="btn btn-default btn-menu ion-ios-menu" id="btn-menu"></button>
+               </div>
+        </div>
+
+        <div class="xs-menu menu" id="mobile-menu">
+                <div id="book-search-input" role="search"><input type="text" placeholder="Type to search"></div>            <compodoc-menu></compodoc-menu>
+        </div>
+
+        <div class="container-fluid main">
+           <div class="row main">
+               <div class="d-none d-md-block menu">
+                   <compodoc-menu mode="normal"></compodoc-menu>
+               </div>
+               <!-- START CONTENT -->
+               <div class="content controller">
+                   <div class="content-data">
+
+
+
+
+
+<ol class="breadcrumb">
+  <li class="breadcrumb-item">Controllers</li>
+  <li class="breadcrumb-item" >BlockchainController</li>
+</ol>
+
+<ul class="nav nav-tabs" role="tablist">
+        <li class="nav-item">
+            <a href="#info" 
+                class="nav-link"
+                class="nav-link active"
+                role="tab" id="info-tab" data-bs-toggle="tab" data-link="info">Info</a>
+        </li>
+        <li class="nav-item">
+            <a href="#source" 
+                class="nav-link"
+                
+                role="tab" id="source-tab" data-bs-toggle="tab" data-link="source">Source</a>
+        </li>
+</ul>
+
+<div class="tab-content">
+    <div class="tab-pane fade active in" id="info">
+        <p class="comment">
+            <h3>File</h3>
+        </p>
+        <p class="comment">
+            <code>src/modules/vaults/processing-tx/onchain/blockchain.controller.ts</code>
+        </p>
+
+            <p class="comment">
+                <h3>Prefix</h3>
+            </p>
+            <p class="comment">
+                <code>blockchain</code>
+            </p>
+
+
+
+
+
+
+            <section data-compodoc="block-index">
+    <h3 id="index">Index</h3>
+    <table class="table table-sm table-bordered index-table">
+        <tbody>
+
+                <tr>
+                    <td class="col-md-4">
+                        <h6><b>Methods</b></h6>
+                    </td>
+                </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <ul class="index-list">
+                            <li>
+                                    <span class="modifier"></span>
+                                    <span class="modifier"></span>
+                                    <span class="modifier"></span>
+                                    <span class="modifier"></span>
+                                    <span class="modifier">Async</span>
+                                <a href="#buildTransaction" >buildTransaction</a>
+                            </li>
+                            <li>
+                                    <span class="modifier"></span>
+                                    <span class="modifier"></span>
+                                    <span class="modifier"></span>
+                                    <span class="modifier"></span>
+                                    <span class="modifier">Async</span>
+                                <a href="#burnVault" >burnVault</a>
+                            </li>
+                            <li>
+                                    <span class="modifier"></span>
+                                    <span class="modifier"></span>
+                                    <span class="modifier"></span>
+                                    <span class="modifier"></span>
+                                    <span class="modifier"></span>
+                                    <span class="modifier">Async</span>
+                                <a href="#handleWebhook" >handleWebhook</a>
+                            </li>
+                            <li>
+                                    <span class="modifier"></span>
+                                    <span class="modifier"></span>
+                                    <span class="modifier"></span>
+                                    <span class="modifier"></span>
+                                    <span class="modifier"></span>
+                                    <span class="modifier">Async</span>
+                                <a href="#scannerWh" >scannerWh</a>
+                            </li>
+                            <li>
+                                    <span class="modifier"></span>
+                                    <span class="modifier"></span>
+                                    <span class="modifier"></span>
+                                    <span class="modifier"></span>
+                                    <span class="modifier">Async</span>
+                                <a href="#submitTransaction" >submitTransaction</a>
+                            </li>
+                            <li>
+                                    <span class="modifier"></span>
+                                    <span class="modifier"></span>
+                                    <span class="modifier"></span>
+                                    <span class="modifier"></span>
+                                    <span class="modifier">Async</span>
+                                <a href="#updateVaultMetadata" >updateVaultMetadata</a>
+                            </li>
+                        </ul>
+                    </td>
+                </tr>
+
+
+
+
+
+        </tbody>
+    </table>
+</section>
+
+            <section data-compodoc="block-methods">
+    
+    <h3 id="methods">
+        Methods
+    </h3>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="buildTransaction"></a>
+                    <span class="name">
+                            <span class="modifier"></span>
+                            <span class="modifier"></span>
+                            <span class="modifier"></span>
+                            <span class="modifier"></span>
+                            <span class="modifier">Async</span>
+                        <span ><b>buildTransaction</b></span>
+                        <a href="#buildTransaction"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>buildTransaction(params: <a href="../classes/BuildTransactionDto.html" target="_self">BuildTransactionDto</a>)</code>
+                </td>
+            </tr>
+
+            <tr>
+                <td class="col-md-4">
+                    <b>Decorators : </b>
+                    <br />
+                    <code>@Post(&#x27;transaction/build&#x27;)<br />@ApiOperation({summary: &#x27;Build a Cardano transaction&#x27;})<br />@ApiResponse({status: 200, description: &#x27;Transaction built successfully&#x27;, type: TransactionBuildResponseDto})<br />@UseGuards(AuthGuard)<br /></code>
+                </td>
+            </tr>
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="34"
+                                    class="link-to-prism">src/modules/vaults/processing-tx/onchain/blockchain.controller.ts:34</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>params</td>
+                                            <td>
+                                                            <code><a href="../classes/BuildTransactionDto.html" target="_self" >BuildTransactionDto</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>        <code><a href="../classes/TransactionBuildResponseDto.html" target="_self" >Promise&lt;TransactionBuildResponseDto&gt;</a></code>
+
+                        </div>
+                            <div class="io-description">
+                                
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="burnVault"></a>
+                    <span class="name">
+                            <span class="modifier"></span>
+                            <span class="modifier"></span>
+                            <span class="modifier"></span>
+                            <span class="modifier"></span>
+                            <span class="modifier">Async</span>
+                        <span ><b>burnVault</b></span>
+                        <a href="#burnVault"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>burnVault(req, data: <a href="https://www.typescriptlang.org/docs/handbook/basic-types.html" target="_blank">any</a>)</code>
+                </td>
+            </tr>
+
+            <tr>
+                <td class="col-md-4">
+                    <b>Decorators : </b>
+                    <br />
+                    <code>@Post(&#x27;burn-vault&#x27;)<br />@ApiOperation({summary: &#x27;Build a Cardano transaction for burn vault&#x27;})<br />@ApiResponse({status: 200, description: &#x27;Transaction built successfully&#x27;, type: TransactionBuildResponseDto})<br />@UseGuards(AuthGuard)<br /></code>
+                </td>
+            </tr>
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="45"
+                                    class="link-to-prism">src/modules/vaults/processing-tx/onchain/blockchain.controller.ts:45</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>req</td>
+                                            <td>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                        <tr>
+                                                <td>data</td>
+                                            <td>
+                                                            <code><a href="https://www.typescriptlang.org/docs/handbook/basic-types.html" target="_blank" >any</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>Promise&lt;any&gt;</code>
+
+                        </div>
+                            <div class="io-description">
+                                
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="handleWebhook"></a>
+                    <span class="name">
+                            <span class="modifier"></span>
+                            <span class="modifier"></span>
+                            <span class="modifier"></span>
+                            <span class="modifier"></span>
+                            <span class="modifier"></span>
+                            <span class="modifier">Async</span>
+                        <span ><b>handleWebhook</b></span>
+                        <a href="#handleWebhook"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>handleWebhook(event: <a href="../classes/BlockchainWebhookDto.html" target="_self">BlockchainWebhookDto</a>, req)</code>
+                </td>
+            </tr>
+
+            <tr>
+                <td class="col-md-4">
+                    <b>Decorators : </b>
+                    <br />
+                    <code>@Post(&#x27;tx-webhook&#x27;)<br />@HttpCode(200)<br />@ApiOperation({summary: &#x27;Webhook endpoint for blockchain events&#x27;})<br />@ApiResponse({status: 200, description: &#x27;Blockchain event processed successfully&#x27;, type: Object})<br />@ApiResponse({status: 401, description: &#x27;Invalid webhook signature&#x27;})<br /></code>
+                </td>
+            </tr>
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="115"
+                                    class="link-to-prism">src/modules/vaults/processing-tx/onchain/blockchain.controller.ts:115</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>event</td>
+                                            <td>
+                                                            <code><a href="../classes/BlockchainWebhookDto.html" target="_self" >BlockchainWebhookDto</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                        <tr>
+                                                <td>req</td>
+                                            <td>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>Promise&lt;literal type&gt;</code>
+
+                        </div>
+                            <div class="io-description">
+                                
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="scannerWh"></a>
+                    <span class="name">
+                            <span class="modifier"></span>
+                            <span class="modifier"></span>
+                            <span class="modifier"></span>
+                            <span class="modifier"></span>
+                            <span class="modifier"></span>
+                            <span class="modifier">Async</span>
+                        <span ><b>scannerWh</b></span>
+                        <a href="#scannerWh"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>scannerWh(event: <a href="https://www.typescriptlang.org/docs/handbook/basic-types.html" target="_blank">any</a>, _req)</code>
+                </td>
+            </tr>
+
+            <tr>
+                <td class="col-md-4">
+                    <b>Decorators : </b>
+                    <br />
+                    <code>@Post(&#x27;scanner-wh&#x27;)<br />@HttpCode(200)<br />@ApiOperation({summary: &#x27;Webhook endpoint for scanner events&#x27;})<br />@ApiResponse({status: 200, description: &#x27;Blockchain event processed successfully&#x27;, type: Object})<br />@ApiResponse({status: 401, description: &#x27;Invalid webhook signature&#x27;})<br /></code>
+                </td>
+            </tr>
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="86"
+                                    class="link-to-prism">src/modules/vaults/processing-tx/onchain/blockchain.controller.ts:86</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>event</td>
+                                            <td>
+                                                            <code><a href="https://www.typescriptlang.org/docs/handbook/basic-types.html" target="_blank" >any</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                        <tr>
+                                                <td>_req</td>
+                                            <td>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>unknown</code>
+
+                        </div>
+                            <div class="io-description">
+                                
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="submitTransaction"></a>
+                    <span class="name">
+                            <span class="modifier"></span>
+                            <span class="modifier"></span>
+                            <span class="modifier"></span>
+                            <span class="modifier"></span>
+                            <span class="modifier">Async</span>
+                        <span ><b>submitTransaction</b></span>
+                        <a href="#submitTransaction"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>submitTransaction(params: <a href="../classes/SubmitTransactionDto.html" target="_self">SubmitTransactionDto</a>)</code>
+                </td>
+            </tr>
+
+            <tr>
+                <td class="col-md-4">
+                    <b>Decorators : </b>
+                    <br />
+                    <code>@Post(&#x27;transaction/submit&#x27;)<br />@ApiOperation({summary: &#x27;Submit a signed Cardano transaction&#x27;})<br />@ApiResponse({status: 200, description: &#x27;Transaction submitted successfully&#x27;, type: TransactionSubmitResponseDto})<br />@UseGuards(AuthGuard)<br /></code>
+                </td>
+            </tr>
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="70"
+                                    class="link-to-prism">src/modules/vaults/processing-tx/onchain/blockchain.controller.ts:70</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>params</td>
+                                            <td>
+                                                            <code><a href="../classes/SubmitTransactionDto.html" target="_self" >SubmitTransactionDto</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>        <code><a href="../classes/TransactionSubmitResponseDto.html" target="_self" >Promise&lt;TransactionSubmitResponseDto&gt;</a></code>
+
+                        </div>
+                            <div class="io-description">
+                                
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="updateVaultMetadata"></a>
+                    <span class="name">
+                            <span class="modifier"></span>
+                            <span class="modifier"></span>
+                            <span class="modifier"></span>
+                            <span class="modifier"></span>
+                            <span class="modifier">Async</span>
+                        <span ><b>updateVaultMetadata</b></span>
+                        <a href="#updateVaultMetadata"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>updateVaultMetadata(params: <a href="../interfaces/VaultConfig.html" target="_self">VaultConfig</a>)</code>
+                </td>
+            </tr>
+
+            <tr>
+                <td class="col-md-4">
+                    <b>Decorators : </b>
+                    <br />
+                    <code>@Post(&#x27;vault/update&#x27;)<br />@ApiOperation({summary: &#x27;Update vault metadata&#x27;})<br />@ApiResponse({status: 200, description: &#x27;Vault updated successfully&#x27;, type: Object})<br />@UseGuards(AuthGuard)<br /></code>
+                </td>
+            </tr>
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="58"
+                                    class="link-to-prism">src/modules/vaults/processing-tx/onchain/blockchain.controller.ts:58</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>params</td>
+                                            <td>
+                                                            <code><a href="../interfaces/VaultConfig.html" target="_self" >VaultConfig</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>unknown</code>
+
+                        </div>
+                            <div class="io-description">
+                                
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+</section>    </div>
+
+
+    <div class="tab-pane fade  tab-source-code" id="source">
+        <pre class="line-numbers compodoc-sourcecode"><code class="language-typescript">import { Body, Controller, Post, UseGuards, HttpCode, Request, UnauthorizedException } from &#x27;@nestjs/common&#x27;;
+import { ApiOperation, ApiResponse, ApiTags } from &#x27;@nestjs/swagger&#x27;;
+
+import {
+  BuildTransactionDto,
+  SubmitTransactionDto,
+  TransactionBuildResponseDto,
+  TransactionSubmitResponseDto,
+} from &#x27;./dto/transaction.dto&#x27;;
+import { BlockchainWebhookDto } from &#x27;./dto/webhook.dto&#x27;;
+import { VaultInsertingService } from &#x27;./vault-inserting.service&#x27;;
+import { VaultConfig, VaultManagingService } from &#x27;./vault-managing.service&#x27;;
+import { WebhookVerificationService } from &#x27;./webhook-verification.service&#x27;;
+
+import { AuthGuard } from &#x27;@/modules/auth/auth.guard&#x27;;
+
+@ApiTags(&#x27;blockchain&#x27;)
+@Controller(&#x27;blockchain&#x27;)
+export class BlockchainController {
+  constructor(
+    private readonly transactionService: VaultInsertingService,
+    private readonly webhookVerificationService: WebhookVerificationService,
+    private readonly vaultManagingService: VaultManagingService
+  ) {}
+
+  @Post(&#x27;transaction/build&#x27;)
+  @ApiOperation({ summary: &#x27;Build a Cardano transaction&#x27; })
+  @ApiResponse({
+    status: 200,
+    description: &#x27;Transaction built successfully&#x27;,
+    type: TransactionBuildResponseDto,
+  })
+  @UseGuards(AuthGuard)
+  async buildTransaction(@Body() params: BuildTransactionDto): Promise&lt;TransactionBuildResponseDto&gt; {
+    return this.transactionService.buildTransaction(params);
+  }
+  @Post(&#x27;burn-vault&#x27;)
+  @ApiOperation({ summary: &#x27;Build a Cardano transaction for burn vault&#x27; })
+  @ApiResponse({
+    status: 200,
+    description: &#x27;Transaction built successfully&#x27;,
+    type: TransactionBuildResponseDto,
+  })
+  @UseGuards(AuthGuard)
+  async burnVault(@Request() req, @Body() data: any): Promise&lt;any&gt; {
+    const userId &#x3D; req.user.sub;
+    return this.transactionService.handleBurnVault(userId, data.vaultId);
+  }
+
+  @Post(&#x27;vault/update&#x27;)
+  @ApiOperation({ summary: &#x27;Update vault metadata&#x27; })
+  @ApiResponse({
+    status: 200,
+    description: &#x27;Vault updated successfully&#x27;,
+    type: Object,
+  })
+  @UseGuards(AuthGuard)
+  async updateVaultMetadata(@Body() params: VaultConfig) {
+    return this.vaultManagingService.updateVaultMetadataTx(params);
+  }
+
+  @Post(&#x27;transaction/submit&#x27;)
+  @ApiOperation({ summary: &#x27;Submit a signed Cardano transaction&#x27; })
+  @ApiResponse({
+    status: 200,
+    description: &#x27;Transaction submitted successfully&#x27;,
+    type: TransactionSubmitResponseDto,
+  })
+  @UseGuards(AuthGuard)
+  async submitTransaction(@Body() params: SubmitTransactionDto): Promise&lt;TransactionSubmitResponseDto&gt; {
+    return this.transactionService.submitTransaction(params);
+  }
+
+  @Post(&#x27;scanner-wh&#x27;)
+  @HttpCode(200)
+  @ApiOperation({ summary: &#x27;Webhook endpoint for scanner events&#x27; })
+  @ApiResponse({
+    status: 200,
+    description: &#x27;Blockchain event processed successfully&#x27;,
+    type: Object,
+  })
+  @ApiResponse({
+    status: 401,
+    description: &#x27;Invalid webhook signature&#x27;,
+  })
+  async scannerWh(@Body() event: any, @Request() _req) {
+    try {
+      await this.transactionService.handleScannerEvent(event);
+
+      return {
+        status: &#x27;success&#x27;,
+        details: &#x27;txSummary&#x27;,
+      };
+    } catch (error) {
+      console.error(&#x27;Error processing webhook:&#x27;, error);
+      return {
+        status: &#x27;error&#x27;,
+        details: error.message,
+      };
+    }
+  }
+
+  @Post(&#x27;tx-webhook&#x27;)
+  @HttpCode(200)
+  @ApiOperation({ summary: &#x27;Webhook endpoint for blockchain events&#x27; })
+  @ApiResponse({
+    status: 200,
+    description: &#x27;Blockchain event processed successfully&#x27;,
+    type: Object,
+  })
+  @ApiResponse({
+    status: 401,
+    description: &#x27;Invalid webhook signature&#x27;,
+  })
+  async handleWebhook(@Body() event: BlockchainWebhookDto, @Request() req): Promise&lt;{ status: string; details: any }&gt; {
+    const signature &#x3D; req.headers[&#x27;blockfrost-signature&#x27;];
+
+    // Get raw body from the request
+    let rawBody: string;
+    if (Buffer.isBuffer(req.body)) {
+      // If body-parser.raw() was used
+      rawBody &#x3D; req.body.toString(&#x27;utf8&#x27;);
+      // Parse the raw body into our DTO
+      event &#x3D; JSON.parse(rawBody);
+    } else {
+      // Fallback to stringifying the parsed body
+      rawBody &#x3D; JSON.stringify(req.body);
+    }
+
+    // Log headers and event info for debugging
+    console.log(&#x27;Received webhook event:&#x27;, {
+      signature,
+      timestamp: req.headers[&#x27;blockfrost-timestamp&#x27;],
+      eventId: event.id,
+      webhookId: event.webhook_id,
+      rawBodyLength: rawBody.length,
+      rawBodyPreview: rawBody.substring(0, 100) + &#x27;...&#x27;,
+    });
+
+    // Verify webhook signature using the raw body
+    const isValid &#x3D; this.webhookVerificationService.verifySignature(rawBody, signature);
+    if (!isValid) {
+      console.error(&#x27;Webhook signature verification failed:&#x27;, {
+        signature,
+        eventId: event.id,
+        webhookId: event.webhook_id,
+        rawBodyPreview: rawBody.substring(0, 100) + &#x27;...&#x27;,
+      });
+      throw new UnauthorizedException(&#x27;Invalid webhook signature&#x27;);
+    }
+
+    // Process the event
+    try {
+      await this.transactionService.handleBlockchainEvent(event);
+
+      // Return transaction summary
+      const txSummary &#x3D; event.payload.map(txEvent &#x3D;&gt; ({
+        txHash: txEvent.tx.hash,
+        blockHeight: txEvent.tx.block_height,
+        timestamp: txEvent.tx.block_time,
+        status: txEvent.tx.valid_contract ? &#x27;confirmed&#x27; : &#x27;failed&#x27;,
+        transfers: txEvent.outputs.map(output &#x3D;&gt; ({
+          recipient: output.address,
+          assets: output.amount.map(asset &#x3D;&gt; ({
+            unit: asset.unit,
+            quantity: asset.quantity,
+            type: asset.unit &#x3D;&#x3D;&#x3D; &#x27;lovelace&#x27; ? &#x27;ADA&#x27; : asset.quantity &#x3D;&#x3D;&#x3D; &#x27;1&#x27; ? &#x27;NFT&#x27; : &#x27;TOKEN&#x27;,
+          })),
+        })),
+      }));
+
+      return {
+        status: &#x27;success&#x27;,
+        details: txSummary,
+      };
+    } catch (error) {
+      console.error(&#x27;Error processing webhook:&#x27;, error);
+      return {
+        status: &#x27;error&#x27;,
+        details: error.message,
+      };
+    }
+  }
+}
+</code></pre>
+    </div>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                   </div><div class="search-results">
+    <div class="has-results">
+        <h1 class="search-results-title"><span class='search-results-count'></span> results matching "<span class='search-query'></span>"</h1>
+        <ul class="search-results-list"></ul>
+    </div>
+    <div class="no-results">
+        <h1 class="search-results-title">No results matching "<span class='search-query'></span>"</h1>
+    </div>
+</div>
+</div>
+               <!-- END CONTENT -->
+           </div>
+       </div>
+
+          <label class="dark-mode-switch">
+               <input type="checkbox">
+               <span class="slider">
+                    <svg class="slider-icon" viewBox="0 0 24 24" fill="none" height="20" stroke="#000" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" width="20" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"></path>
+                    </svg>
+               </span>
+          </label>
+
+       <script>
+            var COMPODOC_CURRENT_PAGE_DEPTH = 1;
+            var COMPODOC_CURRENT_PAGE_CONTEXT = 'controller';
+            var COMPODOC_CURRENT_PAGE_URL = 'BlockchainController.html';
+            var MAX_SEARCH_RESULTS = 15;
+       </script>
+
+       <script>
+               $darkModeToggleSwitchers = document.querySelectorAll('.dark-mode-switch input');
+               checkToggle(darkModeState);
+               if ($darkModeToggleSwitchers.length > 0) {
+                    for (var i = 0; i < $darkModeToggleSwitchers.length; i++) {
+                         $darkModeToggleSwitchers[i].addEventListener('change', function (event) {
+                              darkModeState = !darkModeState;
+                              toggleDarkMode(darkModeState);
+                         });
+                    }
+               }
+          </script>
+
+       <script src="../js/libs/custom-elements.min.js"></script>
+       <script src="../js/libs/lit-html.js"></script>
+
+       <script src="../js/menu-wc.js" defer></script>
+       <script nomodule src="../js/menu-wc_es5.js" defer></script>
+
+       <script src="../js/libs/bootstrap-native.js"></script>
+
+       <script src="../js/libs/es6-shim.min.js"></script>
+       <script src="../js/libs/EventDispatcher.js"></script>
+       <script src="../js/libs/promise.min.js"></script>
+
+       <script src="../js/compodoc.js"></script>
+
+       <script src="../js/tabs.js"></script>
+       <script src="../js/menu.js"></script>
+       <script src="../js/libs/clipboard.min.js"></script>
+       <script src="../js/libs/prism.js"></script>
+       <script src="../js/sourceCode.js"></script>
+          <script src="../js/search/search.js"></script>
+          <script src="../js/search/lunr.min.js"></script>
+          <script src="../js/search/search-lunr.js"></script>
+          <script src="../js/search/search_index.js"></script>
+       <script src="../js/lazy-load-graphs.js"></script>
+
+
+    </body>
+</html>

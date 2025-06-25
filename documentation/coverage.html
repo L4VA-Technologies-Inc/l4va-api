@@ -1,0 +1,2612 @@
+<!doctype html>
+<html class="no-js" lang="">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="x-ua-compatible" content="ie=edge">
+        <title>project-name documentation</title>
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+
+        <link rel="icon" type="image/x-icon" href="./images/favicon.ico">
+	   <link rel="stylesheet" href="./styles/style.css">
+        <link rel="stylesheet" href="./styles/dark.css">
+    </head>
+    <body>
+          <script>
+               // Blocking script to avoid flickering dark mode
+               // Dark mode toggle button
+               var useDark = window.matchMedia('(prefers-color-scheme: dark)');
+               var darkModeState = useDark.matches;
+               var $darkModeToggleSwitchers = document.querySelectorAll('.dark-mode-switch input');
+               var $darkModeToggles = document.querySelectorAll('.dark-mode-switch');
+               var darkModeStateLocal = localStorage.getItem('compodoc_darkmode-state');
+
+               function checkToggle(check) {
+                    for (var i = 0; i < $darkModeToggleSwitchers.length; i++) {
+                         $darkModeToggleSwitchers[i].checked = check;
+                    }
+               }
+
+               function toggleDarkMode(state) {
+                    if (window.localStorage) {
+                         localStorage.setItem('compodoc_darkmode-state', state);
+                    }
+
+                    checkToggle(state);
+
+                    const hasClass = document.body.classList.contains('dark');
+
+                    if (state) {
+                         for (var i = 0; i < $darkModeToggles.length; i++) {
+                              $darkModeToggles[i].classList.add('dark');
+                         }
+                         if (!hasClass) {
+                              document.body.classList.add('dark');
+                         }
+                    } else {
+                         for (var i = 0; i < $darkModeToggles.length; i++) {
+                              $darkModeToggles[i].classList.remove('dark');
+                         }
+                         if (hasClass) {
+                              document.body.classList.remove('dark');
+                         }
+                    }
+               }
+
+               useDark.addEventListener('change', function (evt) {
+                    toggleDarkMode(evt.matches);
+               });
+               if (darkModeStateLocal) {
+                    darkModeState = darkModeStateLocal === 'true';
+               }
+               toggleDarkMode(darkModeState);
+          </script>
+
+        <div class="navbar navbar-default navbar-fixed-top d-md-none p-0">
+               <div class="d-flex">
+                    <a href="./" class="navbar-brand">project-name documentation</a>
+                    <button type="button" class="btn btn-default btn-menu ion-ios-menu" id="btn-menu"></button>
+               </div>
+        </div>
+
+        <div class="xs-menu menu" id="mobile-menu">
+                <div id="book-search-input" role="search"><input type="text" placeholder="Type to search"></div>            <compodoc-menu></compodoc-menu>
+        </div>
+
+        <div class="container-fluid main">
+           <div class="row main">
+               <div class="d-none d-md-block menu">
+                   <compodoc-menu mode="normal"></compodoc-menu>
+               </div>
+               <!-- START CONTENT -->
+               <div class="content coverage">
+                   <div class="content-data">
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<ol class="breadcrumb">
+    <li class="breadcrumb-item">Documentation coverage</li>
+</ol>
+
+<div>
+    <img src="./images/coverage-badge-documentation.svg">
+</div>
+
+<table class="table table-bordered coverage" id="coverage-table">
+    <thead class="coverage-header">
+        <tr>
+            <th>File</th>
+            <th>Type</th>
+            <th>Identifier</th>
+            <th style="text-align:right" class="statements" data-sort-default>Statements</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./controllers/AppController.html">src/app.controller.ts</a>
+            </td>
+            <td>controller</td>
+            <td>AppController</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/2)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/AppService.html">src/app.service.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>AppService</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/2)</span>
+            </td>
+        </tr>
+        <tr class="very-good">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/variables.html#GetUser">src/common/decorators/get-user.decorator.ts</a>
+            </td>
+            <td>variable</td>
+            <td>GetUser</td>
+            <td align="right" data-sort="100">
+                <span class="coverage-percent">100 %</span>
+                <span class="coverage-count">(1/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/variables.html#configService">src/config/typeorm.config.ts</a>
+            </td>
+            <td>variable</td>
+            <td>configService</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./entitys/AcquirerWhitelistEntity.html">src/database/acquirerWhitelist.entity.ts</a>
+            </td>
+            <td>entity</td>
+            <td>AcquirerWhitelistEntity</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./entitys/Asset.html">src/database/asset.entity.ts</a>
+            </td>
+            <td>entity</td>
+            <td>Asset</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./entitys/AssetsWhitelistEntity.html">src/database/assetsWhitelist.entity.ts</a>
+            </td>
+            <td>entity</td>
+            <td>AssetsWhitelistEntity</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./entitys/ContributorWhitelistEntity.html">src/database/contributorWhitelist.entity.ts</a>
+            </td>
+            <td>entity</td>
+            <td>ContributorWhitelistEntity</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./entitys/FileEntity.html">src/database/file.entity.ts</a>
+            </td>
+            <td>entity</td>
+            <td>FileEntity</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./entitys/LinkEntity.html">src/database/link.entity.ts</a>
+            </td>
+            <td>entity</td>
+            <td>LinkEntity</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/DatabaseStruct1741879378411.html">src/database/migrations/1741879378411-databaseStruct.ts</a>
+            </td>
+            <td>class</td>
+            <td>DatabaseStruct1741879378411</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AddedTags1741943808652.html">src/database/migrations/1741943808652-AddedTags.ts</a>
+            </td>
+            <td>class</td>
+            <td>AddedTags1741943808652</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AddVaultLifecycleFields1741943808653.html">src/database/migrations/1741943808653-AddVaultLifecycleFields.ts</a>
+            </td>
+            <td>class</td>
+            <td>AddVaultLifecycleFields1741943808653</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/3)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/UpdateFieldsType1741946649594.html">src/database/migrations/1741946649594-updateFieldsType.ts</a>
+            </td>
+            <td>class</td>
+            <td>UpdateFieldsType1741946649594</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/UpdateRelationto1742209228422.html">src/database/migrations/1742209228422-updateRelationto.ts</a>
+            </td>
+            <td>class</td>
+            <td>UpdateRelationto1742209228422</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/ChangeIntervalToBigint1742311345554.html">src/database/migrations/1742311345554-changeIntervalToBigint.ts</a>
+            </td>
+            <td>class</td>
+            <td>ChangeIntervalToBigint1742311345554</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/RenameVaultField1742382533813.html">src/database/migrations/1742382533813-RenameVaultField.ts</a>
+            </td>
+            <td>class</td>
+            <td>RenameVaultField1742382533813</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AddedContributorWhitelist1742484041497.html">src/database/migrations/1742484041497-AddedContributorWhitelist.ts</a>
+            </td>
+            <td>class</td>
+            <td>AddedContributorWhitelist1742484041497</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/RenameFieldFixEnum1742800375799.html">src/database/migrations/1742800375799-renameFieldFixEnum.ts</a>
+            </td>
+            <td>class</td>
+            <td>RenameFieldFixEnum1742800375799</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/DropOldVauleFormEnum1742800589634.html">src/database/migrations/1742800589634-dropOldVauleFormEnum.ts</a>
+            </td>
+            <td>class</td>
+            <td>DropOldVauleFormEnum1742800589634</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/UpdateType1742819100112.html">src/database/migrations/1742819100112-UpdateType.ts</a>
+            </td>
+            <td>class</td>
+            <td>UpdateType1742819100112</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/TransactionModelFix1743089378621.html">src/database/migrations/1743089378621-transactionModelFix.ts</a>
+            </td>
+            <td>class</td>
+            <td>TransactionModelFix1743089378621</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/ReplaceLockedStateToGovernance1743424803837.html">src/database/migrations/1743424803837-replaceLockedStateToGovernance.ts</a>
+            </td>
+            <td>class</td>
+            <td>ReplaceLockedStateToGovernance1743424803837</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AddStakeAndWalletAddress1743433439139.html">src/database/migrations/1743433439139-addStakeAndWalletAddress.ts</a>
+            </td>
+            <td>class</td>
+            <td>AddStakeAndWalletAddress1743433439139</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AddedTransactionModelAndRelations1743588383672.html">src/database/migrations/1743588383672-AddedTransactionModelAndRelations.ts</a>
+            </td>
+            <td>class</td>
+            <td>AddedTransactionModelAndRelations1743588383672</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/ChangeAssetsOwnerType1743678745097.html">src/database/migrations/1743678745097-ChangeAssetsOwnerType.ts</a>
+            </td>
+            <td>class</td>
+            <td>ChangeAssetsOwnerType1743678745097</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AddNullableForMetadata1743687086047.html">src/database/migrations/1743687086047-addNullableForMetadata.ts</a>
+            </td>
+            <td>class</td>
+            <td>AddNullableForMetadata1743687086047</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AddIndexToTransaction1744024797075.html">src/database/migrations/1744024797075-addIndexToTransaction.ts</a>
+            </td>
+            <td>class</td>
+            <td>AddIndexToTransaction1744024797075</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AddInvestmentToTxType1744032453542.html">src/database/migrations/1744032453542-addInvestmentToTxType.ts</a>
+            </td>
+            <td>class</td>
+            <td>AddInvestmentToTxType1744032453542</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/VaultStatusUpdate1745573712493.html">src/database/migrations/1745573712493-vaultStatusUpdate.ts</a>
+            </td>
+            <td>class</td>
+            <td>VaultStatusUpdate1745573712493</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AddedPublicationHash1745583708330.html">src/database/migrations/1745583708330-AddedPublicationHash.ts</a>
+            </td>
+            <td>class</td>
+            <td>AddedPublicationHash1745583708330</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AddContractAddressToVault1745662880319.html">src/database/migrations/1745662880319-addContractAddressToVault.ts</a>
+            </td>
+            <td>class</td>
+            <td>AddContractAddressToVault1745662880319</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AddedAssetVaultName1745921850315.html">src/database/migrations/1745921850315-addedAssetVaultName.ts</a>
+            </td>
+            <td>class</td>
+            <td>AddedAssetVaultName1745921850315</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/RenameInvestmentToAcquire1746531791148.html">src/database/migrations/1746531791148-renameInvestmentToAcquire.ts</a>
+            </td>
+            <td>class</td>
+            <td>RenameInvestmentToAcquire1746531791148</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/UpdateTypes1746532933340.html">src/database/migrations/1746532933340-updateTypes.ts</a>
+            </td>
+            <td>class</td>
+            <td>UpdateTypes1746532933340</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/RenameFields1746536544579.html">src/database/migrations/1746536544579-renameFields.ts</a>
+            </td>
+            <td>class</td>
+            <td>RenameFields1746536544579</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AddTotalAssetsCost1747665618438.html">src/database/migrations/1747665618438-addTotalAssetsCost.ts</a>
+            </td>
+            <td>class</td>
+            <td>AddTotalAssetsCost1747665618438</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AddedReserveVaule1747821437539.html">src/database/migrations/1747821437539-addedReserveVaule.ts</a>
+            </td>
+            <td>class</td>
+            <td>AddedReserveVaule1747821437539</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AddedDelete1747838327085.html">src/database/migrations/1747838327085-addedDelete.ts</a>
+            </td>
+            <td>class</td>
+            <td>AddedDelete1747838327085</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AddedMaxAssetsCount1747911428750.html">src/database/migrations/1747911428750-AddedMaxAssetsCount.ts</a>
+            </td>
+            <td>class</td>
+            <td>AddedMaxAssetsCount1747911428750</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AddedAssetsStatus1748264767365.html">src/database/migrations/1748264767365-addedAssetsStatus.ts</a>
+            </td>
+            <td>class</td>
+            <td>AddedAssetsStatus1748264767365</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AddedAauired1748361017536.html">src/database/migrations/1748361017536-addedAauired.ts</a>
+            </td>
+            <td>class</td>
+            <td>AddedAauired1748361017536</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AddedLiquidationHash1749046550619.html">src/database/migrations/1749046550619-addedLiquidationHash.ts</a>
+            </td>
+            <td>class</td>
+            <td>AddedLiquidationHash1749046550619</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/PolicyId1749726859213.html">src/database/migrations/1749726859213-PolicyId.ts</a>
+            </td>
+            <td>class</td>
+            <td>PolicyId1749726859213</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/PolicyIdRestore1749727852748.html">src/database/migrations/1749727852748-policyIdRestore.ts</a>
+            </td>
+            <td>class</td>
+            <td>PolicyIdRestore1749727852748</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/$npmConfigName1750085776373.html">src/database/migrations/1750085776373-addUpdateTransactionType.ts</a>
+            </td>
+            <td>class</td>
+            <td>$npmConfigName1750085776373</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/$npmConfigName1750413089611.html">src/database/migrations/1750413089611-AddNewVaultStatus.ts</a>
+            </td>
+            <td>class</td>
+            <td>$npmConfigName1750413089611</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AddTotalAcquiredValueInAda1750670509513.html">src/database/migrations/1750670509513-addTotalAcquiredValueInAda.ts</a>
+            </td>
+            <td>class</td>
+            <td>AddTotalAcquiredValueInAda1750670509513</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./entitys/TagEntity.html">src/database/tag.entity.ts</a>
+            </td>
+            <td>entity</td>
+            <td>TagEntity</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./entitys/Transaction.html">src/database/transaction.entity.ts</a>
+            </td>
+            <td>entity</td>
+            <td>Transaction</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./entitys/User.html">src/database/user.entity.ts</a>
+            </td>
+            <td>entity</td>
+            <td>User</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./entitys/Vault.html">src/database/vault.entity.ts</a>
+            </td>
+            <td>entity</td>
+            <td>Vault</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/ApiDocParams.html">src/decorators/api-doc.decorator.ts</a>
+            </td>
+            <td>interface</td>
+            <td>ApiDocParams</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/functions.html#ApiDoc">src/decorators/api-doc.decorator.ts</a>
+            </td>
+            <td>function</td>
+            <td>ApiDoc</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/DtoRepresentsType.html">src/decorators/dto-represents.decorator.ts</a>
+            </td>
+            <td>interface</td>
+            <td>DtoRepresentsType</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/3)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/functions.html#DtoRepresent">src/decorators/dto-represents.decorator.ts</a>
+            </td>
+            <td>function</td>
+            <td>DtoRepresent</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/variables.html#getMimeTypeFromArrayBuffer">src/helpers/index.ts</a>
+            </td>
+            <td>variable</td>
+            <td>getMimeTypeFromArrayBuffer</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/variables.html#transformImageToUrl">src/helpers/index.ts</a>
+            </td>
+            <td>variable</td>
+            <td>transformImageToUrl</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/variables.html#transformToSnakeCase">src/helpers/index.ts</a>
+            </td>
+            <td>variable</td>
+            <td>transformToSnakeCase</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/functions.html#bootstrap">src/main.ts</a>
+            </td>
+            <td>function</td>
+            <td>bootstrap</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./controllers/AuthController.html">src/modules/auth/auth.controller.ts</a>
+            </td>
+            <td>controller</td>
+            <td>AuthController</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/2)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./guards/AuthGuard.html">src/modules/auth/auth.guard.ts</a>
+            </td>
+            <td>guard</td>
+            <td>AuthGuard</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/AuthService.html">src/modules/auth/auth.service.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>AuthService</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/3)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/LoginReq.html">src/modules/auth/dto/login.req.ts</a>
+            </td>
+            <td>class</td>
+            <td>LoginReq</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/SignatureData.html">src/modules/auth/dto/login.req.ts</a>
+            </td>
+            <td>class</td>
+            <td>SignatureData</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/3)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./controllers/AwsController.html">src/modules/aws_bucket/aws.controller.ts</a>
+            </td>
+            <td>controller</td>
+            <td>AwsController</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/5)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/variables.html#mbMultiplication">src/modules/aws_bucket/aws.controller.ts</a>
+            </td>
+            <td>variable</td>
+            <td>mbMultiplication</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/AwsService.html">src/modules/aws_bucket/aws.service.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>AwsService</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/13)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/DistributionService.html">src/modules/distribution/distribution.service.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>DistributionService</td>
+            <td align="right" data-sort="12">
+                <span class="coverage-percent">12 %</span>
+                <span class="coverage-count">(1/8)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AssetValueDto.html">src/modules/taptools/dto/asset-value.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>AssetValueDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/13)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/WalletSummaryDto.html">src/modules/taptools/dto/wallet-summary.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>WalletSummaryDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/7)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./controllers/TaptoolsController.html">src/modules/taptools/taptools.controller.ts</a>
+            </td>
+            <td>controller</td>
+            <td>TaptoolsController</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/2)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/TaptoolsService.html">src/modules/taptools/taptools.service.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>TaptoolsService</td>
+            <td align="right" data-sort="13">
+                <span class="coverage-percent">13 %</span>
+                <span class="coverage-count">(2/15)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/PublicProfileRes.html">src/modules/users/dto/public-profile.res.ts</a>
+            </td>
+            <td>class</td>
+            <td>PublicProfileRes</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/12)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/SocialLinkDto.html">src/modules/users/dto/update-profile.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>SocialLinkDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/3)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/UpdateProfileDto.html">src/modules/users/dto/update-profile.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>UpdateProfileDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/8)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/UploadImageDto.html">src/modules/users/dto/upload-image.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>UploadImageDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/2)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./controllers/UsersController.html">src/modules/users/users.controller.ts</a>
+            </td>
+            <td>controller</td>
+            <td>UsersController</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/6)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/UsersService.html">src/modules/users/users.service.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>UsersService</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/11)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/DraftVaultsService.html">src/modules/vaults/draft-vaults.service.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>DraftVaultsService</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/5)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AssetWhitelistDto.html">src/modules/vaults/dto/assetWhitelist.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>AssetWhitelistDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/CreateVaultReq.html">src/modules/vaults/dto/createVault.req.ts</a>
+            </td>
+            <td>class</td>
+            <td>CreateVaultReq</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/39)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/GetVaultTransactionsDto.html">src/modules/vaults/dto/get-vault-transactions.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>GetVaultTransactionsDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/3)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/GetVaultsDto.html">src/modules/vaults/dto/get-vaults.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>GetVaultsDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/6)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/PaginatedResponseDto.html">src/modules/vaults/dto/paginated-response.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>PaginatedResponseDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/6)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/PaginationDto.html">src/modules/vaults/dto/pagination.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>PaginationDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/3)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/PublishVaultDto.html">src/modules/vaults/dto/publish-vault.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>PublishVaultDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/5)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/SaveDraftReq.html">src/modules/vaults/dto/saveDraft.req.ts</a>
+            </td>
+            <td>class</td>
+            <td>SaveDraftReq</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/39)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/TagDto.html">src/modules/vaults/dto/tag.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>TagDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/3)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/VaultFullResponse.html">src/modules/vaults/dto/vault.response.ts</a>
+            </td>
+            <td>class</td>
+            <td>VaultFullResponse</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/59)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/VaultShortResponse.html">src/modules/vaults/dto/vault.response.ts</a>
+            </td>
+            <td>class</td>
+            <td>VaultShortResponse</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/15)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/ExtractLpTokensDto.html">src/modules/vaults/lp-tokens/dto/extract-lp-tokens.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>ExtractLpTokensDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/6)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/LpTokenOperationResult.html">src/modules/vaults/lp-tokens/interfaces/lp-token.interface.ts</a>
+            </td>
+            <td>class</td>
+            <td>LpTokenOperationResult</td>
+            <td align="right" data-sort="20">
+                <span class="coverage-percent">20 %</span>
+                <span class="coverage-count">(1/5)</span>
+            </td>
+        </tr>
+        <tr class="very-good">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/BurnLpTokensParams.html">src/modules/vaults/lp-tokens/interfaces/lp-token.interface.ts</a>
+            </td>
+            <td>interface</td>
+            <td>BurnLpTokensParams</td>
+            <td align="right" data-sort="100">
+                <span class="coverage-percent">100 %</span>
+                <span class="coverage-count">(3/3)</span>
+            </td>
+        </tr>
+        <tr class="very-good">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/DistributeLpTokensParams.html">src/modules/vaults/lp-tokens/interfaces/lp-token.interface.ts</a>
+            </td>
+            <td>interface</td>
+            <td>DistributeLpTokensParams</td>
+            <td align="right" data-sort="100">
+                <span class="coverage-percent">100 %</span>
+                <span class="coverage-count">(3/3)</span>
+            </td>
+        </tr>
+        <tr class="very-good">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/ExtractLpTokensParams.html">src/modules/vaults/lp-tokens/interfaces/lp-token.interface.ts</a>
+            </td>
+            <td>interface</td>
+            <td>ExtractLpTokensParams</td>
+            <td align="right" data-sort="100">
+                <span class="coverage-percent">100 %</span>
+                <span class="coverage-count">(4/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./controllers/LpTokensController.html">src/modules/vaults/lp-tokens/lp-tokens.controller.ts</a>
+            </td>
+            <td>controller</td>
+            <td>LpTokensController</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/2)</span>
+            </td>
+        </tr>
+        <tr class="medium">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/LpTokensService.html">src/modules/vaults/lp-tokens/services/lp-tokens.service.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>LpTokensService</td>
+            <td align="right" data-sort="41">
+                <span class="coverage-percent">41 %</span>
+                <span class="coverage-count">(5/12)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/ExtractLpTokensParams.html">src/modules/vaults/lp-tokens/types/lp-token.types.ts</a>
+            </td>
+            <td>interface</td>
+            <td>ExtractLpTokensParams</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/6)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/LpTokenOperationResult.html">src/modules/vaults/lp-tokens/types/lp-token.types.ts</a>
+            </td>
+            <td>interface</td>
+            <td>LpTokenOperationResult</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/6)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./controllers/AcquireController.html">src/modules/vaults/phase-management/acquire/acquire.controller.ts</a>
+            </td>
+            <td>controller</td>
+            <td>AcquireController</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/AcquireService.html">src/modules/vaults/phase-management/acquire/acquire.service.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>AcquireService</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/5)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AcquireReq.html">src/modules/vaults/phase-management/acquire/dto/acquire.req.ts</a>
+            </td>
+            <td>class</td>
+            <td>AcquireReq</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/2)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./controllers/ContributionController.html">src/modules/vaults/phase-management/contribution/contribution.controller.ts</a>
+            </td>
+            <td>controller</td>
+            <td>ContributionController</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/3)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/ContributionService.html">src/modules/vaults/phase-management/contribution/contribution.service.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>ContributionService</td>
+            <td align="right" data-sort="16">
+                <span class="coverage-percent">16 %</span>
+                <span class="coverage-count">(1/6)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/ContributeReq.html">src/modules/vaults/phase-management/contribution/dto/contribute.req.ts</a>
+            </td>
+            <td>class</td>
+            <td>ContributeReq</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/2)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/ContributionAsset.html">src/modules/vaults/phase-management/contribution/dto/contribute.req.ts</a>
+            </td>
+            <td>class</td>
+            <td>ContributionAsset</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/5)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/MetadataFile.html">src/modules/vaults/phase-management/contribution/dto/contribute.req.ts</a>
+            </td>
+            <td>class</td>
+            <td>MetadataFile</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/OnchainMetadata.html">src/modules/vaults/phase-management/contribution/dto/contribute.req.ts</a>
+            </td>
+            <td>class</td>
+            <td>OnchainMetadata</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/7)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/TxUpdateReq.html">src/modules/vaults/phase-management/contribution/dto/txUpdate.req.ts</a>
+            </td>
+            <td>class</td>
+            <td>TxUpdateReq</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/2)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/CreateProposalReq.html">src/modules/vaults/phase-management/governance/dto/create-proposal.req.ts</a>
+            </td>
+            <td>class</td>
+            <td>CreateProposalReq</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/6)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/VoteReq.html">src/modules/vaults/phase-management/governance/dto/vote.req.ts</a>
+            </td>
+            <td>class</td>
+            <td>VoteReq</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/3)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./controllers/GovernanceController.html">src/modules/vaults/phase-management/governance/governance.controller.ts</a>
+            </td>
+            <td>controller</td>
+            <td>GovernanceController</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/5)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/GovernanceService.html">src/modules/vaults/phase-management/governance/governance.service.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>GovernanceService</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/6)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/LifecycleService.html">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>LifecycleService</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/8)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./controllers/AssetsController.html">src/modules/vaults/processing-tx/assets/assets.controller.ts</a>
+            </td>
+            <td>controller</td>
+            <td>AssetsController</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/3)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/AssetsService.html">src/modules/vaults/processing-tx/assets/assets.service.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>AssetsService</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/9)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AssetMetadataDto.html">src/modules/vaults/processing-tx/assets/dto/create-asset.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>AssetMetadataDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/6)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/CreateAssetDto.html">src/modules/vaults/processing-tx/assets/dto/create-asset.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>CreateAssetDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/9)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/VaultAssetsSummaryDto.html">src/modules/vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>VaultAssetsSummaryDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/8)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./controllers/TransactionsController.html">src/modules/vaults/processing-tx/offchain-tx/transactions.controller.ts</a>
+            </td>
+            <td>controller</td>
+            <td>TransactionsController</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/TransactionsService.html">src/modules/vaults/processing-tx/offchain-tx/transactions.service.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>TransactionsService</td>
+            <td align="right" data-sort="6">
+                <span class="coverage-percent">6 %</span>
+                <span class="coverage-count">(1/15)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/AnvilApiService.html">src/modules/vaults/processing-tx/onchain/anvil-api.service.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>AnvilApiService</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/10)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/AnvilApiConfig.html">src/modules/vaults/processing-tx/onchain/anvil-api.service.ts</a>
+            </td>
+            <td>interface</td>
+            <td>AnvilApiConfig</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/5)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/BuildTransactionParams.html">src/modules/vaults/processing-tx/onchain/anvil-api.service.ts</a>
+            </td>
+            <td>interface</td>
+            <td>BuildTransactionParams</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/TransactionBuildResponse.html">src/modules/vaults/processing-tx/onchain/anvil-api.service.ts</a>
+            </td>
+            <td>interface</td>
+            <td>TransactionBuildResponse</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/5)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/BlockchainScannerService.html">src/modules/vaults/processing-tx/onchain/blockchain-scanner.service.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>BlockchainScannerService</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/17)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/variables.html#DEFAULT_INITIAL_DELAY_MS">src/modules/vaults/processing-tx/onchain/blockchain-scanner.service.ts</a>
+            </td>
+            <td>variable</td>
+            <td>DEFAULT_INITIAL_DELAY_MS</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/variables.html#DEFAULT_MAX_DELAY_MS">src/modules/vaults/processing-tx/onchain/blockchain-scanner.service.ts</a>
+            </td>
+            <td>variable</td>
+            <td>DEFAULT_MAX_DELAY_MS</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/variables.html#DEFAULT_MAX_RETRIES">src/modules/vaults/processing-tx/onchain/blockchain-scanner.service.ts</a>
+            </td>
+            <td>variable</td>
+            <td>DEFAULT_MAX_RETRIES</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./controllers/BlockchainController.html">src/modules/vaults/processing-tx/onchain/blockchain.controller.ts</a>
+            </td>
+            <td>controller</td>
+            <td>BlockchainController</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/7)</span>
+            </td>
+        </tr>
+        <tr class="medium">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/BlockchainService.html">src/modules/vaults/processing-tx/onchain/blockchain.service.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>BlockchainService</td>
+            <td align="right" data-sort="28">
+                <span class="coverage-percent">28 %</span>
+                <span class="coverage-count">(2/7)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/TransactionBuildResponse.html">src/modules/vaults/processing-tx/onchain/blockchain.service.ts</a>
+            </td>
+            <td>interface</td>
+            <td>TransactionBuildResponse</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/3)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/TransactionSubmitResponse.html">src/modules/vaults/processing-tx/onchain/blockchain.service.ts</a>
+            </td>
+            <td>interface</td>
+            <td>TransactionSubmitResponse</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/2)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/BuildTransactionDto.html">src/modules/vaults/processing-tx/onchain/dto/transaction.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>BuildTransactionDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/NftAsset.html">src/modules/vaults/processing-tx/onchain/dto/transaction.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>NftAsset</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/SubmitTransactionDto.html">src/modules/vaults/processing-tx/onchain/dto/transaction.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>SubmitTransactionDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/5)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/SubmitVaultTxDto.html">src/modules/vaults/processing-tx/onchain/dto/transaction.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>SubmitVaultTxDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/5)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/TransactionBuildResponseDto.html">src/modules/vaults/processing-tx/onchain/dto/transaction.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>TransactionBuildResponseDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/5)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/TransactionOutput.html">src/modules/vaults/processing-tx/onchain/dto/transaction.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>TransactionOutput</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/TransactionSubmitResponseDto.html">src/modules/vaults/processing-tx/onchain/dto/transaction.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>TransactionSubmitResponseDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/2)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/BlockchainWebhookDto.html">src/modules/vaults/processing-tx/onchain/dto/webhook.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>BlockchainWebhookDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/7)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/BlockfrostAmount.html">src/modules/vaults/processing-tx/onchain/dto/webhook.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>BlockfrostAmount</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/3)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/BlockfrostTransaction.html">src/modules/vaults/processing-tx/onchain/dto/webhook.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>BlockfrostTransaction</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/15)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/BlockfrostTransactionEvent.html">src/modules/vaults/processing-tx/onchain/dto/webhook.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>BlockfrostTransactionEvent</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/BlockfrostTxInput.html">src/modules/vaults/processing-tx/onchain/dto/webhook.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>BlockfrostTxInput</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/7)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/BlockfrostTxOutput.html">src/modules/vaults/processing-tx/onchain/dto/webhook.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>BlockfrostTxOutput</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/5)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/RawBodyMiddleware.html">src/modules/vaults/processing-tx/onchain/raw-body.middleware.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>RawBodyMiddleware</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/3)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/Datum.html">src/modules/vaults/processing-tx/onchain/types/type.ts</a>
+            </td>
+            <td>interface</td>
+            <td>Datum</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/7)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/Datum1.html">src/modules/vaults/processing-tx/onchain/types/type.ts</a>
+            </td>
+            <td>interface</td>
+            <td>Datum1</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/13)</span>
+            </td>
+        </tr>
+        <tr class="medium">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/L4VaVault.html">src/modules/vaults/processing-tx/onchain/types/type.ts</a>
+            </td>
+            <td>interface</td>
+            <td>L4VaVault</td>
+            <td align="right" data-sort="33">
+                <span class="coverage-percent">33 %</span>
+                <span class="coverage-count">(1/3)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/typealiases.html#Redeemer">src/modules/vaults/processing-tx/onchain/types/type.ts</a>
+            </td>
+            <td>type alias</td>
+            <td>Redeemer</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/typealiases.html#Redeemer1">src/modules/vaults/processing-tx/onchain/types/type.ts</a>
+            </td>
+            <td>type alias</td>
+            <td>Redeemer1</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/typealiases.html#Redeemer2">src/modules/vaults/processing-tx/onchain/types/type.ts</a>
+            </td>
+            <td>type alias</td>
+            <td>Redeemer2</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/typealiases.html#Redeemer3">src/modules/vaults/processing-tx/onchain/types/type.ts</a>
+            </td>
+            <td>type alias</td>
+            <td>Redeemer3</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/variables.html#valuation_sc_type">src/modules/vaults/processing-tx/onchain/types/vault-sc-type.ts</a>
+            </td>
+            <td>variable</td>
+            <td>valuation_sc_type</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/variables.html#vault_sc_privacy">src/modules/vaults/processing-tx/onchain/types/vault-sc-type.ts</a>
+            </td>
+            <td>variable</td>
+            <td>vault_sc_privacy</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/functions.html#applyContributeParams">src/modules/vaults/processing-tx/onchain/utils/apply_params.ts</a>
+            </td>
+            <td>function</td>
+            <td>applyContributeParams</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/functions.html#defineShape">src/modules/vaults/processing-tx/onchain/utils/apply_params.ts</a>
+            </td>
+            <td>function</td>
+            <td>defineShape</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/functions.html#toPreloadedScript">src/modules/vaults/processing-tx/onchain/utils/apply_params.ts</a>
+            </td>
+            <td>function</td>
+            <td>toPreloadedScript</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/variables.html#blueprint">src/modules/vaults/processing-tx/onchain/utils/apply_params.ts</a>
+            </td>
+            <td>variable</td>
+            <td>blueprint</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/Amount.html">src/modules/vaults/processing-tx/onchain/utils/lib.ts</a>
+            </td>
+            <td>interface</td>
+            <td>Amount</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/3)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/functions.html#generate_assetname_from_txhash_index">src/modules/vaults/processing-tx/onchain/utils/lib.ts</a>
+            </td>
+            <td>function</td>
+            <td>generate_assetname_from_txhash_index</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/functions.html#generate_tag_from_txhash_index">src/modules/vaults/processing-tx/onchain/utils/lib.ts</a>
+            </td>
+            <td>function</td>
+            <td>generate_tag_from_txhash_index</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/functions.html#getVaultUtxo">src/modules/vaults/processing-tx/onchain/utils/lib.ts</a>
+            </td>
+            <td>function</td>
+            <td>getVaultUtxo</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/functions.html#toHex">src/modules/vaults/processing-tx/onchain/utils/lib.ts</a>
+            </td>
+            <td>function</td>
+            <td>toHex</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/variables.html#assetsToValue">src/modules/vaults/processing-tx/onchain/utils/lib.ts</a>
+            </td>
+            <td>variable</td>
+            <td>assetsToValue</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/variables.html#getUtxos">src/modules/vaults/processing-tx/onchain/utils/lib.ts</a>
+            </td>
+            <td>variable</td>
+            <td>getUtxos</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/VaultInsertingService.html">src/modules/vaults/processing-tx/onchain/vault-inserting.service.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>VaultInsertingService</td>
+            <td align="right" data-sort="9">
+                <span class="coverage-percent">9 %</span>
+                <span class="coverage-count">(1/11)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/BuildTransactionOutput.html">src/modules/vaults/processing-tx/onchain/vault-inserting.service.ts</a>
+            </td>
+            <td>interface</td>
+            <td>BuildTransactionOutput</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/BuildTransactionParams.html">src/modules/vaults/processing-tx/onchain/vault-inserting.service.ts</a>
+            </td>
+            <td>interface</td>
+            <td>BuildTransactionParams</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/NftAsset.html">src/modules/vaults/processing-tx/onchain/vault-inserting.service.ts</a>
+            </td>
+            <td>interface</td>
+            <td>NftAsset</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/SubmitTransactionParams.html">src/modules/vaults/processing-tx/onchain/vault-inserting.service.ts</a>
+            </td>
+            <td>interface</td>
+            <td>SubmitTransactionParams</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/TransactionBuildResponse.html">src/modules/vaults/processing-tx/onchain/vault-inserting.service.ts</a>
+            </td>
+            <td>interface</td>
+            <td>TransactionBuildResponse</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/5)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/TransactionSubmitResponse.html">src/modules/vaults/processing-tx/onchain/vault-inserting.service.ts</a>
+            </td>
+            <td>interface</td>
+            <td>TransactionSubmitResponse</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/2)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/VaultManagingService.html">src/modules/vaults/processing-tx/onchain/vault-managing.service.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>VaultManagingService</td>
+            <td align="right" data-sort="16">
+                <span class="coverage-percent">16 %</span>
+                <span class="coverage-count">(2/12)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/VaultConfig.html">src/modules/vaults/processing-tx/onchain/vault-managing.service.ts</a>
+            </td>
+            <td>interface</td>
+            <td>VaultConfig</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/11)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/VaultCreateConfig.html">src/modules/vaults/processing-tx/onchain/vault-managing.service.ts</a>
+            </td>
+            <td>interface</td>
+            <td>VaultCreateConfig</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/10)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/variables.html#one_day">src/modules/vaults/processing-tx/onchain/vault-managing.service.ts</a>
+            </td>
+            <td>variable</td>
+            <td>one_day</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/WebhookVerificationService.html">src/modules/vaults/processing-tx/onchain/webhook-verification.service.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>WebhookVerificationService</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/6)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AcquirerWhitelist.html">src/modules/vaults/types.ts</a>
+            </td>
+            <td>class</td>
+            <td>AcquirerWhitelist</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/3)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AcquirerWhitelistCsv.html">src/modules/vaults/types.ts</a>
+            </td>
+            <td>class</td>
+            <td>AcquirerWhitelistCsv</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/6)</span>
+            </td>
+        </tr>
+        <tr class="good">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/AssetWhitelist.html">src/modules/vaults/types.ts</a>
+            </td>
+            <td>class</td>
+            <td>AssetWhitelist</td>
+            <td align="right" data-sort="60">
+                <span class="coverage-percent">60 %</span>
+                <span class="coverage-count">(3/5)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/ContributorWhitelist.html">src/modules/vaults/types.ts</a>
+            </td>
+            <td>class</td>
+            <td>ContributorWhitelist</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/3)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/SocialLink.html">src/modules/vaults/types.ts</a>
+            </td>
+            <td>class</td>
+            <td>SocialLink</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./controllers/VaultsController.html">src/modules/vaults/vaults.controller.ts</a>
+            </td>
+            <td>controller</td>
+            <td>VaultsController</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/11)</span>
+            </td>
+        </tr>
+        <tr class="good">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/VaultsService.html">src/modules/vaults/vaults.service.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>VaultsService</td>
+            <td align="right" data-sort="64">
+                <span class="coverage-percent">64 %</span>
+                <span class="coverage-count">(11/17)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/CreatePoolDto.html">src/modules/vyfi/dto/create-pool.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>CreatePoolDto</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/7)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./classes/TokenInfo.html">src/modules/vyfi/dto/create-pool.dto.ts</a>
+            </td>
+            <td>class</td>
+            <td>TokenInfo</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./controllers/VyfiController.html">src/modules/vyfi/vyfi.controller.ts</a>
+            </td>
+            <td>controller</td>
+            <td>VyfiController</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./injectables/VyfiService.html">src/modules/vyfi/vyfi.service.ts</a>
+            </td>
+            <td>injectable</td>
+            <td>VyfiService</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/10)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/variables.html#poolOwner">src/modules/vyfi/vyfi.service.ts</a>
+            </td>
+            <td>variable</td>
+            <td>poolOwner</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                        <a href="./miscellaneous/variables.html#VYFI_CONSTANTS">src/modules/vyfi/vyfi.service.ts</a>
+            </td>
+            <td>variable</td>
+            <td>VYFI_CONSTANTS</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/1)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/Asset.html">src/types/blockchain.types.ts</a>
+            </td>
+            <td>interface</td>
+            <td>Asset</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/3)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/BlockchainAddressResponse.html">src/types/blockchain.types.ts</a>
+            </td>
+            <td>interface</td>
+            <td>BlockchainAddressResponse</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/BlockchainContractResponse.html">src/types/blockchain.types.ts</a>
+            </td>
+            <td>interface</td>
+            <td>BlockchainContractResponse</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/4)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/BlockchainTokenResponse.html">src/types/blockchain.types.ts</a>
+            </td>
+            <td>interface</td>
+            <td>BlockchainTokenResponse</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/5)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/BlockchainTransactionListItem.html">src/types/blockchain.types.ts</a>
+            </td>
+            <td>interface</td>
+            <td>BlockchainTransactionListItem</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/5)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/BlockchainTransactionListResponse.html">src/types/blockchain.types.ts</a>
+            </td>
+            <td>interface</td>
+            <td>BlockchainTransactionListResponse</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/5)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/BlockchainTransactionResponse.html">src/types/blockchain.types.ts</a>
+            </td>
+            <td>interface</td>
+            <td>BlockchainTransactionResponse</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/10)</span>
+            </td>
+        </tr>
+        <tr class="low">
+            <td>
+                <!-- miscellaneous -->
+                <a href="./interfaces/BlockchainUtxo.html">src/types/blockchain.types.ts</a>
+            </td>
+            <td>interface</td>
+            <td>BlockchainUtxo</td>
+            <td align="right" data-sort="0">
+                <span class="coverage-percent">0 %</span>
+                <span class="coverage-count">(0/10)</span>
+            </td>
+        </tr>
+    </tbody>
+</table>
+
+<script src="js/libs/tablesort.min.js"></script>
+<script src="js/libs/tablesort.number.min.js"></script>
+<script>
+    new Tablesort(document.getElementById('coverage-table'));
+</script>
+
+                   </div><div class="search-results">
+    <div class="has-results">
+        <h1 class="search-results-title"><span class='search-results-count'></span> results matching "<span class='search-query'></span>"</h1>
+        <ul class="search-results-list"></ul>
+    </div>
+    <div class="no-results">
+        <h1 class="search-results-title">No results matching "<span class='search-query'></span>"</h1>
+    </div>
+</div>
+</div>
+               <!-- END CONTENT -->
+           </div>
+       </div>
+
+          <label class="dark-mode-switch">
+               <input type="checkbox">
+               <span class="slider">
+                    <svg class="slider-icon" viewBox="0 0 24 24" fill="none" height="20" stroke="#000" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" width="20" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"></path>
+                    </svg>
+               </span>
+          </label>
+
+       <script>
+            var COMPODOC_CURRENT_PAGE_DEPTH = 0;
+            var COMPODOC_CURRENT_PAGE_CONTEXT = 'coverage';
+            var COMPODOC_CURRENT_PAGE_URL = 'coverage.html';
+            var MAX_SEARCH_RESULTS = 15;
+       </script>
+
+       <script>
+               $darkModeToggleSwitchers = document.querySelectorAll('.dark-mode-switch input');
+               checkToggle(darkModeState);
+               if ($darkModeToggleSwitchers.length > 0) {
+                    for (var i = 0; i < $darkModeToggleSwitchers.length; i++) {
+                         $darkModeToggleSwitchers[i].addEventListener('change', function (event) {
+                              darkModeState = !darkModeState;
+                              toggleDarkMode(darkModeState);
+                         });
+                    }
+               }
+          </script>
+
+       <script src="./js/libs/custom-elements.min.js"></script>
+       <script src="./js/libs/lit-html.js"></script>
+
+       <script src="./js/menu-wc.js" defer></script>
+       <script nomodule src="./js/menu-wc_es5.js" defer></script>
+
+       <script src="./js/libs/bootstrap-native.js"></script>
+
+       <script src="./js/libs/es6-shim.min.js"></script>
+       <script src="./js/libs/EventDispatcher.js"></script>
+       <script src="./js/libs/promise.min.js"></script>
+
+       <script src="./js/compodoc.js"></script>
+
+       <script src="./js/tabs.js"></script>
+       <script src="./js/menu.js"></script>
+       <script src="./js/libs/clipboard.min.js"></script>
+       <script src="./js/libs/prism.js"></script>
+       <script src="./js/sourceCode.js"></script>
+          <script src="./js/search/search.js"></script>
+          <script src="./js/search/lunr.min.js"></script>
+          <script src="./js/search/search-lunr.js"></script>
+          <script src="./js/search/search_index.js"></script>
+       <script src="./js/lazy-load-graphs.js"></script>
+
+
+    </body>
+</html>

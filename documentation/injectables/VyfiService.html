@@ -1,0 +1,1027 @@
+<!doctype html>
+<html class="no-js" lang="">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="x-ua-compatible" content="ie=edge">
+        <title>project-name documentation</title>
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+
+        <link rel="icon" type="image/x-icon" href="../images/favicon.ico">
+	   <link rel="stylesheet" href="../styles/style.css">
+        <link rel="stylesheet" href="../styles/dark.css">
+    </head>
+    <body>
+          <script>
+               // Blocking script to avoid flickering dark mode
+               // Dark mode toggle button
+               var useDark = window.matchMedia('(prefers-color-scheme: dark)');
+               var darkModeState = useDark.matches;
+               var $darkModeToggleSwitchers = document.querySelectorAll('.dark-mode-switch input');
+               var $darkModeToggles = document.querySelectorAll('.dark-mode-switch');
+               var darkModeStateLocal = localStorage.getItem('compodoc_darkmode-state');
+
+               function checkToggle(check) {
+                    for (var i = 0; i < $darkModeToggleSwitchers.length; i++) {
+                         $darkModeToggleSwitchers[i].checked = check;
+                    }
+               }
+
+               function toggleDarkMode(state) {
+                    if (window.localStorage) {
+                         localStorage.setItem('compodoc_darkmode-state', state);
+                    }
+
+                    checkToggle(state);
+
+                    const hasClass = document.body.classList.contains('dark');
+
+                    if (state) {
+                         for (var i = 0; i < $darkModeToggles.length; i++) {
+                              $darkModeToggles[i].classList.add('dark');
+                         }
+                         if (!hasClass) {
+                              document.body.classList.add('dark');
+                         }
+                    } else {
+                         for (var i = 0; i < $darkModeToggles.length; i++) {
+                              $darkModeToggles[i].classList.remove('dark');
+                         }
+                         if (hasClass) {
+                              document.body.classList.remove('dark');
+                         }
+                    }
+               }
+
+               useDark.addEventListener('change', function (evt) {
+                    toggleDarkMode(evt.matches);
+               });
+               if (darkModeStateLocal) {
+                    darkModeState = darkModeStateLocal === 'true';
+               }
+               toggleDarkMode(darkModeState);
+          </script>
+
+        <div class="navbar navbar-default navbar-fixed-top d-md-none p-0">
+               <div class="d-flex">
+                    <a href="../" class="navbar-brand">project-name documentation</a>
+                    <button type="button" class="btn btn-default btn-menu ion-ios-menu" id="btn-menu"></button>
+               </div>
+        </div>
+
+        <div class="xs-menu menu" id="mobile-menu">
+                <div id="book-search-input" role="search"><input type="text" placeholder="Type to search"></div>            <compodoc-menu></compodoc-menu>
+        </div>
+
+        <div class="container-fluid main">
+           <div class="row main">
+               <div class="d-none d-md-block menu">
+                   <compodoc-menu mode="normal"></compodoc-menu>
+               </div>
+               <!-- START CONTENT -->
+               <div class="content injectable">
+                   <div class="content-data">
+
+
+
+
+
+
+
+
+<ol class="breadcrumb">
+  <li class="breadcrumb-item">Injectables</li>
+  <li class="breadcrumb-item" >VyfiService</li>
+</ol>
+
+<ul class="nav nav-tabs" role="tablist">
+        <li class="nav-item">
+            <a href="#info" 
+                class="nav-link"
+                class="nav-link active"
+                role="tab" id="info-tab" data-bs-toggle="tab" data-link="info">Info</a>
+        </li>
+        <li class="nav-item">
+            <a href="#source" 
+                class="nav-link"
+                
+                role="tab" id="source-tab" data-bs-toggle="tab" data-link="source">Source</a>
+        </li>
+</ul>
+
+<div class="tab-content">
+    <div class="tab-pane fade active in" id="info">
+        <p class="comment">
+            <h3>File</h3>
+        </p>
+        <p class="comment">
+            <code>src/modules/vyfi/vyfi.service.ts</code>
+        </p>
+
+
+
+
+
+            <section data-compodoc="block-index">
+    <h3 id="index">Index</h3>
+    <table class="table table-sm table-bordered index-table">
+        <tbody>
+                <tr>
+                    <td class="col-md-4">
+                        <h6><b>Properties</b></h6>
+                    </td>
+                </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <ul class="index-list">
+                            <li>
+                                    <span class="modifier">Private</span>
+                                    <span class="modifier">Readonly</span>
+                                <a href="#adaAnvilApiUrl" >adaAnvilApiUrl</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Private</span>
+                                    <span class="modifier">Readonly</span>
+                                <a href="#poolOwner" >poolOwner</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Private</span>
+                                    <span class="modifier">Readonly</span>
+                                <a href="#vyfiApiUrl" >vyfiApiUrl</a>
+                            </li>
+                        </ul>
+                    </td>
+                </tr>
+
+                <tr>
+                    <td class="col-md-4">
+                        <h6><b>Methods</b></h6>
+                    </td>
+                </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <ul class="index-list">
+                            <li>
+                                    <span class="modifier">Async</span>
+                                <a href="#checkPool" >checkPool</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Async</span>
+                                <a href="#createLiquidityPool" >createLiquidityPool</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Private</span>
+                                <a href="#formatMetadataText" >formatMetadataText</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Async</span>
+                                <a href="#getPoolInfo" >getPoolInfo</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Private</span>
+                                    <span class="modifier">Async</span>
+                                <a href="#getUtxos" >getUtxos</a>
+                            </li>
+                        </ul>
+                    </td>
+                </tr>
+
+
+
+
+
+        </tbody>
+    </table>
+</section>
+
+            <section data-compodoc="block-constructor">
+    <h3 id="constructor">Constructor</h3>
+        <table class="table table-sm table-bordered">
+            <tbody>
+                <tr>
+                    <td class="col-md-4">
+<code>constructor(httpService: HttpService, configService: ConfigService)</code>
+                    </td>
+                </tr>
+                        <tr>
+                            <td class="col-md-4">
+                                <div class="io-line">Defined in <a href="" data-line="32" class="link-to-prism">src/modules/vyfi/vyfi.service.ts:32</a></div>
+                            </td>
+                        </tr>
+
+                <tr>
+                    <td class="col-md-4">
+                            <div>
+                                    <b>Parameters :</b>
+                                    <table class="params">
+                                        <thead>
+                                            <tr>
+                                                <td>Name</td>
+                                                    <td>Type</td>
+                                                <td>Optional</td>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                                <tr>
+                                                        <td>httpService</td>
+                                                  
+                                                        <td>
+                                                                    <code>HttpService</code>
+                                                        </td>
+                                                  
+                                                    <td>
+                                                            No
+                                                    </td>
+                                                    
+                                                </tr>
+                                                <tr>
+                                                        <td>configService</td>
+                                                  
+                                                        <td>
+                                                                    <code>ConfigService</code>
+                                                        </td>
+                                                  
+                                                    <td>
+                                                            No
+                                                    </td>
+                                                    
+                                                </tr>
+                                        </tbody>
+                                    </table>
+                            </div>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+</section>
+
+            <section data-compodoc="block-methods">
+    
+    <h3 id="methods">
+        Methods
+    </h3>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="checkPool"></a>
+                    <span class="name">
+                            <span class="modifier">Async</span>
+                        <span ><b>checkPool</b></span>
+                        <a href="#checkPool"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>checkPool(params: literal type)</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="41"
+                                    class="link-to-prism">src/modules/vyfi/vyfi.service.ts:41</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>params</td>
+                                            <td>
+                                                        <code>literal type</code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>unknown</code>
+
+                        </div>
+                            <div class="io-description">
+                                
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="createLiquidityPool"></a>
+                    <span class="name">
+                            <span class="modifier">Async</span>
+                        <span ><b>createLiquidityPool</b></span>
+                        <a href="#createLiquidityPool"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>createLiquidityPool(createPoolDto: <a href="../classes/CreatePoolDto.html" target="_self">CreatePoolDto</a>)</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="77"
+                                    class="link-to-prism">src/modules/vyfi/vyfi.service.ts:77</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>createPoolDto</td>
+                                            <td>
+                                                            <code><a href="../classes/CreatePoolDto.html" target="_self" >CreatePoolDto</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>unknown</code>
+
+                        </div>
+                            <div class="io-description">
+                                
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="formatMetadataText"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                        <span ><b>formatMetadataText</b></span>
+                        <a href="#formatMetadataText"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>formatMetadataText(tokenA: literal type, tokenB: literal type)</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="68"
+                                    class="link-to-prism">src/modules/vyfi/vyfi.service.ts:68</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>tokenA</td>
+                                            <td>
+                                                        <code>literal type</code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                        <tr>
+                                                <td>tokenB</td>
+                                            <td>
+                                                        <code>literal type</code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>        <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank" >string</a></code>
+
+                        </div>
+                            <div class="io-description">
+                                
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="getPoolInfo"></a>
+                    <span class="name">
+                            <span class="modifier">Async</span>
+                        <span ><b>getPoolInfo</b></span>
+                        <a href="#getPoolInfo"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>getPoolInfo(poolId: <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank">string</a>)</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="205"
+                                    class="link-to-prism">src/modules/vyfi/vyfi.service.ts:205</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>poolId</td>
+                                            <td>
+                                                            <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank" >string</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>unknown</code>
+
+                        </div>
+                            <div class="io-description">
+                                
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="getUtxos"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                            <span class="modifier">Async</span>
+                        <span ><b>getUtxos</b></span>
+                        <a href="#getUtxos"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>getUtxos(address: Address)</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="185"
+                                    class="link-to-prism">src/modules/vyfi/vyfi.service.ts:185</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>address</td>
+                                            <td>
+                                                        <code>Address</code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>unknown</code>
+
+                        </div>
+                            <div class="io-description">
+                                
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+</section>
+            <section data-compodoc="block-properties">
+    
+    <h3 id="inputs">
+        Properties
+    </h3>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="adaAnvilApiUrl"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                            <span class="modifier">Readonly</span>
+                        <span ><b>adaAnvilApiUrl</b></span>
+                        <a href="#adaAnvilApiUrl"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <i>Type : </i>        <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank" >string</a></code>
+
+                    </td>
+                </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <i>Default value : </i><code>&#x27;https://preprod.api.ada-anvil.app/v2/services/transactions&#x27;</code>
+                    </td>
+                </tr>
+                    <tr>
+                        <td class="col-md-4">
+                                <div class="io-line">Defined in <a href="" data-line="31" class="link-to-prism">src/modules/vyfi/vyfi.service.ts:31</a></div>
+                        </td>
+                    </tr>
+
+
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="poolOwner"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                            <span class="modifier">Readonly</span>
+                        <span ><b>poolOwner</b></span>
+                        <a href="#poolOwner"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <i>Type : </i>        <code><a href="https://www.typescriptlang.org/docs/handbook/basic-types.html" target="_blank" >any</a></code>
+
+                    </td>
+                </tr>
+                    <tr>
+                        <td class="col-md-4">
+                                <div class="io-line">Defined in <a href="" data-line="32" class="link-to-prism">src/modules/vyfi/vyfi.service.ts:32</a></div>
+                        </td>
+                    </tr>
+
+
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="vyfiApiUrl"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                            <span class="modifier">Readonly</span>
+                        <span ><b>vyfiApiUrl</b></span>
+                        <a href="#vyfiApiUrl"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <i>Type : </i>        <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank" >string</a></code>
+
+                    </td>
+                </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <i>Default value : </i><code>&#x27;https://api.vyfi.io&#x27;</code>
+                    </td>
+                </tr>
+                    <tr>
+                        <td class="col-md-4">
+                                <div class="io-line">Defined in <a href="" data-line="30" class="link-to-prism">src/modules/vyfi/vyfi.service.ts:30</a></div>
+                        </td>
+                    </tr>
+
+
+        </tbody>
+    </table>
+</section>
+
+    </div>
+
+
+    <div class="tab-pane fade  tab-source-code" id="source">
+        <pre class="line-numbers compodoc-sourcecode"><code class="language-typescript">import { Buffer } from &#x27;buffer&#x27;;
+
+import { Address, FixedTransaction, PrivateKey } from &#x27;@emurgo/cardano-serialization-lib-nodejs&#x27;;
+import { HttpService } from &#x27;@nestjs/axios&#x27;;
+import { Injectable } from &#x27;@nestjs/common&#x27;;
+import { ConfigService } from &#x27;@nestjs/config&#x27;;
+import { firstValueFrom } from &#x27;rxjs&#x27;;
+
+import { CreatePoolDto } from &#x27;./dto/create-pool.dto&#x27;;
+
+const poolOwner &#x3D; {
+  skey: &#x27;ed25519e_sk1eqleq0gr7awjymmkcehm4pza8ffq385fyxkntqe74u384fgfs4w7vncmhdlc2u2l78g4r82ctfw6s36dnuguadxh3lggluy9pwansegfprll7&#x27;,
+  base_address_preprod:
+    &#x27;addr_test1qpjavykfl5n4t47xklzyuccevgple0e4c7mke2m6cd0z0fwy0pq8p292lgrquq7hx75c4wpvz0h8cjp69mp7men3nw8s46zete&#x27;,
+};
+
+// Constants for VyFi pool creation
+const VYFI_CONSTANTS &#x3D; {
+  PROCESSING_FEE: 1900000, // 1.9 ADA in lovelace
+  MIN_POOL_ADA: 2000000, // 2 ADA in lovelace
+  MIN_RETURN_ADA: 2000000, // 2 ADA in lovelace
+  TOTAL_REQUIRED_ADA: 5900000, // 5.9 ADA in lovelace
+  POOL_ADDRESS:
+    &#x27;addr1qy5dasujdtm4hzrtamca9sjetu78hgqt8rkqs9tu69n0vq47wr70fcgkj4fe9tyr6z2jz8qvwvrc2gq04ltky960fw0smcuf0t&#x27;,
+  METADATA_LABEL: &#x27;53554741&#x27;,
+};
+
+@Injectable()
+export class VyfiService {
+  private readonly vyfiApiUrl &#x3D; &#x27;https://api.vyfi.io&#x27;;
+  private readonly adaAnvilApiUrl &#x3D; &#x27;https://preprod.api.ada-anvil.app/v2/services/transactions&#x27;;
+  private readonly poolOwner: any;
+
+  constructor(
+    private readonly httpService: HttpService,
+    private readonly configService: ConfigService
+  ) {
+    this.poolOwner &#x3D; poolOwner;
+  }
+
+  async checkPool(params: { networkId: number; tokenAUnit: string; tokenBUnit: string }) {
+    const { networkId, tokenAUnit, tokenBUnit } &#x3D; params;
+    const url &#x3D; &#x60;${this.vyfiApiUrl}/lp&#x60;;
+    const queryParams &#x3D; new URLSearchParams({
+      networkId: networkId.toString(),
+      tokenAUnit,
+      tokenBUnit,
+      v2: &#x27;true&#x27;,
+    });
+
+    try {
+      const response &#x3D; await firstValueFrom(this.httpService.get(&#x60;${url}?${queryParams.toString()}&#x60;));
+      return {
+        exists: true,
+        data: response.data,
+      };
+    } catch (error) {
+      if (error.response?.status &#x3D;&#x3D;&#x3D; 500) {
+        return {
+          exists: false,
+          error: &#x27;Pool does not exist&#x27;,
+        };
+      }
+      throw new Error(&#x60;Failed to check VyFi pool: ${error.message}&#x60;);
+    }
+  }
+
+  private formatMetadataText(
+    tokenA: { policyId?: string; assetName: string },
+    tokenB: { policyId?: string; assetName: string }
+  ): string {
+    const shortA &#x3D; tokenA.policyId ? tokenA.policyId.substring(0, 8) : &#x27;lovelace&#x27;;
+    const shortB &#x3D; tokenB.policyId ? tokenB.policyId.substring(0, 8) : &#x27;lovelace&#x27;;
+    return &#x60;VyFi: LP Factory Create Pool Order Request -- /${VYFI_CONSTANTS.METADATA_LABEL} ${shortA}/${shortB}&#x60;;
+  }
+
+  async createLiquidityPool(createPoolDto: CreatePoolDto) {
+    const { networkId, tokenA, tokenB } &#x3D; createPoolDto;
+
+    // First check if pool exists
+    const poolCheck &#x3D; await this.checkPool({
+      networkId,
+      tokenAUnit: tokenA.policyId ? &#x60;${tokenA.policyId}${tokenA.assetName}&#x60; : &#x27;lovelace&#x27;,
+      tokenBUnit: tokenB.policyId ? &#x60;${tokenB.policyId}${tokenB.assetName}&#x60; : &#x27;lovelace&#x27;,
+    });
+
+    if (poolCheck.exists) {
+      throw new Error(&#x27;Pool already exists&#x27;);
+    }
+
+    const CUSTOMER_ADDRESS &#x3D; this.poolOwner.base_address_preprod;
+
+    // Generate metadata
+    const metadataText &#x3D; this.formatMetadataText(tokenA, tokenB);
+
+    // Get UTxOs
+    const utxos &#x3D; await this.getUtxos(Address.from_bech32(CUSTOMER_ADDRESS));
+    if (utxos.len() &#x3D;&#x3D;&#x3D; 0) {
+      throw new Error(&#x27;No UTXOs found&#x27;);
+    }
+
+    const selectedUtxo &#x3D; utxos.get(0);
+    const REQUIRED_INPUTS &#x3D; [selectedUtxo.to_hex()];
+
+    // Construct transaction input with proper ADA amounts
+    const input &#x3D; {
+      changeAddress: CUSTOMER_ADDRESS,
+      message: &#x27;Create Liquidity Pool&#x27;,
+      outputs: [
+        {
+          address: VYFI_CONSTANTS.POOL_ADDRESS,
+          assets: [
+            {
+              assetName: { name: tokenA.assetName, format: &#x27;hex&#x27; },
+              policyId: tokenA.policyId,
+              quantity: tokenA.amount,
+            },
+            {
+              assetName: { name: tokenB.assetName, format: &#x27;hex&#x27; },
+              policyId: tokenB.policyId,
+              quantity: tokenB.amount,
+            },
+          ],
+          lovelace: VYFI_CONSTANTS.TOTAL_REQUIRED_ADA,
+        },
+      ],
+      metadata: {
+        [VYFI_CONSTANTS.METADATA_LABEL]: metadataText,
+      },
+      requiredInputs: REQUIRED_INPUTS,
+    };
+
+    // Get API key from config
+    const apiKey &#x3D; this.configService.get&lt;string&gt;(&#x27;VYFI_API_KEY&#x27;);
+    if (!apiKey) {
+      throw new Error(&#x27;VYFI_API_KEY not configured&#x27;);
+    }
+
+    // Build the transaction
+    const buildResponse &#x3D; await firstValueFrom(
+      this.httpService.post(&#x60;${this.adaAnvilApiUrl}/build&#x60;, input, {
+        headers: {
+          &#x27;x-api-key&#x27;: apiKey,
+          &#x27;Content-Type&#x27;: &#x27;application/json&#x27;,
+        },
+      })
+    );
+
+    const transaction &#x3D; buildResponse.data;
+
+    // Sign the transaction
+    const txToSubmitOnChain &#x3D; FixedTransaction.from_bytes(Buffer.from(transaction.complete, &#x27;hex&#x27;));
+
+    txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.poolOwner.skey));
+
+    // Submit the transaction
+    const submitResponse &#x3D; await firstValueFrom(
+      this.httpService.post(
+        &#x60;${this.adaAnvilApiUrl}/submit&#x60;,
+        {
+          signatures: [],
+          transaction: txToSubmitOnChain.to_hex(),
+        },
+        {
+          headers: {
+            &#x27;x-api-key&#x27;: apiKey,
+            &#x27;Content-Type&#x27;: &#x27;application/json&#x27;,
+          },
+        }
+      )
+    );
+
+    return {
+      ...submitResponse.data,
+      poolAddress: VYFI_CONSTANTS.POOL_ADDRESS,
+      fees: {
+        processingFee: VYFI_CONSTANTS.PROCESSING_FEE,
+        minPoolAda: VYFI_CONSTANTS.MIN_POOL_ADA,
+        minReturnAda: VYFI_CONSTANTS.MIN_RETURN_ADA,
+        totalRequiredAda: VYFI_CONSTANTS.TOTAL_REQUIRED_ADA,
+      },
+    };
+  }
+
+  private async getUtxos(address: Address) {
+    const apiKey &#x3D; this.configService.get&lt;string&gt;(&#x27;BLOCKFROST_API_KEY&#x27;);
+    if (!apiKey) {
+      throw new Error(&#x27;BLOCKFROST_API_KEY not configured&#x27;);
+    }
+
+    try {
+      const response &#x3D; await firstValueFrom(
+        this.httpService.get(&#x60;https://cardano-preprod.blockfrost.io/api/v0/addresses/${address.to_bech32()}/utxos&#x60;, {
+          headers: {
+            project_id: apiKey,
+          },
+        })
+      );
+      return response.data;
+    } catch (error) {
+      throw new Error(&#x60;Failed to get UTXOs: ${error.message}&#x60;);
+    }
+  }
+
+  async getPoolInfo(poolId: string) {
+    try {
+      const response &#x3D; await firstValueFrom(this.httpService.get(&#x60;${this.vyfiApiUrl}/pool/${poolId}&#x60;));
+      return response.data;
+    } catch (error) {
+      throw new Error(&#x60;Failed to get VyFi pool info: ${error.message}&#x60;);
+    }
+  }
+}
+</code></pre>
+    </div>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+                   </div><div class="search-results">
+    <div class="has-results">
+        <h1 class="search-results-title"><span class='search-results-count'></span> results matching "<span class='search-query'></span>"</h1>
+        <ul class="search-results-list"></ul>
+    </div>
+    <div class="no-results">
+        <h1 class="search-results-title">No results matching "<span class='search-query'></span>"</h1>
+    </div>
+</div>
+</div>
+               <!-- END CONTENT -->
+           </div>
+       </div>
+
+          <label class="dark-mode-switch">
+               <input type="checkbox">
+               <span class="slider">
+                    <svg class="slider-icon" viewBox="0 0 24 24" fill="none" height="20" stroke="#000" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" width="20" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"></path>
+                    </svg>
+               </span>
+          </label>
+
+       <script>
+            var COMPODOC_CURRENT_PAGE_DEPTH = 1;
+            var COMPODOC_CURRENT_PAGE_CONTEXT = 'injectable';
+            var COMPODOC_CURRENT_PAGE_URL = 'VyfiService.html';
+            var MAX_SEARCH_RESULTS = 15;
+       </script>
+
+       <script>
+               $darkModeToggleSwitchers = document.querySelectorAll('.dark-mode-switch input');
+               checkToggle(darkModeState);
+               if ($darkModeToggleSwitchers.length > 0) {
+                    for (var i = 0; i < $darkModeToggleSwitchers.length; i++) {
+                         $darkModeToggleSwitchers[i].addEventListener('change', function (event) {
+                              darkModeState = !darkModeState;
+                              toggleDarkMode(darkModeState);
+                         });
+                    }
+               }
+          </script>
+
+       <script src="../js/libs/custom-elements.min.js"></script>
+       <script src="../js/libs/lit-html.js"></script>
+
+       <script src="../js/menu-wc.js" defer></script>
+       <script nomodule src="../js/menu-wc_es5.js" defer></script>
+
+       <script src="../js/libs/bootstrap-native.js"></script>
+
+       <script src="../js/libs/es6-shim.min.js"></script>
+       <script src="../js/libs/EventDispatcher.js"></script>
+       <script src="../js/libs/promise.min.js"></script>
+
+       <script src="../js/compodoc.js"></script>
+
+       <script src="../js/tabs.js"></script>
+       <script src="../js/menu.js"></script>
+       <script src="../js/libs/clipboard.min.js"></script>
+       <script src="../js/libs/prism.js"></script>
+       <script src="../js/sourceCode.js"></script>
+          <script src="../js/search/search.js"></script>
+          <script src="../js/search/lunr.min.js"></script>
+          <script src="../js/search/search-lunr.js"></script>
+          <script src="../js/search/search_index.js"></script>
+       <script src="../js/lazy-load-graphs.js"></script>
+
+
+    </body>
+</html>
