@@ -791,10 +791,6 @@ export class VaultsService {
       throw new BadRequestException('Vault not found');
     }
 
-    if (vault.privacy !== VaultPrivacy.public) {
-      throw new BadRequestException('Access denied: You are not the owner of this vault');
-    }
-
     // Get count of locked assets for this vault
     const lockedAssetsCount = await this.assetsRepository.count({
       where: {
