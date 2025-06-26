@@ -38,7 +38,6 @@ export class TransactionsService {
     const transaction = await this.transactionRepository.findOne({
       where: { tx_hash: txHash },
     });
-    console.log('tx', transaction);
 
     if (!transaction) {
       throw new Error(`Transaction with hash ${txHash} not found`);
