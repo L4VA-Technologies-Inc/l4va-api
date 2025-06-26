@@ -755,7 +755,7 @@ export class VaultsService {
     };
   }
 
-  async prepareDraftResponse(id: string) {
+  async prepareDraftResponse(id: string): Promise<VaultFullResponse> {
     const vault = await this.vaultsRepository.findOne({
       where: { id },
       relations: ['owner', 'social_links', 'acquirer_whitelist', 'tags', 'vault_image', 'banner_image', 'ft_token_img'],
@@ -978,7 +978,14 @@ export class VaultsService {
    * @param userId - User ID
    * @returns Burn transaction result
    */
-  async burnVaultAttempt(vaultId: string, userId: string) {
+  async burnVaultAttempt(
+    vaultId: string,
+    userId: string
+  ): Promise<{
+    txId: string;
+    presignedTx: string;
+    contractAddress: string;
+  }> {
     const vault = await this.vaultsRepository.findOne({
       where: {
         id: vaultId,
@@ -1016,7 +1023,7 @@ export class VaultsService {
    * @param userId - User ID
    * @param publishDto - PublishVaultDto containing transaction data
    */
-  async burnVaultPublishTx(vaultId, userId, publishDto: PublishVaultDto) {
+  async burnVaultPublishTx(vaultId: string, userId: string, publishDto: PublishVaultDto): Promise<void> {
     const { txHash } = await this.vaultContractService.submitOnChainVaultTx({
       transaction: publishDto.transaction,
       signatures: publishDto.signatures,
