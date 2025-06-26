@@ -185,13 +185,29 @@ export class VaultsService {
   }
 
   /**
-   * Creates a new vault with the provided user and data, including validation, file processing, whitelist, and tag management.
-   * Also creates on-chain vault transaction and returns presigned transaction and vault ID.
+   * Creates a new vault for the specified user with the provided data.
+   * Handles validation, file processing, whitelist and tag management, and on-chain transaction creation.
+   * Returns the vault ID and a presigned transaction for on-chain publishing.
+   *
+   * Steps performed:
+   * - Validates user and vault parameters
+   * - Processes images, whitelists, and tags
+   * - Saves the vault and related entities to the database
+   * - Prepares on-chain transaction and returns presignedTx
+   *
    * @param userId - ID of the vault owner
-   * @param data - Vault creation request data
-   * @returns Object with vaultId and presignedTx
+   * @param data - Vault creation request data (CreateVaultReq)
+   * @returns Object containing vaultId and presignedTx
+   * @throws UnauthorizedException if user is not found
+   * @throws BadRequestException for invalid input or failed creation
    */
-  async createVault(userId: string, data: CreateVaultReq): Promise<any> {
+  async createVault(
+    userId: string,
+    data: CreateVaultReq
+  ): Promise<{
+    vaultId: string;
+    presignedTx: string;
+  }> {
     try {
       const owner = await this.usersRepository.findOne({
         where: { id: userId },
@@ -456,7 +472,7 @@ export class VaultsService {
    * @param signedTx - Signed transaction object
    * @returns Full vault response
    */
-  async publishVault(userId, signedTx) {
+  async publishVault(userId, signedTx): Promise<VaultFullResponse> {
     const vault = await this.vaultsRepository.findOne({
       where: {
         id: signedTx.vaultId,
