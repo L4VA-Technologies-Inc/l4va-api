@@ -40,6 +40,7 @@ export interface VaultCreateConfig {
   customerAddress: string;
   vaultId: string;
   allowedPolicies: string[];
+  allowedContributors: string[];
   assetWindow?: {
     start: number;
     end: number;
@@ -156,7 +157,7 @@ export class VaultManagingService {
               value: {
                 contract_type: vaultConfig.contractType,
                 asset_whitelist: vaultConfig.allowedPolicies,
-                // contributor_whitelist: [],
+                // contributor_whitelist: vaultConfig.allowedContributors, // address list of contributors
                 asset_window: {
                   // Time allowed to upload NFT
                   lower_bound: {

@@ -399,6 +399,7 @@ export class VaultsService {
       }
 
       const policyWhitelist = finalVault?.assets_whitelist.map(item => item.policy_id);
+      const contributorWhitelist = finalVault?.contributor_whitelist.map(item => item.wallet_address);
 
       const privacy = vault_sc_privacy[finalVault.privacy as VaultPrivacy];
       const valueMethod = valuation_sc_type[finalVault.value_method as ValueMethod];
@@ -446,6 +447,7 @@ export class VaultsService {
         customerAddress: finalVault.owner.address,
         vaultId: finalVault.id,
         allowedPolicies: policyWhitelist,
+        allowedContributors: contributorWhitelist,
         contractType: privacy,
         valueMethod: valueMethod,
         assetWindow,
