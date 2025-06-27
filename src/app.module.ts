@@ -28,7 +28,7 @@ import {BullModule} from "@nestjs/bullmq";
     }),
     BullModule.forRoot({
       connection: {
-        host: 'localhost',
+        host: 'l4va-redis',
         port: 6379,
       },
     }),
