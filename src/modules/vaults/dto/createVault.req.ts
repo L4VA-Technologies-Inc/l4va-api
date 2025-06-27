@@ -16,6 +16,12 @@ import {
   Max,
   ValidateIf,
 } from 'class-validator';
+
+import { AcquirerWhitelist, ContributorWhitelist, SocialLink, AcquirerWhitelistCsv } from '../types';
+
+import { AssetWhitelistDto } from './assetWhitelist.dto';
+import { TagDto } from './tag.dto';
+
 import {
   ContributionWindowType,
   InvestmentWindowType,
@@ -24,11 +30,6 @@ import {
   VaultPrivacy,
   VaultType,
 } from '@/types/vault.types';
-
-import { AcquirerWhitelist, ContributorWhitelist, SocialLink, AcquirerWhitelistCsv } from '../types';
-
-import { AssetWhitelistDto } from './assetWhitelist.dto';
-import { TagDto } from './tag.dto';
 
 export class CreateVaultReq {
   @ApiProperty({ required: false })
@@ -221,12 +222,10 @@ export class CreateVaultReq {
   vaultTokenTicker: string;
 
   @ApiProperty({
-    description: 'Number of decimal places for the FT token',
-    required: true,
+    description: 'Number of decimal places for the FT token. Deprecated, decided not to use decimals in FT tokens',
+    required: false,
     default: 2,
   })
-  @IsNotEmpty()
-  @IsNumber()
   @Expose()
   ftTokenDecimals: number = 2;
 
@@ -362,19 +361,6 @@ export class CreateVaultReq {
   @IsObject({ each: true })
   @Expose()
   acquirerWhitelist: AcquirerWhitelist[];
-
-  @ApiProperty({
-    description: 'List of contributor wallet addresses (required for private vaults)',
-    type: [ContributorWhitelist],
-    required: false,
-    nullable: true,
-  })
-  @ValidateIf(o => o.privacy !== VaultPrivacy.public && o.valueMethod === ValueMethod.lbe)
-  @IsArray()
-  @ArrayNotEmpty()
-  @IsObject({ each: true })
-  @Expose()
-  whitelistContributors?: ContributorWhitelist[];
 
   @ApiProperty({
     required: false,

@@ -1,28 +1,9 @@
 import { Credential, EnterpriseAddress, ScriptHash } from '@emurgo/cardano-serialization-lib-nodejs';
-import { transformToSnakeCase } from '@/helpers';
 import { BadRequestException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { classToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
-import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
-import { Asset } from '@/database/asset.entity';
-import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
-import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
-import { FileEntity } from '@/database/file.entity';
-import { LinkEntity } from '@/database/link.entity';
-import { TagEntity } from '@/database/tag.entity';
-import { User } from '@/database/user.entity';
-import { Vault } from '@/database/vault.entity';
-import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
-import { TransactionType } from '@/types/transaction.types';
-import {
-  ContributionWindowType,
-  InvestmentWindowType,
-  ValueMethod,
-  VaultPrivacy,
-  VaultStatus,
-} from '@/types/vault.types';
 import { Brackets, In, Repository } from 'typeorm';
 
 import { AwsService } from '../aws_bucket/aws.service';
@@ -40,6 +21,42 @@ import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/typ
 import { applyContributeParams } from './processing-tx/onchain/utils/apply_params';
 import { VaultManagingService } from './processing-tx/onchain/vault-managing.service';
 
+import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
+import { Asset } from '@/database/asset.entity';
+import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
+import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
+import { FileEntity } from '@/database/file.entity';
+import { LinkEntity } from '@/database/link.entity';
+import { TagEntity } from '@/database/tag.entity';
+import { User } from '@/database/user.entity';
+import { Vault } from '@/database/vault.entity';
+import { transformToSnakeCase } from '@/helpers';
+import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
+import { TransactionType } from '@/types/transaction.types';
+import {
+  ContributionWindowType,
+  InvestmentWindowType,
+  ValueMethod,
+  VaultPrivacy,
+  VaultStatus,
+} from '@/types/vault.types';
+
+/**
+ * VaultsService
+ *
+ * This service manages the creation, publishing, updating, and retrieval of vaults in the system.
+ * It handles business logic for vault lifecycle, including draft and published states, asset and whitelist management,
+ * CSV parsing, transaction confirmation, and integration with AWS S3, blockchain, and related services.
+ *
+ * Main responsibilities:
+ * - Creating and saving new vaults (draft and published)
+ * - Managing vault assets, whitelists, tags, and images
+ * - Handling vault publishing and transaction confirmation
+ * - Providing paginated and filtered vault listings for users
+ * - Supporting vault burning (liquidation) operations
+ * - Integrating with AWS S3 for CSV parsing and file management
+ * - Integrating with blockchain services for on-chain operations
+ */
 @Injectable()
 export class VaultsService {
   private readonly logger = new Logger(VaultsService.name);
@@ -73,10 +90,21 @@ export class VaultsService {
     private readonly configService: ConfigService
   ) {}
 
+  /**
+   * Waits asynchronously for a specified number of milliseconds.
+   * @param ms - Milliseconds to wait
+   */
   private async wait(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
+  /**
+   * Confirms and processes a blockchain transaction for a vault, with retry logic and exponential backoff.
+   * Updates the vault's contract address upon success.
+   * @param txHash - Transaction hash
+   * @param vault - Vault entity
+   * @param attempt - Current retry attempt
+   */
   private async confirmAndProcessTransaction(txHash: string, vault: Vault, attempt = 0): Promise<void> {
     try {
       this.logger.log(`Checking transaction status (attempt ${attempt + 1}): ${txHash}`);
@@ -122,6 +150,11 @@ export class VaultsService {
     }
   }
 
+  /**
+   * Parses a CSV file from AWS S3 and extracts valid Cardano addresses.
+   * @param file_key - S3 file key
+   * @returns Array of valid Cardano addresses
+   */
   private async parseCSVFromS3(file_key: string): Promise<string[]> {
     try {
       const csvStream = await this.awsService.getCsv(file_key);
@@ -151,7 +184,30 @@ export class VaultsService {
     }
   }
 
-  async createVault(userId: string, data: CreateVaultReq): Promise<any> {
+  /**
+   * Creates a new vault for the specified user with the provided data.
+   * Handles validation, file processing, whitelist and tag management, and on-chain transaction creation.
+   * Returns the vault ID and a presigned transaction for on-chain publishing.
+   *
+   * Steps performed:
+   * - Validates user and vault parameters
+   * - Processes images, whitelists, and tags
+   * - Saves the vault and related entities to the database
+   * - Prepares on-chain transaction and returns presignedTx
+   *
+   * @param userId - ID of the vault owner
+   * @param data - Vault creation request data (CreateVaultReq)
+   * @returns Object containing vaultId and presignedTx
+   * @throws UnauthorizedException if user is not found
+   * @throws BadRequestException for invalid input or failed creation
+   */
+  async createVault(
+    userId: string,
+    data: CreateVaultReq
+  ): Promise<{
+    vaultId: string;
+    presignedTx: string;
+  }> {
     try {
       const owner = await this.usersRepository.findOne({
         where: { id: userId },
@@ -410,6 +466,7 @@ export class VaultsService {
       }
 
       const policyWhitelist = finalVault?.assets_whitelist.map(item => item.policy_id);
+      const contributorWhitelist = finalVault?.contributor_whitelist.map(item => item.wallet_address);
 
       const privacy = vault_sc_privacy[finalVault.privacy as VaultPrivacy];
       const valueMethod = valuation_sc_type[finalVault.value_method as ValueMethod];
@@ -457,6 +514,7 @@ export class VaultsService {
         customerAddress: finalVault.owner.address,
         vaultId: finalVault.id,
         allowedPolicies: policyWhitelist,
+        allowedContributors: contributorWhitelist,
         contractType: privacy,
         valueMethod: valueMethod,
         assetWindow,
@@ -496,7 +554,14 @@ export class VaultsService {
     }
   }
 
-  async publishVault(userId, signedTx) {
+  /**
+   * Publishes a vault by submitting a signed transaction and updating vault status.
+   * Starts transaction confirmation in the background.
+   * @param userId - ID of the vault owner
+   * @param signedTx - Signed transaction object
+   * @returns Full vault response
+   */
+  async publishVault(userId, signedTx): Promise<VaultFullResponse> {
     const vault = await this.vaultsRepository.findOne({
       where: {
         id: signedTx.vaultId,
@@ -519,6 +584,12 @@ export class VaultsService {
     return plainToInstance(VaultFullResponse, classToPlain(vault), { excludeExtraneousValues: true });
   }
 
+  /**
+   * Saves a draft vault or updates an existing draft, including file, whitelist, and tag management.
+   * @param userId - ID of the vault owner
+   * @param data - Draft vault request data
+   * @returns Draft vault response
+   */
   async saveDraftVault(userId: string, data: SaveDraftReq): Promise<any> {
     let existingVault: Vault | null = null;
 
@@ -771,7 +842,7 @@ export class VaultsService {
     };
   }
 
-  async prepareDraftResponse(id: string) {
+  async prepareDraftResponse(id: string): Promise<VaultFullResponse> {
     const vault = await this.vaultsRepository.findOne({
       where: { id },
       relations: ['owner', 'social_links', 'acquirer_whitelist', 'tags', 'vault_image', 'banner_image', 'ft_token_img'],
@@ -783,6 +854,12 @@ export class VaultsService {
     return plainToInstance(VaultFullResponse, vault, { excludeExtraneousValues: true });
   }
 
+  /**
+   * Retrieves a vault by ID for a user, including asset and price calculations.
+   * @param id - Vault ID
+   * @param _userId - User ID (for access control)
+   * @returns Full vault response
+   */
   async getVaultById(id: string, _userId: string): Promise<VaultFullResponse> {
     const vault = await this.vaultsRepository.findOne({
       where: { id, deleted: false },
@@ -799,10 +876,6 @@ export class VaultsService {
 
     if (!vault) {
       throw new BadRequestException('Vault not found');
-    }
-
-    if (vault.privacy !== VaultPrivacy.public) {
-      throw new BadRequestException('Access denied: You are not the owner of this vault');
     }
 
     // Get count of locked assets for this vault
@@ -843,6 +916,16 @@ export class VaultsService {
     return plainToInstance(VaultFullResponse, result, { excludeExtraneousValues: true });
   }
 
+  /**
+   * Retrieves paginated and filtered list of vaults accessible to the user, with access control and sorting.
+   * @param userId - ID of the user
+   * @param filter - Optional vault filter
+   * @param page - Page number
+   * @param limit - Items per page
+   * @param sortBy - Field to sort by
+   * @param sortOrder - Sort order
+   * @returns Paginated response of vaults
+   */
   async getVaults(
     userId: string,
     filter?: VaultFilter,
@@ -976,7 +1059,20 @@ export class VaultsService {
     };
   }
 
-  async burnVaultAttempt(vaultId: string, userId: string) {
+  /**
+   * Attempts to burn (liquidate) a vault, creating a burn transaction if the vault is empty and owned by the user.
+   * @param vaultId - Vault ID
+   * @param userId - User ID
+   * @returns Burn transaction result
+   */
+  async burnVaultAttempt(
+    vaultId: string,
+    userId: string
+  ): Promise<{
+    txId: string;
+    presignedTx: string;
+    contractAddress: string;
+  }> {
     const vault = await this.vaultsRepository.findOne({
       where: {
         id: vaultId,
@@ -1008,7 +1104,13 @@ export class VaultsService {
     };
   }
 
-  async burnVaultPublishTx(vaultId, userId, publishDto: PublishVaultDto) {
+  /**
+   * Publishes a burn transaction for a vault, marking it as deleted and saving the liquidation hash.
+   * @param vaultId - Vault ID
+   * @param userId - User ID
+   * @param publishDto - PublishVaultDto containing transaction data
+   */
+  async burnVaultPublishTx(vaultId: string, userId: string, publishDto: PublishVaultDto): Promise<void> {
     const { txHash } = await this.vaultContractService.submitOnChainVaultTx({
       transaction: publishDto.transaction,
       signatures: publishDto.signatures,

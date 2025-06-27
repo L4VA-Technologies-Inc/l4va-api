@@ -1,0 +1,1287 @@
+<!doctype html>
+<html class="no-js" lang="">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="x-ua-compatible" content="ie=edge">
+        <title>project-name documentation</title>
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+
+        <link rel="icon" type="image/x-icon" href="../images/favicon.ico">
+	   <link rel="stylesheet" href="../styles/style.css">
+        <link rel="stylesheet" href="../styles/dark.css">
+    </head>
+    <body>
+          <script>
+               // Blocking script to avoid flickering dark mode
+               // Dark mode toggle button
+               var useDark = window.matchMedia('(prefers-color-scheme: dark)');
+               var darkModeState = useDark.matches;
+               var $darkModeToggleSwitchers = document.querySelectorAll('.dark-mode-switch input');
+               var $darkModeToggles = document.querySelectorAll('.dark-mode-switch');
+               var darkModeStateLocal = localStorage.getItem('compodoc_darkmode-state');
+
+               function checkToggle(check) {
+                    for (var i = 0; i < $darkModeToggleSwitchers.length; i++) {
+                         $darkModeToggleSwitchers[i].checked = check;
+                    }
+               }
+
+               function toggleDarkMode(state) {
+                    if (window.localStorage) {
+                         localStorage.setItem('compodoc_darkmode-state', state);
+                    }
+
+                    checkToggle(state);
+
+                    const hasClass = document.body.classList.contains('dark');
+
+                    if (state) {
+                         for (var i = 0; i < $darkModeToggles.length; i++) {
+                              $darkModeToggles[i].classList.add('dark');
+                         }
+                         if (!hasClass) {
+                              document.body.classList.add('dark');
+                         }
+                    } else {
+                         for (var i = 0; i < $darkModeToggles.length; i++) {
+                              $darkModeToggles[i].classList.remove('dark');
+                         }
+                         if (hasClass) {
+                              document.body.classList.remove('dark');
+                         }
+                    }
+               }
+
+               useDark.addEventListener('change', function (evt) {
+                    toggleDarkMode(evt.matches);
+               });
+               if (darkModeStateLocal) {
+                    darkModeState = darkModeStateLocal === 'true';
+               }
+               toggleDarkMode(darkModeState);
+          </script>
+
+        <div class="navbar navbar-default navbar-fixed-top d-md-none p-0">
+               <div class="d-flex">
+                    <a href="../" class="navbar-brand">project-name documentation</a>
+                    <button type="button" class="btn btn-default btn-menu ion-ios-menu" id="btn-menu"></button>
+               </div>
+        </div>
+
+        <div class="xs-menu menu" id="mobile-menu">
+                <div id="book-search-input" role="search"><input type="text" placeholder="Type to search"></div>            <compodoc-menu></compodoc-menu>
+        </div>
+
+        <div class="container-fluid main">
+           <div class="row main">
+               <div class="d-none d-md-block menu">
+                   <compodoc-menu mode="normal"></compodoc-menu>
+               </div>
+               <!-- START CONTENT -->
+               <div class="content injectable">
+                   <div class="content-data">
+
+
+
+
+
+
+
+
+<ol class="breadcrumb">
+  <li class="breadcrumb-item">Injectables</li>
+  <li class="breadcrumb-item" >LpTokensService</li>
+</ol>
+
+<ul class="nav nav-tabs" role="tablist">
+        <li class="nav-item">
+            <a href="#info" 
+                class="nav-link"
+                class="nav-link active"
+                role="tab" id="info-tab" data-bs-toggle="tab" data-link="info">Info</a>
+        </li>
+        <li class="nav-item">
+            <a href="#source" 
+                class="nav-link"
+                
+                role="tab" id="source-tab" data-bs-toggle="tab" data-link="source">Source</a>
+        </li>
+</ul>
+
+<div class="tab-content">
+    <div class="tab-pane fade active in" id="info">
+        <p class="comment">
+            <h3>File</h3>
+        </p>
+        <p class="comment">
+            <code>src/modules/vaults/lp-tokens/services/lp-tokens.service.ts</code>
+        </p>
+
+
+
+
+
+            <section data-compodoc="block-index">
+    <h3 id="index">Index</h3>
+    <table class="table table-sm table-bordered index-table">
+        <tbody>
+                <tr>
+                    <td class="col-md-4">
+                        <h6><b>Properties</b></h6>
+                    </td>
+                </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <ul class="index-list">
+                            <li>
+                                    <span class="modifier">Private</span>
+                                    <span class="modifier">Readonly</span>
+                                <a href="#adminKeyHash" >adminKeyHash</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Private</span>
+                                    <span class="modifier">Readonly</span>
+                                <a href="#adminSKey" >adminSKey</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Private</span>
+                                <a href="#blockfrost" >blockfrost</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Private</span>
+                                    <span class="modifier">Readonly</span>
+                                <a href="#logger" >logger</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Private</span>
+                                    <span class="modifier">Readonly</span>
+                                <a href="#scPolicyId" >scPolicyId</a>
+                            </li>
+                        </ul>
+                    </td>
+                </tr>
+
+                <tr>
+                    <td class="col-md-4">
+                        <h6><b>Methods</b></h6>
+                    </td>
+                </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <ul class="index-list">
+                            <li>
+                                    <span class="modifier">Async</span>
+                                <a href="#burnLpTokens" >burnLpTokens</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Async</span>
+                                <a href="#distributeLpTokens" >distributeLpTokens</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Async</span>
+                                <a href="#extractLpTokens" >extractLpTokens</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Private</span>
+                                <a href="#generateMockTransactionHash" >generateMockTransactionHash</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Private</span>
+                                <a href="#isValidAddress" >isValidAddress</a>
+                            </li>
+                        </ul>
+                    </td>
+                </tr>
+
+
+
+
+
+        </tbody>
+    </table>
+</section>
+
+            <section data-compodoc="block-constructor">
+    <h3 id="constructor">Constructor</h3>
+        <table class="table table-sm table-bordered">
+            <tbody>
+                <tr>
+                    <td class="col-md-4">
+<code>constructor(transactionsService: <a href="../injectables/TransactionsService.html" target="_self">TransactionsService</a>, transactionRepository: <a href="../entitys/Transaction.html" target="_self">Repository&lt;Transaction&gt;</a>, vaultRepository: <a href="../entitys/Vault.html" target="_self">Repository&lt;Vault&gt;</a>, blockchainService: <a href="../injectables/BlockchainService.html" target="_self">BlockchainService</a>, configService: ConfigService, blockchainScanner: <a href="../injectables/BlockchainScannerService.html" target="_self">BlockchainScannerService</a>)</code>
+                    </td>
+                </tr>
+                        <tr>
+                            <td class="col-md-4">
+                                <div class="io-line">Defined in <a href="" data-line="34" class="link-to-prism">src/modules/vaults/lp-tokens/services/lp-tokens.service.ts:34</a></div>
+                            </td>
+                        </tr>
+
+                <tr>
+                    <td class="col-md-4">
+                            <div>
+                                    <b>Parameters :</b>
+                                    <table class="params">
+                                        <thead>
+                                            <tr>
+                                                <td>Name</td>
+                                                    <td>Type</td>
+                                                <td>Optional</td>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                                <tr>
+                                                        <td>transactionsService</td>
+                                                  
+                                                        <td>
+                                                                        <code><a href="../injectables/TransactionsService.html" target="_self" >TransactionsService</a></code>
+                                                        </td>
+                                                  
+                                                    <td>
+                                                            No
+                                                    </td>
+                                                    
+                                                </tr>
+                                                <tr>
+                                                        <td>transactionRepository</td>
+                                                  
+                                                        <td>
+                                                                        <code><a href="../entitys/Transaction.html" target="_self" >Repository&lt;Transaction&gt;</a></code>
+                                                        </td>
+                                                  
+                                                    <td>
+                                                            No
+                                                    </td>
+                                                    
+                                                </tr>
+                                                <tr>
+                                                        <td>vaultRepository</td>
+                                                  
+                                                        <td>
+                                                                        <code><a href="../entitys/Vault.html" target="_self" >Repository&lt;Vault&gt;</a></code>
+                                                        </td>
+                                                  
+                                                    <td>
+                                                            No
+                                                    </td>
+                                                    
+                                                </tr>
+                                                <tr>
+                                                        <td>blockchainService</td>
+                                                  
+                                                        <td>
+                                                                        <code><a href="../injectables/BlockchainService.html" target="_self" >BlockchainService</a></code>
+                                                        </td>
+                                                  
+                                                    <td>
+                                                            No
+                                                    </td>
+                                                    
+                                                </tr>
+                                                <tr>
+                                                        <td>configService</td>
+                                                  
+                                                        <td>
+                                                                    <code>ConfigService</code>
+                                                        </td>
+                                                  
+                                                    <td>
+                                                            No
+                                                    </td>
+                                                    
+                                                </tr>
+                                                <tr>
+                                                        <td>blockchainScanner</td>
+                                                  
+                                                        <td>
+                                                                        <code><a href="../injectables/BlockchainScannerService.html" target="_self" >BlockchainScannerService</a></code>
+                                                        </td>
+                                                  
+                                                    <td>
+                                                            No
+                                                    </td>
+                                                    
+                                                </tr>
+                                        </tbody>
+                                    </table>
+                            </div>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+</section>
+
+            <section data-compodoc="block-methods">
+    
+    <h3 id="methods">
+        Methods
+    </h3>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="burnLpTokens"></a>
+                    <span class="name">
+                            <span class="modifier">Async</span>
+                        <span ><b>burnLpTokens</b></span>
+                        <a href="#burnLpTokens"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>burnLpTokens(burnDto: <a href="https://www.typescriptlang.org/docs/handbook/basic-types.html" target="_blank">any</a>)</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="299"
+                                    class="link-to-prism">src/modules/vaults/lp-tokens/services/lp-tokens.service.ts:299</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+                        <div class="io-description"><p>Burns LP tokens from a specified wallet</p>
+</div>
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>burnDto</td>
+                                            <td>
+                                                            <code><a href="https://www.typescriptlang.org/docs/handbook/basic-types.html" target="_blank" >any</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>        <code><a href="../interfaces/LpTokenOperationResult.html" target="_self" >Promise&lt;LpTokenOperationResult&gt;</a></code>
+
+                        </div>
+                            <div class="io-description">
+                                <p>Operation result with success status and transaction hash if successful</p>
+
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="distributeLpTokens"></a>
+                    <span class="name">
+                            <span class="modifier">Async</span>
+                        <span ><b>distributeLpTokens</b></span>
+                        <a href="#distributeLpTokens"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>distributeLpTokens(dropDto: <a href="https://www.typescriptlang.org/docs/handbook/basic-types.html" target="_blank">any</a>)</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="341"
+                                    class="link-to-prism">src/modules/vaults/lp-tokens/services/lp-tokens.service.ts:341</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+                        <div class="io-description"><p>Drops LP tokens to a specified wallet</p>
+</div>
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>dropDto</td>
+                                            <td>
+                                                            <code><a href="https://www.typescriptlang.org/docs/handbook/basic-types.html" target="_blank" >any</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>        <code><a href="../interfaces/LpTokenOperationResult.html" target="_self" >Promise&lt;LpTokenOperationResult&gt;</a></code>
+
+                        </div>
+                            <div class="io-description">
+                                <p>Operation result with success status and transaction hash if successful</p>
+
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="extractLpTokens"></a>
+                    <span class="name">
+                            <span class="modifier">Async</span>
+                        <span ><b>extractLpTokens</b></span>
+                        <a href="#extractLpTokens"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>extractLpTokens(extractDto: <a href="../interfaces/ExtractLpTokensParams.html" target="_self">ExtractLpTokensParams</a>)</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="75"
+                                    class="link-to-prism">src/modules/vaults/lp-tokens/services/lp-tokens.service.ts:75</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+                        <div class="io-description"><p>Extracts LP tokens from a vault to a specified wallet</p>
+</div>
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>extractDto</td>
+                                            <td>
+                                                            <code><a href="../interfaces/ExtractLpTokensParams.html" target="_self" >ExtractLpTokensParams</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>        <code><a href="../interfaces/LpTokenOperationResult.html" target="_self" >Promise&lt;LpTokenOperationResult&gt;</a></code>
+
+                        </div>
+                            <div class="io-description">
+                                <p>Operation result with success status and transaction hash if successful</p>
+
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="generateMockTransactionHash"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                        <span ><b>generateMockTransactionHash</b></span>
+                        <a href="#generateMockTransactionHash"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>generateMockTransactionHash()</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="388"
+                                    class="link-to-prism">src/modules/vaults/lp-tokens/services/lp-tokens.service.ts:388</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+                        <div class="io-description"><p>Generates a mock transaction hash for testing</p>
+</div>
+
+                        <div class="io-description">
+                            <b>Returns : </b>        <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank" >string</a></code>
+
+                        </div>
+                            <div class="io-description">
+                                <p>A mock transaction hash string</p>
+
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="isValidAddress"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                        <span ><b>isValidAddress</b></span>
+                        <a href="#isValidAddress"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>isValidAddress(address: <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank">string</a>)</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="372"
+                                    class="link-to-prism">src/modules/vaults/lp-tokens/services/lp-tokens.service.ts:372</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+                        <div class="io-description"><p>Validates a Cardano wallet address</p>
+</div>
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                                <td>Description</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>address</td>
+                                            <td>
+                                                            <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank" >string</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                            <td>
+                                                    <ul>
+<li>The wallet address to validate</li>
+</ul>
+
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>        <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/boolean" target="_blank" >boolean</a></code>
+
+                        </div>
+                            <div class="io-description">
+                                <p>boolean indicating if the address is valid</p>
+
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+</section>
+            <section data-compodoc="block-properties">
+    
+    <h3 id="inputs">
+        Properties
+    </h3>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="adminKeyHash"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                            <span class="modifier">Readonly</span>
+                        <span ><b>adminKeyHash</b></span>
+                        <a href="#adminKeyHash"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <i>Type : </i>        <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank" >string</a></code>
+
+                    </td>
+                </tr>
+                    <tr>
+                        <td class="col-md-4">
+                                <div class="io-line">Defined in <a href="" data-line="33" class="link-to-prism">src/modules/vaults/lp-tokens/services/lp-tokens.service.ts:33</a></div>
+                        </td>
+                    </tr>
+
+
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="adminSKey"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                            <span class="modifier">Readonly</span>
+                        <span ><b>adminSKey</b></span>
+                        <a href="#adminSKey"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <i>Type : </i>        <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank" >string</a></code>
+
+                    </td>
+                </tr>
+                    <tr>
+                        <td class="col-md-4">
+                                <div class="io-line">Defined in <a href="" data-line="31" class="link-to-prism">src/modules/vaults/lp-tokens/services/lp-tokens.service.ts:31</a></div>
+                        </td>
+                    </tr>
+
+
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="blockfrost"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                        <span ><b>blockfrost</b></span>
+                        <a href="#blockfrost"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <i>Type : </i>        <code><a href="https://www.typescriptlang.org/docs/handbook/basic-types.html" target="_blank" >any</a></code>
+
+                    </td>
+                </tr>
+                    <tr>
+                        <td class="col-md-4">
+                                <div class="io-line">Defined in <a href="" data-line="34" class="link-to-prism">src/modules/vaults/lp-tokens/services/lp-tokens.service.ts:34</a></div>
+                        </td>
+                    </tr>
+
+
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="logger"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                            <span class="modifier">Readonly</span>
+                        <span ><b>logger</b></span>
+                        <a href="#logger"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <i>Default value : </i><code>new Logger(LpTokensService.name)</code>
+                    </td>
+                </tr>
+                    <tr>
+                        <td class="col-md-4">
+                                <div class="io-line">Defined in <a href="" data-line="56" class="link-to-prism">src/modules/vaults/lp-tokens/services/lp-tokens.service.ts:56</a></div>
+                        </td>
+                    </tr>
+
+
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="scPolicyId"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                            <span class="modifier">Readonly</span>
+                        <span ><b>scPolicyId</b></span>
+                        <a href="#scPolicyId"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <i>Type : </i>        <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank" >string</a></code>
+
+                    </td>
+                </tr>
+                    <tr>
+                        <td class="col-md-4">
+                                <div class="io-line">Defined in <a href="" data-line="32" class="link-to-prism">src/modules/vaults/lp-tokens/services/lp-tokens.service.ts:32</a></div>
+                        </td>
+                    </tr>
+
+
+        </tbody>
+    </table>
+</section>
+
+    </div>
+
+
+    <div class="tab-pane fade  tab-source-code" id="source">
+        <pre class="line-numbers compodoc-sourcecode"><code class="language-typescript">import { Buffer } from &#x27;node:buffer&#x27;;
+
+import { BlockFrostAPI } from &#x27;@blockfrost/blockfrost-js&#x27;;
+import { FixedTransaction, PlutusData, PrivateKey } from &#x27;@emurgo/cardano-serialization-lib-nodejs&#x27;;
+import {
+  Injectable,
+  Logger,
+  BadRequestException,
+  NotFoundException,
+  InternalServerErrorException,
+} from &#x27;@nestjs/common&#x27;;
+import { ConfigService } from &#x27;@nestjs/config&#x27;;
+import { InjectRepository } from &#x27;@nestjs/typeorm&#x27;;
+import { Repository } from &#x27;typeorm&#x27;;
+
+import { TransactionsService } from &#x27;../../processing-tx/offchain-tx/transactions.service&#x27;;
+import { BlockchainScannerService } from &#x27;../../processing-tx/onchain/blockchain-scanner.service&#x27;;
+import { BlockchainService } from &#x27;../../processing-tx/onchain/blockchain.service&#x27;;
+import { Datum, Redeemer1 } from &#x27;../../processing-tx/onchain/types/type&#x27;;
+import { applyContributeParams, toPreloadedScript } from &#x27;../../processing-tx/onchain/utils/apply_params&#x27;;
+import blueprint from &#x27;../../processing-tx/onchain/utils/blueprint.json&#x27;;
+import { generate_tag_from_txhash_index } from &#x27;../../processing-tx/onchain/utils/lib&#x27;;
+import { LpTokenOperationResult, ExtractLpTokensParams } from &#x27;../types/lp-token.types&#x27;;
+
+import { Transaction } from &#x27;@/database/transaction.entity&#x27;;
+import { Vault } from &#x27;@/database/vault.entity&#x27;;
+import { TransactionType } from &#x27;@/types/transaction.types&#x27;;
+
+@Injectable()
+export class LpTokensService {
+  private readonly adminSKey: string;
+  private readonly scPolicyId: string;
+  private readonly adminKeyHash: string;
+  private blockfrost: any;
+
+  constructor(
+    private readonly transactionsService: TransactionsService,
+    @InjectRepository(Transaction)
+    private readonly transactionRepository: Repository&lt;Transaction&gt;,
+    @InjectRepository(Vault)
+    private readonly vaultRepository: Repository&lt;Vault&gt;,
+    private readonly blockchainService: BlockchainService,
+    private readonly configService: ConfigService,
+    private readonly blockchainScanner: BlockchainScannerService
+  ) {
+    this.adminKeyHash &#x3D; this.configService.get&lt;string&gt;(&#x27;ADMIN_KEY_HASH&#x27;);
+    if (!this.adminKeyHash) {
+      throw new Error(&#x27;ADMIN_KEY_HASH environment variable is not set&#x27;);
+    }
+    this.adminSKey &#x3D; this.configService.get&lt;string&gt;(&#x27;ADMIN_S_KEY&#x27;);
+    this.scPolicyId &#x3D; this.configService.get&lt;string&gt;(&#x27;SC_POLICY_ID&#x27;);
+    this.blockfrost &#x3D; new BlockFrostAPI({
+      projectId: this.configService.get&lt;string&gt;(&#x27;BLOCKFROST_TESTNET_API_KEY&#x27;),
+    });
+  }
+  private readonly logger &#x3D; new Logger(LpTokensService.name);
+
+  /**
+   * Extracts LP tokens from a vault to a specified wallet
+   * @param vaultId The ID of the vault to extract tokens from
+   * @param walletAddress The wallet address to send the tokens to
+   * @param amount The amount of LP tokens to extract
+   * @returns Operation result with success status and transaction hash if successful
+   */
+  /**
+   * Extracts LP tokens from a vault to a specified wallet
+   * @param params Parameters for the extraction operation
+   * @returns Operation result with success status and transaction hash if successful
+   */
+  /**
+   * Extracts LP tokens from a vault to a specified wallet
+   * @param extractDto - DTO containing extraction parameters
+   * @returns Operation result with transaction details
+   */
+  async extractLpTokens(extractDto: ExtractLpTokensParams): Promise&lt;LpTokenOperationResult&gt; {
+    const { vaultId, walletAddress, amount, txHash, txIndex } &#x3D; extractDto;
+
+    if (!this.isValidAddress(walletAddress)) {
+      throw new BadRequestException(&#x27;Invalid wallet address&#x27;);
+    }
+
+    // Create internal transaction with type extractLp, status pending and vault id
+    const transaction &#x3D; await this.transactionsService.createTransaction({
+      vault_id: vaultId,
+      type: TransactionType.extractLp,
+      assets: [], // No assets for LP extraction, just the transaction
+      amount: amount,
+    });
+
+    this.logger.log(&#x60;Created extract LP transaction ${transaction.id} for vault ${vaultId}&#x60;);
+
+    try {
+      this.logger.log(&#x60;Extracting ${amount} LP tokens from vault ${vaultId} to ${walletAddress}&#x60;);
+
+      // 1. Get vault details
+      const vault &#x3D; await this.vaultRepository.findOne({ where: { id: vaultId } });
+      if (!vault) {
+        throw new NotFoundException(&#x60;Vault with ID ${vaultId} not found&#x60;);
+      }
+
+      // 2. Get the last update transaction details
+      const lastUpdateTx &#x3D; await this.transactionsService.getLastVaultUpdate(vaultId);
+      if (!lastUpdateTx) {
+        throw new NotFoundException(&#x27;No update transaction found for this vault&#x27;);
+      }
+      const LAST_UPDATE_TX_INDEX &#x3D; 0; // The index off the output in the transaction
+
+      const TX_HASH_INDEX_WITH_LPS_TO_COLLECT &#x3D; &#x27;904bebf8c7f5d9ee343147cf8bbee24ec1beafe1e73c7d0a1c74b83c4f7a0b35#2&#x27;;
+      const LAST_UPDATE_TX_HASH &#x3D; &#x27;b255d78aaf821388e00cbc03e09add05810e346b2b1f2a5db236752aec116a50&#x27;;
+
+      // Get transaction details and extract policy information
+      this.logger.log(&#x60;Getting transaction details for publication hash: ${vault.publication_hash}&#x60;);
+
+      // Validate output amoun
+
+      const txDetail &#x3D; await this.blockchainScanner.getTransactionDetails(vault.publication_hash);
+
+      const { output_amount } &#x3D; txDetail;
+      this.logger.log(JSON.stringify(output_amount[1].unit));
+
+      const vaultPolicyPlusName &#x3D; output_amount[1].unit;
+      const VAULT_POLICY_ID &#x3D; vaultPolicyPlusName.slice(0, 56);
+      const VAULT_ID &#x3D; vaultPolicyPlusName.slice(56, vaultPolicyPlusName.length);
+
+      this.logger.log(&#x60;Extracted - Policy ID: ${VAULT_POLICY_ID}, Vault ID: ${VAULT_ID}&#x60;);
+
+      let parameterizedScript;
+      try {
+        this.logger.log(&#x27;Applying parameters to contribute script...&#x27;);
+        parameterizedScript &#x3D; applyContributeParams({
+          vault_policy_id: VAULT_POLICY_ID,
+          vault_id: VAULT_ID,
+        });
+
+        if (!parameterizedScript?.validator?.hash) {
+          throw new Error(&#x27;Failed to parameterize script: Invalid response from applyContributeParams&#x27;);
+        }
+
+        this.logger.log(&#x60;Successfully parameterized script. Hash: ${parameterizedScript.validator.hash}&#x60;);
+      } catch (error) {
+        this.logger.error(&#x27;Error in applyContributeParams:&#x27;, error);
+        throw new Error(&#x60;Failed to apply parameters to script: ${error.message}&#x60;);
+      }
+
+      const lpsUnit &#x3D; parameterizedScript.validator.hash + VAULT_ID;
+
+      const POLICY_ID &#x3D; parameterizedScript.validator.hash;
+      const [tx_hash, index] &#x3D; TX_HASH_INDEX_WITH_LPS_TO_COLLECT.split(&#x27;#&#x27;);
+      const txUtxos &#x3D; await this.blockfrost.txsUtxos(tx_hash);
+      const output &#x3D; txUtxos.outputs[index];
+      if (!output) {
+        throw new Error(&#x27;No output found&#x27;);
+      }
+      const amountOfLpsToClaim &#x3D; output.amount.find((a: { unit: string; quantity: string }) &#x3D;&gt; a.unit &#x3D;&#x3D;&#x3D; lpsUnit);
+      const datumTag &#x3D; generate_tag_from_txhash_index(tx_hash, Number(index));
+      if (!amountOfLpsToClaim) {
+        console.log(JSON.stringify(output));
+        throw new Error(&#x27;No lps to claim.&#x27;);
+      }
+
+      const unparameterizedScript &#x3D; blueprint.validators.find(v &#x3D;&gt; v.title &#x3D;&#x3D;&#x3D; &#x27;contribute.contribute&#x27;);
+      if (!unparameterizedScript) {
+        throw new Error(&#x27;Contribute validator not found&#x27;);
+      }
+
+      // 3. Prepare transaction input for LP token extraction
+      const txInput: {
+        changeAddress: string;
+        message: string;
+        mint?: Array&lt;object&gt;;
+        scriptInteractions: object[];
+        outputs: {
+          address: string;
+          assets?: object[];
+          lovelace?: number;
+          datum?: { type: &#x27;inline&#x27;; value: string | Datum; shape?: object };
+        }[];
+        requiredSigners: string[];
+        preloadedScripts: {
+          type: string;
+          blueprint: any;
+        }[];
+        referenceInputs: { txHash: string; index: number }[];
+        validityInterval: {
+          start: boolean;
+          end: boolean;
+        };
+        network: string;
+      } &#x3D; {
+        changeAddress: walletAddress,
+        message: &#x27;Admin extract asset&#x27;,
+        scriptInteractions: [
+          {
+            purpose: &#x27;spend&#x27;,
+            hash: POLICY_ID,
+            outputRef: {
+              txHash: tx_hash,
+              index: index,
+            },
+            redeemer: {
+              type: &#x27;json&#x27;,
+              value: {
+                __variant: &#x27;ExtractAsset&#x27;,
+                __data: {
+                  lp_output_index: 0,
+                },
+              } satisfies Redeemer1,
+            },
+          },
+        ],
+        outputs: [
+          {
+            address: walletAddress,
+            assets: [
+              {
+                assetName: { name: VAULT_ID, format: &#x27;hex&#x27; },
+                policyId: parameterizedScript.validator.hash,
+                quantity: 1000,
+              },
+            ],
+            datum: {
+              type: &#x27;inline&#x27;,
+              value: PlutusData.new_bytes(Buffer.from(datumTag, &#x27;hex&#x27;)).to_hex(),
+            },
+          },
+        ],
+        preloadedScripts: [
+          toPreloadedScript(blueprint, {
+            validators: [parameterizedScript.validator, unparameterizedScript],
+          }),
+        ],
+        requiredSigners: [this.adminKeyHash],
+        referenceInputs: [
+          {
+            txHash: LAST_UPDATE_TX_HASH,
+            index: LAST_UPDATE_TX_INDEX,
+          },
+        ],
+        validityInterval: {
+          start: true,
+          end: true,
+        },
+        network: &#x27;preprod&#x27;,
+      };
+
+      const inputWithNoPreloaded &#x3D; { ...txInput };
+      //@ts-ignore
+      delete inputWithNoPreloaded.preloadedScripts;
+      console.log(JSON.stringify(inputWithNoPreloaded));
+
+      // 4. Build the transaction
+      const buildResponse &#x3D; await this.blockchainService.buildTransaction(txInput);
+
+      // 5. Sign the transaction with admin key
+      const txToSubmitOnChain &#x3D; FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, &#x27;hex&#x27;));
+
+      // Sign with both admin and customer keys if needed
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+      // If customer signature is needed:
+      // txToSubmitOnChain.sign_and_add_vkey_signature(
+      //   PrivateKey.from_bech32(customerSKey),
+      // );
+
+      // 6. Submit the signed transaction
+      const submitResponse &#x3D; await this.blockchainService.submitTransaction({
+        transaction: txToSubmitOnChain.to_hex(),
+        signatures: [], // Signatures are already added to the transaction
+      });
+
+      // 7. Update the transaction with the hash
+      await this.transactionsService.updateTransactionHash(transaction.id, submitResponse.txHash);
+
+      const result: LpTokenOperationResult &#x3D; {
+        success: true,
+        transactionId: submitResponse.txHash,
+        message: &#x27;LP tokens extracted successfully&#x27;,
+        transaction: await this.transactionsService.getTransaction(submitResponse.txHash),
+      };
+      return result;
+    } catch (error) {
+      this.logger.error(&#x60;Failed to extract LP tokens: ${error.message}&#x60;, error.stack);
+      throw new InternalServerErrorException(&#x27;Failed to process LP token extraction&#x27;);
+    }
+  }
+
+  /**
+   * Burns LP tokens from a specified wallet
+   * @param walletAddress The wallet address that holds the LP tokens
+   * @param amount The amount of LP tokens to burn
+   * @returns Operation result with success status and transaction hash if successful
+   * @param params Parameters for the burning operation
+   * @returns Operation result with success status and transaction hash if successful
+   */
+  /**
+   * Burns LP tokens from a specified wallet
+   * @param burnDto - DTO containing burn parameters
+   * @returns Operation result with transaction details
+   */
+  async burnLpTokens(burnDto: any): Promise&lt;LpTokenOperationResult&gt; {
+    const { walletAddress, amount } &#x3D; burnDto;
+
+    if (!this.isValidAddress(walletAddress)) {
+      throw new BadRequestException(&#x27;Invalid wallet address&#x27;);
+    }
+
+    try {
+      this.logger.log(&#x60;Burning ${amount} LP tokens from wallet ${walletAddress}&#x60;);
+
+      // TODO: Implement actual LP token burning logic
+      // This is a placeholder implementation
+      const transactionHash &#x3D; this.generateMockTransactionHash();
+
+      const result: LpTokenOperationResult &#x3D; {
+        success: true,
+        transactionId: transactionHash,
+        message: &#x27;LP tokens burned successfully&#x27;,
+      };
+      return result;
+    } catch (error) {
+      this.logger.error(&#x60;Failed to burn LP tokens: ${error.message}&#x60;, error.stack);
+      throw new InternalServerErrorException(&#x27;Failed to process LP token burn&#x27;);
+    }
+  }
+
+  /**
+   * Drops LP tokens to a specified wallet
+   * @param walletAddress The wallet address to receive the LP tokens
+   * @param amount The amount of LP tokens to drop
+   * @returns Operation result with success status and transaction hash if successful
+   */
+  /**
+   * Drops LP tokens to a specified wallet
+   * @param params Parameters for the drop operation
+   * @returns Operation result with success status and transaction hash if successful
+   */
+  /**
+   * Drops LP tokens to a specified wallet
+   * @param dropDto - DTO containing drop parameters
+   * @returns Operation result with transaction details
+   */
+  async distributeLpTokens(dropDto: any): Promise&lt;LpTokenOperationResult&gt; {
+    const { walletAddress, amount } &#x3D; dropDto;
+
+    if (!this.isValidAddress(walletAddress)) {
+      throw new BadRequestException(&#x27;Invalid wallet address&#x27;);
+    }
+
+    try {
+      this.logger.log(&#x60;Dropping ${amount} LP tokens to wallet ${walletAddress}&#x60;);
+
+      // TODO: Implement actual LP token dropping logic
+      // This is a placeholder implementation
+      const transactionHash &#x3D; this.generateMockTransactionHash();
+
+      const result: LpTokenOperationResult &#x3D; {
+        success: true,
+        transactionId: transactionHash,
+        message: &#x27;LP tokens distributed successfully&#x27;,
+      };
+      return result;
+    } catch (error) {
+      this.logger.error(&#x60;Failed to drop LP tokens: ${error.message}&#x60;, error.stack);
+      throw new InternalServerErrorException(&#x27;Failed to process LP token drop&#x27;);
+    }
+  }
+
+  /**
+   * Validates a Cardano wallet address
+   * @param address - The wallet address to validate
+   * @returns boolean indicating if the address is valid
+   */
+  private isValidAddress(address: string): boolean {
+    // Basic validation for Cardano addresses
+    // Supports both mainnet (addr1) and testnet (addr_test1) addresses
+    return (
+      typeof address &#x3D;&#x3D;&#x3D; &#x27;string&#x27; &amp;&amp;
+      (address.startsWith(&#x27;addr1&#x27;) ||
+        address.startsWith(&#x27;addr_test1&#x27;) ||
+        address.startsWith(&#x27;stake1&#x27;) ||
+        address.startsWith(&#x27;stake_test1&#x27;))
+    );
+  }
+
+  /**
+   * Generates a mock transaction hash for testing
+   * @returns A mock transaction hash string
+   */
+  private generateMockTransactionHash(): string {
+    return &#x27;0x&#x27; + Math.random().toString(16).substr(2, 64);
+  }
+}
+</code></pre>
+    </div>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+                   </div><div class="search-results">
+    <div class="has-results">
+        <h1 class="search-results-title"><span class='search-results-count'></span> results matching "<span class='search-query'></span>"</h1>
+        <ul class="search-results-list"></ul>
+    </div>
+    <div class="no-results">
+        <h1 class="search-results-title">No results matching "<span class='search-query'></span>"</h1>
+    </div>
+</div>
+</div>
+               <!-- END CONTENT -->
+           </div>
+       </div>
+
+          <label class="dark-mode-switch">
+               <input type="checkbox">
+               <span class="slider">
+                    <svg class="slider-icon" viewBox="0 0 24 24" fill="none" height="20" stroke="#000" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" width="20" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"></path>
+                    </svg>
+               </span>
+          </label>
+
+       <script>
+            var COMPODOC_CURRENT_PAGE_DEPTH = 1;
+            var COMPODOC_CURRENT_PAGE_CONTEXT = 'injectable';
+            var COMPODOC_CURRENT_PAGE_URL = 'LpTokensService.html';
+            var MAX_SEARCH_RESULTS = 15;
+       </script>
+
+       <script>
+               $darkModeToggleSwitchers = document.querySelectorAll('.dark-mode-switch input');
+               checkToggle(darkModeState);
+               if ($darkModeToggleSwitchers.length > 0) {
+                    for (var i = 0; i < $darkModeToggleSwitchers.length; i++) {
+                         $darkModeToggleSwitchers[i].addEventListener('change', function (event) {
+                              darkModeState = !darkModeState;
+                              toggleDarkMode(darkModeState);
+                         });
+                    }
+               }
+          </script>
+
+       <script src="../js/libs/custom-elements.min.js"></script>
+       <script src="../js/libs/lit-html.js"></script>
+
+       <script src="../js/menu-wc.js" defer></script>
+       <script nomodule src="../js/menu-wc_es5.js" defer></script>
+
+       <script src="../js/libs/bootstrap-native.js"></script>
+
+       <script src="../js/libs/es6-shim.min.js"></script>
+       <script src="../js/libs/EventDispatcher.js"></script>
+       <script src="../js/libs/promise.min.js"></script>
+
+       <script src="../js/compodoc.js"></script>
+
+       <script src="../js/tabs.js"></script>
+       <script src="../js/menu.js"></script>
+       <script src="../js/libs/clipboard.min.js"></script>
+       <script src="../js/libs/prism.js"></script>
+       <script src="../js/sourceCode.js"></script>
+          <script src="../js/search/search.js"></script>
+          <script src="../js/search/lunr.min.js"></script>
+          <script src="../js/search/search-lunr.js"></script>
+          <script src="../js/search/search_index.js"></script>
+       <script src="../js/lazy-load-graphs.js"></script>
+
+
+    </body>
+</html>

@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Expose, Type, plainToInstance } from 'class-transformer';
-import { IsArray, IsEnum, IsNumber, IsObject, IsOptional, IsString, ValidateIf, Min, Max } from 'class-validator';
+import { Expose, Type } from 'class-transformer';
+import { IsArray, IsEnum, IsNumber, IsOptional, IsString, ValidateIf, Min, Max } from 'class-validator';
 
 import {
   ContributionWindowType,

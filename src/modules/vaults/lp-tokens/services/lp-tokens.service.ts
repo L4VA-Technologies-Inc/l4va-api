@@ -5,17 +5,12 @@ import { FixedTransaction, PlutusData, PrivateKey } from '@emurgo/cardano-serial
 import {
   Injectable,
   Logger,
-  Inject,
-  forwardRef,
   BadRequestException,
   NotFoundException,
   InternalServerErrorException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Transaction } from '@/database/transaction.entity';
-import { Vault } from '@/database/vault.entity';
-import { TransactionType } from '@/types/transaction.types';
 import { Repository } from 'typeorm';
 
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
@@ -27,6 +22,10 @@ import blueprint from '../../processing-tx/onchain/utils/blueprint.json';
 import { generate_tag_from_txhash_index } from '../../processing-tx/onchain/utils/lib';
 import { LpTokenOperationResult, ExtractLpTokensParams } from '../types/lp-token.types';
 
+import { Transaction } from '@/database/transaction.entity';
+import { Vault } from '@/database/vault.entity';
+import { TransactionType } from '@/types/transaction.types';
+
 @Injectable()
 export class LpTokensService {
   private readonly adminSKey: string;
@@ -35,7 +34,6 @@ export class LpTokensService {
   private blockfrost: any;
 
   constructor(
-    @Inject(forwardRef(() => TransactionsService))
     private readonly transactionsService: TransactionsService,
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,

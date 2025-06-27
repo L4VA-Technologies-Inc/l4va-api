@@ -1,0 +1,1061 @@
+<!doctype html>
+<html class="no-js" lang="">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="x-ua-compatible" content="ie=edge">
+        <title>project-name documentation</title>
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+
+        <link rel="icon" type="image/x-icon" href="../images/favicon.ico">
+	   <link rel="stylesheet" href="../styles/style.css">
+        <link rel="stylesheet" href="../styles/dark.css">
+    </head>
+    <body>
+          <script>
+               // Blocking script to avoid flickering dark mode
+               // Dark mode toggle button
+               var useDark = window.matchMedia('(prefers-color-scheme: dark)');
+               var darkModeState = useDark.matches;
+               var $darkModeToggleSwitchers = document.querySelectorAll('.dark-mode-switch input');
+               var $darkModeToggles = document.querySelectorAll('.dark-mode-switch');
+               var darkModeStateLocal = localStorage.getItem('compodoc_darkmode-state');
+
+               function checkToggle(check) {
+                    for (var i = 0; i < $darkModeToggleSwitchers.length; i++) {
+                         $darkModeToggleSwitchers[i].checked = check;
+                    }
+               }
+
+               function toggleDarkMode(state) {
+                    if (window.localStorage) {
+                         localStorage.setItem('compodoc_darkmode-state', state);
+                    }
+
+                    checkToggle(state);
+
+                    const hasClass = document.body.classList.contains('dark');
+
+                    if (state) {
+                         for (var i = 0; i < $darkModeToggles.length; i++) {
+                              $darkModeToggles[i].classList.add('dark');
+                         }
+                         if (!hasClass) {
+                              document.body.classList.add('dark');
+                         }
+                    } else {
+                         for (var i = 0; i < $darkModeToggles.length; i++) {
+                              $darkModeToggles[i].classList.remove('dark');
+                         }
+                         if (hasClass) {
+                              document.body.classList.remove('dark');
+                         }
+                    }
+               }
+
+               useDark.addEventListener('change', function (evt) {
+                    toggleDarkMode(evt.matches);
+               });
+               if (darkModeStateLocal) {
+                    darkModeState = darkModeStateLocal === 'true';
+               }
+               toggleDarkMode(darkModeState);
+          </script>
+
+        <div class="navbar navbar-default navbar-fixed-top d-md-none p-0">
+               <div class="d-flex">
+                    <a href="../" class="navbar-brand">project-name documentation</a>
+                    <button type="button" class="btn btn-default btn-menu ion-ios-menu" id="btn-menu"></button>
+               </div>
+        </div>
+
+        <div class="xs-menu menu" id="mobile-menu">
+                <div id="book-search-input" role="search"><input type="text" placeholder="Type to search"></div>            <compodoc-menu></compodoc-menu>
+        </div>
+
+        <div class="container-fluid main">
+           <div class="row main">
+               <div class="d-none d-md-block menu">
+                   <compodoc-menu mode="normal"></compodoc-menu>
+               </div>
+               <!-- START CONTENT -->
+               <div class="content injectable">
+                   <div class="content-data">
+
+
+
+
+
+
+
+
+<ol class="breadcrumb">
+  <li class="breadcrumb-item">Injectables</li>
+  <li class="breadcrumb-item" >LifecycleService</li>
+</ol>
+
+<ul class="nav nav-tabs" role="tablist">
+        <li class="nav-item">
+            <a href="#info" 
+                class="nav-link"
+                class="nav-link active"
+                role="tab" id="info-tab" data-bs-toggle="tab" data-link="info">Info</a>
+        </li>
+        <li class="nav-item">
+            <a href="#source" 
+                class="nav-link"
+                
+                role="tab" id="source-tab" data-bs-toggle="tab" data-link="source">Source</a>
+        </li>
+</ul>
+
+<div class="tab-content">
+    <div class="tab-pane fade active in" id="info">
+        <p class="comment">
+            <h3>File</h3>
+        </p>
+        <p class="comment">
+            <code>src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts</code>
+        </p>
+
+
+
+
+
+            <section data-compodoc="block-index">
+    <h3 id="index">Index</h3>
+    <table class="table table-sm table-bordered index-table">
+        <tbody>
+                <tr>
+                    <td class="col-md-4">
+                        <h6><b>Properties</b></h6>
+                    </td>
+                </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <ul class="index-list">
+                            <li>
+                                    <span class="modifier">Private</span>
+                                    <span class="modifier">Readonly</span>
+                                <a href="#logger" >logger</a>
+                            </li>
+                        </ul>
+                    </td>
+                </tr>
+
+                <tr>
+                    <td class="col-md-4">
+                        <h6><b>Methods</b></h6>
+                    </td>
+                </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <ul class="index-list">
+                            <li>
+                                    <span class="modifier">Async</span>
+                                <a href="#getAssetsGroupedByUser" >getAssetsGroupedByUser</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Private</span>
+                                    <span class="modifier">Async</span>
+                                <a href="#handleContributionToInvestment" >handleContributionToInvestment</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Private</span>
+                                    <span class="modifier">Async</span>
+                                <a href="#handleInvestmentToGovernance" >handleInvestmentToGovernance</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Private</span>
+                                    <span class="modifier">Async</span>
+                                <a href="#handlePublishedToContribution" >handlePublishedToContribution</a>
+                            </li>
+                            <li>
+                                    <span class="modifier"></span>
+                                    <span class="modifier">Async</span>
+                                <a href="#handleVaultLifecycleTransitions" >handleVaultLifecycleTransitions</a>
+                            </li>
+                        </ul>
+                    </td>
+                </tr>
+
+
+
+
+
+        </tbody>
+    </table>
+</section>
+
+            <section data-compodoc="block-constructor">
+    <h3 id="constructor">Constructor</h3>
+        <table class="table table-sm table-bordered">
+            <tbody>
+                <tr>
+                    <td class="col-md-4">
+<code>constructor(assetsRepository: <a href="../interfaces/Asset.html" target="_self">Repository&lt;Asset&gt;</a>, vaultRepository: <a href="../entitys/Vault.html" target="_self">Repository&lt;Vault&gt;</a>, contributionService: <a href="../injectables/ContributionService.html" target="_self">ContributionService</a>, distributionService: <a href="../injectables/DistributionService.html" target="_self">DistributionService</a>, taptoolsService: <a href="../injectables/TaptoolsService.html" target="_self">TaptoolsService</a>, vaultContractService: <a href="../injectables/VaultManagingService.html" target="_self">VaultManagingService</a>)</code>
+                    </td>
+                </tr>
+                        <tr>
+                            <td class="col-md-4">
+                                <div class="io-line">Defined in <a href="" data-line="18" class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:18</a></div>
+                            </td>
+                        </tr>
+
+                <tr>
+                    <td class="col-md-4">
+                            <div>
+                                    <b>Parameters :</b>
+                                    <table class="params">
+                                        <thead>
+                                            <tr>
+                                                <td>Name</td>
+                                                    <td>Type</td>
+                                                <td>Optional</td>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                                <tr>
+                                                        <td>assetsRepository</td>
+                                                  
+                                                        <td>
+                                                                        <code><a href="../interfaces/Asset.html" target="_self" >Repository&lt;Asset&gt;</a></code>
+                                                        </td>
+                                                  
+                                                    <td>
+                                                            No
+                                                    </td>
+                                                    
+                                                </tr>
+                                                <tr>
+                                                        <td>vaultRepository</td>
+                                                  
+                                                        <td>
+                                                                        <code><a href="../entitys/Vault.html" target="_self" >Repository&lt;Vault&gt;</a></code>
+                                                        </td>
+                                                  
+                                                    <td>
+                                                            No
+                                                    </td>
+                                                    
+                                                </tr>
+                                                <tr>
+                                                        <td>contributionService</td>
+                                                  
+                                                        <td>
+                                                                        <code><a href="../injectables/ContributionService.html" target="_self" >ContributionService</a></code>
+                                                        </td>
+                                                  
+                                                    <td>
+                                                            No
+                                                    </td>
+                                                    
+                                                </tr>
+                                                <tr>
+                                                        <td>distributionService</td>
+                                                  
+                                                        <td>
+                                                                        <code><a href="../injectables/DistributionService.html" target="_self" >DistributionService</a></code>
+                                                        </td>
+                                                  
+                                                    <td>
+                                                            No
+                                                    </td>
+                                                    
+                                                </tr>
+                                                <tr>
+                                                        <td>taptoolsService</td>
+                                                  
+                                                        <td>
+                                                                        <code><a href="../injectables/TaptoolsService.html" target="_self" >TaptoolsService</a></code>
+                                                        </td>
+                                                  
+                                                    <td>
+                                                            No
+                                                    </td>
+                                                    
+                                                </tr>
+                                                <tr>
+                                                        <td>vaultContractService</td>
+                                                  
+                                                        <td>
+                                                                        <code><a href="../injectables/VaultManagingService.html" target="_self" >VaultManagingService</a></code>
+                                                        </td>
+                                                  
+                                                    <td>
+                                                            No
+                                                    </td>
+                                                    
+                                                </tr>
+                                        </tbody>
+                                    </table>
+                            </div>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+</section>
+
+            <section data-compodoc="block-methods">
+    
+    <h3 id="methods">
+        Methods
+    </h3>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="getAssetsGroupedByUser"></a>
+                    <span class="name">
+                            <span class="modifier">Async</span>
+                        <span ><b>getAssetsGroupedByUser</b></span>
+                        <a href="#getAssetsGroupedByUser"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>getAssetsGroupedByUser(vaultId: <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank">string</a>)</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="210"
+                                    class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:210</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>vaultId</td>
+                                            <td>
+                                                            <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank" >string</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>Promise&lt;literal type[]&gt;</code>
+
+                        </div>
+                            <div class="io-description">
+                                
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="handleContributionToInvestment"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                            <span class="modifier">Async</span>
+                        <span ><b>handleContributionToInvestment</b></span>
+                        <a href="#handleContributionToInvestment"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>handleContributionToInvestment()</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="78"
+                                    class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:78</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>Promise&lt;void&gt;</code>
+
+                        </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="handleInvestmentToGovernance"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                            <span class="modifier">Async</span>
+                        <span ><b>handleInvestmentToGovernance</b></span>
+                        <a href="#handleInvestmentToGovernance"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>handleInvestmentToGovernance()</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="260"
+                                    class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:260</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>Promise&lt;void&gt;</code>
+
+                        </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="handlePublishedToContribution"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                            <span class="modifier">Async</span>
+                        <span ><b>handlePublishedToContribution</b></span>
+                        <a href="#handlePublishedToContribution"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>handlePublishedToContribution()</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="44"
+                                    class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:44</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>Promise&lt;void&gt;</code>
+
+                        </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="handleVaultLifecycleTransitions"></a>
+                    <span class="name">
+                            <span class="modifier"></span>
+                            <span class="modifier">Async</span>
+                        <span ><b>handleVaultLifecycleTransitions</b></span>
+                        <a href="#handleVaultLifecycleTransitions"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>handleVaultLifecycleTransitions()</code>
+                </td>
+            </tr>
+
+            <tr>
+                <td class="col-md-4">
+                    <b>Decorators : </b>
+                    <br />
+                    <code>@Cron(CronExpression.EVERY_MINUTE)<br /></code>
+                </td>
+            </tr>
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="32"
+                                    class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:32</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>Promise&lt;void&gt;</code>
+
+                        </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+</section>
+            <section data-compodoc="block-properties">
+    
+    <h3 id="inputs">
+        Properties
+    </h3>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="logger"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                            <span class="modifier">Readonly</span>
+                        <span ><b>logger</b></span>
+                        <a href="#logger"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+                <tr>
+                    <td class="col-md-4">
+                        <i>Default value : </i><code>new Logger(LifecycleService.name)</code>
+                    </td>
+                </tr>
+                    <tr>
+                        <td class="col-md-4">
+                                <div class="io-line">Defined in <a href="" data-line="18" class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:18</a></div>
+                        </td>
+                    </tr>
+
+
+        </tbody>
+    </table>
+</section>
+
+    </div>
+
+
+    <div class="tab-pane fade  tab-source-code" id="source">
+        <pre class="line-numbers compodoc-sourcecode"><code class="language-typescript">import { Injectable, Logger } from &#x27;@nestjs/common&#x27;;
+import { Cron, CronExpression } from &#x27;@nestjs/schedule&#x27;;
+import { InjectRepository } from &#x27;@nestjs/typeorm&#x27;;
+import { Repository } from &#x27;typeorm&#x27;;
+
+import { AssetOriginType } from &#x27;../../../../types/asset.types&#x27;;
+import { VaultStatus, ContributionWindowType, InvestmentWindowType } from &#x27;../../../../types/vault.types&#x27;;
+import { DistributionService } from &#x27;../../../distribution/distribution.service&#x27;;
+import { TaptoolsService } from &#x27;../../../taptools/taptools.service&#x27;;
+import { VaultManagingService } from &#x27;../../processing-tx/onchain/vault-managing.service&#x27;;
+import { ContributionService } from &#x27;../contribution/contribution.service&#x27;;
+
+import { Asset } from &#x27;@/database/asset.entity&#x27;;
+import { Vault } from &#x27;@/database/vault.entity&#x27;;
+
+@Injectable()
+export class LifecycleService {
+  private readonly logger &#x3D; new Logger(LifecycleService.name);
+
+  constructor(
+    @InjectRepository(Asset)
+    private readonly assetsRepository: Repository&lt;Asset&gt;,
+    @InjectRepository(Vault)
+    private readonly vaultRepository: Repository&lt;Vault&gt;,
+    private readonly contributionService: ContributionService,
+    private readonly distributionService: DistributionService,
+    private readonly taptoolsService: TaptoolsService,
+    private readonly vaultContractService: VaultManagingService
+  ) {}
+
+  @Cron(CronExpression.EVERY_MINUTE)
+  async handleVaultLifecycleTransitions(): Promise&lt;void&gt; {
+    // this.logger.debug(&#x27;Checking vault lifecycle transitions...&#x27;);
+
+    await this.handlePublishedToContribution();
+
+    // Handle contribution -&gt; acquire transitions
+    await this.handleContributionToInvestment();
+
+    // Handle acquire -&gt; governance transitions
+    await this.handleInvestmentToGovernance();
+  }
+
+  private async handlePublishedToContribution(): Promise&lt;void&gt; {
+    const now &#x3D; new Date();
+
+    // Handle immediate start vaults
+    const immediateStartVaults &#x3D; await this.vaultRepository
+      .createQueryBuilder(&#x27;vault&#x27;)
+      .where(&#x27;vault.vault_status &#x3D; :status&#x27;, { status: VaultStatus.published })
+      .andWhere(&#x27;vault.contribution_open_window_type &#x3D; :type&#x27;, { type: ContributionWindowType.uponVaultLaunch })
+      .getMany();
+
+    for (const vault of immediateStartVaults) {
+      vault.contribution_phase_start &#x3D; now.toISOString();
+      vault.vault_status &#x3D; VaultStatus.contribution;
+      await this.vaultRepository.save(vault);
+      this.logger.log(&#x60;Vault ${vault.id} moved to contribution phase (immediate start)&#x60;);
+    }
+
+    // Handle custom start time vaults
+    const customStartVaults &#x3D; await this.vaultRepository
+      .createQueryBuilder(&#x27;vault&#x27;)
+      .where(&#x27;vault.vault_status &#x3D; :status&#x27;, { status: VaultStatus.published })
+      .andWhere(&#x27;vault.contribution_open_window_type &#x3D; :type&#x27;, { type: ContributionWindowType.custom })
+      .andWhere(&#x27;vault.contribution_open_window_time IS NOT NULL&#x27;)
+      .andWhere(&#x27;vault.contribution_open_window_time &lt;&#x3D; :now&#x27;, { now: now.toISOString() })
+      .getMany();
+
+    for (const vault of customStartVaults) {
+      vault.contribution_phase_start &#x3D; now.toISOString();
+      vault.vault_status &#x3D; VaultStatus.contribution;
+      await this.vaultRepository.save(vault);
+      this.logger.log(&#x60;Vault ${vault.id} moved to contribution phase (custom start time)&#x60;);
+    }
+  }
+
+  private async handleContributionToInvestment(): Promise&lt;void&gt; {
+    const now &#x3D; new Date();
+    const contributionVaults &#x3D; await this.vaultRepository
+      .createQueryBuilder(&#x27;vault&#x27;)
+      .where(&#x27;vault.vault_status &#x3D; :status&#x27;, { status: VaultStatus.contribution })
+      .andWhere(&#x27;vault.contribution_phase_start IS NOT NULL&#x27;)
+      .andWhere(&#x27;vault.contribution_duration IS NOT NULL&#x27;)
+      .leftJoinAndSelect(&#x27;vault.owner&#x27;, &#x27;owner&#x27;)
+      .getMany();
+
+    for (const vault of contributionVaults) {
+      const contributionStart &#x3D; new Date(vault.contribution_phase_start);
+      const contributionDurationMs &#x3D; Number(vault.contribution_duration);
+      const contributionEnd &#x3D; new Date(contributionStart.getTime() + contributionDurationMs);
+
+      // Skip if contribution period hasn&#x27;t ended yet
+      if (now &lt; contributionEnd) {
+        continue;
+      }
+
+      await this.contributionService.syncContributionTransactions(vault.id);
+
+      const assets &#x3D; await this.assetsRepository.find({ where: { vault: { id: vault.id }, deleted: false } });
+      // Check if vault has any non-deleted assets
+      const hasAssets &#x3D; assets?.some(asset &#x3D;&gt; !asset.deleted) || false;
+
+      // If no assets, burn the vault using admin wallet
+      if (!hasAssets) {
+        try {
+          this.logger.log(&#x60;Vault ${vault.id} has no assets and contribution period has ended. Burning vault...&#x60;);
+          // Update vault status to failed
+          vault.vault_status &#x3D; VaultStatus.failed;
+          await this.vaultRepository.save(vault);
+
+          // // Use admin wallet to burn the vault
+          // const burnTx &#x3D; await this.vaultContractService.createBurnTx({
+          //   customerAddress: vault.owner.address, // Still track the original owner
+          //   assetVaultName: vault.asset_vault_name,
+          // });
+
+          // // Submit the transaction using admin wallet
+          // const { txHash } &#x3D; await this.vaultContractService.submitOnChainVaultTx({
+          //   transaction: burnTx.presignedTx,
+          //   signatures: [], // Admin signature is already included in presignedTx
+          // });
+
+          // // Update vault status
+          // vault.deleted &#x3D; true;
+          // vault.liquidation_hash &#x3D; txHash;
+          // await this.vaultRepository.save(vault);
+
+          // this.logger.log(&#x60;Successfully burned empty vault ${vault.id} in transaction ${txHash}&#x60;);
+
+          continue;
+        } catch (error) {
+          this.logger.error(&#x60;Failed to burn empty vault ${vault.id}:&#x60;, error.message);
+          // Continue with other vaults even if one fails
+        }
+        continue;
+      }
+
+      // If we get here, the vault has assets and the contribution period has ended
+      try {
+        const contributionDurationMs &#x3D; Number(vault.contribution_duration);
+        const contributionEnd &#x3D; new Date(contributionStart.getTime() + contributionDurationMs);
+
+        if (now &gt;&#x3D; contributionEnd) {
+          // For immediate acquire start
+          if (vault.acquire_open_window_type &#x3D;&#x3D;&#x3D; InvestmentWindowType.uponAssetWindowClosing) {
+            vault.acquire_phase_start &#x3D; now.toISOString();
+            vault.vault_status &#x3D; VaultStatus.acquire;
+            // Sync transactions before checking contribution end time
+
+            // TODO: need save this data to vault;
+            // Calculate total value of assets in the vault
+            try {
+              const assetsValue &#x3D; await this.taptoolsService.calculateVaultAssetsValue(vault.id);
+              this.logger.log(
+                &#x60;Vault ${vault.id} total assets value: ${assetsValue.totalValueAda} ADA (${assetsValue.totalValueUsd} USD)&#x60;
+              );
+              // You can store this information in the vault if needed
+              vault.total_assets_cost_ada &#x3D; assetsValue.totalValueAda;
+              vault.total_assets_cost_usd &#x3D; assetsValue.totalValueUsd;
+
+              //  todo calculate threshold Price
+              vault.require_reserved_cost_ada &#x3D; assetsValue.totalValueAda * (vault.acquire_reserve * 0.01);
+              vault.require_reserved_cost_usd &#x3D; assetsValue.totalValueUsd * (vault.acquire_reserve * 0.01);
+            } catch (error) {
+              this.logger.error(&#x60;Failed to calculate assets value for vault ${vault.id}:&#x60;, error);
+              // Continue with the transition even if we couldn&#x27;t calculate the value
+            }
+            await this.vaultRepository.save(vault);
+            this.logger.log(&#x60;Vault ${vault.id} moved to acquire phase (immediate start)&#x60;);
+          }
+          // For custom acquire start time
+          else if (
+            vault.acquire_open_window_type &#x3D;&#x3D;&#x3D; InvestmentWindowType.custom &amp;&amp;
+            vault.acquire_open_window_time &amp;&amp;
+            now &gt;&#x3D; new Date(vault.acquire_open_window_time)
+          ) {
+            vault.acquire_phase_start &#x3D; now.toISOString();
+            vault.vault_status &#x3D; VaultStatus.acquire;
+            // Sync transactions before checking contribution end time
+            await this.contributionService.syncContributionTransactions(vault.id);
+
+            // TODO: need save this data to vault;
+            // Calculate total value of assets in the vault
+            try {
+              const assetsValue &#x3D; await this.taptoolsService.calculateVaultAssetsValue(vault.id);
+              this.logger.log(
+                &#x60;Vault ${vault.id} total assets value: ${assetsValue.totalValueAda} ADA (${assetsValue.totalValueUsd} USD)&#x60;
+              );
+              // You can store this information in the vault if needed
+              // vault.totalValueAda &#x3D; assetsValue.totalValueAda;
+              // vault.totalValueUsd &#x3D; assetsValue.totalValueUsd;
+            } catch (error) {
+              this.logger.error(&#x60;Failed to calculate assets value for vault ${vault.id}:&#x60;, error);
+              // Continue with the transition even if we couldn&#x27;t calculate the value
+            }
+
+            await this.vaultRepository.save(vault);
+            this.logger.log(&#x60;Vault ${vault.id} moved to acquire phase (custom start time)&#x60;);
+          }
+        }
+      } catch (error) {
+        this.logger.error(&#x60;Error processing vault ${vault.id} in handleContributionToInvestment&#x60;, error);
+        // Continue with the next vault even if one fails
+        continue;
+      }
+    }
+  }
+
+  async getAssetsGroupedByUser(vaultId: string): Promise&lt;
+    {
+      user_id: string;
+      user_wallet: string;
+      total_assets: string;
+      assets: {
+        id: string;
+        type: string;
+        contract_address: string | null;
+        added_at: string;
+        quantity: number;
+        origin_type: AssetOriginType;
+        policy_id: string;
+        asset_name: string;
+      }[];
+    }[]
+  &gt; {
+    const query &#x3D; &#x60;
+      SELECT
+        u.id as user_id,
+        u.address as user_wallet,
+        COUNT(a.id) as total_assets,
+        json_agg(
+          json_build_object(
+            &#x27;id&#x27;, a.id,
+            &#x27;type&#x27;, a.type,
+            &#x27;contract_address&#x27;, a.contract_address,
+            &#x27;added_at&#x27;, a.added_at,
+            &#x27;quantity&#x27;, a.quantity,
+            &#x27;origin_type&#x27;, a.origin_type,
+            &#x27;policy_id&#x27;, a.policy_id,
+            &#x27;asset_name&#x27;, a.asset_id
+          )
+        ) as assets
+      FROM
+        assets a
+      JOIN
+        users u ON u.id &#x3D; a.added_by
+      WHERE
+        a.vault_id &#x3D; $1
+      GROUP BY
+        u.id, u.address
+      ORDER BY
+        u.address ASC
+    &#x60;;
+
+    const result &#x3D; await this.assetsRepository.query(query, [vaultId]);
+    return result;
+  }
+
+  private async handleInvestmentToGovernance(): Promise&lt;void&gt; {
+    const acquireVaults &#x3D; await this.vaultRepository
+      .createQueryBuilder(&#x27;vault&#x27;)
+      .where(&#x27;vault.vault_status &#x3D; :status&#x27;, { status: VaultStatus.acquire })
+      .andWhere(&#x27;vault.acquire_phase_start IS NOT NULL&#x27;)
+      .andWhere(&#x27;vault.acquire_window_duration IS NOT NULL&#x27;)
+      .leftJoinAndSelect(&#x27;vault.assets&#x27;, &#x27;assets&#x27;)
+      .getMany();
+
+    const now &#x3D; new Date();
+
+    for (const vault of acquireVaults) {
+      const acquireStart &#x3D; new Date(vault.acquire_phase_start);
+      const acquireDurationMs &#x3D; Number(vault.acquire_window_duration);
+      const acquireEnd &#x3D; new Date(acquireStart.getTime() + acquireDurationMs);
+
+      if (now &gt;&#x3D; acquireEnd) {
+        // Sync transactions one more time
+        await this.contributionService.syncContributionTransactions(vault.id);
+
+        // 1. Group assets by user
+        const assetsByUsers &#x3D; await this.getAssetsGroupedByUser(vault.id);
+        const acquirerAdaMap: Record&lt;string, number&gt; &#x3D; {};
+        const contributorValueMap: Record&lt;string, number&gt; &#x3D; {};
+        let totalAcquiredAda &#x3D; 0;
+        let totalContributedValueAda &#x3D; 0;
+
+        // 2. Iterate over each user&#x27;s assets and split by phase
+        for (const userAssets of assetsByUsers) {
+          const userId &#x3D; userAssets.user_id;
+          const assets &#x3D; userAssets.assets;
+          let userAcquiredAda &#x3D; 0;
+          let userContributedValueAda &#x3D; 0;
+
+          this.logger.log(
+            &#x60;User ${userId} (${userAssets.user_wallet}) has ${userAssets.total_assets} assets in vault ${vault.id}: ${JSON.stringify(assets)}&#x60;
+          );
+
+          for (const asset of assets) {
+            // Only ADA in acquired assets
+            if (asset.origin_type &#x3D;&#x3D;&#x3D; AssetOriginType.ACQUIRED) {
+              userAcquiredAda +&#x3D; asset.quantity || 1;
+              this.logger.debug(&#x60;User ${userId} asset ${asset.id}: ${asset.quantity} ADA&#x60;);
+            }
+            if (asset.origin_type &#x3D;&#x3D;&#x3D; AssetOriginType.CONTRIBUTED) {
+              try {
+                const { priceAda } &#x3D; await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_name);
+                const quantity &#x3D; asset.quantity || 1;
+                userContributedValueAda +&#x3D; priceAda * quantity;
+              } catch (error) {
+                this.logger.error(
+                  &#x60;Error getting price for asset ${asset.policy_id}.${asset.asset_name} for user ${userId} in vault ${vault.id}:&#x60;,
+                  error.message
+                );
+              }
+            }
+
+            if (userAcquiredAda &gt; 0) {
+              acquirerAdaMap[userId] &#x3D; userAcquiredAda;
+              totalAcquiredAda +&#x3D; userAcquiredAda;
+            }
+            if (userContributedValueAda &gt; 0) {
+              contributorValueMap[userId] &#x3D; userContributedValueAda;
+              totalContributedValueAda +&#x3D; userContributedValueAda;
+            }
+          }
+        }
+        this.logger.log(
+          &#x60;Total acquired ADA across all users in vault ${vault.id}: ${totalAcquiredAda}, &#x60; +
+            &#x60;Total contributed value ADA: ${totalContributedValueAda}&#x60;
+        );
+
+        const requiredThresholdAda &#x3D; vault.require_reserved_cost_ada || 0;
+        const meetsThreshold &#x3D; totalAcquiredAda &gt;&#x3D; requiredThresholdAda;
+
+        vault.total_acquired_value_ada &#x3D; totalAcquiredAda;
+        await this.vaultRepository.save(vault);
+
+        this.logger.log(
+          &#x60;Vault ${vault.id} meets the threshold: &#x60; +
+            &#x60;Total contributed: ${totalAcquiredAda} ADA, &#x60; +
+            &#x60;Required: ${requiredThresholdAda} ADA&#x60;
+        );
+
+        if (meetsThreshold) {
+          // TODO: Mint tokens and launch the vault
+          // For each user, calculate VT received
+
+          // 3. Calculate VT for acquirers
+          for (const [userId, adaSent] of Object.entries(acquirerAdaMap)) {
+            const vtResult &#x3D; await this.distributionService.calculateAcquirerExample({
+              vaultId: vault.id,
+              adaSent,
+              numAcquirers: Object.keys(acquirerAdaMap).length,
+              totalAcquiredValueAda: totalAcquiredAda,
+            });
+            this.logger.debug(
+              &#x60;--- Acquirer ${userId} will receive VT: ${vtResult.vtReceived} (for ADA sent: ${adaSent})&#x60;
+            );
+          }
+
+          // 4. Calculate VT for contributors
+          for (const [userId, valueAda] of Object.entries(contributorValueMap)) {
+            const vtResult &#x3D; await this.distributionService.calculateContributorExample({
+              vaultId: vault.id,
+              valueContributed: valueAda,
+              totalTvl: totalContributedValueAda,
+            });
+            this.logger.debug(
+              &#x60;--- Contributor ${userId} will receive VT: ${vtResult.vtRetained} (for value contributed: ${valueAda})&#x60;
+            );
+          }
+
+          this.logger.log(&#x60;Vault ${vault.id} is ready to be launched&#x60;);
+        } else {
+          this.logger.warn(
+            &#x60;Vault ${vault.id} does not meet the threshold: &#x60; +
+              &#x60;Total contributed: ${totalAcquiredAda} ADA, &#x60; +
+              &#x60;Required: ${requiredThresholdAda} ADA&#x60;
+          );
+
+          // TODO: Burn the vault and refund assets
+          this.logger.warn(&#x60;Vault ${vault.id} needs to be burned and assets refunded&#x60;);
+        }
+
+        // Move to governance phase regardless of threshold for now
+        // In a real implementation, you might want to handle success/failure differently
+        vault.governance_phase_start &#x3D; now.toISOString();
+        vault.vault_status &#x3D; VaultStatus.governance;
+
+        await this.vaultRepository.save(vault);
+        this.logger.log(&#x60;Vault ${vault.id} has moved to governance phase&#x60;);
+      }
+    }
+  }
+}
+</code></pre>
+    </div>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+                   </div><div class="search-results">
+    <div class="has-results">
+        <h1 class="search-results-title"><span class='search-results-count'></span> results matching "<span class='search-query'></span>"</h1>
+        <ul class="search-results-list"></ul>
+    </div>
+    <div class="no-results">
+        <h1 class="search-results-title">No results matching "<span class='search-query'></span>"</h1>
+    </div>
+</div>
+</div>
+               <!-- END CONTENT -->
+           </div>
+       </div>
+
+          <label class="dark-mode-switch">
+               <input type="checkbox">
+               <span class="slider">
+                    <svg class="slider-icon" viewBox="0 0 24 24" fill="none" height="20" stroke="#000" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" width="20" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"></path>
+                    </svg>
+               </span>
+          </label>
+
+       <script>
+            var COMPODOC_CURRENT_PAGE_DEPTH = 1;
+            var COMPODOC_CURRENT_PAGE_CONTEXT = 'injectable';
+            var COMPODOC_CURRENT_PAGE_URL = 'LifecycleService.html';
+            var MAX_SEARCH_RESULTS = 15;
+       </script>
+
+       <script>
+               $darkModeToggleSwitchers = document.querySelectorAll('.dark-mode-switch input');
+               checkToggle(darkModeState);
+               if ($darkModeToggleSwitchers.length > 0) {
+                    for (var i = 0; i < $darkModeToggleSwitchers.length; i++) {
+                         $darkModeToggleSwitchers[i].addEventListener('change', function (event) {
+                              darkModeState = !darkModeState;
+                              toggleDarkMode(darkModeState);
+                         });
+                    }
+               }
+          </script>
+
+       <script src="../js/libs/custom-elements.min.js"></script>
+       <script src="../js/libs/lit-html.js"></script>
+
+       <script src="../js/menu-wc.js" defer></script>
+       <script nomodule src="../js/menu-wc_es5.js" defer></script>
+
+       <script src="../js/libs/bootstrap-native.js"></script>
+
+       <script src="../js/libs/es6-shim.min.js"></script>
+       <script src="../js/libs/EventDispatcher.js"></script>
+       <script src="../js/libs/promise.min.js"></script>
+
+       <script src="../js/compodoc.js"></script>
+
+       <script src="../js/tabs.js"></script>
+       <script src="../js/menu.js"></script>
+       <script src="../js/libs/clipboard.min.js"></script>
+       <script src="../js/libs/prism.js"></script>
+       <script src="../js/sourceCode.js"></script>
+          <script src="../js/search/search.js"></script>
+          <script src="../js/search/lunr.min.js"></script>
+          <script src="../js/search/search-lunr.js"></script>
+          <script src="../js/search/search_index.js"></script>
+       <script src="../js/lazy-load-graphs.js"></script>
+
+
+    </body>
+</html>

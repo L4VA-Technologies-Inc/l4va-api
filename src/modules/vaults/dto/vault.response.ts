@@ -1,13 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
 
-import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
-import { Asset } from '@/database/asset.entity';
-import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
-import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
-import { FileEntity } from '@/database/file.entity';
-import { LinkEntity } from '@/database/link.entity';
-import { TagEntity } from '@/database/tag.entity';
-import { User } from '@/database/user.entity';
 import { DtoRepresent } from '../../../decorators/dto-represents.decorator';
 import {
   VaultPrivacy,
@@ -18,6 +10,15 @@ import {
   InvestmentWindowType,
   TerminationType,
 } from '../../../types/vault.types';
+
+import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
+import { Asset } from '@/database/asset.entity';
+import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
+import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
+import { FileEntity } from '@/database/file.entity';
+import { LinkEntity } from '@/database/link.entity';
+import { TagEntity } from '@/database/tag.entity';
+import { User } from '@/database/user.entity';
 
 export class VaultShortResponse {
   @ApiProperty({ description: 'Unique identifier of the vault' })

@@ -44,4 +44,5 @@ export enum VaultStatus {
   investment = 'investment',
   locked = 'locked',
   governance = 'governance',
+  failed = 'failed',
 }

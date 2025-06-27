@@ -1,16 +1,17 @@
 import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+
+import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
+
+import { AcquireReq } from './dto/acquire.req';
+
 import { Asset } from '@/database/asset.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetType, AssetStatus, AssetOriginType } from '@/types/asset.types';
 import { TransactionType } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';
-import { Repository } from 'typeorm';
-
-import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
-
-import { AcquireReq } from './dto/acquire.req';
 
 @Injectable()
 export class AcquireService {

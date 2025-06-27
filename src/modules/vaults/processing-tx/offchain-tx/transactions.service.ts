@@ -1,12 +1,12 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { AssetStatus } from 'src/types/asset.types';
+import { TransactionStatus, TransactionType } from 'src/types/transaction.types';
 import { Repository } from 'typeorm';
 
 import { Asset } from '@/database/asset.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
-import { AssetStatus } from '../../../../types/asset.types';
-import { TransactionStatus, TransactionType } from '../../../../types/transaction.types';
 
 @Injectable()
 export class TransactionsService {
@@ -38,7 +38,6 @@ export class TransactionsService {
     const transaction = await this.transactionRepository.findOne({
       where: { tx_hash: txHash },
     });
-    console.log('tx', transaction);
 
     if (!transaction) {
       throw new Error(`Transaction with hash ${txHash} not found`);

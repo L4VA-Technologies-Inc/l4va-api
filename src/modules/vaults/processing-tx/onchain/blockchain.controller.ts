@@ -1,6 +1,5 @@
 import { Body, Controller, Post, UseGuards, HttpCode, Request, UnauthorizedException } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { AuthGuard } from '@/modules/auth/auth.guard';
 
 import {
   BuildTransactionDto,
@@ -12,6 +11,8 @@ import { BlockchainWebhookDto } from './dto/webhook.dto';
 import { VaultInsertingService } from './vault-inserting.service';
 import { VaultConfig, VaultManagingService } from './vault-managing.service';
 import { WebhookVerificationService } from './webhook-verification.service';
+
+import { AuthGuard } from '@/modules/auth/auth.guard';
 
 @ApiTags('blockchain')
 @Controller('blockchain')

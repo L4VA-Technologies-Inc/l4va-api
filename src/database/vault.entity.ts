@@ -304,6 +304,16 @@ export class Vault {
   })
   total_assets_cost_ada: number;
 
+  @Expose({ name: 'totalAcquiredValueAda' })
+  @Transform(({ value }) => (value ? Number(value) : null))
+  @Column({
+    name: 'total_acquired_value_ada',
+    type: 'numeric',
+    nullable: true,
+    default: 0,
+  })
+  total_acquired_value_ada: number;
+
   @Expose({ name: 'requireReservedCostUsd' })
   @Transform(({ value }) => (value ? Number(value) : null))
   @Column({

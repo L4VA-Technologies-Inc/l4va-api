@@ -1,34 +1,35 @@
-import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { Vault } from '@/database/vault.entity';
-import { AssetOriginType, AssetStatus, AssetType } from '../../../../types/asset.types';
+import { AssetOriginType } from '../../../../types/asset.types';
 import { VaultStatus, ContributionWindowType, InvestmentWindowType } from '../../../../types/vault.types';
+import { DistributionService } from '../../../distribution/distribution.service';
 import { TaptoolsService } from '../../../taptools/taptools.service';
 import { VaultManagingService } from '../../processing-tx/onchain/vault-managing.service';
-import { VaultsService } from '../../vaults.service';
 import { ContributionService } from '../contribution/contribution.service';
+
+import { Asset } from '@/database/asset.entity';
+import { Vault } from '@/database/vault.entity';
 
 @Injectable()
 export class LifecycleService {
   private readonly logger = new Logger(LifecycleService.name);
 
   constructor(
+    @InjectRepository(Asset)
+    private readonly assetsRepository: Repository<Asset>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
-    @Inject(forwardRef(() => ContributionService))
     private readonly contributionService: ContributionService,
+    private readonly distributionService: DistributionService,
     private readonly taptoolsService: TaptoolsService,
-    @Inject(forwardRef(() => VaultsService))
-    private readonly vaultsService: VaultsService,
-    @Inject(forwardRef(() => VaultManagingService))
     private readonly vaultContractService: VaultManagingService
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
-  async handleVaultLifecycleTransitions() {
+  async handleVaultLifecycleTransitions(): Promise<void> {
     // this.logger.debug('Checking vault lifecycle transitions...');
 
     await this.handlePublishedToContribution();
@@ -40,7 +41,7 @@ export class LifecycleService {
     await this.handleInvestmentToGovernance();
   }
 
-  private async handlePublishedToContribution() {
+  private async handlePublishedToContribution(): Promise<void> {
     const now = new Date();
 
     // Handle immediate start vaults
@@ -74,14 +75,13 @@ export class LifecycleService {
     }
   }
 
-  private async handleContributionToInvestment() {
+  private async handleContributionToInvestment(): Promise<void> {
     const now = new Date();
     const contributionVaults = await this.vaultRepository
       .createQueryBuilder('vault')
       .where('vault.vault_status = :status', { status: VaultStatus.contribution })
       .andWhere('vault.contribution_phase_start IS NOT NULL')
       .andWhere('vault.contribution_duration IS NOT NULL')
-      .leftJoinAndSelect('vault.assets', 'assets')
       .leftJoinAndSelect('vault.owner', 'owner')
       .getMany();
 
@@ -95,31 +95,37 @@ export class LifecycleService {
         continue;
       }
 
+      await this.contributionService.syncContributionTransactions(vault.id);
+
+      const assets = await this.assetsRepository.find({ where: { vault: { id: vault.id }, deleted: false } });
       // Check if vault has any non-deleted assets
-      const hasAssets = vault.assets?.some(asset => !asset.deleted) || false;
+      const hasAssets = assets?.some(asset => !asset.deleted) || false;
 
       // If no assets, burn the vault using admin wallet
       if (!hasAssets) {
         try {
           this.logger.log(`Vault ${vault.id} has no assets and contribution period has ended. Burning vault...`);
-          //
+          // Update vault status to failed
+          vault.vault_status = VaultStatus.failed;
+          await this.vaultRepository.save(vault);
+
           // // Use admin wallet to burn the vault
           // const burnTx = await this.vaultContractService.createBurnTx({
           //   customerAddress: vault.owner.address, // Still track the original owner
-          //   assetVaultName: vault.asset_vault_name
+          //   assetVaultName: vault.asset_vault_name,
           // });
-          //
+
           // // Submit the transaction using admin wallet
           // const { txHash } = await this.vaultContractService.submitOnChainVaultTx({
           //   transaction: burnTx.presignedTx,
-          //   signatures: [] // Admin signature is already included in presignedTx
+          //   signatures: [], // Admin signature is already included in presignedTx
           // });
-          //
+
           // // Update vault status
           // vault.deleted = true;
           // vault.liquidation_hash = txHash;
           // await this.vaultRepository.save(vault);
-          //
+
           // this.logger.log(`Successfully burned empty vault ${vault.id} in transaction ${txHash}`);
 
           continue;
@@ -141,7 +147,6 @@ export class LifecycleService {
             vault.acquire_phase_start = now.toISOString();
             vault.vault_status = VaultStatus.acquire;
             // Sync transactions before checking contribution end time
-            await this.contributionService.syncContributionTransactions(vault.id);
 
             // TODO: need save this data to vault;
             // Calculate total value of assets in the vault
@@ -202,7 +207,57 @@ export class LifecycleService {
     }
   }
 
-  private async handleInvestmentToGovernance() {
+  async getAssetsGroupedByUser(vaultId: string): Promise<
+    {
+      user_id: string;
+      user_wallet: string;
+      total_assets: string;
+      assets: {
+        id: string;
+        type: string;
+        contract_address: string | null;
+        added_at: string;
+        quantity: number;
+        origin_type: AssetOriginType;
+        policy_id: string;
+        asset_name: string;
+      }[];
+    }[]
+  > {
+    const query = `
+      SELECT
+        u.id as user_id,
+        u.address as user_wallet,
+        COUNT(a.id) as total_assets,
+        json_agg(
+          json_build_object(
+            'id', a.id,
+            'type', a.type,
+            'contract_address', a.contract_address,
+            'added_at', a.added_at,
+            'quantity', a.quantity,
+            'origin_type', a.origin_type,
+            'policy_id', a.policy_id,
+            'asset_name', a.asset_id
+          )
+        ) as assets
+      FROM
+        assets a
+      JOIN
+        users u ON u.id = a.added_by
+      WHERE
+        a.vault_id = $1
+      GROUP BY
+        u.id, u.address
+      ORDER BY
+        u.address ASC
+    `;
+
+    const result = await this.assetsRepository.query(query, [vaultId]);
+    return result;
+  }
+
+  private async handleInvestmentToGovernance(): Promise<void> {
     const acquireVaults = await this.vaultRepository
       .createQueryBuilder('vault')
       .where('vault.vault_status = :status', { status: VaultStatus.acquire })
@@ -222,68 +277,104 @@ export class LifecycleService {
         // Sync transactions one more time
         await this.contributionService.syncContributionTransactions(vault.id);
 
-        // Get all contributed assets for this vault
-        const contributedAssets =
-          vault.assets?.filter(
-            asset =>
-              asset.origin_type === AssetOriginType.CONTRIBUTED &&
-              asset.status === AssetStatus.PENDING &&
-              !asset.deleted
-          ) || [];
-
-        // Calculate total value of contributed assets in ADA using Taptools
+        // 1. Group assets by user
+        const assetsByUsers = await this.getAssetsGroupedByUser(vault.id);
+        const acquirerAdaMap: Record<string, number> = {};
+        const contributorValueMap: Record<string, number> = {};
+        let totalAcquiredAda = 0;
         let totalContributedValueAda = 0;
 
-        // Process each asset to get its value from Taptools
-        for (const asset of contributedAssets) {
-          try {
-            // Skip if no policy_id or asset_id
-            if (!asset.policy_id || !asset.asset_id) {
-              this.logger.warn(`Skipping asset with missing policy_id or asset_id in vault ${vault.id}`);
-              continue;
-            }
+        // 2. Iterate over each user's assets and split by phase
+        for (const userAssets of assetsByUsers) {
+          const userId = userAssets.user_id;
+          const assets = userAssets.assets;
+          let userAcquiredAda = 0;
+          let userContributedValueAda = 0;
 
-            // Get asset value from Taptools
-            const assetValue = await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_id);
-
-            // Calculate total value for this asset (price * quantity)
-            const quantity = asset.quantity || 1;
-            const assetValueAda = assetValue.priceAda * quantity;
-            totalContributedValueAda += assetValueAda;
-
-            this.logger.debug(
-              `Asset ${asset.policy_id}.${asset.asset_id}: ` +
-                `${quantity} x ${assetValue.priceAda} ADA = ${assetValueAda} ADA`
-            );
-          } catch (error) {
-            this.logger.error(
-              `Error getting price for asset ${asset.policy_id}.${asset.asset_id} in vault ${vault.id}:`,
-              error.message
-            );
-            // Continue processing other assets even if one fails
-          }
-        }
-
-        // Get the required threshold value (in ADA)
-        const requiredThresholdAda = vault.require_reserved_cost_ada || 0;
-
-        // Check if the vault meets the threshold
-        const meetsThreshold = totalContributedValueAda >= requiredThresholdAda;
-
-        // Log the decision
-        if (meetsThreshold) {
           this.logger.log(
-            `Vault ${vault.id} meets the threshold: ` +
-              `Total contributed: ${totalContributedValueAda} ADA, ` +
-              `Required: ${requiredThresholdAda} ADA`
+            `User ${userId} (${userAssets.user_wallet}) has ${userAssets.total_assets} assets in vault ${vault.id}: ${JSON.stringify(assets)}`
           );
 
+          for (const asset of assets) {
+            // Only ADA in acquired assets
+            if (asset.origin_type === AssetOriginType.ACQUIRED) {
+              userAcquiredAda += asset.quantity || 1;
+              this.logger.debug(`User ${userId} asset ${asset.id}: ${asset.quantity} ADA`);
+            }
+            if (asset.origin_type === AssetOriginType.CONTRIBUTED) {
+              try {
+                const { priceAda } = await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_name);
+                const quantity = asset.quantity || 1;
+                userContributedValueAda += priceAda * quantity;
+              } catch (error) {
+                this.logger.error(
+                  `Error getting price for asset ${asset.policy_id}.${asset.asset_name} for user ${userId} in vault ${vault.id}:`,
+                  error.message
+                );
+              }
+            }
+
+            if (userAcquiredAda > 0) {
+              acquirerAdaMap[userId] = userAcquiredAda;
+              totalAcquiredAda += userAcquiredAda;
+            }
+            if (userContributedValueAda > 0) {
+              contributorValueMap[userId] = userContributedValueAda;
+              totalContributedValueAda += userContributedValueAda;
+            }
+          }
+        }
+        this.logger.log(
+          `Total acquired ADA across all users in vault ${vault.id}: ${totalAcquiredAda}, ` +
+            `Total contributed value ADA: ${totalContributedValueAda}`
+        );
+
+        const requiredThresholdAda = vault.require_reserved_cost_ada || 0;
+        const meetsThreshold = totalAcquiredAda >= requiredThresholdAda;
+
+        vault.total_acquired_value_ada = totalAcquiredAda;
+        await this.vaultRepository.save(vault);
+
+        this.logger.log(
+          `Vault ${vault.id} meets the threshold: ` +
+            `Total contributed: ${totalAcquiredAda} ADA, ` +
+            `Required: ${requiredThresholdAda} ADA`
+        );
+
+        if (meetsThreshold) {
           // TODO: Mint tokens and launch the vault
+          // For each user, calculate VT received
+
+          // 3. Calculate VT for acquirers
+          for (const [userId, adaSent] of Object.entries(acquirerAdaMap)) {
+            const vtResult = await this.distributionService.calculateAcquirerExample({
+              vaultId: vault.id,
+              adaSent,
+              numAcquirers: Object.keys(acquirerAdaMap).length,
+              totalAcquiredValueAda: totalAcquiredAda,
+            });
+            this.logger.debug(
+              `--- Acquirer ${userId} will receive VT: ${vtResult.vtReceived} (for ADA sent: ${adaSent})`
+            );
+          }
+
+          // 4. Calculate VT for contributors
+          for (const [userId, valueAda] of Object.entries(contributorValueMap)) {
+            const vtResult = await this.distributionService.calculateContributorExample({
+              vaultId: vault.id,
+              valueContributed: valueAda,
+              totalTvl: totalContributedValueAda,
+            });
+            this.logger.debug(
+              `--- Contributor ${userId} will receive VT: ${vtResult.vtRetained} (for value contributed: ${valueAda})`
+            );
+          }
+
           this.logger.log(`Vault ${vault.id} is ready to be launched`);
         } else {
           this.logger.warn(
             `Vault ${vault.id} does not meet the threshold: ` +
-              `Total contributed: ${totalContributedValueAda} ADA, ` +
+              `Total contributed: ${totalAcquiredAda} ADA, ` +
               `Required: ${requiredThresholdAda} ADA`
           );
 
@@ -295,7 +386,6 @@ export class LifecycleService {
         // In a real implementation, you might want to handle success/failure differently
         vault.governance_phase_start = now.toISOString();
         vault.vault_status = VaultStatus.governance;
-        vault.total_assets_cost_ada = totalContributedValueAda;
 
         await this.vaultRepository.save(vault);
         this.logger.log(`Vault ${vault.id} has moved to governance phase`);

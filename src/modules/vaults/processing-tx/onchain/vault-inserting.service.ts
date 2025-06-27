@@ -13,7 +13,6 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { Vault } from '@/database/vault.entity';
 import { TransactionStatus } from '../../../../types/transaction.types';
 import { TransactionsService } from '../offchain-tx/transactions.service';
 
@@ -25,6 +24,8 @@ import { OnchainTransactionStatus } from './types/transaction-status.enum';
 import { Datum } from './types/type';
 import { applyContributeParams, toPreloadedScript } from './utils/apply_params';
 import * as blueprint from './utils/blueprint.json';
+
+import { Vault } from '@/database/vault.entity';
 
 // Investment and Contribution
 
@@ -178,7 +179,7 @@ export class VaultInsertingService {
             assetName: { name: VAULT_ID, format: 'hex' },
             policyId: POLICY_ID,
             type: 'plutus',
-            quantity: 1000, // todo need to change this mint value to calculated value based on price
+            quantity: 1, // Mint 1 VT token
             metadata: {},
           },
         ],
@@ -189,7 +190,7 @@ export class VaultInsertingService {
             redeemer: {
               type: 'json',
               value: {
-                quantity: 1000,
+                quantity: 1, // Mint 1 VT token
                 output_index: 0,
                 contribution: isAda ? 'Lovelace' : 'Asset',
               },
@@ -205,14 +206,14 @@ export class VaultInsertingService {
                   {
                     assetName: { name: VAULT_ID, format: 'hex' },
                     policyId: POLICY_ID,
-                    quantity: 1000,
+                    quantity: 1,
                   },
                 ]
               : [
                   {
                     assetName: { name: VAULT_ID, format: 'hex' },
                     policyId: POLICY_ID,
-                    quantity: 1000,
+                    quantity: 1,
                   },
                   ...assetsList,
                 ],
