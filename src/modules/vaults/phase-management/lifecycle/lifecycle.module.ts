@@ -10,6 +10,8 @@ import { LifecycleService } from './lifecycle.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Vault } from '@/database/vault.entity';
+import {BullModule} from "@nestjs/bullmq";
+import {LifecycleProcessor} from "@/modules/vaults/phase-management/lifecycle/lifecycle.processor";
 
 @Module({
   imports: [
@@ -18,8 +20,11 @@ import { Vault } from '@/database/vault.entity';
     TypeOrmModule.forFeature([Vault, Asset]),
     ScheduleModule.forRoot(),
     BlockchainModule,
+    BullModule.registerQueue({
+      name: 'phaseTransition',
+    })
   ],
-  providers: [LifecycleService],
+  providers: [LifecycleService, LifecycleProcessor],
   exports: [LifecycleService],
 })
 export class LifecycleModule {}

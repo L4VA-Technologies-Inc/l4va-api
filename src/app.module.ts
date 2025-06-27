@@ -18,12 +18,19 @@ import { AssetsModule } from './modules/vaults/processing-tx/assets/assets.modul
 import { TransactionsModule } from './modules/vaults/processing-tx/offchain-tx/transactions.module';
 import { BlockchainModule } from './modules/vaults/processing-tx/onchain/blockchain.module';
 import { VaultsModule } from './modules/vaults/vaults.module';
+import {BullModule} from "@nestjs/bullmq";
 
 @Module({
   imports: [
     ScheduleModule.forRoot(),
     ConfigModule.forRoot({
       isGlobal: true,
+    }),
+    BullModule.forRoot({
+      connection: {
+        host: 'localhost',
+        port: 6379,
+      },
     }),
     TypeOrmModule.forRoot({
       type: 'postgres',

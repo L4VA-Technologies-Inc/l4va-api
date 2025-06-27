@@ -7,17 +7,20 @@ import { AssetOriginType } from '../../../../types/asset.types';
 import { VaultStatus, ContributionWindowType, InvestmentWindowType } from '../../../../types/vault.types';
 import { DistributionService } from '../../../distribution/distribution.service';
 import { TaptoolsService } from '../../../taptools/taptools.service';
-import { VaultManagingService } from '../../processing-tx/onchain/vault-managing.service';
 import { ContributionService } from '../contribution/contribution.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Vault } from '@/database/vault.entity';
+import {InjectQueue} from "@nestjs/bullmq";
+import {Queue} from "bullmq";
 
 @Injectable()
 export class LifecycleService {
   private readonly logger = new Logger(LifecycleService.name);
 
   constructor(
+    @InjectQueue('phaseTransition')
+    private phaseTransitionQueue: Queue,
     @InjectRepository(Asset)
     private readonly assetsRepository: Repository<Asset>,
     @InjectRepository(Vault)
@@ -25,8 +28,7 @@ export class LifecycleService {
     private readonly contributionService: ContributionService,
     private readonly distributionService: DistributionService,
     private readonly taptoolsService: TaptoolsService,
-    private readonly vaultContractService: VaultManagingService
-  ) {}
+) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
   async handleVaultLifecycleTransitions(): Promise<void> {
@@ -41,6 +43,319 @@ export class LifecycleService {
     await this.handleInvestmentToGovernance();
   }
 
+  private async queuePhaseTransition(
+    vaultId: string, 
+    newStatus: VaultStatus, 
+    transitionTime: Date,
+    phaseStartField?: string
+  ): Promise<void> {
+    const now = new Date();
+    const delay = transitionTime.getTime() - now.getTime();
+    const ONE_MINUTE_MS = 60 * 1000;
+    
+    if (delay <= 0) {
+      // If transition time is now or in the past, execute immediately
+      await this.executePhaseTransition(vaultId, newStatus, phaseStartField);
+    } else if (delay <= ONE_MINUTE_MS) {
+      // If transition should happen within the next minute, create a precise delay job
+      await this.phaseTransitionQueue.add(
+        'transitionPhase',
+        {
+          vaultId,
+          newStatus,
+          phaseStartField
+        },
+        { 
+          delay,
+          // Remove any existing jobs for this vault and phase to avoid duplicates
+          jobId: `${vaultId}-${newStatus}`,
+          removeOnComplete: 10,
+          removeOnFail: 10
+        }
+      );
+      
+      this.logger.log(
+        `Queued precise phase transition for vault ${vaultId} to ${newStatus} ` +
+        `in ${Math.round(delay / 1000)} seconds`
+      );
+    } else {
+      // If more than 1 minute away, don't queue - let future cron runs handle it
+      this.logger.log(
+        `Vault ${vaultId} phase transition to ${newStatus} scheduled in ${Math.round(delay / 1000)} seconds. ` +
+        `Will be queued when closer to transition time.`
+      );
+    }
+  }
+
+  private async executePhaseTransition(
+    vaultId: string, 
+    newStatus: VaultStatus, 
+    phaseStartField?: string
+  ): Promise<void> {
+    try {
+      const vault = await this.vaultRepository.findOne({
+        where: { id: vaultId }
+      });
+
+      if (!vault) {
+        this.logger.error(`Vault ${vaultId} not found for phase transition`);
+        return;
+      }
+
+      vault.vault_status = newStatus;
+      
+      if (phaseStartField) {
+        (vault as any)[phaseStartField] = new Date().toISOString();
+      }
+
+      await this.vaultRepository.save(vault);
+      
+      this.logger.log(
+        `Executed immediate phase transition for vault ${vaultId} to ${newStatus}` + 
+        (phaseStartField ? ` and set ${phaseStartField}` : '')
+      );
+    } catch (error) {
+      this.logger.error(`Failed to execute phase transition for vault ${vaultId}:`, error);
+      throw error;
+    }
+  }
+
+  private async queueContributionToAcquireTransition(vault: Vault, contributionEnd: Date): Promise<void> {
+    // Check if vault has assets before queuing transition
+    await this.contributionService.syncContributionTransactions(vault.id);
+    const assets = await this.assetsRepository.find({ 
+      where: { vault: { id: vault.id }, deleted: false } 
+    });
+    const hasAssets = assets?.some(asset => !asset.deleted) || false;
+
+    if (!hasAssets) {
+      // Queue failure transition
+      await this.queuePhaseTransition(
+        vault.id,
+        VaultStatus.failed,
+        contributionEnd
+      );
+      return;
+    }
+
+    // Determine acquire phase start time based on vault configuration
+    let acquireStartTime: Date;
+    
+    if (vault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
+      // Start acquire phase immediately when contribution ends
+      acquireStartTime = contributionEnd;
+    } else if (
+      vault.acquire_open_window_type === InvestmentWindowType.custom &&
+      vault.acquire_open_window_time
+    ) {
+      // Use custom start time, but ensure it's not before contribution ends
+      const customTime = new Date(vault.acquire_open_window_time);
+      acquireStartTime = customTime > contributionEnd ? customTime : contributionEnd;
+    } else {
+      this.logger.warn(`Vault ${vault.id} has invalid acquire window configuration`);
+      return;
+    }
+
+    await this.queuePhaseTransition(
+      vault.id,
+      VaultStatus.acquire,
+      acquireStartTime,
+      'acquire_phase_start'
+    );
+  }
+
+  private async executeContributionToAcquireTransition(vault: Vault): Promise<void> {
+    try {
+      // For immediate acquire start
+      if (vault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
+        // Calculate total value of assets in the vault
+        try {
+          const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
+          this.logger.log(
+            `Vault ${vault.id} total assets value: ${assetsValue.totalValueAda} ADA (${assetsValue.totalValueUsd} USD)`
+          );
+          vault.total_assets_cost_ada = assetsValue.totalValueAda;
+          vault.total_assets_cost_usd = assetsValue.totalValueUsd;
+
+          // Calculate threshold Price
+          vault.require_reserved_cost_ada = assetsValue.totalValueAda * (vault.acquire_reserve * 0.01);
+          vault.require_reserved_cost_usd = assetsValue.totalValueUsd * (vault.acquire_reserve * 0.01);
+        } catch (error) {
+          this.logger.error(`Failed to calculate assets value for vault ${vault.id}:`, error);
+        }
+
+        await this.executePhaseTransition(
+          vault.id,
+          VaultStatus.acquire,
+          'acquire_phase_start'
+        );
+      }
+      // For custom acquire start time
+      else if (
+        vault.acquire_open_window_type === InvestmentWindowType.custom &&
+        vault.acquire_open_window_time
+      ) {
+        const now = new Date();
+        const customTime = new Date(vault.acquire_open_window_time);
+        
+        if (now >= customTime) {
+          // Calculate total value of assets in the vault
+          try {
+            const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
+            this.logger.log(
+              `Vault ${vault.id} total assets value: ${assetsValue.totalValueAda} ADA (${assetsValue.totalValueUsd} USD)`
+            );
+            vault.total_assets_cost_ada = assetsValue.totalValueAda;
+            vault.total_assets_cost_usd = assetsValue.totalValueUsd;
+
+            // Calculate threshold Price
+            vault.require_reserved_cost_ada = assetsValue.totalValueAda * (vault.acquire_reserve * 0.01);
+            vault.require_reserved_cost_usd = assetsValue.totalValueUsd * (vault.acquire_reserve * 0.01);
+          } catch (error) {
+            this.logger.error(`Failed to calculate assets value for vault ${vault.id}:`, error);
+          }
+
+          await this.executePhaseTransition(
+            vault.id,
+            VaultStatus.acquire,
+            'acquire_phase_start'
+          );
+        } else {
+          // Queue for the custom time
+          await this.queuePhaseTransition(
+            vault.id,
+            VaultStatus.acquire,
+            customTime,
+            'acquire_phase_start'
+          );
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Error executing contribution to acquire transition for vault ${vault.id}`, error);
+    }
+  }
+
+  private async executeAcquireToGovernanceTransition(vault: Vault): Promise<void> {
+    try {
+      // Sync transactions one more time
+      await this.contributionService.syncContributionTransactions(vault.id);
+
+      // 1. Group assets by user
+      const assetsByUsers = await this.getAssetsGroupedByUser(vault.id);
+      const acquirerAdaMap: Record<string, number> = {};
+      const contributorValueMap: Record<string, number> = {};
+      let totalAcquiredAda = 0;
+      let totalContributedValueAda = 0;
+
+      // 2. Iterate over each user's assets and split by phase
+      for (const userAssets of assetsByUsers) {
+        const userId = userAssets.user_id;
+        const assets = userAssets.assets;
+        let userAcquiredAda = 0;
+        let userContributedValueAda = 0;
+
+        this.logger.log(
+          `User ${userId} (${userAssets.user_wallet}) has ${userAssets.total_assets} assets in vault ${vault.id}: ${JSON.stringify(assets)}`
+        );
+
+        for (const asset of assets) {
+          // Only ADA in acquired assets
+          if (asset.origin_type === AssetOriginType.ACQUIRED) {
+            userAcquiredAda += asset.quantity || 1;
+            this.logger.debug(`User ${userId} asset ${asset.id}: ${asset.quantity} ADA`);
+          }
+          if (asset.origin_type === AssetOriginType.CONTRIBUTED) {
+            try {
+              const { priceAda } = await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_name);
+              const quantity = asset.quantity || 1;
+              userContributedValueAda += priceAda * quantity;
+            } catch (error) {
+              this.logger.error(
+                `Error getting price for asset ${asset.policy_id}.${asset.asset_name} for user ${userId} in vault ${vault.id}:`,
+                error.message
+              );
+            }
+          }
+
+          if (userAcquiredAda > 0) {
+            acquirerAdaMap[userId] = userAcquiredAda;
+            totalAcquiredAda += userAcquiredAda;
+          }
+          if (userContributedValueAda > 0) {
+            contributorValueMap[userId] = userContributedValueAda;
+            totalContributedValueAda += userContributedValueAda;
+          }
+        }
+      }
+      this.logger.log(
+        `Total acquired ADA across all users in vault ${vault.id}: ${totalAcquiredAda}, ` +
+          `Total contributed value ADA: ${totalContributedValueAda}`
+      );
+
+      const requiredThresholdAda = vault.require_reserved_cost_ada || 0;
+      const meetsThreshold = totalAcquiredAda >= requiredThresholdAda;
+
+      vault.total_acquired_value_ada = totalAcquiredAda;
+      await this.vaultRepository.save(vault);
+
+      this.logger.log(
+        `Vault ${vault.id} meets the threshold: ` +
+          `Total contributed: ${totalAcquiredAda} ADA, ` +
+          `Required: ${requiredThresholdAda} ADA`
+      );
+
+      if (meetsThreshold) {
+        // TODO: Mint tokens and launch the vault
+        // For each user, calculate VT received
+
+        // 3. Calculate VT for acquirers
+        for (const [userId, adaSent] of Object.entries(acquirerAdaMap)) {
+          const vtResult = await this.distributionService.calculateAcquirerExample({
+            vaultId: vault.id,
+            adaSent,
+            numAcquirers: Object.keys(acquirerAdaMap).length,
+            totalAcquiredValueAda: totalAcquiredAda,
+          });
+          this.logger.debug(
+            `--- Acquirer ${userId} will receive VT: ${vtResult.vtReceived} (for ADA sent: ${adaSent})`
+          );
+        }
+
+        // 4. Calculate VT for contributors
+        for (const [userId, valueAda] of Object.entries(contributorValueMap)) {
+          const vtResult = await this.distributionService.calculateContributorExample({
+            vaultId: vault.id,
+            valueContributed: valueAda,
+            totalTvl: totalContributedValueAda,
+          });
+          this.logger.debug(
+            `--- Contributor ${userId} will receive VT: ${vtResult.vtRetained} (for value contributed: ${valueAda})`
+          );
+        }
+
+        this.logger.log(`Vault ${vault.id} is ready to be launched`);
+      } else {
+        this.logger.warn(
+          `Vault ${vault.id} does not meet the threshold: ` +
+            `Total contributed: ${totalAcquiredAda} ADA, ` +
+            `Required: ${requiredThresholdAda} ADA`
+        );
+
+        // TODO: Burn the vault and refund assets
+        this.logger.warn(`Vault ${vault.id} needs to be burned and assets refunded`);
+      }
+
+      // Execute the phase transition using the consistent method
+      await this.executePhaseTransition(
+        vault.id,
+        VaultStatus.governance,
+        'governance_phase_start'
+      );
+    } catch (error) {
+      this.logger.error(`Error executing acquire to governance transition for vault ${vault.id}`, error);
+    }
+  }
+
   private async handlePublishedToContribution(): Promise<void> {
     const now = new Date();
 
@@ -52,10 +367,11 @@ export class LifecycleService {
       .getMany();
 
     for (const vault of immediateStartVaults) {
-      vault.contribution_phase_start = now.toISOString();
-      vault.vault_status = VaultStatus.contribution;
-      await this.vaultRepository.save(vault);
-      this.logger.log(`Vault ${vault.id} moved to contribution phase (immediate start)`);
+      await this.executePhaseTransition(
+        vault.id, 
+        VaultStatus.contribution, 
+        'contribution_phase_start'
+      );
     }
 
     // Handle custom start time vaults
@@ -64,14 +380,16 @@ export class LifecycleService {
       .where('vault.vault_status = :status', { status: VaultStatus.published })
       .andWhere('vault.contribution_open_window_type = :type', { type: ContributionWindowType.custom })
       .andWhere('vault.contribution_open_window_time IS NOT NULL')
-      .andWhere('vault.contribution_open_window_time <= :now', { now: now.toISOString() })
       .getMany();
 
     for (const vault of customStartVaults) {
-      vault.contribution_phase_start = now.toISOString();
-      vault.vault_status = VaultStatus.contribution;
-      await this.vaultRepository.save(vault);
-      this.logger.log(`Vault ${vault.id} moved to contribution phase (custom start time)`);
+      const transitionTime = new Date(vault.contribution_open_window_time);
+      await this.queuePhaseTransition(
+        vault.id,
+        VaultStatus.contribution,
+        transitionTime,
+        'contribution_phase_start'
+      );
     }
   }
 
@@ -90,8 +408,9 @@ export class LifecycleService {
       const contributionDurationMs = Number(vault.contribution_duration);
       const contributionEnd = new Date(contributionStart.getTime() + contributionDurationMs);
 
-      // Skip if contribution period hasn't ended yet
+      // If contribution period hasn't ended yet, queue the transition
       if (now < contributionEnd) {
+        await this.queueContributionToAcquireTransition(vault, contributionEnd);
         continue;
       }
 
@@ -137,73 +456,8 @@ export class LifecycleService {
       }
 
       // If we get here, the vault has assets and the contribution period has ended
-      try {
-        const contributionDurationMs = Number(vault.contribution_duration);
-        const contributionEnd = new Date(contributionStart.getTime() + contributionDurationMs);
-
-        if (now >= contributionEnd) {
-          // For immediate acquire start
-          if (vault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
-            vault.acquire_phase_start = now.toISOString();
-            vault.vault_status = VaultStatus.acquire;
-            // Sync transactions before checking contribution end time
-
-            // TODO: need save this data to vault;
-            // Calculate total value of assets in the vault
-            try {
-              const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
-              this.logger.log(
-                `Vault ${vault.id} total assets value: ${assetsValue.totalValueAda} ADA (${assetsValue.totalValueUsd} USD)`
-              );
-              // You can store this information in the vault if needed
-              vault.total_assets_cost_ada = assetsValue.totalValueAda;
-              vault.total_assets_cost_usd = assetsValue.totalValueUsd;
-
-              //  todo calculate threshold Price
-              vault.require_reserved_cost_ada = assetsValue.totalValueAda * (vault.acquire_reserve * 0.01);
-              vault.require_reserved_cost_usd = assetsValue.totalValueUsd * (vault.acquire_reserve * 0.01);
-            } catch (error) {
-              this.logger.error(`Failed to calculate assets value for vault ${vault.id}:`, error);
-              // Continue with the transition even if we couldn't calculate the value
-            }
-            await this.vaultRepository.save(vault);
-            this.logger.log(`Vault ${vault.id} moved to acquire phase (immediate start)`);
-          }
-          // For custom acquire start time
-          else if (
-            vault.acquire_open_window_type === InvestmentWindowType.custom &&
-            vault.acquire_open_window_time &&
-            now >= new Date(vault.acquire_open_window_time)
-          ) {
-            vault.acquire_phase_start = now.toISOString();
-            vault.vault_status = VaultStatus.acquire;
-            // Sync transactions before checking contribution end time
-            await this.contributionService.syncContributionTransactions(vault.id);
-
-            // TODO: need save this data to vault;
-            // Calculate total value of assets in the vault
-            try {
-              const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
-              this.logger.log(
-                `Vault ${vault.id} total assets value: ${assetsValue.totalValueAda} ADA (${assetsValue.totalValueUsd} USD)`
-              );
-              // You can store this information in the vault if needed
-              // vault.totalValueAda = assetsValue.totalValueAda;
-              // vault.totalValueUsd = assetsValue.totalValueUsd;
-            } catch (error) {
-              this.logger.error(`Failed to calculate assets value for vault ${vault.id}:`, error);
-              // Continue with the transition even if we couldn't calculate the value
-            }
-
-            await this.vaultRepository.save(vault);
-            this.logger.log(`Vault ${vault.id} moved to acquire phase (custom start time)`);
-          }
-        }
-      } catch (error) {
-        this.logger.error(`Error processing vault ${vault.id} in handleContributionToInvestment`, error);
-        // Continue with the next vault even if one fails
-        continue;
-      }
+      // Execute the transition immediately since the time has passed
+      await this.executeContributionToAcquireTransition(vault);
     }
   }
 
@@ -273,122 +527,20 @@ export class LifecycleService {
       const acquireDurationMs = Number(vault.acquire_window_duration);
       const acquireEnd = new Date(acquireStart.getTime() + acquireDurationMs);
 
+      // If acquire period hasn't ended yet, queue the transition
+      if (now < acquireEnd) {
+        await this.queuePhaseTransition(
+          vault.id,
+          VaultStatus.governance,
+          acquireEnd,
+          'governance_phase_start'
+        );
+        continue;
+      }
+
       if (now >= acquireEnd) {
-        // Sync transactions one more time
-        await this.contributionService.syncContributionTransactions(vault.id);
-
-        // 1. Group assets by user
-        const assetsByUsers = await this.getAssetsGroupedByUser(vault.id);
-        const acquirerAdaMap: Record<string, number> = {};
-        const contributorValueMap: Record<string, number> = {};
-        let totalAcquiredAda = 0;
-        let totalContributedValueAda = 0;
-
-        // 2. Iterate over each user's assets and split by phase
-        for (const userAssets of assetsByUsers) {
-          const userId = userAssets.user_id;
-          const assets = userAssets.assets;
-          let userAcquiredAda = 0;
-          let userContributedValueAda = 0;
-
-          this.logger.log(
-            `User ${userId} (${userAssets.user_wallet}) has ${userAssets.total_assets} assets in vault ${vault.id}: ${JSON.stringify(assets)}`
-          );
-
-          for (const asset of assets) {
-            // Only ADA in acquired assets
-            if (asset.origin_type === AssetOriginType.ACQUIRED) {
-              userAcquiredAda += asset.quantity || 1;
-              this.logger.debug(`User ${userId} asset ${asset.id}: ${asset.quantity} ADA`);
-            }
-            if (asset.origin_type === AssetOriginType.CONTRIBUTED) {
-              try {
-                const { priceAda } = await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_name);
-                const quantity = asset.quantity || 1;
-                userContributedValueAda += priceAda * quantity;
-              } catch (error) {
-                this.logger.error(
-                  `Error getting price for asset ${asset.policy_id}.${asset.asset_name} for user ${userId} in vault ${vault.id}:`,
-                  error.message
-                );
-              }
-            }
-
-            if (userAcquiredAda > 0) {
-              acquirerAdaMap[userId] = userAcquiredAda;
-              totalAcquiredAda += userAcquiredAda;
-            }
-            if (userContributedValueAda > 0) {
-              contributorValueMap[userId] = userContributedValueAda;
-              totalContributedValueAda += userContributedValueAda;
-            }
-          }
-        }
-        this.logger.log(
-          `Total acquired ADA across all users in vault ${vault.id}: ${totalAcquiredAda}, ` +
-            `Total contributed value ADA: ${totalContributedValueAda}`
-        );
-
-        const requiredThresholdAda = vault.require_reserved_cost_ada || 0;
-        const meetsThreshold = totalAcquiredAda >= requiredThresholdAda;
-
-        vault.total_acquired_value_ada = totalAcquiredAda;
-        await this.vaultRepository.save(vault);
-
-        this.logger.log(
-          `Vault ${vault.id} meets the threshold: ` +
-            `Total contributed: ${totalAcquiredAda} ADA, ` +
-            `Required: ${requiredThresholdAda} ADA`
-        );
-
-        if (meetsThreshold) {
-          // TODO: Mint tokens and launch the vault
-          // For each user, calculate VT received
-
-          // 3. Calculate VT for acquirers
-          for (const [userId, adaSent] of Object.entries(acquirerAdaMap)) {
-            const vtResult = await this.distributionService.calculateAcquirerExample({
-              vaultId: vault.id,
-              adaSent,
-              numAcquirers: Object.keys(acquirerAdaMap).length,
-              totalAcquiredValueAda: totalAcquiredAda,
-            });
-            this.logger.debug(
-              `--- Acquirer ${userId} will receive VT: ${vtResult.vtReceived} (for ADA sent: ${adaSent})`
-            );
-          }
-
-          // 4. Calculate VT for contributors
-          for (const [userId, valueAda] of Object.entries(contributorValueMap)) {
-            const vtResult = await this.distributionService.calculateContributorExample({
-              vaultId: vault.id,
-              valueContributed: valueAda,
-              totalTvl: totalContributedValueAda,
-            });
-            this.logger.debug(
-              `--- Contributor ${userId} will receive VT: ${vtResult.vtRetained} (for value contributed: ${valueAda})`
-            );
-          }
-
-          this.logger.log(`Vault ${vault.id} is ready to be launched`);
-        } else {
-          this.logger.warn(
-            `Vault ${vault.id} does not meet the threshold: ` +
-              `Total contributed: ${totalAcquiredAda} ADA, ` +
-              `Required: ${requiredThresholdAda} ADA`
-          );
-
-          // TODO: Burn the vault and refund assets
-          this.logger.warn(`Vault ${vault.id} needs to be burned and assets refunded`);
-        }
-
-        // Move to governance phase regardless of threshold for now
-        // In a real implementation, you might want to handle success/failure differently
-        vault.governance_phase_start = now.toISOString();
-        vault.vault_status = VaultStatus.governance;
-
-        await this.vaultRepository.save(vault);
-        this.logger.log(`Vault ${vault.id} has moved to governance phase`);
+        // Execute the transition immediately since the time has passed
+        await this.executeAcquireToGovernanceTransition(vault);
       }
     }
   }
