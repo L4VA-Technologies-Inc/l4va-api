@@ -363,19 +363,6 @@ export class CreateVaultReq {
   acquirerWhitelist: AcquirerWhitelist[];
 
   @ApiProperty({
-    description: 'List of contributor wallet addresses (required for private vaults)',
-    type: [ContributorWhitelist],
-    required: false,
-    nullable: true,
-  })
-  @ValidateIf(o => o.privacy !== VaultPrivacy.public && o.valueMethod === ValueMethod.lbe)
-  @IsArray()
-  @ArrayNotEmpty()
-  @IsObject({ each: true })
-  @Expose()
-  whitelistContributors?: ContributorWhitelist[];
-
-  @ApiProperty({
     required: false,
   })
   @IsOptional()
