@@ -1,29 +1,88 @@
-version: "3.9"
+version: '3.9'
 
 services:
-  postgres:
-    image: postgres:15
-    container_name: l4va-postgres
-    restart: always
-    ports:
-      - "${DB_PORT}:5432"
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    networks:
-      - l4va-network
-  redis:
-    image: redis:latest
-    container_name: l4va-redis
-    ports:
-      - "${REDIS_PORT}:6379"
-    networks:
-      - l4va-network
-volumes:
-  postgres-data:
-
+ postgres:
+   container_name: nestjs-postgres
+   image: postgres:15
+   environment:
+     POSTGRES_USER: ${POSTGRES_USER}
+     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+     POSTGRES_DB: ${POSTGRES_DB}
+     DB_HOST: postgres
+   volumes:
+     - postgres_data:/var/lib/postgresql/data
+   networks:
+     - l4va-network
+   ports:
+     - "5432:5432"
+ redis:
+   image: redis:latest
+   container_name: l4va-redis
+   ports:
+     - "${REDIS_PORT}:6379"
+   networks:
+     - l4va-network
+ l4va-api:
+   container_name: l4va-api
+   build:
+     context: ./l4va-api
+     dockerfile: Dockerfile
+   ports:
+     - "3000:3000"
+   environment:
+     DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+     DB_HOST: postgres
+     DB_PORT: 5432
+     DB_USERNAME: ${POSTGRES_USER}
+     DB_PASSWORD: ${POSTGRES_PASSWORD}
+     DB_NAME: ${POSTGRES_DB}
+     JWT_SECRET: ${JWT_SECRET}
+   depends_on:
+     - postgres
+     - redis
+   networks:
+     - l4va-network
+ new-scanner:
+   container_name: new-scanner
+   build:
+     context: ./new-scanner
+     dockerfile: Dockerfile
+   ports:
+     - "3001:3001"
+   environment:
+     DATABASE_URL: postgresql://${POSTGRES_SCANNER_USER}:${POSTGRES_SCANNER_PASSWORD}@postgres:5432/${POSTGRES_SCANNER_DB}
+     DB_HOST: postgres
+     DB_PORT: 5432
+     DB_USERNAME: ${POSTGRES_SCANNER_USER}
+     DB_PASSWORD: ${POSTGRES_SCANNER_PASSWORD}
+     DB_NAME: ${POSTGRES_SCANNER_DB}
+     JWT_SECRET: ${JWT_SECRET}
+   depends_on:
+     - postgres
+     - redis
+   networks:
+     - l4va-network
+ l4va-client:
+   container_name: l4va-client
+   build:
+     context: ./l4va-client
+     dockerfile: Dockerfile
+   ports:
+     - "80:80"
+     - "443:443"
+   environment:
+     VITE_VLRM_TOKEN_ID: ${VITE_VLRM_TOKEN_ID}
+     VITE_SWAP_VLRM_TOKEN_ID: ${VITE_SWAP_VLRM_TOKEN_ID}
+   volumes:
+     - ./l4va-client/ssl:/etc/nginx/ssl:ro
+   depends_on:
+     - l4va-api
+   networks:
+     - l4va-network
 networks:
-  l4va-network:
+ l4va-network:
+   driver: bridge
+
+volumes:
+ postgres_data:
+
