@@ -10,6 +10,7 @@ import {
   JoinColumn,
 } from 'typeorm';
 
+import { Claim } from './claim.entity';
 import { FileEntity } from './file.entity';
 import { LinkEntity } from './link.entity';
 import { Vault } from './vault.entity';
@@ -23,6 +24,10 @@ export class User {
   @Exclude()
   @OneToMany(() => Vault, (vault: Vault) => vault.owner)
   public vaults: Vault[];
+
+  @Expose()
+  @OneToMany(() => Claim, (claim: Claim) => claim.user)
+  claims: Claim[];
 
   @Expose({ name: 'name' })
   @Column()
