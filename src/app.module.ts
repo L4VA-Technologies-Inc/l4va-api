@@ -1,3 +1,4 @@
+import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -18,7 +19,6 @@ import { AssetsModule } from './modules/vaults/processing-tx/assets/assets.modul
 import { TransactionsModule } from './modules/vaults/processing-tx/offchain-tx/transactions.module';
 import { BlockchainModule } from './modules/vaults/processing-tx/onchain/blockchain.module';
 import { VaultsModule } from './modules/vaults/vaults.module';
-import {BullModule} from "@nestjs/bullmq";
 
 @Module({
   imports: [
@@ -28,7 +28,7 @@ import {BullModule} from "@nestjs/bullmq";
     }),
     BullModule.forRoot({
       connection: {
-        host: 'l4va-redis',
+        host: process.env.REDIS_HOST,
         port: 6379,
       },
     }),

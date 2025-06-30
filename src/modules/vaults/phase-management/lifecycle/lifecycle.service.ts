@@ -1,6 +1,8 @@
+import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
+import { Queue } from 'bullmq';
 import { Repository } from 'typeorm';
 
 import { AssetOriginType } from '../../../../types/asset.types';
@@ -11,8 +13,6 @@ import { ContributionService } from '../contribution/contribution.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Vault } from '@/database/vault.entity';
-import {InjectQueue} from "@nestjs/bullmq";
-import {Queue} from "bullmq";
 
 @Injectable()
 export class LifecycleService {
@@ -27,8 +27,8 @@ export class LifecycleService {
     private readonly vaultRepository: Repository<Vault>,
     private readonly contributionService: ContributionService,
     private readonly distributionService: DistributionService,
-    private readonly taptoolsService: TaptoolsService,
-) {}
+    private readonly taptoolsService: TaptoolsService
+  ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
   async handleVaultLifecycleTransitions(): Promise<void> {
@@ -44,15 +44,15 @@ export class LifecycleService {
   }
 
   private async queuePhaseTransition(
-    vaultId: string, 
-    newStatus: VaultStatus, 
+    vaultId: string,
+    newStatus: VaultStatus,
     transitionTime: Date,
     phaseStartField?: string
   ): Promise<void> {
     const now = new Date();
     const delay = transitionTime.getTime() - now.getTime();
     const ONE_MINUTE_MS = 60 * 1000;
-    
+
     if (delay <= 0) {
       // If transition time is now or in the past, execute immediately
       await this.executePhaseTransition(vaultId, newStatus, phaseStartField);
@@ -63,38 +63,38 @@ export class LifecycleService {
         {
           vaultId,
           newStatus,
-          phaseStartField
+          phaseStartField,
         },
-        { 
+        {
           delay,
           // Remove any existing jobs for this vault and phase to avoid duplicates
           jobId: `${vaultId}-${newStatus}`,
           removeOnComplete: 10,
-          removeOnFail: 10
+          removeOnFail: 10,
         }
       );
-      
+
       this.logger.log(
         `Queued precise phase transition for vault ${vaultId} to ${newStatus} ` +
-        `in ${Math.round(delay / 1000)} seconds`
+          `in ${Math.round(delay / 1000)} seconds`
       );
     } else {
       // If more than 1 minute away, don't queue - let future cron runs handle it
       this.logger.log(
         `Vault ${vaultId} phase transition to ${newStatus} scheduled in ${Math.round(delay / 1000)} seconds. ` +
-        `Will be queued when closer to transition time.`
+          `Will be queued when closer to transition time.`
       );
     }
   }
 
   private async executePhaseTransition(
-    vaultId: string, 
-    newStatus: VaultStatus, 
+    vaultId: string,
+    newStatus: VaultStatus,
     phaseStartField?: string
   ): Promise<void> {
     try {
       const vault = await this.vaultRepository.findOne({
-        where: { id: vaultId }
+        where: { id: vaultId },
       });
 
       if (!vault) {
@@ -103,16 +103,16 @@ export class LifecycleService {
       }
 
       vault.vault_status = newStatus;
-      
+
       if (phaseStartField) {
         (vault as any)[phaseStartField] = new Date().toISOString();
       }
 
       await this.vaultRepository.save(vault);
-      
+
       this.logger.log(
-        `Executed immediate phase transition for vault ${vaultId} to ${newStatus}` + 
-        (phaseStartField ? ` and set ${phaseStartField}` : '')
+        `Executed immediate phase transition for vault ${vaultId} to ${newStatus}` +
+          (phaseStartField ? ` and set ${phaseStartField}` : '')
       );
     } catch (error) {
       this.logger.error(`Failed to execute phase transition for vault ${vaultId}:`, error);
@@ -123,31 +123,24 @@ export class LifecycleService {
   private async queueContributionToAcquireTransition(vault: Vault, contributionEnd: Date): Promise<void> {
     // Check if vault has assets before queuing transition
     await this.contributionService.syncContributionTransactions(vault.id);
-    const assets = await this.assetsRepository.find({ 
-      where: { vault: { id: vault.id }, deleted: false } 
+    const assets = await this.assetsRepository.find({
+      where: { vault: { id: vault.id }, deleted: false },
     });
     const hasAssets = assets?.some(asset => !asset.deleted) || false;
 
     if (!hasAssets) {
       // Queue failure transition
-      await this.queuePhaseTransition(
-        vault.id,
-        VaultStatus.failed,
-        contributionEnd
-      );
+      await this.queuePhaseTransition(vault.id, VaultStatus.failed, contributionEnd);
       return;
     }
 
     // Determine acquire phase start time based on vault configuration
     let acquireStartTime: Date;
-    
+
     if (vault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
       // Start acquire phase immediately when contribution ends
       acquireStartTime = contributionEnd;
-    } else if (
-      vault.acquire_open_window_type === InvestmentWindowType.custom &&
-      vault.acquire_open_window_time
-    ) {
+    } else if (vault.acquire_open_window_type === InvestmentWindowType.custom && vault.acquire_open_window_time) {
       // Use custom start time, but ensure it's not before contribution ends
       const customTime = new Date(vault.acquire_open_window_time);
       acquireStartTime = customTime > contributionEnd ? customTime : contributionEnd;
@@ -156,12 +149,7 @@ export class LifecycleService {
       return;
     }
 
-    await this.queuePhaseTransition(
-      vault.id,
-      VaultStatus.acquire,
-      acquireStartTime,
-      'acquire_phase_start'
-    );
+    await this.queuePhaseTransition(vault.id, VaultStatus.acquire, acquireStartTime, 'acquire_phase_start');
   }
 
   private async executeContributionToAcquireTransition(vault: Vault): Promise<void> {
@@ -184,20 +172,13 @@ export class LifecycleService {
           this.logger.error(`Failed to calculate assets value for vault ${vault.id}:`, error);
         }
 
-        await this.executePhaseTransition(
-          vault.id,
-          VaultStatus.acquire,
-          'acquire_phase_start'
-        );
+        await this.executePhaseTransition(vault.id, VaultStatus.acquire, 'acquire_phase_start');
       }
       // For custom acquire start time
-      else if (
-        vault.acquire_open_window_type === InvestmentWindowType.custom &&
-        vault.acquire_open_window_time
-      ) {
+      else if (vault.acquire_open_window_type === InvestmentWindowType.custom && vault.acquire_open_window_time) {
         const now = new Date();
         const customTime = new Date(vault.acquire_open_window_time);
-        
+
         if (now >= customTime) {
           // Calculate total value of assets in the vault
           try {
@@ -215,19 +196,10 @@ export class LifecycleService {
             this.logger.error(`Failed to calculate assets value for vault ${vault.id}:`, error);
           }
 
-          await this.executePhaseTransition(
-            vault.id,
-            VaultStatus.acquire,
-            'acquire_phase_start'
-          );
+          await this.executePhaseTransition(vault.id, VaultStatus.acquire, 'acquire_phase_start');
         } else {
           // Queue for the custom time
-          await this.queuePhaseTransition(
-            vault.id,
-            VaultStatus.acquire,
-            customTime,
-            'acquire_phase_start'
-          );
+          await this.queuePhaseTransition(vault.id, VaultStatus.acquire, customTime, 'acquire_phase_start');
         }
       }
     } catch (error) {
@@ -346,19 +318,13 @@ export class LifecycleService {
       }
 
       // Execute the phase transition using the consistent method
-      await this.executePhaseTransition(
-        vault.id,
-        VaultStatus.governance,
-        'governance_phase_start'
-      );
+      await this.executePhaseTransition(vault.id, VaultStatus.governance, 'governance_phase_start');
     } catch (error) {
       this.logger.error(`Error executing acquire to governance transition for vault ${vault.id}`, error);
     }
   }
 
   private async handlePublishedToContribution(): Promise<void> {
-    const now = new Date();
-
     // Handle immediate start vaults
     const immediateStartVaults = await this.vaultRepository
       .createQueryBuilder('vault')
@@ -367,11 +333,7 @@ export class LifecycleService {
       .getMany();
 
     for (const vault of immediateStartVaults) {
-      await this.executePhaseTransition(
-        vault.id, 
-        VaultStatus.contribution, 
-        'contribution_phase_start'
-      );
+      await this.executePhaseTransition(vault.id, VaultStatus.contribution, 'contribution_phase_start');
     }
 
     // Handle custom start time vaults
@@ -384,12 +346,7 @@ export class LifecycleService {
 
     for (const vault of customStartVaults) {
       const transitionTime = new Date(vault.contribution_open_window_time);
-      await this.queuePhaseTransition(
-        vault.id,
-        VaultStatus.contribution,
-        transitionTime,
-        'contribution_phase_start'
-      );
+      await this.queuePhaseTransition(vault.id, VaultStatus.contribution, transitionTime, 'contribution_phase_start');
     }
   }
 
@@ -529,12 +486,7 @@ export class LifecycleService {
 
       // If acquire period hasn't ended yet, queue the transition
       if (now < acquireEnd) {
-        await this.queuePhaseTransition(
-          vault.id,
-          VaultStatus.governance,
-          acquireEnd,
-          'governance_phase_start'
-        );
+        await this.queuePhaseTransition(vault.id, VaultStatus.governance, acquireEnd, 'governance_phase_start');
         continue;
       }
 
