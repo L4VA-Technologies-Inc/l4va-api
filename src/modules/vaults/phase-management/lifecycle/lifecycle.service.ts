@@ -32,7 +32,6 @@ export class LifecycleService {
 
   @Cron(CronExpression.EVERY_MINUTE)
   async handleVaultLifecycleTransitions(): Promise<void> {
-    // this.logger.debug('Checking vault lifecycle transitions...');
 
     await this.handlePublishedToContribution();
 
