@@ -1,8 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 
 import { CreateClaimDto } from './dto/create-claim.dto';
+import { GetClaimsDto } from './dto/get-claims.dto';
 import { UpdateClaimStatusDto } from './dto/update-claim-status.dto';
 
 import { Claim } from '@/database/claim.entity';
@@ -18,10 +19,23 @@ export class ClaimsService {
     private userRepository: Repository<User>
   ) {}
 
-  async getUserClaims(userId: string): Promise<Claim[]> {
+  async getUserClaims(userId: string, query?: GetClaimsDto): Promise<Claim[]> {
+    const whereConditions: any = { user: { id: userId } };
+
+    if (query?.status) {
+      whereConditions.status = query.status;
+    }
+
+    if (query?.claimState === 'claimed') {
+      whereConditions.status = ClaimStatus.CLAIMED;
+    } else if (query?.claimState === 'unclaimed') {
+      whereConditions.status = In([ClaimStatus.DISABLED, ClaimStatus.PENDING]);
+    }
+
     return this.claimRepository.find({
-      where: { user: { id: userId } },
+      where: whereConditions,
       order: { created_at: 'DESC' },
+      relations: ['user'],
     });
   }
 
