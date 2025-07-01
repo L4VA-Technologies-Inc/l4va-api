@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 
 import { FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
-import { Injectable, NotFoundException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
@@ -156,7 +156,7 @@ export class ClaimsService {
     }
 
     if (claim.status !== ClaimStatus.PENDING) {
-      throw new Error('Claim is not in pending status');
+      throw new BadRequestException('Claim is not in pending status');
     }
 
     try {

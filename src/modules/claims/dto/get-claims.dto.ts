@@ -14,7 +14,8 @@ export class GetClaimsDto {
 
   @ApiPropertyOptional({
     enum: ['claimed', 'unclaimed'],
-    description: 'Filter by claim state (claimed=CLAIMED, unclaimed=DISABLED+PENDING)',
+    description:
+      'Filter by claim state: "claimed" maps to status CLAIMED, "unclaimed" maps to statuses DISABLED and PENDING',
   })
   @IsOptional()
   @IsString()
