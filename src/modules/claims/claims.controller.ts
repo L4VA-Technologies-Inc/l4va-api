@@ -1,6 +1,7 @@
-import { Controller, Get, Post, Put, Param, Body, UseGuards, Query } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
+import { Controller, Get, Post, Put, Param, Body, UseGuards, Query, Request } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+
+import { AuthGuard } from '../auth/auth.guard';
 
 import { ClaimsService } from './claims.service';
 import { ClaimResponseDto } from './dto/claim-response.dto';
@@ -8,12 +9,10 @@ import { CreateClaimDto } from './dto/create-claim.dto';
 import { GetClaimsDto } from './dto/get-claims.dto';
 import { UpdateClaimStatusDto } from './dto/update-claim-status.dto';
 
-import { GetUser } from '@/common/decorators/get-user.decorator';
 import { ApiDoc } from '@/decorators/api-doc.decorator';
 
 @ApiTags('Claims')
 @Controller('claims')
-@UseGuards(AuthGuard)
 export class ClaimsController {
   constructor(private readonly claimsService: ClaimsService) {}
 
@@ -22,12 +21,15 @@ export class ClaimsController {
     description: 'Returns claims for current user with optional filtering by status or claim state',
     status: 200,
   })
+  @UseGuards(AuthGuard)
   @Get('my')
   @ApiResponse({ type: [ClaimResponseDto] })
-  async getMyClaims(@GetUser('id') userId: string, @Query() query: GetClaimsDto) {
+  async getMyClaims(@Request() req, @Query() query: GetClaimsDto) {
+    const userId = req.user.sub;
     return this.claimsService.getUserClaims(userId, query);
   }
 
+  @UseGuards(AuthGuard)
   @Get('user/:userId')
   @ApiOperation({ summary: 'Get user claims by user ID' })
   @ApiResponse({ type: [ClaimResponseDto] })
@@ -35,6 +37,7 @@ export class ClaimsController {
     return this.claimsService.getUserClaims(userId);
   }
 
+  @UseGuards(AuthGuard)
   @Post()
   @ApiOperation({ summary: 'Create new claim' })
   @ApiResponse({ type: ClaimResponseDto })
@@ -42,6 +45,7 @@ export class ClaimsController {
     return this.claimsService.createClaim(createClaimDto);
   }
 
+  @UseGuards(AuthGuard)
   @Put(':id/status')
   @ApiOperation({ summary: 'Update claim status' })
   @ApiResponse({ type: ClaimResponseDto })
@@ -49,6 +53,7 @@ export class ClaimsController {
     return this.claimsService.updateClaimStatus(id, updateStatusDto);
   }
 
+  @UseGuards(AuthGuard)
   @Post(':id/claim')
   @ApiOperation({ summary: 'Process claim and build transaction' })
   async processClaim(@Param('id') id: string) {

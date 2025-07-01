@@ -9,6 +9,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './modules/auth/auth.module';
 import { AwsModule } from './modules/aws_bucket/aws.module';
+import { ClaimsModule } from './modules/claims/claims.module';
 import { DistributionModule } from './modules/distribution/distribution.module';
 import { JwtGlobalModule } from './modules/globals/jwt_global_module/jwt_global.module';
 import { UsersModule } from './modules/users/users.module';
@@ -56,6 +57,7 @@ import { VaultsModule } from './modules/vaults/vaults.module';
     TransactionsModule,
     LpTokensModule,
     DistributionModule,
+    ClaimsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
