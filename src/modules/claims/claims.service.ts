@@ -32,6 +32,13 @@ export class ClaimsService {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
   }
 
+  /**
+   * Retrieves claims for a specific user with optional filtering
+   *
+   * @param userId - The ID of the user whose claims to retrieve
+   * @param query - Optional query parameters for filtering claims
+   * @returns Promise with an array of Claim entities
+   */
   async getUserClaims(userId: string, query?: GetClaimsDto): Promise<Claim[]> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const whereConditions: any = { user: { id: userId } };
@@ -52,6 +59,13 @@ export class ClaimsService {
     });
   }
 
+  /**
+   * Creates a new claim for a user
+   *
+   * @param createClaimDto - Data Transfer Object containing claim creation details
+   * @returns Promise with the newly created Claim entity
+   * @throws NotFoundException if the user is not found
+   */
   async createClaim(createClaimDto: CreateClaimDto): Promise<Claim> {
     const user = await this.userRepository.findOne({
       where: { id: createClaimDto.userId },
@@ -70,6 +84,14 @@ export class ClaimsService {
     return this.claimRepository.save(claim);
   }
 
+  /**
+   * Updates the status of an existing claim
+   *
+   * @param claimId - The ID of the claim to update
+   * @param updateStatusDto - Data Transfer Object containing the new status
+   * @returns Promise with the updated Claim entity
+   * @throws NotFoundException if the claim is not found
+   */
   async updateClaimStatus(claimId: string, updateStatusDto: UpdateClaimStatusDto): Promise<Claim> {
     const claim = await this.claimRepository.findOne({
       where: { id: claimId },
@@ -83,6 +105,14 @@ export class ClaimsService {
     return this.claimRepository.save(claim);
   }
 
+  /**
+   * Updates the transaction hash for a claim and marks it as claimed
+   *
+   * @param claimId - The ID of the claim to update
+   * @param txHash - The transaction hash to associate with the claim
+   * @returns Promise with the updated Claim entity
+   * @throws NotFoundException if the claim is not found
+   */
   async updateClaimTxHash(claimId: string, txHash: string): Promise<Claim> {
     const claim = await this.claimRepository.findOne({
       where: { id: claimId },
@@ -97,6 +127,18 @@ export class ClaimsService {
     return this.claimRepository.save(claim);
   }
 
+  /**
+   * Builds and submits a blockchain transaction for a claim
+   *
+   * This method creates a transaction to process the claim payment,
+   * signs it with the admin key, and submits it to the blockchain.
+   * If the transaction fails, it falls back to creating a mock transaction.
+   *
+   * @param claimId - The ID of the claim for which to build a transaction
+   * @returns Promise with transaction details including success status, transaction hash, and error information if applicable
+   * @throws NotFoundException if the claim is not found
+   * @throws Error if the claim is not in pending status
+   */
   async buildClaimTransaction(claimId: string): Promise<{
     success: boolean;
     txHash?: string;
