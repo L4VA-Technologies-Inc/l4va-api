@@ -6,8 +6,8 @@ import { DistributionService } from './distribution.service';
 import { Vault } from '@/database/vault.entity';
 
 @Module({
-  providers: [DistributionService],
   imports: [TypeOrmModule.forFeature([Vault])],
+  providers: [DistributionService],
   exports: [DistributionService],
 })
 export class DistributionModule {}
