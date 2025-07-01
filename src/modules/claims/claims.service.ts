@@ -35,7 +35,6 @@ export class ClaimsService {
     return this.claimRepository.find({
       where: whereConditions,
       order: { created_at: 'DESC' },
-      relations: ['user'],
     });
   }
 
