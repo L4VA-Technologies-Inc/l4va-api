@@ -1,9 +1,9 @@
 import { Expose } from 'class-transformer';
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, BeforeInsert, BeforeUpdate } from 'typeorm';
 
-import { User } from './user.entity';
+import { ClaimStatus } from '../types/claim.types';
 
-import { ClaimStatus } from '@/types/claim.types';
+import { User } from './user.entity';
 
 @Entity('claims')
 export class Claim {
