@@ -6,15 +6,17 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
+import { TransactionsService } from '../vaults/processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from '../vaults/processing-tx/onchain/blockchain.service';
 
 import { CreateClaimDto } from './dto/create-claim.dto';
 import { GetClaimsDto } from './dto/get-claims.dto';
-import { UpdateClaimStatusDto } from './dto/update-claim-status.dto';
 
 import { Claim } from '@/database/claim.entity';
+import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { ClaimStatus } from '@/types/claim.types';
+import { TransactionType } from '@/types/transaction.types';
 
 @Injectable()
 export class ClaimsService {
@@ -22,11 +24,14 @@ export class ClaimsService {
   private readonly adminSKey: string;
 
   constructor(
+    @InjectRepository(Transaction)
+    private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(Claim)
     private claimRepository: Repository<Claim>,
     @InjectRepository(User)
     private userRepository: Repository<User>,
     private readonly configService: ConfigService,
+    private readonly transactionsService: TransactionsService,
     private readonly blockchainService: BlockchainService
   ) {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
@@ -85,30 +90,9 @@ export class ClaimsService {
   }
 
   /**
-   * Updates the status of an existing claim
-   *
-   * @param claimId - The ID of the claim to update
-   * @param updateStatusDto - Data Transfer Object containing the new status
-   * @returns Promise with the updated Claim entity
-   * @throws NotFoundException if the claim is not found
-   */
-  async updateClaimStatus(claimId: string, updateStatusDto: UpdateClaimStatusDto): Promise<Claim> {
-    const claim = await this.claimRepository.findOne({
-      where: { id: claimId },
-    });
-
-    if (!claim) {
-      throw new NotFoundException('Claim not found');
-    }
-
-    claim.status = updateStatusDto.status;
-    return this.claimRepository.save(claim);
-  }
-
-  /**
    * Updates the transaction hash for a claim and marks it as claimed
    *
-   * @param claimId - The ID of the claim to update
+   * @param claimId - The ID of the claim to updateв
    * @param txHash - The transaction hash to associate with the claim
    * @returns Promise with the updated Claim entity
    * @throws NotFoundException if the claim is not found
@@ -128,23 +112,26 @@ export class ClaimsService {
   }
 
   /**
-   * Builds and submits a blockchain transaction for a claim
+   * User press "claim" button
    *
-   * This method creates a transaction to process the claim payment,
-   * signs it with the admin key, and submits it to the blockchain.
-   * If the transaction fails, it falls back to creating a mock transaction.
+   * Frontend send request to build tx of claim
    *
-   * @param claimId - The ID of the claim for which to build a transaction
-   * @returns Promise with transaction details including success status, transaction hash, and error information if applicable
-   * @throws NotFoundException if the claim is not found
-   * @throws Error if the claim is not in pending status
+   * backend create internal tx, then backend create blockchain tx and connect both tx by txHash
+   *
+   * then backend sign blockchain tx with admin wallet, and return presigned tx to user
+   *
+   * then user sign presigned tx with his own wallet
+   *
+   * then tx send to backend and publish to blockchain
+   *
+   * then scanner call webhook with tx detail when tx will exist on chain.
+   *
+   * then using information txHash we will update internal tx and maybe claim status
    */
   async buildClaimTransaction(claimId: string): Promise<{
     success: boolean;
-    txHash?: string;
-    transactionId?: string;
-    error?: string;
-    presignedTx?: string;
+    transactionId: string;
+    presignedTx: string;
   }> {
     const claim = await this.claimRepository.findOne({
       where: { id: claimId },
@@ -173,54 +160,109 @@ export class ClaimsService {
         network: 'preprod', // or 'mainnet' for production
       };
 
-      this.logger.log('Transaction input prepared:', JSON.stringify(transactionInput, null, 2));
+      // Create internal transaction
+      const internalTx = await this.transactionRepository.save({
+        amount: claim.amount,
+        user: claim.user,
+        type: TransactionType.claim,
+        metadata: {
+          claimId: claim.id,
+          createdAt: new Date().toISOString(),
+          transactionType: 'claim',
+          description: `Claim payout for user ${claim.user.id}`,
+        },
+      });
 
-      // Build the transaction using BlockchainService
+      // Build the transaction
       const buildResponse = await this.blockchainService.buildTransaction(transactionInput);
       this.logger.log('Transaction built successfully');
 
-      // Sign the transaction if admin key is available
-      let presignedTx: string;
-      if (this.adminSKey) {
-        const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-        txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
-        presignedTx = txToSubmitOnChain.to_hex();
-        this.logger.log('Transaction signed successfully');
-      } else {
-        presignedTx = buildResponse.complete;
-        this.logger.warn('No admin key available, transaction not signed');
-      }
-
-      // Submit the transaction
-      const submitResponse = await this.blockchainService.submitTransaction({
-        transaction: presignedTx,
-        signatures: [],
-      });
-
-      this.logger.log('Transaction submitted successfully:', submitResponse);
-
-      // Update claim status and tx hash
-      const txHash = submitResponse.txHash || `tx_${Date.now()}_${claim.id.slice(0, 8)}`;
-      await this.updateClaimTxHash(claim.id, txHash);
+      // Sign the transaction
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
       return {
         success: true,
-        txHash: txHash,
-        transactionId: submitResponse.txHash,
-        presignedTx: presignedTx,
+        transactionId: internalTx.id,
+        presignedTx: txToSubmitOnChain.to_hex(),
       };
     } catch (error) {
-      this.logger.error('Error building/submitting claim transaction:', error);
+      if (error instanceof NotFoundException) {
+        throw new NotFoundException(error.message);
+      }
+      throw error;
+    }
+  }
 
-      // Fall back to mock transaction if real transaction fails
-      const mockTxHash = `mock_tx_${Date.now()}_${claim.id.slice(0, 8)}`;
-      await this.updateClaimTxHash(claim.id, mockTxHash);
+  async submitSignedTransaction(
+    transactionId: string,
+    signedTxHex: string
+  ): Promise<{
+    success: boolean;
+    transactionId: string;
+    blockchainTxHash: string;
+  }> {
+    // Find the internal transaction
+    const internalTx = await this.transactionRepository.findOne({
+      where: { id: transactionId },
+    });
+
+    if (!internalTx) {
+      throw new NotFoundException('Transaction not found');
+    }
+
+    try {
+      // Submit to blockchain
+      const submitResponse = await this.blockchainService.submitTransaction({
+        transaction: signedTxHex,
+        signatures: [],
+      });
+
+      internalTx.tx_hash = submitResponse.txHash; // Connect offchain and onchain tx
+
+      await this.transactionRepository.save(internalTx);
+
+      // Also update the claim with the tx hash reference
+      const claim = await this.claimRepository.findOne({
+        where: { id: internalTx.metadata.claimId },
+      });
+      if (claim) {
+        claim.status = ClaimStatus.CLAIMED;
+        claim.tx_hash = submitResponse.txHash;
+        await this.claimRepository.save(claim);
+      }
 
       return {
-        success: false,
-        error: error.message,
-        txHash: mockTxHash,
+        success: true,
+        transactionId: internalTx.id,
+        blockchainTxHash: submitResponse.txHash,
       };
+    } catch (error) {
+      await this.transactionRepository.save(internalTx);
+      throw error;
+    }
+  }
+
+  async processConfirmedTransaction(txHash: string): Promise<void> {
+    // Find the internal transaction by blockchain hash
+    const internalTx = await this.transactionRepository.findOne({
+      where: { tx_hash: txHash },
+    });
+
+    if (!internalTx) {
+      this.logger.warn(`No internal transaction found for blockchain hash: ${txHash}`);
+      return;
+    }
+
+    // Update the claim status
+    const claim = await this.claimRepository.findOne({
+      where: { id: internalTx.metadata.claimId },
+    });
+
+    if (claim) {
+      claim.status = ClaimStatus.CLAIMED;
+      await this.claimRepository.save(claim);
+      this.logger.log(`Claim ${claim.id} marked as CLAIMED with tx ${txHash}`);
     }
   }
 }
