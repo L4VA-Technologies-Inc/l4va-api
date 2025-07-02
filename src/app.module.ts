@@ -21,6 +21,7 @@ import { TransactionsModule } from './modules/vaults/processing-tx/offchain-tx/t
 import { BlockchainModule } from './modules/vaults/processing-tx/onchain/blockchain.module';
 import { VaultsModule } from './modules/vaults/vaults.module';
 
+
 @Module({
   imports: [
     ScheduleModule.forRoot(),
@@ -41,7 +42,9 @@ import { VaultsModule } from './modules/vaults/vaults.module';
       password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME,
       synchronize: false,
-      entities: [__dirname + '/database/core/**/*.entity{.ts,.js}', __dirname + '/database/*.entity{.ts,.js}'],
+      entities: [
+        __dirname + '/database/core/**/*.entity{.ts,.js}',
+        __dirname + '/database/**/*.entity{.ts,.js}'],
       autoLoadEntities: true,
       namingStrategy: new SnakeNamingStrategy(),
     }),
