@@ -20,6 +20,7 @@ import { TransactionsModule } from './modules/vaults/processing-tx/offchain-tx/t
 import { BlockchainModule } from './modules/vaults/processing-tx/onchain/blockchain.module';
 import { VaultsModule } from './modules/vaults/vaults.module';
 
+
 @Module({
   imports: [
     ScheduleModule.forRoot(),
