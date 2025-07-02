@@ -117,13 +117,13 @@
 <title>cluster_DistributionModule</title>
 <polygon fill="none" stroke="black" stroke-dasharray="1,5" points="145,-70 145,-268 351,-268 351,-70 145,-70"/>
 </g>
-<g id="clust4" class="cluster">
-<title>cluster_DistributionModule_exports</title>
-<polygon fill="none" stroke="black" points="175,-208 175,-260 321,-260 321,-208 175,-208"/>
-</g>
 <g id="clust6" class="cluster">
 <title>cluster_DistributionModule_providers</title>
 <polygon fill="none" stroke="black" points="153,-78 153,-130 343,-130 343,-78 153,-78"/>
+</g>
+<g id="clust4" class="cluster">
+<title>cluster_DistributionModule_exports</title>
+<polygon fill="none" stroke="black" points="175,-208 175,-260 321,-260 321,-208 175,-208"/>
 </g>
 <!-- DistributionService  -->
 <g id="node1" class="node">
@@ -235,8 +235,8 @@ import { DistributionService } from &#x27;./distribution.service&#x27;;
 import { Vault } from &#x27;@/database/vault.entity&#x27;;
 
 @Module({
-  providers: [DistributionService],
   imports: [TypeOrmModule.forFeature([Vault])],
+  providers: [DistributionService],
   exports: [DistributionService],
 })
 export class DistributionModule {}

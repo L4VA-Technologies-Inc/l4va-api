@@ -88,7 +88,7 @@
 
 <ol class="breadcrumb">
   <li class="breadcrumb-item">Controllers</li>
-  <li class="breadcrumb-item" >AwsController</li>
+  <li class="breadcrumb-item" >ClaimsController</li>
 </ol>
 
 <ul class="nav nav-tabs" role="tablist">
@@ -112,9 +112,15 @@
             <h3>File</h3>
         </p>
         <p class="comment">
-            <code>src/modules/aws_bucket/aws.controller.ts</code>
+            <code>src/modules/claims/claims.controller.ts</code>
         </p>
 
+            <p class="comment">
+                <h3>Prefix</h3>
+            </p>
+            <p class="comment">
+                <code>claims</code>
+            </p>
 
 
 
@@ -137,30 +143,28 @@
                             <li>
                                     <span class="modifier"></span>
                                     <span class="modifier"></span>
-                                    <span class="modifier">Async</span>
-                                <a href="#getCsvFile" >getCsvFile</a>
-                            </li>
-                            <li>
                                     <span class="modifier"></span>
                                     <span class="modifier"></span>
                                     <span class="modifier">Async</span>
-                                <a href="#getImageFile" >getImageFile</a>
-                            </li>
-                            <li>
-                                    <span class="modifier"></span>
-                                    <span class="modifier"></span>
-                                    <span class="modifier"></span>
-                                    <span class="modifier"></span>
-                                    <span class="modifier">Async</span>
-                                <a href="#handleCsvFiles" >handleCsvFiles</a>
+                                <a href="#getMyClaims" >getMyClaims</a>
                             </li>
                             <li>
                                     <span class="modifier"></span>
                                     <span class="modifier"></span>
                                     <span class="modifier"></span>
+                                    <span class="modifier">Async</span>
+                                <a href="#processClaim" >processClaim</a>
+                            </li>
+                            <li>
+                                    <span class="modifier"></span>
                                     <span class="modifier"></span>
                                     <span class="modifier">Async</span>
-                                <a href="#uploadFile" >uploadFile</a>
+                                <a href="#submitSignedClaimTransaction" >submitSignedClaimTransaction</a>
+                            </li>
+                            <li>
+                                    <span class="modifier"></span>
+                                    <span class="modifier">Async</span>
+                                <a href="#webhookTxConfirmed" >webhookTxConfirmed</a>
                             </li>
                         </ul>
                     </td>
@@ -183,20 +187,22 @@
         <tbody>
             <tr>
                 <td class="col-md-4">
-                    <a name="getCsvFile"></a>
+                    <a name="getMyClaims"></a>
                     <span class="name">
                             <span class="modifier"></span>
                             <span class="modifier"></span>
+                            <span class="modifier"></span>
+                            <span class="modifier"></span>
                             <span class="modifier">Async</span>
-                        <span ><b>getCsvFile</b></span>
-                        <a href="#getCsvFile"><span class="icon ion-ios-link"></span></a>
+                        <span ><b>getMyClaims</b></span>
+                        <a href="#getMyClaims"><span class="icon ion-ios-link"></span></a>
                     </span>
                 </td>
             </tr>
             <tr>
                 <td class="col-md-4">
                         <span class="modifier-icon icon ion-ios-reset"></span>
-                    <code>getCsvFile(id, res: Response)</code>
+                    <code>getMyClaims(req, query: <a href="../classes/GetClaimsDto.html" target="_self">GetClaimsDto</a>)</code>
                 </td>
             </tr>
 
@@ -204,14 +210,14 @@
                 <td class="col-md-4">
                     <b>Decorators : </b>
                     <br />
-                    <code>@ApiDoc({summary: &#x27;Get csv from bucket&#x27;, description: &#x27;Forward csv directly to frontend&#x27;, status: 200})<br />@Get(&#x27;/csv/:id&#x27;)<br /></code>
+                    <code>@ApiDoc({summary: &#x27;Get current user claims&#x27;, description: &#x27;Returns claims for current user with optional filtering by status or claim state&#x27;, status: 200})<br />@UseGuards(AuthGuard)<br />@Get(&#x27;my&#x27;)<br />@ApiResponse({type: undefined})<br /></code>
                 </td>
             </tr>
 
                     <tr>
                         <td class="col-md-4">
-                            <div class="io-line">Defined in <a href="" data-line="80"
-                                    class="link-to-prism">src/modules/aws_bucket/aws.controller.ts:80</a></div>
+                            <div class="io-line">Defined in <a href="" data-line="25"
+                                    class="link-to-prism">src/modules/claims/claims.controller.ts:25</a></div>
                         </td>
                     </tr>
 
@@ -231,202 +237,21 @@
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        <tr>
-                                                <td>id</td>
-                                            <td>
-                                            </td>
-
-                                            <td>
-                                                    No
-                                            </td>
-
-
-                                        </tr>
-                                        <tr>
-                                                <td>res</td>
-                                            <td>
-                                                        <code>Response</code>
-                                            </td>
-
-                                            <td>
-                                                    No
-                                            </td>
-
-
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                        <div class="io-description">
-                            <b>Returns : </b>        <code><a href="https://www.typescriptlang.org/docs/handbook/basic-types.html" target="_blank" >any</a></code>
-
-                        </div>
-                            <div class="io-description">
-                                
-                            </div>
-                </td>
-            </tr>
-        </tbody>
-    </table>
-    <table class="table table-sm table-bordered">
-        <tbody>
-            <tr>
-                <td class="col-md-4">
-                    <a name="getImageFile"></a>
-                    <span class="name">
-                            <span class="modifier"></span>
-                            <span class="modifier"></span>
-                            <span class="modifier">Async</span>
-                        <span ><b>getImageFile</b></span>
-                        <a href="#getImageFile"><span class="icon ion-ios-link"></span></a>
-                    </span>
-                </td>
-            </tr>
-            <tr>
-                <td class="col-md-4">
-                        <span class="modifier-icon icon ion-ios-reset"></span>
-                    <code>getImageFile(id, res: Response)</code>
-                </td>
-            </tr>
-
-            <tr>
-                <td class="col-md-4">
-                    <b>Decorators : </b>
-                    <br />
-                    <code>@ApiDoc({summary: &#x27;Get image from bucket&#x27;, description: &#x27;Forward image directly to frontend&#x27;, status: 200})<br />@Get(&#x27;/image/:id&#x27;)<br /></code>
-                </td>
-            </tr>
-
-                    <tr>
-                        <td class="col-md-4">
-                            <div class="io-line">Defined in <a href="" data-line="67"
-                                    class="link-to-prism">src/modules/aws_bucket/aws.controller.ts:67</a></div>
-                        </td>
-                    </tr>
-
-
-            <tr>
-                <td class="col-md-4">
-
-                            <div class="io-description">
-                                <b>Parameters :</b>
-                                
-                                <table class="params">
-                                    <thead>
-                                        <tr>
-                                            <td>Name</td>
-                                                <td>Type</td>
-                                            <td>Optional</td>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        <tr>
-                                                <td>id</td>
-                                            <td>
-                                            </td>
-
-                                            <td>
-                                                    No
-                                            </td>
-
-
-                                        </tr>
-                                        <tr>
-                                                <td>res</td>
-                                            <td>
-                                                        <code>Response</code>
-                                            </td>
-
-                                            <td>
-                                                    No
-                                            </td>
-
-
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                        <div class="io-description">
-                            <b>Returns : </b>        <code><a href="https://www.typescriptlang.org/docs/handbook/basic-types.html" target="_blank" >any</a></code>
-
-                        </div>
-                            <div class="io-description">
-                                
-                            </div>
-                </td>
-            </tr>
-        </tbody>
-    </table>
-    <table class="table table-sm table-bordered">
-        <tbody>
-            <tr>
-                <td class="col-md-4">
-                    <a name="handleCsvFiles"></a>
-                    <span class="name">
-                            <span class="modifier"></span>
-                            <span class="modifier"></span>
-                            <span class="modifier"></span>
-                            <span class="modifier"></span>
-                            <span class="modifier">Async</span>
-                        <span ><b>handleCsvFiles</b></span>
-                        <a href="#handleCsvFiles"><span class="icon ion-ios-link"></span></a>
-                    </span>
-                </td>
-            </tr>
-            <tr>
-                <td class="col-md-4">
-                        <span class="modifier-icon icon ion-ios-reset"></span>
-                    <code>handleCsvFiles(file: Express.Multer.File, req: Request)</code>
-                </td>
-            </tr>
-
-            <tr>
-                <td class="col-md-4">
-                    <b>Decorators : </b>
-                    <br />
-                    <code>@ApiDoc({summary: &#x27;Validate and parcing CSV&#x27;, description: &#x27;Image upload successfully&#x27;, status: 200})<br />@UseInterceptors(undefined)<br />@UseGuards(AuthGuard)<br />@Post(&#x27;/handle-csv&#x27;)<br /></code>
-                </td>
-            </tr>
-
-                    <tr>
-                        <td class="col-md-4">
-                            <div class="io-line">Defined in <a href="" data-line="95"
-                                    class="link-to-prism">src/modules/aws_bucket/aws.controller.ts:95</a></div>
-                        </td>
-                    </tr>
-
-
-            <tr>
-                <td class="col-md-4">
-
-                            <div class="io-description">
-                                <b>Parameters :</b>
-                                
-                                <table class="params">
-                                    <thead>
-                                        <tr>
-                                            <td>Name</td>
-                                                <td>Type</td>
-                                            <td>Optional</td>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        <tr>
-                                                <td>file</td>
-                                            <td>
-                                                        <code>Express.Multer.File</code>
-                                            </td>
-
-                                            <td>
-                                                    No
-                                            </td>
-
-
-                                        </tr>
                                         <tr>
                                                 <td>req</td>
                                             <td>
-                                                        <code>Request</code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                        <tr>
+                                                <td>query</td>
+                                            <td>
+                                                            <code><a href="../classes/GetClaimsDto.html" target="_self" >GetClaimsDto</a></code>
                                             </td>
 
                                             <td>
@@ -453,22 +278,21 @@
         <tbody>
             <tr>
                 <td class="col-md-4">
-                    <a name="uploadFile"></a>
+                    <a name="processClaim"></a>
                     <span class="name">
                             <span class="modifier"></span>
                             <span class="modifier"></span>
                             <span class="modifier"></span>
-                            <span class="modifier"></span>
                             <span class="modifier">Async</span>
-                        <span ><b>uploadFile</b></span>
-                        <a href="#uploadFile"><span class="icon ion-ios-link"></span></a>
+                        <span ><b>processClaim</b></span>
+                        <a href="#processClaim"><span class="icon ion-ios-link"></span></a>
                     </span>
                 </td>
             </tr>
             <tr>
                 <td class="col-md-4">
                         <span class="modifier-icon icon ion-ios-reset"></span>
-                    <code>uploadFile(file: Express.Multer.File, req: Request)</code>
+                    <code>processClaim(id: <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank">string</a>)</code>
                 </td>
             </tr>
 
@@ -476,14 +300,14 @@
                 <td class="col-md-4">
                     <b>Decorators : </b>
                     <br />
-                    <code>@ApiDoc({summary: &#x27;Upload image files&#x27;, description: &#x27;Image upload successfully&#x27;, status: 200})<br />@UseInterceptors(undefined)<br />@Post(&#x27;/upload&#x27;)<br />@UseGuards(AuthGuard)<br /></code>
+                    <code>@UseGuards(AuthGuard)<br />@Post(&#x27;:id/claim&#x27;)<br />@ApiOperation({summary: &#x27;Process claim and build transaction&#x27;})<br /></code>
                 </td>
             </tr>
 
                     <tr>
                         <td class="col-md-4">
-                            <div class="io-line">Defined in <a href="" data-line="45"
-                                    class="link-to-prism">src/modules/aws_bucket/aws.controller.ts:45</a></div>
+                            <div class="io-line">Defined in <a href="" data-line="33"
+                                    class="link-to-prism">src/modules/claims/claims.controller.ts:33</a></div>
                         </td>
                     </tr>
 
@@ -504,9 +328,87 @@
                                     </thead>
                                     <tbody>
                                         <tr>
-                                                <td>file</td>
+                                                <td>id</td>
                                             <td>
-                                                        <code>Express.Multer.File</code>
+                                                            <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank" >string</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>unknown</code>
+
+                        </div>
+                            <div class="io-description">
+                                
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="submitSignedClaimTransaction"></a>
+                    <span class="name">
+                            <span class="modifier"></span>
+                            <span class="modifier"></span>
+                            <span class="modifier">Async</span>
+                        <span ><b>submitSignedClaimTransaction</b></span>
+                        <a href="#submitSignedClaimTransaction"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>submitSignedClaimTransaction(transactionId: <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank">string</a>, body: literal type)</code>
+                </td>
+            </tr>
+
+            <tr>
+                <td class="col-md-4">
+                    <b>Decorators : </b>
+                    <br />
+                    <code>@Post(&#x27;:id/claim/submit&#x27;)<br />@UseGuards(AuthGuard)<br /></code>
+                </td>
+            </tr>
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="39"
+                                    class="link-to-prism">src/modules/claims/claims.controller.ts:39</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>transactionId</td>
+                                            <td>
+                                                            <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank" >string</a></code>
                                             </td>
 
                                             <td>
@@ -516,9 +418,86 @@
 
                                         </tr>
                                         <tr>
-                                                <td>req</td>
+                                                <td>body</td>
                                             <td>
-                                                        <code>Request</code>
+                                                        <code>literal type</code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>unknown</code>
+
+                        </div>
+                            <div class="io-description">
+                                
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="webhookTxConfirmed"></a>
+                    <span class="name">
+                            <span class="modifier"></span>
+                            <span class="modifier">Async</span>
+                        <span ><b>webhookTxConfirmed</b></span>
+                        <a href="#webhookTxConfirmed"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>webhookTxConfirmed(body: literal type)</code>
+                </td>
+            </tr>
+
+            <tr>
+                <td class="col-md-4">
+                    <b>Decorators : </b>
+                    <br />
+                    <code>@Post(&#x27;webhook/tx-confirmed&#x27;)<br /></code>
+                </td>
+            </tr>
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="44"
+                                    class="link-to-prism">src/modules/claims/claims.controller.ts:44</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>body</td>
+                                            <td>
+                                                        <code>literal type</code>
                                             </td>
 
                                             <td>
@@ -545,117 +524,52 @@
 
 
     <div class="tab-pane fade  tab-source-code" id="source">
-        <pre class="line-numbers compodoc-sourcecode"><code class="language-typescript">import {
-  ClassSerializerInterceptor,
-  Controller,
-  FileTypeValidator,
-  Get,
-  Logger,
-  MaxFileSizeValidator,
-  Param,
-  ParseFilePipe,
-  Post,
-  Req,
-  Res,
-  UploadedFile,
-  UseGuards,
-  UseInterceptors,
-} from &#x27;@nestjs/common&#x27;;
-import { FileInterceptor } from &#x27;@nestjs/platform-express&#x27;;
-import { ApiTags } from &#x27;@nestjs/swagger&#x27;;
-import { Express, Response, Request } from &#x27;express&#x27;;
-import { Multer } from &#x27;multer&#x27;;
+        <pre class="line-numbers compodoc-sourcecode"><code class="language-typescript">import { Controller, Get, Post, Param, Body, UseGuards, Query, Request } from &#x27;@nestjs/common&#x27;;
+import { ApiTags, ApiOperation, ApiResponse } from &#x27;@nestjs/swagger&#x27;;
 
 import { AuthGuard } from &#x27;../auth/auth.guard&#x27;;
 
-import { AwsService } from &#x27;./aws.service&#x27;;
+import { ClaimsService } from &#x27;./claims.service&#x27;;
+import { ClaimResponseDto } from &#x27;./dto/claim-response.dto&#x27;;
+import { GetClaimsDto } from &#x27;./dto/get-claims.dto&#x27;;
 
 import { ApiDoc } from &#x27;@/decorators/api-doc.decorator&#x27;;
 
-export const mbMultiplication &#x3D; 1024 * 1024;
-
-@ApiTags(&#x27;files&#x27;)
-@Controller(&#x27;&#x27;)
-@UseInterceptors(ClassSerializerInterceptor)
-export class AwsController {
-  private readonly logger &#x3D; new Logger(AwsController.name);
-  constructor(private readonly awsService: AwsService) {}
+@ApiTags(&#x27;Claims&#x27;)
+@Controller(&#x27;claims&#x27;)
+export class ClaimsController {
+  constructor(private readonly claimsService: ClaimsService) {}
 
   @ApiDoc({
-    summary: &#x27;Upload image files&#x27;,
-    description: &#x27;Image upload successfully&#x27;,
+    summary: &#x27;Get current user claims&#x27;,
+    description: &#x27;Returns claims for current user with optional filtering by status or claim state&#x27;,
     status: 200,
   })
-  @UseInterceptors(FileInterceptor(&#x27;image&#x27;))
-  @Post(&#x27;/upload&#x27;)
   @UseGuards(AuthGuard)
-  async uploadFile(
-    @UploadedFile(
-      new ParseFilePipe({
-        validators: [
-          new MaxFileSizeValidator({ maxSize: 5 * mbMultiplication }), // 5mb
-          new FileTypeValidator({ fileType: &#x27;image/*&#x27; }),
-        ],
-      })
-    )
-    file: Express.Multer.File,
-    @Req() req: Request
-  ) {
-    const { host } &#x3D; req?.headers;
-    return await this.awsService.uploadImage(file, host);
+  @Get(&#x27;my&#x27;)
+  @ApiResponse({ type: [ClaimResponseDto] })
+  async getMyClaims(@Request() req, @Query() query: GetClaimsDto) {
+    const userId &#x3D; req.user.sub;
+    return this.claimsService.getUserClaims(userId, query);
   }
 
-  @ApiDoc({
-    summary: &#x27;Get image from bucket&#x27;,
-    description: &#x27;Forward image directly to frontend&#x27;,
-    status: 200,
-  })
-  @Get(&#x27;/image/:id&#x27;)
-  async getImageFile(@Param(&#x27;id&#x27;) id, @Res() res: Response) {
-    const response &#x3D; await this.awsService.getImage(id);
-    res.setHeader(&#x27;Content-Type&#x27;, response.headers[&#x27;content-type&#x27;]);
-    res.setHeader(&#x27;Cache-Control&#x27;, &#x27;public, max-age&#x3D;3600&#x27;);
-    response.data.pipe(res);
-  }
-
-  @ApiDoc({
-    summary: &#x27;Get csv from bucket&#x27;,
-    description: &#x27;Forward csv directly to frontend&#x27;,
-    status: 200,
-  })
-  @Get(&#x27;/csv/:id&#x27;)
-  async getCsvFile(@Param(&#x27;id&#x27;) id, @Res() res: Response) {
-    const response &#x3D; await this.awsService.getCsv(id);
-    res.setHeader(&#x27;Content-Type&#x27;, response.headers[&#x27;content-type&#x27;]);
-    res.setHeader(&#x27;Cache-Control&#x27;, &#x27;public, max-age&#x3D;3600&#x27;);
-    response.data.pipe(res);
-  }
-
-  @ApiDoc({
-    summary: &#x27;Validate and parcing CSV&#x27;,
-    description: &#x27;Image upload successfully&#x27;,
-    status: 200,
-  })
-  @UseInterceptors(FileInterceptor(&#x27;csv&#x27;))
   @UseGuards(AuthGuard)
-  @Post(&#x27;/handle-csv&#x27;)
-  async handleCsvFiles(
-    @UploadedFile(
-      new ParseFilePipe({
-        validators: [
-          new MaxFileSizeValidator({ maxSize: 5 * mbMultiplication }),
-          new FileTypeValidator({ fileType: &#x27;text/csv&#x27; }),
-        ],
-      })
-    )
-    file: Express.Multer.File,
-    @Req() req: Request
-  ) {
-    // todo need to validate and parse csv and then return list of asset whitelist id&#x27;s
-    this.logger.log(&#x27;csv file received&#x27;, file);
-    const { host } &#x3D; req?.headers;
+  @Post(&#x27;:id/claim&#x27;)
+  @ApiOperation({ summary: &#x27;Process claim and build transaction&#x27; })
+  async processClaim(@Param(&#x27;id&#x27;) id: string) {
+    return this.claimsService.buildClaimTransaction(id);
+  }
 
-    return await this.awsService.uploadCSV(file, host);
+  @Post(&#x27;:id/claim/submit&#x27;)
+  @UseGuards(AuthGuard)
+  async submitSignedClaimTransaction(@Param(&#x27;id&#x27;) transactionId: string, @Body() body: { signedTx: string }) {
+    return this.claimsService.submitSignedTransaction(transactionId, body.signedTx);
+  }
+
+  @Post(&#x27;webhook/tx-confirmed&#x27;)
+  async webhookTxConfirmed(@Body() body: { txHash: string }) {
+    await this.claimsService.processConfirmedTransaction(body.txHash);
+    return { received: true };
   }
 }
 </code></pre>
@@ -703,7 +617,7 @@ export class AwsController {
        <script>
             var COMPODOC_CURRENT_PAGE_DEPTH = 1;
             var COMPODOC_CURRENT_PAGE_CONTEXT = 'controller';
-            var COMPODOC_CURRENT_PAGE_URL = 'AwsController.html';
+            var COMPODOC_CURRENT_PAGE_URL = 'ClaimsController.html';
             var MAX_SEARCH_RESULTS = 15;
        </script>
 

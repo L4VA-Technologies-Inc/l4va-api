@@ -24,13 +24,13 @@
 <title>cluster_AcquireModule</title>
 <polygon fill="none" stroke="black" stroke-dasharray="1,5" points="83,-70 83,-268 413,-268 413,-70 83,-70"/>
 </g>
-<g id="clust3" class="cluster">
-<title>cluster_AcquireModule_imports</title>
-<polygon fill="none" stroke="black" points="257,-78 257,-130 405,-130 405,-78 257,-78"/>
-</g>
 <g id="clust4" class="cluster">
 <title>cluster_AcquireModule_exports</title>
 <polygon fill="none" stroke="black" points="189,-208 189,-260 311,-260 311,-208 189,-208"/>
+</g>
+<g id="clust3" class="cluster">
+<title>cluster_AcquireModule_imports</title>
+<polygon fill="none" stroke="black" points="257,-78 257,-130 405,-130 405,-78 257,-78"/>
 </g>
 <g id="clust6" class="cluster">
 <title>cluster_AcquireModule_providers</title>

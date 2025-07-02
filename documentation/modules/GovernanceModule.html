@@ -117,13 +117,13 @@
 <title>cluster_GovernanceModule</title>
 <polygon fill="none" stroke="black" stroke-dasharray="1,5" points="145,-70 145,-268 351,-268 351,-70 145,-70"/>
 </g>
-<g id="clust6" class="cluster">
-<title>cluster_GovernanceModule_providers</title>
-<polygon fill="none" stroke="black" points="153,-78 153,-130 343,-130 343,-78 153,-78"/>
-</g>
 <g id="clust4" class="cluster">
 <title>cluster_GovernanceModule_exports</title>
 <polygon fill="none" stroke="black" points="175,-208 175,-260 321,-260 321,-208 175,-208"/>
+</g>
+<g id="clust6" class="cluster">
+<title>cluster_GovernanceModule_providers</title>
+<polygon fill="none" stroke="black" points="153,-78 153,-130 343,-130 343,-78 153,-78"/>
 </g>
 <!-- GovernanceService  -->
 <g id="node1" class="node">
@@ -240,10 +240,10 @@
         <pre class="line-numbers compodoc-sourcecode"><code class="language-typescript">import { Module } from &#x27;@nestjs/common&#x27;;
 import { TypeOrmModule } from &#x27;@nestjs/typeorm&#x27;;
 
-import { Vault } from &#x27;@/database/vault.entity&#x27;;
-
 import { GovernanceController } from &#x27;./governance.controller&#x27;;
 import { GovernanceService } from &#x27;./governance.service&#x27;;
+
+import { Vault } from &#x27;@/database/vault.entity&#x27;;
 
 @Module({
   imports: [TypeOrmModule.forFeature([Vault])],
