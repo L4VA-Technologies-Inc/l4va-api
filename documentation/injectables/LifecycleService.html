@@ -152,6 +152,21 @@
                     <td class="col-md-4">
                         <ul class="index-list">
                             <li>
+                                    <span class="modifier">Private</span>
+                                    <span class="modifier">Async</span>
+                                <a href="#executeAcquireToGovernanceTransition" >executeAcquireToGovernanceTransition</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Private</span>
+                                    <span class="modifier">Async</span>
+                                <a href="#executeContributionToAcquireTransition" >executeContributionToAcquireTransition</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Private</span>
+                                    <span class="modifier">Async</span>
+                                <a href="#executePhaseTransition" >executePhaseTransition</a>
+                            </li>
+                            <li>
                                     <span class="modifier">Async</span>
                                 <a href="#getAssetsGroupedByUser" >getAssetsGroupedByUser</a>
                             </li>
@@ -175,6 +190,16 @@
                                     <span class="modifier">Async</span>
                                 <a href="#handleVaultLifecycleTransitions" >handleVaultLifecycleTransitions</a>
                             </li>
+                            <li>
+                                    <span class="modifier">Private</span>
+                                    <span class="modifier">Async</span>
+                                <a href="#queueContributionToAcquireTransition" >queueContributionToAcquireTransition</a>
+                            </li>
+                            <li>
+                                    <span class="modifier">Private</span>
+                                    <span class="modifier">Async</span>
+                                <a href="#queuePhaseTransition" >queuePhaseTransition</a>
+                            </li>
                         </ul>
                     </td>
                 </tr>
@@ -193,12 +218,12 @@
             <tbody>
                 <tr>
                     <td class="col-md-4">
-<code>constructor(assetsRepository: <a href="../interfaces/Asset.html" target="_self">Repository&lt;Asset&gt;</a>, vaultRepository: <a href="../entitys/Vault.html" target="_self">Repository&lt;Vault&gt;</a>, contributionService: <a href="../injectables/ContributionService.html" target="_self">ContributionService</a>, distributionService: <a href="../injectables/DistributionService.html" target="_self">DistributionService</a>, taptoolsService: <a href="../injectables/TaptoolsService.html" target="_self">TaptoolsService</a>, vaultContractService: <a href="../injectables/VaultManagingService.html" target="_self">VaultManagingService</a>)</code>
+<code>constructor(phaseTransitionQueue: Queue, assetsRepository: <a href="../interfaces/Asset.html" target="_self">Repository&lt;Asset&gt;</a>, vaultRepository: <a href="../entitys/Vault.html" target="_self">Repository&lt;Vault&gt;</a>, contributionService: <a href="../injectables/ContributionService.html" target="_self">ContributionService</a>, distributionService: <a href="../injectables/DistributionService.html" target="_self">DistributionService</a>, taptoolsService: <a href="../injectables/TaptoolsService.html" target="_self">TaptoolsService</a>)</code>
                     </td>
                 </tr>
                         <tr>
                             <td class="col-md-4">
-                                <div class="io-line">Defined in <a href="" data-line="18" class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:18</a></div>
+                                <div class="io-line">Defined in <a href="" data-line="19" class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:19</a></div>
                             </td>
                         </tr>
 
@@ -215,6 +240,18 @@
                                             </tr>
                                         </thead>
                                         <tbody>
+                                                <tr>
+                                                        <td>phaseTransitionQueue</td>
+                                                  
+                                                        <td>
+                                                                    <code>Queue</code>
+                                                        </td>
+                                                  
+                                                    <td>
+                                                            No
+                                                    </td>
+                                                    
+                                                </tr>
                                                 <tr>
                                                         <td>assetsRepository</td>
                                                   
@@ -275,18 +312,6 @@
                                                     </td>
                                                     
                                                 </tr>
-                                                <tr>
-                                                        <td>vaultContractService</td>
-                                                  
-                                                        <td>
-                                                                        <code><a href="../injectables/VaultManagingService.html" target="_self" >VaultManagingService</a></code>
-                                                        </td>
-                                                  
-                                                    <td>
-                                                            No
-                                                    </td>
-                                                    
-                                                </tr>
                                         </tbody>
                                     </table>
                             </div>
@@ -301,6 +326,240 @@
     <h3 id="methods">
         Methods
     </h3>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="executeAcquireToGovernanceTransition"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                            <span class="modifier">Async</span>
+                        <span ><b>executeAcquireToGovernanceTransition</b></span>
+                        <a href="#executeAcquireToGovernanceTransition"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>executeAcquireToGovernanceTransition(vault: <a href="../entitys/Vault.html" target="_self">Vault</a>)</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="209"
+                                    class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:209</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>vault</td>
+                                            <td>
+                                                            <code><a href="../entitys/Vault.html" target="_self" >Vault</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>Promise&lt;void&gt;</code>
+
+                        </div>
+                            <div class="io-description">
+                                
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="executeContributionToAcquireTransition"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                            <span class="modifier">Async</span>
+                        <span ><b>executeContributionToAcquireTransition</b></span>
+                        <a href="#executeContributionToAcquireTransition"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>executeContributionToAcquireTransition(vault: <a href="../entitys/Vault.html" target="_self">Vault</a>)</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="154"
+                                    class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:154</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>vault</td>
+                                            <td>
+                                                            <code><a href="../entitys/Vault.html" target="_self" >Vault</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>Promise&lt;void&gt;</code>
+
+                        </div>
+                            <div class="io-description">
+                                
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="executePhaseTransition"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                            <span class="modifier">Async</span>
+                        <span ><b>executePhaseTransition</b></span>
+                        <a href="#executePhaseTransition"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>executePhaseTransition(vaultId: <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank">string</a>, newStatus: <a href="../undefineds/VaultStatus.html" target="_self">VaultStatus</a>, phaseStartField?: <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank">string</a>)</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="89"
+                                    class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:89</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>vaultId</td>
+                                            <td>
+                                                            <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank" >string</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                        <tr>
+                                                <td>newStatus</td>
+                                            <td>
+                                                            <code><a href="../miscellaneous/enumerations.html#VaultStatus" target="_self" >VaultStatus</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                        <tr>
+                                                <td>phaseStartField</td>
+                                            <td>
+                                                            <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank" >string</a></code>
+                                            </td>
+
+                                            <td>
+                                                    Yes
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>Promise&lt;void&gt;</code>
+
+                        </div>
+                            <div class="io-description">
+                                
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
     <table class="table table-sm table-bordered">
         <tbody>
             <tr>
@@ -323,8 +582,8 @@
 
                     <tr>
                         <td class="col-md-4">
-                            <div class="io-line">Defined in <a href="" data-line="210"
-                                    class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:210</a></div>
+                            <div class="io-line">Defined in <a href="" data-line="420"
+                                    class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:420</a></div>
                         </td>
                     </tr>
 
@@ -393,8 +652,8 @@
 
                     <tr>
                         <td class="col-md-4">
-                            <div class="io-line">Defined in <a href="" data-line="78"
-                                    class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:78</a></div>
+                            <div class="io-line">Defined in <a href="" data-line="352"
+                                    class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:352</a></div>
                         </td>
                     </tr>
 
@@ -433,8 +692,8 @@
 
                     <tr>
                         <td class="col-md-4">
-                            <div class="io-line">Defined in <a href="" data-line="260"
-                                    class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:260</a></div>
+                            <div class="io-line">Defined in <a href="" data-line="470"
+                                    class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:470</a></div>
                         </td>
                     </tr>
 
@@ -473,8 +732,8 @@
 
                     <tr>
                         <td class="col-md-4">
-                            <div class="io-line">Defined in <a href="" data-line="44"
-                                    class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:44</a></div>
+                            <div class="io-line">Defined in <a href="" data-line="326"
+                                    class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:326</a></div>
                         </td>
                     </tr>
 
@@ -520,8 +779,8 @@
 
                     <tr>
                         <td class="col-md-4">
-                            <div class="io-line">Defined in <a href="" data-line="32"
-                                    class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:32</a></div>
+                            <div class="io-line">Defined in <a href="" data-line="34"
+                                    class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:34</a></div>
                         </td>
                     </tr>
 
@@ -533,6 +792,194 @@
                             <b>Returns : </b>    <code>Promise&lt;void&gt;</code>
 
                         </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="queueContributionToAcquireTransition"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                            <span class="modifier">Async</span>
+                        <span ><b>queueContributionToAcquireTransition</b></span>
+                        <a href="#queueContributionToAcquireTransition"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>queueContributionToAcquireTransition(vault: <a href="../entitys/Vault.html" target="_self">Vault</a>, contributionEnd: <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date" target="_blank">Date</a>)</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="122"
+                                    class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:122</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>vault</td>
+                                            <td>
+                                                            <code><a href="../entitys/Vault.html" target="_self" >Vault</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                        <tr>
+                                                <td>contributionEnd</td>
+                                            <td>
+                                                            <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date" target="_blank" >Date</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>Promise&lt;void&gt;</code>
+
+                        </div>
+                            <div class="io-description">
+                                
+                            </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <table class="table table-sm table-bordered">
+        <tbody>
+            <tr>
+                <td class="col-md-4">
+                    <a name="queuePhaseTransition"></a>
+                    <span class="name">
+                            <span class="modifier">Private</span>
+                            <span class="modifier">Async</span>
+                        <span ><b>queuePhaseTransition</b></span>
+                        <a href="#queuePhaseTransition"><span class="icon ion-ios-link"></span></a>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td class="col-md-4">
+                        <span class="modifier-icon icon ion-ios-reset"></span>
+                    <code>queuePhaseTransition(vaultId: <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank">string</a>, newStatus: <a href="../undefineds/VaultStatus.html" target="_self">VaultStatus</a>, transitionTime: <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date" target="_blank">Date</a>, phaseStartField?: <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank">string</a>)</code>
+                </td>
+            </tr>
+
+
+                    <tr>
+                        <td class="col-md-4">
+                            <div class="io-line">Defined in <a href="" data-line="45"
+                                    class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:45</a></div>
+                        </td>
+                    </tr>
+
+
+            <tr>
+                <td class="col-md-4">
+
+                            <div class="io-description">
+                                <b>Parameters :</b>
+                                
+                                <table class="params">
+                                    <thead>
+                                        <tr>
+                                            <td>Name</td>
+                                                <td>Type</td>
+                                            <td>Optional</td>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                                <td>vaultId</td>
+                                            <td>
+                                                            <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank" >string</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                        <tr>
+                                                <td>newStatus</td>
+                                            <td>
+                                                            <code><a href="../miscellaneous/enumerations.html#VaultStatus" target="_self" >VaultStatus</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                        <tr>
+                                                <td>transitionTime</td>
+                                            <td>
+                                                            <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date" target="_blank" >Date</a></code>
+                                            </td>
+
+                                            <td>
+                                                    No
+                                            </td>
+
+
+                                        </tr>
+                                        <tr>
+                                                <td>phaseStartField</td>
+                                            <td>
+                                                            <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank" >string</a></code>
+                                            </td>
+
+                                            <td>
+                                                    Yes
+                                            </td>
+
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <div class="io-description">
+                            <b>Returns : </b>    <code>Promise&lt;void&gt;</code>
+
+                        </div>
+                            <div class="io-description">
+                                
+                            </div>
                 </td>
             </tr>
         </tbody>
@@ -563,7 +1010,7 @@
                 </tr>
                     <tr>
                         <td class="col-md-4">
-                                <div class="io-line">Defined in <a href="" data-line="18" class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:18</a></div>
+                                <div class="io-line">Defined in <a href="" data-line="19" class="link-to-prism">src/modules/vaults/phase-management/lifecycle/lifecycle.service.ts:19</a></div>
                         </td>
                     </tr>
 
@@ -576,16 +1023,17 @@
 
 
     <div class="tab-pane fade  tab-source-code" id="source">
-        <pre class="line-numbers compodoc-sourcecode"><code class="language-typescript">import { Injectable, Logger } from &#x27;@nestjs/common&#x27;;
+        <pre class="line-numbers compodoc-sourcecode"><code class="language-typescript">import { InjectQueue } from &#x27;@nestjs/bullmq&#x27;;
+import { Injectable, Logger } from &#x27;@nestjs/common&#x27;;
 import { Cron, CronExpression } from &#x27;@nestjs/schedule&#x27;;
 import { InjectRepository } from &#x27;@nestjs/typeorm&#x27;;
+import { Queue } from &#x27;bullmq&#x27;;
 import { Repository } from &#x27;typeorm&#x27;;
 
 import { AssetOriginType } from &#x27;../../../../types/asset.types&#x27;;
 import { VaultStatus, ContributionWindowType, InvestmentWindowType } from &#x27;../../../../types/vault.types&#x27;;
 import { DistributionService } from &#x27;../../../distribution/distribution.service&#x27;;
 import { TaptoolsService } from &#x27;../../../taptools/taptools.service&#x27;;
-import { VaultManagingService } from &#x27;../../processing-tx/onchain/vault-managing.service&#x27;;
 import { ContributionService } from &#x27;../contribution/contribution.service&#x27;;
 
 import { Asset } from &#x27;@/database/asset.entity&#x27;;
@@ -596,19 +1044,19 @@ export class LifecycleService {
   private readonly logger &#x3D; new Logger(LifecycleService.name);
 
   constructor(
+    @InjectQueue(&#x27;phaseTransition&#x27;)
+    private phaseTransitionQueue: Queue,
     @InjectRepository(Asset)
     private readonly assetsRepository: Repository&lt;Asset&gt;,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository&lt;Vault&gt;,
     private readonly contributionService: ContributionService,
     private readonly distributionService: DistributionService,
-    private readonly taptoolsService: TaptoolsService,
-    private readonly vaultContractService: VaultManagingService
+    private readonly taptoolsService: TaptoolsService
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
   async handleVaultLifecycleTransitions(): Promise&lt;void&gt; {
-    // this.logger.debug(&#x27;Checking vault lifecycle transitions...&#x27;);
 
     await this.handlePublishedToContribution();
 
@@ -619,9 +1067,288 @@ export class LifecycleService {
     await this.handleInvestmentToGovernance();
   }
 
-  private async handlePublishedToContribution(): Promise&lt;void&gt; {
+  private async queuePhaseTransition(
+    vaultId: string,
+    newStatus: VaultStatus,
+    transitionTime: Date,
+    phaseStartField?: string
+  ): Promise&lt;void&gt; {
     const now &#x3D; new Date();
+    const delay &#x3D; transitionTime.getTime() - now.getTime();
+    const ONE_MINUTE_MS &#x3D; 60 * 1000;
 
+    if (delay &lt;&#x3D; 0) {
+      // If transition time is now or in the past, execute immediately
+      await this.executePhaseTransition(vaultId, newStatus, phaseStartField);
+    } else if (delay &lt;&#x3D; ONE_MINUTE_MS) {
+      // If transition should happen within the next minute, create a precise delay job
+      await this.phaseTransitionQueue.add(
+        &#x27;transitionPhase&#x27;,
+        {
+          vaultId,
+          newStatus,
+          phaseStartField,
+        },
+        {
+          delay,
+          // Remove any existing jobs for this vault and phase to avoid duplicates
+          jobId: &#x60;${vaultId}-${newStatus}&#x60;,
+          removeOnComplete: 10,
+          removeOnFail: 10,
+        }
+      );
+
+      this.logger.log(
+        &#x60;Queued precise phase transition for vault ${vaultId} to ${newStatus} &#x60; +
+          &#x60;in ${Math.round(delay / 1000)} seconds&#x60;
+      );
+    } else {
+      // If more than 1 minute away, don&#x27;t queue - let future cron runs handle it
+      this.logger.log(
+        &#x60;Vault ${vaultId} phase transition to ${newStatus} scheduled in ${Math.round(delay / 1000)} seconds. &#x60; +
+          &#x60;Will be queued when closer to transition time.&#x60;
+      );
+    }
+  }
+
+  private async executePhaseTransition(
+    vaultId: string,
+    newStatus: VaultStatus,
+    phaseStartField?: string
+  ): Promise&lt;void&gt; {
+    try {
+      const vault &#x3D; await this.vaultRepository.findOne({
+        where: { id: vaultId },
+      });
+
+      if (!vault) {
+        this.logger.error(&#x60;Vault ${vaultId} not found for phase transition&#x60;);
+        return;
+      }
+
+      vault.vault_status &#x3D; newStatus;
+
+      if (phaseStartField) {
+        (vault as any)[phaseStartField] &#x3D; new Date().toISOString();
+      }
+
+      await this.vaultRepository.save(vault);
+
+      this.logger.log(
+        &#x60;Executed immediate phase transition for vault ${vaultId} to ${newStatus}&#x60; +
+          (phaseStartField ? &#x60; and set ${phaseStartField}&#x60; : &#x27;&#x27;)
+      );
+    } catch (error) {
+      this.logger.error(&#x60;Failed to execute phase transition for vault ${vaultId}:&#x60;, error);
+      throw error;
+    }
+  }
+
+  private async queueContributionToAcquireTransition(vault: Vault, contributionEnd: Date): Promise&lt;void&gt; {
+    // Check if vault has assets before queuing transition
+    await this.contributionService.syncContributionTransactions(vault.id);
+    const assets &#x3D; await this.assetsRepository.find({
+      where: { vault: { id: vault.id }, deleted: false },
+    });
+    const hasAssets &#x3D; assets?.some(asset &#x3D;&gt; !asset.deleted) || false;
+
+    if (!hasAssets) {
+      // Queue failure transition
+      await this.queuePhaseTransition(vault.id, VaultStatus.failed, contributionEnd);
+      return;
+    }
+
+    // Determine acquire phase start time based on vault configuration
+    let acquireStartTime: Date;
+
+    if (vault.acquire_open_window_type &#x3D;&#x3D;&#x3D; InvestmentWindowType.uponAssetWindowClosing) {
+      // Start acquire phase immediately when contribution ends
+      acquireStartTime &#x3D; contributionEnd;
+    } else if (vault.acquire_open_window_type &#x3D;&#x3D;&#x3D; InvestmentWindowType.custom &amp;&amp; vault.acquire_open_window_time) {
+      // Use custom start time, but ensure it&#x27;s not before contribution ends
+      const customTime &#x3D; new Date(vault.acquire_open_window_time);
+      acquireStartTime &#x3D; customTime &gt; contributionEnd ? customTime : contributionEnd;
+    } else {
+      this.logger.warn(&#x60;Vault ${vault.id} has invalid acquire window configuration&#x60;);
+      return;
+    }
+
+    await this.queuePhaseTransition(vault.id, VaultStatus.acquire, acquireStartTime, &#x27;acquire_phase_start&#x27;);
+  }
+
+  private async executeContributionToAcquireTransition(vault: Vault): Promise&lt;void&gt; {
+    try {
+      // For immediate acquire start
+      if (vault.acquire_open_window_type &#x3D;&#x3D;&#x3D; InvestmentWindowType.uponAssetWindowClosing) {
+        // Calculate total value of assets in the vault
+        try {
+          const assetsValue &#x3D; await this.taptoolsService.calculateVaultAssetsValue(vault.id);
+          this.logger.log(
+            &#x60;Vault ${vault.id} total assets value: ${assetsValue.totalValueAda} ADA (${assetsValue.totalValueUsd} USD)&#x60;
+          );
+          vault.total_assets_cost_ada &#x3D; assetsValue.totalValueAda;
+          vault.total_assets_cost_usd &#x3D; assetsValue.totalValueUsd;
+
+          // Calculate threshold Price
+          vault.require_reserved_cost_ada &#x3D; assetsValue.totalValueAda * (vault.acquire_reserve * 0.01);
+          vault.require_reserved_cost_usd &#x3D; assetsValue.totalValueUsd * (vault.acquire_reserve * 0.01);
+        } catch (error) {
+          this.logger.error(&#x60;Failed to calculate assets value for vault ${vault.id}:&#x60;, error);
+        }
+
+        await this.executePhaseTransition(vault.id, VaultStatus.acquire, &#x27;acquire_phase_start&#x27;);
+      }
+      // For custom acquire start time
+      else if (vault.acquire_open_window_type &#x3D;&#x3D;&#x3D; InvestmentWindowType.custom &amp;&amp; vault.acquire_open_window_time) {
+        const now &#x3D; new Date();
+        const customTime &#x3D; new Date(vault.acquire_open_window_time);
+
+        if (now &gt;&#x3D; customTime) {
+          // Calculate total value of assets in the vault
+          try {
+            const assetsValue &#x3D; await this.taptoolsService.calculateVaultAssetsValue(vault.id);
+            this.logger.log(
+              &#x60;Vault ${vault.id} total assets value: ${assetsValue.totalValueAda} ADA (${assetsValue.totalValueUsd} USD)&#x60;
+            );
+            vault.total_assets_cost_ada &#x3D; assetsValue.totalValueAda;
+            vault.total_assets_cost_usd &#x3D; assetsValue.totalValueUsd;
+
+            // Calculate threshold Price
+            vault.require_reserved_cost_ada &#x3D; assetsValue.totalValueAda * (vault.acquire_reserve * 0.01);
+            vault.require_reserved_cost_usd &#x3D; assetsValue.totalValueUsd * (vault.acquire_reserve * 0.01);
+          } catch (error) {
+            this.logger.error(&#x60;Failed to calculate assets value for vault ${vault.id}:&#x60;, error);
+          }
+
+          await this.executePhaseTransition(vault.id, VaultStatus.acquire, &#x27;acquire_phase_start&#x27;);
+        } else {
+          // Queue for the custom time
+          await this.queuePhaseTransition(vault.id, VaultStatus.acquire, customTime, &#x27;acquire_phase_start&#x27;);
+        }
+      }
+    } catch (error) {
+      this.logger.error(&#x60;Error executing contribution to acquire transition for vault ${vault.id}&#x60;, error);
+    }
+  }
+
+  private async executeAcquireToGovernanceTransition(vault: Vault): Promise&lt;void&gt; {
+    try {
+      // Sync transactions one more time
+      await this.contributionService.syncContributionTransactions(vault.id);
+
+      // 1. Group assets by user
+      const assetsByUsers &#x3D; await this.getAssetsGroupedByUser(vault.id);
+      const acquirerAdaMap: Record&lt;string, number&gt; &#x3D; {};
+      const contributorValueMap: Record&lt;string, number&gt; &#x3D; {};
+      let totalAcquiredAda &#x3D; 0;
+      let totalContributedValueAda &#x3D; 0;
+
+      // 2. Iterate over each user&#x27;s assets and split by phase
+      for (const userAssets of assetsByUsers) {
+        const userId &#x3D; userAssets.user_id;
+        const assets &#x3D; userAssets.assets;
+        let userAcquiredAda &#x3D; 0;
+        let userContributedValueAda &#x3D; 0;
+
+        this.logger.log(
+          &#x60;User ${userId} (${userAssets.user_wallet}) has ${userAssets.total_assets} assets in vault ${vault.id}: ${JSON.stringify(assets)}&#x60;
+        );
+
+        for (const asset of assets) {
+          // Only ADA in acquired assets
+          if (asset.origin_type &#x3D;&#x3D;&#x3D; AssetOriginType.ACQUIRED) {
+            userAcquiredAda +&#x3D; asset.quantity || 1;
+            this.logger.debug(&#x60;User ${userId} asset ${asset.id}: ${asset.quantity} ADA&#x60;);
+          }
+          if (asset.origin_type &#x3D;&#x3D;&#x3D; AssetOriginType.CONTRIBUTED) {
+            try {
+              const { priceAda } &#x3D; await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_name);
+              const quantity &#x3D; asset.quantity || 1;
+              userContributedValueAda +&#x3D; priceAda * quantity;
+            } catch (error) {
+              this.logger.error(
+                &#x60;Error getting price for asset ${asset.policy_id}.${asset.asset_name} for user ${userId} in vault ${vault.id}:&#x60;,
+                error.message
+              );
+            }
+          }
+
+          if (userAcquiredAda &gt; 0) {
+            acquirerAdaMap[userId] &#x3D; userAcquiredAda;
+            totalAcquiredAda +&#x3D; userAcquiredAda;
+          }
+          if (userContributedValueAda &gt; 0) {
+            contributorValueMap[userId] &#x3D; userContributedValueAda;
+            totalContributedValueAda +&#x3D; userContributedValueAda;
+          }
+        }
+      }
+      this.logger.log(
+        &#x60;Total acquired ADA across all users in vault ${vault.id}: ${totalAcquiredAda}, &#x60; +
+          &#x60;Total contributed value ADA: ${totalContributedValueAda}&#x60;
+      );
+
+      const requiredThresholdAda &#x3D; vault.require_reserved_cost_ada || 0;
+      const meetsThreshold &#x3D; totalAcquiredAda &gt;&#x3D; requiredThresholdAda;
+
+      vault.total_acquired_value_ada &#x3D; totalAcquiredAda;
+      await this.vaultRepository.save(vault);
+
+      this.logger.log(
+        &#x60;Vault ${vault.id} meets the threshold: &#x60; +
+          &#x60;Total contributed: ${totalAcquiredAda} ADA, &#x60; +
+          &#x60;Required: ${requiredThresholdAda} ADA&#x60;
+      );
+
+      if (meetsThreshold) {
+        // TODO: Mint tokens and launch the vault
+        // For each user, calculate VT received
+
+        // 3. Calculate VT for acquirers
+        for (const [userId, adaSent] of Object.entries(acquirerAdaMap)) {
+          const vtResult &#x3D; await this.distributionService.calculateAcquirerExample({
+            vaultId: vault.id,
+            adaSent,
+            numAcquirers: Object.keys(acquirerAdaMap).length,
+            totalAcquiredValueAda: totalAcquiredAda,
+          });
+          this.logger.debug(
+            &#x60;--- Acquirer ${userId} will receive VT: ${vtResult.vtReceived} (for ADA sent: ${adaSent})&#x60;
+          );
+        }
+
+        // 4. Calculate VT for contributors
+        for (const [userId, valueAda] of Object.entries(contributorValueMap)) {
+          const vtResult &#x3D; await this.distributionService.calculateContributorExample({
+            vaultId: vault.id,
+            valueContributed: valueAda,
+            totalTvl: totalContributedValueAda,
+          });
+          this.logger.debug(
+            &#x60;--- Contributor ${userId} will receive VT: ${vtResult.vtRetained} (for value contributed: ${valueAda})&#x60;
+          );
+        }
+
+        this.logger.log(&#x60;Vault ${vault.id} is ready to be launched&#x60;);
+      } else {
+        this.logger.warn(
+          &#x60;Vault ${vault.id} does not meet the threshold: &#x60; +
+            &#x60;Total contributed: ${totalAcquiredAda} ADA, &#x60; +
+            &#x60;Required: ${requiredThresholdAda} ADA&#x60;
+        );
+
+        // TODO: Burn the vault and refund assets
+        this.logger.warn(&#x60;Vault ${vault.id} needs to be burned and assets refunded&#x60;);
+      }
+
+      // Execute the phase transition using the consistent method
+      await this.executePhaseTransition(vault.id, VaultStatus.governance, &#x27;governance_phase_start&#x27;);
+    } catch (error) {
+      this.logger.error(&#x60;Error executing acquire to governance transition for vault ${vault.id}&#x60;, error);
+    }
+  }
+
+  private async handlePublishedToContribution(): Promise&lt;void&gt; {
     // Handle immediate start vaults
     const immediateStartVaults &#x3D; await this.vaultRepository
       .createQueryBuilder(&#x27;vault&#x27;)
@@ -630,10 +1357,7 @@ export class LifecycleService {
       .getMany();
 
     for (const vault of immediateStartVaults) {
-      vault.contribution_phase_start &#x3D; now.toISOString();
-      vault.vault_status &#x3D; VaultStatus.contribution;
-      await this.vaultRepository.save(vault);
-      this.logger.log(&#x60;Vault ${vault.id} moved to contribution phase (immediate start)&#x60;);
+      await this.executePhaseTransition(vault.id, VaultStatus.contribution, &#x27;contribution_phase_start&#x27;);
     }
 
     // Handle custom start time vaults
@@ -642,14 +1366,11 @@ export class LifecycleService {
       .where(&#x27;vault.vault_status &#x3D; :status&#x27;, { status: VaultStatus.published })
       .andWhere(&#x27;vault.contribution_open_window_type &#x3D; :type&#x27;, { type: ContributionWindowType.custom })
       .andWhere(&#x27;vault.contribution_open_window_time IS NOT NULL&#x27;)
-      .andWhere(&#x27;vault.contribution_open_window_time &lt;&#x3D; :now&#x27;, { now: now.toISOString() })
       .getMany();
 
     for (const vault of customStartVaults) {
-      vault.contribution_phase_start &#x3D; now.toISOString();
-      vault.vault_status &#x3D; VaultStatus.contribution;
-      await this.vaultRepository.save(vault);
-      this.logger.log(&#x60;Vault ${vault.id} moved to contribution phase (custom start time)&#x60;);
+      const transitionTime &#x3D; new Date(vault.contribution_open_window_time);
+      await this.queuePhaseTransition(vault.id, VaultStatus.contribution, transitionTime, &#x27;contribution_phase_start&#x27;);
     }
   }
 
@@ -668,8 +1389,9 @@ export class LifecycleService {
       const contributionDurationMs &#x3D; Number(vault.contribution_duration);
       const contributionEnd &#x3D; new Date(contributionStart.getTime() + contributionDurationMs);
 
-      // Skip if contribution period hasn&#x27;t ended yet
+      // If contribution period hasn&#x27;t ended yet, queue the transition
       if (now &lt; contributionEnd) {
+        await this.queueContributionToAcquireTransition(vault, contributionEnd);
         continue;
       }
 
@@ -715,73 +1437,8 @@ export class LifecycleService {
       }
 
       // If we get here, the vault has assets and the contribution period has ended
-      try {
-        const contributionDurationMs &#x3D; Number(vault.contribution_duration);
-        const contributionEnd &#x3D; new Date(contributionStart.getTime() + contributionDurationMs);
-
-        if (now &gt;&#x3D; contributionEnd) {
-          // For immediate acquire start
-          if (vault.acquire_open_window_type &#x3D;&#x3D;&#x3D; InvestmentWindowType.uponAssetWindowClosing) {
-            vault.acquire_phase_start &#x3D; now.toISOString();
-            vault.vault_status &#x3D; VaultStatus.acquire;
-            // Sync transactions before checking contribution end time
-
-            // TODO: need save this data to vault;
-            // Calculate total value of assets in the vault
-            try {
-              const assetsValue &#x3D; await this.taptoolsService.calculateVaultAssetsValue(vault.id);
-              this.logger.log(
-                &#x60;Vault ${vault.id} total assets value: ${assetsValue.totalValueAda} ADA (${assetsValue.totalValueUsd} USD)&#x60;
-              );
-              // You can store this information in the vault if needed
-              vault.total_assets_cost_ada &#x3D; assetsValue.totalValueAda;
-              vault.total_assets_cost_usd &#x3D; assetsValue.totalValueUsd;
-
-              //  todo calculate threshold Price
-              vault.require_reserved_cost_ada &#x3D; assetsValue.totalValueAda * (vault.acquire_reserve * 0.01);
-              vault.require_reserved_cost_usd &#x3D; assetsValue.totalValueUsd * (vault.acquire_reserve * 0.01);
-            } catch (error) {
-              this.logger.error(&#x60;Failed to calculate assets value for vault ${vault.id}:&#x60;, error);
-              // Continue with the transition even if we couldn&#x27;t calculate the value
-            }
-            await this.vaultRepository.save(vault);
-            this.logger.log(&#x60;Vault ${vault.id} moved to acquire phase (immediate start)&#x60;);
-          }
-          // For custom acquire start time
-          else if (
-            vault.acquire_open_window_type &#x3D;&#x3D;&#x3D; InvestmentWindowType.custom &amp;&amp;
-            vault.acquire_open_window_time &amp;&amp;
-            now &gt;&#x3D; new Date(vault.acquire_open_window_time)
-          ) {
-            vault.acquire_phase_start &#x3D; now.toISOString();
-            vault.vault_status &#x3D; VaultStatus.acquire;
-            // Sync transactions before checking contribution end time
-            await this.contributionService.syncContributionTransactions(vault.id);
-
-            // TODO: need save this data to vault;
-            // Calculate total value of assets in the vault
-            try {
-              const assetsValue &#x3D; await this.taptoolsService.calculateVaultAssetsValue(vault.id);
-              this.logger.log(
-                &#x60;Vault ${vault.id} total assets value: ${assetsValue.totalValueAda} ADA (${assetsValue.totalValueUsd} USD)&#x60;
-              );
-              // You can store this information in the vault if needed
-              // vault.totalValueAda &#x3D; assetsValue.totalValueAda;
-              // vault.totalValueUsd &#x3D; assetsValue.totalValueUsd;
-            } catch (error) {
-              this.logger.error(&#x60;Failed to calculate assets value for vault ${vault.id}:&#x60;, error);
-              // Continue with the transition even if we couldn&#x27;t calculate the value
-            }
-
-            await this.vaultRepository.save(vault);
-            this.logger.log(&#x60;Vault ${vault.id} moved to acquire phase (custom start time)&#x60;);
-          }
-        }
-      } catch (error) {
-        this.logger.error(&#x60;Error processing vault ${vault.id} in handleContributionToInvestment&#x60;, error);
-        // Continue with the next vault even if one fails
-        continue;
-      }
+      // Execute the transition immediately since the time has passed
+      await this.executeContributionToAcquireTransition(vault);
     }
   }
 
@@ -851,122 +1508,15 @@ export class LifecycleService {
       const acquireDurationMs &#x3D; Number(vault.acquire_window_duration);
       const acquireEnd &#x3D; new Date(acquireStart.getTime() + acquireDurationMs);
 
+      // If acquire period hasn&#x27;t ended yet, queue the transition
+      if (now &lt; acquireEnd) {
+        await this.queuePhaseTransition(vault.id, VaultStatus.governance, acquireEnd, &#x27;governance_phase_start&#x27;);
+        continue;
+      }
+
       if (now &gt;&#x3D; acquireEnd) {
-        // Sync transactions one more time
-        await this.contributionService.syncContributionTransactions(vault.id);
-
-        // 1. Group assets by user
-        const assetsByUsers &#x3D; await this.getAssetsGroupedByUser(vault.id);
-        const acquirerAdaMap: Record&lt;string, number&gt; &#x3D; {};
-        const contributorValueMap: Record&lt;string, number&gt; &#x3D; {};
-        let totalAcquiredAda &#x3D; 0;
-        let totalContributedValueAda &#x3D; 0;
-
-        // 2. Iterate over each user&#x27;s assets and split by phase
-        for (const userAssets of assetsByUsers) {
-          const userId &#x3D; userAssets.user_id;
-          const assets &#x3D; userAssets.assets;
-          let userAcquiredAda &#x3D; 0;
-          let userContributedValueAda &#x3D; 0;
-
-          this.logger.log(
-            &#x60;User ${userId} (${userAssets.user_wallet}) has ${userAssets.total_assets} assets in vault ${vault.id}: ${JSON.stringify(assets)}&#x60;
-          );
-
-          for (const asset of assets) {
-            // Only ADA in acquired assets
-            if (asset.origin_type &#x3D;&#x3D;&#x3D; AssetOriginType.ACQUIRED) {
-              userAcquiredAda +&#x3D; asset.quantity || 1;
-              this.logger.debug(&#x60;User ${userId} asset ${asset.id}: ${asset.quantity} ADA&#x60;);
-            }
-            if (asset.origin_type &#x3D;&#x3D;&#x3D; AssetOriginType.CONTRIBUTED) {
-              try {
-                const { priceAda } &#x3D; await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_name);
-                const quantity &#x3D; asset.quantity || 1;
-                userContributedValueAda +&#x3D; priceAda * quantity;
-              } catch (error) {
-                this.logger.error(
-                  &#x60;Error getting price for asset ${asset.policy_id}.${asset.asset_name} for user ${userId} in vault ${vault.id}:&#x60;,
-                  error.message
-                );
-              }
-            }
-
-            if (userAcquiredAda &gt; 0) {
-              acquirerAdaMap[userId] &#x3D; userAcquiredAda;
-              totalAcquiredAda +&#x3D; userAcquiredAda;
-            }
-            if (userContributedValueAda &gt; 0) {
-              contributorValueMap[userId] &#x3D; userContributedValueAda;
-              totalContributedValueAda +&#x3D; userContributedValueAda;
-            }
-          }
-        }
-        this.logger.log(
-          &#x60;Total acquired ADA across all users in vault ${vault.id}: ${totalAcquiredAda}, &#x60; +
-            &#x60;Total contributed value ADA: ${totalContributedValueAda}&#x60;
-        );
-
-        const requiredThresholdAda &#x3D; vault.require_reserved_cost_ada || 0;
-        const meetsThreshold &#x3D; totalAcquiredAda &gt;&#x3D; requiredThresholdAda;
-
-        vault.total_acquired_value_ada &#x3D; totalAcquiredAda;
-        await this.vaultRepository.save(vault);
-
-        this.logger.log(
-          &#x60;Vault ${vault.id} meets the threshold: &#x60; +
-            &#x60;Total contributed: ${totalAcquiredAda} ADA, &#x60; +
-            &#x60;Required: ${requiredThresholdAda} ADA&#x60;
-        );
-
-        if (meetsThreshold) {
-          // TODO: Mint tokens and launch the vault
-          // For each user, calculate VT received
-
-          // 3. Calculate VT for acquirers
-          for (const [userId, adaSent] of Object.entries(acquirerAdaMap)) {
-            const vtResult &#x3D; await this.distributionService.calculateAcquirerExample({
-              vaultId: vault.id,
-              adaSent,
-              numAcquirers: Object.keys(acquirerAdaMap).length,
-              totalAcquiredValueAda: totalAcquiredAda,
-            });
-            this.logger.debug(
-              &#x60;--- Acquirer ${userId} will receive VT: ${vtResult.vtReceived} (for ADA sent: ${adaSent})&#x60;
-            );
-          }
-
-          // 4. Calculate VT for contributors
-          for (const [userId, valueAda] of Object.entries(contributorValueMap)) {
-            const vtResult &#x3D; await this.distributionService.calculateContributorExample({
-              vaultId: vault.id,
-              valueContributed: valueAda,
-              totalTvl: totalContributedValueAda,
-            });
-            this.logger.debug(
-              &#x60;--- Contributor ${userId} will receive VT: ${vtResult.vtRetained} (for value contributed: ${valueAda})&#x60;
-            );
-          }
-
-          this.logger.log(&#x60;Vault ${vault.id} is ready to be launched&#x60;);
-        } else {
-          this.logger.warn(
-            &#x60;Vault ${vault.id} does not meet the threshold: &#x60; +
-              &#x60;Total contributed: ${totalAcquiredAda} ADA, &#x60; +
-              &#x60;Required: ${requiredThresholdAda} ADA&#x60;
-          );
-
-          // TODO: Burn the vault and refund assets
-          this.logger.warn(&#x60;Vault ${vault.id} needs to be burned and assets refunded&#x60;);
-        }
-
-        // Move to governance phase regardless of threshold for now
-        // In a real implementation, you might want to handle success/failure differently
-        vault.governance_phase_start &#x3D; now.toISOString();
-        vault.vault_status &#x3D; VaultStatus.governance;
-
-        await this.vaultRepository.save(vault);
-        this.logger.log(&#x60;Vault ${vault.id} has moved to governance phase&#x60;);
+        // Execute the transition immediately since the time has passed
+        await this.executeAcquireToGovernanceTransition(vault);
       }
     }
   }

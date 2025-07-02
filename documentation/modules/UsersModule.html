@@ -117,10 +117,6 @@
 <title>cluster_UsersModule</title>
 <polygon fill="none" stroke="black" stroke-dasharray="1,5" points="115,-70 115,-268 381,-268 381,-70 115,-70"/>
 </g>
-<g id="clust4" class="cluster">
-<title>cluster_UsersModule_exports</title>
-<polygon fill="none" stroke="black" points="200,-208 200,-260 310,-260 310,-208 200,-208"/>
-</g>
 <g id="clust3" class="cluster">
 <title>cluster_UsersModule_imports</title>
 <polygon fill="none" stroke="black" points="271,-78 271,-130 373,-130 373,-78 271,-78"/>
@@ -128,6 +124,10 @@
 <g id="clust6" class="cluster">
 <title>cluster_UsersModule_providers</title>
 <polygon fill="none" stroke="black" points="123,-78 123,-130 263,-130 263,-78 123,-78"/>
+</g>
+<g id="clust4" class="cluster">
+<title>cluster_UsersModule_exports</title>
+<polygon fill="none" stroke="black" points="200,-208 200,-260 310,-260 310,-208 200,-208"/>
 </g>
 <!-- AwsModule -->
 <g id="node1" class="node">
@@ -266,13 +266,14 @@
         <pre class="line-numbers compodoc-sourcecode"><code class="language-typescript">import { Module } from &#x27;@nestjs/common&#x27;;
 import { TypeOrmModule } from &#x27;@nestjs/typeorm&#x27;;
 
-import { FileEntity } from &#x27;@/database/file.entity&#x27;;
-import { LinkEntity } from &#x27;@/database/link.entity&#x27;;
-import { User } from &#x27;@/database/user.entity&#x27;;
 import { AwsModule } from &#x27;../aws_bucket/aws.module&#x27;;
 
 import { UsersController } from &#x27;./users.controller&#x27;;
 import { UsersService } from &#x27;./users.service&#x27;;
+
+import { FileEntity } from &#x27;@/database/file.entity&#x27;;
+import { LinkEntity } from &#x27;@/database/link.entity&#x27;;
+import { User } from &#x27;@/database/user.entity&#x27;;
 
 @Module({
   imports: [TypeOrmModule.forFeature([User, FileEntity, LinkEntity]), AwsModule],

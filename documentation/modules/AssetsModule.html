@@ -240,13 +240,13 @@
         <pre class="line-numbers compodoc-sourcecode"><code class="language-typescript">import { Module } from &#x27;@nestjs/common&#x27;;
 import { TypeOrmModule } from &#x27;@nestjs/typeorm&#x27;;
 
+import { AssetsController } from &#x27;./assets.controller&#x27;;
+import { AssetsService } from &#x27;./assets.service&#x27;;
+
 import { Asset } from &#x27;@/database/asset.entity&#x27;;
 import { Transaction } from &#x27;@/database/transaction.entity&#x27;;
 import { User } from &#x27;@/database/user.entity&#x27;;
 import { Vault } from &#x27;@/database/vault.entity&#x27;;
-
-import { AssetsController } from &#x27;./assets.controller&#x27;;
-import { AssetsService } from &#x27;./assets.service&#x27;;
 
 @Module({
   imports: [TypeOrmModule.forFeature([Asset, Vault, Transaction, User])],

@@ -488,8 +488,8 @@ CSV parsing, transaction confirmation, and integration with AWS S3, blockchain, 
 
                     <tr>
                         <td class="col-md-4">
-                            <div class="io-line">Defined in <a href="" data-line="967"
-                                    class="link-to-prism">src/modules/vaults/vaults.service.ts:967</a></div>
+                            <div class="io-line">Defined in <a href="" data-line="1068"
+                                    class="link-to-prism">src/modules/vaults/vaults.service.ts:1068</a></div>
                         </td>
                     </tr>
 
@@ -552,7 +552,7 @@ CSV parsing, transaction confirmation, and integration with AWS S3, blockchain, 
                                 </table>
                             </div>
                         <div class="io-description">
-                            <b>Returns : </b>    <code>unknown</code>
+                            <b>Returns : </b>    <code>Promise&lt;literal type&gt;</code>
 
                         </div>
                             <div class="io-description">
@@ -578,15 +578,15 @@ CSV parsing, transaction confirmation, and integration with AWS S3, blockchain, 
             <tr>
                 <td class="col-md-4">
                         <span class="modifier-icon icon ion-ios-reset"></span>
-                    <code>burnVaultPublishTx(vaultId, userId, publishDto: <a href="../classes/PublishVaultDto.html" target="_self">PublishVaultDto</a>)</code>
+                    <code>burnVaultPublishTx(vaultId: <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank">string</a>, userId: <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank">string</a>, publishDto: <a href="../classes/PublishVaultDto.html" target="_self">PublishVaultDto</a>)</code>
                 </td>
             </tr>
 
 
                     <tr>
                         <td class="col-md-4">
-                            <div class="io-line">Defined in <a href="" data-line="1005"
-                                    class="link-to-prism">src/modules/vaults/vaults.service.ts:1005</a></div>
+                            <div class="io-line">Defined in <a href="" data-line="1113"
+                                    class="link-to-prism">src/modules/vaults/vaults.service.ts:1113</a></div>
                         </td>
                     </tr>
 
@@ -612,6 +612,7 @@ CSV parsing, transaction confirmation, and integration with AWS S3, blockchain, 
                                         <tr>
                                                 <td>vaultId</td>
                                             <td>
+                                                            <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank" >string</a></code>
                                             </td>
 
                                             <td>
@@ -629,6 +630,7 @@ CSV parsing, transaction confirmation, and integration with AWS S3, blockchain, 
                                         <tr>
                                                 <td>userId</td>
                                             <td>
+                                                            <code><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/string" target="_blank" >string</a></code>
                                             </td>
 
                                             <td>
@@ -665,7 +667,7 @@ CSV parsing, transaction confirmation, and integration with AWS S3, blockchain, 
                                 </table>
                             </div>
                         <div class="io-description">
-                            <b>Returns : </b>        <code><a href="https://www.typescriptlang.org/docs/handbook/basic-types.html" target="_blank" >any</a></code>
+                            <b>Returns : </b>    <code>Promise&lt;void&gt;</code>
 
                         </div>
                             <div class="io-description">
@@ -821,16 +823,24 @@ Updates the vault&#39;s contract address upon success.</p>
 
                     <tr>
                         <td class="col-md-4">
-                            <div class="io-line">Defined in <a href="" data-line="194"
-                                    class="link-to-prism">src/modules/vaults/vaults.service.ts:194</a></div>
+                            <div class="io-line">Defined in <a href="" data-line="204"
+                                    class="link-to-prism">src/modules/vaults/vaults.service.ts:204</a></div>
                         </td>
                     </tr>
 
 
             <tr>
                 <td class="col-md-4">
-                        <div class="io-description"><p>Creates a new vault with the provided user and data, including validation, file processing, whitelist, and tag management.
-Also creates on-chain vault transaction and returns presigned transaction and vault ID.</p>
+                        <div class="io-description"><p>Creates a new vault for the specified user with the provided data.
+Handles validation, file processing, whitelist and tag management, and on-chain transaction creation.
+Returns the vault ID and a presigned transaction for on-chain publishing.</p>
+<p>Steps performed:</p>
+<ul>
+<li>Validates user and vault parameters</li>
+<li>Processes images, whitelists, and tags</li>
+<li>Saves the vault and related entities to the database</li>
+<li>Prepares on-chain transaction and returns presignedTx</li>
+</ul>
 </div>
 
                             <div class="io-description">
@@ -877,7 +887,7 @@ Also creates on-chain vault transaction and returns presigned transaction and va
 
                                             <td>
                                                     <ul>
-<li>Vault creation request data</li>
+<li>Vault creation request data (CreateVaultReq)</li>
 </ul>
 
                                             </td>
@@ -886,11 +896,11 @@ Also creates on-chain vault transaction and returns presigned transaction and va
                                 </table>
                             </div>
                         <div class="io-description">
-                            <b>Returns : </b>    <code>Promise&lt;any&gt;</code>
+                            <b>Returns : </b>    <code>Promise&lt;literal type&gt;</code>
 
                         </div>
                             <div class="io-description">
-                                <p>Object with vaultId and presignedTx</p>
+                                <p>Object containing vaultId and presignedTx</p>
 
                             </div>
                 </td>
@@ -919,8 +929,8 @@ Also creates on-chain vault transaction and returns presigned transaction and va
 
                     <tr>
                         <td class="col-md-4">
-                            <div class="io-line">Defined in <a href="" data-line="677"
-                                    class="link-to-prism">src/modules/vaults/vaults.service.ts:677</a></div>
+                            <div class="io-line">Defined in <a href="" data-line="782"
+                                    class="link-to-prism">src/modules/vaults/vaults.service.ts:782</a></div>
                         </td>
                     </tr>
 
@@ -1064,8 +1074,8 @@ Also creates on-chain vault transaction and returns presigned transaction and va
 
                     <tr>
                         <td class="col-md-4">
-                            <div class="io-line">Defined in <a href="" data-line="758"
-                                    class="link-to-prism">src/modules/vaults/vaults.service.ts:758</a></div>
+                            <div class="io-line">Defined in <a href="" data-line="863"
+                                    class="link-to-prism">src/modules/vaults/vaults.service.ts:863</a></div>
                         </td>
                     </tr>
 
@@ -1161,8 +1171,8 @@ Also creates on-chain vault transaction and returns presigned transaction and va
 
                     <tr>
                         <td class="col-md-4">
-                            <div class="io-line">Defined in <a href="" data-line="828"
-                                    class="link-to-prism">src/modules/vaults/vaults.service.ts:828</a></div>
+                            <div class="io-line">Defined in <a href="" data-line="929"
+                                    class="link-to-prism">src/modules/vaults/vaults.service.ts:929</a></div>
                         </td>
                     </tr>
 
@@ -1426,8 +1436,8 @@ Also creates on-chain vault transaction and returns presigned transaction and va
 
                     <tr>
                         <td class="col-md-4">
-                            <div class="io-line">Defined in <a href="" data-line="740"
-                                    class="link-to-prism">src/modules/vaults/vaults.service.ts:740</a></div>
+                            <div class="io-line">Defined in <a href="" data-line="845"
+                                    class="link-to-prism">src/modules/vaults/vaults.service.ts:845</a></div>
                         </td>
                     </tr>
 
@@ -1463,7 +1473,7 @@ Also creates on-chain vault transaction and returns presigned transaction and va
                                 </table>
                             </div>
                         <div class="io-description">
-                            <b>Returns : </b>    <code>unknown</code>
+                            <b>Returns : </b>        <code><a href="../classes/VaultFullResponse.html" target="_self" >Promise&lt;VaultFullResponse&gt;</a></code>
 
                         </div>
                             <div class="io-description">
@@ -1495,8 +1505,8 @@ Also creates on-chain vault transaction and returns presigned transaction and va
 
                     <tr>
                         <td class="col-md-4">
-                            <div class="io-line">Defined in <a href="" data-line="459"
-                                    class="link-to-prism">src/modules/vaults/vaults.service.ts:459</a></div>
+                            <div class="io-line">Defined in <a href="" data-line="564"
+                                    class="link-to-prism">src/modules/vaults/vaults.service.ts:564</a></div>
                         </td>
                     </tr>
 
@@ -1553,7 +1563,7 @@ Starts transaction confirmation in the background.</p>
                                 </table>
                             </div>
                         <div class="io-description">
-                            <b>Returns : </b>    <code>unknown</code>
+                            <b>Returns : </b>        <code><a href="../classes/VaultFullResponse.html" target="_self" >Promise&lt;VaultFullResponse&gt;</a></code>
 
                         </div>
                             <div class="io-description">
@@ -1586,8 +1596,8 @@ Starts transaction confirmation in the background.</p>
 
                     <tr>
                         <td class="col-md-4">
-                            <div class="io-line">Defined in <a href="" data-line="488"
-                                    class="link-to-prism">src/modules/vaults/vaults.service.ts:488</a></div>
+                            <div class="io-line">Defined in <a href="" data-line="593"
+                                    class="link-to-prism">src/modules/vaults/vaults.service.ts:593</a></div>
                         </td>
                     </tr>
 
@@ -2032,13 +2042,29 @@ export class VaultsService {
   }
 
   /**
-   * Creates a new vault with the provided user and data, including validation, file processing, whitelist, and tag management.
-   * Also creates on-chain vault transaction and returns presigned transaction and vault ID.
+   * Creates a new vault for the specified user with the provided data.
+   * Handles validation, file processing, whitelist and tag management, and on-chain transaction creation.
+   * Returns the vault ID and a presigned transaction for on-chain publishing.
+   *
+   * Steps performed:
+   * - Validates user and vault parameters
+   * - Processes images, whitelists, and tags
+   * - Saves the vault and related entities to the database
+   * - Prepares on-chain transaction and returns presignedTx
+   *
    * @param userId - ID of the vault owner
-   * @param data - Vault creation request data
-   * @returns Object with vaultId and presignedTx
+   * @param data - Vault creation request data (CreateVaultReq)
+   * @returns Object containing vaultId and presignedTx
+   * @throws UnauthorizedException if user is not found
+   * @throws BadRequestException for invalid input or failed creation
    */
-  async createVault(userId: string, data: CreateVaultReq): Promise&lt;any&gt; {
+  async createVault(
+    userId: string,
+    data: CreateVaultReq
+  ): Promise&lt;{
+    vaultId: string;
+    presignedTx: string;
+  }&gt; {
     try {
       const owner &#x3D; await this.usersRepository.findOne({
         where: { id: userId },
@@ -2069,27 +2095,69 @@ export class VaultsService {
         }
       }
 
-      // Process image files
+      // Process image files - allow reuse of existing files
       const imgKey &#x3D; data.vaultImage?.split(&#x27;image/&#x27;)[1];
-      const vaultImg &#x3D; imgKey
-        ? await this.filesRepository.findOne({
-            where: { file_key: imgKey },
-          })
-        : null;
+      let vaultImg &#x3D; null;
+      if (imgKey) {
+        vaultImg &#x3D; await this.filesRepository.findOne({
+          where: { file_key: imgKey },
+        });
+        
+        if (vaultImg) {
+          // Check if this file is already used by another vault
+          const existingVaultWithImage &#x3D; await this.vaultsRepository.findOne({
+            where: { vault_image: { id: vaultImg.id } },
+          });
+          
+          if (existingVaultWithImage) {
+            this.logger.log(&#x60;Vault image file ${imgKey} is already in use by vault ${existingVaultWithImage.id}, allowing reuse&#x60;);
+            // We&#x27;ll allow reuse by setting vaultImg to null so it won&#x27;t be assigned
+            vaultImg &#x3D; null;
+          }
+        }
+      }
 
       const ftTokenImgKey &#x3D; data.ftTokenImg?.split(&#x27;image/&#x27;)[1];
-      const ftTokenImg &#x3D; ftTokenImgKey
-        ? await this.filesRepository.findOne({
-            where: { file_key: ftTokenImgKey },
-          })
-        : null;
+      let ftTokenImg &#x3D; null;
+      if (ftTokenImgKey) {
+        ftTokenImg &#x3D; await this.filesRepository.findOne({
+          where: { file_key: ftTokenImgKey },
+        });
+        
+        if (ftTokenImg) {
+          // Check if this file is already used by another vault
+          const existingVaultWithFtImage &#x3D; await this.vaultsRepository.findOne({
+            where: { ft_token_img: { id: ftTokenImg.id } },
+          });
+          
+          if (existingVaultWithFtImage) {
+            this.logger.log(&#x60;FT token image file ${ftTokenImgKey} is already in use by vault ${existingVaultWithFtImage.id}, allowing reuse&#x60;);
+            // We&#x27;ll allow reuse by setting ftTokenImg to null so it won&#x27;t be assigned
+            ftTokenImg &#x3D; null;
+          }
+        }
+      }
 
       const acquirerWhitelistCsvKey &#x3D; data.acquirerWhitelistCsv?.key;
-      const acquirerWhitelistFile &#x3D; acquirerWhitelistCsvKey
-        ? await this.filesRepository.findOne({
-            where: { file_key: acquirerWhitelistCsvKey },
-          })
-        : null;
+      let acquirerWhitelistFile &#x3D; null;
+      if (acquirerWhitelistCsvKey) {
+        acquirerWhitelistFile &#x3D; await this.filesRepository.findOne({
+          where: { file_key: acquirerWhitelistCsvKey },
+        });
+        
+        if (acquirerWhitelistFile) {
+          // Check if this file is already used by another vault
+          const existingVaultWithCsv &#x3D; await this.vaultsRepository.findOne({
+            where: { acquirer_whitelist_csv: { id: acquirerWhitelistFile.id } },
+          });
+          
+          if (existingVaultWithCsv) {
+            this.logger.log(&#x60;Acquirer whitelist CSV file ${acquirerWhitelistCsvKey} is already in use by vault ${existingVaultWithCsv.id}, allowing reuse&#x60;);
+            // We&#x27;ll allow reuse by setting acquirerWhitelistFile to null so it won&#x27;t be assigned
+            acquirerWhitelistFile &#x3D; null;
+          }
+        }
+      }
 
       const contributorWhitelistCsvKey &#x3D; data.contributorWhitelistCsv?.split(&#x27;csv/&#x27;)[1];
       const contributorWhitelistFile &#x3D; contributorWhitelistCsvKey
@@ -2119,7 +2187,32 @@ export class VaultsService {
       delete vaultData.contributor_whitelist;
       delete vaultData.tags;
 
-      const newVault &#x3D; await this.vaultsRepository.save(vaultData as Vault);
+      let newVault: Vault;
+      try {
+        newVault &#x3D; await this.vaultsRepository.save(vaultData as Vault);
+      } catch (error) {
+        // Handle unique constraint violation for file relations as fallback
+        if (error.code &#x3D;&#x3D;&#x3D; &#x27;23505&#x27; &amp;&amp; error.detail?.includes(&#x27;already exists&#x27;)) {
+          this.logger.warn(&#x27;Duplicate key constraint violation during vault creation, retrying without file relations:&#x27;, error.detail);
+          
+          // Remove file relations and retry
+          const vaultDataWithoutFiles &#x3D; { ...vaultData };
+          delete vaultDataWithoutFiles.vaultImage;
+          delete vaultDataWithoutFiles.ftTokenImg;
+          delete vaultDataWithoutFiles.acquirerWhitelistCsv;
+          delete vaultDataWithoutFiles.contributorWhitelistCsv;
+          
+          try {
+            newVault &#x3D; await this.vaultsRepository.save(vaultDataWithoutFiles as Vault);
+            this.logger.log(&#x27;Vault creation succeeded without file relations&#x27;);
+          } catch (retryError) {
+            this.logger.error(&#x27;Vault creation failed even without file relations:&#x27;, retryError);
+            throw new BadRequestException(&#x27;Failed to create vault due to file conflicts. Please try again.&#x27;);
+          }
+        } else {
+          throw error;
+        }
+      }
 
       // Handle social links
       if (data.socialLinks?.length &gt; 0) {
@@ -2230,6 +2323,7 @@ export class VaultsService {
       }
 
       const policyWhitelist &#x3D; finalVault?.assets_whitelist.map(item &#x3D;&gt; item.policy_id);
+      const contributorWhitelist &#x3D; finalVault?.contributor_whitelist.map(item &#x3D;&gt; item.wallet_address);
 
       const privacy &#x3D; vault_sc_privacy[finalVault.privacy as VaultPrivacy];
       const valueMethod &#x3D; valuation_sc_type[finalVault.value_method as ValueMethod];
@@ -2277,6 +2371,7 @@ export class VaultsService {
         customerAddress: finalVault.owner.address,
         vaultId: finalVault.id,
         allowedPolicies: policyWhitelist,
+        allowedContributors: contributorWhitelist,
         contractType: privacy,
         valueMethod: valueMethod,
         assetWindow,
@@ -2291,8 +2386,28 @@ export class VaultsService {
         presignedTx,
       };
     } catch (error) {
-      console.error(error);
-      throw new BadRequestException(&#x27;Failed to create vault&#x27;);
+      this.logger.error(&#x27;Error creating vault:&#x27;, error);
+      
+      // If it&#x27;s already a BadRequestException, re-throw it
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+      
+      // Handle database constraint violations as fallback
+      if (error.code &#x3D;&#x3D;&#x3D; &#x27;23505&#x27;) {
+        if (error.detail?.includes(&#x27;vault_image_id&#x27;)) {
+          throw new BadRequestException(&#x27;The selected vault image is already in use. The vault was created without the image.&#x27;);
+        }
+        if (error.detail?.includes(&#x27;ft_token_img_id&#x27;)) {
+          throw new BadRequestException(&#x27;The selected FT token image is already in use. The vault was created without the image.&#x27;);
+        }
+        if (error.detail?.includes(&#x27;acquirer_whitelist_csv_id&#x27;)) {
+          throw new BadRequestException(&#x27;The selected acquirer whitelist CSV is already in use. The vault was created without the CSV file.&#x27;);
+        }
+        throw new BadRequestException(&#x27;Some files you selected are already in use. The vault was created without those files.&#x27;);
+      }
+      
+      throw new BadRequestException(&#x27;Failed to create vault. Please check your input and try again.&#x27;);
     }
   }
 
@@ -2303,7 +2418,7 @@ export class VaultsService {
    * @param signedTx - Signed transaction object
    * @returns Full vault response
    */
-  async publishVault(userId, signedTx) {
+  async publishVault(userId, signedTx): Promise&lt;VaultFullResponse&gt; {
     const vault &#x3D; await this.vaultsRepository.findOne({
       where: {
         id: signedTx.vaultId,
@@ -2584,7 +2699,7 @@ export class VaultsService {
     };
   }
 
-  async prepareDraftResponse(id: string) {
+  async prepareDraftResponse(id: string): Promise&lt;VaultFullResponse&gt; {
     const vault &#x3D; await this.vaultsRepository.findOne({
       where: { id },
       relations: [&#x27;owner&#x27;, &#x27;social_links&#x27;, &#x27;acquirer_whitelist&#x27;, &#x27;tags&#x27;, &#x27;vault_image&#x27;, &#x27;banner_image&#x27;, &#x27;ft_token_img&#x27;],
@@ -2618,10 +2733,6 @@ export class VaultsService {
 
     if (!vault) {
       throw new BadRequestException(&#x27;Vault not found&#x27;);
-    }
-
-    if (vault.privacy !&#x3D;&#x3D; VaultPrivacy.public) {
-      throw new BadRequestException(&#x27;Access denied: You are not the owner of this vault&#x27;);
     }
 
     // Get count of locked assets for this vault
@@ -2811,7 +2922,14 @@ export class VaultsService {
    * @param userId - User ID
    * @returns Burn transaction result
    */
-  async burnVaultAttempt(vaultId: string, userId: string) {
+  async burnVaultAttempt(
+    vaultId: string,
+    userId: string
+  ): Promise&lt;{
+    txId: string;
+    presignedTx: string;
+    contractAddress: string;
+  }&gt; {
     const vault &#x3D; await this.vaultsRepository.findOne({
       where: {
         id: vaultId,
@@ -2849,7 +2967,7 @@ export class VaultsService {
    * @param userId - User ID
    * @param publishDto - PublishVaultDto containing transaction data
    */
-  async burnVaultPublishTx(vaultId, userId, publishDto: PublishVaultDto) {
+  async burnVaultPublishTx(vaultId: string, userId: string, publishDto: PublishVaultDto): Promise&lt;void&gt; {
     const { txHash } &#x3D; await this.vaultContractService.submitOnChainVaultTx({
       transaction: publishDto.transaction,
       signatures: publishDto.signatures,

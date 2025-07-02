@@ -11,6 +11,7 @@ export enum TransactionType {
   mint = 'mint',
   payment = 'payment',
   contribute = 'contribute', // Contains NFTs
+  claim = 'claim',
   acquire = 'acquire', // Contains only lovelace (ADA)
   investment = 'investment',
   burn = 'burn',
