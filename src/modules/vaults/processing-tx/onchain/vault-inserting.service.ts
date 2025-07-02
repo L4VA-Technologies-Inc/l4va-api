@@ -251,8 +251,6 @@ export class VaultInsertingService {
         network: 'preprod',
       };
 
-      console.log('INPUT ', input);
-
       // Build the transaction using BlockchainService
       const buildResponse = await this.blockchainService.buildTransaction(input);
 
