@@ -64,6 +64,12 @@ export class Transaction {
   })
   status?: TransactionStatus; //
 
+  @Column({
+    type: 'jsonb',
+    nullable: true,
+  })
+  metadata?: Record<string, any>;
+
   @Exclude()
   @OneToMany(() => Asset, (asset: Asset) => asset.transaction)
   public assets: Asset[];
