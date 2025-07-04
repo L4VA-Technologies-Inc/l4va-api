@@ -10,6 +10,7 @@ import { AcquireReq } from './dto/acquire.req';
 
 @ApiTags('Acquire')
 @Controller('acquire')
+@UseGuards(AuthGuard)
 export class AcquireController {
   constructor(
     private readonly acquireService: AcquireService,
@@ -18,7 +19,6 @@ export class AcquireController {
 
   @Post(':vaultId')
   @ApiOperation({ summary: 'Acquire in a vault' })
-  @UseGuards(AuthGuard)
   @ApiResponse({ status: 201, description: 'Acquire successful' })
   async invest(@Req() req, @Param('vaultId') vaultId: string, @Body() acquireReq: AcquireReq) {
     const userId = req.user.sub;
@@ -27,7 +27,6 @@ export class AcquireController {
 
   @Patch('transaction/:txId/hash')
   @ApiOperation({ summary: 'Update transaction hash' })
-  @UseGuards(AuthGuard)
   @ApiResponse({ status: 200, description: 'Transaction hash updated successfully' })
   async updateTransactionHash(@Param('txId') txId: string, @Body() txUpdate: TxUpdateReq) {
     return this.acquireService.updateTransactionHash(txId, txUpdate.txHash);
@@ -35,7 +34,6 @@ export class AcquireController {
 
   @Get('transactions')
   @ApiOperation({ summary: 'Get all acquire transactions' })
-  @UseGuards(AuthGuard)
   @ApiResponse({ status: 200, description: 'Returns all acquire transactions' })
   async getInvestmentTransactions(@Query('vaultId') vaultId?: string) {
     return this.transactionsService.getAcquireTransactions(vaultId);

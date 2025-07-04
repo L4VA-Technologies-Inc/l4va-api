@@ -94,6 +94,87 @@ export class WayupService {
   }
 
   /**
+   * Updates an existing asset listing price on Way-up
+   */
+  async updateAssetListing(
+    assetId: string,
+    userId: string,
+    updateData: {
+      newPrice: number;
+      utxos: string[];
+      txHashIndex: string; // Format: txHash#outputIndex
+    }
+  ): Promise<{
+    success: boolean;
+    transactions: string[];
+  }> {
+    // Fetch the asset to validate and get policy_id
+    const asset = await this.assetRepository.findOne({
+      where: { id: assetId },
+      relations: ['vault', 'vault.owner'],
+    });
+
+    if (!asset) {
+      throw new BadRequestException('Asset not found');
+    }
+
+    if (asset.vault.owner.id !== userId) {
+      throw new BadRequestException('You are not the owner of this asset');
+    }
+
+    if (asset.status !== AssetStatus.LISTED_FOR_SALE) {
+      throw new BadRequestException('Asset is not currently listed for sale');
+    }
+
+    try {
+      // Check if we have the txHashIndex in metadata
+      if (!asset.metadata?.wayup_tx_hash) {
+        throw new BadRequestException('Cannot update listing: missing original transaction hash');
+      }
+
+      const wayupUpdateData = {
+        changeAddress: asset.vault.contract_address, // Vault address as change address
+        utxos: updateData.utxos, // UTXOs to fund the transaction - should come from frontend
+        update: [
+          {
+            policyId: asset.policy_id,
+            txHashIndex: updateData.txHashIndex,
+            newPriceAda: updateData.newPrice,
+          },
+        ],
+      };
+
+      this.logger.log(`Updating Way-up listing for asset ${asset.policy_id} to ${updateData.newPrice} ADA`);
+
+      const response = await axios.post(`${this.wayupApiUrl}/build-tx`, wayupUpdateData, {
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      // Update asset metadata with new price and transaction data
+      await this.assetRepository.update(assetId, {
+        metadata: {
+          ...asset.metadata,
+          wayup_transactions: response.data.transactions,
+          listing_price: updateData.newPrice,
+          listing_updated_at: new Date().toISOString(),
+        },
+      });
+
+      this.logger.log(`Asset ${assetId} listing updated on Way-up`);
+
+      return {
+        success: true,
+        transactions: response.data.transactions,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to update Way-up listing: ${error.message}`);
+      throw new BadRequestException('Failed to update listing on Way-up');
+    }
+  }
+
+  /**
    * Submits signed listing transaction to Way-up
    */
   async submitListingTransaction(

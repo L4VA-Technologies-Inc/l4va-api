@@ -3,7 +3,7 @@ import { ApiTags, ApiOperation } from '@nestjs/swagger';
 
 import { AuthGuard } from '../auth/auth.guard';
 
-import { CreateListingDto } from './dto/create-listing.dto';
+import { CreateListingDto, UpdateListingDto } from './dto/create-listing.dto';
 import { SubmitListingTxDto } from './dto/submit-listing-tx.dto';
 import { WayupService } from './wayup.service';
 
@@ -35,5 +35,16 @@ export class WayupController {
   @ApiOperation({ summary: 'Submit signed listing transactions' })
   async submitListingTransaction(@Param('assetId') assetId: string, @Body() txData: SubmitListingTxDto) {
     return this.wayupService.submitListingTransaction(assetId, txData);
+  }
+
+  @Post('vaults/:vaultId/assets/:assetId/update-listing')
+  @ApiOperation({ summary: 'Update asset listing price on Way-up' })
+  async updateAssetListing(
+    @Param('assetId') assetId: string,
+    @Body() updateData: UpdateListingDto,
+    @Req() req: Request & { user: { sub: string } }
+  ) {
+    const userId = req?.user.sub;
+    return this.wayupService.updateAssetListing(assetId, userId, updateData);
   }
 }
