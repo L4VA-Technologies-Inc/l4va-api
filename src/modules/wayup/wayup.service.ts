@@ -7,7 +7,6 @@ import { Repository } from 'typeorm';
 import { CreateListingDto } from './dto/create-listing.dto';
 
 import { Asset } from '@/database/asset.entity';
-import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetOriginType, AssetStatus } from '@/types/asset.types';
 import { VaultStatus } from '@/types/vault.types';
@@ -22,8 +21,6 @@ export class WayupService {
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
-    @InjectRepository(User)
-    private readonly userRepository: Repository<User>,
     private readonly configService: ConfigService
   ) {
     this.wayupApiUrl =
@@ -47,10 +44,8 @@ export class WayupService {
     const asset = await this.validateAssetInVault(assetId, vaultId);
 
     try {
-      // Extract asset name from asset_id (remove policy_id part and convert from hex)
-      const assetNameHex = this.extractAssetNameFromAssetId(asset.asset_id, asset.policy_id);
+      const assetNameHex = asset.asset_id; // NFT_ASSET_NAME_HEX
 
-      // Prepare data for Way-up API
       const wayupListingData = {
         changeAddress: vault.contract_address, // Vault address as change address
         utxos: listingData.utxos, // UTXOs containing the NFT - should come from frontend
@@ -106,7 +101,7 @@ export class WayupService {
     signedTransactions: string[]
   ): Promise<{
     success: boolean;
-    result: any;
+    result: unknown;
   }> {
     try {
       const response = await axios.post(
@@ -154,19 +149,6 @@ export class WayupService {
         origin_type: AssetOriginType.CONTRIBUTED, // Only contributed assets
       },
     });
-  }
-
-  /**
-   * Extracts asset name hex from full asset_id by removing policy_id
-   */
-  private extractAssetNameFromAssetId(assetId: string, policyId: string): string {
-    // If asset_id is policy_id + asset_name_hex, extract the asset_name part
-    if (assetId.startsWith(policyId)) {
-      return assetId.substring(policyId.length);
-    }
-
-    // If asset_id is already just the asset name, return as is
-    return assetId;
   }
 
   private async validateVaultAccess(vaultId: string, userId: string): Promise<Vault> {
