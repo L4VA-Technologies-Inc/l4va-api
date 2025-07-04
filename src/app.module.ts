@@ -20,7 +20,7 @@ import { AssetsModule } from './modules/vaults/processing-tx/assets/assets.modul
 import { TransactionsModule } from './modules/vaults/processing-tx/offchain-tx/transactions.module';
 import { BlockchainModule } from './modules/vaults/processing-tx/onchain/blockchain.module';
 import { VaultsModule } from './modules/vaults/vaults.module';
-
+import { WayupModule } from './modules/wayup/wayup.module';
 
 @Module({
   imports: [
@@ -42,9 +42,7 @@ import { VaultsModule } from './modules/vaults/vaults.module';
       password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME,
       synchronize: false,
-      entities: [
-        __dirname + '/database/core/**/*.entity{.ts,.js}',
-        __dirname + '/database/**/*.entity{.ts,.js}'],
+      entities: [__dirname + '/database/core/**/*.entity{.ts,.js}', __dirname + '/database/**/*.entity{.ts,.js}'],
       autoLoadEntities: true,
       namingStrategy: new SnakeNamingStrategy(),
     }),
@@ -61,6 +59,7 @@ import { VaultsModule } from './modules/vaults/vaults.module';
     LpTokensModule,
     DistributionModule,
     ClaimsModule,
+    WayupModule,
   ],
   controllers: [AppController],
   providers: [AppService],

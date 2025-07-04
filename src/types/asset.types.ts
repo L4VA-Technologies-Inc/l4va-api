@@ -8,6 +8,7 @@ export enum AssetStatus {
   PENDING = 'pending',
   LOCKED = 'locked',
   RELEASED = 'released',
+  LISTED_FOR_SALE = 'listed_for_sale',
 }
 
 export enum AssetOriginType {
