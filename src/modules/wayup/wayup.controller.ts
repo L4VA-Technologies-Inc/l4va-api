@@ -34,6 +34,6 @@ export class WayupController {
   @Post('assets/:assetId/submit')
   @ApiOperation({ summary: 'Submit signed listing transactions' })
   async submitListingTransaction(@Param('assetId') assetId: string, @Body() txData: SubmitListingTxDto) {
-    return this.wayupService.submitListingTransaction(assetId, txData.transactions);
+    return this.wayupService.submitListingTransaction(assetId, txData);
   }
 }

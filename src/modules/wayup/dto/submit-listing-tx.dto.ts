@@ -1,12 +1,14 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsArray, IsString } from 'class-validator';
+import { IsString, IsNotEmpty } from 'class-validator';
 
 export class SubmitListingTxDto {
-  @ApiProperty({
-    description: 'Array of signed transaction hex strings',
-    type: [String],
-  })
-  @IsArray()
-  @IsString({ each: true })
-  transactions: string[];
+  @ApiProperty({ description: 'Transaction hex string' })
+  @IsString()
+  @IsNotEmpty()
+  transaction: string;
+
+  @ApiProperty({ description: 'Transaction signature' })
+  @IsString()
+  @IsNotEmpty()
+  signature: string;
 }

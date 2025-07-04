@@ -98,7 +98,7 @@ export class WayupService {
    */
   async submitListingTransaction(
     assetId: string,
-    signedTransactions: string[]
+    signedData: { transaction: string; signature: string }
   ): Promise<{
     success: boolean;
     result: unknown;
@@ -107,7 +107,8 @@ export class WayupService {
       const response = await axios.post(
         `${this.wayupApiUrl}/submit`,
         {
-          transactions: signedTransactions,
+          transaction: signedData.transaction.trim(),
+          signature: signedData.signature.trim(),
         },
         {
           headers: {
@@ -124,6 +125,7 @@ export class WayupService {
             ...asset.metadata,
             wayup_submitted_at: new Date().toISOString(),
             wayup_submission_result: response.data,
+            wayup_tx_hash: response.data?.result?.data?.txHash,
           },
         });
       }
