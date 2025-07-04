@@ -10,6 +10,7 @@ export enum VaultFilter {
   contribution = 'contribution',
   acquire = 'acquire',
   governance = 'governance',
+  published = 'published',
 }
 
 export enum VaultSortField {

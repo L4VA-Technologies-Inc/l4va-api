@@ -245,15 +245,17 @@ export class VaultsService {
         vaultImg = await this.filesRepository.findOne({
           where: { file_key: imgKey },
         });
-        
+
         if (vaultImg) {
           // Check if this file is already used by another vault
           const existingVaultWithImage = await this.vaultsRepository.findOne({
             where: { vault_image: { id: vaultImg.id } },
           });
-          
+
           if (existingVaultWithImage) {
-            this.logger.log(`Vault image file ${imgKey} is already in use by vault ${existingVaultWithImage.id}, allowing reuse`);
+            this.logger.log(
+              `Vault image file ${imgKey} is already in use by vault ${existingVaultWithImage.id}, allowing reuse`
+            );
             // We'll allow reuse by setting vaultImg to null so it won't be assigned
             vaultImg = null;
           }
@@ -266,15 +268,17 @@ export class VaultsService {
         ftTokenImg = await this.filesRepository.findOne({
           where: { file_key: ftTokenImgKey },
         });
-        
+
         if (ftTokenImg) {
           // Check if this file is already used by another vault
           const existingVaultWithFtImage = await this.vaultsRepository.findOne({
             where: { ft_token_img: { id: ftTokenImg.id } },
           });
-          
+
           if (existingVaultWithFtImage) {
-            this.logger.log(`FT token image file ${ftTokenImgKey} is already in use by vault ${existingVaultWithFtImage.id}, allowing reuse`);
+            this.logger.log(
+              `FT token image file ${ftTokenImgKey} is already in use by vault ${existingVaultWithFtImage.id}, allowing reuse`
+            );
             // We'll allow reuse by setting ftTokenImg to null so it won't be assigned
             ftTokenImg = null;
           }
@@ -287,15 +291,17 @@ export class VaultsService {
         acquirerWhitelistFile = await this.filesRepository.findOne({
           where: { file_key: acquirerWhitelistCsvKey },
         });
-        
+
         if (acquirerWhitelistFile) {
           // Check if this file is already used by another vault
           const existingVaultWithCsv = await this.vaultsRepository.findOne({
             where: { acquirer_whitelist_csv: { id: acquirerWhitelistFile.id } },
           });
-          
+
           if (existingVaultWithCsv) {
-            this.logger.log(`Acquirer whitelist CSV file ${acquirerWhitelistCsvKey} is already in use by vault ${existingVaultWithCsv.id}, allowing reuse`);
+            this.logger.log(
+              `Acquirer whitelist CSV file ${acquirerWhitelistCsvKey} is already in use by vault ${existingVaultWithCsv.id}, allowing reuse`
+            );
             // We'll allow reuse by setting acquirerWhitelistFile to null so it won't be assigned
             acquirerWhitelistFile = null;
           }
@@ -336,15 +342,18 @@ export class VaultsService {
       } catch (error) {
         // Handle unique constraint violation for file relations as fallback
         if (error.code === '23505' && error.detail?.includes('already exists')) {
-          this.logger.warn('Duplicate key constraint violation during vault creation, retrying without file relations:', error.detail);
-          
+          this.logger.warn(
+            'Duplicate key constraint violation during vault creation, retrying without file relations:',
+            error.detail
+          );
+
           // Remove file relations and retry
           const vaultDataWithoutFiles = { ...vaultData };
           delete vaultDataWithoutFiles.vaultImage;
           delete vaultDataWithoutFiles.ftTokenImg;
           delete vaultDataWithoutFiles.acquirerWhitelistCsv;
           delete vaultDataWithoutFiles.contributorWhitelistCsv;
-          
+
           try {
             newVault = await this.vaultsRepository.save(vaultDataWithoutFiles as Vault);
             this.logger.log('Vault creation succeeded without file relations');
@@ -530,26 +539,34 @@ export class VaultsService {
       };
     } catch (error) {
       this.logger.error('Error creating vault:', error);
-      
+
       // If it's already a BadRequestException, re-throw it
       if (error instanceof BadRequestException) {
         throw error;
       }
-      
+
       // Handle database constraint violations as fallback
       if (error.code === '23505') {
         if (error.detail?.includes('vault_image_id')) {
-          throw new BadRequestException('The selected vault image is already in use. The vault was created without the image.');
+          throw new BadRequestException(
+            'The selected vault image is already in use. The vault was created without the image.'
+          );
         }
         if (error.detail?.includes('ft_token_img_id')) {
-          throw new BadRequestException('The selected FT token image is already in use. The vault was created without the image.');
+          throw new BadRequestException(
+            'The selected FT token image is already in use. The vault was created without the image.'
+          );
         }
         if (error.detail?.includes('acquirer_whitelist_csv_id')) {
-          throw new BadRequestException('The selected acquirer whitelist CSV is already in use. The vault was created without the CSV file.');
+          throw new BadRequestException(
+            'The selected acquirer whitelist CSV is already in use. The vault was created without the CSV file.'
+          );
         }
-        throw new BadRequestException('Some files you selected are already in use. The vault was created without those files.');
+        throw new BadRequestException(
+          'Some files you selected are already in use. The vault was created without those files.'
+        );
       }
-      
+
       throw new BadRequestException('Failed to create vault. Please check your input and try again.');
     }
   }
@@ -1028,6 +1045,15 @@ export class VaultsService {
         case VaultFilter.locked:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked });
           break;
+        case VaultFilter.published:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.published }).andWhere(
+            new Brackets(qb => {
+              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
+                'EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress)',
+                { userWalletAddress }
+              );
+            })
+          );
       }
     }
 
