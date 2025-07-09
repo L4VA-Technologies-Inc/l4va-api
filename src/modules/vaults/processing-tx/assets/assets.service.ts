@@ -22,7 +22,7 @@ export class AssetsService {
     private readonly userRepository: Repository<User>
   ) {}
 
-  async addAssetToVault(userId: string, data: CreateAssetDto): Promise<any> {
+  async addAssetToVault(userId: string, data: CreateAssetDto): Promise<Record<string, unknown>> {
     const vault = await this.vaultsRepository.findOne({
       where: {
         id: data.vaultId,
@@ -73,7 +73,17 @@ export class AssetsService {
     return classToPlain(asset);
   }
 
-  async getVaultAssets(vaultId: string, page: number = 1, limit: number = 10): Promise<any> {
+  async getVaultAssets(
+    vaultId: string,
+    page: number = 1,
+    limit: number = 10
+  ): Promise<{
+    items: Record<string, unknown>[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
     // Verify vault ownership
     const vault = await this.vaultsRepository.findOne({
       where: {
@@ -107,7 +117,17 @@ export class AssetsService {
       totalPages: Math.ceil(total / limit),
     };
   }
-  async getAcquiredAssets(vaultId: string, page: number = 1, limit: number = 10): Promise<any> {
+  async getAcquiredAssets(
+    vaultId: string,
+    page: number = 1,
+    limit: number = 10
+  ): Promise<{
+    items: Record<string, unknown>[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
     // Verify vault ownership
     const vault = await this.vaultsRepository.findOne({
       where: {
@@ -142,7 +162,7 @@ export class AssetsService {
     };
   }
 
-  async lockAsset(userId: string, assetId: string): Promise<any> {
+  async lockAsset(userId: string, assetId: string): Promise<Record<string, unknown>> {
     const asset = await this.assetsRepository.findOne({
       where: { id: assetId },
       relations: ['vault', 'vault.owner'],
@@ -167,7 +187,7 @@ export class AssetsService {
     return classToPlain(asset);
   }
 
-  async releaseAsset(userId: string, assetId: string): Promise<any> {
+  async releaseAsset(userId: string, assetId: string): Promise<Record<string, unknown>> {
     const asset = await this.assetsRepository.findOne({
       where: { id: assetId },
       relations: ['vault', 'vault.owner'],
@@ -192,7 +212,12 @@ export class AssetsService {
     return classToPlain(asset);
   }
 
-  async updateAssetValuation(userId: string, assetId: string, floorPrice?: number, dexPrice?: number): Promise<any> {
+  async updateAssetValuation(
+    userId: string,
+    assetId: string,
+    floorPrice?: number,
+    dexPrice?: number
+  ): Promise<Record<string, unknown>> {
     const asset = await this.assetsRepository.findOne({
       where: { id: assetId },
       relations: ['vault', 'vault.owner'],
