@@ -1,11 +1,11 @@
-import { Controller, Get, Query, Param, Request, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, Param } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { ApiDoc } from '@/decorators/api-doc.decorator';
-import { AuthGuard } from '@/modules/auth/auth.guard';
 
 import { PaginationDto } from '../../dto/pagination.dto';
 
 import { AssetsService } from './assets.service';
+
+import { ApiDoc } from '@/decorators/api-doc.decorator';
 
 @ApiTags('assets')
 @Controller('assets')
@@ -17,11 +17,9 @@ export class AssetsController {
     description: 'Get paginated list of assets for a specific vault',
     status: 200,
   })
-  @UseGuards(AuthGuard)
   @Get('contributed/:vaultId')
-  getContributedAssets(@Request() req, @Param('vaultId') vaultId: string, @Query() query: PaginationDto) {
-    const userId = req.user.sub;
-    return this.assetsService.getVaultAssets(userId, vaultId, query.page, query.limit);
+  getContributedAssets(@Param('vaultId') vaultId: string, @Query() query: PaginationDto) {
+    return this.assetsService.getVaultAssets(vaultId, query.page, query.limit);
   }
 
   @ApiDoc({
@@ -29,10 +27,8 @@ export class AssetsController {
     description: 'Get paginated list of assets for a specific vault',
     status: 200,
   })
-  @UseGuards(AuthGuard)
   @Get('acquired/:vaultId')
-  getInvestedAssets(@Request() req, @Param('vaultId') vaultId: string, @Query() query: PaginationDto) {
-    const userId = req.user.sub;
-    return this.assetsService.getAcquiredAssets(userId, vaultId, query.page, query.limit);
+  getInvestedAssets(@Param('vaultId') vaultId: string, @Query() query: PaginationDto) {
+    return this.assetsService.getAcquiredAssets(vaultId, query.page, query.limit);
   }
 }

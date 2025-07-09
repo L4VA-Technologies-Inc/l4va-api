@@ -103,15 +103,14 @@ export class VaultsController {
     description: 'Returns vault if user is the owner. Uses draft service for draft vaults.',
     status: 200,
   })
-  @UseGuards(AuthGuard)
   @Get(':id')
   async getVaultById(@Param('id') id: string, @Request() req) {
-    const userId = req.user.sub;
+    const userId = req.user?.sub;
     try {
       return await this.draftVaultsService.getDraftVaultById(id, userId);
     } catch (error) {
       if (error?.message === 'Draft vault not found') {
-        return this.vaultsService.getVaultById(id, userId);
+        return this.vaultsService.getVaultById(id);
       }
       throw error;
     }
@@ -123,10 +122,9 @@ export class VaultsController {
       'Returns paginated list of all published vaults. Default page: 1, default limit: 10. Supports sorting by name, created_at, or updated_at. Response includes total count and total pages.',
     status: 200,
   })
-  @UseGuards(AuthGuard)
   @Get()
   getVaults(@Query() query: GetVaultsDto, @Request() req) {
-    const userId = req.user.sub;
+    const userId = req.user?.sub;
 
     return this.vaultsService.getVaults(userId, query.filter, query.page, query.limit, query.sortBy, query.sortOrder);
   }
@@ -138,10 +136,9 @@ export class VaultsController {
   })
   @UseGuards(AuthGuard)
   @Get(':id/transactions')
-  async getVaultTransactions(@Param('id') id: string, @Query() query: GetVaultTransactionsDto, @Request() req) {
-    const userId = req.user.sub;
+  async getVaultTransactions(@Param('id') id: string, @Query() query: GetVaultTransactionsDto) {
     // Verify vault exists and user has access
-    await this.vaultsService.getVaultById(id, userId);
+    await this.vaultsService.getVaultById(id);
     return this.transactionsService.getVaultTransactions(id, query.status, query.type);
   }
 

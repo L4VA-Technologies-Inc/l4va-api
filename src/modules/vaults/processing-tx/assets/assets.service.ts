@@ -1,14 +1,15 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { classToPlain } from 'class-transformer';
+import { Repository } from 'typeorm';
+
+import { CreateAssetDto } from './dto/create-asset.dto';
+
 import { Asset } from '@/database/asset.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { VaultStatus } from '@/types/vault.types';
-import { Repository } from 'typeorm';
-
-import { CreateAssetDto } from './dto/create-asset.dto';
 
 @Injectable()
 export class AssetsService {
@@ -72,7 +73,7 @@ export class AssetsService {
     return classToPlain(asset);
   }
 
-  async getVaultAssets(userId: string, vaultId: string, page: number = 1, limit: number = 10): Promise<any> {
+  async getVaultAssets(vaultId: string, page: number = 1, limit: number = 10): Promise<any> {
     // Verify vault ownership
     const vault = await this.vaultsRepository.findOne({
       where: {
@@ -106,7 +107,7 @@ export class AssetsService {
       totalPages: Math.ceil(total / limit),
     };
   }
-  async getAcquiredAssets(userId: string, vaultId: string, page: number = 1, limit: number = 10): Promise<any> {
+  async getAcquiredAssets(vaultId: string, page: number = 1, limit: number = 10): Promise<any> {
     // Verify vault ownership
     const vault = await this.vaultsRepository.findOne({
       where: {

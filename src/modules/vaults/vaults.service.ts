@@ -874,10 +874,9 @@ export class VaultsService {
   /**
    * Retrieves a vault by ID for a user, including asset and price calculations.
    * @param id - Vault ID
-   * @param _userId - User ID (for access control)
    * @returns Full vault response
    */
-  async getVaultById(id: string, _userId: string): Promise<VaultFullResponse> {
+  async getVaultById(id: string): Promise<VaultFullResponse> {
     const vault = await this.vaultsRepository.findOne({
       where: { id, deleted: false },
       relations: [
@@ -944,7 +943,7 @@ export class VaultsService {
    * @returns Paginated response of vaults
    */
   async getVaults(
-    userId: string,
+    userId?: string,
     filter?: VaultFilter,
     page: number = 1,
     limit: number = 10,
