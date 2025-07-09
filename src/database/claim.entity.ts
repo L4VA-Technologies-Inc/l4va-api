@@ -18,7 +18,7 @@ export class Claim {
   user: User;
 
   @Expose({ name: 'vaultId' })
-  @ManyToOne(() => Vault, (vault: Vault) => vault.social_links, { onDelete: 'CASCADE', nullable: true })
+  @ManyToOne(() => Vault, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({ name: 'vault_id' })
   vault: Vault;
 
