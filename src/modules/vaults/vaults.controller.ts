@@ -106,6 +106,12 @@ export class VaultsController {
   @Get(':id')
   async getVaultById(@Param('id') id: string, @Request() req) {
     const userId = req.user?.sub;
+
+    if (!userId) {
+      // If user is not authenticated, return public vault
+      return this.vaultsService.getVaultById(id);
+    }
+
     try {
       return await this.draftVaultsService.getDraftVaultById(id, userId);
     } catch (error) {

@@ -82,10 +82,6 @@ export class DraftVaultsService {
   }
 
   async getDraftVaultById(id: string, userId: string): Promise<any> {
-    if (!userId) {
-      throw new BadRequestException('User ID is required');
-    }
-
     const vault = await this.vaultsRepository.findOne({
       where: {
         id,
