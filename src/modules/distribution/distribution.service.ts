@@ -80,7 +80,6 @@ export class DistributionService {
   }): Promise<{
     adaSent: number;
     percentOfTotalAcquireAdaSent: number;
-    percentOfTotalVtNetOfLp: number;
     vtReceived: number;
     vtValueInAda: number;
     lpAdaInitialShare: number;
@@ -106,19 +105,18 @@ export class DistributionService {
     const vtPrice = this.round6(this.calculateVtPrice(totalAcquiredValueAda, VT_SUPPLY, ASSETS_OFFERED_PERCENT));
 
     const lpAda = this.round6(LP_PERCENT * totalAcquiredValueAda);
-    const lpVt = this.round6(VT_SUPPLY * ASSETS_OFFERED_PERCENT * LP_PERCENT);
 
-    const vtAvailableToAcquirers = this.round6(VT_SUPPLY * ASSETS_OFFERED_PERCENT - lpVt);
+    // LP (ADA) / VT price
+    const lpVt = this.round6(lpAda / vtPrice);
 
-    const percentOfTotalVtNetOfLp = percentOfTotalAcquireAdaSent;
-
-    const vtReceived = this.round6(percentOfTotalVtNetOfLp * vtAvailableToAcquirers);
+    // ((ADA sent to the vault / total acuiqre ADA) * Assets Offered Percent) * (VT Supply - LP VT)
+    const vtReceived = this.round6(percentOfTotalAcquireAdaSent * ASSETS_OFFERED_PERCENT * (VT_SUPPLY - lpVt));
 
     const vtValueInAda = this.round6(vtReceived * vtPrice);
 
-    const lpAdaInitialShare = this.round6(percentOfTotalVtNetOfLp * lpAda);
+    const lpAdaInitialShare = this.round6(percentOfTotalAcquireAdaSent * lpAda);
 
-    const lpVtInitialShare = this.round6(percentOfTotalVtNetOfLp * lpVt);
+    const lpVtInitialShare = this.round6(percentOfTotalAcquireAdaSent * lpVt);
 
     const lpVtAdaValue = this.round6(lpVtInitialShare * vtPrice);
 
@@ -131,7 +129,6 @@ export class DistributionService {
     return {
       adaSent: this.round6(adaSent),
       percentOfTotalAcquireAdaSent,
-      percentOfTotalVtNetOfLp,
       vtReceived: Math.round(vtReceived),
       vtValueInAda,
       lpAdaInitialShare,
