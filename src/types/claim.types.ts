@@ -1,5 +1,5 @@
 export enum ClaimStatus {
-  DISABLED = 'disabled',
+  AVAILABLE = 'available',
   PENDING = 'pending',
   CLAIMED = 'claimed',
 }

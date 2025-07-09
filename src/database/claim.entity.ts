@@ -4,6 +4,7 @@ import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, BeforeIn
 import { ClaimStatus } from '../types/claim.types';
 
 import { User } from './user.entity';
+import { Vault } from './vault.entity';
 
 @Entity('claims')
 export class Claim {
@@ -16,6 +17,11 @@ export class Claim {
   @JoinColumn({ name: 'user_id' })
   user: User;
 
+  @Expose({ name: 'vaultId' })
+  @ManyToOne(() => Vault, (vault: Vault) => vault.social_links, { onDelete: 'CASCADE', nullable: true })
+  @JoinColumn({ name: 'vault_id' })
+  vault: Vault;
+
   @Expose({ name: 'type' })
   @Column({ type: 'varchar', nullable: false })
   type: string;
@@ -24,7 +30,7 @@ export class Claim {
   @Column({
     type: 'varchar',
     nullable: false,
-    default: ClaimStatus.DISABLED, // disabled, pending, claimed
+    default: ClaimStatus.AVAILABLE,
   })
   status: ClaimStatus;
 
