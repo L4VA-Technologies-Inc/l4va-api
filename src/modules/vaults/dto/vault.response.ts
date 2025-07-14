@@ -131,6 +131,13 @@ export class VaultShortResponse {
     expose: true,
   })
   tags?: string[];
+
+  @ApiProperty({ description: 'Fractional token image ' })
+  @DtoRepresent({
+    transform: ({ value }) => (value ? value.url : null),
+    expose: true,
+  })
+  ftTokenImg: FileEntity;
 }
 
 export class VaultFullResponse extends VaultShortResponse {
@@ -140,13 +147,6 @@ export class VaultFullResponse extends VaultShortResponse {
     expose: true,
   })
   type: VaultType;
-
-  @ApiProperty({ description: 'Fractional token image ' })
-  @DtoRepresent({
-    transform: ({ value }) => (value ? value.url : null),
-    expose: true,
-  })
-  ftTokenImg: FileEntity;
 
   @ApiProperty({ description: 'Hash of publication tx' })
   @DtoRepresent({
