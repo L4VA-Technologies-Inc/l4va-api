@@ -2,7 +2,7 @@ import { Credential, EnterpriseAddress, ScriptHash } from '@emurgo/cardano-seria
 import { BadRequestException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { classToPlain, plainToInstance } from 'class-transformer';
+import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
 import { Brackets, In, Repository } from 'typeorm';
 
@@ -598,7 +598,7 @@ export class VaultsService {
       this.logger.error(`Failed to process transaction ${publishedTx.txHash}:`, error);
     });
 
-    return plainToInstance(VaultFullResponse, classToPlain(vault), { excludeExtraneousValues: true });
+    return plainToInstance(VaultFullResponse, instanceToPlain(vault), { excludeExtraneousValues: true });
   }
 
   /**
@@ -847,7 +847,7 @@ export class VaultsService {
 
     // Transform vault images to URLs and convert to VaultShortResponse
     const transformedItems = listOfVaults.map(vault => {
-      return plainToInstance(VaultShortResponse, classToPlain(vault), { excludeExtraneousValues: true });
+      return plainToInstance(VaultShortResponse, instanceToPlain(vault), { excludeExtraneousValues: true });
     });
 
     return {
@@ -874,10 +874,9 @@ export class VaultsService {
   /**
    * Retrieves a vault by ID for a user, including asset and price calculations.
    * @param id - Vault ID
-   * @param _userId - User ID (for access control)
    * @returns Full vault response
    */
-  async getVaultById(id: string, _userId: string): Promise<VaultFullResponse> {
+  async getVaultById(id: string): Promise<VaultFullResponse> {
     const vault = await this.vaultsRepository.findOne({
       where: { id, deleted: false },
       relations: [
@@ -922,7 +921,7 @@ export class VaultsService {
     };
 
     // First transform the vault to plain object with class-transformer
-    const plainVault = classToPlain(vault);
+    const plainVault = instanceToPlain(vault);
 
     // Then merge with additional data
     const result = {
@@ -944,7 +943,7 @@ export class VaultsService {
    * @returns Paginated response of vaults
    */
   async getVaults(
-    userId: string,
+    userId?: string,
     filter?: VaultFilter,
     page: number = 1,
     limit: number = 10,
@@ -1072,9 +1071,42 @@ export class VaultsService {
       .getManyAndCount();
 
     // Transform vault images to URLs and convert to VaultShortResponse
-    const transformedItems = items.map(vault => {
-      return plainToInstance(VaultShortResponse, classToPlain(vault), { excludeExtraneousValues: true });
-    });
+
+    const transformedItems = await Promise.all(
+      items.map(async vault => {
+        // Create plain object from entity
+        const plainVault = instanceToPlain(vault);
+
+        // Calculate all the required metrics
+        // const tvl = await this.calculateVaultTVL(vault);
+        // const baseAllocation = await this.calculateBaseAllocation(vault);
+        // const totalValue = await this.calculateTotalAssetValue(vault);
+
+        const { phaseStartTime, phaseEndTime } = this.calculatePhaseTime(vault);
+
+        // Current time for timeRemaining calculation
+        const now = new Date();
+        const endTime = phaseEndTime ? new Date(phaseEndTime) : null;
+        const timeRemaining = endTime ? Math.max(0, endTime.getTime() - now.getTime()) : null;
+
+        // Merge calculated values with plain object
+        const enrichedVault = {
+          ...plainVault,
+          tvl: null,
+          baseAllocation: null,
+          total: null,
+          invested: vault.total_acquired_value_ada,
+          phaseStartTime: phaseStartTime ? phaseStartTime.toISOString() : null,
+          phaseEndTime: phaseEndTime ? phaseEndTime.toISOString() : null,
+          timeRemaining,
+        };
+
+        // Transform to DTO with class-transformer
+        return plainToInstance(VaultShortResponse, enrichedVault, {
+          excludeExtraneousValues: true,
+        });
+      })
+    );
 
     return {
       items: transformedItems,
@@ -1083,6 +1115,160 @@ export class VaultsService {
       limit,
       totalPages: Math.ceil(total / limit),
     };
+  }
+
+  /**
+   * Calculates Total Value Locked for a vault
+   * @param vault - Vault entity
+   * @returns TVL value in USD
+   */
+  private async calculateVaultTVL(vault: Vault): Promise<number> {
+    try {
+      // If vault is in contribution or later phase, calculate real TVL
+      if (
+        [VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked, VaultStatus.governance].includes(
+          vault.vault_status
+        )
+      ) {
+        // Get all locked assets for this vault
+        // const lockedAssets = await this.assetsRepository.count({
+        //   where: {
+        //     vault: { id: vault.id },
+        //     status: AssetStatus.LOCKED,
+        //     origin_type: AssetOriginType.CONTRIBUTED,
+        //   },
+        // });
+
+        // Calculate assets value using taptools service
+        const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
+        return assetsValue.totalValueUsd || 0;
+      }
+
+      // For published phase or earlier, TVL is 0
+      return 0;
+    } catch (error) {
+      this.logger.error(`Error calculating TVL for vault ${vault.id}:`, error);
+      return 0;
+    }
+  }
+
+  /**
+   * Calculates base allocation for a vault
+   * @param vault - Vault entity
+   * @returns Base allocation value
+   */
+  private async calculateBaseAllocation(vault: Vault): Promise<number> {
+    try {
+      // This is a placeholder - implement your actual business logic
+      // Base allocation might be calculated based on your tokenomics model
+
+      // Example: might be based on acquire_reserve percentage
+      if (vault.acquire_reserve) {
+        const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
+        return assetsValue.totalValueUsd * (vault.acquire_reserve / 100) || 0;
+      }
+
+      return 0;
+    } catch (error) {
+      this.logger.error(`Error calculating base allocation for vault ${vault.id}:`, error);
+      return 0;
+    }
+  }
+
+  /**
+   * Calculates total asset value for a vault
+   * @param vault - Vault entity
+   * @returns Total asset value in USD
+   */
+  private async calculateTotalAssetValue(vault: Vault): Promise<number> {
+    try {
+      // For most phases, total value equals TVL
+      const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
+      return assetsValue.totalValueUsd || 0;
+    } catch (error) {
+      this.logger.error(`Error calculating total asset value for vault ${vault.id}:`, error);
+      return 0;
+    }
+  }
+
+  /**
+   * Calculates when the current phase ends for a vault
+   * @param vault - Vault entity
+   * @returns Date when the current phase ends
+   */
+  private calculatePhaseTime(vault: Vault): {
+    phaseStartTime: Date | null;
+    phaseEndTime: Date | null;
+  } {
+    try {
+      let phaseStartTime: Date | null = null;
+      let phaseEndTime: Date | null = null;
+
+      switch (vault.vault_status) {
+        case VaultStatus.published:
+          // For published vaults, start time is when it was published
+          phaseStartTime = new Date(vault.created_at);
+
+          // End time is when contribution phase starts
+          if (vault.contribution_open_window_type === ContributionWindowType.uponVaultLaunch) {
+            phaseEndTime = new Date(phaseStartTime.getTime() + Number(vault.contribution_duration));
+          } else if (vault.contribution_open_window_time) {
+            phaseEndTime = new Date(Number(vault.contribution_open_window_time));
+          }
+          break;
+
+        case VaultStatus.contribution:
+          // Start time is either actual contribution_phase_start or fallback to planned time
+          phaseStartTime = vault.contribution_phase_start
+            ? new Date(vault.contribution_phase_start)
+            : vault.contribution_open_window_time
+              ? new Date(Number(vault.contribution_open_window_time))
+              : null;
+
+          // End time is start time + duration
+          if (phaseStartTime) {
+            phaseEndTime = new Date(phaseStartTime.getTime() + Number(vault.contribution_duration));
+          }
+          break;
+
+        case VaultStatus.acquire:
+          // Start time is either actual acquire_phase_start or fallback to planned time
+          phaseStartTime = vault.acquire_phase_start
+            ? new Date(vault.acquire_phase_start)
+            : vault.acquire_open_window_time
+              ? new Date(Number(vault.acquire_open_window_time))
+              : null;
+
+          // End time is start time + duration
+          if (phaseStartTime) {
+            phaseEndTime = new Date(phaseStartTime.getTime() + Number(vault.acquire_window_duration));
+          }
+          break;
+
+        case VaultStatus.locked:
+          // Start time is when the vault was locked
+          phaseStartTime = vault.locked_at ? new Date(vault.locked_at) : null;
+          // No end time for locked vaults
+          phaseEndTime = null;
+          break;
+
+        case VaultStatus.governance:
+          // Start time would be when governance began (not tracked in current model)
+          // End time is not applicable for governance
+          phaseStartTime = null;
+          phaseEndTime = null;
+          break;
+
+        default:
+          phaseStartTime = null;
+          phaseEndTime = null;
+      }
+
+      return { phaseStartTime, phaseEndTime };
+    } catch (error) {
+      this.logger.error(`Error calculating phase times for vault ${vault.id}:`, error);
+      return { phaseStartTime: null, phaseEndTime: null };
+    }
   }
 
   /**

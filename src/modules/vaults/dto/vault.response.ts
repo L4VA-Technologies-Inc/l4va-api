@@ -42,28 +42,28 @@ export class VaultShortResponse {
   })
   description?: string;
 
-  @ApiProperty({ description: 'Tvl', required: false })
+  @ApiProperty({ description: 'Tvl', required: true })
   @DtoRepresent({
     transform: ({ value }) => (value ? Number(value) : null),
     expose: true,
   })
-  tvl?: number;
+  tvl: number;
 
-  @ApiProperty({ description: 'Tvl', required: false })
+  @ApiProperty({ description: 'Tvl', required: true })
   @DtoRepresent({
     transform: ({ value }) => (value ? Number(value) : null),
     expose: true,
   })
-  baseAllocation?: number;
+  baseAllocation: number;
 
-  @ApiProperty({ description: 'Tvl', required: false })
+  @ApiProperty({ description: 'Tvl', required: true })
   @DtoRepresent({
     transform: ({ value }) => (value ? Number(value) : null),
     expose: true,
   })
-  total?: number;
+  total: number;
 
-  @ApiProperty({ description: 'Tvl', required: false })
+  @ApiProperty({ description: 'Tvl', required: true })
   @DtoRepresent({
     transform: ({ value }) => (value ? Number(value) : null),
     expose: true,
@@ -77,14 +77,21 @@ export class VaultShortResponse {
   })
   privacy: VaultPrivacy;
 
-  @ApiProperty({ description: 'Timestamp when current phase ends', required: false })
+  @ApiProperty({ description: 'Timestamp when current phase starts', required: true })
   @DtoRepresent({
     transform: ({ value }) => (value ? new Date(value).toISOString() : null),
     expose: true,
   })
-  phaseEndTime?: string;
+  phaseStartTime: string;
 
-  @ApiProperty({ description: 'Time remaining in current phase in milliseconds', required: false })
+  @ApiProperty({ description: 'Timestamp when current phase ends', required: true })
+  @DtoRepresent({
+    transform: ({ value }) => (value ? new Date(value).toISOString() : null),
+    expose: true,
+  })
+  phaseEndTime: string;
+
+  @ApiProperty({ description: 'Time remaining in current phase in milliseconds', required: true })
   @DtoRepresent({
     transform: ({ obj }) => {
       if (!obj.phaseEndTime) return null;
@@ -95,7 +102,7 @@ export class VaultShortResponse {
     },
     expose: true,
   })
-  timeRemaining?: number;
+  timeRemaining: number;
 
   @ApiProperty({ description: 'Vault image', required: true })
   @DtoRepresent({
