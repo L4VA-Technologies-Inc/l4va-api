@@ -124,6 +124,13 @@ export class VaultShortResponse {
     expose: { name: 'socialLinks' },
   })
   socialLinks?: LinkEntity[];
+
+  @ApiProperty({ description: 'Tags', type: [String], required: false, example: ['NFT', 'Art', 'Gaming'] })
+  @DtoRepresent({
+    transform: ({ value }) => value?.map(tag => tag.name) || [],
+    expose: true,
+  })
+  tags?: string[];
 }
 
 export class VaultFullResponse extends VaultShortResponse {
@@ -392,13 +399,6 @@ export class VaultFullResponse extends VaultShortResponse {
     expose: true,
   })
   acquirerWhitelistCsv?: FileEntity;
-
-  @ApiProperty({ description: 'Tags', type: [TagEntity], required: false })
-  @DtoRepresent({
-    transform: false,
-    expose: true,
-  })
-  tags?: TagEntity[];
 
   @ApiProperty({ description: 'Contribution phase start time', required: false })
   @DtoRepresent({

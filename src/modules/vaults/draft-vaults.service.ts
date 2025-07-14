@@ -280,13 +280,13 @@ export class DraftVaultsService {
       // Handle tags if provided
       if (data.tags?.length > 0) {
         const tags = await Promise.all(
-          data.tags.map(async tagData => {
+          data.tags.map(async tagName => {
             let tag = await this.tagsRepository.findOne({
-              where: { name: tagData.name },
+              where: { name: tagName },
             });
             if (!tag) {
               tag = await this.tagsRepository.save({
-                name: tagData.name,
+                name: tagName,
               });
             }
             return tag;

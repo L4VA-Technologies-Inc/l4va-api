@@ -12,7 +12,7 @@ import {
 } from '../../../types/vault.types';
 import { AssetWhitelist, ContributorWhitelist, AcquirerWhitelist, AcquirerWhitelistCsv, SocialLink } from '../types';
 
-import { TagDto } from './tag.dto';
+
 
 export class SaveDraftReq {
   @ApiProperty({ required: false, nullable: true })
@@ -368,14 +368,15 @@ export class SaveDraftReq {
 
   @ApiProperty({
     description: 'List of tags for the vault',
-    type: [TagDto],
+    type: [String],
     required: false,
     nullable: true,
+    example: ['NFT', 'Art', 'Gaming'],
   })
   @IsOptional()
   @ValidateIf((o, v) => v !== null)
   @IsArray()
-  @Type(() => TagDto)
+  @IsString({ each: true })
   @Expose()
-  tags?: TagDto[] | null;
+  tags?: string[] | null;
 }
