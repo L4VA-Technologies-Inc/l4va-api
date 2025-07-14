@@ -439,13 +439,13 @@ export class VaultsService {
       // Handle tags
       if (data.tags?.length > 0) {
         const tags = await Promise.all(
-          data.tags.map(async tagData => {
+          data.tags.map(async tagName => {
             let tag = await this.tagsRepository.findOne({
-              where: { name: tagData.name },
+              where: { name: tagName },
             });
             if (!tag) {
               tag = await this.tagsRepository.save({
-                name: tagData.name,
+                name: tagName,
               });
             }
             return tag;
@@ -741,13 +741,13 @@ export class VaultsService {
 
       if (data.tags?.length > 0) {
         const tags = await Promise.all(
-          data.tags.map(async tagData => {
+          data.tags.map(async tagName => {
             let tag = await this.tagsRepository.findOne({
-              where: { name: tagData.name },
+              where: { name: tagName },
             });
             if (!tag) {
               tag = await this.tagsRepository.save({
-                name: tagData.name,
+                name: tagName,
               });
             }
             return tag;
@@ -887,6 +887,7 @@ export class VaultsService {
         'vault_image',
         'banner_image',
         'ft_token_img',
+        'tags'
       ],
     });
 

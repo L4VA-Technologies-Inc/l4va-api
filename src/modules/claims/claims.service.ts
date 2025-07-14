@@ -55,7 +55,7 @@ export class ClaimsService {
     if (query?.claimState === 'claimed') {
       whereConditions.status = ClaimStatus.CLAIMED;
     } else if (query?.claimState === 'unclaimed') {
-      whereConditions.status = In([ClaimStatus.DISABLED, ClaimStatus.PENDING]);
+      whereConditions.status = In([ClaimStatus.AVAILABLE, ClaimStatus.PENDING]);
     }
 
     return this.claimRepository.find({
@@ -83,7 +83,7 @@ export class ClaimsService {
     const claim = this.claimRepository.create({
       ...createClaimDto,
       user,
-      status: ClaimStatus.DISABLED,
+      status: ClaimStatus.AVAILABLE,
     });
 
     return this.claimRepository.save(claim);

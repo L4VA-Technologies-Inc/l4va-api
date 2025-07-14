@@ -2,11 +2,11 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { Vault } from '@/database/vault.entity';
-import { VaultStatus } from '../../../../types/vault.types';
-
 import { CreateProposalReq } from './dto/create-proposal.req';
 import { VoteReq } from './dto/vote.req';
+
+import { Vault } from '@/database/vault.entity';
+import { VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class GovernanceService {
@@ -77,7 +77,7 @@ export class GovernanceService {
     };
   }
 
-  async getProposal(proposalId: string) {
+  async getProposal(_proposalId: string) {
     // TODO: Implement proposal retrieval from blockchain/database
     // For now, throw not found
     throw new NotFoundException('Proposal not found');

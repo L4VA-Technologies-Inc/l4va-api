@@ -20,7 +20,6 @@ import {
 import { AcquirerWhitelist, ContributorWhitelist, SocialLink, AcquirerWhitelistCsv } from '../types';
 
 import { AssetWhitelistDto } from './assetWhitelist.dto';
-import { TagDto } from './tag.dto';
 
 import {
   ContributionWindowType,
@@ -373,12 +372,13 @@ export class CreateVaultReq {
 
   @ApiProperty({
     description: 'List of tags for the vault',
-    type: [TagDto],
+    type: [String],
     required: false,
+    example: ['NFT', 'Art', 'Gaming'],
   })
   @IsArray()
   @IsOptional()
-  @IsObject({ each: true })
+  @IsString({ each: true })
   @Expose()
-  tags?: TagDto[];
+  tags?: string[];
 }

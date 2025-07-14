@@ -5,7 +5,6 @@ import { Repository } from 'typeorm';
 
 import { transformImageToUrl } from '../../helpers';
 import { VaultStatus } from '../../types/vault.types';
-import { AwsService } from '../aws_bucket/aws.service';
 
 import { VaultSortField, SortOrder } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
@@ -39,8 +38,7 @@ export class DraftVaultsService {
     @InjectRepository(ContributorWhitelistEntity)
     private readonly contributorWhitelistRepository: Repository<ContributorWhitelistEntity>,
     @InjectRepository(TagEntity)
-    private readonly tagsRepository: Repository<TagEntity>,
-    private readonly awsService: AwsService
+    private readonly tagsRepository: Repository<TagEntity>
   ) {}
 
   async getMyDraftVaults(
@@ -282,13 +280,13 @@ export class DraftVaultsService {
       // Handle tags if provided
       if (data.tags?.length > 0) {
         const tags = await Promise.all(
-          data.tags.map(async tagData => {
+          data.tags.map(async tagName => {
             let tag = await this.tagsRepository.findOne({
-              where: { name: tagData.name },
+              where: { name: tagName },
             });
             if (!tag) {
               tag = await this.tagsRepository.save({
-                name: tagData.name,
+                name: tagName,
               });
             }
             return tag;
