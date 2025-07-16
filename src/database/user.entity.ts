@@ -13,6 +13,7 @@ import {
 import { Claim } from './claim.entity';
 import { FileEntity } from './file.entity';
 import { LinkEntity } from './link.entity';
+import { Notification } from './notification.entity';
 import { Vault } from './vault.entity';
 
 @Entity('users')
@@ -73,6 +74,14 @@ export class User {
 
   @Column({ name: 'deleted', type: 'boolean', nullable: false, default: false })
   deleted: boolean;
+
+  @Expose({ name: 'hasNotifications' })
+  @Column({ type: 'boolean', default: false })
+  has_notifications: boolean;
+
+  @Expose({ name: 'notifications' })
+  @OneToMany(() => Notification, notification => notification.user)
+  notifications: Notification[];
 
   @Expose({ name: 'createdAt' })
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
