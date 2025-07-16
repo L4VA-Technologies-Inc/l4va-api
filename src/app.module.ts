@@ -13,6 +13,7 @@ import { AwsModule } from './modules/aws_bucket/aws.module';
 import { ClaimsModule } from './modules/claims/claims.module';
 import { DistributionModule } from './modules/distribution/distribution.module';
 import { JwtGlobalModule } from './modules/globals/jwt_global_module/jwt_global.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 import { UsersModule } from './modules/users/users.module';
 import { LpTokensModule } from './modules/vaults/lp-tokens/lp-tokens.module';
 import { AcquireModule } from './modules/vaults/phase-management/acquire/acquire.module';
@@ -60,6 +61,7 @@ import { VaultsModule } from './modules/vaults/vaults.module';
     LpTokensModule,
     DistributionModule,
     ClaimsModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

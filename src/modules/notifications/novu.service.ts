@@ -1,8 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Novu } from '@novu/api';
-
 @Injectable()
 export class NovuService {
+  private readonly logger = new Logger(NovuService.name);
   private novu: Novu;
 
   constructor() {
@@ -20,7 +20,7 @@ export class NovuService {
         overrides,
       });
     } catch (error) {
-      console.error('Novu notification failed:', error);
+      this.logger.error(`Novu notification failed for user ${userId}:`, error.message);
     }
   }
 
@@ -33,24 +33,28 @@ export class NovuService {
     }>
   ): Promise<void> {
     try {
-      await this.novu.triggerBulk({
+      const result = await this.novu.triggerBulk({
         events,
       });
+
+      this.logger.log(`Novu bulk notification sent to ${events.length} users`, {
+        bulkResult: result,
+      });
     } catch (error) {
-      console.error('Novu bulk notification failed:', error);
+      this.logger.error('Novu bulk notification failed:', error.message);
     }
   }
 
-  async createSubscriber(subscriberId: string, email?: string, firstName?: string, lastName?: string): Promise<void> {
+  async createSubscriber(subscriberId: string, email?: string, name?: string): Promise<void> {
     try {
       await this.novu.subscribers.create({
         subscriberId,
         email,
-        firstName,
-        lastName,
+        firstName: name,
       });
+      this.logger.log(`Novu subscriber created: ${subscriberId}`);
     } catch (error) {
-      console.error('Novu subscriber creation failed:', error);
+      this.logger.error(`Novu subscriber creation failed for ${subscriberId}:`, error.message);
     }
   }
 }

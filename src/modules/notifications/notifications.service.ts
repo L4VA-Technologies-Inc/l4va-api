@@ -145,4 +145,9 @@ export class NotificationsService {
       await this.userRepository.update(userId, { has_notifications: false });
     }
   }
+
+  // User management methods
+  async createNovuSubscriber(user: User): Promise<void> {
+    await this.novuService.createSubscriber(user.id, 'tregubartemofficial@gmail.com', user.name);
+  }
 }

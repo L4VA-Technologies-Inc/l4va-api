@@ -1,6 +1,7 @@
 import { Credential, EnterpriseAddress, ScriptHash } from '@emurgo/cardano-serialization-lib-nodejs';
 import { BadRequestException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
@@ -87,7 +88,8 @@ export class VaultsService {
     private readonly blockchainScannerService: BlockchainScannerService,
     private readonly taptoolsService: TaptoolsService,
     private readonly transactionsService: TransactionsService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly eventEmitter: EventEmitter2
   ) {}
 
   /**
@@ -533,6 +535,14 @@ export class VaultsService {
       finalVault.contract_address = contractAddress;
       finalVault.asset_vault_name = vaultAssetName;
       await this.vaultsRepository.save(finalVault);
+
+      this.eventEmitter.emit('vault.launched', {
+        vaultId: finalVault.id,
+        creatorId: finalVault.owner.id,
+        vaultName: finalVault.name,
+        contributionStartDate: new Date(finalVault.contribution_open_window_time).toLocaleDateString(),
+        contributionStartTime: new Date(finalVault.contribution_open_window_time).toLocaleTimeString(),
+      });
       return {
         vaultId: finalVault.id,
         presignedTx,
@@ -887,7 +897,7 @@ export class VaultsService {
         'vault_image',
         'banner_image',
         'ft_token_img',
-        'tags'
+        'tags',
       ],
     });
 

@@ -2,20 +2,23 @@ import { Buffer } from 'buffer';
 
 import { COSESign1, COSEKey, Label, Int, BigNum } from '@emurgo/cardano-message-signing-nodejs';
 import { Ed25519Signature, PublicKey, Address, RewardAddress } from '@emurgo/cardano-serialization-lib-nodejs';
-import { transformImageToUrl } from '@/helpers';
 import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { generateUsername } from 'unique-username-generator';
 
+import { NotificationsService } from '../notifications/notifications.service';
 import { UsersService } from '../users/users.service';
 
 import { LoginReq } from './dto/login.req';
+
+import { transformImageToUrl } from '@/helpers';
 
 @Injectable()
 export class AuthService {
   constructor(
     private usersService: UsersService,
-    private jwtService: JwtService
+    private jwtService: JwtService,
+    private notificationsService: NotificationsService
   ) {}
 
   async verifySignature(signatureData: LoginReq) {
@@ -84,6 +87,27 @@ export class AuthService {
 
       const profileImage = transformImageToUrl(user.profile_image);
       const bannerImage = transformImageToUrl(user.banner_image);
+
+      // Create Novu subscriber
+      await this.notificationsService.createNovuSubscriber(user);
+
+      // Send welcome notification
+      await this.notificationsService.createNotification(
+        user.id,
+        'Welcome to L4VA!',
+        `Welcome to L4VA, ${user.name}! Start creating your first vault or explore existing ones.`,
+        'user_welcome',
+        {
+          relatedEntityType: 'user',
+          relatedEntityId: user.id,
+          novuWorkflowId: 'user-welcome',
+          sendPush: true,
+          novuPayload: {
+            userName: user.name,
+            userEmail: 'tregubartemofficial@gmail.com',
+          },
+        }
+      );
 
       return {
         success: true,

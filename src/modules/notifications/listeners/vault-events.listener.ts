@@ -111,7 +111,7 @@ export class VaultEventsListener {
     );
   }
 
-  @OnEvent('vault.favorite_launched')
+  @OnEvent('vault.favorite_launched') // Haven`t added
   async handleFavoriteVaultLaunched(event: { vaultId: string; vaultName: string; userIds: string[] }): Promise<void> {
     await this.notificationsService.createBulkNotifications(
       event.userIds,
@@ -130,7 +130,7 @@ export class VaultEventsListener {
     );
   }
 
-  @OnEvent('vault.whitelist_added')
+  @OnEvent('vault.whitelist_added') // Haven`t added
   async handleWhitelistAdded(event: { vaultId: string; vaultName: string; userIds: string[] }): Promise<void> {
     await this.notificationsService.createBulkNotifications(
       event.userIds,
@@ -168,7 +168,7 @@ export class VaultEventsListener {
     );
   }
 
-  @OnEvent('vault.time_running_out')
+  @OnEvent('vault.time_running_out') // Haven`t added
   async handleTimeRunningOut(event: {
     vaultId: string;
     vaultName: string;
@@ -194,7 +194,7 @@ export class VaultEventsListener {
   }
 
   // GOVERNANCE NOTIFICATIONS
-  @OnEvent('governance.proposal_created')
+  @OnEvent('governance.proposal_created') // Haven`t added
   async handleProposalCreated(event: {
     proposalId: string;
     vaultId: string;
@@ -241,7 +241,7 @@ export class VaultEventsListener {
     );
   }
 
-  @OnEvent('governance.vote_complete')
+  @OnEvent('governance.vote_complete') // Haven`t added
   async handleVoteComplete(event: {
     proposalId: string;
     vaultId: string;
@@ -267,7 +267,7 @@ export class VaultEventsListener {
     );
   }
 
-  @OnEvent('governance.vote_time_running_out')
+  @OnEvent('governance.vote_time_running_out') // Haven`t added
   async handleVoteTimeRunningOut(event: {
     proposalId: string;
     vaultId: string;
@@ -293,7 +293,7 @@ export class VaultEventsListener {
     );
   }
 
-  @OnEvent('distribution.claim_available')
+  @OnEvent('distribution.claim_available') // Haven`t added
   async handleDistributionClaim(event: {
     vaultId: string;
     vaultName: string;
@@ -316,7 +316,7 @@ export class VaultEventsListener {
     );
   }
 
-  @OnEvent('vault.termination')
+  @OnEvent('vault.termination') // Haven`t added
   async handleVaultTermination(event: {
     vaultId: string;
     vaultName: string;
@@ -342,7 +342,7 @@ export class VaultEventsListener {
   }
 
   // MILESTONE NOTIFICATIONS
-  @OnEvent('milestone.tvl_reached')
+  @OnEvent('milestone.tvl_reached') // Haven`t added
   async handleTVLMilestone(event: {
     vaultId: string;
     vaultName: string;
@@ -369,7 +369,7 @@ export class VaultEventsListener {
     );
   }
 
-  @OnEvent('milestone.market_cap_reached')
+  @OnEvent('milestone.market_cap_reached') // Haven`t added
   async handleMarketCapMilestone(event: {
     tokenTicker: string;
     milestoneAda: number;

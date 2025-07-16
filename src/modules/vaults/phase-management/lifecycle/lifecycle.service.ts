@@ -1,18 +1,19 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter'; // Add this import
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Queue } from 'bullmq';
 import { Repository } from 'typeorm';
 
-import { AssetOriginType } from '../../../../types/asset.types';
-import { VaultStatus, ContributionWindowType, InvestmentWindowType } from '../../../../types/vault.types';
-import { DistributionService } from '../../../distribution/distribution.service';
-import { TaptoolsService } from '../../../taptools/taptools.service';
 import { ContributionService } from '../contribution/contribution.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Vault } from '@/database/vault.entity';
+import { DistributionService } from '@/modules/distribution/distribution.service';
+import { TaptoolsService } from '@/modules/taptools/taptools.service';
+import { AssetOriginType } from '@/types/asset.types';
+import { ContributionWindowType, InvestmentWindowType, VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class LifecycleService {
@@ -27,12 +28,12 @@ export class LifecycleService {
     private readonly vaultRepository: Repository<Vault>,
     private readonly contributionService: ContributionService,
     private readonly distributionService: DistributionService,
-    private readonly taptoolsService: TaptoolsService
+    private readonly taptoolsService: TaptoolsService,
+    private readonly eventEmitter: EventEmitter2
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
   async handleVaultLifecycleTransitions(): Promise<void> {
-
     await this.handlePublishedToContribution();
 
     // Handle contribution -> acquire transitions
@@ -101,6 +102,7 @@ export class LifecycleService {
         return;
       }
 
+      const previousStatus = vault.vault_status;
       vault.vault_status = newStatus;
 
       if (phaseStartField) {
@@ -108,6 +110,7 @@ export class LifecycleService {
       }
 
       await this.vaultRepository.save(vault);
+      await this.emitPhaseTransitionEvents(vault, previousStatus, newStatus);
 
       this.logger.log(
         `Executed immediate phase transition for vault ${vaultId} to ${newStatus}` +
@@ -149,6 +152,57 @@ export class LifecycleService {
     }
 
     await this.queuePhaseTransition(vault.id, VaultStatus.acquire, acquireStartTime, 'acquire_phase_start');
+  }
+
+  private async emitPhaseTransitionEvents(
+    vault: Vault,
+    previousStatus: VaultStatus,
+    newStatus: VaultStatus
+  ): Promise<void> {
+    try {
+      const contributorIds = vault.assets.map(asset => asset.added_by);
+
+      // When transitioning from contribution to acquire
+      if (previousStatus === VaultStatus.contribution && newStatus === VaultStatus.acquire) {
+        this.eventEmitter.emit('vault.contribution_complete', {
+          vaultId: vault.id,
+          vaultName: vault.name,
+          totalValueLocked: vault.total_assets_cost_ada || 0,
+          contributorIds,
+        });
+      }
+
+      // When transitioning from acquire to governance
+      if (previousStatus === VaultStatus.acquire && newStatus === VaultStatus.governance) {
+        this.eventEmitter.emit('vault.success', {
+          vaultId: vault.id,
+          vaultName: vault.name,
+          tokenHolderIds: contributorIds, // TODO: add aquire token holders to list
+          adaSpent: 'Unknown', // TODO: insert calculation per user
+          tokenPercentage: 'Unknown', // TODO: This should be calculated based on token distribution logic
+          tokenTicker: vault.vault_token_ticker,
+          impliedVaultValue: 'Unknown', // TODO
+        });
+
+        this.eventEmitter.emit('vault.reserve_met', {
+          vaultId: vault.id,
+          vaultName: vault.name,
+          subscriberIds: contributorIds, // TODO: add aquire token holders to list
+        });
+      }
+
+      // When transitioning to failed status
+      if (newStatus === VaultStatus.failed) {
+        this.eventEmitter.emit('vault.failed', {
+          vaultId: vault.id,
+          vaultName: vault.name,
+          contributorIds,
+        });
+      }
+    } catch (error) {
+      this.logger.error(`Failed to emit phase transition events for vault:`, error);
+      // Don't throw - phase transition should still complete
+    }
   }
 
   private async executeContributionToAcquireTransition(vault: Vault): Promise<void> {
