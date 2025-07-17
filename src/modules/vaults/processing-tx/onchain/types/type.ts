@@ -91,6 +91,7 @@ export interface Datum {
   }>;
 }
 export interface Datum1 {
+  vault_status?: 0 | 1 | 2 | 3; // 0: contribution, 1: launch, 2: distribution, 3: closed
   contract_type: number;
   asset_whitelist: string[];
   contributor_whitelist?: string[];
@@ -104,7 +105,7 @@ export interface Datum1 {
       is_inclusive: boolean;
     };
   };
-  investment_window: {
+  acquire_window: {
     lower_bound: {
       bound_type: 'NegativeInfinity' | number | 'PositiveInfinity';
       is_inclusive: boolean;

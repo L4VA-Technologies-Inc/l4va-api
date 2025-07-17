@@ -887,7 +887,7 @@ export class VaultsService {
         'vault_image',
         'banner_image',
         'ft_token_img',
-        'tags'
+        'tags',
       ],
     });
 

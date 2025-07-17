@@ -57,18 +57,6 @@ export class LpTokensService {
 
   /**
    * Extracts LP tokens from a vault to a specified wallet
-   * @param vaultId The ID of the vault to extract tokens from
-   * @param walletAddress The wallet address to send the tokens to
-   * @param amount The amount of LP tokens to extract
-   * @returns Operation result with success status and transaction hash if successful
-   */
-  /**
-   * Extracts LP tokens from a vault to a specified wallet
-   * @param params Parameters for the extraction operation
-   * @returns Operation result with success status and transaction hash if successful
-   */
-  /**
-   * Extracts LP tokens from a vault to a specified wallet
    * @param extractDto - DTO containing extraction parameters
    * @returns Operation result with transaction details
    */
@@ -322,17 +310,6 @@ export class LpTokensService {
     }
   }
 
-  /**
-   * Drops LP tokens to a specified wallet
-   * @param walletAddress The wallet address to receive the LP tokens
-   * @param amount The amount of LP tokens to drop
-   * @returns Operation result with success status and transaction hash if successful
-   */
-  /**
-   * Drops LP tokens to a specified wallet
-   * @param params Parameters for the drop operation
-   * @returns Operation result with success status and transaction hash if successful
-   */
   /**
    * Drops LP tokens to a specified wallet
    * @param dropDto - DTO containing drop parameters

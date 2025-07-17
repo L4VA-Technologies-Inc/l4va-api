@@ -155,6 +155,7 @@ export class VaultManagingService {
             datum: {
               type: 'inline',
               value: {
+                vault_status: 1,
                 contract_type: vaultConfig.contractType,
                 asset_whitelist: vaultConfig.allowedPolicies,
                 contributor_whitelist: vaultConfig.allowedContributors, // address list of contributors
@@ -169,7 +170,7 @@ export class VaultManagingService {
                     is_inclusive: true,
                   },
                 },
-                investment_window: {
+                acquire_window: {
                   // Time allowed to upload ADA
                   lower_bound: {
                     bound_type: new Date().getTime(),
