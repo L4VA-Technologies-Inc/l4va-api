@@ -364,6 +364,50 @@ export class Vault {
   @OneToMany(() => Asset, (asset: Asset) => asset.vault)
   assets?: Asset[];
 
+  @Expose({ name: 'acquireMultiplier' })
+  @Column({
+    name: 'acquire_multiplier',
+    type: 'jsonb',
+    nullable: true,
+    default: () => 'null',
+  })
+  acquire_multiplier?: Array<[string, string | null, number]>; // [policyId, assetName?, multiplier]
+
+  @Expose({ name: 'adaPairMultiplier' })
+  @Transform(({ value }) => (value ? Number(value) : null))
+  @Column({
+    name: 'ada_pair_multiplier',
+    type: 'numeric',
+    nullable: true,
+    default: 1,
+  })
+  ada_pair_multiplier?: number;
+
+  @Expose({ name: 'lastUpdateTxHash' })
+  @Column({
+    name: 'last_update_tx_hash',
+    type: 'varchar',
+    nullable: true,
+  })
+  last_update_tx_hash?: string;
+
+  @Expose({ name: 'lastUpdateTxIndex' })
+  @Column({
+    name: 'last_update_tx_index',
+    type: 'integer',
+    nullable: true,
+    default: 0,
+  })
+  last_update_tx_index?: number;
+
+  @Expose({ name: 'vaultPolicyId' })
+  @Column({
+    name: 'vault_policy_id',
+    type: 'varchar',
+    nullable: true,
+  })
+  vault_policy_id?: string;
+
   @Expose({ name: 'vaultImage' })
   @OneToOne(() => FileEntity)
   @JoinColumn({
