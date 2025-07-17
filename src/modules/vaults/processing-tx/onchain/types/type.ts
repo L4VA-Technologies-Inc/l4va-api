@@ -10,11 +10,11 @@ export type Redeemer1 =
   | {
       __variant: 'ExtractAda' | 'ExtractAsset';
       __data: {
-        lp_output_index?: number;
+        vault_token_output_index?: number;
       };
     }
   | {
-      lp_output_index: number;
+      vault_token_output_index: number;
       change_output_index: number;
     }
   | 'CancelAsset'
@@ -127,7 +127,7 @@ export interface Datum1 {
     termination_type: number;
     fdp: number;
   };
-  investment?: {
+  acquire?: {
     reserve: number;
     liquidityPool: number;
   };

@@ -61,7 +61,7 @@ export class LpTokensService {
    * @returns Operation result with transaction details
    */
   async extractLpTokens(extractDto: ExtractLpTokensParams): Promise<LpTokenOperationResult> {
-    const { vaultId, walletAddress, amount, txHash, txIndex } = extractDto;
+    const { vaultId, walletAddress, amount } = extractDto;
 
     if (!this.isValidAddress(walletAddress)) {
       throw new BadRequestException('Invalid wallet address');
@@ -142,7 +142,7 @@ export class LpTokensService {
       const amountOfLpsToClaim = output.amount.find((a: { unit: string; quantity: string }) => a.unit === lpsUnit);
       const datumTag = generate_tag_from_txhash_index(tx_hash, Number(index));
       if (!amountOfLpsToClaim) {
-        console.log(JSON.stringify(output));
+        // console.log(JSON.stringify(output));
         throw new Error('No lps to claim.');
       }
 
@@ -232,9 +232,7 @@ export class LpTokensService {
       };
 
       const inputWithNoPreloaded = { ...txInput };
-      //@ts-ignore
       delete inputWithNoPreloaded.preloadedScripts;
-      console.log(JSON.stringify(inputWithNoPreloaded));
 
       // 4. Build the transaction
       const buildResponse = await this.blockchainService.buildTransaction(txInput);

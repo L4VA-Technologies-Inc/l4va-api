@@ -27,7 +27,7 @@ import * as blueprint from './utils/blueprint.json';
 
 import { Vault } from '@/database/vault.entity';
 
-// Investment and Contribution
+// Acquire and Contribution
 
 export interface NftAsset {
   policyId: string;

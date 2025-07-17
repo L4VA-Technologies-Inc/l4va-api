@@ -22,6 +22,7 @@ export interface VaultConfig {
   adminKeyHash: string;
   policyId: string;
   allowedPolicies: string[];
+  allowedContributors: string[];
   assetWindow?: {
     start: number;
     end: number;
@@ -203,7 +204,7 @@ export class VaultManagingService {
                 //   termination_type: 1,
                 //   fdp: 1,
                 // },
-                // investment: {
+                // acquire: {
                 //   reserve: 1,
                 //   liquidityPool: 1,
                 // },
@@ -288,7 +289,10 @@ export class VaultManagingService {
   }
 
   // Create a transaction to update the vault's metadata
-  async updateVaultMetadataTx(vaultConfig: VaultConfig) {
+  async updateVaultMetadataTx(vaultConfig: VaultConfig): Promise<{
+    presignedTx: string;
+    contractAddress: string;
+  }> {
     this.scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
       .to_address()
       .to_bech32();
@@ -324,15 +328,37 @@ export class VaultManagingService {
           datum: {
             type: 'inline',
             value: {
-              contract_type: vaultConfig.contractType, // Represent an enum setup by L4VA (0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE)
-              asset_whitelist: vaultConfig.allowedPolicies,
-              // contributor_whitelist: [],
-              asset_window: vaultConfig.assetWindow,
-              acquire_window: vaultConfig.acquireWindow,
-              valuation_type: vaultConfig.valueMethod, // Enum 0: 'FIXED' 1: 'LBE'
+              vault_status: 2, // Added vault_status field
+              contract_type: vaultConfig.contractType || 0,
+              asset_whitelist: vaultConfig.allowedPolicies || [],
+              contributor_whitelist: vaultConfig.allowedContributors || [],
+              asset_window: vaultConfig.assetWindow || {
+                lower_bound: {
+                  bound_type: new Date().getTime(),
+                  is_inclusive: true,
+                },
+                upper_bound: {
+                  bound_type: new Date().getTime() + 24 * 60 * 60 * 1000, // Default 1 day
+                  is_inclusive: true,
+                },
+              },
+              acquire_window: vaultConfig.acquireWindow || {
+                lower_bound: {
+                  bound_type: new Date().getTime(),
+                  is_inclusive: true,
+                },
+                upper_bound: {
+                  bound_type: new Date().getTime() + 24 * 60 * 60 * 1000, // Default 1 day
+                  is_inclusive: true,
+                },
+              },
+              valuation_type: vaultConfig.valueMethod || 0,
               custom_metadata: vaultConfig.customMetadata || [],
               admin: this.adminHash,
               minting_key: this.adminHash,
+              // New fields from update_vault.ts
+              // acquire_multiplier: vaultConfig.acquireMultiplier || [['', '', 1]],
+              // ada_pair_multipler: vaultConfig.adaPairMultiplier || 1,
             },
             shape: {
               validatorHash: this.scPolicyId,
@@ -341,6 +367,7 @@ export class VaultManagingService {
           },
         },
       ],
+      requiredInputs: [this.adminHash],
     };
 
     try {
