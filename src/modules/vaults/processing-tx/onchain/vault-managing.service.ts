@@ -31,6 +31,8 @@ export interface VaultConfig {
     start: number;
     end: number;
   };
+  acquireMultiplier?: Array<[string, string | null, number]>; // [policyId, assetName?, multiplier]
+  adaPairMultiplier?: number; // 0: FIXED | 1: LBE
   contractType?: number; // 0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE
   valueMethod?: number; // 0: FIXED | 1: LBE
   customMetadata?: [string, string][];
@@ -357,8 +359,8 @@ export class VaultManagingService {
               admin: this.adminHash,
               minting_key: this.adminHash,
               // New fields from update_vault.ts
-              // acquire_multiplier: vaultConfig.acquireMultiplier || [['', '', 1]],
-              // ada_pair_multipler: vaultConfig.adaPairMultiplier || 1,
+              acquire_multiplier: vaultConfig.acquireMultiplier || [['', '', 1]],
+              ada_pair_multiplier: vaultConfig.adaPairMultiplier || 1,
             },
             shape: {
               validatorHash: this.scPolicyId,
