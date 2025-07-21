@@ -315,14 +315,22 @@ export class VaultsService {
           })
         : null;
 
+      // Maybe set to null
+      const contributionOpenWindowTime = data.contributionOpenWindowTime
+        ? new Date(data.contributionOpenWindowTime).toISOString()
+        : new Date().toISOString();
+      const acquireOpenWindowTime = data.acquireOpenWindowTime
+        ? new Date(data.acquireOpenWindowTime).toISOString()
+        : new Date().toISOString();
+
       // Prepare vault data
       const vaultData = transformToSnakeCase({
         ...data,
         owner: owner,
         contributionDuration: data.contributionDuration,
         acquireWindowDuration: data.acquireWindowDuration,
-        acquireOpenWindowTime: new Date(data.acquireOpenWindowTime).toISOString(),
-        contributionOpenWindowTime: new Date(data.contributionOpenWindowTime).toISOString(),
+        acquireOpenWindowTime,
+        contributionOpenWindowTime,
         timeElapsedIsEqualToTime: data.timeElapsedIsEqualToTime,
         vaultStatus: VaultStatus.created,
         vaultImage: vaultImg,
