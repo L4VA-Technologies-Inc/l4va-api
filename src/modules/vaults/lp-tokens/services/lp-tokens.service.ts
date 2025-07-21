@@ -13,17 +13,17 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
-import { BlockchainScannerService } from '../../processing-tx/onchain/blockchain-scanner.service';
-import { BlockchainService } from '../../processing-tx/onchain/blockchain.service';
-import { Datum, Redeemer1 } from '../../processing-tx/onchain/types/type';
-import { applyContributeParams, toPreloadedScript } from '../../processing-tx/onchain/utils/apply_params';
-import blueprint from '../../processing-tx/onchain/utils/blueprint.json';
-import { generate_tag_from_txhash_index } from '../../processing-tx/onchain/utils/lib';
 import { LpTokenOperationResult, ExtractLpTokensParams } from '../types/lp-token.types';
 
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
+import { BlockchainScannerService } from '@/modules/vaults/processing-tx/onchain/blockchain-scanner.service';
+import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
+import { Datum, Redeemer1 } from '@/modules/vaults/processing-tx/onchain/types/type';
+import { applyContributeParams, toPreloadedScript } from '@/modules/vaults/processing-tx/onchain/utils/apply_params';
+import blueprint from '@/modules/vaults/processing-tx/onchain/utils/blueprint.json';
+import { generate_tag_from_txhash_index } from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { TransactionType } from '@/types/transaction.types';
 
 @Injectable()
