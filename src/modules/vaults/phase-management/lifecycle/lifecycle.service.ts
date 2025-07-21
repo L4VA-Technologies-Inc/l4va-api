@@ -173,24 +173,18 @@ export class LifecycleService {
 
   private async executeContributionToAcquireTransition(vault: Vault): Promise<void> {
     try {
+      // Calculate total value of assets in the vault
+      const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
+
+      vault.total_assets_cost_ada = assetsValue.totalValueAda;
+      vault.total_assets_cost_usd = assetsValue.totalValueUsd;
+
+      // Calculate threshold Price
+      vault.require_reserved_cost_ada = assetsValue.totalValueAda * (vault.acquire_reserve * 0.01);
+      vault.require_reserved_cost_usd = assetsValue.totalValueUsd * (vault.acquire_reserve * 0.01);
+
       // For immediate acquire start
       if (vault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
-        // Calculate total value of assets in the vault
-        try {
-          const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
-          this.logger.log(
-            `Vault ${vault.id} total assets value: ${assetsValue.totalValueAda} ADA (${assetsValue.totalValueUsd} USD)`
-          );
-          vault.total_assets_cost_ada = assetsValue.totalValueAda;
-          vault.total_assets_cost_usd = assetsValue.totalValueUsd;
-
-          // Calculate threshold Price
-          vault.require_reserved_cost_ada = assetsValue.totalValueAda * (vault.acquire_reserve * 0.01);
-          vault.require_reserved_cost_usd = assetsValue.totalValueUsd * (vault.acquire_reserve * 0.01);
-        } catch (error) {
-          this.logger.error(`Failed to calculate assets value for vault ${vault.id}:`, error);
-        }
-
         await this.executePhaseTransition(vault.id, VaultStatus.acquire, 'acquire_phase_start');
       }
       // For custom acquire start time
@@ -199,22 +193,6 @@ export class LifecycleService {
         const customTime = new Date(vault.acquire_open_window_time);
 
         if (now >= customTime) {
-          // Calculate total value of assets in the vault
-          try {
-            const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
-            this.logger.log(
-              `Vault ${vault.id} total assets value: ${assetsValue.totalValueAda} ADA (${assetsValue.totalValueUsd} USD)`
-            );
-            vault.total_assets_cost_ada = assetsValue.totalValueAda;
-            vault.total_assets_cost_usd = assetsValue.totalValueUsd;
-
-            // Calculate threshold Price
-            vault.require_reserved_cost_ada = assetsValue.totalValueAda * (vault.acquire_reserve * 0.01);
-            vault.require_reserved_cost_usd = assetsValue.totalValueUsd * (vault.acquire_reserve * 0.01);
-          } catch (error) {
-            this.logger.error(`Failed to calculate assets value for vault ${vault.id}:`, error);
-          }
-
           await this.executePhaseTransition(vault.id, VaultStatus.acquire, 'acquire_phase_start');
         } else {
           // Queue for the custom time
@@ -411,8 +389,7 @@ export class LifecycleService {
         try {
           this.logger.log(`Vault ${vault.id} has no assets and contribution period has ended. Burning vault...`);
           // Update vault status to failed
-          vault.vault_status = VaultStatus.failed;
-          await this.vaultRepository.save(vault);
+          await this.executePhaseTransition(vault.id, VaultStatus.failed, null, SmartContractVaultStatus.CANCELLED);
 
           // // Use admin wallet to burn the vault
           // const burnTx = await this.vaultContractService.createBurnTx({

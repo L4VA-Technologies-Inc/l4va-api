@@ -13,7 +13,6 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { TransactionStatus } from '../../../../types/transaction.types';
 import { TransactionsService } from '../offchain-tx/transactions.service';
 
 import { BlockchainScannerService } from './blockchain-scanner.service';
@@ -26,6 +25,7 @@ import { applyContributeParams, toPreloadedScript } from './utils/apply_params';
 import * as blueprint from './utils/blueprint.json';
 
 import { Vault } from '@/database/vault.entity';
+import { TransactionStatus } from '@/types/transaction.types';
 
 // Acquire and Contribution
 
@@ -86,7 +86,9 @@ export class VaultInsertingService {
     });
   }
 
-  async buildTransaction(params: BuildTransactionParams): Promise<any> {
+  async buildTransaction(params: BuildTransactionParams): Promise<{
+    presignedTx: string;
+  }> {
     try {
       // Validate that the transaction exists and get its current state
       const transaction = await this.transactionsService.validateTransactionExists(params.txId);
@@ -96,6 +98,10 @@ export class VaultInsertingService {
           id: transaction.vault_id,
         },
       });
+
+      if (!vault.publication_hash) {
+        throw new Error('Vault publication hash not found - vault may not be properly published');
+      }
 
       const txDetail = await this.blockchainScanner.getTransactionDetails(vault.publication_hash);
 
@@ -171,7 +177,6 @@ export class VaultInsertingService {
         network: string;
       } = {
         changeAddress: params.changeAddress,
-        // message: isAda ? 'Contribution in ADA' : 'Contribution in asset',
         message: 'Contribution in asset',
         mint: [
           {
@@ -265,6 +270,7 @@ export class VaultInsertingService {
       if (error instanceof NotFoundException) {
         throw new NotFoundException(error.message);
       }
+      this.logger.error('Error building contribution transaction', error);
       throw error;
     }
   }

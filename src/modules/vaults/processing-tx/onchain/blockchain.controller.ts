@@ -31,7 +31,7 @@ export class BlockchainController {
     type: TransactionBuildResponseDto,
   })
   @UseGuards(AuthGuard)
-  async buildTransaction(@Body() params: BuildTransactionDto): Promise<TransactionBuildResponseDto> {
+  async buildTransaction(@Body() params: BuildTransactionDto): Promise<any> {
     return this.transactionService.buildTransaction(params);
   }
   @Post('burn-vault')
