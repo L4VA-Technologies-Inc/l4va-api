@@ -15,7 +15,6 @@ import { Repository } from 'typeorm';
 
 import { LpTokenOperationResult, ExtractLpTokensParams } from '../types/lp-token.types';
 
-import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { BlockchainScannerService } from '@/modules/vaults/processing-tx/onchain/blockchain-scanner.service';
@@ -35,8 +34,6 @@ export class LpTokensService {
 
   constructor(
     private readonly transactionsService: TransactionsService,
-    @InjectRepository(Transaction)
-    private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     private readonly blockchainService: BlockchainService,
