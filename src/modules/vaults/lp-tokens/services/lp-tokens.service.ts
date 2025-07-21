@@ -190,7 +190,7 @@ export class LpTokensService {
               value: {
                 __variant: 'ExtractAsset',
                 __data: {
-                  lp_output_index: 0,
+                  vault_token_output_index: 0,
                 },
               } satisfies Redeemer1,
             },
