@@ -1,4 +1,4 @@
-import { Expose, Transform } from 'class-transformer';
+import { Exclude, Expose, Transform } from 'class-transformer';
 import {
   Entity,
   PrimaryGeneratedColumn,
@@ -17,6 +17,7 @@ import {
 import {
   ContributionWindowType,
   InvestmentWindowType,
+  SmartContractVaultStatus,
   TerminationType,
   ValueMethod,
   VaultPrivacy,
@@ -342,6 +343,10 @@ export class Vault {
     nullable: true,
   })
   vault_status: VaultStatus;
+
+  @Exclude()
+  @Column({ name: 'vault_sc_status', type: 'enum', enum: SmartContractVaultStatus, nullable: true })
+  vault_sc_status: SmartContractVaultStatus;
 
   @Expose({ name: 'owner' })
   @ManyToOne(() => User, (owner: User) => owner.id)

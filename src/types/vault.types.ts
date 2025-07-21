@@ -12,6 +12,13 @@ export enum VaultPrivacy {
   semiPrivate = 'semi-private',
 }
 
+// Smart contract acquire multiplier type
+export interface AcquireMultiplier {
+  policyId: string;
+  assetName?: string | null; // None in smart contract
+  multiplier: number;
+}
+
 // step 2
 export enum ValueMethod {
   lbe = 'lbe',
@@ -45,4 +52,12 @@ export enum VaultStatus {
   locked = 'locked',
   governance = 'governance',
   failed = 'failed',
+}
+
+// Mapping for smart contract vault status
+export enum SmartContractVaultStatus {
+  PENDING = 0,
+  OPEN = 1,
+  SUCCESSFUL = 2,
+  CANCELLED = 3,
 }

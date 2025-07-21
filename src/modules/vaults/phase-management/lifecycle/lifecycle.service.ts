@@ -5,14 +5,19 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Queue } from 'bullmq';
 import { Repository } from 'typeorm';
 
-import { AssetOriginType } from '../../../../types/asset.types';
-import { VaultStatus, ContributionWindowType, InvestmentWindowType } from '../../../../types/vault.types';
 import { DistributionService } from '../../../distribution/distribution.service';
 import { TaptoolsService } from '../../../taptools/taptools.service';
 import { ContributionService } from '../contribution/contribution.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Vault } from '@/database/vault.entity';
+import { AssetOriginType } from '@/types/asset.types';
+import {
+  VaultStatus,
+  ContributionWindowType,
+  InvestmentWindowType,
+  SmartContractVaultStatus,
+} from '@/types/vault.types';
 
 @Injectable()
 export class LifecycleService {
@@ -32,7 +37,6 @@ export class LifecycleService {
 
   @Cron(CronExpression.EVERY_MINUTE)
   async handleVaultLifecycleTransitions(): Promise<void> {
-
     await this.handlePublishedToContribution();
 
     // Handle contribution -> acquire transitions
@@ -54,7 +58,19 @@ export class LifecycleService {
 
     if (delay <= 0) {
       // If transition time is now or in the past, execute immediately
-      await this.executePhaseTransition(vaultId, newStatus, phaseStartField);
+      let scStatus: SmartContractVaultStatus | undefined;
+
+      if (newStatus === VaultStatus.governance) {
+        scStatus = SmartContractVaultStatus.SUCCESSFUL;
+      } else if (newStatus === VaultStatus.contribution || newStatus === VaultStatus.acquire) {
+        scStatus = SmartContractVaultStatus.OPEN;
+      } else if (newStatus === VaultStatus.failed) {
+        scStatus = SmartContractVaultStatus.CANCELLED;
+      } else {
+        scStatus = undefined;
+      }
+
+      await this.executePhaseTransition(vaultId, newStatus, phaseStartField, scStatus);
     } else if (delay <= ONE_MINUTE_MS) {
       // If transition should happen within the next minute, create a precise delay job
       await this.phaseTransitionQueue.add(
@@ -89,7 +105,8 @@ export class LifecycleService {
   private async executePhaseTransition(
     vaultId: string,
     newStatus: VaultStatus,
-    phaseStartField?: string
+    phaseStartField: string,
+    newScStatus?: SmartContractVaultStatus
   ): Promise<void> {
     try {
       const vault = await this.vaultRepository.findOne({
@@ -102,6 +119,9 @@ export class LifecycleService {
       }
 
       vault.vault_status = newStatus;
+      if (newScStatus !== undefined) {
+        vault.vault_sc_status = newScStatus;
+      }
 
       if (phaseStartField) {
         (vault as any)[phaseStartField] = new Date().toISOString();
@@ -281,7 +301,7 @@ export class LifecycleService {
 
         // 3. Calculate VT for acquirers
         for (const [userId, adaSent] of Object.entries(acquirerAdaMap)) {
-          const vtResult = await this.distributionService.calculateAcquirerExample({
+          const vtResult = await this.distributionService.calculateAcquirerTokens({
             vaultId: vault.id,
             adaSent,
             numAcquirers: Object.keys(acquirerAdaMap).length,
@@ -294,7 +314,7 @@ export class LifecycleService {
 
         // 4. Calculate VT for contributors
         for (const [userId, valueAda] of Object.entries(contributorValueMap)) {
-          const vtResult = await this.distributionService.calculateContributorExample({
+          const vtResult = await this.distributionService.calculateContributorTokens({
             vaultId: vault.id,
             valueContributed: valueAda,
             totalTvl: totalContributedValueAda,
@@ -317,7 +337,12 @@ export class LifecycleService {
       }
 
       // Execute the phase transition using the consistent method
-      await this.executePhaseTransition(vault.id, VaultStatus.governance, 'governance_phase_start');
+      await this.executePhaseTransition(
+        vault.id,
+        VaultStatus.governance,
+        'governance_phase_start',
+        SmartContractVaultStatus.SUCCESSFUL
+      );
     } catch (error) {
       this.logger.error(`Error executing acquire to governance transition for vault ${vault.id}`, error);
     }
@@ -332,7 +357,12 @@ export class LifecycleService {
       .getMany();
 
     for (const vault of immediateStartVaults) {
-      await this.executePhaseTransition(vault.id, VaultStatus.contribution, 'contribution_phase_start');
+      await this.executePhaseTransition(
+        vault.id,
+        VaultStatus.contribution,
+        'contribution_phase_start',
+        SmartContractVaultStatus.OPEN
+      );
     }
 
     // Handle custom start time vaults
