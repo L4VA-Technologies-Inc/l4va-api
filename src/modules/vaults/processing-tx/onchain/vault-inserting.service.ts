@@ -227,7 +227,6 @@ export class VaultInsertingService {
               value: {
                 policy_id: POLICY_ID,
                 asset_name: VAULT_ID,
-                quantity: 1000,
                 owner: params.changeAddress,
               },
               shape: {

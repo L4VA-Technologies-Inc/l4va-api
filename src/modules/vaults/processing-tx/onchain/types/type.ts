@@ -1,11 +1,13 @@
 export type Redeemer =
   | {
-      quantity: number;
       output_index: number;
       contribution: 'Lovelace' | 'Asset';
     }
   | 'MintAdaPair'
+  | 'MintVaultToken'
   | 'BurnLp';
+type VaultPolicy = string;
+type VaultId = string;
 export type Redeemer1 =
   | {
       __variant: 'ExtractAda' | 'ExtractAsset';
@@ -19,6 +21,10 @@ export type Redeemer1 =
     }
   | 'CancelAsset'
   | 'CancelAda';
+export type VaultPolicy1 = string;
+export type VaultId1 = string;
+type VaultPolicy2 = string;
+type VaultId2 = string;
 export type Redeemer2 =
   | {
       vault_token_index: number;
@@ -39,13 +45,16 @@ export interface L4VaVault {
   contribute: {
     mint: {
       redeemer: Redeemer;
+      parameters: [] | [VaultPolicy] | [VaultPolicy, VaultId];
     };
     spend: {
       redeemer: Redeemer1;
       datum: Datum;
+      parameters: [] | [VaultPolicy1] | [VaultPolicy1, VaultId1];
     };
     else: {
       redeemer: unknown;
+      parameters: [] | [VaultPolicy2] | [VaultPolicy2, VaultId2];
     };
   };
   vault: {
@@ -64,7 +73,6 @@ export interface L4VaVault {
 export interface Datum {
   policy_id: string;
   asset_name: string;
-  quantity: number;
   owner:
     | string
     | {
@@ -84,14 +92,9 @@ export interface Datum {
             };
       };
   datum_tag?: string;
-  contributed_assets?: Array<{
-    policy_id: string;
-    asset_name: string;
-    quantity: number;
-  }>;
 }
 export interface Datum1 {
-  vault_status?: 0 | 1 | 2 | 3; // 0: contribution, 1: launch, 2: distribution, 3: closed
+  vault_status: 0 | 1 | 2 | 3; // 0: contribution, 1: launch, 2: distribution, 3: closed
   contract_type: number;
   asset_whitelist: string[];
   contributor_whitelist?: string[];
@@ -131,6 +134,8 @@ export interface Datum1 {
     reserve: number;
     liquidityPool: number;
   };
+  acquire_multiplier?: [string, string, number][];
+  ada_pair_multipler?: number;
   admin: string;
   minting_key: string;
 }
