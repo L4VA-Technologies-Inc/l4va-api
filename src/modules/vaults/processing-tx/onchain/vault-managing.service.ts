@@ -22,7 +22,7 @@ export interface VaultConfig {
   adminKeyHash: string;
   policyId: string;
   allowedPolicies: string[];
-  allowedContributors: string[];
+  allowedContributors?: string[];
   assetWindow?: {
     start: number;
     end: number;
@@ -333,7 +333,7 @@ export class VaultManagingService {
               vault_status: 2, // Added vault_status field
               contract_type: vaultConfig.contractType || 0,
               asset_whitelist: vaultConfig.allowedPolicies || [],
-              contributor_whitelist: vaultConfig.allowedContributors || [],
+              // contributor_whitelist: vaultConfig.allowedContributors || [],
               asset_window: vaultConfig.assetWindow || {
                 lower_bound: {
                   bound_type: new Date().getTime(),
@@ -359,7 +359,7 @@ export class VaultManagingService {
               admin: this.adminHash,
               minting_key: this.adminHash,
               // New fields from update_vault.ts
-              acquire_multiplier: vaultConfig.acquireMultiplier || [['', '', 1]],
+              acquire_multiplier: vaultConfig.acquireMultiplier,
               ada_pair_multiplier: vaultConfig.adaPairMultiplier || 1,
             },
             shape: {

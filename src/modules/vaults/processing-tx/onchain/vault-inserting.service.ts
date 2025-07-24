@@ -161,10 +161,11 @@ export class VaultInsertingService {
         outputs: {
           address: string;
           assets: object[];
-          lovelace?: number;
+          lovelace?: number; // Required if Contribution in ADA
           datum: { type: 'inline'; value: Datum; shape: object };
         }[];
         requiredSigners: string[];
+        // Not required if Contribution in ADA
         preloadedScripts: {
           type: string;
           blueprint: any;

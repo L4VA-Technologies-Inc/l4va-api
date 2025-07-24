@@ -2,10 +2,6 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { AssetStatus, AssetType, AssetOriginType } from '../../../../types/asset.types';
-import { BlockchainTransactionListItem } from '../../../../types/blockchain.types';
-import { TransactionStatus, TransactionType } from '../../../../types/transaction.types';
-import { VaultPrivacy, VaultStatus } from '../../../../types/vault.types';
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
 import { BlockchainScannerService } from '../../processing-tx/onchain/blockchain-scanner.service';
 
@@ -15,6 +11,10 @@ import { Asset } from '@/database/asset.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { AssetStatus, AssetType, AssetOriginType } from '@/types/asset.types';
+import { BlockchainTransactionListItem } from '@/types/blockchain.types';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
+import { VaultPrivacy, VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class ContributionService {
