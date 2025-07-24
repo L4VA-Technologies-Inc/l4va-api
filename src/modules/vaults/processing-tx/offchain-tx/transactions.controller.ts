@@ -28,13 +28,6 @@ export class TransactionsController {
     return null;
   }
 
-  @Get(':txHash')
-  @ApiOperation({ summary: 'Get transaction details by transaction hash' })
-  async getTransaction(@Param('txHash') _txHash: string) {
-    //return this.transactionsService.getTransaction(txHash);
-    return null;
-  }
-
   @ApiDoc({
     summary: 'Get transactions waiting for owner',
     description: 'Fetch all transactions that are waiting for the owner to sign them.',
@@ -43,8 +36,14 @@ export class TransactionsController {
   @Get('waiting-owner')
   @ApiOperation({ summary: 'Get transactions waiting for owner' })
   async getWaitingOwnerTransactions(@Request() req: any) {
-    const userId = req.user.id;
-    return this.transactionsService.getWaitingOwnerTransactions(userId);
+    return this.transactionsService.getWaitingOwnerTransactions(req.user.id);
+  }
+
+  @Get(':txHash')
+  @ApiOperation({ summary: 'Get transaction details by transaction hash' })
+  async getTransaction(@Param('txHash') _txHash: string) {
+    //return this.transactionsService.getTransaction(txHash);
+    return null;
   }
 
   @ApiDoc({

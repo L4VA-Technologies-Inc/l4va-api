@@ -81,4 +81,8 @@ export class Transaction {
   @Column({ name: 'vault_id', nullable: true })
   @Index()
   vault_id: string;
+
+  @Column({ name: 'user_id', nullable: true })
+  @Index()
+  user_id: string;
 }

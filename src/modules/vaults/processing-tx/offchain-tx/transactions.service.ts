@@ -2,7 +2,7 @@ import { Injectable, InternalServerErrorException, Logger, NotFoundException } f
 import { InjectRepository } from '@nestjs/typeorm';
 import { AssetStatus } from 'src/types/asset.types';
 import { TransactionStatus, TransactionType } from 'src/types/transaction.types';
-import { In, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 
 import { VaultManagingService } from '../onchain/vault-managing.service';
 
@@ -218,22 +218,12 @@ export class TransactionsService {
   }
 
   async getWaitingOwnerTransactions(userId: string): Promise<Transaction[]> {
-    // Знайти волти, власником яких є поточний користувач
-    const vaults = await this.vaultRepository.find({
-      where: { owner: { id: userId } },
-      select: ['id'],
-    });
-
-    const vaultIds = vaults.map(vault => vault.id);
-
-    // Знайти транзакції updateVault зі статусом waitingOwner
     return this.transactionRepository.find({
       where: {
-        vault_id: In(vaultIds),
+        user_id: userId,
         type: TransactionType.updateVault,
         status: TransactionStatus.waitingOwner,
       },
-      relations: ['vault'],
     });
   }
 
@@ -256,7 +246,6 @@ export class TransactionsService {
       const newMetadata: any = transaction.metadata;
       const result = await this.vaultManagingService.updateVaultMetadataTx(newMetadata);
 
-      // Оновлюємо транзакцію з hex-кодом згенерованої транзакції
       transaction.tx_hash = result.presignedTx;
       transaction.status = TransactionStatus.pending;
       await this.transactionRepository.save(transaction);
