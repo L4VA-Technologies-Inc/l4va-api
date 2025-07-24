@@ -1,4 +1,5 @@
 export enum TransactionStatus {
+  waitingOwner = 'waiting_owner',
   created = 'created',
   pending = 'pending',
   submitted = 'submitted',
