@@ -274,28 +274,40 @@ export class LifecycleService {
       );
 
       if (meetsThreshold) {
-        // TODO: Mint tokens and launch the vault
-        // For each user, calculate VT received
+        // 3. Calculate LP Tokens
+        const { lpAdaAmount, lpVtAmount, vtPrice } = await this.distributionService.calculateLpTokens({
+          vaultId: vault.id,
+          vtSupply: vault.ft_token_supply || 0,
+          totalValue: totalContributedValueAda,
+          assetsOfferedPercent: vault.tokens_for_acquires * 0.01,
+          lpPercent: vault.liquidity_pool_contribution * 0.01,
+        });
 
-        // 3. Calculate VT for acquirers
+        // 4. Calculate VT for acquirers
         for (const [userId, adaSent] of Object.entries(acquirerAdaMap)) {
           const vtResult = await this.distributionService.calculateAcquirerTokens({
             vaultId: vault.id,
             adaSent,
             numAcquirers: Object.keys(acquirerAdaMap).length,
             totalAcquiredValueAda: totalAcquiredAda,
+            lpAdaAmount,
+            lpVtAmount,
+            vtPrice,
           });
           this.logger.debug(
             `--- Acquirer ${userId} will receive VT: ${vtResult.vtReceived} (for ADA sent: ${adaSent})`
           );
         }
 
-        // 4. Calculate VT for contributors
+        // 5. Calculate VT for contributors
         for (const [userId, valueAda] of Object.entries(contributorValueMap)) {
           const vtResult = await this.distributionService.calculateContributorTokens({
             vaultId: vault.id,
             valueContributed: valueAda,
             totalTvl: totalContributedValueAda,
+            lpAdaAmount,
+            lpVtAmount,
+            vtPrice,
           });
           this.logger.debug(
             `--- Contributor ${userId} will receive VT: ${vtResult.vtRetained} (for value contributed: ${valueAda})`
