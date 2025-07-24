@@ -1,8 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { AssetStatus } from 'src/types/asset.types';
 import { TransactionStatus, TransactionType } from 'src/types/transaction.types';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
+
+import { VaultManagingService } from '../onchain/vault-managing.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Transaction } from '@/database/transaction.entity';
@@ -10,13 +12,16 @@ import { Vault } from '@/database/vault.entity';
 
 @Injectable()
 export class TransactionsService {
+  private readonly logger = new Logger(TransactionsService.name);
+
   constructor(
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(Asset)
-    private readonly assetRepository: Repository<Asset>
+    private readonly assetRepository: Repository<Asset>,
+    private readonly vaultManagingService: VaultManagingService
   ) {}
 
   async createTransaction(data: {
@@ -189,5 +194,81 @@ export class TransactionsService {
     });
 
     return transactions.length > 0 ? transactions[0] : null;
+  }
+
+  async createWaitingVaultUpdateTransaction(
+    vaultId: string,
+    metadata: {
+      vaultName: string;
+      customerAddress: string;
+      adminKeyHash: string;
+      allowedPolicies: string[];
+      contractType: number;
+      policyId: string;
+      acquireMultiplier: [string, string, number][];
+      adaPairMultiplier: number;
+    }
+  ): Promise<Transaction> {
+    return this.transactionRepository.save({
+      vault_id: vaultId,
+      type: TransactionType.updateVault,
+      status: TransactionStatus.waitingOwner,
+      metadata,
+    });
+  }
+
+  async getWaitingOwnerTransactions(userId: string): Promise<Transaction[]> {
+    // Знайти волти, власником яких є поточний користувач
+    const vaults = await this.vaultRepository.find({
+      where: { owner: { id: userId } },
+      select: ['id'],
+    });
+
+    const vaultIds = vaults.map(vault => vault.id);
+
+    // Знайти транзакції updateVault зі статусом waitingOwner
+    return this.transactionRepository.find({
+      where: {
+        vault_id: In(vaultIds),
+        type: TransactionType.updateVault,
+        status: TransactionStatus.waitingOwner,
+      },
+      relations: ['vault'],
+    });
+  }
+
+  async generateUpdateTransaction(
+    transactionId: string
+  ): Promise<{ transactionId: string; vaultId: string; transactionHex: string }> {
+    const transaction = await this.transactionRepository.findOne({
+      where: { id: transactionId },
+    });
+
+    if (
+      !transaction ||
+      transaction.status !== TransactionStatus.waitingOwner ||
+      transaction.type !== TransactionType.updateVault
+    ) {
+      throw new NotFoundException('Transaction not found or not waiting for owner');
+    }
+
+    try {
+      const newMetadata: any = transaction.metadata;
+      const result = await this.vaultManagingService.updateVaultMetadataTx(newMetadata);
+
+      // Оновлюємо транзакцію з hex-кодом згенерованої транзакції
+      transaction.tx_hash = result.presignedTx;
+      transaction.status = TransactionStatus.pending;
+      await this.transactionRepository.save(transaction);
+
+      return {
+        transactionId: transaction.id,
+        vaultId: transaction.vault_id,
+        transactionHex: result.presignedTx,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to generate transaction: ${error.message}`);
+      throw new InternalServerErrorException(`Failed to generate transaction: ${error.message}`);
+    }
   }
 }

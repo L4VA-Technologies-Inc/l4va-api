@@ -1,9 +1,11 @@
-import { Controller, Get, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Post, Request, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 
 import { AuthGuard } from '../../../auth/auth.guard';
 
 import { TransactionsService } from './transactions.service';
+
+import { ApiDoc } from '@/decorators/api-doc.decorator';
 
 @ApiTags('Transactions')
 @Controller('transactions')
@@ -28,8 +30,31 @@ export class TransactionsController {
 
   @Get(':txHash')
   @ApiOperation({ summary: 'Get transaction details by transaction hash' })
-  async getTransaction(@Param('txHash') txHash: string) {
+  async getTransaction(@Param('txHash') _txHash: string) {
     //return this.transactionsService.getTransaction(txHash);
     return null;
+  }
+
+  @ApiDoc({
+    summary: 'Get transactions waiting for owner',
+    description: 'Fetch all transactions that are waiting for the owner to sign them.',
+    status: 200,
+  })
+  @Get('waiting-owner')
+  @ApiOperation({ summary: 'Get transactions waiting for owner' })
+  async getWaitingOwnerTransactions(@Request() req: any) {
+    const userId = req.user.id;
+    return this.transactionsService.getWaitingOwnerTransactions(userId);
+  }
+
+  @ApiDoc({
+    summary: 'Generate updateVault transaction',
+    description: 'Generate an updateVault transaction based on the provided transaction ID.',
+    status: 200,
+  })
+  @Post('generate-update/:transactionId')
+  @ApiOperation({ summary: 'Generate updateVault transaction' })
+  async generateUpdateTransaction(@Param('transactionId') transactionId: string) {
+    return this.transactionsService.generateUpdateTransaction(transactionId);
   }
 }

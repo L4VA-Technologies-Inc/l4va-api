@@ -1,5 +1,5 @@
 import { HttpModule } from '@nestjs/axios';
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
@@ -21,7 +21,7 @@ import { Vault } from '@/database/vault.entity';
       isGlobal: true,
     }),
     HttpModule,
-    TransactionsModule,
+    forwardRef(() => TransactionsModule),
     TypeOrmModule.forFeature([Vault]),
   ],
   controllers: [BlockchainController],

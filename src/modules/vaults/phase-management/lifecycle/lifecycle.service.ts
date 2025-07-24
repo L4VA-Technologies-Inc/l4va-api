@@ -1,5 +1,6 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config/dist/config.service';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Queue } from 'bullmq';
@@ -7,6 +8,7 @@ import { Repository } from 'typeorm';
 
 import { DistributionService } from '../../../distribution/distribution.service';
 import { TaptoolsService } from '../../../taptools/taptools.service';
+import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
 import { ContributionService } from '../contribution/contribution.service';
 
 import { Asset } from '@/database/asset.entity';
@@ -22,6 +24,7 @@ import {
 @Injectable()
 export class LifecycleService {
   private readonly logger = new Logger(LifecycleService.name);
+  private readonly adminHash: string;
 
   constructor(
     @InjectQueue('phaseTransition')
@@ -32,8 +35,12 @@ export class LifecycleService {
     private readonly vaultRepository: Repository<Vault>,
     private readonly contributionService: ContributionService,
     private readonly distributionService: DistributionService,
-    private readonly taptoolsService: TaptoolsService
-  ) {}
+    private readonly taptoolsService: TaptoolsService,
+    private readonly transactionsService: TransactionsService,
+    private readonly configService: ConfigService
+  ) {
+    this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
+  }
 
   @Cron(CronExpression.EVERY_MINUTE)
   async handleVaultLifecycleTransitions(): Promise<void> {
@@ -105,7 +112,7 @@ export class LifecycleService {
   private async executePhaseTransition(
     vaultId: string,
     newStatus: VaultStatus,
-    phaseStartField: string,
+    phaseStartField?: string,
     newScStatus?: SmartContractVaultStatus
   ): Promise<void> {
     try {
@@ -314,7 +321,22 @@ export class LifecycleService {
           );
         }
 
-        this.logger.log(`Vault ${vault.id} is ready to be launched`);
+        const updateParams = {
+          vaultName: vault.asset_vault_name,
+          customerAddress: vault.owner.address,
+          adminKeyHash: this.adminHash,
+          allowedPolicies: ['7350d27fee037e39e25ecd473e6220961cf55eb8e1b1d16a0e79f122'],
+          contractType: 2, // Successful
+          policyId: vault.policy_id,
+          acquireMultiplier: [
+            ['7350d27fee037e39e25ecd473e6220961cf55eb8e1b1d16a0e79f122', '', 25000000],
+            ['', '', 10000000],
+          ] as [string, string, number][], //test
+          adaPairMultiplier: vault.ada_pair_multiplier || 1,
+        };
+
+        await this.transactionsService.createWaitingVaultUpdateTransaction(vault.id, updateParams);
+        this.logger.log(`Vault ${vault.id} update transaction is waiting for owner signature`);
       } else {
         this.logger.warn(
           `Vault ${vault.id} does not meet the threshold: ` +
@@ -326,13 +348,8 @@ export class LifecycleService {
         this.logger.warn(`Vault ${vault.id} needs to be burned and assets refunded`);
       }
 
-      // Execute the phase transition using the consistent method
-      await this.executePhaseTransition(
-        vault.id,
-        VaultStatus.governance,
-        'governance_phase_start',
-        SmartContractVaultStatus.SUCCESSFUL
-      );
+      // Execute the phase transition For ready for DAO and waiting owner`s signing
+      await this.executePhaseTransition(vault.id, VaultStatus.readyForGovernance);
     } catch (error) {
       this.logger.error(`Error executing acquire to governance transition for vault ${vault.id}`, error);
     }
@@ -492,6 +509,7 @@ export class LifecycleService {
       .where('vault.vault_status = :status', { status: VaultStatus.acquire })
       .andWhere('vault.acquire_phase_start IS NOT NULL')
       .andWhere('vault.acquire_window_duration IS NOT NULL')
+      .leftJoinAndSelect('vault.owner', 'owner')
       .leftJoinAndSelect('vault.assets', 'assets')
       .getMany();
 

@@ -4,6 +4,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { DistributionModule } from '../../../distribution/distribution.module';
+import { TransactionsModule } from '../../processing-tx/offchain-tx/transactions.module';
 import { BlockchainModule } from '../../processing-tx/onchain/blockchain.module';
 import { ContributionModule } from '../contribution/contribution.module';
 
@@ -17,6 +18,7 @@ import { LifecycleProcessor } from '@/modules/vaults/phase-management/lifecycle/
   imports: [
     ContributionModule,
     DistributionModule,
+    TransactionsModule,
     TypeOrmModule.forFeature([Vault, Asset]),
     ScheduleModule.forRoot(),
     BlockchainModule,

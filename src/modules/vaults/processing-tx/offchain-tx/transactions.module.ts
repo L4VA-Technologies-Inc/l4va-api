@@ -1,5 +1,7 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+
+import { BlockchainModule } from '../onchain/blockchain.module';
 
 import { TransactionsController } from './transactions.controller';
 import { TransactionsService } from './transactions.service';
@@ -9,7 +11,7 @@ import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Transaction, Asset, Vault])],
+  imports: [forwardRef(() => BlockchainModule), TypeOrmModule.forFeature([Transaction, Asset, Vault])],
   providers: [TransactionsService],
   controllers: [TransactionsController],
   exports: [TransactionsService],
