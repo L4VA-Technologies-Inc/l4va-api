@@ -369,7 +369,7 @@ export class VaultManagingService {
           },
         },
       ],
-      requiredInputs: [this.adminHash],
+      requiredSigners: [this.adminHash],
     };
 
     try {
