@@ -55,6 +55,11 @@ export class Transaction {
   })
   tx_hash: string; // 1
 
+  @Column({
+    nullable: true,
+  })
+  tx_hex: string;
+
   @Expose({ name: 'status' })
   @Column({
     name: 'status',
