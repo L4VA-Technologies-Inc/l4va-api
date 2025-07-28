@@ -69,19 +69,7 @@ export class BlockchainController {
   @ApiOperation({ summary: 'Generate updateVault transaction' })
   @UseGuards(AuthGuard)
   async generateUpdateTransaction(@Param('transactionId') transactionId: string) {
-    return this.transactionManagingService.generateUpdateTransaction(transactionId);
-  }
-
-  @ApiDoc({
-    summary: 'Submit signed updateVault transaction',
-    description: 'Submit a signed updateVault transaction to the blockchain',
-    status: 200,
-  })
-  @Post('transactions/submit/:transactionId')
-  @ApiOperation({ summary: 'Submit signed updateVault transaction' })
-  @UseGuards(AuthGuard)
-  async submitSignedTransaction(@Param('transactionId') transactionId: string, @Body() data: { signedTx: string }) {
-    return this.transactionManagingService.submitSignedTransaction(transactionId, data.signedTx);
+    return this.transactionManagingService.updateVaultMetadataTx(transactionId);
   }
 
   @Post('scanner-wh')

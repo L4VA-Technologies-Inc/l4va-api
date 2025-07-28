@@ -219,6 +219,7 @@ export class TransactionsService {
         type: TransactionType.updateVault,
         status: TransactionStatus.waitingOwner,
       },
+      relations: ['vault'],
     });
   }
 }
