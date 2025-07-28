@@ -362,7 +362,8 @@ export class TaptoolsService {
       this.cache.set(cacheKey, result);
       return result;
     } catch (error) {
-      console.error(`Error fetching asset value for ${policyId}.${assetName}:`, error.message);
+      // No value on Preprod
+      // console.error(`Error fetching asset value for ${policyId}.${assetName}:`, error.message);
       // Return zero values if the asset is not found or there's an error
       return { priceAda: 91, priceUsd: 123 };
     }

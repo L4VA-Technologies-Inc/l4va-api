@@ -475,7 +475,15 @@ export class VaultManagingService {
   }
 
   // Add a method to submit the signed transaction
-  async submitSignedTransaction(transactionId: string, signedTx: string): Promise<any> {
+  async submitSignedTransaction(
+    transactionId: string,
+    signedTx: string
+  ): Promise<{
+    transactionId: string;
+    vaultId: string;
+    status: TransactionStatus.submitted;
+    txHash: string;
+  }> {
     const transaction = await this.transactionRepository.findOne({
       where: { id: transactionId },
       relations: ['vault'],
