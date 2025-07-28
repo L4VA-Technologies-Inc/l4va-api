@@ -55,6 +55,7 @@ export class Transaction {
   })
   tx_hash: string; // 1
 
+  @Exclude()
   @Column({
     nullable: true,
   })
