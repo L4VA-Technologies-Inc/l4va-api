@@ -1,11 +1,10 @@
 import { Controller, Get, Param, Request, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { AuthGuard } from '../../../auth/auth.guard';
 
+import { WaitingTransactionsResponseDto } from './dto/waiting-transactions-response.dto';
 import { TransactionsService } from './transactions.service';
-
-import { ApiDoc } from '@/decorators/api-doc.decorator';
 
 @ApiTags('Transactions')
 @Controller('transactions')
@@ -28,15 +27,15 @@ export class TransactionsController {
     return null;
   }
 
-  @ApiDoc({
-    summary: 'Get transactions waiting for owner',
-    description: 'Fetch all transactions that are waiting for the owner to sign them.',
-    status: 200,
-  })
   @Get('waiting-owner')
   @ApiOperation({ summary: 'Get transactions waiting for owner' })
-  async getWaitingOwnerTransactions(@Request() req: any) {
-    return this.transactionsService.getWaitingOwnerTransactions(req.user.id);
+  @ApiResponse({
+    status: 200,
+    description: 'List of transactions waiting for owner signature',
+    type: [WaitingTransactionsResponseDto],
+  })
+  async getWaitingOwnerTransactions(@Request() req) {
+    return this.transactionsService.getWaitingOwnerTransactions(req.user.sub);
   }
 
   @Get(':txHash')

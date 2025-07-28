@@ -8,12 +8,13 @@ import { Repository } from 'typeorm';
 
 import { DistributionService } from '../../../distribution/distribution.service';
 import { TaptoolsService } from '../../../taptools/taptools.service';
-import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
 import { ContributionService } from '../contribution/contribution.service';
 
 import { Asset } from '@/database/asset.entity';
+import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetOriginType } from '@/types/asset.types';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import {
   VaultStatus,
   ContributionWindowType,
@@ -31,12 +32,13 @@ export class LifecycleService {
     private phaseTransitionQueue: Queue,
     @InjectRepository(Asset)
     private readonly assetsRepository: Repository<Asset>,
+    @InjectRepository(Transaction)
+    private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     private readonly contributionService: ContributionService,
     private readonly distributionService: DistributionService,
     private readonly taptoolsService: TaptoolsService,
-    private readonly transactionsService: TransactionsService,
     private readonly configService: ConfigService
   ) {
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
@@ -321,7 +323,7 @@ export class LifecycleService {
           );
         }
 
-        const updateParams = {
+        const metadata = {
           vaultName: vault.asset_vault_name,
           customerAddress: vault.owner.address,
           adminKeyHash: this.adminHash,
@@ -335,7 +337,13 @@ export class LifecycleService {
           adaPairMultiplier: vault.ada_pair_multiplier || 1,
         };
 
-        await this.transactionsService.createWaitingVaultUpdateTransaction(vault.id, updateParams);
+        await this.transactionRepository.save({
+          vault_id: vault.id,
+          user_id: vault.owner.id,
+          type: TransactionType.updateVault,
+          status: TransactionStatus.waitingOwner,
+          metadata,
+        });
         this.logger.log(`Vault ${vault.id} update transaction is waiting for owner signature`);
       } else {
         this.logger.warn(
@@ -522,7 +530,7 @@ export class LifecycleService {
 
       // If acquire period hasn't ended yet, queue the transition
       if (now < acquireEnd) {
-        await this.queuePhaseTransition(vault.id, VaultStatus.governance, acquireEnd, 'governance_phase_start');
+        await this.queuePhaseTransition(vault.id, VaultStatus.readyForGovernance, acquireEnd, 'governance_phase_start');
         continue;
       }
 
