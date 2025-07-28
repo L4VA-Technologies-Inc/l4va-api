@@ -1,4 +1,4 @@
-import { Body, Controller, Post, UseGuards, HttpCode, Request, UnauthorizedException } from '@nestjs/common';
+import { Body, Controller, Post, UseGuards, HttpCode, Request, UnauthorizedException, Param } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import {
@@ -9,8 +9,10 @@ import {
 } from './dto/transaction.dto';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
 import { VaultInsertingService } from './vault-inserting.service';
+import { VaultManagingService } from './vault-managing.service';
 import { WebhookVerificationService } from './webhook-verification.service';
 
+import { ApiDoc } from '@/decorators/api-doc.decorator';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 
 @ApiTags('blockchain')
@@ -18,7 +20,8 @@ import { AuthGuard } from '@/modules/auth/auth.guard';
 export class BlockchainController {
   constructor(
     private readonly transactionService: VaultInsertingService,
-    private readonly webhookVerificationService: WebhookVerificationService
+    private readonly webhookVerificationService: WebhookVerificationService,
+    private readonly transactionManagingService: VaultManagingService
   ) {}
 
   @Post('transaction/build')
@@ -55,6 +58,30 @@ export class BlockchainController {
   @UseGuards(AuthGuard)
   async submitTransaction(@Body() params: SubmitTransactionDto): Promise<TransactionSubmitResponseDto> {
     return this.transactionService.submitTransaction(params);
+  }
+
+  @ApiDoc({
+    summary: 'Generate updateVault transaction',
+    description: 'Generate an updateVault transaction based on the provided transaction ID.',
+    status: 200,
+  })
+  @Post('transactions/generate-update/:transactionId')
+  @ApiOperation({ summary: 'Generate updateVault transaction' })
+  @UseGuards(AuthGuard)
+  async generateUpdateTransaction(@Param('transactionId') transactionId: string) {
+    return this.transactionManagingService.generateUpdateTransaction(transactionId);
+  }
+
+  @ApiDoc({
+    summary: 'Submit signed updateVault transaction',
+    description: 'Submit a signed updateVault transaction to the blockchain',
+    status: 200,
+  })
+  @Post('transactions/submit/:transactionId')
+  @ApiOperation({ summary: 'Submit signed updateVault transaction' })
+  @UseGuards(AuthGuard)
+  async submitSignedTransaction(@Param('transactionId') transactionId: string, @Body() data: { signedTx: string }) {
+    return this.transactionManagingService.submitSignedTransaction(transactionId, data.signedTx);
   }
 
   @Post('scanner-wh')

@@ -13,6 +13,7 @@ import { VaultInsertingService } from './vault-inserting.service';
 import { VaultManagingService } from './vault-managing.service';
 import { WebhookVerificationService } from './webhook-verification.service';
 
+import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 
 @Module({
@@ -21,8 +22,8 @@ import { Vault } from '@/database/vault.entity';
       isGlobal: true,
     }),
     HttpModule,
-    forwardRef(() => TransactionsModule),
-    TypeOrmModule.forFeature([Vault]),
+    TransactionsModule,
+    TypeOrmModule.forFeature([Vault, Transaction]),
   ],
   controllers: [BlockchainController],
   providers: [

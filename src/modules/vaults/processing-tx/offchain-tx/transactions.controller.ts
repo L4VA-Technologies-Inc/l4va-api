@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Post, Request, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Request, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 
 import { AuthGuard } from '../../../auth/auth.guard';
@@ -44,16 +44,5 @@ export class TransactionsController {
   async getTransaction(@Param('txHash') _txHash: string) {
     //return this.transactionsService.getTransaction(txHash);
     return null;
-  }
-
-  @ApiDoc({
-    summary: 'Generate updateVault transaction',
-    description: 'Generate an updateVault transaction based on the provided transaction ID.',
-    status: 200,
-  })
-  @Post('generate-update/:transactionId')
-  @ApiOperation({ summary: 'Generate updateVault transaction' })
-  async generateUpdateTransaction(@Param('transactionId') transactionId: string) {
-    return this.transactionsService.generateUpdateTransaction(transactionId);
   }
 }

@@ -9,12 +9,17 @@ import {
   FixedTransaction,
   PrivateKey,
 } from '@emurgo/cardano-serialization-lib-nodejs';
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 
 import { BlockchainService } from './blockchain.service';
 import { Datum1 } from './types/type';
 import { generate_assetname_from_txhash_index, getUtxos, getVaultUtxo, toHex } from './utils/lib';
+
+import { Transaction } from '@/database/transaction.entity';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
 export interface VaultConfig {
   vaultName: string;
@@ -69,6 +74,8 @@ export class VaultManagingService {
   private readonly blockfrost: any;
 
   constructor(
+    @InjectRepository(Transaction)
+    private readonly transactionRepository: Repository<Transaction>,
     private readonly configService: ConfigService,
     @Inject(BlockchainService)
     private readonly blockchainService: BlockchainService
@@ -410,6 +417,97 @@ export class VaultManagingService {
     } catch (error) {
       this.logger.error('Failed to submit vault transaction', error);
       throw new Error(`Failed to submit transaction: ${error.message}`);
+    }
+  }
+
+  async generateUpdateTransaction(
+    transactionId: string
+  ): Promise<{ transactionId: string; vaultId: string; transactionHex: string }> {
+    const transaction = await this.transactionRepository.findOne({
+      where: { id: transactionId },
+      relations: ['vault'],
+    });
+
+    if (
+      !transaction ||
+      transaction.status !== TransactionStatus.waitingOwner ||
+      transaction.type !== TransactionType.updateVault
+    ) {
+      throw new NotFoundException('Transaction not found or not waiting for owner');
+    }
+
+    try {
+      // Prepare metadata with correct types for vault-managing service
+      const newMetadata: any = {
+        ...transaction.metadata,
+        // Convert the acquireMultiplier to the correct format
+        acquireMultiplier: transaction.metadata.acquireMultiplier.map((item: [string, string | null, number]) => [
+          item[0],
+          item[1] || '',
+          item[2],
+        ]),
+        adaPairMultiplier: Number(transaction.metadata.adaPairMultiplier),
+      };
+
+      this.logger.log(
+        `Generating update transaction for vault ${transaction.vault_id} with metadata: ${JSON.stringify(newMetadata)}`
+      );
+
+      const result = await this.updateVaultMetadataTx(newMetadata);
+
+      if (!result || !result.presignedTx) {
+        throw new Error('Failed to generate transaction - no presignedTx returned');
+      }
+
+      // Update transaction status to pending
+      transaction.tx_hex = result.presignedTx; // Save the hex for later use if needed
+      await this.transactionRepository.save(transaction);
+
+      return {
+        transactionId: transaction.id,
+        vaultId: transaction.vault_id,
+        transactionHex: result.presignedTx,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to generate transaction: ${error.message}`, error.stack);
+      throw new InternalServerErrorException(`Failed to generate transaction: ${error.message}`);
+    }
+  }
+
+  // Add a method to submit the signed transaction
+  async submitSignedTransaction(transactionId: string, signedTx: string): Promise<any> {
+    const transaction = await this.transactionRepository.findOne({
+      where: { id: transactionId },
+      relations: ['vault'],
+    });
+
+    if (!transaction) {
+      throw new NotFoundException(`Transaction with id ${transactionId} not found`);
+    }
+
+    try {
+      this.logger.log(`Submitting signed transaction for tx: ${transactionId}`);
+
+      // Submit the signed transaction
+      const result = await this.submitOnChainVaultTx({
+        transaction: signedTx,
+        signatures: [],
+      });
+
+      // Update transaction with hash
+      transaction.tx_hash = result.txHash;
+      transaction.status = TransactionStatus.submitted;
+      await this.transactionRepository.save(transaction);
+
+      return {
+        transactionId: transaction.id,
+        vaultId: transaction.vault_id,
+        status: transaction.status,
+        txHash: result.txHash,
+      };
+    } catch (error) {
+      this.logger.error(`Error submitting transaction ${transactionId}: ${error.message}`);
+      throw new InternalServerErrorException(`Failed to submit transaction: ${error.message}`);
     }
   }
 }
