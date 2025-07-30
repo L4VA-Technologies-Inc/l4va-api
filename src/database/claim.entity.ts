@@ -28,7 +28,8 @@ export class Claim {
 
   @Expose({ name: 'status' })
   @Column({
-    type: 'varchar',
+    type: 'enum',
+    enum: ClaimStatus,
     nullable: false,
     default: ClaimStatus.AVAILABLE,
   })
