@@ -4,7 +4,7 @@ import { FixedTransaction, PlutusData, PrivateKey } from '@emurgo/cardano-serial
 import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { instanceToPlain, plainToInstance } from 'class-transformer';
+import { plainToInstance } from 'class-transformer';
 import { In, Repository } from 'typeorm';
 
 import { ClaimResponseDto } from './dto/claim-response.dto';
@@ -103,28 +103,6 @@ export class ClaimsService {
         excludeExtraneousValues: true,
       });
     });
-  }
-
-  /**
-   * Updates the transaction hash for a claim and marks it as claimed
-   *
-   * @param claimId - The ID of the claim to updateв
-   * @param txHash - The transaction hash to associate with the claim
-   * @returns Promise with the updated Claim entity
-   * @throws NotFoundException if the claim is not found
-   */
-  async updateClaimTxHash(claimId: string, txHash: string): Promise<Claim> {
-    const claim = await this.claimRepository.findOne({
-      where: { id: claimId },
-    });
-
-    if (!claim) {
-      throw new NotFoundException('Claim not found');
-    }
-
-    claim.tx_hash = txHash;
-    claim.status = ClaimStatus.CLAIMED;
-    return this.claimRepository.save(claim);
   }
 
   /**
