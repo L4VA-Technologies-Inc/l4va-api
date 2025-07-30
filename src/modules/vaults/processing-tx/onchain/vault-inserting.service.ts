@@ -25,7 +25,8 @@ import { applyContributeParams, toPreloadedScript } from './utils/apply_params';
 import * as blueprint from './utils/blueprint.json';
 
 import { Vault } from '@/database/vault.entity';
-import { TransactionStatus } from '@/types/transaction.types';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
+import { SmartContractVaultStatus, VaultStatus } from '@/types/vault.types';
 
 // Acquire and Contribution
 
@@ -316,6 +317,12 @@ export class VaultInsertingService {
             this.logger.warn(`Vault ${signedTx.vaultId} not found when updating monitoring address`);
           } else if (vault.contract_address) {
             await this.blockchainScanner.checkMonitoringAddress(vault.contract_address, vault.name);
+
+            const transaction = await this.transactionsService.findById(signedTx.txId);
+            if (transaction && transaction.type === TransactionType.updateVault) {
+              // Update vault status after transaction submission
+              await this.updateVaultStatusAfterTransaction(signedTx.vaultId, result.txHash);
+            }
           }
         }
 
@@ -330,6 +337,45 @@ export class VaultInsertingService {
     } catch (error) {
       this.logger.error('Error submitting transaction', error);
       throw new Error(`Failed to submit transaction: ${error.message}`);
+    }
+  }
+
+  private async updateVaultStatusAfterTransaction(vaultId: string, txHash: string): Promise<void> {
+    try {
+      const vault = await this.vaultsRepository.findOne({
+        where: { id: vaultId },
+      });
+
+      if (!vault) {
+        this.logger.warn(`Vault ${vaultId} not found when updating status after transaction`);
+        return;
+      }
+
+      this.logger.log(`Updating vault ${vaultId} status after transaction ${txHash}`);
+
+      // Update monitoring for the vault address if available
+      if (vault.contract_address) {
+        await this.blockchainScanner.checkMonitoringAddress(vault.contract_address, vault.name);
+      }
+
+      // Update vault status
+      const previousStatus = vault.vault_status;
+      const previousScStatus = vault.vault_sc_status;
+
+      vault.vault_sc_status = SmartContractVaultStatus.SUCCESSFUL;
+      vault.vault_status = VaultStatus.locked;
+      vault.last_update_tx_hash = txHash;
+
+      // Save the updated vault
+      await this.vaultsRepository.save(vault);
+
+      this.logger.log(
+        `Vault ${vaultId} status updated: SC status ${previousScStatus} -> ${vault.vault_sc_status}, ` +
+          `Vault status ${previousStatus} -> ${vault.vault_status}`
+      );
+    } catch (error) {
+      this.logger.error(`Failed to update vault ${vaultId} status after transaction`, error);
+      throw new Error(`Failed to update vault status: ${error.message}`);
     }
   }
 

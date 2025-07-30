@@ -11,9 +11,11 @@ import { TaptoolsService } from '../../../taptools/taptools.service';
 import { ContributionService } from '../contribution/contribution.service';
 
 import { Asset } from '@/database/asset.entity';
+import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetOriginType } from '@/types/asset.types';
+import { ClaimStatus } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import {
   VaultStatus,
@@ -34,6 +36,8 @@ export class LifecycleService {
     private readonly assetsRepository: Repository<Asset>,
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
+    @InjectRepository(Claim)
+    private readonly claimRepository: Repository<Claim>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     private readonly contributionService: ContributionService,
@@ -82,26 +86,25 @@ export class LifecycleService {
       await this.executePhaseTransition(vaultId, newStatus, phaseStartField, scStatus);
     } else if (delay <= ONE_MINUTE_MS) {
       // If transition should happen within the next minute, create a precise delay job
-      await this.phaseTransitionQueue.add(
-        'transitionPhase',
-        {
-          vaultId,
-          newStatus,
-          phaseStartField,
-        },
-        {
-          delay,
-          // Remove any existing jobs for this vault and phase to avoid duplicates
-          jobId: `${vaultId}-${newStatus}`,
-          removeOnComplete: 10,
-          removeOnFail: 10,
-        }
-      );
-
-      this.logger.log(
-        `Queued precise phase transition for vault ${vaultId} to ${newStatus} ` +
-          `in ${Math.round(delay / 1000)} seconds`
-      );
+      // await this.phaseTransitionQueue.add(
+      //   'transitionPhase',
+      //   {
+      //     vaultId,
+      //     newStatus,
+      //     phaseStartField,
+      //   },
+      //   {
+      //     delay,
+      //     // Remove any existing jobs for this vault and phase to avoid duplicates
+      //     jobId: `${vaultId}-${newStatus}`,
+      //     removeOnComplete: 10,
+      //     removeOnFail: 10,
+      //   }
+      // );
+      // this.logger.log(
+      //   `Queued precise phase transition for vault ${vaultId} to ${newStatus} ` +
+      //     `in ${Math.round(delay / 1000)} seconds`
+      // );
     } else {
       // If more than 1 minute away, don't queue - let future cron runs handle it
       this.logger.log(
@@ -291,6 +294,22 @@ export class LifecycleService {
           assetsOfferedPercent: vault.tokens_for_acquires * 0.01,
           lpPercent: vault.liquidity_pool_contribution * 0.01,
         });
+        // Create LP claim record
+        try {
+          await this.claimRepository.save({
+            vault: { id: vault.id },
+            type: 'lp',
+            amount: lpVtAmount,
+            status: ClaimStatus.AVAILABLE,
+            metadata: {
+              lpAmount: lpAdaAmount,
+              vtPrice: vtPrice,
+            },
+          });
+          this.logger.log(`Created LP claim for vault owner: ${lpVtAmount} VT tokens (${lpAdaAmount} ADA)`);
+        } catch (error) {
+          this.logger.error(`Failed to create LP claim for vault ${vault.id}:`, error);
+        }
 
         // 4. Calculate VT for acquirers
         for (const [userId, adaSent] of Object.entries(acquirerAdaMap)) {
@@ -306,6 +325,24 @@ export class LifecycleService {
           this.logger.debug(
             `--- Acquirer ${userId} will receive VT: ${vtResult.vtReceived} (for ADA sent: ${adaSent})`
           );
+
+          // Create claim record for acquirer
+          try {
+            await this.claimRepository.save({
+              user: { id: userId },
+              vault: { id: vault.id },
+              type: 'acquirer',
+              amount: vtResult.vtReceived,
+              status: ClaimStatus.AVAILABLE,
+              metadata: {
+                adaSent: adaSent,
+                vtPrice: vtPrice,
+              },
+            });
+            this.logger.log(`Created acquirer claim for user ${userId}: ${vtResult.vtReceived} VT tokens`);
+          } catch (error) {
+            this.logger.error(`Failed to create acquirer claim for user ${userId} in vault ${vault.id}:`, error);
+          }
         }
 
         // 5. Calculate VT for contributors
@@ -321,6 +358,24 @@ export class LifecycleService {
           this.logger.debug(
             `--- Contributor ${userId} will receive VT: ${vtResult.vtRetained} (for value contributed: ${valueAda})`
           );
+
+          // Create claim record for contributor
+          try {
+            await this.claimRepository.save({
+              user: { id: userId },
+              vault: { id: vault.id },
+              type: 'contributor',
+              amount: vtResult.vtRetained,
+              status: ClaimStatus.AVAILABLE,
+              metadata: {
+                valueContributed: valueAda,
+                vtPrice: vtPrice,
+              },
+            });
+            this.logger.log(`Created contributor claim for user ${userId}: ${vtResult.vtRetained} VT tokens`);
+          } catch (error) {
+            this.logger.error(`Failed to create contributor claim for user ${userId} in vault ${vault.id}:`, error);
+          }
         }
 
         const metadata = {
