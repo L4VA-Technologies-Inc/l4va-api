@@ -302,7 +302,15 @@ export class VaultManagingService {
   }
 
   // Create a transaction to update the vault's metadata
-  async updateVaultMetadataTx(transactionId: string): Promise<{
+  async updateVaultMetadataTx({
+    transactionId,
+    acquireMultiplier,
+    adaPairMultiplier,
+  }: {
+    transactionId: string;
+    acquireMultiplier: [string, string | null, number][];
+    adaPairMultiplier: number;
+  }): Promise<{
     success: boolean;
     txHash: string;
     message: string;
@@ -316,21 +324,14 @@ export class VaultManagingService {
       throw new NotFoundException('Transaction not found');
     }
 
-    const vaultConfig: VaultConfig = {
-      ...(transaction.metadata as VaultConfig),
-      acquireMultiplier: transaction.metadata.acquireMultiplier.map((item: [string, string | null, number]) => [
-        item[0],
-        item[1] || '',
-        item[2],
-      ]),
-      adaPairMultiplier: Number(transaction.metadata.adaPairMultiplier),
-    };
+    const allowedPolicies: string[] = transaction.vault.assets_whitelist.map(policy => policy.policy_id);
+    const contract_type = transaction.vault.privacy === 'private' ? 0 : transaction.vault.privacy === 'public' ? 1 : 2;
 
     this.scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
       .to_address()
       .to_bech32();
 
-    const vaultUtxo = await getVaultUtxo(this.scPolicyId, vaultConfig.vaultName, this.blockfrost);
+    const vaultUtxo = await getVaultUtxo(this.scPolicyId, transaction.vault.asset_vault_name, this.blockfrost);
     const input = {
       changeAddress: this.adminAddress,
       message: 'Vault Update',
@@ -343,7 +344,7 @@ export class VaultManagingService {
             type: 'json',
             value: {
               vault_token_index: 0, // must fit the ordering defined in the outputs array
-              asset_name: vaultConfig.vaultName,
+              asset_name: transaction.vault.asset_vault_name,
             },
           },
         },
@@ -353,7 +354,7 @@ export class VaultManagingService {
           address: this.scAddress,
           assets: [
             {
-              assetName: vaultConfig.vaultName,
+              assetName: transaction.vault.asset_vault_name,
               policyId: this.scPolicyId,
               quantity: 1,
             },
@@ -362,10 +363,10 @@ export class VaultManagingService {
             type: 'inline',
             value: {
               vault_status: 2, // Added vault_status field
-              contract_type: vaultConfig.contractType || 0,
-              asset_whitelist: vaultConfig.allowedPolicies || [],
+              contract_type: contract_type,
+              asset_whitelist: allowedPolicies,
               // contributor_whitelist: vaultConfig.allowedContributors || [],
-              asset_window: vaultConfig.assetWindow || {
+              asset_window: {
                 lower_bound: {
                   bound_type: new Date().getTime(),
                   is_inclusive: true,
@@ -375,7 +376,7 @@ export class VaultManagingService {
                   is_inclusive: true,
                 },
               },
-              acquire_window: vaultConfig.acquireWindow || {
+              acquire_window: {
                 lower_bound: {
                   bound_type: new Date().getTime(),
                   is_inclusive: true,
@@ -385,13 +386,22 @@ export class VaultManagingService {
                   is_inclusive: true,
                 },
               },
-              valuation_type: vaultConfig.valueMethod || 0,
-              custom_metadata: vaultConfig.customMetadata || [],
+              valuation_type: transaction.vault.value_method === 'fixed' ? 0 : 1,
+              custom_metadata: [
+                // <Data,Data>
+                // [
+                //   PlutusData.new_bytes(Buffer.from("foo")).to_hex(),
+                //   PlutusData.new_bytes(Buffer.from("bar")).to_hex(),
+                // ],
+                [toHex('foo'), toHex('bar')],
+                [toHex('bar'), toHex('foo')],
+                [toHex('inc'), toHex('3')],
+              ],
               admin: this.adminHash,
               minting_key: this.adminHash,
               // New fields from update_vault.ts
-              acquire_multiplier: vaultConfig.acquireMultiplier,
-              ada_pair_multiplier: vaultConfig.adaPairMultiplier || 1,
+              acquire_multiplier: acquireMultiplier,
+              ada_pair_multiplier: adaPairMultiplier,
             },
             shape: {
               validatorHash: this.scPolicyId,

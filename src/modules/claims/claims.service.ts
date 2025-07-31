@@ -12,36 +12,34 @@ import { GetClaimsDto } from './dto/get-claims.dto';
 
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
-import { User } from '@/database/user.entity';
-import { Vault } from '@/database/vault.entity';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { Datum, Redeemer, Redeemer1 } from '@/modules/vaults/processing-tx/onchain/types/type';
 import { applyContributeParams, toPreloadedScript } from '@/modules/vaults/processing-tx/onchain/utils/apply_params';
-import blueprint from '@/modules/vaults/processing-tx/onchain/utils/blueprint.json';
 import { generate_tag_from_txhash_index } from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { ClaimStatus } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const blueprint = require('../vaults/processing-tx/onchain/utils/blueprint.json');
 
 @Injectable()
 export class ClaimsService {
   private readonly logger = new Logger(ClaimsService.name);
   private readonly adminSKey: string;
   private readonly adminHash: string;
+  private readonly vaultPolicyId: string;
 
   constructor(
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(Claim)
     private claimRepository: Repository<Claim>,
-    @InjectRepository(User)
-    private userRepository: Repository<User>,
-    @InjectRepository(Vault)
-    private readonly vaultRepository: Repository<Vault>,
     private readonly configService: ConfigService,
     private readonly blockchainService: BlockchainService
   ) {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
+    this.vaultPolicyId = this.configService.get<string>('SC_POLICY_ID');
   }
 
   /**
@@ -78,6 +76,7 @@ export class ClaimsService {
         amount: true,
         tx_hash: true,
         description: true,
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore
         metadata: true,
         created_at: true,
@@ -137,6 +136,9 @@ export class ClaimsService {
       relations: ['user', 'vault'],
     });
 
+    const vault = claim.vault;
+    const user = claim.user;
+
     if (!claim) {
       throw new NotFoundException('Claim not found');
     }
@@ -145,43 +147,33 @@ export class ClaimsService {
       throw new Error('Claim is not available for extraction');
     }
 
-    // Update claim status to PENDING
-    claim.status = ClaimStatus.PENDING;
-    await this.claimRepository.save(claim);
+    if (!vault || !user) {
+      throw new Error('Vault or user not found for claim');
+    }
 
     const parameterizedScript = applyContributeParams({
-      vault_policy_id: 'd4915ac1dd9ef95493351cfaa2a6c9a85086472f12523999b5e32aeb',
+      vault_policy_id: this.vaultPolicyId,
       vault_id: claim.vault.asset_vault_name,
     });
 
     const unparameterizedScript = blueprint.validators.find(v => v.title === 'contribute.contribute');
 
     try {
-      const vault = claim.vault;
-      const user = claim.user;
-
-      if (!vault || !user) {
-        throw new Error('Vault or user not found for claim');
-      }
+      // Update claim status to PENDING
+      claim.status = ClaimStatus.PENDING;
+      await this.claimRepository.save(claim);
 
       // Create internal transaction
       const internalTx = await this.transactionRepository.save({
         user_id: user.id,
         vault_id: vault.id,
-        amount: claim.amount,
+        amount: parseFloat(claim.amount.toString()),
         type: TransactionType.claim,
         status: TransactionStatus.created,
         metadata: {
-          claimId: claim.id,
-          createdAt: new Date().toISOString(),
-          transactionType: 'claim',
-          description: `Claim payout for user ${claim.user.id}`,
           utxoToClaim: claim.metadata?.utxoToClaim, // TX_HASH_INDEX_WITH_LPS_TO_COLLECT from metadata
           lastUpdateTxHash: vault.last_update_tx_hash,
-          lastUpdateTxIndex: vault.last_update_tx_index,
-          policyId: vault.policy_id,
           vaultId: vault.asset_vault_name,
-          vtAmount: claim.amount,
         },
       });
 
@@ -248,7 +240,7 @@ export class ClaimsService {
             assetName: { name: vault.asset_vault_name, format: 'hex' },
             policyId: vault.policy_id,
             type: 'plutus',
-            quantity: claim.amount, // Use the amount from the claim
+            quantity: parseFloat(claim.amount.toString()), // Use the amount from the claim
             metadata: {},
           },
         ],
@@ -259,7 +251,7 @@ export class ClaimsService {
               {
                 assetName: { name: vault.asset_vault_name, format: 'hex' },
                 policyId: vault.policy_id,
-                quantity: claim.amount,
+                quantity: parseFloat(claim.amount.toString()),
               },
             ],
             datum: {
@@ -277,7 +269,7 @@ export class ClaimsService {
         referenceInputs: [
           {
             txHash: vault.last_update_tx_hash,
-            index: vault.last_update_tx_index,
+            index: vault.last_update_tx_index || 0,
           },
         ],
         validityInterval: {
@@ -303,7 +295,7 @@ export class ClaimsService {
         presignedTx: txToSubmitOnChain.to_hex(),
       };
     } catch (error) {
-      this.logger.error(`Failed to build LP extraction transaction: ${error.message}`, error);
+      this.logger.error(`Failed to build Claim extraction transaction: ${error.message}`, error);
       // Reset claim status on error
       claim.status = ClaimStatus.AVAILABLE;
       await this.claimRepository.save(claim);

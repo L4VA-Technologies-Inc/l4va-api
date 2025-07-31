@@ -7,20 +7,15 @@ export enum VaultType {
 }
 
 export enum VaultPrivacy {
+  // Represent an enum setup by L4VA (0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE) in SC
   private = 'private',
   public = 'public',
   semiPrivate = 'semi-private',
 }
 
-// Smart contract acquire multiplier type
-export interface AcquireMultiplier {
-  policyId: string;
-  assetName?: string | null; // None in smart contract
-  multiplier: number;
-}
-
 // step 2
 export enum ValueMethod {
+  // Enum 0: 'FIXED' 1: 'LBE' in SC
   lbe = 'lbe',
   fixed = 'fixed',
 }

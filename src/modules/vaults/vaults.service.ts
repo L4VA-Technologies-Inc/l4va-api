@@ -315,7 +315,6 @@ export class VaultsService {
           })
         : null;
 
-      // Maybe set to null
       const contributionOpenWindowTime = data.contributionOpenWindowTime
         ? new Date(data.contributionOpenWindowTime).toISOString()
         : null;

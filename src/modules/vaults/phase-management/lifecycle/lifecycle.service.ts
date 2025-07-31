@@ -398,28 +398,21 @@ export class LifecycleService {
           }
         }
 
-        const metadata = {
-          vaultName: vault.asset_vault_name,
-          customerAddress: vault.owner.address,
-          adminKeyHash: this.adminHash,
-          allowedPolicies: ['7350d27fee037e39e25ecd473e6220961cf55eb8e1b1d16a0e79f122'],
-          contractType: 2, // Successful
-          policyId: vault.policy_id,
-          acquireMultiplier: [
-            ['7350d27fee037e39e25ecd473e6220961cf55eb8e1b1d16a0e79f122', '', 25000000],
-            ['', '', 10000000],
-          ] as [string, string, number][], //test
-          adaPairMultiplier: vault.ada_pair_multiplier || 1,
-        };
+        // TODO: make calculation for this value for SC
+        const acquireMultiplier: [string, string | null, number][] = [];
+        const adaPairMultiplier = 1;
 
         const transaction = await this.transactionsService.createTransaction({
           vault_id: vault.id,
           type: TransactionType.updateVault,
           assets: [], // No assets needed for this transaction as it's metadata update
-          metadata,
         });
 
-        const response = await this.vaultManagingService.updateVaultMetadataTx(transaction.id);
+        const response = await this.vaultManagingService.updateVaultMetadataTx({
+          transactionId: transaction.id,
+          acquireMultiplier,
+          adaPairMultiplier,
+        });
 
         await this.executePhaseTransition({
           vaultId: vault.id,
@@ -427,8 +420,8 @@ export class LifecycleService {
           phaseStartField: 'governance_phase_start',
           newScStatus: SmartContractVaultStatus.SUCCESSFUL,
           txHash: response.txHash,
-          acquire_multiplier: metadata.acquireMultiplier,
-          ada_pair_multiplier: metadata.adaPairMultiplier,
+          acquire_multiplier: acquireMultiplier,
+          ada_pair_multiplier: adaPairMultiplier,
         });
       } else {
         this.logger.warn(
