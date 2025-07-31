@@ -318,10 +318,10 @@ export class VaultsService {
       // Maybe set to null
       const contributionOpenWindowTime = data.contributionOpenWindowTime
         ? new Date(data.contributionOpenWindowTime).toISOString()
-        : new Date().toISOString();
+        : null;
       const acquireOpenWindowTime = data.acquireOpenWindowTime
         ? new Date(data.acquireOpenWindowTime).toISOString()
-        : new Date().toISOString();
+        : null;
 
       // Prepare vault data
       const vaultData = transformToSnakeCase({
