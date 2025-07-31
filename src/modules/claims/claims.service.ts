@@ -170,7 +170,7 @@ export class ClaimsService {
         vault_id: vault.id,
         amount: claim.amount,
         type: TransactionType.claim,
-        status: TransactionStatus.waitingOwner,
+        status: TransactionStatus.created,
         metadata: {
           claimId: claim.id,
           createdAt: new Date().toISOString(),

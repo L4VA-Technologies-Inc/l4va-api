@@ -6,17 +6,17 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Queue } from 'bullmq';
 import { Repository } from 'typeorm';
 
-import { DistributionService } from '../../../distribution/distribution.service';
-import { TaptoolsService } from '../../../taptools/taptools.service';
-import { ContributionService } from '../contribution/contribution.service';
-
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
-import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { DistributionService } from '@/modules/distribution/distribution.service';
+import { TaptoolsService } from '@/modules/taptools/taptools.service';
+import { ContributionService } from '@/modules/vaults/phase-management/contribution/contribution.service';
+import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
+import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
 import { AssetOriginType } from '@/types/asset.types';
 import { ClaimStatus } from '@/types/claim.types';
-import { TransactionStatus, TransactionType } from '@/types/transaction.types';
+import { TransactionType } from '@/types/transaction.types';
 import {
   VaultStatus,
   ContributionWindowType,
@@ -34,13 +34,13 @@ export class LifecycleService {
     private phaseTransitionQueue: Queue,
     @InjectRepository(Asset)
     private readonly assetsRepository: Repository<Asset>,
-    @InjectRepository(Transaction)
-    private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(Claim)
     private readonly claimRepository: Repository<Claim>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     private readonly contributionService: ContributionService,
+    private readonly vaultManagingService: VaultManagingService,
+    private readonly transactionsService: TransactionsService,
     private readonly distributionService: DistributionService,
     private readonly taptoolsService: TaptoolsService,
     private readonly configService: ConfigService
@@ -63,7 +63,7 @@ export class LifecycleService {
     vaultId: string,
     newStatus: VaultStatus,
     transitionTime: Date,
-    phaseStartField?: string
+    phaseStartField?: 'contribution_phase_start' | 'acquire_phase_start' | 'governance_phase_start'
   ): Promise<void> {
     const now = new Date();
     const delay = transitionTime.getTime() - now.getTime();
@@ -83,7 +83,7 @@ export class LifecycleService {
         scStatus = undefined;
       }
 
-      await this.executePhaseTransition(vaultId, newStatus, phaseStartField, scStatus);
+      await this.executePhaseTransition({ vaultId, newStatus, phaseStartField, newScStatus: scStatus });
     } else if (delay <= ONE_MINUTE_MS) {
       // If transition should happen within the next minute, create a precise delay job
       // await this.phaseTransitionQueue.add(
@@ -114,39 +114,51 @@ export class LifecycleService {
     }
   }
 
-  private async executePhaseTransition(
-    vaultId: string,
-    newStatus: VaultStatus,
-    phaseStartField?: string,
-    newScStatus?: SmartContractVaultStatus
-  ): Promise<void> {
+  private async executePhaseTransition(data: {
+    vaultId: string;
+    newStatus: VaultStatus;
+    phaseStartField?: 'contribution_phase_start' | 'acquire_phase_start' | 'governance_phase_start';
+    newScStatus?: SmartContractVaultStatus;
+    txHash?: string;
+    acquire_multiplier?: [string, string, number][];
+    ada_pair_multiplier?: number;
+  }): Promise<void> {
     try {
       const vault = await this.vaultRepository.findOne({
-        where: { id: vaultId },
+        where: { id: data.vaultId },
       });
 
       if (!vault) {
-        this.logger.error(`Vault ${vaultId} not found for phase transition`);
+        this.logger.error(`Vault ${data.vaultId} not found for phase transition`);
         return;
       }
 
-      vault.vault_status = newStatus;
-      if (newScStatus !== undefined) {
-        vault.vault_sc_status = newScStatus;
+      vault.vault_status = data.newStatus;
+      if (data.newScStatus !== undefined) {
+        vault.vault_sc_status = data.newScStatus;
+        vault.last_update_tx_hash = data.txHash;
       }
 
-      if (phaseStartField) {
-        (vault as any)[phaseStartField] = new Date().toISOString();
+      if (data.phaseStartField) {
+        vault[data.phaseStartField] = new Date().toISOString();
+      }
+
+      if (data.ada_pair_multiplier) {
+        vault.ada_pair_multiplier = data.ada_pair_multiplier;
+      }
+
+      if (data.acquire_multiplier) {
+        vault.acquire_multiplier = data.acquire_multiplier;
       }
 
       await this.vaultRepository.save(vault);
 
       this.logger.log(
-        `Executed immediate phase transition for vault ${vaultId} to ${newStatus}` +
-          (phaseStartField ? ` and set ${phaseStartField}` : '')
+        `Executed immediate phase transition for vault ${vault.id} to ${data.newStatus}` +
+          (data.phaseStartField ? ` and set ${data.phaseStartField}` : '')
       );
     } catch (error) {
-      this.logger.error(`Failed to execute phase transition for vault ${vaultId}:`, error);
+      this.logger.error(`Failed to execute phase transition for vault ${data.vaultId}:`, error);
       throw error;
     }
   }
@@ -197,7 +209,11 @@ export class LifecycleService {
 
       // For immediate acquire start
       if (vault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
-        await this.executePhaseTransition(vault.id, VaultStatus.acquire, 'acquire_phase_start');
+        await this.executePhaseTransition({
+          vaultId: vault.id,
+          newStatus: VaultStatus.acquire,
+          phaseStartField: 'acquire_phase_start',
+        });
       }
       // For custom acquire start time
       else if (vault.acquire_open_window_type === InvestmentWindowType.custom && vault.acquire_open_window_time) {
@@ -205,7 +221,11 @@ export class LifecycleService {
         const customTime = new Date(vault.acquire_open_window_time);
 
         if (now >= customTime) {
-          await this.executePhaseTransition(vault.id, VaultStatus.acquire, 'acquire_phase_start');
+          await this.executePhaseTransition({
+            vaultId: vault.id,
+            newStatus: VaultStatus.acquire,
+            phaseStartField: 'acquire_phase_start',
+          });
         } else {
           // Queue for the custom time
           await this.queuePhaseTransition(vault.id, VaultStatus.acquire, customTime, 'acquire_phase_start');
@@ -392,14 +412,24 @@ export class LifecycleService {
           adaPairMultiplier: vault.ada_pair_multiplier || 1,
         };
 
-        await this.transactionRepository.save({
+        const transaction = await this.transactionsService.createTransaction({
           vault_id: vault.id,
-          user_id: vault.owner.id,
           type: TransactionType.updateVault,
-          status: TransactionStatus.waitingOwner,
+          assets: [], // No assets needed for this transaction as it's metadata update
           metadata,
         });
-        this.logger.log(`Vault ${vault.id} update transaction is waiting for owner signature`);
+
+        const response = await this.vaultManagingService.updateVaultMetadataTx(transaction.id);
+
+        await this.executePhaseTransition({
+          vaultId: vault.id,
+          newStatus: VaultStatus.governance,
+          phaseStartField: 'governance_phase_start',
+          newScStatus: SmartContractVaultStatus.SUCCESSFUL,
+          txHash: response.txHash,
+          acquire_multiplier: metadata.acquireMultiplier,
+          ada_pair_multiplier: metadata.adaPairMultiplier,
+        });
       } else {
         this.logger.warn(
           `Vault ${vault.id} does not meet the threshold: ` +
@@ -409,10 +439,8 @@ export class LifecycleService {
 
         // TODO: Burn the vault and refund assets
         this.logger.warn(`Vault ${vault.id} needs to be burned and assets refunded`);
+        await this.executePhaseTransition({ vaultId: vault.id, newStatus: VaultStatus.failed });
       }
-
-      // Execute the phase transition For ready for DAO and waiting owner`s signing
-      await this.executePhaseTransition(vault.id, VaultStatus.readyForGovernance);
     } catch (error) {
       this.logger.error(`Error executing acquire to governance transition for vault ${vault.id}`, error);
     }
@@ -427,12 +455,12 @@ export class LifecycleService {
       .getMany();
 
     for (const vault of immediateStartVaults) {
-      await this.executePhaseTransition(
-        vault.id,
-        VaultStatus.contribution,
-        'contribution_phase_start',
-        SmartContractVaultStatus.OPEN
-      );
+      await this.executePhaseTransition({
+        vaultId: vault.id,
+        newStatus: VaultStatus.contribution,
+        phaseStartField: 'contribution_phase_start',
+        newScStatus: SmartContractVaultStatus.OPEN,
+      });
     }
 
     // Handle custom start time vaults
@@ -481,7 +509,12 @@ export class LifecycleService {
         try {
           this.logger.log(`Vault ${vault.id} has no assets and contribution period has ended. Burning vault...`);
           // Update vault status to failed
-          await this.executePhaseTransition(vault.id, VaultStatus.failed, null, SmartContractVaultStatus.CANCELLED);
+          await this.executePhaseTransition({
+            vaultId: vault.id,
+            newStatus: VaultStatus.failed,
+            phaseStartField: null,
+            newScStatus: SmartContractVaultStatus.CANCELLED,
+          });
 
           // // Use admin wallet to burn the vault
           // const burnTx = await this.vaultContractService.createBurnTx({
@@ -585,7 +618,7 @@ export class LifecycleService {
 
       // If acquire period hasn't ended yet, queue the transition
       if (now < acquireEnd) {
-        await this.queuePhaseTransition(vault.id, VaultStatus.readyForGovernance, acquireEnd, 'governance_phase_start');
+        await this.queuePhaseTransition(vault.id, VaultStatus.governance, acquireEnd, 'governance_phase_start');
         continue;
       }
 

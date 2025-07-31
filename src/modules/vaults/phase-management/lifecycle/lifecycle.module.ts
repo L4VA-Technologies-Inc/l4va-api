@@ -4,6 +4,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { DistributionModule } from '../../../distribution/distribution.module';
+import { TransactionsModule } from '../../processing-tx/offchain-tx/transactions.module';
 import { BlockchainModule } from '../../processing-tx/onchain/blockchain.module';
 import { ContributionModule } from '../contribution/contribution.module';
 
@@ -11,7 +12,6 @@ import { LifecycleService } from './lifecycle.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
-import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { LifecycleProcessor } from '@/modules/vaults/phase-management/lifecycle/lifecycle.processor';
 
@@ -19,7 +19,8 @@ import { LifecycleProcessor } from '@/modules/vaults/phase-management/lifecycle/
   imports: [
     ContributionModule,
     DistributionModule,
-    TypeOrmModule.forFeature([Vault, Asset, Transaction, Claim]),
+    TransactionsModule,
+    TypeOrmModule.forFeature([Vault, Asset, Claim]),
     ScheduleModule.forRoot(),
     BlockchainModule,
     BullModule.registerQueue({

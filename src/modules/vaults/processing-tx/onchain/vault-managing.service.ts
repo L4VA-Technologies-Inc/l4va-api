@@ -9,7 +9,7 @@ import {
   FixedTransaction,
   PrivateKey,
 } from '@emurgo/cardano-serialization-lib-nodejs';
-import { Inject, Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -17,9 +17,10 @@ import { Repository } from 'typeorm';
 import { BlockchainService } from './blockchain.service';
 import { Datum1 } from './types/type';
 import { generate_assetname_from_txhash_index, getUtxos, getVaultUtxo, toHex } from './utils/lib';
+import { VaultInsertingService } from './vault-inserting.service';
 
 import { Transaction } from '@/database/transaction.entity';
-import { TransactionStatus, TransactionType } from '@/types/transaction.types';
+import { TransactionType } from '@/types/transaction.types';
 
 export interface VaultConfig {
   vaultName: string;
@@ -71,6 +72,7 @@ export class VaultManagingService {
   private readonly scPolicyId: string;
   private readonly adminHash: string;
   private readonly adminSKey: string;
+  private readonly adminAddress: string;
   private readonly blockfrost: any;
 
   constructor(
@@ -78,11 +80,13 @@ export class VaultManagingService {
     private readonly transactionRepository: Repository<Transaction>,
     private readonly configService: ConfigService,
     @Inject(BlockchainService)
-    private readonly blockchainService: BlockchainService
+    private readonly blockchainService: BlockchainService,
+    private readonly vaultInsertingService: VaultInsertingService
   ) {
     this.scPolicyId = this.configService.get<string>('SC_POLICY_ID');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
+    this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
     });
@@ -299,20 +303,17 @@ export class VaultManagingService {
 
   // Create a transaction to update the vault's metadata
   async updateVaultMetadataTx(transactionId: string): Promise<{
-    presignedTx: string;
-    contractAddress: string;
+    success: boolean;
+    txHash: string;
+    message: string;
   }> {
     const transaction = await this.transactionRepository.findOne({
       where: { id: transactionId },
       relations: ['vault'],
     });
 
-    if (
-      !transaction ||
-      transaction.status !== TransactionStatus.waitingOwner ||
-      transaction.type !== TransactionType.updateVault
-    ) {
-      throw new NotFoundException('Transaction not found or not waiting for owner');
+    if (!transaction || transaction.type !== TransactionType.updateVault) {
+      throw new NotFoundException('Transaction not found');
     }
 
     const vaultConfig: VaultConfig = {
@@ -331,7 +332,7 @@ export class VaultManagingService {
 
     const vaultUtxo = await getVaultUtxo(this.scPolicyId, vaultConfig.vaultName, this.blockfrost);
     const input = {
-      changeAddress: vaultConfig.customerAddress,
+      changeAddress: this.adminAddress,
       message: 'Vault Update',
       scriptInteractions: [
         {
@@ -409,10 +410,13 @@ export class VaultManagingService {
       const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
       txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
-      return {
-        presignedTx: txToSubmitOnChain.to_hex(),
-        contractAddress: this.scAddress,
-      };
+      const response = await this.vaultInsertingService.submitTransaction({
+        transaction: txToSubmitOnChain.to_hex(),
+        vaultId: transaction.vault.id,
+        txId: transaction.id,
+      });
+
+      return { success: true, txHash: response.txHash, message: 'Transaction submitted successfully' };
     } catch (error) {
       this.logger.error('Failed to build vault update tx:', error);
       throw error;

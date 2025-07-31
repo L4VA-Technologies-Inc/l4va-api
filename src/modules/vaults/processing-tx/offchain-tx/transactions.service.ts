@@ -1,11 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { plainToInstance } from 'class-transformer';
 import { AssetStatus } from 'src/types/asset.types';
 import { TransactionStatus, TransactionType } from 'src/types/transaction.types';
 import { Repository } from 'typeorm';
-
-import { WaitingTransactionsResponseDto } from './dto/waiting-transactions-response.dto';
 
 import { Asset } from '@/database/asset.entity';
 import { Transaction } from '@/database/transaction.entity';
@@ -27,6 +24,7 @@ export class TransactionsService {
     type: TransactionType;
     assets: Asset[];
     amount?: number;
+    metadata?: object;
   }): Promise<Transaction> {
     return this.transactionRepository.save({
       vault_id: data.vault_id,
@@ -34,6 +32,7 @@ export class TransactionsService {
       status: TransactionStatus.created,
       assets: data.assets,
       amount: data.amount,
+      metadata: data.metadata,
     });
   }
 
@@ -192,19 +191,5 @@ export class TransactionsService {
     });
 
     return transactions.length > 0 ? transactions[0] : null;
-  }
-
-  async getWaitingOwnerTransactions(userId: string): Promise<WaitingTransactionsResponseDto[]> {
-    const transactions = await this.transactionRepository.find({
-      where: {
-        user_id: userId,
-        type: TransactionType.updateVault,
-        status: TransactionStatus.waitingOwner,
-      },
-      relations: ['vault'],
-    });
-    return plainToInstance(WaitingTransactionsResponseDto, transactions, {
-      excludeExtraneousValues: true,
-    });
   }
 }
