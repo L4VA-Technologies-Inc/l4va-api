@@ -73,7 +73,7 @@ export class LifecycleService {
       // If transition time is now or in the past, execute immediately
       let scStatus: SmartContractVaultStatus | undefined;
 
-      if (newStatus === VaultStatus.governance) {
+      if (newStatus === VaultStatus.locked) {
         scStatus = SmartContractVaultStatus.SUCCESSFUL;
       } else if (newStatus === VaultStatus.contribution || newStatus === VaultStatus.acquire) {
         scStatus = SmartContractVaultStatus.OPEN;
@@ -423,7 +423,7 @@ export class LifecycleService {
 
         await this.executePhaseTransition({
           vaultId: vault.id,
-          newStatus: VaultStatus.governance,
+          newStatus: VaultStatus.locked,
           phaseStartField: 'governance_phase_start',
           newScStatus: SmartContractVaultStatus.SUCCESSFUL,
           txHash: response.txHash,
@@ -618,7 +618,7 @@ export class LifecycleService {
 
       // If acquire period hasn't ended yet, queue the transition
       if (now < acquireEnd) {
-        await this.queuePhaseTransition(vault.id, VaultStatus.governance, acquireEnd, 'governance_phase_start');
+        await this.queuePhaseTransition(vault.id, VaultStatus.locked, acquireEnd, 'governance_phase_start');
         continue;
       }
 

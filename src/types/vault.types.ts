@@ -50,7 +50,6 @@ export enum VaultStatus {
   acquire = 'acquire',
   investment = 'investment',
   locked = 'locked',
-  governance = 'governance',
   failed = 'failed',
 }
 

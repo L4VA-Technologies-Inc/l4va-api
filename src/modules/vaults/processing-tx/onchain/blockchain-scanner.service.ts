@@ -30,7 +30,7 @@ export class BlockchainScannerService {
 
   private async makeRequest<T>(endpoint: string): Promise<T> {
     this.logger.log(`Scanner URL ${this.scannerUrl}${endpoint}`);
-    this.logger.log(`Scanner KEY ${this.scannerKey}`);
+    // this.logger.log(`Scanner KEY ${this.scannerKey}`);
     try {
       const response = await axios.get(`${this.scannerUrl}${endpoint}`, {
         headers: {
@@ -136,8 +136,22 @@ export class BlockchainScannerService {
   async checkMonitoringAddress(vaultAddress: string = '', vaultName: string = ''): Promise<boolean> {
     try {
       // First, check if the address is already being monitored
-      await this.makeRequest(`/monitoring/addresses/${vaultAddress}`);
-      return true;
+      const response: {
+        id: string;
+        address: string;
+        name: string;
+        description: string;
+        last_checked_at: string;
+        created_at: string;
+        is_active: boolean;
+      }[] = await this.makeRequest(`/monitoring/addresses`);
+      if (response && response.some((addr: any) => addr.address === vaultAddress)) {
+        this.logger.log(`Address ${vaultAddress} is already being monitored`);
+        return true;
+      } else {
+        this.logger.log(`Address ${vaultAddress} is not being monitored`);
+        await this.registerTrackingAddress(vaultAddress, vaultName);
+      }
     } catch (error) {
       if (!vaultName) {
         return false;

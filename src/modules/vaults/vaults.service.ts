@@ -837,9 +837,6 @@ export class VaultsService {
         case VaultFilter.acquire:
           query.where['vault_status'] = VaultStatus.acquire;
           break;
-        case VaultFilter.governance:
-          query.where['vault_status'] = VaultStatus.governance;
-          break;
       }
     }
 
@@ -1040,16 +1037,6 @@ export class VaultsService {
             })
           );
           break;
-        case VaultFilter.governance:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.governance }).andWhere(
-            new Brackets(qb => {
-              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
-                '(EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress) OR EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress))',
-                { userWalletAddress }
-              );
-            })
-          );
-          break;
         case VaultFilter.locked:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked });
           break;
@@ -1134,11 +1121,7 @@ export class VaultsService {
   private async calculateVaultTVL(vault: Vault): Promise<number> {
     try {
       // If vault is in contribution or later phase, calculate real TVL
-      if (
-        [VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked, VaultStatus.governance].includes(
-          vault.vault_status
-        )
-      ) {
+      if ([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked].includes(vault.vault_status)) {
         // Get all locked assets for this vault
         // const lockedAssets = await this.assetsRepository.count({
         //   where: {
@@ -1258,13 +1241,6 @@ export class VaultsService {
           // Start time is when the vault was locked
           phaseStartTime = vault.locked_at ? new Date(vault.locked_at) : null;
           // No end time for locked vaults
-          phaseEndTime = null;
-          break;
-
-        case VaultStatus.governance:
-          // Start time would be when governance began (not tracked in current model)
-          // End time is not applicable for governance
-          phaseStartTime = null;
           phaseEndTime = null;
           break;
 
