@@ -1,6 +1,5 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config/dist/config.service';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Queue } from 'bullmq';
@@ -8,6 +7,7 @@ import { Repository } from 'typeorm';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
+import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { DistributionService } from '@/modules/distribution/distribution.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
@@ -15,8 +15,8 @@ import { ContributionService } from '@/modules/vaults/phase-management/contribut
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
 import { AssetOriginType } from '@/types/asset.types';
-import { ClaimStatus } from '@/types/claim.types';
-import { TransactionType } from '@/types/transaction.types';
+import { ClaimStatus, ClaimType } from '@/types/claim.types';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import {
   VaultStatus,
   ContributionWindowType,
@@ -27,13 +27,14 @@ import {
 @Injectable()
 export class LifecycleService {
   private readonly logger = new Logger(LifecycleService.name);
-  private readonly adminHash: string;
 
   constructor(
     @InjectQueue('phaseTransition')
     private phaseTransitionQueue: Queue,
     @InjectRepository(Asset)
     private readonly assetsRepository: Repository<Asset>,
+    @InjectRepository(Transaction)
+    private readonly transactionsRepository: Repository<Transaction>,
     @InjectRepository(Claim)
     private readonly claimRepository: Repository<Claim>,
     @InjectRepository(Vault)
@@ -42,11 +43,8 @@ export class LifecycleService {
     private readonly vaultManagingService: VaultManagingService,
     private readonly transactionsService: TransactionsService,
     private readonly distributionService: DistributionService,
-    private readonly taptoolsService: TaptoolsService,
-    private readonly configService: ConfigService
-  ) {
-    this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
-  }
+    private readonly taptoolsService: TaptoolsService
+  ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
   async handleVaultLifecycleTransitions(): Promise<void> {
@@ -241,59 +239,93 @@ export class LifecycleService {
       // Sync transactions one more time
       await this.contributionService.syncContributionTransactions(vault.id);
 
-      // 1. Group assets by user
-      const assetsByUsers = await this.getAssetsGroupedByUser(vault.id);
-      const acquirerAdaMap: Record<string, number> = {};
-      const contributorValueMap: Record<string, number> = {};
+      // 1. First get all relevant transactions for this vault
+      // Get all acquisition transactions
+      const acquisitionTransactions = await this.transactionsRepository.find({
+        where: {
+          vault_id: vault.id,
+          type: TransactionType.acquire,
+          status: TransactionStatus.confirmed,
+        },
+        relations: ['user'],
+      });
+
+      // Get all contribution transactions
+      const contributionTransactions = await this.transactionsRepository.find({
+        where: {
+          vault_id: vault.id,
+          type: TransactionType.contribute,
+          status: TransactionStatus.confirmed,
+        },
+        relations: ['user'],
+      });
+
+      // Calculate total ADA from acquisitions
       let totalAcquiredAda = 0;
+      const userAcquiredAdaMap: Record<string, number> = {};
+
+      // Group acquisition transactions by user for total calculations
+      for (const tx of acquisitionTransactions) {
+        if (!tx.user || !tx.user.id) continue;
+
+        const adaSent = tx.amount || 0;
+        totalAcquiredAda += adaSent;
+
+        // Track total per user for later calculations
+        if (!userAcquiredAdaMap[tx.user.id]) {
+          userAcquiredAdaMap[tx.user.id] = 0;
+        }
+        userAcquiredAdaMap[tx.user.id] += adaSent;
+      }
+
+      // Calculate total value of contributed assets
       let totalContributedValueAda = 0;
+      const contributionValueByTransaction: Record<string, number> = {};
+      const userContributedValueMap: Record<string, number> = {};
 
-      // 2. Iterate over each user's assets and split by phase
-      for (const userAssets of assetsByUsers) {
-        const userId = userAssets.user_id;
-        const assets = userAssets.assets;
-        let userAcquiredAda = 0;
-        let userContributedValueAda = 0;
+      // Process contributed assets to calculate their value
+      for (const tx of contributionTransactions) {
+        if (!tx.user || !tx.user.id) continue;
 
-        this.logger.log(
-          `User ${userId} (${userAssets.user_wallet}) has ${userAssets.total_assets} assets in vault ${vault.id}: ${JSON.stringify(assets)}`
-        );
+        // Get assets associated with this transaction
+        const txAssets = await this.assetsRepository.find({
+          where: {
+            transaction: { id: tx.id },
+            origin_type: AssetOriginType.CONTRIBUTED,
+            deleted: false,
+          },
+        });
 
-        for (const asset of assets) {
-          // Only ADA in acquired assets
-          if (asset.origin_type === AssetOriginType.ACQUIRED) {
-            userAcquiredAda += asset.quantity || 1;
-            this.logger.debug(`User ${userId} asset ${asset.id}: ${asset.quantity} ADA`);
-          }
-          if (asset.origin_type === AssetOriginType.CONTRIBUTED) {
-            try {
-              const { priceAda } = await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_name);
-              const quantity = asset.quantity || 1;
-              userContributedValueAda += priceAda * quantity;
-            } catch (error) {
-              this.logger.error(
-                `Error getting price for asset ${asset.policy_id}.${asset.asset_name} for user ${userId} in vault ${vault.id}:`,
-                error.message
-              );
-            }
-          }
+        let transactionValueAda = 0;
 
-          if (userAcquiredAda > 0) {
-            acquirerAdaMap[userId] = userAcquiredAda;
-            totalAcquiredAda += userAcquiredAda;
-          }
-          if (userContributedValueAda > 0) {
-            contributorValueMap[userId] = userContributedValueAda;
-            totalContributedValueAda += userContributedValueAda;
+        // Calculate value of assets in this transaction
+        for (const asset of txAssets) {
+          try {
+            const { priceAda } = await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_id);
+            const quantity = asset.quantity || 1;
+            transactionValueAda += priceAda * quantity;
+          } catch (error) {
+            this.logger.error(`Error getting price for asset ${asset.policy_id}.${asset.asset_id}:`, error.message);
           }
         }
+
+        // Store value of this transaction
+        contributionValueByTransaction[tx.id] = transactionValueAda;
+        totalContributedValueAda += transactionValueAda;
+
+        // Track total per user for proportional distribution
+        if (!userContributedValueMap[tx.user.id]) {
+          userContributedValueMap[tx.user.id] = 0;
+        }
+        userContributedValueMap[tx.user.id] += transactionValueAda;
       }
+
       this.logger.log(
         `Total acquired ADA across all users in vault ${vault.id}: ${totalAcquiredAda}, ` +
           `Total contributed value ADA: ${totalContributedValueAda}`
       );
 
-      const requiredThresholdAda = vault.require_reserved_cost_ada || 0;
+      const requiredThresholdAda = vault.acquire_reserve || 0;
       const meetsThreshold = totalAcquiredAda >= requiredThresholdAda;
 
       vault.total_acquired_value_ada = totalAcquiredAda;
@@ -318,7 +350,7 @@ export class LifecycleService {
         try {
           await this.claimRepository.save({
             vault: { id: vault.id },
-            type: 'lp',
+            type: ClaimType.LP,
             amount: lpVtAmount,
             status: ClaimStatus.AVAILABLE,
             metadata: {
@@ -331,70 +363,136 @@ export class LifecycleService {
           this.logger.error(`Failed to create LP claim for vault ${vault.id}:`, error);
         }
 
-        // 4. Calculate VT for acquirers
-        for (const [userId, adaSent] of Object.entries(acquirerAdaMap)) {
-          const vtResult = await this.distributionService.calculateAcquirerTokens({
-            vaultId: vault.id,
-            adaSent,
-            numAcquirers: Object.keys(acquirerAdaMap).length,
-            totalAcquiredValueAda: totalAcquiredAda,
-            lpAdaAmount,
-            lpVtAmount,
-            vtPrice,
-          });
-          this.logger.debug(
-            `--- Acquirer ${userId} will receive VT: ${vtResult.vtReceived} (for ADA sent: ${adaSent})`
-          );
+        // 4. Create claims for each acquisition transaction
+        for (const tx of acquisitionTransactions) {
+          if (!tx.user || !tx.user.id) continue;
 
-          // Create claim record for acquirer
+          const userId = tx.user.id;
+          const adaSent = tx.amount || 0;
+
+          // Skip transactions with zero amount
+          if (adaSent <= 0) continue;
+
           try {
+            // Check if a claim for this transaction already exists
+            const existingClaim = await this.claimRepository.findOne({
+              where: {
+                transaction: { id: tx.id },
+                type: ClaimType.ACQUIRER,
+              },
+            });
+
+            if (existingClaim) {
+              this.logger.log(`Claim already exists for acquirer transaction ${tx.id}, skipping.`);
+              continue;
+            }
+
+            const vtResult = await this.distributionService.calculateAcquirerTokens({
+              vaultId: vault.id,
+              adaSent,
+              numAcquirers: Object.keys(userAcquiredAdaMap).length,
+              totalAcquiredValueAda: totalAcquiredAda,
+              lpAdaAmount,
+              lpVtAmount,
+              vtPrice,
+            });
+
+            this.logger.debug(
+              `--- Acquirer ${userId} will receive VT: ${vtResult.vtReceived} (for ADA sent: ${adaSent} in tx ${tx.id})`
+            );
+
+            // Create claim record for this specific acquisition transaction
             await this.claimRepository.save({
               user: { id: userId },
               vault: { id: vault.id },
-              type: 'acquirer',
+              type: ClaimType.ACQUIRER,
               amount: vtResult.vtReceived,
               status: ClaimStatus.AVAILABLE,
+              transaction: { id: tx.id },
               metadata: {
                 adaSent: adaSent,
                 vtPrice: vtPrice,
+                txHash: tx.tx_hash,
+                txIndex: tx.tx_index,
               },
             });
-            this.logger.log(`Created acquirer claim for user ${userId}: ${vtResult.vtReceived} VT tokens`);
+
+            this.logger.log(
+              `Created acquirer claim for user ${userId}: ${vtResult.vtReceived} VT tokens for transaction ${tx.id}`
+            );
           } catch (error) {
-            this.logger.error(`Failed to create acquirer claim for user ${userId} in vault ${vault.id}:`, error);
+            this.logger.error(`Failed to create acquirer claim for user ${userId} transaction ${tx.id}:`, error);
           }
         }
 
-        // 5. Calculate VT for contributors
-        for (const [userId, valueAda] of Object.entries(contributorValueMap)) {
-          const vtResult = await this.distributionService.calculateContributorTokens({
-            vaultId: vault.id,
-            valueContributed: valueAda,
-            totalTvl: totalContributedValueAda,
-            lpAdaAmount,
-            lpVtAmount,
-            vtPrice,
-          });
-          this.logger.debug(
-            `--- Contributor ${userId} will receive VT: ${vtResult.vtRetained} (for value contributed: ${valueAda})`
-          );
+        // 5. Create claims for each contribution transaction
+        for (const tx of contributionTransactions) {
+          if (!tx.user || !tx.user.id) continue;
 
-          // Create claim record for contributor
+          const userId = tx.user.id;
+          const txValueAda = contributionValueByTransaction[tx.id] || 0;
+
+          // Skip transactions with zero value
+          if (txValueAda <= 0) continue;
+
           try {
+            // Check if a claim for this transaction already exists
+            const existingClaim = await this.claimRepository.findOne({
+              where: {
+                transaction: { id: tx.id },
+                type: ClaimType.CONTRIBUTOR,
+              },
+            });
+
+            if (existingClaim) {
+              this.logger.log(`Claim already exists for contributor transaction ${tx.id}, skipping.`);
+              continue;
+            }
+
+            // Calculate this transaction's proportion of the user's total contribution
+            const userTotalValue = userContributedValueMap[userId] || 0;
+            const proportionOfUserTotal = userTotalValue > 0 ? txValueAda / userTotalValue : 0;
+
+            // Get total VT tokens for this user based on their total contribution
+            const userVtResult = await this.distributionService.calculateContributorTokens({
+              vaultId: vault.id,
+              valueContributed: userTotalValue,
+              totalTvl: totalContributedValueAda,
+              lpAdaAmount,
+              lpVtAmount,
+              vtPrice,
+            });
+
+            // Calculate VT tokens for this specific transaction
+            const txVtAmount = userVtResult.vtRetained * proportionOfUserTotal;
+
+            this.logger.debug(
+              `--- Contributor ${userId} will receive VT: ${txVtAmount} (${proportionOfUserTotal * 100}% of ${userVtResult.vtRetained}) for transaction ${tx.id}`
+            );
+
+            // Create claim record for this specific contribution transaction
             await this.claimRepository.save({
               user: { id: userId },
               vault: { id: vault.id },
-              type: 'contributor',
-              amount: vtResult.vtRetained,
+              type: ClaimType.CONTRIBUTOR,
+              amount: txVtAmount,
               status: ClaimStatus.AVAILABLE,
+              transaction: { id: tx.id },
               metadata: {
-                valueContributed: valueAda,
+                valueContributed: txValueAda,
                 vtPrice: vtPrice,
+                txHash: tx.tx_hash,
+                txIndex: tx.tx_index,
+                totalUserContribution: userTotalValue,
+                proportionOfUserTotal: proportionOfUserTotal,
               },
             });
-            this.logger.log(`Created contributor claim for user ${userId}: ${vtResult.vtRetained} VT tokens`);
+
+            this.logger.log(
+              `Created contributor claim for user ${userId}: ${txVtAmount} VT tokens for transaction ${tx.id}`
+            );
           } catch (error) {
-            this.logger.error(`Failed to create contributor claim for user ${userId} in vault ${vault.id}:`, error);
+            this.logger.error(`Failed to create contributor claim for user ${userId} transaction ${tx.id}:`, error);
           }
         }
 
@@ -540,56 +638,6 @@ export class LifecycleService {
       // Execute the transition immediately since the time has passed
       await this.executeContributionToAcquireTransition(vault);
     }
-  }
-
-  async getAssetsGroupedByUser(vaultId: string): Promise<
-    {
-      user_id: string;
-      user_wallet: string;
-      total_assets: string;
-      assets: {
-        id: string;
-        type: string;
-        contract_address: string | null;
-        added_at: string;
-        quantity: number;
-        origin_type: AssetOriginType;
-        policy_id: string;
-        asset_name: string;
-      }[];
-    }[]
-  > {
-    const query = `
-      SELECT
-        u.id as user_id,
-        u.address as user_wallet,
-        COUNT(a.id) as total_assets,
-        json_agg(
-          json_build_object(
-            'id', a.id,
-            'type', a.type,
-            'contract_address', a.contract_address,
-            'added_at', a.added_at,
-            'quantity', a.quantity,
-            'origin_type', a.origin_type,
-            'policy_id', a.policy_id,
-            'asset_name', a.asset_id
-          )
-        ) as assets
-      FROM
-        assets a
-      JOIN
-        users u ON u.id = a.added_by
-      WHERE
-        a.vault_id = $1
-      GROUP BY
-        u.id, u.address
-      ORDER BY
-        u.address ASC
-    `;
-
-    const result = await this.assetsRepository.query(query, [vaultId]);
-    return result;
   }
 
   private async handleInvestmentToGovernance(): Promise<void> {

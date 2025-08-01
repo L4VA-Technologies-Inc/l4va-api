@@ -82,7 +82,11 @@ export class ContributionService {
             // If transaction exists in DB and status is not confirmed, update it
             if (dbTx && dbTx.status !== 'confirmed') {
               try {
-                await this.transactionsService.updateTransactionStatus(tx.tx_hash, 'confirmed' as TransactionStatus);
+                await this.transactionsService.updateTransactionStatus(
+                  tx.tx_hash,
+                  tx.tx_index,
+                  TransactionStatus.confirmed
+                );
                 statusUpdated = true;
                 this.logger.log(`Updated transaction ${tx.tx_hash} status to confirmed`);
               } catch (updateError) {
@@ -170,6 +174,7 @@ export class ContributionService {
       vault_id: vaultId,
       type: TransactionType.contribute,
       assets: [],
+      userId,
     });
     if (contributeReq.assets.length > 0) {
       try {

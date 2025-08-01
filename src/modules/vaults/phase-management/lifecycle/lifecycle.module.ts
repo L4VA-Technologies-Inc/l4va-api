@@ -9,6 +9,7 @@ import { LifecycleService } from './lifecycle.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
+import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { DistributionModule } from '@/modules/distribution/distribution.module';
 import { LifecycleProcessor } from '@/modules/vaults/phase-management/lifecycle/lifecycle.processor';
@@ -20,7 +21,7 @@ import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockch
     ContributionModule,
     DistributionModule,
     TransactionsModule,
-    TypeOrmModule.forFeature([Vault, Asset, Claim]),
+    TypeOrmModule.forFeature([Vault, Asset, Claim, Transaction]),
     ScheduleModule.forRoot(),
     BlockchainModule,
     BullModule.registerQueue({

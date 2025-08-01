@@ -74,7 +74,6 @@ export class ClaimsService {
         type: true,
         status: true,
         amount: true,
-        tx_hash: true,
         description: true,
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore
@@ -133,7 +132,7 @@ export class ClaimsService {
   }> {
     const claim = await this.claimRepository.findOne({
       where: { id: claimId },
-      relations: ['user', 'vault'],
+      relations: ['user', 'vault', 'transaction'],
     });
 
     const vault = claim.vault;
@@ -170,16 +169,10 @@ export class ClaimsService {
         amount: parseFloat(claim.amount.toString()),
         type: TransactionType.claim,
         status: TransactionStatus.created,
-        metadata: {
-          utxoToClaim: claim.metadata?.utxoToClaim, // TX_HASH_INDEX_WITH_LPS_TO_COLLECT from metadata
-          lastUpdateTxHash: vault.last_update_tx_hash,
-          vaultId: vault.asset_vault_name,
-        },
       });
 
       // Extract data from claim metadata
-      const [txHash, txIndex] = claim.metadata.utxoToClaim.split('#');
-      const datumTag = generate_tag_from_txhash_index(txHash, Number(txIndex));
+      const datumTag = generate_tag_from_txhash_index(claim.transaction.tx_hash, Number(claim.transaction.tx_index));
 
       // Define the transaction input based on extract_lovelace.ts example
       const input: {
@@ -212,8 +205,8 @@ export class ClaimsService {
             purpose: 'spend',
             hash: vault.policy_id,
             outputRef: {
-              txHash: txHash,
-              index: txIndex,
+              txHash: claim.transaction.tx_hash,
+              index: claim.transaction.tx_index,
             },
             redeemer: {
               type: 'json',
@@ -337,7 +330,6 @@ export class ClaimsService {
       });
       if (claim) {
         claim.status = ClaimStatus.CLAIMED;
-        claim.tx_hash = submitResponse.txHash;
         await this.claimRepository.save(claim);
       }
 

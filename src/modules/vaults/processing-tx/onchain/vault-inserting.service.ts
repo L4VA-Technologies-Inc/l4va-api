@@ -356,7 +356,7 @@ export class VaultInsertingService {
     };
 
     const internalStatus = statusMap[status];
-    await this.transactionsService.updateTransactionStatus(tx.hash, internalStatus);
+    await this.transactionsService.updateTransactionStatus(tx.hash, tx.index, internalStatus);
   }
 
   // return this.anvilApiService.submitTransaction(params);
@@ -393,7 +393,7 @@ export class VaultInsertingService {
 
       // Update transaction status
       const internalStatus = statusMap[status];
-      await this.transactionsService.updateTransactionStatus(tx.hash, internalStatus);
+      await this.transactionsService.updateTransactionStatus(tx.hash, tx.index, internalStatus);
 
       // For confirmed transactions, analyze the transfer
       if (status === OnchainTransactionStatus.CONFIRMED) {

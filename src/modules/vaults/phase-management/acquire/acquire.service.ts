@@ -71,6 +71,7 @@ export class AcquireService {
       vault_id: vaultId,
       type: TransactionType.acquire,
       assets: [],
+      userId,
     });
 
     // Create assets for the transaction

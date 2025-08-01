@@ -27,9 +27,6 @@ export class ClaimResponseDto {
   amount: string;
 
   @Expose()
-  tx_hash: string | null;
-
-  @Expose()
   description: string | null;
 
   @Expose()

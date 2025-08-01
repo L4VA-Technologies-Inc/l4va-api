@@ -24,6 +24,7 @@ export class TransactionsService {
     type: TransactionType;
     assets: Asset[];
     amount?: number;
+    userId?: string;
   }): Promise<Transaction> {
     return this.transactionRepository.save({
       vault_id: data.vault_id,
@@ -31,10 +32,11 @@ export class TransactionsService {
       status: TransactionStatus.created,
       assets: data.assets,
       amount: data.amount,
+      user_id: data.userId,
     });
   }
 
-  async updateTransactionStatus(txHash: string, status: TransactionStatus): Promise<Transaction> {
+  async updateTransactionStatus(txHash: string, txIndex: number, status: TransactionStatus): Promise<Transaction> {
     const transaction = await this.transactionRepository.findOne({
       where: { tx_hash: txHash },
     });
@@ -67,6 +69,7 @@ export class TransactionsService {
     });
 
     transaction.status = status;
+    transaction.tx_index = txIndex.toString();
 
     return this.transactionRepository.save(transaction);
   }

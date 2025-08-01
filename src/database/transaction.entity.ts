@@ -5,6 +5,7 @@ import { Column, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColum
 import { TransactionStatus, TransactionType } from '../types/transaction.types';
 
 import { Asset } from './asset.entity';
+import { User } from './user.entity';
 import { Vault } from './vault.entity';
 
 @Entity('transactions')
@@ -14,21 +15,19 @@ export class Transaction {
   id: string;
 
   @Expose({ name: 'utxoInput' })
-  @Column({
-    nullable: true,
-  })
+  @Column({ nullable: true })
   utxo_input: string; // sender
 
   @Expose({ name: 'utxoOutput' })
-  @Column({
-    nullable: true,
-  })
+  @Column({ nullable: true })
   utxo_output: string; // receiver
 
+  @Expose({ name: 'txIndex' })
+  @Column({ nullable: true })
+  tx_index: string;
+
   @Expose({ name: 'utxoRef' })
-  @Column({
-    nullable: true,
-  })
+  @Column({ nullable: true })
   utxo_ref: string;
 
   @Column({
@@ -39,20 +38,14 @@ export class Transaction {
   })
   type?: TransactionType;
 
-  @Column({
-    nullable: true,
-  })
+  @Column({ nullable: true })
   amount: number;
 
-  @Column({
-    nullable: true,
-  })
+  @Column({ nullable: true })
   fee: number;
 
   @Expose({ name: 'txHash' })
-  @Column({
-    nullable: true,
-  })
+  @Column({ nullable: true })
   tx_hash: string; // 1
 
   @Expose({ name: 'status' })
@@ -74,6 +67,15 @@ export class Transaction {
   @OneToMany(() => Asset, (asset: Asset) => asset.transaction)
   public assets: Asset[];
 
+  @Expose({ name: 'user' })
+  @ManyToOne(() => User, { nullable: true, onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'user_id' })
+  user: User;
+
+  @Column({ name: 'user_id', nullable: true, type: 'uuid' })
+  @Index()
+  user_id: string;
+
   @ManyToOne(() => Vault)
   @JoinColumn({ name: 'vault_id' })
   vault: Vault;
@@ -81,8 +83,4 @@ export class Transaction {
   @Column({ name: 'vault_id', nullable: true })
   @Index()
   vault_id: string;
-
-  @Column({ name: 'user_id', nullable: true })
-  @Index()
-  user_id: string;
 }

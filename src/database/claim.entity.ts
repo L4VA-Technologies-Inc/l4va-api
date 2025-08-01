@@ -1,8 +1,18 @@
 import { Expose } from 'class-transformer';
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, BeforeInsert, BeforeUpdate } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+  BeforeInsert,
+  BeforeUpdate,
+  Index,
+} from 'typeorm';
 
-import { ClaimStatus } from '../types/claim.types';
+import { ClaimStatus, ClaimType } from '../types/claim.types';
 
+import { Transaction } from './transaction.entity';
 import { User } from './user.entity';
 import { Vault } from './vault.entity';
 
@@ -23,8 +33,12 @@ export class Claim {
   vault: Vault;
 
   @Expose({ name: 'type' })
-  @Column({ type: 'varchar', nullable: false })
-  type: string;
+  @Column({
+    type: 'enum',
+    enum: ClaimType,
+    nullable: false,
+  })
+  type: ClaimType;
 
   @Expose({ name: 'status' })
   @Column({
@@ -39,9 +53,22 @@ export class Claim {
   @Column({ type: 'decimal', precision: 20, scale: 6, default: 0 })
   amount: number;
 
-  @Expose({ name: 'txHash' })
-  @Column({ type: 'varchar', nullable: true })
-  tx_hash: string;
+  @Expose({ name: 'transaction' })
+  @ManyToOne(() => Transaction, { nullable: true })
+  @JoinColumn({ name: 'transaction_id' })
+  transaction: Transaction;
+
+  @Column({ name: 'transaction_id', nullable: true })
+  @Index()
+  transaction_id: string;
+
+  @Expose({ name: 'utxoToClaim' })
+  get utxoToClaim(): string | null {
+    if (this.transaction?.tx_hash && this.transaction?.tx_index) {
+      return `${this.transaction.tx_hash}#${this.transaction.tx_index}`;
+    }
+    return null;
+  }
 
   @Expose({ name: 'description' })
   @Column({ type: 'text', nullable: true })
