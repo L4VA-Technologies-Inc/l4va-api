@@ -371,12 +371,10 @@ export class GovernanceService {
     };
 
     votes.forEach(vote => {
-      if (vote.vote === 'yes') {
+      if (vote.vote === VoteType.YES) {
         totals.yes = (BigInt(totals.yes) + BigInt(vote.voteWeight)).toString();
-      } else if (vote.vote === 'no') {
+      } else if (vote.vote === VoteType.NO) {
         totals.no = (BigInt(totals.no) + BigInt(vote.voteWeight)).toString();
-      } else if (vote.vote === 'abstain') {
-        totals.abstain = (BigInt(totals.abstain) + BigInt(vote.voteWeight)).toString();
       }
     });
 
