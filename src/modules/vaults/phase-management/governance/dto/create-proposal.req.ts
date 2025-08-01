@@ -49,3 +49,9 @@ export class CreateProposalReq {
   @IsString({ each: true })
   options: string[];
 }
+
+export class CreateSnapshotDto {
+  @IsString()
+  @IsNotEmpty()
+  assetId: string;
+}
