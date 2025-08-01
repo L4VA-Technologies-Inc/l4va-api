@@ -1,10 +1,11 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { CreateProposalReq, CreateSnapshotDto } from './dto/create-proposal.req';
+import { CreateProposalReq } from './dto/create-proposal.req';
 import { VoteReq } from './dto/vote.req';
 
 import { Proposal } from '@/database/proposal.entity';
@@ -36,31 +37,49 @@ export class GovernanceService {
     });
   }
 
-  async createSnapshot(
-    vaultId: string,
-    createSnapshotDto: CreateSnapshotDto
-  ): Promise<{
-    success: boolean;
-    message: string;
-    snapshot: {
-      id: string;
-      vaultId: string;
-      assetId: string;
-      addressCount: number;
-      createdAt: Date;
-    };
-  }> {
-    const vault = await this.vaultRepository.findOne({
-      where: { id: vaultId },
-    });
+  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  async createDailySnapshots(): Promise<void> {
+    this.logger.log('Starting daily snapshot creation');
 
-    if (!vault) {
-      throw new NotFoundException('Vault not found');
-    }
+    try {
+      // Get all locked vaults
+      const lockedVaults = await this.vaultRepository.find({
+        where: { vault_status: VaultStatus.locked },
+      });
 
-    if (vault.vault_status !== VaultStatus.locked) {
-      throw new BadRequestException('Governance is only available for locked vaults');
+      this.logger.log(`Found ${lockedVaults.length} locked vaults for snapshots`);
+
+      for (const vault of lockedVaults) {
+        try {
+          // For each vault, you need to know which asset to track
+          // This could be stored in the vault entity or in a configuration
+          const assetId = vault.policy_id || this.configService.get<string>('DEFAULT_GOVERNANCE_ASSET_ID');
+
+          if (!assetId) {
+            this.logger.warn(`No asset ID found for vault ${vault.id}, skipping snapshot`);
+            continue;
+          }
+
+          // Create a snapshot for this vault
+          await this.createAutomaticSnapshot(vault.id, assetId);
+
+          // Add some delay between requests to not overwhelm the BlockFrost API
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        } catch (error) {
+          this.logger.error(`Error creating snapshot for vault ${vault.id}: ${error.message}`, error.stack);
+          // Continue with the next vault even if one fails
+        }
+      }
+
+      this.logger.log('Daily snapshot creation completed');
+    } catch (error) {
+      this.logger.error(`Failed to create daily snapshots: ${error.message}`, error.stack);
     }
+  }
+
+  // Helper method to create an automatic snapshot
+  private async createAutomaticSnapshot(vaultId: string, assetId: string): Promise<Snapshot> {
+    this.logger.log(`Creating automatic snapshot for vault ${vaultId} with asset ${assetId}`);
 
     try {
       // Fetch all addresses holding the asset using BlockFrost
@@ -69,7 +88,7 @@ export class GovernanceService {
       let hasMorePages = true;
 
       while (hasMorePages) {
-        const response = await this.blockfrost.assetsAddresses(createSnapshotDto.assetId, { page, order: 'desc' });
+        const response = await this.blockfrost.assetsAddresses(assetId, { page, order: 'desc' });
 
         if (response.length === 0) {
           hasMorePages = false;
@@ -85,26 +104,20 @@ export class GovernanceService {
       // Create and save the snapshot
       const snapshot = this.snapshotRepository.create({
         vaultId,
-        assetId: createSnapshotDto.assetId,
+        assetId,
         addressBalances,
       });
 
       await this.snapshotRepository.save(snapshot);
 
-      return {
-        success: true,
-        message: 'Snapshot created successfully',
-        snapshot: {
-          id: snapshot.id,
-          vaultId,
-          assetId: createSnapshotDto.assetId,
-          addressCount: Object.keys(addressBalances).length,
-          createdAt: snapshot.createdAt,
-        },
-      };
+      this.logger.log(
+        `Automatic snapshot created for vault ${vaultId} with ${Object.keys(addressBalances).length} addresses`
+      );
+
+      return snapshot;
     } catch (error) {
-      this.logger.error(`Failed to create snapshot: ${error.message}`, error.stack);
-      throw new BadRequestException(`Failed to create snapshot: ${error.message}`);
+      this.logger.error(`Failed to create automatic snapshot: ${error.message}`, error.stack);
+      throw error;
     }
   }
 
