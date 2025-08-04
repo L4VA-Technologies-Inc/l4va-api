@@ -1,7 +1,7 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddGovernanceSystem1754301526704 implements MigrationInterface {
-  name = 'AddGovernanceSystem1754301526704';
+export class AddGovernanceSystem1754303000063 implements MigrationInterface {
+  name = 'AddGovernanceSystem1754303000063';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`ALTER TABLE "vault_tags" DROP CONSTRAINT "FK_adf9f0b047319be1ec67ac1d1eb"`);
@@ -20,7 +20,7 @@ export class AddGovernanceSystem1754301526704 implements MigrationInterface {
     );
     await queryRunner.query(`CREATE TYPE "public"."vote_vote_enum" AS ENUM('yes', 'no')`);
     await queryRunner.query(
-      `CREATE TABLE "vote" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "proposalId" uuid NOT NULL, "snapshotId" uuid NOT NULL, "voterId" character varying NOT NULL, "voterAddress" character varying NOT NULL, "voteWeight" character varying NOT NULL, "vote" "public"."vote_vote_enum", "timestamp" TIMESTAMP NOT NULL DEFAULT now(), CONSTRAINT "PK_2d5932d46afe39c8176f9d4be72" PRIMARY KEY ("id"))`
+      `CREATE TABLE "vote" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "proposalId" uuid NOT NULL, "snapshotId" uuid NOT NULL, "voterId" character varying NOT NULL, "voterAddress" character varying NOT NULL, "voteWeight" character varying NOT NULL, "vote" "public"."vote_vote_enum" NOT NULL, "timestamp" TIMESTAMP NOT NULL DEFAULT now(), CONSTRAINT "PK_2d5932d46afe39c8176f9d4be72" PRIMARY KEY ("id"))`
     );
     await queryRunner.query(`ALTER TABLE "vaults" ALTER COLUMN "acquire_multiplier" SET DEFAULT null`);
     await queryRunner.query(

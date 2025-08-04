@@ -29,9 +29,9 @@ export class Vote {
     name: 'vote',
     type: 'enum',
     enum: VoteType,
-    nullable: true,
+    nullable: false,
   })
-  vote?: VoteType;
+  vote: VoteType;
 
   @CreateDateColumn()
   timestamp: Date;

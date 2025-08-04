@@ -53,7 +53,7 @@ export class GovernanceService {
         try {
           // For each vault, you need to know which asset to track
           // This could be stored in the vault entity or in a configuration
-          const assetId = vault.policy_id || this.configService.get<string>('DEFAULT_GOVERNANCE_ASSET_ID');
+          const assetId = vault.policy_id; // TODO: change to accurate asset ID retrieval logic
 
           if (!assetId) {
             this.logger.warn(`No asset ID found for vault ${vault.id}, skipping snapshot`);
@@ -232,7 +232,7 @@ export class GovernanceService {
       title: string;
       description: string;
       creatorId: string;
-      status: 'active' | 'passed' | 'rejected' | 'executed';
+      status: ProposalStatus;
       createdAt: Date;
       endDate: Date;
     }[];
@@ -289,7 +289,7 @@ export class GovernanceService {
       throw new NotFoundException('Proposal not found');
     }
 
-    if (proposal.status !== 'active') {
+    if (proposal.status !== ProposalStatus.ACTIVE) {
       throw new BadRequestException('Voting is only allowed on active proposals');
     }
 
