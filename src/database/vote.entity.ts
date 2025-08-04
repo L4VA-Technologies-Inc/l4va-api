@@ -1,9 +1,9 @@
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn } from 'typeorm';
 
+import { VoteType } from '../types/vote.types';
+
 import { Proposal } from './proposal.entity';
 import { Snapshot } from './snapshot.entity';
-
-import { VoteType } from '@/types/vote.types';
 
 @Entity()
 export class Vote {

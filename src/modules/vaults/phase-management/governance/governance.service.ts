@@ -154,7 +154,24 @@ export class GovernanceService {
     };
   }
 
-  async createProposal(vaultId: string, createProposalReq: CreateProposalReq, userId: string) {
+  async createProposal(
+    vaultId: string,
+    createProposalReq: CreateProposalReq,
+    userId: string
+  ): Promise<{
+    success: boolean;
+    message: string;
+    proposal: {
+      id: string;
+      vaultId: string;
+      title: string;
+      description: string;
+      creatorId: string;
+      status: ProposalStatus;
+      createdAt: Date;
+      endDate: Date;
+    };
+  }> {
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
     });
@@ -392,7 +409,32 @@ export class GovernanceService {
     };
   }
 
-  async getProposal(proposalId: string) {
+  async getProposal(proposalId: string): Promise<{
+    proposal: {
+      id: string;
+      vaultId: string;
+      title: string;
+      description: string;
+      creatorId: string;
+      status: ProposalStatus;
+      createdAt: Date;
+      endDate: Date;
+    };
+    votes: {
+      id: string;
+      proposalId: string;
+      voterId: string;
+      voterAddress: string;
+      voteWeight: string;
+      vote: VoteType;
+      timestamp: Date;
+    }[];
+    totals: {
+      yes: string;
+      no: string;
+      abstain: string;
+    };
+  }> {
     const proposal = await this.proposalRepository.findOne({
       where: { id: proposalId },
     });

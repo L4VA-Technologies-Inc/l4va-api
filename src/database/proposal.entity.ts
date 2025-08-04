@@ -1,10 +1,10 @@
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, CreateDateColumn, JoinColumn } from 'typeorm';
 
+import { ProposalStatus, ProposalType } from '../types/proposal.types';
+
 import { User } from './user.entity';
 import { Vault } from './vault.entity';
 import { Vote } from './vote.entity';
-
-import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 
 @Entity()
 export class Proposal {
