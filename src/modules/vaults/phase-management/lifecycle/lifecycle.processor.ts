@@ -30,6 +30,7 @@ export class LifecycleProcessor extends WorkerHost {
     }
   }
 
+  // Not used for governance transition
   async updateVaultStatus(data: { vaultId: string; newStatus: VaultStatus; phaseStartField?: string }): Promise<void> {
     try {
       const vault = await this.vaultRepository.findOne({
