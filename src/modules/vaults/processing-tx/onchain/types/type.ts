@@ -3,11 +3,11 @@ export type Redeemer =
       output_index: number;
       contribution: 'Lovelace' | 'Asset';
     }
-  | 'MintAdaPair'
   | 'MintVaultToken'
+  | 'CancelContribution'
   | 'BurnLp';
-type VaultPolicy = string;
-type VaultId = string;
+export type VaultPolicy = string;
+export type VaultId = string;
 export type Redeemer1 =
   | {
       __variant: 'ExtractAda' | 'ExtractAsset';
@@ -19,10 +19,14 @@ export type Redeemer1 =
       vault_token_output_index: number;
       change_output_index: number;
     }
-  | 'CancelAsset'
-  | 'CancelAda';
-export type VaultPolicy1 = string;
-export type VaultId1 = string;
+  | {
+      __variant: 'CancelAsset' | 'CancelAda';
+      __data: {
+        cancel_output_index?: number;
+      };
+    };
+type VaultPolicy1 = string;
+type VaultId1 = string;
 type VaultPolicy2 = string;
 type VaultId2 = string;
 export type Redeemer2 =
@@ -134,7 +138,7 @@ export interface Datum1 {
     reserve: number;
     liquidityPool: number;
   };
-  acquire_multiplier?: [string, string, number][];
+  acquire_multiplier?: [string, string | undefined, number][];
   ada_pair_multipler?: number;
   admin: string;
   minting_key: string;

@@ -201,7 +201,7 @@ export class GovernanceService {
       description: createProposalReq.description,
       creatorId: userId,
       proposalType: createProposalReq.type,
-      startDate: createProposalReq.startDate,
+      startDate: new Date(createProposalReq.startDate).toISOString(),
       snapshotId: latestSnapshot.id,
       status: ProposalStatus.ACTIVE,
       endDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days from now

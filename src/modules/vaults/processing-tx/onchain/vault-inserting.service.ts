@@ -20,7 +20,7 @@ import { BlockchainService } from './blockchain.service';
 import { SubmitTransactionDto } from './dto/transaction.dto';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
-import { Datum } from './types/type';
+import { Datum, Redeemer } from './types/type';
 import { applyContributeParams, toPreloadedScript } from './utils/apply_params';
 import * as blueprint from './utils/blueprint.json';
 
@@ -69,7 +69,7 @@ export class VaultInsertingService {
   private readonly logger = new Logger(VaultInsertingService.name);
   private readonly adminHash: string;
   private readonly adminSKey: string;
-  private blockfrost: any;
+  private blockfrost: BlockFrostAPI;
   constructor(
     @InjectRepository(Vault)
     private readonly vaultsRepository: Repository<Vault>,
@@ -182,7 +182,7 @@ export class VaultInsertingService {
         mint: [
           {
             version: 'cip25',
-            assetName: { name: VAULT_ID, format: 'hex' },
+            assetName: { name: 'receipt', format: 'utf8' },
             policyId: POLICY_ID,
             type: 'plutus',
             quantity: 1, // Mint 1 VT token
@@ -196,10 +196,9 @@ export class VaultInsertingService {
             redeemer: {
               type: 'json',
               value: {
-                quantity: 1, // Mint 1 VT token
                 output_index: 0,
                 contribution: isAda ? 'Lovelace' : 'Asset',
-              },
+              } satisfies Redeemer,
             },
           },
         ],
@@ -210,14 +209,14 @@ export class VaultInsertingService {
             assets: isAda
               ? [
                   {
-                    assetName: { name: VAULT_ID, format: 'hex' },
+                    assetName: { name: 'receipt', format: 'utf8' },
                     policyId: POLICY_ID,
                     quantity: 1,
                   },
                 ]
               : [
                   {
-                    assetName: { name: VAULT_ID, format: 'hex' },
+                    assetName: { name: 'receipt', format: 'utf8' },
                     policyId: POLICY_ID,
                     quantity: 1,
                   },
@@ -333,7 +332,7 @@ export class VaultInsertingService {
     }
   }
 
-  async handleScannerEvent(event: any) {
+  async handleScannerEvent(event: any): Promise<void> {
     // Determine transaction status based on blockchain data
     const tx = event.data.tx;
     let status: OnchainTransactionStatus;
@@ -452,7 +451,7 @@ export class VaultInsertingService {
     }
   }
 
-  async handleBurnVault(userId: string, vaultId: string) {
+  async handleBurnVault(userId: string, vaultId: string): Promise<void> {
     // todo need to check if user is owner and if vault is exists
     this.logger.log(`Run delete vault process for  vaultId: ${vaultId}  by user with userId: ${userId}`);
 
