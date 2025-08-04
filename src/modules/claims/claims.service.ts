@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 
-import { FixedTransaction, PlutusData, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
+import { Address, FixedTransaction, PlutusData, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -15,7 +16,7 @@ import { Transaction } from '@/database/transaction.entity';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { Datum, Redeemer, Redeemer1 } from '@/modules/vaults/processing-tx/onchain/types/type';
 import { applyContributeParams, toPreloadedScript } from '@/modules/vaults/processing-tx/onchain/utils/apply_params';
-import { generate_tag_from_txhash_index } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import { generate_tag_from_txhash_index, getUtxosExctract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { ClaimStatus } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
@@ -28,6 +29,7 @@ export class ClaimsService {
   private readonly adminSKey: string;
   private readonly adminHash: string;
   private readonly vaultPolicyId: string;
+  private blockfrost: BlockFrostAPI;
 
   constructor(
     @InjectRepository(Transaction)
@@ -40,6 +42,9 @@ export class ClaimsService {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.vaultPolicyId = this.configService.get<string>('SC_POLICY_ID');
+    this.blockfrost = new BlockFrostAPI({
+      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
+    });
   }
 
   /**
@@ -150,33 +155,39 @@ export class ClaimsService {
       throw new Error('Vault or user not found for claim');
     }
 
-    const parameterizedScript = applyContributeParams({
-      vault_policy_id: this.vaultPolicyId,
-      vault_id: claim.vault.asset_vault_name,
-    });
-
-    const unparameterizedScript = blueprint.validators.find(v => v.title === 'contribute.contribute');
-
     try {
-      // Update claim status to PENDING
-      claim.status = ClaimStatus.PENDING;
-      await this.claimRepository.save(claim);
+      const utxos = await getUtxosExctract(Address.from_bech32(user.address), 0, this.blockfrost); // Any UTXO works.
 
-      // Create internal transaction
-      const internalTx = await this.transactionRepository.save({
-        user_id: user.id,
-        vault_id: vault.id,
-        amount: parseFloat(claim.amount.toString()),
-        type: TransactionType.claim,
-        status: TransactionStatus.created,
+      const parameterizedScript = applyContributeParams({
+        vault_policy_id: this.vaultPolicyId,
+        vault_id: claim.vault.asset_vault_name,
       });
 
+      const unparameterizedScript = blueprint.validators.find(v => v.title === 'contribute.contribute');
+
+      if (!unparameterizedScript) {
+        throw new Error('Contribute validator not found');
+      }
+
       // Extract data from claim metadata
+      const lpsUnit = parameterizedScript.validator.hash + '72656365697074';
+      const txUtxos = await this.blockfrost.txsUtxos(claim.transaction.tx_hash);
+      const output = txUtxos.outputs[claim.transaction.tx_index];
+      if (!output) {
+        throw new Error('No output found');
+      }
+      const amountOfLpsToClaim = output.amount.find((a: { unit: string; quantity: string }) => a.unit === lpsUnit);
+
       const datumTag = generate_tag_from_txhash_index(claim.transaction.tx_hash, Number(claim.transaction.tx_index));
+
+      if (!amountOfLpsToClaim) {
+        throw new Error('No lps to claim.');
+      }
 
       // Define the transaction input based on extract_lovelace.ts example
       const input: {
         changeAddress: string;
+        utxos: string[];
         message: string;
         mint?: Array<object>;
         scriptInteractions: object[];
@@ -200,6 +211,7 @@ export class ClaimsService {
       } = {
         changeAddress: user.address,
         message: 'Token Extraction',
+        utxos,
         scriptInteractions: [
           {
             purpose: 'spend',
@@ -271,6 +283,19 @@ export class ClaimsService {
         },
         network: 'preprod',
       };
+
+      // Create internal transaction
+      const internalTx = await this.transactionRepository.save({
+        user_id: user.id,
+        vault_id: vault.id,
+        amount: parseFloat(claim.amount.toString()),
+        type: TransactionType.claim,
+        status: TransactionStatus.created,
+      });
+
+      // Update claim status to PENDING
+      claim.status = ClaimStatus.PENDING;
+      await this.claimRepository.save(claim);
 
       // Build the transaction
       const buildResponse = await this.blockchainService.buildTransaction(input);

@@ -13,6 +13,7 @@ import { VaultInsertingService } from './vault-inserting.service';
 import { VaultManagingService } from './vault-managing.service';
 import { WebhookVerificationService } from './webhook-verification.service';
 
+import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 
@@ -23,7 +24,7 @@ import { Vault } from '@/database/vault.entity';
     }),
     HttpModule,
     TransactionsModule,
-    TypeOrmModule.forFeature([Vault, Transaction]),
+    TypeOrmModule.forFeature([Vault, Transaction, AssetsWhitelistEntity]),
   ],
   controllers: [BlockchainController],
   providers: [

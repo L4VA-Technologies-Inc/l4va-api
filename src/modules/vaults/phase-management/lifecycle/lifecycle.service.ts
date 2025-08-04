@@ -30,7 +30,7 @@ export class LifecycleService {
 
   constructor(
     @InjectQueue('phaseTransition')
-    private phaseTransitionQueue: Queue,
+    private readonly phaseTransitionQueue: Queue,
     @InjectRepository(Asset)
     private readonly assetsRepository: Repository<Asset>,
     @InjectRepository(Transaction)
@@ -89,6 +89,9 @@ export class LifecycleService {
         {
           vaultId,
           newStatus,
+          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+          // @ts-ignore
+          scStatus,
           phaseStartField,
         },
         {
@@ -266,16 +269,16 @@ export class LifecycleService {
 
       // Group acquisition transactions by user for total calculations
       for (const tx of acquisitionTransactions) {
-        if (!tx.user || !tx.user.id) continue;
+        if (!tx.user_id) continue;
 
         const adaSent = tx.amount || 0;
         totalAcquiredAda += adaSent;
 
         // Track total per user for later calculations
-        if (!userAcquiredAdaMap[tx.user.id]) {
-          userAcquiredAdaMap[tx.user.id] = 0;
+        if (!userAcquiredAdaMap[tx.user_id]) {
+          userAcquiredAdaMap[tx.user_id] = 0;
         }
-        userAcquiredAdaMap[tx.user.id] += adaSent;
+        userAcquiredAdaMap[tx.user_id] += adaSent;
       }
 
       // Calculate total value of contributed assets
@@ -285,7 +288,7 @@ export class LifecycleService {
 
       // Process contributed assets to calculate their value
       for (const tx of contributionTransactions) {
-        if (!tx.user || !tx.user.id) continue;
+        if (!tx.user_id) continue;
 
         // Get assets associated with this transaction
         const txAssets = await this.assetsRepository.find({
@@ -507,6 +510,7 @@ export class LifecycleService {
         });
 
         const response = await this.vaultManagingService.updateVaultMetadataTx({
+          vault,
           transactionId: transaction.id,
           acquireMultiplier,
           adaPairMultiplier,
@@ -530,7 +534,11 @@ export class LifecycleService {
 
         // TODO: Burn the vault and refund assets
         this.logger.warn(`Vault ${vault.id} needs to be burned and assets refunded`);
-        await this.executePhaseTransition({ vaultId: vault.id, newStatus: VaultStatus.failed });
+        await this.executePhaseTransition({
+          vaultId: vault.id,
+          newStatus: VaultStatus.failed,
+          newScStatus: SmartContractVaultStatus.CANCELLED,
+        });
       }
     } catch (error) {
       this.logger.error(`Error executing acquire to governance transition for vault ${vault.id}`, error);

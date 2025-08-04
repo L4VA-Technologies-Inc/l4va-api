@@ -5,7 +5,7 @@ import { Job } from 'bullmq';
 import { Repository } from 'typeorm';
 
 import { Vault } from '@/database/vault.entity';
-import { VaultStatus } from '@/types/vault.types';
+import { SmartContractVaultStatus, VaultStatus } from '@/types/vault.types';
 
 @Processor('phaseTransition')
 @Injectable()
@@ -31,7 +31,12 @@ export class LifecycleProcessor extends WorkerHost {
   }
 
   // Not used for governance transition
-  async updateVaultStatus(data: { vaultId: string; newStatus: VaultStatus; phaseStartField?: string }): Promise<void> {
+  async updateVaultStatus(data: {
+    vaultId: string;
+    newStatus: VaultStatus;
+    scStatus?: SmartContractVaultStatus;
+    phaseStartField?: string;
+  }): Promise<void> {
     try {
       const vault = await this.vaultRepository.findOne({
         where: { id: data.vaultId },
@@ -44,6 +49,7 @@ export class LifecycleProcessor extends WorkerHost {
 
       // Update vault status
       vault.vault_status = data.newStatus;
+      if (data?.scStatus) vault.vault_sc_status = data.scStatus;
 
       // Set phase start time if specified
       if (data.phaseStartField) {

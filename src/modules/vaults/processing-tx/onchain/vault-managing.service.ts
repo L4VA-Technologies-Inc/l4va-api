@@ -19,8 +19,11 @@ import { Datum1 } from './types/type';
 import { generate_assetname_from_txhash_index, getUtxos, getVaultUtxo, toHex } from './utils/lib';
 import { VaultInsertingService } from './vault-inserting.service';
 
+import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Transaction } from '@/database/transaction.entity';
+import { Vault } from '@/database/vault.entity';
 import { TransactionType } from '@/types/transaction.types';
+import { SmartContractVaultStatus } from '@/types/vault.types';
 
 export interface VaultConfig {
   vaultName: string;
@@ -73,11 +76,13 @@ export class VaultManagingService {
   private readonly adminHash: string;
   private readonly adminSKey: string;
   private readonly adminAddress: string;
-  private readonly blockfrost: any;
+  private readonly blockfrost: BlockFrostAPI;
 
   constructor(
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
+    @InjectRepository(AssetsWhitelistEntity)
+    private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
     private readonly configService: ConfigService,
     @Inject(BlockchainService)
     private readonly blockchainService: BlockchainService,
@@ -169,7 +174,7 @@ export class VaultManagingService {
             datum: {
               type: 'inline',
               value: {
-                vault_status: 1,
+                vault_status: SmartContractVaultStatus.OPEN,
                 contract_type: vaultConfig.contractType,
                 asset_whitelist: vaultConfig.allowedPolicies,
                 // contributor_whitelist: vaultConfig.allowedContributors, // address list of contributors
@@ -303,10 +308,12 @@ export class VaultManagingService {
 
   // Create a transaction to update the vault's metadata
   async updateVaultMetadataTx({
+    vault,
     transactionId,
     acquireMultiplier,
     adaPairMultiplier,
   }: {
+    vault: Vault;
     transactionId: string;
     acquireMultiplier: [string, string | null, number][];
     adaPairMultiplier: number;
@@ -317,21 +324,24 @@ export class VaultManagingService {
   }> {
     const transaction = await this.transactionRepository.findOne({
       where: { id: transactionId },
-      relations: ['vault'],
+    });
+
+    const assetsWhitelist = await this.assetsWhitelistRepository.find({
+      where: { vault: { id: vault.id } },
     });
 
     if (!transaction || transaction.type !== TransactionType.updateVault) {
       throw new NotFoundException('Transaction not found');
     }
 
-    const allowedPolicies: string[] = transaction.vault.assets_whitelist.map(policy => policy.policy_id);
-    const contract_type = transaction.vault.privacy === 'private' ? 0 : transaction.vault.privacy === 'public' ? 1 : 2;
+    const allowedPolicies: string[] = assetsWhitelist ? assetsWhitelist.map(policy => policy.policy_id) : [];
+    const contract_type = vault.privacy === 'private' ? 0 : vault.privacy === 'public' ? 1 : 2;
 
     this.scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
       .to_address()
       .to_bech32();
 
-    const vaultUtxo = await getVaultUtxo(this.scPolicyId, transaction.vault.asset_vault_name, this.blockfrost);
+    const vaultUtxo = await getVaultUtxo(this.scPolicyId, vault.asset_vault_name, this.blockfrost);
     const input = {
       changeAddress: this.adminAddress,
       message: 'Vault Update',
@@ -344,7 +354,7 @@ export class VaultManagingService {
             type: 'json',
             value: {
               vault_token_index: 0, // must fit the ordering defined in the outputs array
-              asset_name: transaction.vault.asset_vault_name,
+              asset_name: vault.asset_vault_name,
             },
           },
         },
@@ -354,7 +364,7 @@ export class VaultManagingService {
           address: this.scAddress,
           assets: [
             {
-              assetName: transaction.vault.asset_vault_name,
+              assetName: vault.asset_vault_name,
               policyId: this.scPolicyId,
               quantity: 1,
             },
@@ -362,7 +372,7 @@ export class VaultManagingService {
           datum: {
             type: 'inline',
             value: {
-              vault_status: 2, // Added vault_status field
+              vault_status: SmartContractVaultStatus.SUCCESSFUL, // Added vault_status field
               contract_type: contract_type,
               asset_whitelist: allowedPolicies,
               // contributor_whitelist: vaultConfig.allowedContributors || [],
@@ -386,7 +396,7 @@ export class VaultManagingService {
                   is_inclusive: true,
                 },
               },
-              valuation_type: transaction.vault.value_method === 'fixed' ? 0 : 1,
+              valuation_type: vault.value_method === 'fixed' ? 0 : 1,
               custom_metadata: [
                 // <Data,Data>
                 // [
@@ -422,7 +432,7 @@ export class VaultManagingService {
 
       const response = await this.vaultInsertingService.submitTransaction({
         transaction: txToSubmitOnChain.to_hex(),
-        vaultId: transaction.vault.id,
+        vaultId: vault.id,
         txId: transaction.id,
       });
 
