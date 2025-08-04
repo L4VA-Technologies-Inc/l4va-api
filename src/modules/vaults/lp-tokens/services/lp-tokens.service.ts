@@ -30,7 +30,7 @@ export class LpTokensService {
   private readonly adminSKey: string;
   private readonly scPolicyId: string;
   private readonly adminKeyHash: string;
-  private blockfrost: any;
+  private blockfrost: BlockFrostAPI;
 
   constructor(
     private readonly transactionsService: TransactionsService,

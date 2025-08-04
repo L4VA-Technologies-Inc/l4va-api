@@ -1,12 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, IsEnum, IsOptional, IsArray } from 'class-validator';
+import { IsNotEmpty, IsString, IsEnum, IsOptional, IsArray, IsDateString } from 'class-validator';
 
-export enum ProposalType {
-  ASSET_SALE = 'asset_sale',
-  VAULT_STRATEGY = 'vault_strategy',
-  PARAMETER_CHANGE = 'parameter_change',
-  OTHER = 'other',
-}
+import { ProposalType } from '@/types/proposal.types';
 
 export class CreateProposalReq {
   @ApiProperty({
@@ -28,10 +23,20 @@ export class CreateProposalReq {
   @ApiProperty({
     description: 'Type of proposal',
     enum: ProposalType,
-    example: ProposalType.ASSET_SALE,
+    example: ProposalType.DISTRIBUTION,
   })
   @IsEnum(ProposalType)
   type: ProposalType;
+
+  @ApiProperty({
+    description: 'Start date and time when voting begins',
+    example: '2025-08-05T10:00:00.000Z',
+    type: 'string',
+    format: 'date-time',
+  })
+  @IsNotEmpty()
+  @IsDateString()
+  startDate: string;
 
   @ApiProperty({
     description: 'Additional metadata for the proposal',

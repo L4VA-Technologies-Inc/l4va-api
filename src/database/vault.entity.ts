@@ -31,6 +31,8 @@ import { AssetsWhitelistEntity } from './assetsWhitelist.entity';
 import { ContributorWhitelistEntity } from './contributorWhitelist.entity';
 import { FileEntity } from './file.entity';
 import { LinkEntity } from './link.entity';
+import { Proposal } from './proposal.entity';
+import { Snapshot } from './snapshot.entity';
 import { TagEntity } from './tag.entity';
 import { User } from './user.entity';
 
@@ -368,6 +370,12 @@ export class Vault {
   @Expose({ name: 'assets' })
   @OneToMany(() => Asset, (asset: Asset) => asset.vault)
   assets?: Asset[];
+
+  @OneToMany(() => Snapshot, snapshot => snapshot.vault)
+  snapshots: Snapshot[];
+
+  @OneToMany(() => Proposal, proposal => proposal.vault)
+  proposals: Proposal[];
 
   @Expose({ name: 'acquireMultiplier' })
   @Column({
