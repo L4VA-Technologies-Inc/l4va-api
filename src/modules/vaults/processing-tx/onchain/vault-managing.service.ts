@@ -334,7 +334,10 @@ export class VaultManagingService {
       throw new NotFoundException('Transaction not found');
     }
 
-    const allowedPolicies: string[] = assetsWhitelist ? assetsWhitelist.map(policy => policy.policy_id) : [];
+    const allowedPolicies: string[] =
+      Array.isArray(assetsWhitelist) && assetsWhitelist.length > 0
+        ? assetsWhitelist.map(policy => policy.policy_id)
+        : [];
     const contract_type = vault.privacy === VaultPrivacy.private ? 0 : vault.privacy === VaultPrivacy.public ? 1 : 2;
 
     this.scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))

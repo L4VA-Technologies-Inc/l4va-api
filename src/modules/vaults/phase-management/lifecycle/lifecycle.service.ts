@@ -665,7 +665,6 @@ export class LifecycleService {
           await this.executePhaseTransition({
             vaultId: vault.id,
             newStatus: VaultStatus.failed,
-            phaseStartField: null,
             newScStatus: SmartContractVaultStatus.CANCELLED,
           });
 
