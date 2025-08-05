@@ -282,6 +282,10 @@ export class LifecycleService {
       let totalContributedValueAda = 0;
       const contributionValueByTransaction: Record<string, number> = {};
       const userContributedValueMap: Record<string, number> = {};
+      const uniqueAssets = new Map<
+        string,
+        { policyId: string; assetId: string; totalValueAda: number; totalQuantity: number }
+      >();
 
       // Process contributed assets to calculate their value
       for (const tx of contributionTransactions) {
@@ -300,10 +304,25 @@ export class LifecycleService {
 
         // Calculate value of assets in this transaction
         for (const asset of txAssets) {
+          const assetKey = `${asset.policy_id}:${asset.asset_id}`;
+
           try {
             const { priceAda } = await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_id);
             const quantity = asset.quantity || 1;
             transactionValueAda += priceAda * quantity;
+
+            if (uniqueAssets.has(assetKey)) {
+              const existing = uniqueAssets.get(assetKey)!;
+              existing.totalValueAda += priceAda * quantity;
+              existing.totalQuantity += quantity;
+            } else {
+              uniqueAssets.set(assetKey, {
+                policyId: asset.policy_id,
+                assetId: asset.asset_id,
+                totalValueAda: priceAda * quantity,
+                totalQuantity: quantity,
+              });
+            }
           } catch (error) {
             this.logger.error(`Error getting price for asset ${asset.policy_id}.${asset.asset_id}:`, error.message);
           }
@@ -362,6 +381,9 @@ export class LifecycleService {
         } catch (error) {
           this.logger.error(`Failed to create LP claim for vault ${vault.id}:`, error);
         }
+
+        const tokensForAcquirers = (vault.ft_token_supply - lpVtAmount) * vault.tokens_for_acquires * 0.01;
+        const tokensForContributors = vault.ft_token_supply - tokensForAcquirers - lpVtAmount;
 
         // 4. Create claims for each acquisition transaction
         for (const tx of acquisitionTransactions) {
@@ -496,9 +518,44 @@ export class LifecycleService {
           }
         }
 
-        // TODO: make calculation for this value for SC
         const acquireMultiplier: [string, string | null, number][] = [];
-        const adaPairMultiplier = 1;
+
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        for (const [assetKey, assetData] of uniqueAssets) {
+          if (assetData.totalValueAda > 0) {
+            // Calculate multiplier based on asset's proportion of total contributed value
+            const assetProportion = assetData.totalValueAda / totalContributedValueAda;
+            const tokensForThisAsset = tokensForContributors * assetProportion;
+
+            // Calculate multiplier: VT tokens per unit of this asset
+            const assetMultiplier = Math.floor(tokensForThisAsset / assetData.totalQuantity);
+
+            acquireMultiplier.push([assetData.policyId, assetData.assetId, assetMultiplier]);
+
+            this.logger.log(
+              `Asset ${assetData.policyId}.${assetData.assetId} multiplier: ${assetMultiplier} VT per unit  (Value: ${assetData.totalValueAda} ADA, Quantity: ${assetData.totalQuantity}, Proportion: ${(assetProportion * 100).toFixed(2)}%)`
+            );
+          }
+        }
+        // Add a row for total acquired ADA
+        acquireMultiplier.push(['', '', Math.floor(tokensForAcquirers / totalAcquiredAda)]);
+
+        // Multiplier for LP
+        const adaPairMultiplier = Math.floor(lpVtAmount / lpAdaAmount);
+
+        this.logger.log(`LP multiplier calculation for vault ${vault.id}:
+          LP VT Amount: ${lpVtAmount}
+          LP ADA Amount: ${lpAdaAmount}
+          Multiplier: ${adaPairMultiplier} VT per ADA`);
+
+        // Validation check for precision loss
+        const reconstructedVT = adaPairMultiplier * lpAdaAmount;
+        const difference = Math.abs(reconstructedVT - lpVtAmount);
+        const percentageError = (difference / lpVtAmount) * 100;
+
+        if (percentageError > 1) {
+          this.logger.warn(`High precision loss in LP multiplier: ${percentageError.toFixed(2)}% error`);
+        }
 
         const transaction = await this.transactionsService.createTransaction({
           vault_id: vault.id,
