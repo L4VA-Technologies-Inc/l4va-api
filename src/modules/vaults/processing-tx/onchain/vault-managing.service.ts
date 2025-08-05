@@ -23,7 +23,7 @@ import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { TransactionType } from '@/types/transaction.types';
-import { SmartContractVaultStatus } from '@/types/vault.types';
+import { SmartContractVaultStatus, VaultPrivacy } from '@/types/vault.types';
 
 export interface VaultConfig {
   vaultName: string;
@@ -335,7 +335,7 @@ export class VaultManagingService {
     }
 
     const allowedPolicies: string[] = assetsWhitelist ? assetsWhitelist.map(policy => policy.policy_id) : [];
-    const contract_type = vault.privacy === 'private' ? 0 : vault.privacy === 'public' ? 1 : 2;
+    const contract_type = vault.privacy === VaultPrivacy.private ? 0 : vault.privacy === VaultPrivacy.public ? 1 : 2;
 
     this.scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
       .to_address()
@@ -378,21 +378,21 @@ export class VaultManagingService {
               // contributor_whitelist: vaultConfig.allowedContributors || [],
               asset_window: {
                 lower_bound: {
-                  bound_type: new Date().getTime(),
+                  bound_type: new Date(vault.contribution_phase_start).getTime(),
                   is_inclusive: true,
                 },
                 upper_bound: {
-                  bound_type: new Date().getTime() + 24 * 60 * 60 * 1000, // Default 1 day
+                  bound_type: new Date(vault.acquire_phase_start).getTime(),
                   is_inclusive: true,
                 },
               },
               acquire_window: {
                 lower_bound: {
-                  bound_type: new Date().getTime(),
+                  bound_type: new Date(vault.acquire_phase_start).getTime(),
                   is_inclusive: true,
                 },
                 upper_bound: {
-                  bound_type: new Date().getTime() + 24 * 60 * 60 * 1000, // Default 1 day
+                  bound_type: new Date().getTime(), // current time
                   is_inclusive: true,
                 },
               },
