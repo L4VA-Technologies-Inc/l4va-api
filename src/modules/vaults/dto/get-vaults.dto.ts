@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Expose } from 'class-transformer';
-import { IsEnum, IsOptional } from 'class-validator';
+import { Expose, Transform, Type } from 'class-transformer';
+import { IsBoolean, IsEnum, IsNumber, IsOptional, Max, Min } from 'class-validator';
 
 import { PaginationDto } from './pagination.dto';
 
@@ -16,11 +16,55 @@ export enum VaultSortField {
   name = 'name',
   createdAt = 'created_at',
   updatedAt = 'updated_at',
+  tvl = 'tvl',
+  initialVaultOffered = 'acquire_reserve',
 }
 
 export enum SortOrder {
   ASC = 'ASC',
   DESC = 'DESC',
+}
+
+export enum VaultTagFilter {
+  NFT = 'NFT',
+  FT = 'FT',
+  RWA = 'RWA',
+  REAL_ESTATE = 'Real Estate',
+  INSURANCE = 'Insurance',
+  COMMODITY = 'Commodity',
+  SYNTHETIC = 'Synthetic',
+  EXOTIC = 'Exotic',
+  PRECIOUS_METAL = 'Precious Metal',
+  GEM = 'Gem',
+  DEFI = 'DeFi',
+  PFP = 'PFP',
+  STAKING = 'Staking',
+  DEPIN = 'DePin',
+  STABLECOIN = 'Stablecoin',
+  GOVERNANCE = 'Governance',
+  DEX = 'DEX',
+  GAMING = 'Gaming',
+  MUSIC = 'Music',
+  ART = 'Art',
+  METAVERSE = 'Metaverse',
+  UTILITY = 'Utility',
+  COLLECTIBLE = 'Collectible',
+  PROTOCOL = 'Protocol',
+  LP_TOKEN = 'LP Token',
+  WRAPPED = 'Wrapped',
+}
+
+export enum VaultStageFilter {
+  CREATED = 'created',
+  CONTRIBUTION = 'contribution',
+  ACQUIRE = 'acquire',
+  LOCKED = 'locked',
+  TERMINATED = 'terminated',
+}
+
+export enum TVLCurrency {
+  ADA = 'ADA',
+  USD = 'USD',
 }
 
 export class GetVaultsDto extends PaginationDto {
@@ -50,4 +94,119 @@ export class GetVaultsDto extends PaginationDto {
   })
   @Expose()
   sortOrder?: SortOrder = SortOrder.DESC;
+
+  // Vault Tags Filter
+  @IsEnum(VaultTagFilter, { each: true })
+  @IsOptional()
+  @ApiProperty({
+    enum: VaultTagFilter,
+    isArray: true,
+    required: false,
+    description: 'Filter by vault tags',
+  })
+  @Expose()
+  @Transform(({ value }) => {
+    if (typeof value === 'string') {
+      return [value];
+    }
+    return value;
+  })
+  tags?: VaultTagFilter[];
+
+  // Reserve Met Filter
+  @IsBoolean()
+  @IsOptional()
+  @ApiProperty({
+    type: Boolean,
+    required: false,
+    description: 'Filter by whether reserve is met (true) or not met (false)',
+  })
+  @Expose()
+  @Transform(({ value }) => {
+    if (typeof value === 'string') {
+      return value === 'true';
+    }
+    return value;
+  })
+  reserveMet?: boolean;
+
+  // Vault Stage Filter
+  @IsEnum(VaultStageFilter)
+  @IsOptional()
+  @ApiProperty({
+    enum: VaultStageFilter,
+    required: false,
+    description: 'Filter by vault stage',
+  })
+  @Expose()
+  vaultStage?: VaultStageFilter;
+
+  // Initial % Vault Offered Range
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  @Max(100)
+  @ApiProperty({
+    type: Number,
+    required: false,
+    minimum: 0,
+    maximum: 100,
+    description: 'Minimum initial vault percentage offered',
+  })
+  @Expose()
+  @Type(() => Number)
+  minInitialVaultOffered?: number;
+
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  @Max(100)
+  @ApiProperty({
+    type: Number,
+    required: false,
+    minimum: 0,
+    maximum: 100,
+    description: 'Maximum initial vault percentage offered',
+  })
+  @Expose()
+  @Type(() => Number)
+  maxInitialVaultOffered?: number;
+
+  // TVL Range
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  @ApiProperty({
+    type: Number,
+    required: false,
+    minimum: 0,
+    description: 'Minimum TVL value',
+  })
+  @Expose()
+  @Type(() => Number)
+  minTvl?: number;
+
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  @ApiProperty({
+    type: Number,
+    required: false,
+    minimum: 0,
+    description: 'Maximum TVL value',
+  })
+  @Expose()
+  @Type(() => Number)
+  maxTvl?: number;
+
+  @IsEnum(TVLCurrency)
+  @IsOptional()
+  @ApiProperty({
+    enum: TVLCurrency,
+    required: false,
+    default: TVLCurrency.USD,
+    description: 'Currency for TVL filtering (ADA or USD)',
+  })
+  @Expose()
+  tvlCurrency?: TVLCurrency = TVLCurrency.USD;
 }

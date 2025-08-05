@@ -953,7 +953,15 @@ export class VaultsService {
     page: number = 1,
     limit: number = 10,
     sortBy?: VaultSortField,
-    sortOrder: SortOrder = SortOrder.DESC
+    sortOrder: SortOrder = SortOrder.DESC,
+    tags?: string[],
+    reserveMet?: boolean,
+    vaultStage?: string,
+    minInitialVaultOffered?: number,
+    maxInitialVaultOffered?: number,
+    minTvl?: number,
+    maxTvl?: number,
+    tvlCurrency?: string
   ): Promise<PaginatedResponseDto<VaultShortResponse>> {
     // Get user's wallet address
     const user = await this.usersRepository.findOne({
