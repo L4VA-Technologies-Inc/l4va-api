@@ -355,7 +355,8 @@ export class VaultInsertingService {
     };
 
     const internalStatus = statusMap[status];
-    await this.transactionsService.updateTransactionStatus(tx.hash, tx.index, internalStatus);
+    const txIndex = typeof tx.index !== 'undefined' ? tx.index : 0;
+    await this.transactionsService.updateTransactionStatus(tx.hash, txIndex, internalStatus);
   }
 
   // return this.anvilApiService.submitTransaction(params);
