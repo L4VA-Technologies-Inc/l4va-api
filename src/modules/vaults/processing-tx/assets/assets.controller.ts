@@ -13,7 +13,7 @@ export class AssetsController {
   constructor(private readonly assetsService: AssetsService) {}
 
   @ApiDoc({
-    summary: 'Get vault assets',
+    summary: 'Get contributed vault assets',
     description: 'Get paginated list of assets for a specific vault',
     status: 200,
   })
@@ -23,7 +23,7 @@ export class AssetsController {
   }
 
   @ApiDoc({
-    summary: 'Get vault assets',
+    summary: 'Get acquired vault assets',
     description: 'Get paginated list of assets for a specific vault',
     status: 200,
   })

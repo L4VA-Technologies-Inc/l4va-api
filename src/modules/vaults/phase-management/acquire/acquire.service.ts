@@ -70,7 +70,9 @@ export class AcquireService {
     const transaction = await this.transactionsService.createTransaction({
       vault_id: vaultId,
       type: TransactionType.acquire,
+      amount: acquireReq.assets.reduce((sum, asset) => sum + (asset.quantity || 0), 0),
       assets: [],
+      userId,
     });
 
     // Create assets for the transaction

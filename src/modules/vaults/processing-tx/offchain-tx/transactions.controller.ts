@@ -3,15 +3,11 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 
 import { AuthGuard } from '../../../auth/auth.guard';
 
-import { TransactionsService } from './transactions.service';
-
 @ApiTags('Transactions')
 @Controller('transactions')
 @UseGuards(AuthGuard)
 @ApiBearerAuth()
 export class TransactionsController {
-  constructor(private readonly transactionsService: TransactionsService) {}
-
   @Get('sent')
   @ApiOperation({ summary: 'Get transactions sent by the authenticated user' })
   async getSentTransactions() {
@@ -25,10 +21,9 @@ export class TransactionsController {
     // return this.transactionsService.getTransactionsByReceiver(address);
     return null;
   }
-
   @Get(':txHash')
   @ApiOperation({ summary: 'Get transaction details by transaction hash' })
-  async getTransaction(@Param('txHash') txHash: string) {
+  async getTransaction(@Param('txHash') _txHash: string) {
     //return this.transactionsService.getTransaction(txHash);
     return null;
   }

@@ -1,6 +1,17 @@
-import { Expose } from 'class-transformer';
+import { Expose, Type } from 'class-transformer';
 
 import { ClaimStatus } from '@/types/claim.types';
+
+class SimpleVaultDto {
+  @Expose()
+  id: string;
+
+  @Expose()
+  name: string;
+
+  @Expose()
+  image: string;
+}
 
 export class ClaimResponseDto {
   @Expose()
@@ -13,20 +24,24 @@ export class ClaimResponseDto {
   status: ClaimStatus;
 
   @Expose()
-  amount: number;
+  amount: string;
 
   @Expose()
-  txHash?: string;
+  description: string | null;
 
   @Expose()
-  description?: string;
+  metadata: Record<string, any> | null;
 
   @Expose()
-  metadata?: Record<string, any>;
+  created_at: string;
 
   @Expose()
-  createdAt: string;
+  updated_at: string;
 
   @Expose()
-  updatedAt: string;
+  userId: string;
+
+  @Expose()
+  @Type(() => SimpleVaultDto)
+  vault: SimpleVaultDto;
 }

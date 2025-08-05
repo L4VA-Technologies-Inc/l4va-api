@@ -69,6 +69,23 @@ export const getUtxos = async (address: Address, min = 0, blockfrost) => {
   return parsedUtxos;
 };
 
+export const getUtxosExctract = async (address: Address, min = 0, blockfrost) => {
+  const utxos = await blockfrost.addressesUtxosAll(address.to_bech32());
+  const parsedUtxos: string[] = [];
+  utxos.forEach((utxo: any) => {
+    const { tx_hash, output_index, amount } = utxo;
+    if (Number(amount[0].quantity) > min) {
+      parsedUtxos.push(
+        TransactionUnspentOutput.new(
+          TransactionInput.new(TransactionHash.from_hex(tx_hash), output_index),
+          TransactionOutput.new(address, assetsToValue(amount))
+        ).to_hex()
+      );
+    }
+  });
+  return parsedUtxos;
+};
+
 export function generate_assetname_from_txhash_index(txHash: string, txOutputIdx: number) {
   const plutusList = PlutusList.new();
   plutusList.add(PlutusData.new_bytes(Buffer.from(txHash, 'hex')));

@@ -13,7 +13,6 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { TransactionStatus } from '../../../../types/transaction.types';
 import { TransactionsService } from '../offchain-tx/transactions.service';
 
 import { BlockchainScannerService } from './blockchain-scanner.service';
@@ -21,13 +20,14 @@ import { BlockchainService } from './blockchain.service';
 import { SubmitTransactionDto } from './dto/transaction.dto';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
-import { Datum } from './types/type';
+import { Datum, Redeemer } from './types/type';
 import { applyContributeParams, toPreloadedScript } from './utils/apply_params';
 import * as blueprint from './utils/blueprint.json';
 
 import { Vault } from '@/database/vault.entity';
+import { TransactionStatus } from '@/types/transaction.types';
 
-// Investment and Contribution
+// Acquire and Contribution
 
 export interface NftAsset {
   policyId: string;
@@ -69,7 +69,7 @@ export class VaultInsertingService {
   private readonly logger = new Logger(VaultInsertingService.name);
   private readonly adminHash: string;
   private readonly adminSKey: string;
-  private blockfrost: any;
+  private blockfrost: BlockFrostAPI;
   constructor(
     @InjectRepository(Vault)
     private readonly vaultsRepository: Repository<Vault>,
@@ -86,7 +86,9 @@ export class VaultInsertingService {
     });
   }
 
-  async buildTransaction(params: BuildTransactionParams): Promise<any> {
+  async buildTransaction(params: BuildTransactionParams): Promise<{
+    presignedTx: string;
+  }> {
     try {
       // Validate that the transaction exists and get its current state
       const transaction = await this.transactionsService.validateTransactionExists(params.txId);
@@ -96,6 +98,10 @@ export class VaultInsertingService {
           id: transaction.vault_id,
         },
       });
+
+      if (!vault.publication_hash) {
+        throw new Error('Vault publication hash not found - vault may not be properly published');
+      }
 
       const txDetail = await this.blockchainScanner.getTransactionDetails(vault.publication_hash);
 
@@ -155,10 +161,11 @@ export class VaultInsertingService {
         outputs: {
           address: string;
           assets: object[];
-          lovelace?: number;
+          lovelace?: number; // Required if Contribution in ADA
           datum: { type: 'inline'; value: Datum; shape: object };
         }[];
         requiredSigners: string[];
+        // Not required if Contribution in ADA
         preloadedScripts: {
           type: string;
           blueprint: any;
@@ -171,12 +178,11 @@ export class VaultInsertingService {
         network: string;
       } = {
         changeAddress: params.changeAddress,
-        // message: isAda ? 'Contribution in ADA' : 'Contribution in asset',
         message: 'Contribution in asset',
         mint: [
           {
             version: 'cip25',
-            assetName: { name: VAULT_ID, format: 'hex' },
+            assetName: { name: 'receipt', format: 'utf8' },
             policyId: POLICY_ID,
             type: 'plutus',
             quantity: 1, // Mint 1 VT token
@@ -190,10 +196,9 @@ export class VaultInsertingService {
             redeemer: {
               type: 'json',
               value: {
-                quantity: 1, // Mint 1 VT token
                 output_index: 0,
                 contribution: isAda ? 'Lovelace' : 'Asset',
-              },
+              } satisfies Redeemer,
             },
           },
         ],
@@ -204,14 +209,14 @@ export class VaultInsertingService {
             assets: isAda
               ? [
                   {
-                    assetName: { name: VAULT_ID, format: 'hex' },
+                    assetName: { name: 'receipt', format: 'utf8' },
                     policyId: POLICY_ID,
                     quantity: 1,
                   },
                 ]
               : [
                   {
-                    assetName: { name: VAULT_ID, format: 'hex' },
+                    assetName: { name: 'receipt', format: 'utf8' },
                     policyId: POLICY_ID,
                     quantity: 1,
                   },
@@ -222,7 +227,6 @@ export class VaultInsertingService {
               value: {
                 policy_id: POLICY_ID,
                 asset_name: VAULT_ID,
-                quantity: 1000,
                 owner: params.changeAddress,
               },
               shape: {
@@ -265,6 +269,7 @@ export class VaultInsertingService {
       if (error instanceof NotFoundException) {
         throw new NotFoundException(error.message);
       }
+      this.logger.error('Error building contribution transaction', error);
       throw error;
     }
   }
@@ -327,7 +332,7 @@ export class VaultInsertingService {
     }
   }
 
-  async handleScannerEvent(event: any) {
+  async handleScannerEvent(event: any): Promise<void> {
     // Determine transaction status based on blockchain data
     const tx = event.data.tx;
     let status: OnchainTransactionStatus;
@@ -350,7 +355,7 @@ export class VaultInsertingService {
     };
 
     const internalStatus = statusMap[status];
-    await this.transactionsService.updateTransactionStatus(tx.hash, internalStatus);
+    await this.transactionsService.updateTransactionStatus(tx.hash, tx.index, internalStatus);
   }
 
   // return this.anvilApiService.submitTransaction(params);
@@ -387,7 +392,7 @@ export class VaultInsertingService {
 
       // Update transaction status
       const internalStatus = statusMap[status];
-      await this.transactionsService.updateTransactionStatus(tx.hash, internalStatus);
+      await this.transactionsService.updateTransactionStatus(tx.hash, tx.index, internalStatus);
 
       // For confirmed transactions, analyze the transfer
       if (status === OnchainTransactionStatus.CONFIRMED) {
@@ -446,7 +451,7 @@ export class VaultInsertingService {
     }
   }
 
-  async handleBurnVault(userId: string, vaultId: string) {
+  async handleBurnVault(userId: string, vaultId: string): Promise<void> {
     // todo need to check if user is owner and if vault is exists
     this.logger.log(`Run delete vault process for  vaultId: ${vaultId}  by user with userId: ${userId}`);
 

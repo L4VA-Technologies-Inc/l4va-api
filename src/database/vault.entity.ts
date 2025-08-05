@@ -1,4 +1,4 @@
-import { Expose, Transform } from 'class-transformer';
+import { Exclude, Expose, Transform } from 'class-transformer';
 import {
   Entity,
   PrimaryGeneratedColumn,
@@ -17,6 +17,7 @@ import {
 import {
   ContributionWindowType,
   InvestmentWindowType,
+  SmartContractVaultStatus,
   TerminationType,
   ValueMethod,
   VaultPrivacy,
@@ -30,6 +31,8 @@ import { AssetsWhitelistEntity } from './assetsWhitelist.entity';
 import { ContributorWhitelistEntity } from './contributorWhitelist.entity';
 import { FileEntity } from './file.entity';
 import { LinkEntity } from './link.entity';
+import { Proposal } from './proposal.entity';
+import { Snapshot } from './snapshot.entity';
 import { TagEntity } from './tag.entity';
 import { User } from './user.entity';
 
@@ -343,6 +346,10 @@ export class Vault {
   })
   vault_status: VaultStatus;
 
+  @Exclude()
+  @Column({ name: 'vault_sc_status', type: 'enum', enum: SmartContractVaultStatus, nullable: true })
+  vault_sc_status: SmartContractVaultStatus;
+
   @Expose({ name: 'owner' })
   @ManyToOne(() => User, (owner: User) => owner.id)
   @JoinColumn({ name: 'owner_id' })
@@ -363,6 +370,56 @@ export class Vault {
   @Expose({ name: 'assets' })
   @OneToMany(() => Asset, (asset: Asset) => asset.vault)
   assets?: Asset[];
+
+  @OneToMany(() => Snapshot, snapshot => snapshot.vault)
+  snapshots: Snapshot[];
+
+  @OneToMany(() => Proposal, proposal => proposal.vault)
+  proposals: Proposal[];
+
+  @Expose({ name: 'acquireMultiplier' })
+  @Column({
+    name: 'acquire_multiplier',
+    type: 'jsonb',
+    nullable: true,
+    default: () => 'null',
+  })
+  acquire_multiplier?: Array<[string, string | null, number]>; // [policyId, assetName?, multiplier]
+
+  @Expose({ name: 'adaPairMultiplier' })
+  @Transform(({ value }) => (value ? Number(value) : null))
+  @Column({
+    name: 'ada_pair_multiplier',
+    type: 'numeric',
+    nullable: true,
+    default: 1,
+  })
+  ada_pair_multiplier?: number;
+
+  @Expose({ name: 'lastUpdateTxHash' })
+  @Column({
+    name: 'last_update_tx_hash',
+    type: 'varchar',
+    nullable: true,
+  })
+  last_update_tx_hash?: string;
+
+  @Expose({ name: 'lastUpdateTxIndex' })
+  @Column({
+    name: 'last_update_tx_index',
+    type: 'integer',
+    nullable: true,
+    default: 0,
+  })
+  last_update_tx_index?: number;
+
+  @Expose({ name: 'vaultPolicyId' })
+  @Column({
+    name: 'vault_policy_id',
+    type: 'varchar',
+    nullable: true,
+  })
+  vault_policy_id?: string;
 
   @Expose({ name: 'vaultImage' })
   @OneToOne(() => FileEntity)

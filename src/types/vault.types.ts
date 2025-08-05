@@ -7,6 +7,7 @@ export enum VaultType {
 }
 
 export enum VaultPrivacy {
+  // Represent an enum setup by L4VA (0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE) in SC
   private = 'private',
   public = 'public',
   semiPrivate = 'semi-private',
@@ -14,6 +15,7 @@ export enum VaultPrivacy {
 
 // step 2
 export enum ValueMethod {
+  // Enum 0: 'FIXED' 1: 'LBE' in SC
   lbe = 'lbe',
   fixed = 'fixed',
 }
@@ -43,6 +45,13 @@ export enum VaultStatus {
   acquire = 'acquire',
   investment = 'investment',
   locked = 'locked',
-  governance = 'governance',
   failed = 'failed',
+}
+
+// Mapping for smart contract vault status
+export enum SmartContractVaultStatus {
+  PENDING = 0,
+  OPEN = 1,
+  SUCCESSFUL = 2,
+  CANCELLED = 3,
 }

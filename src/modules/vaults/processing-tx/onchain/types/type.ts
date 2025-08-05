@@ -1,24 +1,34 @@
 export type Redeemer =
   | {
-      quantity: number;
       output_index: number;
       contribution: 'Lovelace' | 'Asset';
     }
-  | 'MintAdaPair'
+  | 'MintVaultToken'
+  | 'CancelContribution'
   | 'BurnLp';
+export type VaultPolicy = string;
+export type VaultId = string;
 export type Redeemer1 =
   | {
       __variant: 'ExtractAda' | 'ExtractAsset';
       __data: {
-        lp_output_index?: number;
+        vault_token_output_index?: number;
       };
     }
   | {
-      lp_output_index: number;
+      vault_token_output_index: number;
       change_output_index: number;
     }
-  | 'CancelAsset'
-  | 'CancelAda';
+  | {
+      __variant: 'CancelAsset' | 'CancelAda';
+      __data: {
+        cancel_output_index?: number;
+      };
+    };
+type VaultPolicy1 = string;
+type VaultId1 = string;
+type VaultPolicy2 = string;
+type VaultId2 = string;
 export type Redeemer2 =
   | {
       vault_token_index: number;
@@ -39,13 +49,16 @@ export interface L4VaVault {
   contribute: {
     mint: {
       redeemer: Redeemer;
+      parameters: [] | [VaultPolicy] | [VaultPolicy, VaultId];
     };
     spend: {
       redeemer: Redeemer1;
       datum: Datum;
+      parameters: [] | [VaultPolicy1] | [VaultPolicy1, VaultId1];
     };
     else: {
       redeemer: unknown;
+      parameters: [] | [VaultPolicy2] | [VaultPolicy2, VaultId2];
     };
   };
   vault: {
@@ -64,7 +77,6 @@ export interface L4VaVault {
 export interface Datum {
   policy_id: string;
   asset_name: string;
-  quantity: number;
   owner:
     | string
     | {
@@ -84,13 +96,9 @@ export interface Datum {
             };
       };
   datum_tag?: string;
-  contributed_assets?: Array<{
-    policy_id: string;
-    asset_name: string;
-    quantity: number;
-  }>;
 }
 export interface Datum1 {
+  vault_status: 0 | 1 | 2 | 3; // 0: contribution, 1: launch, 2: distribution, 3: closed
   contract_type: number;
   asset_whitelist: string[];
   contributor_whitelist?: string[];
@@ -104,7 +112,7 @@ export interface Datum1 {
       is_inclusive: boolean;
     };
   };
-  investment_window: {
+  acquire_window: {
     lower_bound: {
       bound_type: 'NegativeInfinity' | number | 'PositiveInfinity';
       is_inclusive: boolean;
@@ -126,10 +134,12 @@ export interface Datum1 {
     termination_type: number;
     fdp: number;
   };
-  investment?: {
+  acquire?: {
     reserve: number;
     liquidityPool: number;
   };
+  acquire_multiplier?: [string, string | undefined, number][];
+  ada_pair_multipler?: number;
   admin: string;
   minting_key: string;
 }

@@ -2,10 +2,6 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { AssetStatus, AssetType, AssetOriginType } from '../../../../types/asset.types';
-import { BlockchainTransactionListItem } from '../../../../types/blockchain.types';
-import { TransactionStatus, TransactionType } from '../../../../types/transaction.types';
-import { VaultPrivacy, VaultStatus } from '../../../../types/vault.types';
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
 import { BlockchainScannerService } from '../../processing-tx/onchain/blockchain-scanner.service';
 
@@ -15,6 +11,10 @@ import { Asset } from '@/database/asset.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { AssetStatus, AssetType, AssetOriginType } from '@/types/asset.types';
+import { BlockchainTransactionListItem } from '@/types/blockchain.types';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
+import { VaultPrivacy, VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class ContributionService {
@@ -82,7 +82,11 @@ export class ContributionService {
             // If transaction exists in DB and status is not confirmed, update it
             if (dbTx && dbTx.status !== 'confirmed') {
               try {
-                await this.transactionsService.updateTransactionStatus(tx.tx_hash, 'confirmed' as TransactionStatus);
+                await this.transactionsService.updateTransactionStatus(
+                  tx.tx_hash,
+                  tx.tx_index,
+                  TransactionStatus.confirmed
+                );
                 statusUpdated = true;
                 this.logger.log(`Updated transaction ${tx.tx_hash} status to confirmed`);
               } catch (updateError) {
@@ -170,6 +174,7 @@ export class ContributionService {
       vault_id: vaultId,
       type: TransactionType.contribute,
       assets: [],
+      userId,
     });
     if (contributeReq.assets.length > 0) {
       try {

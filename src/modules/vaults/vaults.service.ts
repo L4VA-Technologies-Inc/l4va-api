@@ -315,14 +315,21 @@ export class VaultsService {
           })
         : null;
 
+      const contributionOpenWindowTime = data.contributionOpenWindowTime
+        ? new Date(data.contributionOpenWindowTime).toISOString()
+        : null;
+      const acquireOpenWindowTime = data.acquireOpenWindowTime
+        ? new Date(data.acquireOpenWindowTime).toISOString()
+        : null;
+
       // Prepare vault data
       const vaultData = transformToSnakeCase({
         ...data,
         owner: owner,
         contributionDuration: data.contributionDuration,
         acquireWindowDuration: data.acquireWindowDuration,
-        acquireOpenWindowTime: new Date(data.acquireOpenWindowTime).toISOString(),
-        contributionOpenWindowTime: new Date(data.contributionOpenWindowTime).toISOString(),
+        acquireOpenWindowTime,
+        contributionOpenWindowTime,
         timeElapsedIsEqualToTime: data.timeElapsedIsEqualToTime,
         vaultStatus: VaultStatus.created,
         vaultImage: vaultImg,
@@ -829,9 +836,6 @@ export class VaultsService {
         case VaultFilter.acquire:
           query.where['vault_status'] = VaultStatus.acquire;
           break;
-        case VaultFilter.governance:
-          query.where['vault_status'] = VaultStatus.governance;
-          break;
       }
     }
 
@@ -887,7 +891,7 @@ export class VaultsService {
         'vault_image',
         'banner_image',
         'ft_token_img',
-        'tags'
+        'tags',
       ],
     });
 
@@ -949,7 +953,15 @@ export class VaultsService {
     page: number = 1,
     limit: number = 10,
     sortBy?: VaultSortField,
-    sortOrder: SortOrder = SortOrder.DESC
+    sortOrder: SortOrder = SortOrder.DESC,
+    tags?: string[],
+    reserveMet?: boolean,
+    vaultStage?: string,
+    minInitialVaultOffered?: number,
+    maxInitialVaultOffered?: number,
+    minTvl?: number,
+    maxTvl?: number,
+    tvlCurrency?: string
   ): Promise<PaginatedResponseDto<VaultShortResponse>> {
     // Get user's wallet address
     const user = await this.usersRepository.findOne({
@@ -1027,16 +1039,6 @@ export class VaultsService {
             new Brackets(qb => {
               qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
                 'EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress)',
-                { userWalletAddress }
-              );
-            })
-          );
-          break;
-        case VaultFilter.governance:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.governance }).andWhere(
-            new Brackets(qb => {
-              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
-                '(EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress) OR EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress))',
                 { userWalletAddress }
               );
             })
@@ -1126,11 +1128,7 @@ export class VaultsService {
   private async calculateVaultTVL(vault: Vault): Promise<number> {
     try {
       // If vault is in contribution or later phase, calculate real TVL
-      if (
-        [VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked, VaultStatus.governance].includes(
-          vault.vault_status
-        )
-      ) {
+      if ([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked].includes(vault.vault_status)) {
         // Get all locked assets for this vault
         // const lockedAssets = await this.assetsRepository.count({
         //   where: {
@@ -1250,13 +1248,6 @@ export class VaultsService {
           // Start time is when the vault was locked
           phaseStartTime = vault.locked_at ? new Date(vault.locked_at) : null;
           // No end time for locked vaults
-          phaseEndTime = null;
-          break;
-
-        case VaultStatus.governance:
-          // Start time would be when governance began (not tracked in current model)
-          // End time is not applicable for governance
-          phaseStartTime = null;
           phaseEndTime = null;
           break;
 

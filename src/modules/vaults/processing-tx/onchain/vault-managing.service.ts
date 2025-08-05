@@ -9,12 +9,21 @@ import {
   FixedTransaction,
   PrivateKey,
 } from '@emurgo/cardano-serialization-lib-nodejs';
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 
 import { BlockchainService } from './blockchain.service';
 import { Datum1 } from './types/type';
 import { generate_assetname_from_txhash_index, getUtxos, getVaultUtxo, toHex } from './utils/lib';
+import { VaultInsertingService } from './vault-inserting.service';
+
+import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
+import { Transaction } from '@/database/transaction.entity';
+import { Vault } from '@/database/vault.entity';
+import { TransactionType } from '@/types/transaction.types';
+import { SmartContractVaultStatus, VaultPrivacy } from '@/types/vault.types';
 
 export interface VaultConfig {
   vaultName: string;
@@ -22,6 +31,7 @@ export interface VaultConfig {
   adminKeyHash: string;
   policyId: string;
   allowedPolicies: string[];
+  allowedContributors?: string[];
   assetWindow?: {
     start: number;
     end: number;
@@ -30,6 +40,8 @@ export interface VaultConfig {
     start: number;
     end: number;
   };
+  acquireMultiplier?: Array<[string, string | null, number]>; // [policyId, assetName?, multiplier]
+  adaPairMultiplier?: number; // 0: FIXED | 1: LBE
   contractType?: number; // 0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE
   valueMethod?: number; // 0: FIXED | 1: LBE
   customMetadata?: [string, string][];
@@ -63,16 +75,23 @@ export class VaultManagingService {
   private readonly scPolicyId: string;
   private readonly adminHash: string;
   private readonly adminSKey: string;
-  private readonly blockfrost: any;
+  private readonly adminAddress: string;
+  private readonly blockfrost: BlockFrostAPI;
 
   constructor(
+    @InjectRepository(Transaction)
+    private readonly transactionRepository: Repository<Transaction>,
+    @InjectRepository(AssetsWhitelistEntity)
+    private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
     private readonly configService: ConfigService,
     @Inject(BlockchainService)
-    private readonly blockchainService: BlockchainService
+    private readonly blockchainService: BlockchainService,
+    private readonly vaultInsertingService: VaultInsertingService
   ) {
     this.scPolicyId = this.configService.get<string>('SC_POLICY_ID');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
+    this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
     });
@@ -155,9 +174,10 @@ export class VaultManagingService {
             datum: {
               type: 'inline',
               value: {
+                vault_status: SmartContractVaultStatus.OPEN,
                 contract_type: vaultConfig.contractType,
                 asset_whitelist: vaultConfig.allowedPolicies,
-                contributor_whitelist: vaultConfig.allowedContributors, // address list of contributors
+                // contributor_whitelist: vaultConfig.allowedContributors, // address list of contributors
                 asset_window: {
                   // Time allowed to upload NFT
                   lower_bound: {
@@ -169,7 +189,7 @@ export class VaultManagingService {
                     is_inclusive: true,
                   },
                 },
-                investment_window: {
+                acquire_window: {
                   // Time allowed to upload ADA
                   lower_bound: {
                     bound_type: new Date().getTime(),
@@ -202,7 +222,7 @@ export class VaultManagingService {
                 //   termination_type: 1,
                 //   fdp: 1,
                 // },
-                // investment: {
+                // acquire: {
                 //   reserve: 1,
                 //   liquidityPool: 1,
                 // },
@@ -287,14 +307,46 @@ export class VaultManagingService {
   }
 
   // Create a transaction to update the vault's metadata
-  async updateVaultMetadataTx(vaultConfig: VaultConfig) {
+  async updateVaultMetadataTx({
+    vault,
+    transactionId,
+    acquireMultiplier,
+    adaPairMultiplier,
+  }: {
+    vault: Vault;
+    transactionId: string;
+    acquireMultiplier: [string, string | null, number][];
+    adaPairMultiplier: number;
+  }): Promise<{
+    success: boolean;
+    txHash: string;
+    message: string;
+  }> {
+    const transaction = await this.transactionRepository.findOne({
+      where: { id: transactionId },
+    });
+
+    const assetsWhitelist = await this.assetsWhitelistRepository.find({
+      where: { vault: { id: vault.id } },
+    });
+
+    if (!transaction || transaction.type !== TransactionType.updateVault) {
+      throw new NotFoundException('Transaction not found');
+    }
+
+    const allowedPolicies: string[] =
+      Array.isArray(assetsWhitelist) && assetsWhitelist.length > 0
+        ? assetsWhitelist.map(policy => policy.policy_id)
+        : [];
+    const contract_type = vault.privacy === VaultPrivacy.private ? 0 : vault.privacy === VaultPrivacy.public ? 1 : 2;
+
     this.scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
       .to_address()
       .to_bech32();
 
-    const vaultUtxo = await getVaultUtxo(this.scPolicyId, vaultConfig.vaultName, this.blockfrost);
+    const vaultUtxo = await getVaultUtxo(this.scPolicyId, vault.asset_vault_name, this.blockfrost);
     const input = {
-      changeAddress: vaultConfig.customerAddress,
+      changeAddress: this.adminAddress,
       message: 'Vault Update',
       scriptInteractions: [
         {
@@ -305,7 +357,7 @@ export class VaultManagingService {
             type: 'json',
             value: {
               vault_token_index: 0, // must fit the ordering defined in the outputs array
-              asset_name: vaultConfig.vaultName,
+              asset_name: vault.asset_vault_name,
             },
           },
         },
@@ -315,7 +367,7 @@ export class VaultManagingService {
           address: this.scAddress,
           assets: [
             {
-              assetName: vaultConfig.vaultName,
+              assetName: vault.asset_vault_name,
               policyId: this.scPolicyId,
               quantity: 1,
             },
@@ -323,15 +375,46 @@ export class VaultManagingService {
           datum: {
             type: 'inline',
             value: {
-              contract_type: vaultConfig.contractType, // Represent an enum setup by L4VA (0: PRIVATE | 1: PUBLIC | 2: SEMI_PRIVATE)
-              asset_whitelist: vaultConfig.allowedPolicies,
-              // contributor_whitelist: [],
-              asset_window: vaultConfig.assetWindow,
-              acquire_window: vaultConfig.acquireWindow,
-              valuation_type: vaultConfig.valueMethod, // Enum 0: 'FIXED' 1: 'LBE'
-              custom_metadata: vaultConfig.customMetadata || [],
+              vault_status: SmartContractVaultStatus.SUCCESSFUL, // Added vault_status field
+              contract_type: contract_type,
+              asset_whitelist: allowedPolicies,
+              // contributor_whitelist: vaultConfig.allowedContributors || [],
+              asset_window: {
+                lower_bound: {
+                  bound_type: new Date(vault.contribution_phase_start).getTime(),
+                  is_inclusive: true,
+                },
+                upper_bound: {
+                  bound_type: new Date(vault.acquire_phase_start).getTime(),
+                  is_inclusive: true,
+                },
+              },
+              acquire_window: {
+                lower_bound: {
+                  bound_type: new Date(vault.acquire_phase_start).getTime(),
+                  is_inclusive: true,
+                },
+                upper_bound: {
+                  bound_type: new Date().getTime(), // current time
+                  is_inclusive: true,
+                },
+              },
+              valuation_type: vault.value_method === 'fixed' ? 0 : 1,
+              custom_metadata: [
+                // <Data,Data>
+                // [
+                //   PlutusData.new_bytes(Buffer.from("foo")).to_hex(),
+                //   PlutusData.new_bytes(Buffer.from("bar")).to_hex(),
+                // ],
+                [toHex('foo'), toHex('bar')],
+                [toHex('bar'), toHex('foo')],
+                [toHex('inc'), toHex('3')],
+              ],
               admin: this.adminHash,
               minting_key: this.adminHash,
+              // New fields from update_vault.ts
+              acquire_multiplier: acquireMultiplier,
+              ada_pair_multiplier: adaPairMultiplier,
             },
             shape: {
               validatorHash: this.scPolicyId,
@@ -340,6 +423,7 @@ export class VaultManagingService {
           },
         },
       ],
+      requiredSigners: [this.adminHash],
     };
 
     try {
@@ -349,10 +433,13 @@ export class VaultManagingService {
       const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
       txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
-      return {
-        presignedTx: txToSubmitOnChain.to_hex(),
-        contractAddress: this.scAddress,
-      };
+      const response = await this.vaultInsertingService.submitTransaction({
+        transaction: txToSubmitOnChain.to_hex(),
+        vaultId: vault.id,
+        txId: transaction.id,
+      });
+
+      return { success: true, txHash: response.txHash, message: 'Transaction submitted successfully' };
     } catch (error) {
       this.logger.error('Failed to build vault update tx:', error);
       throw error;

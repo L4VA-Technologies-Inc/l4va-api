@@ -13,17 +13,16 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
-import { BlockchainScannerService } from '../../processing-tx/onchain/blockchain-scanner.service';
-import { BlockchainService } from '../../processing-tx/onchain/blockchain.service';
-import { Datum, Redeemer1 } from '../../processing-tx/onchain/types/type';
-import { applyContributeParams, toPreloadedScript } from '../../processing-tx/onchain/utils/apply_params';
-import blueprint from '../../processing-tx/onchain/utils/blueprint.json';
-import { generate_tag_from_txhash_index } from '../../processing-tx/onchain/utils/lib';
 import { LpTokenOperationResult, ExtractLpTokensParams } from '../types/lp-token.types';
 
-import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
+import { BlockchainScannerService } from '@/modules/vaults/processing-tx/onchain/blockchain-scanner.service';
+import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
+import { Datum, Redeemer1 } from '@/modules/vaults/processing-tx/onchain/types/type';
+import { applyContributeParams, toPreloadedScript } from '@/modules/vaults/processing-tx/onchain/utils/apply_params';
+import blueprint from '@/modules/vaults/processing-tx/onchain/utils/blueprint.json';
+import { generate_tag_from_txhash_index } from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { TransactionType } from '@/types/transaction.types';
 
 @Injectable()
@@ -31,12 +30,10 @@ export class LpTokensService {
   private readonly adminSKey: string;
   private readonly scPolicyId: string;
   private readonly adminKeyHash: string;
-  private blockfrost: any;
+  private blockfrost: BlockFrostAPI;
 
   constructor(
     private readonly transactionsService: TransactionsService,
-    @InjectRepository(Transaction)
-    private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     private readonly blockchainService: BlockchainService,
@@ -57,23 +54,11 @@ export class LpTokensService {
 
   /**
    * Extracts LP tokens from a vault to a specified wallet
-   * @param vaultId The ID of the vault to extract tokens from
-   * @param walletAddress The wallet address to send the tokens to
-   * @param amount The amount of LP tokens to extract
-   * @returns Operation result with success status and transaction hash if successful
-   */
-  /**
-   * Extracts LP tokens from a vault to a specified wallet
-   * @param params Parameters for the extraction operation
-   * @returns Operation result with success status and transaction hash if successful
-   */
-  /**
-   * Extracts LP tokens from a vault to a specified wallet
    * @param extractDto - DTO containing extraction parameters
    * @returns Operation result with transaction details
    */
   async extractLpTokens(extractDto: ExtractLpTokensParams): Promise<LpTokenOperationResult> {
-    const { vaultId, walletAddress, amount, txHash, txIndex } = extractDto;
+    const { vaultId, walletAddress, amount } = extractDto;
 
     if (!this.isValidAddress(walletAddress)) {
       throw new BadRequestException('Invalid wallet address');
@@ -154,7 +139,7 @@ export class LpTokensService {
       const amountOfLpsToClaim = output.amount.find((a: { unit: string; quantity: string }) => a.unit === lpsUnit);
       const datumTag = generate_tag_from_txhash_index(tx_hash, Number(index));
       if (!amountOfLpsToClaim) {
-        console.log(JSON.stringify(output));
+        // console.log(JSON.stringify(output));
         throw new Error('No lps to claim.');
       }
 
@@ -202,7 +187,7 @@ export class LpTokensService {
               value: {
                 __variant: 'ExtractAsset',
                 __data: {
-                  lp_output_index: 0,
+                  vault_token_output_index: 0,
                 },
               } satisfies Redeemer1,
             },
@@ -244,9 +229,7 @@ export class LpTokensService {
       };
 
       const inputWithNoPreloaded = { ...txInput };
-      //@ts-ignore
       delete inputWithNoPreloaded.preloadedScripts;
-      console.log(JSON.stringify(inputWithNoPreloaded));
 
       // 4. Build the transaction
       const buildResponse = await this.blockchainService.buildTransaction(txInput);
@@ -322,17 +305,6 @@ export class LpTokensService {
     }
   }
 
-  /**
-   * Drops LP tokens to a specified wallet
-   * @param walletAddress The wallet address to receive the LP tokens
-   * @param amount The amount of LP tokens to drop
-   * @returns Operation result with success status and transaction hash if successful
-   */
-  /**
-   * Drops LP tokens to a specified wallet
-   * @param params Parameters for the drop operation
-   * @returns Operation result with success status and transaction hash if successful
-   */
   /**
    * Drops LP tokens to a specified wallet
    * @param dropDto - DTO containing drop parameters
