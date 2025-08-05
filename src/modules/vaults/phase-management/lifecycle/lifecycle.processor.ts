@@ -31,12 +31,7 @@ export class LifecycleProcessor extends WorkerHost {
   }
 
   // Not used for governance transition
-  async updateVaultStatus(data: {
-    vaultId: string;
-    newStatus: VaultStatus;
-    scStatus?: SmartContractVaultStatus;
-    phaseStartField?: string;
-  }): Promise<void> {
+  async updateVaultStatus(data: { vaultId: string; newStatus: VaultStatus; phaseStartField?: string }): Promise<void> {
     try {
       const vault = await this.vaultRepository.findOne({
         where: { id: data.vaultId },
@@ -49,7 +44,9 @@ export class LifecycleProcessor extends WorkerHost {
 
       // Update vault status
       vault.vault_status = data.newStatus;
-      if (data?.scStatus) vault.vault_sc_status = data.scStatus;
+      if (data.newStatus === VaultStatus.failed) {
+        vault.vault_sc_status = SmartContractVaultStatus.CANCELLED;
+      }
 
       // Set phase start time if specified
       if (data.phaseStartField) {
