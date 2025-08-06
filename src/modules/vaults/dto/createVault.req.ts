@@ -15,6 +15,7 @@ import {
   Min,
   Max,
   ValidateIf,
+  ArrayMinSize,
 } from 'class-validator';
 
 import { AcquirerWhitelist, ContributorWhitelist, SocialLink, AcquirerWhitelistCsv } from '../types';
@@ -346,9 +347,9 @@ export class CreateVaultReq {
       },
     ],
   })
-  @IsOptional()
   @IsArray()
-  @ArrayMaxSize(10)
+  @ArrayMinSize(1, { message: 'At least one asset must be whitelisted' })
+  @ArrayMaxSize(10, { message: 'A maximum of 10 assets can be whitelisted' })
   @IsObject({ each: true })
   @Expose()
   assetsWhitelist?: AssetWhitelistDto[];

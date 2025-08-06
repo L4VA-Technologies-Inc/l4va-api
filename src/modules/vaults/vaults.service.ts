@@ -386,25 +386,24 @@ export class VaultsService {
       }
 
       // Handle assets whitelist
+      // TODO: Add lovelace support
       let maxCountOf = 0;
-      if (data.assetsWhitelist?.length > 0) {
-        await Promise.all(
-          data.assetsWhitelist.map(assetItem => {
-            if (assetItem.policyId) {
-              // Sum up the countCapMax values
-              if (assetItem.countCapMax) {
-                maxCountOf += assetItem.countCapMax;
-              }
-              return this.assetsWhitelistRepository.save({
-                vault: newVault,
-                policy_id: assetItem.policyId,
-                asset_count_cap_min: assetItem.countCapMin,
-                asset_count_cap_max: assetItem.countCapMax,
-              });
+      await Promise.all(
+        data.assetsWhitelist.map(assetItem => {
+          if (assetItem.policyId) {
+            // Sum up the countCapMax values
+            if (assetItem.countCapMax) {
+              maxCountOf += assetItem.countCapMax;
             }
-          })
-        );
-      }
+            return this.assetsWhitelistRepository.save({
+              vault: newVault,
+              policy_id: assetItem.policyId,
+              asset_count_cap_min: assetItem.countCapMin,
+              asset_count_cap_max: assetItem.countCapMax,
+            });
+          }
+        })
+      );
 
       newVault.max_contribute_assets = Number(maxCountOf) || 0;
       await this.vaultsRepository.save(newVault);
