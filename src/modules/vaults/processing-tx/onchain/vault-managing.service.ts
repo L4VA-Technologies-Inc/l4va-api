@@ -16,7 +16,7 @@ import { Repository } from 'typeorm';
 
 import { BlockchainService } from './blockchain.service';
 import { Datum1 } from './types/type';
-import { generate_assetname_from_txhash_index, getUtxos, getVaultUtxo, toHex } from './utils/lib';
+import { generate_tag_from_txhash_index, getUtxos, getVaultUtxo, toHex } from './utils/lib';
 import { VaultInsertingService } from './vault-inserting.service';
 
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
@@ -118,7 +118,7 @@ export class VaultManagingService {
 
     const selectedUtxo = utxos.get(0);
     const REQUIRED_INPUTS = [selectedUtxo.to_hex()];
-    const assetName = generate_assetname_from_txhash_index(
+    const assetName = generate_tag_from_txhash_index(
       selectedUtxo.input().transaction_id().to_hex(),
       selectedUtxo.input().index()
     );

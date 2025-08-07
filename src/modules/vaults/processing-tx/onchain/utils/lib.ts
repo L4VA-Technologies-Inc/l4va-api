@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 
-import { BlockfrostServerError } from '@blockfrost/blockfrost-js';
+import { BlockFrostAPI, BlockfrostServerError } from '@blockfrost/blockfrost-js';
 import {
   Address,
   TransactionInput,
@@ -26,7 +26,7 @@ interface Amount {
   quantity: string | number;
 }
 
-const assetsToValue = (assets: Amount[]) => {
+const assetsToValue = (assets: Amount[]): Value => {
   const multiAsset = MultiAsset.new();
   const lovelace = assets.find(asset => asset.unit === 'lovelace');
   const policies = assets.filter(asset => asset.unit !== 'lovelace').map(asset => asset.unit.slice(0, 56));
@@ -52,7 +52,7 @@ const assetsToValue = (assets: Amount[]) => {
   return multiAssetsValue;
 };
 
-export const getUtxos = async (address: Address, min = 0, blockfrost) => {
+export const getUtxos = async (address: Address, min = 0, blockfrost): Promise<TransactionUnspentOutputs> => {
   const utxos = await blockfrost.addressesUtxosAll(address.to_bech32());
   const parsedUtxos = TransactionUnspentOutputs.new();
   utxos.forEach((utxo: any) => {
@@ -69,7 +69,7 @@ export const getUtxos = async (address: Address, min = 0, blockfrost) => {
   return parsedUtxos;
 };
 
-export const getUtxosExctract = async (address: Address, min = 0, blockfrost) => {
+export const getUtxosExctract = async (address: Address, min = 0, blockfrost): Promise<string[]> => {
   const utxos = await blockfrost.addressesUtxosAll(address.to_bech32());
   const parsedUtxos: string[] = [];
   utxos.forEach((utxo: any) => {
@@ -86,7 +86,7 @@ export const getUtxosExctract = async (address: Address, min = 0, blockfrost) =>
   return parsedUtxos;
 };
 
-export function generate_assetname_from_txhash_index(txHash: string, txOutputIdx: number) {
+export function generate_tag_from_txhash_index(txHash: string, txOutputIdx: number): string {
   const plutusList = PlutusList.new();
   plutusList.add(PlutusData.new_bytes(Buffer.from(txHash, 'hex')));
 
@@ -98,11 +98,9 @@ export function generate_assetname_from_txhash_index(txHash: string, txOutputIdx
   return hash.to_hex();
 }
 
-export function generate_tag_from_txhash_index(tx_hash: string, tx_output_idx: number) {
+export function generate_tag_from_ticker(ticker: string): string {
   const plutusList = PlutusList.new();
-  plutusList.add(PlutusData.new_bytes(Buffer.from(tx_hash, 'hex')));
-
-  plutusList.add(PlutusData.new_integer(BigInt.from_str(String(tx_output_idx))));
+  plutusList.add(PlutusData.new_bytes(Buffer.from(ticker, 'utf-8')));
 
   const plutusData = PlutusData.new_constr_plutus_data(ConstrPlutusData.new(BigNum.zero(), plutusList));
   const hash = hash_plutus_data(plutusData);
@@ -110,7 +108,14 @@ export function generate_tag_from_txhash_index(tx_hash: string, tx_output_idx: n
   return hash.to_hex();
 }
 
-export async function getVaultUtxo(policyId: string, assetName: string, blockfrost) {
+export async function getVaultUtxo(
+  policyId: string,
+  assetName: string,
+  blockfrost: BlockFrostAPI
+): Promise<{
+  txHash: string;
+  index: number;
+}> {
   try {
     const unit = policyId + assetName;
     const assets = await blockfrost.assetsTransactions(unit, {
@@ -138,6 +143,6 @@ export async function getVaultUtxo(policyId: string, assetName: string, blockfro
   }
 }
 
-export function toHex(str: string) {
+export function toHex(str: string): string {
   return Buffer.from(str).toString('hex');
 }

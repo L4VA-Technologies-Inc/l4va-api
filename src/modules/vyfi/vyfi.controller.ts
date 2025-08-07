@@ -28,9 +28,9 @@ export class VyfiController {
 
   @Post('create-pool')
   @ApiOperation({ summary: 'Create a new VyFi liquidity pool' })
-  @ApiBody({ type: CreatePoolDto })
-  async createLiquidityPool(@Body() createPoolDto: CreatePoolDto) {
-    return this.vyfiService.createLiquidityPool(createPoolDto);
+  // @ApiBody({ type: CreatePoolDto })
+  async createLiquidityPool(@Body() body) {
+    return this.vyfiService.createLiquidityPool(body);
   }
 
   @Get('pool/:poolId')
