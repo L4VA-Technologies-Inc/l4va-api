@@ -210,7 +210,7 @@ export class ClaimsService {
         network: string;
       } = {
         changeAddress: user.address,
-        message: 'Token Extraction',
+        message: 'Admin extract asset',
         utxos,
         scriptInteractions: [
           {
