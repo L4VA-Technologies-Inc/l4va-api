@@ -110,6 +110,14 @@ export class Vault {
   })
   valuation_amount?: number;
 
+  @Expose({ name: 'vtPrice' })
+  @Column({
+    name: 'vt_price',
+    type: 'numeric',
+    nullable: true,
+  })
+  vt_price?: number;
+
   @Expose({ name: 'contributionOpenWindowType' })
   @Column({
     type: 'enum',

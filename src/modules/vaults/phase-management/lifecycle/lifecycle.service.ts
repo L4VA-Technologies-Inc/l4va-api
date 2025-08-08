@@ -120,6 +120,7 @@ export class LifecycleService {
     txHash?: string;
     acquire_multiplier?: [string, string, number][];
     ada_pair_multiplier?: number;
+    vtPrice?: number;
   }): Promise<void> {
     try {
       const vault = await this.vaultRepository.findOne({
@@ -147,6 +148,10 @@ export class LifecycleService {
 
       if (data.acquire_multiplier) {
         vault.acquire_multiplier = data.acquire_multiplier;
+      }
+
+      if (data.vtPrice) {
+        vault.vt_price = data.vtPrice;
       }
 
       await this.vaultRepository.save(vault);
@@ -432,10 +437,8 @@ export class LifecycleService {
               status: ClaimStatus.AVAILABLE,
               transaction: { id: tx.id },
               metadata: {
-                adaSent: adaSent,
-                vtPrice: vtPrice,
-                txHash: tx.tx_hash,
-                txIndex: tx.tx_index,
+                vtPrice,
+                adaSent,
               },
             });
 
@@ -501,11 +504,8 @@ export class LifecycleService {
               status: ClaimStatus.AVAILABLE,
               transaction: { id: tx.id },
               metadata: {
+                vtPrice,
                 valueContributed: txValueAda,
-                vtPrice: vtPrice,
-                txHash: tx.tx_hash,
-                txIndex: tx.tx_index,
-                totalUserContribution: userTotalValue,
                 proportionOfUserTotal: proportionOfUserTotal,
               },
             });
@@ -578,6 +578,7 @@ export class LifecycleService {
           txHash: response.txHash,
           acquire_multiplier: acquireMultiplier,
           ada_pair_multiplier: adaPairMultiplier,
+          vtPrice,
         });
       } else {
         this.logger.warn(
