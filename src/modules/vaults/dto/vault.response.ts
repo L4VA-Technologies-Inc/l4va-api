@@ -17,7 +17,6 @@ import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
-import { TagEntity } from '@/database/tag.entity';
 import { User } from '@/database/user.entity';
 
 export class VaultShortResponse {
@@ -281,7 +280,7 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   tokensForAcquires: number;
 
-  @ApiProperty({ description: 'FT acquire reserve' })
+  @ApiProperty({ description: 'VT acquire reserve' })
   @DtoRepresent({
     transform: false,
     expose: true,
@@ -295,21 +294,42 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   liquidityPoolContribution: number;
 
-  @ApiProperty({ description: 'FT token supply' })
+  @ApiProperty({ description: 'VT token supply' })
   @DtoRepresent({
     transform: false,
     expose: true,
   })
   ftTokenSupply: number;
 
-  @ApiProperty({ description: 'FT token ticker' })
+  @ApiProperty({ description: 'Fully diluted valuation' })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  fdv: number;
+
+  @ApiProperty({ description: 'FDV TVL' })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  fdvTvl: number;
+
+  @ApiProperty({ description: 'VT gains' })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  vtGains: number;
+
+  @ApiProperty({ description: 'VT token ticker' })
   @DtoRepresent({
     transform: false,
     expose: true,
   })
   vaultTokenTicker: string;
 
-  @ApiProperty({ description: 'FT token decimals' })
+  @ApiProperty({ description: 'VT token decimals' })
   @DtoRepresent({
     transform: false,
     expose: true,

@@ -1,6 +1,5 @@
 import { Credential, EnterpriseAddress, ScriptHash } from '@emurgo/cardano-serialization-lib-nodejs';
 import { BadRequestException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
@@ -86,8 +85,7 @@ export class VaultsService {
     private readonly vaultContractService: VaultManagingService,
     private readonly blockchainScannerService: BlockchainScannerService,
     private readonly taptoolsService: TaptoolsService,
-    private readonly transactionsService: TransactionsService,
-    private readonly configService: ConfigService
+    private readonly transactionsService: TransactionsService
   ) {}
 
   /**
@@ -911,10 +909,6 @@ export class VaultsService {
     // todo this is ok for contribution phase, but we need to calculate only assets with origin type CONTRIBUTED
     const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(id);
 
-    // todo for calculate how much ada already invested we need to select assets with INVESTED origin type.
-    // todo and here we got how much invested now
-    // const investedAssetsPrice = await this.taptoolsService.calculateVaultAssetsValue(id, 'acquire');
-
     // Create a new plain object with the additional properties
     const additionalData = {
       maxContributeAssets: Number(vault.max_contribute_assets),
@@ -1079,11 +1073,6 @@ export class VaultsService {
         // Create plain object from entity
         const plainVault = instanceToPlain(vault);
 
-        // Calculate all the required metrics
-        // const tvl = await this.calculateVaultTVL(vault);
-        // const baseAllocation = await this.calculateBaseAllocation(vault);
-        // const totalValue = await this.calculateTotalAssetValue(vault);
-
         const { phaseStartTime, phaseEndTime } = this.calculatePhaseTime(vault);
 
         // Current time for timeRemaining calculation
@@ -1094,7 +1083,7 @@ export class VaultsService {
         // Merge calculated values with plain object
         const enrichedVault = {
           ...plainVault,
-          tvl: null,
+          tvl: vault.total_assets_cost_usd,
           baseAllocation: null,
           total: null,
           invested: vault.total_acquired_value_ada,
@@ -1117,76 +1106,6 @@ export class VaultsService {
       limit,
       totalPages: Math.ceil(total / limit),
     };
-  }
-
-  /**
-   * Calculates Total Value Locked for a vault
-   * @param vault - Vault entity
-   * @returns TVL value in USD
-   */
-  private async calculateVaultTVL(vault: Vault): Promise<number> {
-    try {
-      // If vault is in contribution or later phase, calculate real TVL
-      if ([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked].includes(vault.vault_status)) {
-        // Get all locked assets for this vault
-        // const lockedAssets = await this.assetsRepository.count({
-        //   where: {
-        //     vault: { id: vault.id },
-        //     status: AssetStatus.LOCKED,
-        //     origin_type: AssetOriginType.CONTRIBUTED,
-        //   },
-        // });
-
-        // Calculate assets value using taptools service
-        const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
-        return assetsValue.totalValueUsd || 0;
-      }
-
-      // For published phase or earlier, TVL is 0
-      return 0;
-    } catch (error) {
-      this.logger.error(`Error calculating TVL for vault ${vault.id}:`, error);
-      return 0;
-    }
-  }
-
-  /**
-   * Calculates base allocation for a vault
-   * @param vault - Vault entity
-   * @returns Base allocation value
-   */
-  private async calculateBaseAllocation(vault: Vault): Promise<number> {
-    try {
-      // This is a placeholder - implement your actual business logic
-      // Base allocation might be calculated based on your tokenomics model
-
-      // Example: might be based on acquire_reserve percentage
-      if (vault.acquire_reserve) {
-        const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
-        return assetsValue.totalValueUsd * (vault.acquire_reserve / 100) || 0;
-      }
-
-      return 0;
-    } catch (error) {
-      this.logger.error(`Error calculating base allocation for vault ${vault.id}:`, error);
-      return 0;
-    }
-  }
-
-  /**
-   * Calculates total asset value for a vault
-   * @param vault - Vault entity
-   * @returns Total asset value in USD
-   */
-  private async calculateTotalAssetValue(vault: Vault): Promise<number> {
-    try {
-      // For most phases, total value equals TVL
-      const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
-      return assetsValue.totalValueUsd || 0;
-    } catch (error) {
-      this.logger.error(`Error calculating total asset value for vault ${vault.id}:`, error);
-      return 0;
-    }
   }
 
   /**

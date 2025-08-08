@@ -401,11 +401,17 @@ export class TaptoolsService {
       }
     >();
 
+    let totalAcquiredAda = 0;
+
     // Process each asset in the vault
     for (const asset of vault.assets) {
       // Skip assets that are not in a valid status for valuation or don't match the phase
       if (asset.status !== AssetStatus.PENDING && asset.status !== AssetStatus.LOCKED) {
         continue;
+      }
+
+      if (asset.origin_type === AssetOriginType.ACQUIRED && asset.policy_id === 'lovelace') {
+        totalAcquiredAda += Number(asset.quantity);
       }
 
       // Filter assets based on phase
@@ -485,6 +491,8 @@ export class TaptoolsService {
       }
     }
 
+    const adaPrice = await this.getAdaPrice();
+
     // Create and return the summary
     const summary: VaultAssetsSummaryDto = {
       totalValueAda: +totalValueAda.toFixed(6),
@@ -493,6 +501,8 @@ export class TaptoolsService {
       nfts: assetsWithValues.filter(a => a.isNft).length,
       tokens: assetsWithValues.filter(a => !a.isNft).length,
       lastUpdated: new Date().toISOString(),
+      totalAcquiredAda,
+      totalAcquiredUsd: totalAcquiredAda * adaPrice,
       assets: assetsWithValues.map(asset => ({
         policyId: asset.policyId,
         assetName: asset.assetId, // Using assetId as assetName for backward compatibility
