@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
+import { ContributionAsset } from '../contribution/dto/contribute.req';
 
 import { AcquireReq } from './dto/acquire.req';
 
@@ -27,7 +28,17 @@ export class AcquireService {
     private readonly transactionsService: TransactionsService
   ) {}
 
-  async acquire(vaultId: string, acquireReq: AcquireReq, userId: string) {
+  async acquire(
+    vaultId: string,
+    acquireReq: AcquireReq,
+    userId: string
+  ): Promise<{
+    success: boolean;
+    message: string;
+    vaultId: string;
+    txId: string;
+    assets: ContributionAsset[];
+  }> {
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
       relations: ['acquirer_whitelist', 'owner'],
@@ -111,21 +122,6 @@ export class AcquireService {
       vaultId,
       txId: transaction.id,
       assets: acquireReq.assets,
-    };
-  }
-
-  async updateTransactionHash(transactionId: string, txHash: string) {
-    const transaction = await this.transactionsService.findById(transactionId);
-    if (!transaction) {
-      throw new NotFoundException('Transaction not found');
-    }
-
-    await this.transactionsService.updateTransactionHash(transactionId, txHash);
-    return {
-      success: true,
-      message: 'Transaction hash updated',
-      txId: transactionId,
-      txHash: txHash,
     };
   }
 }

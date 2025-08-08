@@ -1,12 +1,14 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { AuthGuard } from '../../../auth/auth.guard';
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
-import { TxUpdateReq } from '../contribution/dto/txUpdate.req';
+import { ContributionAsset } from '../contribution/dto/contribute.req';
 
 import { AcquireService } from './acquire.service';
 import { AcquireReq } from './dto/acquire.req';
+
+import { Transaction } from '@/database/transaction.entity';
 
 @ApiTags('Acquire')
 @Controller('acquire')
@@ -20,24 +22,26 @@ export class AcquireController {
   @ApiOperation({ summary: 'Acquire in a vault' })
   @UseGuards(AuthGuard)
   @ApiResponse({ status: 201, description: 'Acquire successful' })
-  async invest(@Req() req, @Param('vaultId') vaultId: string, @Body() acquireReq: AcquireReq) {
+  async invest(
+    @Req() req,
+    @Param('vaultId') vaultId: string,
+    @Body() acquireReq: AcquireReq
+  ): Promise<{
+    success: boolean;
+    message: string;
+    vaultId: string;
+    txId: string;
+    assets: ContributionAsset[];
+  }> {
     const userId = req.user.sub;
     return this.acquireService.acquire(vaultId, acquireReq, userId);
-  }
-
-  @Patch('transaction/:txId/hash')
-  @ApiOperation({ summary: 'Update transaction hash' })
-  @UseGuards(AuthGuard)
-  @ApiResponse({ status: 200, description: 'Transaction hash updated successfully' })
-  async updateTransactionHash(@Param('txId') txId: string, @Body() txUpdate: TxUpdateReq) {
-    return this.acquireService.updateTransactionHash(txId, txUpdate.txHash);
   }
 
   @Get('transactions')
   @ApiOperation({ summary: 'Get all acquire transactions' })
   @UseGuards(AuthGuard)
   @ApiResponse({ status: 200, description: 'Returns all acquire transactions' })
-  async getInvestmentTransactions(@Query('vaultId') vaultId?: string) {
+  async getInvestmentTransactions(@Query('vaultId') vaultId?: string): Promise<Transaction[]> {
     return this.transactionsService.getAcquireTransactions(vaultId);
   }
 }
