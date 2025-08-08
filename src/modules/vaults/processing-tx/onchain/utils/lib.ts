@@ -98,16 +98,6 @@ export function generate_tag_from_txhash_index(txHash: string, txOutputIdx: numb
   return hash.to_hex();
 }
 
-export function generate_tag_from_ticker(ticker: string): string {
-  const plutusList = PlutusList.new();
-  plutusList.add(PlutusData.new_bytes(Buffer.from(ticker, 'utf-8')));
-
-  const plutusData = PlutusData.new_constr_plutus_data(ConstrPlutusData.new(BigNum.zero(), plutusList));
-  const hash = hash_plutus_data(plutusData);
-
-  return hash.to_hex();
-}
-
 export async function getVaultUtxo(
   policyId: string,
   assetName: string,
