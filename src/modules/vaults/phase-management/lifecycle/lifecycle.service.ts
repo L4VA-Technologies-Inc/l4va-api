@@ -388,7 +388,6 @@ export class LifecycleService {
         }
 
         const tokensForAcquirers = (vault.ft_token_supply - lpVtAmount) * vault.tokens_for_acquires * 0.01;
-        const tokensForContributors = vault.ft_token_supply - tokensForAcquirers - lpVtAmount;
 
         // 4. Create claims for each acquisition transaction
         for (const tx of acquisitionTransactions) {
@@ -525,11 +524,10 @@ export class LifecycleService {
           if (assetData.totalValueAda > 0) {
             // Calculate multiplier based on asset's proportion of total contributed value
             const assetProportion = assetData.totalValueAda / totalContributedValueAda;
-            const tokensForThisAsset = tokensForContributors * assetProportion;
+            const tokensForThisAsset = (vault.ft_token_supply - tokensForAcquirers) * assetProportion;
 
             // Calculate multiplier: VT tokens per unit of this asset
             const assetMultiplier = Math.floor(tokensForThisAsset / assetData.totalQuantity);
-
             acquireMultiplier.push([assetData.policyId, assetData.assetId, assetMultiplier]);
 
             this.logger.log(

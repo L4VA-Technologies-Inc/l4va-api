@@ -158,10 +158,15 @@ export class ClaimsService {
     try {
       const utxos = await getUtxosExctract(Address.from_bech32(user.address), 0, this.blockfrost); // Any UTXO works.
 
+      if (utxos.length === 0) {
+        throw new Error('No UTXOs found.');
+      }
+
       const parameterizedScript = applyContributeParams({
         vault_policy_id: this.vaultPolicyId,
         vault_id: claim.vault.asset_vault_name,
       });
+      const POLICY_ID = parameterizedScript.validator.hash;
 
       const unparameterizedScript = blueprint.validators.find(v => v.title === 'contribute.contribute');
 
@@ -172,22 +177,21 @@ export class ClaimsService {
       // Extract data from claim metadata
       const lpsUnit = parameterizedScript.validator.hash + '72656365697074';
       const txUtxos = await this.blockfrost.txsUtxos(claim.transaction.tx_hash);
-      const output = txUtxos.outputs[claim.transaction.tx_index];
+      const output = txUtxos.outputs[0];
       if (!output) {
         throw new Error('No output found');
       }
       const amountOfLpsToClaim = output.amount.find((a: { unit: string; quantity: string }) => a.unit === lpsUnit);
 
-      const datumTag = generate_tag_from_txhash_index(claim.transaction.tx_hash, Number(claim.transaction.tx_index));
+      const datumTag = generate_tag_from_txhash_index(claim.transaction.tx_hash, Number(0));
 
       if (!amountOfLpsToClaim) {
         throw new Error('No lps to claim.');
       }
 
-      // Define the transaction input based on extract_lovelace.ts example
       const input: {
         changeAddress: string;
-        utxos: string[];
+        utxos?: string[]; // FOR EXCTRACT ASSET TX
         message: string;
         mint?: Array<object>;
         scriptInteractions: object[];
@@ -211,19 +215,18 @@ export class ClaimsService {
       } = {
         changeAddress: user.address,
         message: 'Admin extract asset',
-        utxos,
         scriptInteractions: [
           {
             purpose: 'spend',
-            hash: vault.policy_id,
+            hash: POLICY_ID,
             outputRef: {
               txHash: claim.transaction.tx_hash,
-              index: claim.transaction.tx_index,
+              index: 0,
             },
             redeemer: {
               type: 'json',
               value: {
-                __variant: 'ExtractAda',
+                __variant: claim.transaction.type === TransactionType.contribute ? 'ExtractAsset' : 'ExtractAda',
                 __data: {
                   vault_token_output_index: 0,
                 },
@@ -232,7 +235,7 @@ export class ClaimsService {
           },
           {
             purpose: 'mint',
-            hash: vault.policy_id,
+            hash: POLICY_ID,
             redeemer: {
               type: 'json',
               value: 'MintVaultToken' satisfies Redeemer,
@@ -243,9 +246,17 @@ export class ClaimsService {
           {
             version: 'cip25',
             assetName: { name: vault.asset_vault_name, format: 'hex' },
-            policyId: vault.policy_id,
+            policyId: POLICY_ID,
             type: 'plutus',
             quantity: parseFloat(claim.amount.toString()), // Use the amount from the claim
+            metadata: {},
+          },
+          {
+            version: 'cip25',
+            assetName: { name: 'receipt', format: 'utf8' },
+            policyId: POLICY_ID,
+            type: 'plutus',
+            quantity: -1,
             metadata: {},
           },
         ],
@@ -255,7 +266,7 @@ export class ClaimsService {
             assets: [
               {
                 assetName: { name: vault.asset_vault_name, format: 'hex' },
-                policyId: vault.policy_id,
+                policyId: parameterizedScript.validator.hash,
                 quantity: parseFloat(claim.amount.toString()),
               },
             ],
@@ -274,7 +285,7 @@ export class ClaimsService {
         referenceInputs: [
           {
             txHash: vault.last_update_tx_hash,
-            index: vault.last_update_tx_index || 0,
+            index: vault.last_update_tx_index,
           },
         ],
         validityInterval: {
@@ -283,6 +294,10 @@ export class ClaimsService {
         },
         network: 'preprod',
       };
+
+      if (claim.transaction.type === TransactionType.contribute) {
+        input['utxos'] = utxos;
+      }
 
       // Create internal transaction
       const internalTx = await this.transactionRepository.save({
@@ -323,7 +338,7 @@ export class ClaimsService {
 
   async submitSignedTransaction(
     transactionId: string,
-    signedTxHex: string
+    signedTx: { transaction: string; signatures: string | string[]; txId: string; claimId: string }
   ): Promise<{
     success: boolean;
     transactionId: string;
@@ -339,29 +354,34 @@ export class ClaimsService {
     }
 
     try {
-      // Submit to blockchain
-      const submitResponse = await this.blockchainService.submitTransaction({
-        transaction: signedTxHex,
-        signatures: [],
+      const signatures = Array.isArray(signedTx.signatures) ? signedTx.signatures : [signedTx.signatures];
+
+      const result = await this.blockchainService.submitTransaction({
+        transaction: signedTx.transaction,
+        signatures,
       });
 
-      internalTx.tx_hash = submitResponse.txHash;
+      internalTx.tx_hash = result.txHash;
       internalTx.status = TransactionStatus.submitted;
       await this.transactionRepository.save(internalTx);
 
       // Update the claim status
-      const claim = await this.claimRepository.findOne({
-        where: { id: internalTx.metadata.claimId },
-      });
-      if (claim) {
-        claim.status = ClaimStatus.CLAIMED;
-        await this.claimRepository.save(claim);
+      try {
+        const claim = await this.claimRepository.findOne({
+          where: { id: signedTx.claimId },
+        });
+        if (claim) {
+          claim.status = ClaimStatus.CLAIMED;
+          await this.claimRepository.save(claim);
+        }
+      } catch (error) {
+        this.logger.error(`Failed to update claim status: ${error.message}`, error);
       }
 
       return {
         success: true,
         transactionId: internalTx.id,
-        blockchainTxHash: submitResponse.txHash,
+        blockchainTxHash: result.txHash,
       };
     } catch (error) {
       await this.transactionRepository.save(internalTx);
