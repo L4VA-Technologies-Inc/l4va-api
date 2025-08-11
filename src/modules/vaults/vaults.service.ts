@@ -344,6 +344,8 @@ export class VaultsService {
       let newVault: Vault;
       try {
         newVault = await this.vaultsRepository.save(vaultData as Vault);
+        // Always reload the entity to ensure it's managed and has all relations
+        newVault = await this.vaultsRepository.findOne({ where: { id: newVault.id } });
       } catch (error) {
         // Handle unique constraint violation for file relations as fallback
         if (error.code === '23505' && error.detail?.includes('already exists')) {
