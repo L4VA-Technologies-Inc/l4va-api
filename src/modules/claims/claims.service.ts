@@ -308,10 +308,6 @@ export class ClaimsService {
         status: TransactionStatus.created,
       });
 
-      // Update claim status to PENDING
-      claim.status = ClaimStatus.PENDING;
-      await this.claimRepository.save(claim);
-
       // Build the transaction
       const buildResponse = await this.blockchainService.buildTransaction(input);
       this.logger.log('Transaction built successfully');
