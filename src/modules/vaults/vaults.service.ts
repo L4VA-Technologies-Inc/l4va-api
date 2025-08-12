@@ -12,7 +12,6 @@ import { CreateVaultReq } from './dto/createVault.req';
 import { SortOrder, VaultFilter, VaultSortField } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { PublishVaultDto } from './dto/publish-vault.dto';
-import { SaveDraftReq } from './dto/saveDraft.req';
 import { VaultFullResponse, VaultShortResponse } from './dto/vault.response';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { BlockchainScannerService } from './processing-tx/onchain/blockchain-scanner.service';
@@ -725,6 +724,14 @@ export class VaultsService {
       requireReservedCostUsd: assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01),
     };
 
+    const fdv =
+      vault.ft_token_supply !== null && vault.vt_price !== null ? vault.ft_token_supply * vault.vt_price : null;
+
+    let fdvTvl = null;
+    if (fdv !== null && assetsPrices?.totalValueUsd && assetsPrices.totalValueUsd > 0) {
+      fdvTvl = (fdv / assetsPrices.totalValueUsd).toFixed(2);
+    }
+
     // First transform the vault to plain object with class-transformer
     const plainVault = instanceToPlain(vault);
 
@@ -732,6 +739,8 @@ export class VaultsService {
     const result = {
       ...plainVault,
       ...additionalData,
+      fdvTvl,
+      fdv,
     };
 
     return plainToInstance(VaultFullResponse, result, { excludeExtraneousValues: true });
