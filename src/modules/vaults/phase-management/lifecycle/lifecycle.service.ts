@@ -389,6 +389,10 @@ export class LifecycleService {
 
         const tokensForAcquirers = (vault.ft_token_supply - lpVtAmount) * vault.tokens_for_acquires * 0.01;
 
+        const VT_SUPPLY = vault.ft_token_supply;
+        const ASSETS_OFFERED_PERCENT = vault.tokens_for_acquires * 0.01;
+        const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
+
         // 4. Create claims for each acquisition transaction
         for (const tx of acquisitionTransactions) {
           if (!tx.user || !tx.user.id) continue;
@@ -421,6 +425,8 @@ export class LifecycleService {
               lpAdaAmount,
               lpVtAmount,
               vtPrice,
+              VT_SUPPLY,
+              ASSETS_OFFERED_PERCENT,
             });
 
             this.logger.debug(
@@ -479,12 +485,14 @@ export class LifecycleService {
 
             // Get total VT tokens for this user based on their total contribution
             const userVtResult = await this.distributionService.calculateContributorTokens({
-              vaultId: vault.id,
               valueContributed: userTotalValue,
               totalTvl: totalContributedValueAda,
               lpAdaAmount,
               lpVtAmount,
               vtPrice,
+              VT_SUPPLY,
+              ASSETS_OFFERED_PERCENT,
+              LP_PERCENT,
             });
 
             // Calculate VT tokens for this specific transaction
@@ -536,7 +544,7 @@ export class LifecycleService {
           }
         }
         // Add a row for total acquired ADA
-        acquireMultiplier.push(['', '', Math.floor(tokensForAcquirers / totalAcquiredAda)]);
+        acquireMultiplier.push(['', '', Math.floor(tokensForAcquirers / totalAcquiredAda / 1_000_000)]);
 
         // Multiplier for LP
         const adaPairMultiplier = Math.floor(lpVtAmount / lpAdaAmount);
