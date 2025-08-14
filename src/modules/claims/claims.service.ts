@@ -1,7 +1,15 @@
 import { Buffer } from 'node:buffer';
 
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { Address, FixedTransaction, PlutusData, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
+import {
+  Address,
+  Credential,
+  EnterpriseAddress,
+  FixedTransaction,
+  PlutusData,
+  PrivateKey,
+  ScriptHash,
+} from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -109,28 +117,16 @@ export class ClaimsService {
   }
 
   /**
-   * Build a transaction to extract LP tokens from a vault
+   * Build a transaction to extract Ada or NFT from a vault
    *
-   * User press "claim" button
+   * → scanner call webhook with tx detail when tx will exist on chain.
    *
-   * Frontend send request to build tx of claim
-   *
-   * backend create internal tx, then backend create blockchain tx and connect both tx by txHash
-   *
-   * then backend sign blockchain tx with admin wallet, and return presigned tx to user
-   *
-   * then user sign presigned tx with his own wallet
-   *
-   * then tx send to backend and publish to blockchain
-   *
-   * then scanner call webhook with tx detail when tx will exist on chain.
-   *
-   * then using information txHash we will update internal tx and maybe claim status
+   * → using information txHash we will update internal tx and maybe claim status
    *
    * @param claimId - ID of the claim to process
    * @returns Object containing transaction details
    */
-  async buildClaimTransaction(claimId: string): Promise<{
+  async buildExctractTransaction(claimId: string): Promise<{
     success: boolean;
     transactionId: string;
     presignedTx: string;
@@ -248,7 +244,7 @@ export class ClaimsService {
             assetName: { name: vault.asset_vault_name, format: 'hex' },
             policyId: POLICY_ID,
             type: 'plutus',
-            quantity: parseFloat(claim.amount.toString()), // Use the amount from the claim
+            quantity: claim.amount, // Use the amount from the claim
             metadata: {},
           },
           {
@@ -267,7 +263,7 @@ export class ClaimsService {
               {
                 assetName: { name: vault.asset_vault_name, format: 'hex' },
                 policyId: parameterizedScript.validator.hash,
-                quantity: parseFloat(claim.amount.toString()),
+                quantity: claim.amount,
               },
             ],
             datum: {
@@ -299,14 +295,222 @@ export class ClaimsService {
         input['utxos'] = utxos;
       }
 
+      // Build the transaction
+      const buildResponse = await this.blockchainService.buildTransaction(input);
+      this.logger.log('Transaction built successfully');
+
+      // Sign the transaction with admin key
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
       // Create internal transaction
       const internalTx = await this.transactionRepository.save({
         user_id: user.id,
         vault_id: vault.id,
-        amount: parseFloat(claim.amount.toString()),
-        type: TransactionType.claim,
+        type: TransactionType.extract,
         status: TransactionStatus.created,
       });
+
+      await this.transactionRepository.save(internalTx);
+
+      return {
+        success: true,
+        transactionId: internalTx.id,
+        presignedTx: txToSubmitOnChain.to_hex(),
+      };
+    } catch (error) {
+      this.logger.error(`Failed to build Claim extraction transaction: ${error.message}`, error);
+      // Reset claim status on error
+      claim.status = ClaimStatus.AVAILABLE;
+      await this.claimRepository.save(claim);
+      throw error;
+    }
+  }
+
+  async buildClaimTransaction(claimId: string): Promise<{
+    success: boolean;
+    transactionId: string;
+    presignedTx: string;
+  }> {
+    const claim = await this.claimRepository.findOne({
+      where: { id: claimId },
+      relations: ['user', 'vault', 'transaction'],
+    });
+
+    const vault = claim.vault;
+    const user = claim.user;
+
+    if (!claim) {
+      throw new NotFoundException('Claim not found');
+    }
+
+    if (claim.status !== ClaimStatus.AVAILABLE && claim.status !== ClaimStatus.PENDING) {
+      throw new Error('Claim is not available for extraction');
+    }
+
+    if (!vault || !user) {
+      throw new Error('Vault or user not found for claim');
+    }
+
+    try {
+      const utxos = await getUtxosExctract(Address.from_bech32(user.address), 0, this.blockfrost); // Any UTXO works.
+
+      if (utxos.length === 0) {
+        throw new Error('No UTXOs found.');
+      }
+
+      const parameterizedScript = applyContributeParams({
+        vault_policy_id: this.vaultPolicyId,
+        vault_id: claim.vault.asset_vault_name,
+      });
+      const POLICY_ID = parameterizedScript.validator.hash;
+      const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(POLICY_ID)))
+        .to_address()
+        .to_bech32();
+
+      const unparameterizedScript = blueprint.validators.find(v => v.title === 'contribute.contribute');
+
+      if (!unparameterizedScript) {
+        throw new Error('Contribute validator not found');
+      }
+
+      // Extract data from claim metadata
+      const lpsUnit = parameterizedScript.validator.hash + '72656365697074';
+      const txUtxos = await this.blockfrost.txsUtxos(claim.transaction.tx_hash);
+      const output = txUtxos.outputs[0];
+      if (!output) {
+        throw new Error('No output found');
+      }
+      this.logger.debug(txUtxos);
+      this.logger.debug(lpsUnit);
+
+      const amountOfLpsToClaim = output.amount.find((a: { unit: string; quantity: string }) => a.unit === lpsUnit);
+
+      const datumTag = generate_tag_from_txhash_index(claim.transaction.tx_hash, Number(0));
+
+      if (!amountOfLpsToClaim) {
+        throw new Error('No lps to claim.');
+      }
+
+      const input: {
+        changeAddress: string;
+        message: string;
+        mint?: Array<object>;
+        scriptInteractions: object[];
+        outputs: {
+          address: string;
+          assets?: object[];
+          lovelace?: number;
+          datum?: { type: 'inline'; value: string | Datum; shape?: object };
+        }[];
+        requiredSigners: string[];
+        preloadedScripts: {
+          type: string;
+          blueprint: unknown;
+        }[];
+        referenceInputs: { txHash: string; index: number }[];
+        validityInterval: {
+          start: boolean;
+          end: boolean;
+        };
+        network: string;
+      } = {
+        changeAddress: user.address,
+        message: 'Claim LPs from ada contribution',
+        scriptInteractions: [
+          {
+            purpose: 'spend',
+            hash: POLICY_ID,
+            outputRef: {
+              txHash: claim.transaction.tx_hash,
+              index: 0,
+            },
+            redeemer: {
+              type: 'json',
+              value: { vault_token_output_index: 0, change_output_index: 1 },
+            },
+          },
+          {
+            purpose: 'mint',
+            hash: POLICY_ID,
+            redeemer: {
+              type: 'json',
+              value: 'MintVaultToken' satisfies Redeemer,
+            },
+          },
+        ],
+        mint: [
+          {
+            version: 'cip25',
+            assetName: { name: vault.asset_vault_name, format: 'hex' },
+            policyId: POLICY_ID,
+            type: 'plutus',
+            quantity: claim.amount, // Use the amount from the claim
+            metadata: {},
+          },
+          {
+            version: 'cip25',
+            assetName: { name: 'receipt', format: 'utf8' },
+            policyId: POLICY_ID,
+            type: 'plutus',
+            quantity: -1,
+            metadata: {},
+          },
+        ],
+        outputs: [
+          {
+            address: user.address,
+            assets: [
+              {
+                assetName: { name: vault.asset_vault_name, format: 'hex' },
+                policyId: parameterizedScript.validator.hash,
+                quantity: claim.amount,
+              },
+            ],
+            datum: {
+              type: 'inline',
+              value: PlutusData.new_bytes(Buffer.from(datumTag, 'hex')).to_hex(),
+            },
+          },
+          {
+            address: SC_ADDRESS,
+            lovelace: 10000000,
+            datum: {
+              type: 'inline',
+              value: {
+                policy_id: POLICY_ID,
+                asset_name: vault.asset_vault_name,
+                owner: user.address,
+              },
+              shape: {
+                validatorHash: POLICY_ID,
+                purpose: 'spend',
+              },
+            },
+          },
+        ],
+        preloadedScripts: [
+          toPreloadedScript(blueprint, {
+            validators: [parameterizedScript.validator, unparameterizedScript],
+          }),
+        ],
+        requiredSigners: [this.adminHash],
+        referenceInputs: [
+          {
+            txHash: vault.last_update_tx_hash,
+            index: vault.last_update_tx_index,
+          },
+        ],
+        validityInterval: {
+          start: true,
+          end: true,
+        },
+        network: 'preprod',
+      };
+
+      const inputWithNoPreloaded = { ...input };
+      delete inputWithNoPreloaded.preloadedScripts;
+      this.logger.debug(JSON.stringify(inputWithNoPreloaded));
 
       // Build the transaction
       const buildResponse = await this.blockchainService.buildTransaction(input);
@@ -315,6 +519,15 @@ export class ClaimsService {
       // Sign the transaction with admin key
       const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
       txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+      // Create internal transaction
+      const internalTx = await this.transactionRepository.save({
+        user_id: user.id,
+        vault_id: vault.id,
+        // amount: claim.amount,
+        type: TransactionType.extract,
+        status: TransactionStatus.created,
+      });
 
       await this.transactionRepository.save(internalTx);
 
