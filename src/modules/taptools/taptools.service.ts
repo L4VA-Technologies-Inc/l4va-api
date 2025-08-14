@@ -1,7 +1,7 @@
 import { Injectable, HttpException, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import axios from 'axios';
-import * as NodeCache from 'node-cache';
+import NodeCache from 'node-cache';
 import { Repository } from 'typeorm';
 
 import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
