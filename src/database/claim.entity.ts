@@ -50,7 +50,7 @@ export class Claim {
   status: ClaimStatus;
 
   @Expose({ name: 'amount' })
-  @Column({ type: 'decimal', precision: 20, scale: 6, default: 0 })
+  @Column({ type: 'bigint', default: 0 })
   amount: number;
 
   @Expose({ name: 'transaction' })

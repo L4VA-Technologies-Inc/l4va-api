@@ -507,7 +507,7 @@ export class LifecycleService {
               user: { id: userId },
               vault: { id: vault.id },
               type: ClaimType.CONTRIBUTOR,
-              amount: txVtAmount,
+              amount: Math.floor(txVtAmount / 1000000),
               status: ClaimStatus.AVAILABLE,
               transaction: { id: tx.id },
               metadata: {
