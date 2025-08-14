@@ -583,7 +583,7 @@ export class VaultsService {
    * @param signedTx - Signed transaction object
    * @returns Full vault response
    */
-  async publishVault(userId, signedTx): Promise<VaultFullResponse> {
+  async publishVault(userId: string, signedTx): Promise<VaultFullResponse> {
     const vault = await this.vaultsRepository.findOne({
       where: {
         id: signedTx.vaultId,
