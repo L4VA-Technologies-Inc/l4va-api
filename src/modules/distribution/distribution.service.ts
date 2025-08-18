@@ -158,8 +158,6 @@ export class DistributionService {
     };
   }
 
-  calculateAdaPair;
-
   private round6(amount: number): number {
     return Math.round(amount * 1e6) / 1e6;
   }
