@@ -24,9 +24,9 @@ type ItemData = {
 
 type TokenMetaData = {
   subject: string; //	The base16-encoded policyId + base16-encoded assetName
-  policy: string; // The base16-encoded CBOR representation of the monetary policy script, used to verify ownership. Optional in the case of Plutus scripts as verification is handled elsewhere.
   name: ItemData; // A human-readable name for the subject, suitable for use in an interface
   description: ItemData; // A human-readable description for the subject, suitable for use in an interface
+  policy?: string; // The base16-encoded CBOR representation of the monetary policy script, used to verify ownership. Optional in the case of Plutus scripts as verification is handled elsewhere.
   ticker?: ItemData; // A human-readable ticker name for the subject, suitable for use in an interface
   url?: ItemData; // A HTTPS URL (web page relating to the token)
   logo?: ItemData; // A PNG image file as a byte string
@@ -35,9 +35,9 @@ type TokenMetaData = {
 
 export type TokenMetaDataRaw = {
   subject: string; //	The base16-encoded policyId + base16-encoded assetName
-  policy: string; // The base16-encoded CBOR representation of the monetary policy script, used to verify ownership. Optional in the case of Plutus scripts as verification is handled elsewhere.
   name: string; // A human-readable name for the subject, suitable for use in an interface
   description: string; // A human-readable description for the subject, suitable for use in an interface
+  policy?: string; // The base16-encoded CBOR representation of the monetary policy script, used to verify ownership. Optional in the case of Plutus scripts as verification is handled elsewhere.
   ticker?: string; // A human-readable ticker name for the subject, suitable for use in an interface
   url?: string; // A HTTPS URL (web page relating to the token)
   logo?: string; // A PNG image file as a byte string
@@ -83,6 +83,8 @@ export class MetadataRegistryApiService {
       // Optional fields
       const ticker = raw.ticker ? this.signItemData(raw.subject, 0, raw.ticker) : undefined;
       const url = raw.url ? this.signItemData(raw.subject, 0, raw.url) : undefined;
+      // The base16-encoded CBOR "policy": "82018201828200581cf950845fdf374bba64605f96a9d5940890cc2bb92c4b5b55139cc00982051a09bde472",
+      const policy = raw.policy ? raw.policy : undefined;
       const logo = raw.logo ? this.signItemData(raw.subject, 0, raw.logo) : undefined;
       const decimals =
         typeof raw.decimals === 'number' ? this.signItemData(raw.subject, 0, raw.decimals.toString()) : undefined;
@@ -90,7 +92,7 @@ export class MetadataRegistryApiService {
       // Build full metadata object
       const metadata: TokenMetaData = {
         subject: raw.subject,
-        policy: raw.policy,
+        policy,
         name,
         description,
         ticker,
@@ -174,7 +176,7 @@ export class MetadataRegistryApiService {
     const signature = privateKey.sign(Buffer.from(hash)).to_hex();
 
     // Get public key in hex
-    const publicKey = privateKey.to_public().to_bech32();
+    const publicKey = privateKey.to_public().to_hex();
 
     return {
       sequenceNumber,
