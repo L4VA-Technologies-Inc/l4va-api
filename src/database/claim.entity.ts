@@ -12,7 +12,6 @@ import {
 
 import { ClaimStatus, ClaimType } from '../types/claim.types';
 
-import { Asset } from './asset.entity';
 import { Transaction } from './transaction.entity';
 import { User } from './user.entity';
 import { Vault } from './vault.entity';
@@ -32,11 +31,6 @@ export class Claim {
   @ManyToOne(() => Vault, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({ name: 'vault_id' })
   vault: Vault;
-
-  @Expose({ name: 'asset' })
-  @ManyToOne(() => Asset, { nullable: true })
-  @JoinColumn({ name: 'asset_id' })
-  asset: Asset;
 
   @Column({ name: 'asset_id', nullable: true })
   @Index()
