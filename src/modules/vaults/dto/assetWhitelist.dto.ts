@@ -32,4 +32,13 @@ export class AssetWhitelistDto {
   @IsNumber()
   @Expose({ name: 'countCapMax' })
   countCapMax?: number;
+
+  @ApiProperty({
+    description: 'Unique ID for the asset',
+    required: false,
+    example: 1456431,
+  })
+  @IsOptional()
+  @IsNumber()
+  uniqueId?: number;
 }

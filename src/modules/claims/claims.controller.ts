@@ -43,8 +43,8 @@ export class ClaimsController {
   @UseGuards(AuthGuard)
   async submitSignedClaimTransaction(
     @Param('transactionId') transactionId: string,
-    @Body() body: { signedTx: string }
+    @Body() body: { transaction: string; signatures: string | string[]; txId: string; claimId: string }
   ) {
-    return this.claimsService.submitSignedTransaction(transactionId, body.signedTx);
+    return this.claimsService.submitSignedTransaction(transactionId, body);
   }
 }

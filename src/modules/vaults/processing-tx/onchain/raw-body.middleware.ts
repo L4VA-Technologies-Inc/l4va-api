@@ -1,6 +1,6 @@
 import { Injectable, NestMiddleware, Logger } from '@nestjs/common';
 import { Request, Response, NextFunction } from 'express';
-import * as rawBody from 'raw-body';
+import rawBody from 'raw-body';
 
 @Injectable()
 export class RawBodyMiddleware implements NestMiddleware {

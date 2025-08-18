@@ -7,6 +7,12 @@ export class VaultAssetsSummaryDto {
   @ApiProperty({ description: 'Total value of all assets in USD' })
   totalValueUsd: number;
 
+  @ApiProperty({ description: 'Total acquired ADA' })
+  totalAcquiredAda: number;
+
+  @ApiProperty({ description: 'Total acquired USD' })
+  totalAcquiredUsd: number;
+
   @ApiProperty({ description: 'Number of unique assets in the vault' })
   totalAssets: number;
 
@@ -18,6 +24,9 @@ export class VaultAssetsSummaryDto {
 
   @ApiProperty({ description: 'Timestamp of the last update' })
   lastUpdated: string;
+
+  @ApiProperty({ description: 'Current ADA price in USD' })
+  adaPrice: number;
 
   @ApiProperty({
     description: 'List of assets with their values',

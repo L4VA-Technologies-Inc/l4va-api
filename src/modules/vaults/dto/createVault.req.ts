@@ -118,7 +118,7 @@ export class CreateVaultReq {
     description: 'CSV file containing acquirer whitelist',
     required: false,
   })
-  @ValidateIf(o => o.privacy !== VaultPrivacy.public)
+  @ValidateIf(o => o.privacy === VaultPrivacy.private && !o.acquirerWhitelistCsv)
   @IsOptional()
   @Expose()
   acquirerWhitelistCsv?: AcquirerWhitelistCsv;
@@ -355,7 +355,7 @@ export class CreateVaultReq {
   assetsWhitelist?: AssetWhitelistDto[];
 
   @ApiProperty({ required: false, nullable: true, type: [AcquirerWhitelist] })
-  @ValidateIf(o => o.privacy !== VaultPrivacy.public && !o.acquirerWhitelistCsv)
+  @ValidateIf(o => o.privacy === VaultPrivacy.private && !o.acquirerWhitelistCsv)
   @IsArray()
   @ArrayNotEmpty()
   @IsObject({ each: true })

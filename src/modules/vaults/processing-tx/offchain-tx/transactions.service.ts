@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { AssetStatus } from 'src/types/asset.types';
 import { TransactionStatus, TransactionType } from 'src/types/transaction.types';
@@ -7,16 +7,20 @@ import { Repository } from 'typeorm';
 import { Asset } from '@/database/asset.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { TaptoolsService } from '@/modules/taptools/taptools.service';
 
 @Injectable()
 export class TransactionsService {
+  private readonly logger = new Logger(TransactionsService.name);
+
   constructor(
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(Asset)
-    private readonly assetRepository: Repository<Asset>
+    private readonly assetRepository: Repository<Asset>,
+    private readonly taptoolsService: TaptoolsService
   ) {}
 
   async createTransaction(data: {
@@ -70,6 +74,16 @@ export class TransactionsService {
 
     transaction.status = status;
     transaction.tx_index = txIndex.toString();
+
+    const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(transaction.vault_id);
+
+    vault.require_reserved_cost_ada = assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01);
+    vault.require_reserved_cost_usd = assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01);
+    vault.total_assets_cost_ada = assetsPrices.totalValueAda;
+    vault.total_assets_cost_usd = assetsPrices.totalValueUsd;
+    vault.total_acquired_value_ada = assetsPrices.totalAcquiredAda;
+
+    await this.vaultRepository.save(vault);
 
     return this.transactionRepository.save(transaction);
   }

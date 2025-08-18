@@ -1,10 +1,12 @@
-export const vault_sc_privacy = {
+import { ValueMethod, VaultPrivacy } from '@/types/vault.types';
+
+export const vault_sc_privacy: Record<VaultPrivacy, number> = {
   private: 0,
   public: 1,
-  semiPrivate: 2,
+  'semi-private': 2,
 };
 
-export const valuation_sc_type = {
+export const valuation_sc_type: Record<ValueMethod, number> = {
   fixed: 0,
   lbe: 1,
 };

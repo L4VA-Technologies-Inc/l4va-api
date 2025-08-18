@@ -1,6 +1,5 @@
 import { Credential, EnterpriseAddress, ScriptHash } from '@emurgo/cardano-serialization-lib-nodejs';
 import { BadRequestException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
@@ -13,7 +12,6 @@ import { CreateVaultReq } from './dto/createVault.req';
 import { SortOrder, VaultFilter, VaultSortField } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { PublishVaultDto } from './dto/publish-vault.dto';
-import { SaveDraftReq } from './dto/saveDraft.req';
 import { VaultFullResponse, VaultShortResponse } from './dto/vault.response';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { BlockchainScannerService } from './processing-tx/onchain/blockchain-scanner.service';
@@ -86,8 +84,7 @@ export class VaultsService {
     private readonly vaultContractService: VaultManagingService,
     private readonly blockchainScannerService: BlockchainScannerService,
     private readonly taptoolsService: TaptoolsService,
-    private readonly transactionsService: TransactionsService,
-    private readonly configService: ConfigService
+    private readonly transactionsService: TransactionsService
   ) {}
 
   /**
@@ -346,6 +343,8 @@ export class VaultsService {
       let newVault: Vault;
       try {
         newVault = await this.vaultsRepository.save(vaultData as Vault);
+        // Always reload the entity to ensure it's managed and has all relations
+        newVault = await this.vaultsRepository.findOne({ where: { id: newVault.id } });
       } catch (error) {
         // Handle unique constraint violation for file relations as fallback
         if (error.code === '23505' && error.detail?.includes('already exists')) {
@@ -584,7 +583,7 @@ export class VaultsService {
    * @param signedTx - Signed transaction object
    * @returns Full vault response
    */
-  async publishVault(userId, signedTx): Promise<VaultFullResponse> {
+  async publishVault(userId: string, signedTx): Promise<VaultFullResponse> {
     const vault = await this.vaultsRepository.findOne({
       where: {
         id: signedTx.vaultId,
@@ -605,201 +604,6 @@ export class VaultsService {
     });
 
     return plainToInstance(VaultFullResponse, instanceToPlain(vault), { excludeExtraneousValues: true });
-  }
-
-  /**
-   * Saves a draft vault or updates an existing draft, including file, whitelist, and tag management.
-   * @param userId - ID of the vault owner
-   * @param data - Draft vault request data
-   * @returns Draft vault response
-   */
-  async saveDraftVault(userId: string, data: SaveDraftReq): Promise<any> {
-    let existingVault: Vault | null = null;
-
-    // Check for existing draft vault if ID is provided
-    if (data.id) {
-      existingVault = await this.vaultsRepository.findOne({
-        where: {
-          id: data.id,
-          vault_status: VaultStatus.draft,
-          owner: { id: userId },
-        },
-        relations: ['owner', 'social_links', 'assets_whitelist', 'acquirer_whitelist'],
-      });
-
-      // If found but not a draft, throw error
-      if (existingVault && existingVault.vault_status !== VaultStatus.draft) {
-        throw new BadRequestException('Cannot modify a published vault');
-      }
-
-      // If found and is draft, remove existing relationships
-      if (existingVault) {
-        if (existingVault.social_links?.length > 0) {
-          await this.linksRepository.remove(existingVault.social_links);
-        }
-        if (existingVault.assets_whitelist?.length > 0) {
-          await this.assetsWhitelistRepository.remove(existingVault.assets_whitelist);
-        }
-        if (existingVault.acquirer_whitelist?.length > 0) {
-          await this.acquirerWhitelistRepository.remove(existingVault.acquirer_whitelist);
-        }
-      }
-    }
-    try {
-      const owner = await this.usersRepository.findOne({
-        where: { id: userId },
-      });
-
-      // Process image files
-      const imgKey = data.vaultImage?.split('image/')[1];
-      const vaultImg = imgKey
-        ? await this.filesRepository.findOne({
-            where: { file_key: imgKey },
-          })
-        : null;
-
-      const bannerImgKey = data.bannerImage?.split('image/')[1];
-      const bannerImg = bannerImgKey
-        ? await this.filesRepository.findOne({
-            where: { file_key: bannerImgKey },
-          })
-        : null;
-
-      const ftTokenImgKey = data.ftTokenImg?.split('image/')[1];
-      const ftTokenImg = ftTokenImgKey
-        ? await this.filesRepository.findOne({
-            where: { file_key: ftTokenImgKey },
-          })
-        : null;
-
-      const acquirerWhitelistCsvKey = data.acquirerWhitelistCsv?.key;
-      const acquirerWhitelistFile = acquirerWhitelistCsvKey
-        ? await this.filesRepository.findOne({
-            where: { file_key: acquirerWhitelistCsvKey },
-          })
-        : null;
-
-      // Prepare vault data with only the provided fields
-      const vaultData: any = {
-        owner: owner,
-        vault_status: VaultStatus.draft,
-      };
-
-      // Only include fields that are actually provided
-      if (data.name !== undefined) vaultData.name = data.name;
-      if (data.type !== undefined) vaultData.type = data.type;
-      if (data.privacy !== undefined) vaultData.privacy = data.privacy;
-      if (data.valueMethod !== undefined) vaultData.value_method = data.valueMethod;
-      if (data.valuationCurrency !== undefined) vaultData.valuation_currency = data.valuationCurrency;
-      if (data.valuationAmount !== undefined) vaultData.valuation_amount = data.valuationAmount;
-      if (data.description !== undefined) vaultData.description = data.description;
-      if (data.ftTokenDecimals) vaultData.ftToken_decimals = data.ftTokenDecimals;
-      if (data.acquireOpenWindowType) vaultData.acquire_open_window_type = data.acquireOpenWindowType;
-
-      // Handle date fields only if they are provided
-      if (data.contributionDuration !== undefined) {
-        vaultData.contribution_duration = data.contributionDuration;
-      }
-      if (data.acquireWindowDuration !== undefined) {
-        vaultData.acquire_window_duration = data.acquireWindowDuration;
-      }
-      if (data.acquireOpenWindowTime !== undefined) {
-        vaultData.acquire_open_window_time = new Date(data.acquireOpenWindowTime).toISOString();
-      }
-      if (data.contributionOpenWindowTime !== undefined) {
-        vaultData.contribution_open_window_time = new Date(data.contributionOpenWindowTime).toISOString();
-      }
-      if (data.timeElapsedIsEqualToTime !== undefined) {
-        vaultData.time_elapsed_is_equal_to_time = data.timeElapsedIsEqualToTime;
-      }
-
-      // Handle file relationships only if provided
-      if (vaultImg) vaultData.vault_image = vaultImg;
-      if (bannerImg) vaultData.banner_image = bannerImg;
-      if (ftTokenImg) vaultData.ft_token_img = ftTokenImg;
-      if (acquirerWhitelistFile) vaultData.acquirer_whitelist_csv = acquirerWhitelistFile;
-
-      let vault: Vault;
-      if (existingVault) {
-        // Update only the provided fields in existing draft vault
-        vault = (await this.vaultsRepository.save({
-          ...existingVault,
-          ...vaultData,
-        })) as Vault;
-      } else {
-        // Create new draft vault with provided fields
-        vault = await this.vaultsRepository.save(vaultData as Vault);
-      }
-
-      // Handle social links only if provided
-      if (data.socialLinks !== undefined) {
-        if (data.socialLinks.length > 0) {
-          const links = data.socialLinks.map(linkItem => {
-            return this.linksRepository.create({
-              vault: vault,
-              name: linkItem.name,
-              url: linkItem.url,
-            });
-          });
-          await this.linksRepository.save(links);
-        }
-      }
-
-      if (data.tags?.length > 0) {
-        const tags = await Promise.all(
-          data.tags.map(async tagName => {
-            let tag = await this.tagsRepository.findOne({
-              where: { name: tagName },
-            });
-            if (!tag) {
-              tag = await this.tagsRepository.save({
-                name: tagName,
-              });
-            }
-            return tag;
-          })
-        );
-        vault.tags = tags;
-        await this.vaultsRepository.save(vault);
-      }
-
-      // Handle assets whitelist only if provided
-      if (data.assetsWhitelist !== undefined && data.assetsWhitelist.length > 0) {
-        await Promise.all(
-          data.assetsWhitelist.map(whitelistItem => {
-            return this.assetsWhitelistRepository.save({
-              vault: vault,
-              policy_id: whitelistItem.policyId,
-              asset_count_cap_min: whitelistItem?.countCapMin,
-              asset_count_cap_max: whitelistItem?.countCapMax,
-            });
-          })
-        );
-      }
-
-      // Handle acquirer whitelist only if provided
-      if (data.acquirerWhitelist !== undefined || acquirerWhitelistFile) {
-        const acquirerFromCsv = acquirerWhitelistFile ? await this.parseCSVFromS3(acquirerWhitelistFile.file_key) : [];
-
-        const manualAcquirer = data.acquirerWhitelist?.map(item => item.walletAddress) || [];
-        const allAcquirer = new Set([...manualAcquirer, ...acquirerFromCsv]);
-
-        if (allAcquirer.size > 0) {
-          const investorItems = Array.from(allAcquirer).map(walletAddress => {
-            return this.acquirerWhitelistRepository.create({
-              vault: vault,
-              wallet_address: walletAddress,
-            });
-          });
-          await this.acquirerWhitelistRepository.save(investorItems);
-        }
-      }
-
-      return await this.prepareDraftResponse(vault.id);
-    } catch (error) {
-      console.error(error);
-      throw new BadRequestException('Failed to create vault');
-    }
   }
 
   async getMyVaults(
@@ -911,10 +715,6 @@ export class VaultsService {
     // todo this is ok for contribution phase, but we need to calculate only assets with origin type CONTRIBUTED
     const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(id);
 
-    // todo for calculate how much ada already invested we need to select assets with INVESTED origin type.
-    // todo and here we got how much invested now
-    // const investedAssetsPrice = await this.taptoolsService.calculateVaultAssetsValue(id, 'acquire');
-
     // Create a new plain object with the additional properties
     const additionalData = {
       maxContributeAssets: Number(vault.max_contribute_assets),
@@ -924,6 +724,14 @@ export class VaultsService {
       requireReservedCostUsd: assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01),
     };
 
+    const fdv =
+      vault.ft_token_supply !== null && vault.vt_price !== null ? vault.ft_token_supply * vault.vt_price : null;
+
+    let fdvTvl = null;
+    if (fdv !== null && assetsPrices?.totalValueUsd && assetsPrices.totalValueUsd > 0) {
+      fdvTvl = (fdv / assetsPrices.totalValueUsd).toFixed(2);
+    }
+
     // First transform the vault to plain object with class-transformer
     const plainVault = instanceToPlain(vault);
 
@@ -931,6 +739,8 @@ export class VaultsService {
     const result = {
       ...plainVault,
       ...additionalData,
+      fdvTvl,
+      fdv,
     };
 
     return plainToInstance(VaultFullResponse, result, { excludeExtraneousValues: true });
@@ -1079,11 +889,6 @@ export class VaultsService {
         // Create plain object from entity
         const plainVault = instanceToPlain(vault);
 
-        // Calculate all the required metrics
-        // const tvl = await this.calculateVaultTVL(vault);
-        // const baseAllocation = await this.calculateBaseAllocation(vault);
-        // const totalValue = await this.calculateTotalAssetValue(vault);
-
         const { phaseStartTime, phaseEndTime } = this.calculatePhaseTime(vault);
 
         // Current time for timeRemaining calculation
@@ -1094,7 +899,7 @@ export class VaultsService {
         // Merge calculated values with plain object
         const enrichedVault = {
           ...plainVault,
-          tvl: null,
+          tvl: vault.total_assets_cost_usd,
           baseAllocation: null,
           total: null,
           invested: vault.total_acquired_value_ada,
@@ -1117,76 +922,6 @@ export class VaultsService {
       limit,
       totalPages: Math.ceil(total / limit),
     };
-  }
-
-  /**
-   * Calculates Total Value Locked for a vault
-   * @param vault - Vault entity
-   * @returns TVL value in USD
-   */
-  private async calculateVaultTVL(vault: Vault): Promise<number> {
-    try {
-      // If vault is in contribution or later phase, calculate real TVL
-      if ([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked].includes(vault.vault_status)) {
-        // Get all locked assets for this vault
-        // const lockedAssets = await this.assetsRepository.count({
-        //   where: {
-        //     vault: { id: vault.id },
-        //     status: AssetStatus.LOCKED,
-        //     origin_type: AssetOriginType.CONTRIBUTED,
-        //   },
-        // });
-
-        // Calculate assets value using taptools service
-        const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
-        return assetsValue.totalValueUsd || 0;
-      }
-
-      // For published phase or earlier, TVL is 0
-      return 0;
-    } catch (error) {
-      this.logger.error(`Error calculating TVL for vault ${vault.id}:`, error);
-      return 0;
-    }
-  }
-
-  /**
-   * Calculates base allocation for a vault
-   * @param vault - Vault entity
-   * @returns Base allocation value
-   */
-  private async calculateBaseAllocation(vault: Vault): Promise<number> {
-    try {
-      // This is a placeholder - implement your actual business logic
-      // Base allocation might be calculated based on your tokenomics model
-
-      // Example: might be based on acquire_reserve percentage
-      if (vault.acquire_reserve) {
-        const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
-        return assetsValue.totalValueUsd * (vault.acquire_reserve / 100) || 0;
-      }
-
-      return 0;
-    } catch (error) {
-      this.logger.error(`Error calculating base allocation for vault ${vault.id}:`, error);
-      return 0;
-    }
-  }
-
-  /**
-   * Calculates total asset value for a vault
-   * @param vault - Vault entity
-   * @returns Total asset value in USD
-   */
-  private async calculateTotalAssetValue(vault: Vault): Promise<number> {
-    try {
-      // For most phases, total value equals TVL
-      const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
-      return assetsValue.totalValueUsd || 0;
-    } catch (error) {
-      this.logger.error(`Error calculating total asset value for vault ${vault.id}:`, error);
-      return 0;
-    }
   }
 
   /**

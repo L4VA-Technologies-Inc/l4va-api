@@ -1,16 +1,20 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { classToPlain, plainToInstance } from 'class-transformer';
-import { Repository } from 'typeorm';
+import { classToPlain, instanceToPlain, plainToInstance } from 'class-transformer';
+import { IsNull, Not, Repository } from 'typeorm';
 
-import { FileEntity } from '@/database/file.entity';
-import { LinkEntity } from '@/database/link.entity';
-import { User } from '@/database/user.entity';
 import { transformImageToUrl } from '../../helpers';
 import { AwsService } from '../aws_bucket/aws.service';
 
 import { PublicProfileRes } from './dto/public-profile.res';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+
+import { Asset } from '@/database/asset.entity';
+import { FileEntity } from '@/database/file.entity';
+import { LinkEntity } from '@/database/link.entity';
+import { User } from '@/database/user.entity';
+import { Vault } from '@/database/vault.entity';
+import { AssetOriginType, AssetStatus } from '@/types/asset.types';
 
 @Injectable()
 export class UsersService {
@@ -18,6 +22,10 @@ export class UsersService {
   constructor(
     @InjectRepository(User)
     private usersRepository: Repository<User>,
+    @InjectRepository(Vault)
+    private vaultRepository: Repository<Vault>,
+    @InjectRepository(Asset)
+    private assetRepository: Repository<Asset>,
     @InjectRepository(FileEntity)
     private filesRepository: Repository<FileEntity>,
     @InjectRepository(LinkEntity)
@@ -78,9 +86,31 @@ export class UsersService {
       throw new BadRequestException('User not found');
     }
 
+    const ownedVaultsCount = await this.vaultRepository.count({
+      where: {
+        owner: { id: userId },
+        deleted: false,
+      },
+    });
+
+    const contributedAssestsToVaults = await this.assetRepository.find({
+      where: {
+        added_by: { id: userId },
+        origin_type: AssetOriginType.CONTRIBUTED,
+        status: AssetStatus.LOCKED,
+        dex_price: Not(IsNull()),
+      },
+    });
+
+    const tvl = contributedAssestsToVaults.reduce((acc, asset) => {
+      const price = parseFloat(asset.dex_price as any);
+      return acc + price;
+    }, 0);
+
     // Calculate total_vaults from the vaults relation
-    user.total_vaults = user.vaults?.length || 0;
-    const plainedUsers = classToPlain(user);
+    user.total_vaults = ownedVaultsCount || 0;
+    user.tvl = tvl;
+    const plainedUsers = instanceToPlain(user);
     return plainToInstance(PublicProfileRes, plainedUsers, { excludeExtraneousValues: true });
   }
 
