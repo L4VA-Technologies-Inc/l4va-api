@@ -1,4 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+
+import { Claim } from '@/database/claim.entity';
 
 /**
  * DistributionService
@@ -10,9 +12,11 @@ import { Injectable } from '@nestjs/common';
  */
 @Injectable()
 export class DistributionService {
+  private readonly logger = new Logger(DistributionService.name);
+
   constructor() {}
 
-  async calculateContributorTokens(params: {
+  calculateContributorTokens(params: {
     valueContributed: number;
     totalTvl: number;
     lpVtAmount: number;
@@ -21,39 +25,20 @@ export class DistributionService {
     VT_SUPPLY: number;
     ASSETS_OFFERED_PERCENT: number;
     LP_PERCENT: number;
-  }): Promise<{
-    vtRetained: number;
-    lpVtRetained: number;
-    lpAdaRetained: number;
-    totalRetainedValue: number;
-  }> {
-    const {
-      VT_SUPPLY,
-      ASSETS_OFFERED_PERCENT,
-      LP_PERCENT,
-      valueContributed,
-      totalTvl,
-      lpVtAmount,
-      lpAdaAmount,
-      vtPrice,
-    } = params;
+  }): number {
+    const { VT_SUPPLY, ASSETS_OFFERED_PERCENT, valueContributed, totalTvl } = params;
 
     const contributorShare = valueContributed / totalTvl;
     const vtRetained = this.round6(VT_SUPPLY * (1 - ASSETS_OFFERED_PERCENT) * contributorShare);
-    const lpVtRetained = this.round6(lpVtAmount * LP_PERCENT);
-    const lpAdaRetained = this.round6(lpAdaAmount * LP_PERCENT);
-    const vtAdaValue = this.round6(vtRetained * vtPrice);
-    const totalRetainedValue = this.round6(this.calculateTotalValueRetained(0, vtAdaValue, lpAdaRetained, 0));
+    // const lpVtRetained = this.round6(lpVtAmount * LP_PERCENT);
+    // const lpAdaRetained = this.round6(lpAdaAmount * LP_PERCENT);
+    // const vtAdaValue = this.round6(vtRetained * vtPrice);
+    // const totalRetainedValue = this.round6(this.calculateTotalValueRetained(0, vtAdaValue, lpAdaRetained, 0));
 
-    return {
-      vtRetained: Math.round(vtRetained),
-      lpVtRetained,
-      lpAdaRetained,
-      totalRetainedValue,
-    };
+    return Math.round(vtRetained);
   }
 
-  async calculateAcquirerTokens(params: {
+  calculateAcquirerTokens(params: {
     vaultId: string;
     adaSent: number;
     numAcquirers: number;
@@ -63,47 +48,24 @@ export class DistributionService {
     VT_SUPPLY: number;
     ASSETS_OFFERED_PERCENT: number;
     vtPrice: number;
-  }): Promise<{
-    adaSent: number;
-    percentOfTotalAcquireAdaSent: number;
-    vtReceived: number;
-    vtValueInAda: number;
-
-    totalValueInAdaRetained: number;
-    percentValueRetained: number;
-  }> {
-    const { adaSent, VT_SUPPLY, ASSETS_OFFERED_PERCENT, totalAcquiredValueAda, lpVtAmount, lpAdaAmount, vtPrice } =
-      params;
-
-    const percentOfTotalAcquireAdaSent = this.round6(adaSent / totalAcquiredValueAda);
+  }): number {
+    const { adaSent, VT_SUPPLY, ASSETS_OFFERED_PERCENT, totalAcquiredValueAda, lpVtAmount } = params;
 
     // ((ADA sent to the vault / total acquire ADA) * Assets Offered Percent) * (VT Supply - LP VT)
+    const percentOfTotalAcquireAdaSent = this.round6(adaSent / totalAcquiredValueAda);
     const vtReceived = this.round6(percentOfTotalAcquireAdaSent * ASSETS_OFFERED_PERCENT * (VT_SUPPLY - lpVtAmount));
 
-    const vtValueInAda = this.round6(vtReceived * vtPrice);
-
-    const lpAdaInitialShare = this.round6(percentOfTotalAcquireAdaSent * lpAdaAmount);
-    const lpVtInitialShare = this.round6(percentOfTotalAcquireAdaSent * lpVtAmount);
-    const lpVtAdaValue = this.round6(lpVtInitialShare * vtPrice);
-    const totalValueInAdaRetained = this.round6(adaSent + vtValueInAda + lpAdaInitialShare + lpVtAdaValue);
-    const percentValueRetained = this.round6(totalValueInAdaRetained / adaSent);
-
+    // const vtValueInAda = this.round6(vtReceived * vtPrice);
+    // const lpAdaInitialShare = this.round6(percentOfTotalAcquireAdaSent * lpAdaAmount);
+    // const lpVtInitialShare = this.round6(percentOfTotalAcquireAdaSent * lpVtAmount);
+    // const lpVtAdaValue = this.round6(lpVtInitialShare * vtPrice);
+    // const totalValueInAdaRetained = this.round6(adaSent + vtValueInAda + lpAdaInitialShare + lpVtAdaValue);
     // const valueInAdaRetainedNetOfFees = this.round6(totalValueInAdaRetained - l4vaFee - trxnReserveFee);
-
-    return {
-      adaSent: this.round6(adaSent),
-      percentOfTotalAcquireAdaSent,
-      vtReceived: Math.round(vtReceived),
-      vtValueInAda,
-      totalValueInAdaRetained,
-      percentValueRetained,
-    };
+    return Math.round(vtReceived);
   }
 
   /**
    * Calculate liquidity pool tokens and values
-   * Extracted as a separate method to ensure consistent calculations across
-   * contributor and acquirer flows
    */
   async calculateLpTokens(params: {
     vaultId: string;
@@ -139,6 +101,59 @@ export class DistributionService {
       vtPrice,
     };
   }
+
+  calculateAcquireMultipliers(params: {
+    contributorsClaims: Claim[];
+    acquirerClaims: Claim[];
+  }): [string, string, number][] {
+    const { contributorsClaims, acquirerClaims } = params;
+    const multipliers = [];
+
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    for (const claim of contributorsClaims) {
+      multipliers.push([claim.asset.policy_id, claim.asset.asset_id, claim.amount]);
+    }
+
+    for (const claim of acquirerClaims) {
+      multipliers.push(['', '', Math.floor(claim.amount / claim.transaction.amount / 1_000_000)]);
+    }
+
+    return multipliers;
+  }
+
+  /**
+   * Calculates the LP ADA multiplier with precision validation
+   * @returns Object containing the multiplier and validation info
+   */
+  calculateLpAdaMultiplier(
+    lpVtAmount: number,
+    lpAdaAmount: number
+  ): {
+    adaPairMultiplier: number;
+    precisionLoss: number;
+  } {
+    // Calculate the multiplier (VT per ADA)
+    const multiplier = Math.floor(lpVtAmount / lpAdaAmount);
+
+    // Validate precision loss
+    const reconstructedVT = multiplier * lpAdaAmount;
+    const difference = Math.abs(reconstructedVT - lpVtAmount);
+    const precisionLoss = (difference / lpVtAmount) * 100;
+
+    // Check if precision loss is significant
+    const hasHighPrecisionLoss = precisionLoss > 1;
+
+    if (hasHighPrecisionLoss) {
+      this.logger.warn(`High precision loss in LP multiplier: ${precisionLoss.toFixed(2)}% error`);
+    }
+
+    return {
+      adaPairMultiplier: multiplier,
+      precisionLoss,
+    };
+  }
+
+  calculateAdaPair;
 
   private round6(amount: number): number {
     return Math.round(amount * 1e6) / 1e6;

@@ -285,11 +285,18 @@ export class LifecycleService {
 
       // Calculate total value of contributed assets
       let totalContributedValueAda = 0;
-      const contributionValueByTransaction: Record<string, number> = {};
       const userContributedValueMap: Record<string, number> = {};
       const uniqueAssets = new Map<
         string,
-        { policyId: string; assetId: string; totalValueAda: number; totalQuantity: number }
+        {
+          policyId: string;
+          assetName: string;
+          totalValueAda: number;
+          totalQuantity: number;
+          userId: string;
+          txId: string;
+          assetId: string;
+        }
       >();
 
       // Process contributed assets to calculate their value
@@ -323,9 +330,12 @@ export class LifecycleService {
             } else {
               uniqueAssets.set(assetKey, {
                 policyId: asset.policy_id,
-                assetId: asset.asset_id,
+                assetName: asset.asset_id,
                 totalValueAda: priceAda * quantity,
                 totalQuantity: quantity,
+                userId: tx.user.id,
+                txId: tx.id,
+                assetId: asset.id,
               });
             }
           } catch (error) {
@@ -334,7 +344,6 @@ export class LifecycleService {
         }
 
         // Store value of this transaction
-        contributionValueByTransaction[tx.id] = transactionValueAda;
         totalContributedValueAda += transactionValueAda;
 
         // Track total per user for proportional distribution
@@ -377,23 +386,17 @@ export class LifecycleService {
             type: ClaimType.LP,
             amount: lpVtAmount,
             status: ClaimStatus.AVAILABLE,
-            metadata: {
-              lpAmount: lpAdaAmount,
-              vtPrice: vtPrice,
-            },
           });
           this.logger.log(`Created LP claim for vault owner: ${lpVtAmount} VT tokens (${lpAdaAmount} ADA)`);
         } catch (error) {
           this.logger.error(`Failed to create LP claim for vault ${vault.id}:`, error);
         }
 
-        const tokensForAcquirers = (vault.ft_token_supply - lpVtAmount) * vault.tokens_for_acquires * 0.01;
-
-        const VT_SUPPLY = vault.ft_token_supply;
         const ASSETS_OFFERED_PERCENT = vault.tokens_for_acquires * 0.01;
         const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
 
         // 4. Create claims for each acquisition transaction
+        const acquirerClaims: Partial<Claim>[] = [];
         for (const tx of acquisitionTransactions) {
           if (!tx.user || !tx.user.id) continue;
 
@@ -417,7 +420,7 @@ export class LifecycleService {
               continue;
             }
 
-            const vtResult = await this.distributionService.calculateAcquirerTokens({
+            const vtReceived = await this.distributionService.calculateAcquirerTokens({
               vaultId: vault.id,
               adaSent,
               numAcquirers: Object.keys(userAcquiredAdaMap).length,
@@ -425,42 +428,45 @@ export class LifecycleService {
               lpAdaAmount,
               lpVtAmount,
               vtPrice,
-              VT_SUPPLY,
+              VT_SUPPLY: vault.ft_token_supply,
               ASSETS_OFFERED_PERCENT,
             });
 
             this.logger.debug(
-              `--- Acquirer ${userId} will receive VT: ${vtResult.vtReceived} (for ADA sent: ${adaSent} in tx ${tx.id})`
+              `--- Acquirer ${userId} will receive VT: ${vtReceived} (for ADA sent: ${adaSent} in tx ${tx.id})`
             );
 
             // Create claim record for this specific acquisition transaction
-            await this.claimRepository.save({
+            const claim = this.claimRepository.create({
               user: { id: userId },
               vault: { id: vault.id },
               type: ClaimType.ACQUIRER,
-              amount: vtResult.vtReceived,
+              amount: vtReceived,
               status: ClaimStatus.AVAILABLE,
               transaction: { id: tx.id },
-              metadata: {
-                vtPrice,
-                adaSent,
-              },
             });
-
+            acquirerClaims.push(claim);
             this.logger.log(
-              `Created acquirer claim for user ${userId}: ${vtResult.vtReceived} VT tokens for transaction ${tx.id}`
+              `Created acquirer claim for user ${userId}: ${vtReceived} VT tokens for transaction ${tx.id}`
             );
           } catch (error) {
             this.logger.error(`Failed to create acquirer claim for user ${userId} transaction ${tx.id}:`, error);
           }
         }
 
-        // 5. Create claims for each contribution transaction
-        for (const tx of contributionTransactions) {
-          if (!tx.user || !tx.user.id) continue;
+        if (acquirerClaims.length > 0) {
+          try {
+            await this.claimRepository.save(acquirerClaims);
+          } catch (error) {
+            this.logger.error(`Failed to save batch of acquirer claims:`, error);
+          }
+        }
 
-          const userId = tx.user.id;
-          const txValueAda = contributionValueByTransaction[tx.id] || 0;
+        // 5. Create claims for each contribution transaction
+        const contributorClaims: Partial<Claim>[] = [];
+        for (const asset of uniqueAssets.values()) {
+          const userId = asset.userId;
+          const txValueAda = asset.totalValueAda;
 
           // Skip transactions with zero value
           if (txValueAda <= 0) continue;
@@ -469,13 +475,13 @@ export class LifecycleService {
             // Check if a claim for this transaction already exists
             const existingClaim = await this.claimRepository.findOne({
               where: {
-                transaction: { id: tx.id },
+                transaction: { id: asset.txId },
                 type: ClaimType.CONTRIBUTOR,
               },
             });
 
             if (existingClaim) {
-              this.logger.log(`Claim already exists for contributor transaction ${tx.id}, skipping.`);
+              this.logger.log(`Claim already exists for contributor transaction ${asset.txId}, skipping.`);
               continue;
             }
 
@@ -484,84 +490,74 @@ export class LifecycleService {
             const proportionOfUserTotal = userTotalValue > 0 ? txValueAda / userTotalValue : 0;
 
             // Get total VT tokens for this user based on their total contribution
-            const userVtResult = await this.distributionService.calculateContributorTokens({
+            const vtRetained = await this.distributionService.calculateContributorTokens({
               valueContributed: userTotalValue,
               totalTvl: totalContributedValueAda,
               lpAdaAmount,
               lpVtAmount,
               vtPrice,
-              VT_SUPPLY,
+              VT_SUPPLY: vault.ft_token_supply,
               ASSETS_OFFERED_PERCENT,
               LP_PERCENT,
             });
 
             // Calculate VT tokens for this specific transaction
-            const txVtAmount = userVtResult.vtRetained * proportionOfUserTotal;
-
+            const txVtAmount = vtRetained * proportionOfUserTotal;
             this.logger.debug(
-              `--- Contributor ${userId} will receive VT: ${txVtAmount} (${proportionOfUserTotal * 100}% of ${userVtResult.vtRetained}) for transaction ${tx.id}`
+              `--- Contributor ${userId} will receive VT: ${txVtAmount} (${proportionOfUserTotal * 100}% of ${vtRetained}) for transaction ${asset.txId}`
             );
 
             // Create claim record for this specific contribution transaction
-            await this.claimRepository.save({
+            const claim = this.claimRepository.create({
               user: { id: userId },
               vault: { id: vault.id },
               type: ClaimType.CONTRIBUTOR,
-              amount: Math.floor(txVtAmount / 1000000),
+              amount: Math.floor(txVtAmount),
               status: ClaimStatus.AVAILABLE,
-              transaction: { id: tx.id },
-              metadata: {
-                vtPrice,
-                valueContributed: txValueAda,
-                proportionOfUserTotal: proportionOfUserTotal,
-              },
+              transaction: { id: asset.txId },
+              asset: { id: asset.assetId },
             });
-
+            contributorClaims.push(claim);
             this.logger.log(
-              `Created contributor claim for user ${userId}: ${txVtAmount} VT tokens for transaction ${tx.id}`
+              `Created contributor claim for user ${userId}: ${txVtAmount} VT tokens for transaction ${asset.txId}`
             );
           } catch (error) {
-            this.logger.error(`Failed to create contributor claim for user ${userId} transaction ${tx.id}:`, error);
-          }
-        }
-
-        const acquireMultiplier: [string, string | null, number][] = [];
-
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        for (const [assetKey, assetData] of uniqueAssets) {
-          if (assetData.totalValueAda > 0) {
-            // Calculate multiplier based on asset's proportion of total contributed value
-            const assetProportion = assetData.totalValueAda / totalContributedValueAda;
-            const tokensForThisAsset = (vault.ft_token_supply - tokensForAcquirers) * assetProportion;
-
-            // Calculate multiplier: VT tokens per unit of this asset
-            const assetMultiplier = Math.floor(tokensForThisAsset / assetData.totalQuantity);
-            acquireMultiplier.push([assetData.policyId, assetData.assetId, assetMultiplier]);
-
-            this.logger.log(
-              `Asset ${assetData.policyId}.${assetData.assetId} multiplier: ${assetMultiplier} VT per unit  (Value: ${assetData.totalValueAda} ADA, Quantity: ${assetData.totalQuantity}, Proportion: ${(assetProportion * 100).toFixed(2)}%)`
+            this.logger.error(
+              `Failed to create contributor claim for user ${userId} transaction ${asset.txId}:`,
+              error
             );
           }
         }
-        // Add a row for total acquired ADA
-        acquireMultiplier.push(['', '', Math.floor(tokensForAcquirers / totalAcquiredAda / 1_000_000)]);
+
+        if (contributorClaims.length > 0) {
+          try {
+            await this.claimRepository.save(contributorClaims);
+          } catch (error) {
+            this.logger.error(`Failed to save batch of acquirer claims:`, error);
+          }
+        }
+
+        const finalContributorClaims = await this.claimRepository.find({
+          where: {
+            vault: { id: vault.id },
+            type: ClaimType.CONTRIBUTOR,
+          },
+          relations: ['transaction', 'asset'],
+        });
+        const finalAcquirerClaims = await this.claimRepository.find({
+          where: {
+            vault: { id: vault.id },
+            type: ClaimType.ACQUIRER,
+          },
+          relations: ['transaction'],
+        });
+        const acquireMultiplier = this.distributionService.calculateAcquireMultipliers({
+          contributorsClaims: finalContributorClaims,
+          acquirerClaims: finalAcquirerClaims,
+        });
 
         // Multiplier for LP
-        const adaPairMultiplier = Math.floor(lpVtAmount / lpAdaAmount);
-
-        this.logger.log(`LP multiplier calculation for vault ${vault.id}:
-          LP VT Amount: ${lpVtAmount}
-          LP ADA Amount: ${lpAdaAmount}
-          Multiplier: ${adaPairMultiplier} VT per ADA`);
-
-        // Validation check for precision loss
-        const reconstructedVT = adaPairMultiplier * lpAdaAmount;
-        const difference = Math.abs(reconstructedVT - lpVtAmount);
-        const percentageError = (difference / lpVtAmount) * 100;
-
-        if (percentageError > 1) {
-          this.logger.warn(`High precision loss in LP multiplier: ${percentageError.toFixed(2)}% error`);
-        }
+        const { adaPairMultiplier } = this.distributionService.calculateLpAdaMultiplier(lpVtAmount, lpAdaAmount);
 
         const transaction = await this.transactionsService.createTransaction({
           vault_id: vault.id,
