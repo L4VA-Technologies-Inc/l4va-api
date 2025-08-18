@@ -25,6 +25,9 @@ export class VaultAssetsSummaryDto {
   @ApiProperty({ description: 'Timestamp of the last update' })
   lastUpdated: string;
 
+  @ApiProperty({ description: 'Current ADA price in USD' })
+  adaPrice: number;
+
   @ApiProperty({
     description: 'List of assets with their values',
     type: 'array',

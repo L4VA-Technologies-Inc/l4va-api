@@ -503,6 +503,7 @@ export class TaptoolsService {
       lastUpdated: new Date().toISOString(),
       totalAcquiredAda,
       totalAcquiredUsd: totalAcquiredAda * adaPrice,
+      adaPrice,
       assets: assetsWithValues.map(asset => ({
         policyId: asset.policyId,
         assetName: asset.assetId, // Using assetId as assetName for backward compatibility
