@@ -32,10 +32,6 @@ export class Claim {
   @JoinColumn({ name: 'vault_id' })
   vault: Vault;
 
-  @Column({ name: 'asset_id', nullable: true })
-  @Index()
-  asset_id: string;
-
   @Expose({ name: 'type' })
   @Column({
     type: 'enum',

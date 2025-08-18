@@ -109,9 +109,14 @@ export class DistributionService {
     const { contributorsClaims, acquirerClaims } = params;
     const multipliers = [];
 
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     for (const claim of contributorsClaims) {
-      multipliers.push([claim.asset.policy_id, claim.asset.asset_id, claim.amount]);
+      // Creates eaqual share between all NFTs in same tx, used reminder to always have sum of multipliers eqaul to claim.amount
+      const baseShare = Math.floor(claim.amount / claim.transaction.assets.length);
+      const remainder = claim.amount - baseShare * claim.transaction.assets.length;
+      claim.transaction.assets.forEach((asset, index) => {
+        const share = baseShare + (index < remainder ? 1 : 0);
+        multipliers.push([asset.policy_id, asset.asset_id, share]);
+      });
     }
 
     for (const claim of acquirerClaims) {

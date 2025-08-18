@@ -285,6 +285,7 @@ export class LifecycleService {
 
       // Calculate total value of contributed assets
       let totalContributedValueAda = 0;
+      const contributionValueByTransaction: Record<string, number> = {};
       const userContributedValueMap: Record<string, number> = {};
       const uniqueAssets = new Map<
         string,
@@ -344,6 +345,7 @@ export class LifecycleService {
         }
 
         // Store value of this transaction
+        contributionValueByTransaction[tx.id] = transactionValueAda;
         totalContributedValueAda += transactionValueAda;
 
         // Track total per user for proportional distribution
@@ -464,9 +466,11 @@ export class LifecycleService {
 
         // 5. Create claims for each contribution transaction
         const contributorClaims: Partial<Claim>[] = [];
-        for (const asset of uniqueAssets.values()) {
-          const userId = asset.userId;
-          const txValueAda = asset.totalValueAda;
+        for (const tx of contributionTransactions) {
+          if (!tx.user || !tx.user.id) continue;
+
+          const userId = tx.user.id;
+          const txValueAda = contributionValueByTransaction[tx.id] || 0;
 
           // Skip transactions with zero value
           if (txValueAda <= 0) continue;
@@ -475,13 +479,13 @@ export class LifecycleService {
             // Check if a claim for this transaction already exists
             const existingClaim = await this.claimRepository.findOne({
               where: {
-                transaction: { id: asset.txId },
+                transaction: { id: tx.id },
                 type: ClaimType.CONTRIBUTOR,
               },
             });
 
             if (existingClaim) {
-              this.logger.log(`Claim already exists for contributor transaction ${asset.txId}, skipping.`);
+              this.logger.log(`Claim already exists for contributor transaction ${tx.id}, skipping.`);
               continue;
             }
 
@@ -504,7 +508,7 @@ export class LifecycleService {
             // Calculate VT tokens for this specific transaction
             const txVtAmount = vtRetained * proportionOfUserTotal;
             this.logger.debug(
-              `--- Contributor ${userId} will receive VT: ${txVtAmount} (${proportionOfUserTotal * 100}% of ${vtRetained}) for transaction ${asset.txId}`
+              `--- Contributor ${userId} will receive VT: ${txVtAmount} (${proportionOfUserTotal * 100}% of ${vtRetained}) for transaction ${tx.id}`
             );
 
             // Create claim record for this specific contribution transaction
@@ -514,18 +518,14 @@ export class LifecycleService {
               type: ClaimType.CONTRIBUTOR,
               amount: Math.floor(txVtAmount),
               status: ClaimStatus.AVAILABLE,
-              transaction: { id: asset.txId },
-              asset: { id: asset.assetId },
+              transaction: { id: tx.id },
             });
             contributorClaims.push(claim);
             this.logger.log(
-              `Created contributor claim for user ${userId}: ${txVtAmount} VT tokens for transaction ${asset.txId}`
+              `Created contributor claim for user ${userId}: ${txVtAmount} VT tokens for transaction ${tx.id}`
             );
           } catch (error) {
-            this.logger.error(
-              `Failed to create contributor claim for user ${userId} transaction ${asset.txId}:`,
-              error
-            );
+            this.logger.error(`Failed to create contributor claim for user ${userId} transaction ${tx.id}:`, error);
           }
         }
 
@@ -542,7 +542,7 @@ export class LifecycleService {
             vault: { id: vault.id },
             type: ClaimType.CONTRIBUTOR,
           },
-          relations: ['transaction', 'asset'],
+          relations: ['transaction', 'transaction.assets'],
         });
         const finalAcquirerClaims = await this.claimRepository.find({
           where: {
