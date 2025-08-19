@@ -34,7 +34,7 @@ import { LinkEntity } from './link.entity';
 import { Proposal } from './proposal.entity';
 import { Snapshot } from './snapshot.entity';
 import { TagEntity } from './tag.entity';
-import { TokenRegistryPR } from './tokenRegistry.entity';
+import { TokenRegistry } from './tokenRegistry.entity';
 import { User } from './user.entity';
 
 @Entity('vaults')
@@ -386,8 +386,8 @@ export class Vault {
   @OneToMany(() => Proposal, proposal => proposal.vault)
   proposals: Proposal[];
 
-  @OneToMany(() => TokenRegistryPR, (pr: TokenRegistryPR) => pr.vault)
-  token_registry_prs?: TokenRegistryPR[];
+  @OneToMany(() => TokenRegistry, (pr: TokenRegistry) => pr.vault)
+  token_registry_prs?: TokenRegistry[];
 
   @Expose({ name: 'acquireMultiplier' })
   @Column({

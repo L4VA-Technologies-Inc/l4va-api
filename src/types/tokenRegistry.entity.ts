@@ -1,4 +1,4 @@
-export enum TokenRegistryPRStatus {
+export enum TokenRegistryStatus {
   PENDING = 'pending',
   MERGED = 'merged',
   REJECTED = 'rejected',

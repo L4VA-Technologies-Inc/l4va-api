@@ -9,12 +9,12 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 
-import { TokenRegistryPRStatus } from '../types/tokenRegistry.entity';
+import { TokenRegistryStatus } from '../types/tokenRegistry.entity';
 
 import { Vault } from './vault.entity';
 
 @Entity('token_registry')
-export class TokenRegistryPR {
+export class TokenRegistry {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
@@ -23,10 +23,10 @@ export class TokenRegistryPR {
 
   @Column({
     type: 'enum',
-    enum: TokenRegistryPRStatus,
-    default: TokenRegistryPRStatus.PENDING,
+    enum: TokenRegistryStatus,
+    default: TokenRegistryStatus.PENDING,
   })
-  status: TokenRegistryPRStatus;
+  status: TokenRegistryStatus;
 
   @ManyToOne(() => Vault, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'vault_id' })

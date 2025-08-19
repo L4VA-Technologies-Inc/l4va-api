@@ -20,8 +20,8 @@ import axios from 'axios';
 import { firstValueFrom } from 'rxjs';
 import { Repository } from 'typeorm';
 
-import { TokenRegistryPR } from '@/database/tokenRegistry.entity';
-import { TokenRegistryPRStatus } from '@/types/tokenRegistry.entity';
+import { TokenRegistry } from '@/database/tokenRegistry.entity';
+import { TokenRegistryStatus } from '@/types/tokenRegistry.entity';
 
 type ItemData = {
   sequenceNumber: number;
@@ -65,8 +65,8 @@ export class MetadataRegistryApiService {
   private readonly blockfrost: BlockFrostAPI;
 
   constructor(
-    @InjectRepository(TokenRegistryPR)
-    private readonly tokenRegistryPRRepository: Repository<TokenRegistryPR>,
+    @InjectRepository(TokenRegistry)
+    private readonly TokenRegistryRepository: Repository<TokenRegistry>,
     private readonly configService: ConfigService,
     private readonly httpService: HttpService
   ) {
@@ -124,7 +124,7 @@ export class MetadataRegistryApiService {
         return { success: false, message: 'Invalid token metadata format' };
       }
 
-      const result = await this.createTokenRegistryPR(metadata);
+      const result = await this.createTokenRegistry(metadata);
 
       return result;
     } catch (error) {
@@ -207,7 +207,7 @@ export class MetadataRegistryApiService {
     };
   }
 
-  private async createTokenRegistryPR(
+  private async createTokenRegistry(
     metadata: TokenMetaData
   ): Promise<{ success: boolean; message: string; prUrl?: string }> {
     try {
@@ -322,12 +322,12 @@ export class MetadataRegistryApiService {
     }
   }
 
-  @Cron(CronExpression.EVERY_HOUR)
+  @Cron(CronExpression.EVERY_MINUTE)
   async checkPendingPRs(): Promise<void> {
     this.logger.log('Checking pending token registry PRs');
 
-    const pendingPRs = await this.tokenRegistryPRRepository.find({
-      where: { status: TokenRegistryPRStatus.PENDING },
+    const pendingPRs = await this.TokenRegistryRepository.find({
+      where: { status: TokenRegistryStatus.PENDING },
     });
 
     if (pendingPRs.length === 0) {
@@ -345,7 +345,7 @@ export class MetadataRegistryApiService {
   /**
    * Check the status of a specific PR
    */
-  async checkPRStatus(pr: TokenRegistryPR): Promise<TokenRegistryPR> {
+  async checkPRStatus(pr: TokenRegistry): Promise<TokenRegistry> {
     try {
       const url = `https://api.github.com/repos/${this.repoOwner}/${this.repoName}/pulls/${pr.pr_number}`;
 
@@ -359,24 +359,24 @@ export class MetadataRegistryApiService {
       // Update status based on GitHub response
       if (response.data.state === 'closed') {
         if (response.data.merged) {
-          pr.status = TokenRegistryPRStatus.MERGED;
+          pr.status = TokenRegistryStatus.MERGED;
           pr.merged_at = new Date(response.data.merged_at);
           this.logger.log(`PR #${pr.pr_number} for vault ${pr.vault_id} has been merged`);
         } else {
-          pr.status = TokenRegistryPRStatus.REJECTED;
+          pr.status = TokenRegistryStatus.REJECTED;
           this.logger.warn(`PR #${pr.pr_number} for vault ${pr.vault_id} was rejected`);
         }
       }
 
       // Save the updated PR record
-      return this.tokenRegistryPRRepository.save(pr);
+      return this.TokenRegistryRepository.save(pr);
     } catch (error) {
       this.logger.error(`Error checking PR #${pr.pr_number} status:`, error.message);
 
       // If PR not found, mark as failed
       if (error.response?.status === 404) {
-        pr.status = TokenRegistryPRStatus.FAILED;
-        return this.tokenRegistryPRRepository.save(pr);
+        pr.status = TokenRegistryStatus.FAILED;
+        return this.TokenRegistryRepository.save(pr);
       }
 
       // Return the PR without changes for other errors
