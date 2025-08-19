@@ -678,6 +678,29 @@ export class VaultsService {
     return plainToInstance(VaultFullResponse, vault, { excludeExtraneousValues: true });
   }
 
+  async getAcquire() {
+    const vaults = await this.vaultsRepository.find({
+      where: {
+        privacy: VaultPrivacy.public,
+        vault_status: VaultStatus.acquire
+      },
+      select: ['name', 'total_assets_cost_ada', 'total_assets_cost_usd', 'acquire_phase_start', 'acquire_window_duration', 'privacy', 'vault_status'],
+      order: {
+        total_assets_cost_ada: 'DESC',
+      },
+      take: 5
+    });
+    return vaults.map((vault) => {
+      const start = new Date(vault.acquire_phase_start);
+      const duration = Number(vault.acquire_window_duration);
+      const timeLeft = new Date(start.getTime() + duration);
+      return {
+        ...vault,
+        timeLeft: timeLeft.toISOString()
+      }
+    })
+  }
+
   /**
    * Retrieves a vault by ID for a user, including asset and price calculations.
    * @param id - Vault ID
