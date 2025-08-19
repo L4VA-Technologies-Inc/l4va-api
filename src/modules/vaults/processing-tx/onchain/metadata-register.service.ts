@@ -348,12 +348,8 @@ export class MetadataRegistryApiService {
   async checkPRStatus(pr: TokenRegistry): Promise<TokenRegistry> {
     try {
       const url = `https://api.github.com/repos/${this.repoOwner}/${this.repoName}/pulls/${pr.pr_number}`;
+      const response = await firstValueFrom(this.httpService.get(url));
 
-      const headers = this.githubToken ? { Authorization: `token ${this.githubToken}` } : {};
-
-      const response = await firstValueFrom(this.httpService.get(url, { headers }));
-
-      // Update last checked timestamp
       pr.last_checked = new Date();
 
       // Update status based on GitHub response
