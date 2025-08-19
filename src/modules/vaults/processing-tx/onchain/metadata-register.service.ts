@@ -322,7 +322,7 @@ export class MetadataRegistryApiService {
     }
   }
 
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Cron(CronExpression.EVERY_HOUR)
   async checkPendingPRs(): Promise<void> {
     this.logger.log('Checking pending token registry PRs');
 
