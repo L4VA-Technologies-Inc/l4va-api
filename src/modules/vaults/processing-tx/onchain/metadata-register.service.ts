@@ -1,17 +1,27 @@
 import { Buffer } from 'buffer';
 import * as crypto from 'crypto';
 
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
+import { HttpService } from '@nestjs/axios';
 import {
   BadRequestException,
   ConflictException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { InjectRepository } from '@nestjs/typeorm';
 import axios from 'axios';
+import { firstValueFrom } from 'rxjs';
+import { Repository } from 'typeorm';
+
+import { TokenRegistryPR } from '@/database/tokenRegistry.entity';
+import { TokenRegistryPRStatus } from '@/types/tokenRegistry.entity';
 
 type ItemData = {
   sequenceNumber: number;
@@ -46,24 +56,34 @@ export type TokenMetaDataRaw = {
 
 @Injectable()
 export class MetadataRegistryApiService {
+  private readonly logger = new Logger(MetadataRegistryApiService.name);
   private readonly apiBaseUrl: string;
   private readonly adminSKey: string;
   private readonly githubToken: string;
   private readonly repoOwner: string;
   private readonly repoName: string;
+  private readonly blockfrost: BlockFrostAPI;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    @InjectRepository(TokenRegistryPR)
+    private readonly tokenRegistryPRRepository: Repository<TokenRegistryPR>,
+    private readonly configService: ConfigService,
+    private readonly httpService: HttpService
+  ) {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.githubToken = this.configService.get<string>('GITHUB_TOKEN');
     this.apiBaseUrl = this.configService.get<string>('METADATA_API_TESTNET_URL');
     this.repoOwner = this.configService.get<string>('METADATA_REGISTRY_TESTNET_OWNER');
     this.repoName = this.configService.get<string>('METADATA_REGISTRY_TESTNET_REPO');
+    this.blockfrost = new BlockFrostAPI({
+      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
+    });
   }
 
   /**
-   * Відправляє метадані токена через API
-   * @param metadata Метадані токена
-   * @returns Результат відправки
+   * Submits token metadata via API
+   * @param metadata Token metadata
+   * @returns Submission result
    */
   async submitTokenMetadata(raw: TokenMetaDataRaw): Promise<{ success: boolean; message: string; data?: unknown }> {
     try {
@@ -71,7 +91,6 @@ export class MetadataRegistryApiService {
       if (exists) {
         return { success: false, message: 'Token already exists' };
       }
-      console.log('Token does not exist, proceeding with submission');
     } catch (error) {
       console.error('Error checking token existence:', error);
     }
@@ -101,12 +120,10 @@ export class MetadataRegistryApiService {
         decimals,
       };
 
-      // Валідація метаданих перед відправкою
       if (!this.validateTokenMetadata(metadata)) {
         return { success: false, message: 'Invalid token metadata format' };
       }
 
-      // Відправка метаданих
       const result = await this.createTokenRegistryPR(metadata);
 
       return result;
@@ -125,9 +142,9 @@ export class MetadataRegistryApiService {
   }
 
   /**
-   * Перевіряє наявність токена в реєстрі
-   * @param subject Ідентифікатор токена (policyId + assetName)
-   * @returns true, якщо токен вже зареєстрований
+   * Checks if a token exists in the registry
+   * @param subject Token identifier (policyId + assetName)
+   * @returns true if token is already registered
    */
   async checkTokenExists(subject: string): Promise<boolean> {
     try {
@@ -143,9 +160,9 @@ export class MetadataRegistryApiService {
   }
 
   /**
-   * Валідує метадані токена
-   * @param metadata Метадані токена
-   * @returns true, якщо формат коректний
+   * Validates token metadata
+   * @param metadata Token metadata
+   * @returns true if format is correct
    */
   private validateTokenMetadata(metadata: TokenMetaData): boolean {
     // Перевірка обов'язкових полів
@@ -234,7 +251,7 @@ export class MetadataRegistryApiService {
         });
 
         // Wait for the fork to be created (GitHub fork is async)
-        console.log('Fork created, waiting for it to be ready...');
+        this.logger.log('Fork created, waiting for it to be ready...');
         await new Promise(resolve => setTimeout(resolve, 5000));
       }
 
@@ -302,6 +319,68 @@ export class MetadataRegistryApiService {
       }
 
       throw new InternalServerErrorException(`Failed to create PR: ${error.message}`);
+    }
+  }
+
+  @Cron(CronExpression.EVERY_HOUR)
+  async checkPendingPRs(): Promise<void> {
+    this.logger.log('Checking pending token registry PRs');
+
+    const pendingPRs = await this.tokenRegistryPRRepository.find({
+      where: { status: TokenRegistryPRStatus.PENDING },
+    });
+
+    if (pendingPRs.length === 0) {
+      this.logger.log('No pending PRs to check');
+      return;
+    }
+
+    this.logger.log(`Found ${pendingPRs.length} pending PRs to check`);
+
+    for (const pr of pendingPRs) {
+      await this.checkPRStatus(pr);
+    }
+  }
+
+  /**
+   * Check the status of a specific PR
+   */
+  async checkPRStatus(pr: TokenRegistryPR): Promise<TokenRegistryPR> {
+    try {
+      const url = `https://api.github.com/repos/${this.repoOwner}/${this.repoName}/pulls/${pr.pr_number}`;
+
+      const headers = this.githubToken ? { Authorization: `token ${this.githubToken}` } : {};
+
+      const response = await firstValueFrom(this.httpService.get(url, { headers }));
+
+      // Update last checked timestamp
+      pr.last_checked = new Date();
+
+      // Update status based on GitHub response
+      if (response.data.state === 'closed') {
+        if (response.data.merged) {
+          pr.status = TokenRegistryPRStatus.MERGED;
+          pr.merged_at = new Date(response.data.merged_at);
+          this.logger.log(`PR #${pr.pr_number} for vault ${pr.vault_id} has been merged`);
+        } else {
+          pr.status = TokenRegistryPRStatus.REJECTED;
+          this.logger.warn(`PR #${pr.pr_number} for vault ${pr.vault_id} was rejected`);
+        }
+      }
+
+      // Save the updated PR record
+      return this.tokenRegistryPRRepository.save(pr);
+    } catch (error) {
+      this.logger.error(`Error checking PR #${pr.pr_number} status:`, error.message);
+
+      // If PR not found, mark as failed
+      if (error.response?.status === 404) {
+        pr.status = TokenRegistryPRStatus.FAILED;
+        return this.tokenRegistryPRRepository.save(pr);
+      }
+
+      // Return the PR without changes for other errors
+      return pr;
     }
   }
 }
