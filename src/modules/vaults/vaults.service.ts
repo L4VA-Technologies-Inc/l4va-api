@@ -679,25 +679,35 @@ export class VaultsService {
   }
 
   async getAcquire() {
-    const vaults = await this.vaultsRepository.find({
-      where: {
-        privacy: VaultPrivacy.public,
-        vault_status: VaultStatus.acquire
-      },
-      select: ['name', 'total_assets_cost_ada', 'total_assets_cost_usd', 'acquire_phase_start', 'acquire_window_duration', 'privacy', 'vault_status'],
-      order: {
-        total_assets_cost_ada: 'DESC',
-      },
-      take: 5
-    });
+    const vaults = await this.vaultsRepository
+      .createQueryBuilder('vault')
+      .leftJoinAndSelect('vault.vault_image', 'file')
+      .select([
+        'vault.id',
+        'vault.name',
+        'vault.total_assets_cost_ada',
+        'vault.total_assets_cost_usd',
+        'vault.acquire_phase_start',
+        'vault.acquire_window_duration',
+        'vault.privacy',
+        'vault.vault_status',
+        'file.file_url'
+      ])
+      .where('vault.privacy = :privacy', { privacy: VaultPrivacy.public })
+      .andWhere('vault.vault_status = :status', { status: VaultStatus.acquire })
+      .orderBy('vault.total_assets_cost_ada', 'DESC')
+      .take(5)
+      .getMany();
+
     return vaults.map((vault) => {
       const start = new Date(vault.acquire_phase_start);
       const duration = Number(vault.acquire_window_duration);
       const timeLeft = new Date(start.getTime() + duration);
       return {
         ...vault,
-        timeLeft: timeLeft.toISOString()
-      }
+        timeLeft: timeLeft.toISOString(),
+        imgUrl: vault.vault_image?.file_url || ''
+    }
     })
   }
 
