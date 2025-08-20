@@ -464,3 +464,42 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   updatedAt: string;
 }
+
+export class VaultAcquireResponse {
+  @ApiProperty({ description: 'Unique identifier of the vault' })
+  id: string;
+
+  @ApiProperty({ description: 'Vault name' })
+  name: string;
+
+  @ApiProperty({ description: 'Privacy setting of the vault' })
+  privacy: string;
+
+  @ApiProperty({ description: 'Acquire window duration in ms' })
+  acquire_window_duration: number;
+
+  @ApiProperty({ description: 'Total assets cost in USD' })
+  total_assets_cost_usd: number;
+
+  @ApiProperty({ description: 'Total assets cost in ADA' })
+  total_assets_cost_ada: number;
+
+  @ApiProperty({ description: 'Vault status' })
+  vault_status: string;
+
+  @ApiProperty({ description: 'Acquire phase start timestamp' })
+  @DtoRepresent({
+    transform: ({ value }) => (value ? new Date(value).toISOString() : null),
+    expose: true,
+  })
+  acquire_phase_start: string;
+
+  @ApiProperty({ description: 'Time left until end of acquire phase' })
+  @DtoRepresent({
+    transform: ({ value }) => (value ? new Date(value).toISOString() : null),
+    expose: true,
+  })
+  timeLeft: string;
+
+}
+

@@ -87,6 +87,17 @@ export class VaultsController {
   }
 
   @ApiDoc({
+    summary: 'List of biggest investments',
+    description: 'Returns list of biggest transaction.',
+    status: 200,
+  })
+  @Get('acquire')
+  async getAcquire(@Request() req, @Query() query: any) {
+    return this.vaultsService.getAcquire(); 
+  }
+
+
+  @ApiDoc({
     summary: 'Select my draft vaults',
     description: 'Returns list of my draft vaults. Supports sorting by name, created_at, or updated_at.',
     status: 200,

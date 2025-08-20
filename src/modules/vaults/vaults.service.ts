@@ -12,7 +12,7 @@ import { CreateVaultReq } from './dto/createVault.req';
 import { SortOrder, VaultFilter, VaultSortField } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { PublishVaultDto } from './dto/publish-vault.dto';
-import { VaultFullResponse, VaultShortResponse } from './dto/vault.response';
+import {VaultAcquireResponse, VaultFullResponse, VaultShortResponse} from './dto/vault.response';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { BlockchainScannerService } from './processing-tx/onchain/blockchain-scanner.service';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
@@ -676,6 +676,38 @@ export class VaultsService {
       throw new BadRequestException('Vault not found');
     }
     return plainToInstance(VaultFullResponse, vault, { excludeExtraneousValues: true });
+  }
+
+  async getAcquire(): Promise<VaultAcquireResponse[]> {
+    const vaults = await this.vaultsRepository
+      .createQueryBuilder('vault')
+      .leftJoinAndSelect('vault.vault_image', 'file')
+      .select([
+        'vault.id',
+        'vault.name',
+        'vault.total_assets_cost_ada',
+        'vault.total_assets_cost_usd',
+        'vault.acquire_phase_start',
+        'vault.acquire_window_duration',
+        'vault.privacy',
+        'vault.vault_status',
+        'file.file_url'
+      ])
+      .where('vault.privacy = :privacy', { privacy: VaultPrivacy.public })
+      .andWhere('vault.vault_status = :status', { status: VaultStatus.acquire })
+      .orderBy('vault.total_assets_cost_ada', 'DESC')
+      .take(5)
+      .getMany();
+
+    return vaults.map((vault) => {
+      const start = new Date(vault.acquire_phase_start);
+      const duration = Number(vault.acquire_window_duration);
+      const timeLeft = new Date(start.getTime() + duration);
+      return {
+        ...vault,
+        timeLeft: timeLeft.toISOString(),
+      } as VaultAcquireResponse;
+    })
   }
 
   /**
