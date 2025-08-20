@@ -12,7 +12,7 @@ import { CreateVaultReq } from './dto/createVault.req';
 import { SortOrder, VaultFilter, VaultSortField } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { PublishVaultDto } from './dto/publish-vault.dto';
-import { VaultFullResponse, VaultShortResponse } from './dto/vault.response';
+import {VaultAcquireResponse, VaultFullResponse, VaultShortResponse} from './dto/vault.response';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { BlockchainScannerService } from './processing-tx/onchain/blockchain-scanner.service';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
@@ -678,7 +678,7 @@ export class VaultsService {
     return plainToInstance(VaultFullResponse, vault, { excludeExtraneousValues: true });
   }
 
-  async getAcquire() {
+  async getAcquire(): Promise<VaultAcquireResponse[]> {
     const vaults = await this.vaultsRepository
       .createQueryBuilder('vault')
       .leftJoinAndSelect('vault.vault_image', 'file')
@@ -706,8 +706,7 @@ export class VaultsService {
       return {
         ...vault,
         timeLeft: timeLeft.toISOString(),
-        imgUrl: vault.vault_image?.file_url || ''
-    }
+      } as VaultAcquireResponse;
     })
   }
 
