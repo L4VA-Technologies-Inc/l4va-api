@@ -36,7 +36,7 @@ type TokenMetaData = {
   name: ItemData; // A human-readable name for the subject, suitable for use in an interface
   description: ItemData; // A human-readable description for the subject, suitable for use in an interface
   policy?: string; // The base16-encoded CBOR representation of the monetary policy script, used to verify ownership. Optional in the case of Plutus scripts as verification is handled elsewhere.
-  ticker?: ItemData; // A human-readable ticker name for the subject, suitable for use in an interface
+  ticker: ItemData; // A human-readable ticker name for the subject, suitable for use in an interface
   url?: ItemData; // A HTTPS URL (web page relating to the token)
   logo?: ItemData; // A PNG image file as a byte string
   decimals?: ItemData; // how many decimals to the token
@@ -48,7 +48,7 @@ export type TokenMetaDataRaw = {
   name: string;
   description: string;
   policy?: string;
-  ticker?: string;
+  ticker: string;
   url?: string;
   logo?: string;
   decimals?: number;
@@ -282,7 +282,7 @@ export class MetadataRegistryApiService {
         owner: username,
         repo: this.repoName,
         path: filePath,
-        message: `Add token metadata for ${metadata.name.value}`,
+        message: `Add token metadata for ${metadata.ticker.value}`,
         content: Buffer.from(metadataJson).toString('base64'),
         branch: branchName,
       });
@@ -291,8 +291,8 @@ export class MetadataRegistryApiService {
       const { data: pr } = await octokit.pulls.create({
         owner: this.repoOwner,
         repo: this.repoName,
-        title: `Add token metadata for ${metadata.name.value}`,
-        body: `This PR adds metadata for token ${metadata.name.value} (${metadata.ticker?.value || ''})`,
+        title: `Add token metadata for ${metadata.ticker.value}`,
+        body: `This PR adds metadata for token ${metadata.ticker.value}`,
         head: `${username}:${branchName}`,
         base: defaultBranch,
       });
