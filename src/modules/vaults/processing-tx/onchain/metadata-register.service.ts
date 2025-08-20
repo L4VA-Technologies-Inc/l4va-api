@@ -21,7 +21,7 @@ import { firstValueFrom } from 'rxjs';
 import { Repository } from 'typeorm';
 
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
-import { TokenRegistryStatus } from '@/types/tokenRegistry.entity';
+import { TokenRegistryStatus } from '@/types/tokenRegistry.types';
 
 type ItemData = {
   sequenceNumber: number;

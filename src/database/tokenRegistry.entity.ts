@@ -9,7 +9,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 
-import { TokenRegistryStatus } from '../types/tokenRegistry.entity';
+import { TokenRegistryStatus } from '../types/tokenRegistry.types';
 
 import { Vault } from './vault.entity';
 
