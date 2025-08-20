@@ -1,5 +1,6 @@
 import { Credential, EnterpriseAddress, ScriptHash } from '@emurgo/cardano-serialization-lib-nodejs';
 import { BadRequestException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
@@ -15,6 +16,7 @@ import { PublishVaultDto } from './dto/publish-vault.dto';
 import { VaultFullResponse, VaultShortResponse } from './dto/vault.response';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { BlockchainScannerService } from './processing-tx/onchain/blockchain-scanner.service';
+import { MetadataRegistryApiService } from './processing-tx/onchain/metadata-register.service';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
 import { applyContributeParams } from './processing-tx/onchain/utils/apply_params';
 import { VaultManagingService } from './processing-tx/onchain/vault-managing.service';
@@ -60,6 +62,7 @@ export class VaultsService {
   private readonly logger = new Logger(VaultsService.name);
   private readonly MAX_RETRIES = 10;
   private readonly INITIAL_RETRY_DELAY = 3000; // 3 seconds
+  private readonly vaultPolicyId: string;
 
   constructor(
     @InjectRepository(Vault)
@@ -84,8 +87,12 @@ export class VaultsService {
     private readonly vaultContractService: VaultManagingService,
     private readonly blockchainScannerService: BlockchainScannerService,
     private readonly taptoolsService: TaptoolsService,
-    private readonly transactionsService: TransactionsService
-  ) {}
+    private readonly configService: ConfigService,
+    private readonly transactionsService: TransactionsService,
+    private readonly metadataRegistryApiService: MetadataRegistryApiService
+  ) {
+    this.vaultPolicyId = this.configService.get<string>('SC_POLICY_ID');
+  }
 
   /**
    * Waits asynchronously for a specified number of milliseconds.
@@ -602,6 +609,20 @@ export class VaultsService {
     this.confirmAndProcessTransaction(publishedTx.txHash, vault).catch(error => {
       this.logger.error(`Failed to process transaction ${publishedTx.txHash}:`, error);
     });
+
+    try {
+      this.logger.log(`Create PR to update Vault Metadata`);
+      await this.metadataRegistryApiService.submitTokenMetadata({
+        vaultId: vault.id,
+        subject: `${this.vaultPolicyId}${vault.asset_vault_name}`,
+        name: vault.name,
+        description: vault.description,
+        ticker: vault.vault_token_ticker,
+        decimals: 6,
+      });
+    } catch (error) {
+      this.logger.error('Error updating vault metadata:', error);
+    }
 
     return plainToInstance(VaultFullResponse, instanceToPlain(vault), { excludeExtraneousValues: true });
   }

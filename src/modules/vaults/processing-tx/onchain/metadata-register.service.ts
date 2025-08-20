@@ -1,7 +1,6 @@
 import { Buffer } from 'buffer';
 import * as crypto from 'crypto';
 
-import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { HttpService } from '@nestjs/axios';
 import {
@@ -25,12 +24,12 @@ import { TokenRegistryStatus } from '@/types/tokenRegistry.types';
 
 type ItemData = {
   sequenceNumber: number;
-  value: string;
+  value: string | number;
   signatures: {
     signature: string;
     publicKey: string;
   }[];
-}; //
+};
 
 type TokenMetaData = {
   subject: string; //	The base16-encoded policyId + base16-encoded assetName
@@ -44,14 +43,15 @@ type TokenMetaData = {
 };
 
 export type TokenMetaDataRaw = {
-  subject: string; //	The base16-encoded policyId + base16-encoded assetName
-  name: string; // A human-readable name for the subject, suitable for use in an interface
-  description: string; // A human-readable description for the subject, suitable for use in an interface
-  policy?: string; // The base16-encoded CBOR representation of the monetary policy script, used to verify ownership. Optional in the case of Plutus scripts as verification is handled elsewhere.
-  ticker?: string; // A human-readable ticker name for the subject, suitable for use in an interface
-  url?: string; // A HTTPS URL (web page relating to the token)
-  logo?: string; // A PNG image file as a byte string
-  decimals?: number; // how many decimals to the token
+  vaultId: string;
+  subject: string;
+  name: string;
+  description: string;
+  policy?: string;
+  ticker?: string;
+  url?: string;
+  logo?: string;
+  decimals?: number;
 };
 
 @Injectable()
@@ -62,7 +62,6 @@ export class MetadataRegistryApiService {
   private readonly githubToken: string;
   private readonly repoOwner: string;
   private readonly repoName: string;
-  private readonly blockfrost: BlockFrostAPI;
 
   constructor(
     @InjectRepository(TokenRegistry)
@@ -75,9 +74,6 @@ export class MetadataRegistryApiService {
     this.apiBaseUrl = this.configService.get<string>('METADATA_API_TESTNET_URL');
     this.repoOwner = this.configService.get<string>('METADATA_REGISTRY_TESTNET_OWNER');
     this.repoName = this.configService.get<string>('METADATA_REGISTRY_TESTNET_REPO');
-    this.blockfrost = new BlockFrostAPI({
-      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
-    });
   }
 
   /**
@@ -105,8 +101,7 @@ export class MetadataRegistryApiService {
       // The base16-encoded CBOR "policy": "82018201828200581cf950845fdf374bba64605f96a9d5940890cc2bb92c4b5b55139cc00982051a09bde472",
       const policy = raw.policy ? raw.policy : undefined;
       const logo = raw.logo ? this.signItemData(raw.subject, 0, raw.logo) : undefined;
-      const decimals =
-        typeof raw.decimals === 'number' ? this.signItemData(raw.subject, 0, raw.decimals.toString()) : undefined;
+      const decimals = raw.decimals ? this.signItemData(raw.subject, 0, raw.decimals) : undefined;
 
       // Build full metadata object
       const metadata: TokenMetaData = {
@@ -124,7 +119,7 @@ export class MetadataRegistryApiService {
         return { success: false, message: 'Invalid token metadata format' };
       }
 
-      const result = await this.createTokenRegistry(metadata);
+      const result = await this.createTokenRegistry(metadata, raw.vaultId);
 
       return result;
     } catch (error) {
@@ -181,7 +176,7 @@ export class MetadataRegistryApiService {
     return true;
   }
 
-  private signItemData(subject: string, sequenceNumber: number, value: string): ItemData {
+  private signItemData(subject: string, sequenceNumber: number, value: string | number): ItemData {
     // Hash the subject, sequenceNumber, and value together
     const hash = crypto
       .createHash('sha256')
@@ -208,7 +203,8 @@ export class MetadataRegistryApiService {
   }
 
   private async createTokenRegistry(
-    metadata: TokenMetaData
+    metadata: TokenMetaData,
+    vaultId: string
   ): Promise<{ success: boolean; message: string; prUrl?: string }> {
     try {
       // 1. Format metadata as JSON
@@ -300,6 +296,25 @@ export class MetadataRegistryApiService {
         head: `${username}:${branchName}`,
         base: defaultBranch,
       });
+
+      // 12. Save PR information to database
+      if (pr.number) {
+        try {
+          // Create a new TokenRegistry record
+          const tokenRegistryRecord = this.TokenRegistryRepository.create({
+            pr_number: pr.number,
+            status: TokenRegistryStatus.PENDING,
+            vault: { id: vaultId },
+          });
+          await this.TokenRegistryRepository.save(tokenRegistryRecord);
+          this.logger.log(`Saved PR #${pr.number} information to database for vault ${vaultId}`);
+        } catch (dbError) {
+          this.logger.error('Failed to save PR information to database:', dbError);
+          // Continue since PR was created successfully on GitHub
+        }
+      } else {
+        this.logger.warn(`Cannot save PR to database: Missing PR number or vault ID`);
+      }
 
       return {
         success: true,
