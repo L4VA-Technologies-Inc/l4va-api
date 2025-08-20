@@ -185,18 +185,18 @@ export class VaultManagingService {
                     is_inclusive: true,
                   },
                   upper_bound: {
-                    bound_type: new Date().getTime() + one_day,
+                    bound_type: new Date(vaultConfig.assetWindow.end).getTime() + one_day,
                     is_inclusive: true,
                   },
                 },
                 acquire_window: {
                   // Time allowed to upload ADA
                   lower_bound: {
-                    bound_type: new Date().getTime(),
+                    bound_type: new Date(vaultConfig.acquireWindow.start).getTime(),
                     is_inclusive: true,
                   },
                   upper_bound: {
-                    bound_type: new Date().getTime() + one_day,
+                    bound_type: new Date(vaultConfig.acquireWindow.end).getTime() + one_day,
                     is_inclusive: true,
                   },
                 },
