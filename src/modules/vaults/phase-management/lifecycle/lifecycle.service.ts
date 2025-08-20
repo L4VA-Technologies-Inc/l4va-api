@@ -355,11 +355,6 @@ export class LifecycleService {
         userContributedValueMap[tx.user.id] += transactionValueAda;
       }
 
-      this.logger.log(
-        `Total acquired ADA across all users in vault ${vault.id}: ${totalAcquiredAda}, ` +
-          `Total contributed value ADA: ${totalContributedValueAda}`
-      );
-
       const requiredThresholdAda = vault.acquire_reserve || 0;
       const meetsThreshold = totalAcquiredAda >= requiredThresholdAda;
 
@@ -367,17 +362,16 @@ export class LifecycleService {
       await this.vaultRepository.save(vault);
 
       this.logger.log(
-        `Vault ${vault.id} meets the threshold: ` +
-          `Total contributed: ${totalAcquiredAda} ADA, ` +
+        `Total acquired ADA across all users in vault ${vault.id}: ${totalAcquiredAda}, ` +
+          `Total contributed value ADA: ${totalContributedValueAda}` +
           `Required: ${requiredThresholdAda} ADA`
       );
 
       if (meetsThreshold) {
         // 3. Calculate LP Tokens
         const { lpAdaAmount, lpVtAmount, vtPrice } = await this.distributionService.calculateLpTokens({
-          vaultId: vault.id,
           vtSupply: vault.ft_token_supply || 0,
-          totalValue: totalContributedValueAda,
+          totalAcquiredAda,
           assetsOfferedPercent: vault.tokens_for_acquires * 0.01,
           lpPercent: vault.liquidity_pool_contribution * 0.01,
         });

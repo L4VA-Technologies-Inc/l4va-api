@@ -68,8 +68,7 @@ export class DistributionService {
    * Calculate liquidity pool tokens and values
    */
   async calculateLpTokens(params: {
-    vaultId: string;
-    totalValue: number;
+    totalAcquiredAda: number;
     vtSupply: number;
     assetsOfferedPercent: number;
     lpPercent: number;
@@ -79,13 +78,19 @@ export class DistributionService {
     lpTokensReceived: number;
     vtPrice: number;
   }> {
-    const { totalValue, vtSupply, assetsOfferedPercent, lpPercent } = params;
+    const { totalAcquiredAda, vtSupply, assetsOfferedPercent, lpPercent } = params;
 
     // Calculate VT token price
-    const vtPrice = this.round6(this.calculateVtPrice(totalValue, vtSupply, assetsOfferedPercent));
+    const vtPrice = this.round6(
+      this.calculateVtPrice({
+        totalAcquiredAda,
+        VT_SUPPLY: vtSupply,
+        ASSETS_OFFERED_PERCENT: assetsOfferedPercent,
+      })
+    );
 
     // Calculate ADA allocated to LP
-    const lpAdaAmount = this.round6(this.calculateLpAda(totalValue, lpPercent));
+    const lpAdaAmount = this.round6(this.calculateLpAda(totalAcquiredAda, lpPercent));
 
     // Calculate VT tokens allocated to LP
     const lpVtAmount = this.round6(vtSupply * assetsOfferedPercent * lpPercent);
@@ -162,8 +167,16 @@ export class DistributionService {
     return Math.round(amount * 1e6) / 1e6;
   }
 
-  private calculateVtPrice(adaSent: number, VT_SUPPLY: number, ASSETS_OFFERED_PERCENT: number): number {
-    return adaSent / ASSETS_OFFERED_PERCENT / VT_SUPPLY;
+  private calculateVtPrice({
+    totalAcquiredAda,
+    VT_SUPPLY,
+    ASSETS_OFFERED_PERCENT,
+  }: {
+    totalAcquiredAda: number;
+    VT_SUPPLY: number;
+    ASSETS_OFFERED_PERCENT: number;
+  }): number {
+    return totalAcquiredAda / ASSETS_OFFERED_PERCENT / VT_SUPPLY;
   }
 
   private calculateTotalValueRetained(netAda: number, vtAda: number, lpAda: number, lpVtAda: number): number {
