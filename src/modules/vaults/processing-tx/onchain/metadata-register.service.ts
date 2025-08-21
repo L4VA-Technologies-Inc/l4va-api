@@ -2,57 +2,73 @@ import { Buffer } from 'buffer';
 import * as crypto from 'crypto';
 
 import { PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
+import { HttpService } from '@nestjs/axios';
 import {
   BadRequestException,
   ConflictException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { InjectRepository } from '@nestjs/typeorm';
 import axios from 'axios';
+import { firstValueFrom } from 'rxjs';
+import { Repository } from 'typeorm';
+
+import { TokenRegistry } from '@/database/tokenRegistry.entity';
+import { TokenRegistryStatus } from '@/types/tokenRegistry.types';
 
 type ItemData = {
   sequenceNumber: number;
-  value: string;
+  value: string | number;
   signatures: {
     signature: string;
     publicKey: string;
   }[];
-}; //
+};
 
 type TokenMetaData = {
   subject: string; //	The base16-encoded policyId + base16-encoded assetName
   name: ItemData; // A human-readable name for the subject, suitable for use in an interface
   description: ItemData; // A human-readable description for the subject, suitable for use in an interface
   policy?: string; // The base16-encoded CBOR representation of the monetary policy script, used to verify ownership. Optional in the case of Plutus scripts as verification is handled elsewhere.
-  ticker?: ItemData; // A human-readable ticker name for the subject, suitable for use in an interface
+  ticker: ItemData; // A human-readable ticker name for the subject, suitable for use in an interface
   url?: ItemData; // A HTTPS URL (web page relating to the token)
   logo?: ItemData; // A PNG image file as a byte string
   decimals?: ItemData; // how many decimals to the token
 };
 
 export type TokenMetaDataRaw = {
-  subject: string; //	The base16-encoded policyId + base16-encoded assetName
-  name: string; // A human-readable name for the subject, suitable for use in an interface
-  description: string; // A human-readable description for the subject, suitable for use in an interface
-  policy?: string; // The base16-encoded CBOR representation of the monetary policy script, used to verify ownership. Optional in the case of Plutus scripts as verification is handled elsewhere.
-  ticker?: string; // A human-readable ticker name for the subject, suitable for use in an interface
-  url?: string; // A HTTPS URL (web page relating to the token)
-  logo?: string; // A PNG image file as a byte string
-  decimals?: number; // how many decimals to the token
+  vaultId: string;
+  subject: string;
+  name: string;
+  description: string;
+  policy?: string;
+  ticker: string;
+  url?: string;
+  logo?: string;
+  decimals?: number;
 };
 
 @Injectable()
 export class MetadataRegistryApiService {
+  private readonly logger = new Logger(MetadataRegistryApiService.name);
   private readonly apiBaseUrl: string;
   private readonly adminSKey: string;
   private readonly githubToken: string;
   private readonly repoOwner: string;
   private readonly repoName: string;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    @InjectRepository(TokenRegistry)
+    private readonly TokenRegistryRepository: Repository<TokenRegistry>,
+    private readonly configService: ConfigService,
+    private readonly httpService: HttpService
+  ) {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.githubToken = this.configService.get<string>('GITHUB_TOKEN');
     this.apiBaseUrl = this.configService.get<string>('METADATA_API_TESTNET_URL');
@@ -61,9 +77,9 @@ export class MetadataRegistryApiService {
   }
 
   /**
-   * Відправляє метадані токена через API
-   * @param metadata Метадані токена
-   * @returns Результат відправки
+   * Submits token metadata via API
+   * @param metadata Token metadata
+   * @returns Submission result
    */
   async submitTokenMetadata(raw: TokenMetaDataRaw): Promise<{ success: boolean; message: string; data?: unknown }> {
     try {
@@ -71,7 +87,6 @@ export class MetadataRegistryApiService {
       if (exists) {
         return { success: false, message: 'Token already exists' };
       }
-      console.log('Token does not exist, proceeding with submission');
     } catch (error) {
       console.error('Error checking token existence:', error);
     }
@@ -86,8 +101,7 @@ export class MetadataRegistryApiService {
       // The base16-encoded CBOR "policy": "82018201828200581cf950845fdf374bba64605f96a9d5940890cc2bb92c4b5b55139cc00982051a09bde472",
       const policy = raw.policy ? raw.policy : undefined;
       const logo = raw.logo ? this.signItemData(raw.subject, 0, raw.logo) : undefined;
-      const decimals =
-        typeof raw.decimals === 'number' ? this.signItemData(raw.subject, 0, raw.decimals.toString()) : undefined;
+      const decimals = raw.decimals ? this.signItemData(raw.subject, 0, raw.decimals) : undefined;
 
       // Build full metadata object
       const metadata: TokenMetaData = {
@@ -101,13 +115,11 @@ export class MetadataRegistryApiService {
         decimals,
       };
 
-      // Валідація метаданих перед відправкою
       if (!this.validateTokenMetadata(metadata)) {
         return { success: false, message: 'Invalid token metadata format' };
       }
 
-      // Відправка метаданих
-      const result = await this.createTokenRegistryPR(metadata);
+      const result = await this.createTokenRegistry(metadata, raw.vaultId);
 
       return result;
     } catch (error) {
@@ -125,9 +137,9 @@ export class MetadataRegistryApiService {
   }
 
   /**
-   * Перевіряє наявність токена в реєстрі
-   * @param subject Ідентифікатор токена (policyId + assetName)
-   * @returns true, якщо токен вже зареєстрований
+   * Checks if a token exists in the registry
+   * @param subject Token identifier (policyId + assetName)
+   * @returns true if token is already registered
    */
   async checkTokenExists(subject: string): Promise<boolean> {
     try {
@@ -143,9 +155,9 @@ export class MetadataRegistryApiService {
   }
 
   /**
-   * Валідує метадані токена
-   * @param metadata Метадані токена
-   * @returns true, якщо формат коректний
+   * Validates token metadata
+   * @param metadata Token metadata
+   * @returns true if format is correct
    */
   private validateTokenMetadata(metadata: TokenMetaData): boolean {
     // Перевірка обов'язкових полів
@@ -164,7 +176,7 @@ export class MetadataRegistryApiService {
     return true;
   }
 
-  private signItemData(subject: string, sequenceNumber: number, value: string): ItemData {
+  private signItemData(subject: string, sequenceNumber: number, value: string | number): ItemData {
     // Hash the subject, sequenceNumber, and value together
     const hash = crypto
       .createHash('sha256')
@@ -190,8 +202,9 @@ export class MetadataRegistryApiService {
     };
   }
 
-  private async createTokenRegistryPR(
-    metadata: TokenMetaData
+  private async createTokenRegistry(
+    metadata: TokenMetaData,
+    vaultId: string
   ): Promise<{ success: boolean; message: string; prUrl?: string }> {
     try {
       // 1. Format metadata as JSON
@@ -234,7 +247,7 @@ export class MetadataRegistryApiService {
         });
 
         // Wait for the fork to be created (GitHub fork is async)
-        console.log('Fork created, waiting for it to be ready...');
+        this.logger.log('Fork created, waiting for it to be ready...');
         await new Promise(resolve => setTimeout(resolve, 5000));
       }
 
@@ -269,7 +282,7 @@ export class MetadataRegistryApiService {
         owner: username,
         repo: this.repoName,
         path: filePath,
-        message: `Add token metadata for ${metadata.name.value}`,
+        message: `Add token metadata for ${metadata.ticker.value}`,
         content: Buffer.from(metadataJson).toString('base64'),
         branch: branchName,
       });
@@ -278,11 +291,30 @@ export class MetadataRegistryApiService {
       const { data: pr } = await octokit.pulls.create({
         owner: this.repoOwner,
         repo: this.repoName,
-        title: `Add token metadata for ${metadata.name.value}`,
-        body: `This PR adds metadata for token ${metadata.name.value} (${metadata.ticker?.value || ''})`,
+        title: `Add token metadata for ${metadata.ticker.value}`,
+        body: `This PR adds metadata for token ${metadata.ticker.value}`,
         head: `${username}:${branchName}`,
         base: defaultBranch,
       });
+
+      // 12. Save PR information to database
+      if (pr.number) {
+        try {
+          // Create a new TokenRegistry record
+          const tokenRegistryRecord = this.TokenRegistryRepository.create({
+            pr_number: pr.number,
+            status: TokenRegistryStatus.PENDING,
+            vault: { id: vaultId },
+          });
+          await this.TokenRegistryRepository.save(tokenRegistryRecord);
+          this.logger.log(`Saved PR #${pr.number} information to database for vault ${vaultId}`);
+        } catch (dbError) {
+          this.logger.error('Failed to save PR information to database:', dbError);
+          // Continue since PR was created successfully on GitHub
+        }
+      } else {
+        this.logger.warn(`Cannot save PR to database: Missing PR number or vault ID`);
+      }
 
       return {
         success: true,
@@ -302,6 +334,64 @@ export class MetadataRegistryApiService {
       }
 
       throw new InternalServerErrorException(`Failed to create PR: ${error.message}`);
+    }
+  }
+
+  @Cron(CronExpression.EVERY_HOUR)
+  async checkPendingPRs(): Promise<void> {
+    this.logger.log('Checking pending token registry PRs');
+
+    const pendingPRs = await this.TokenRegistryRepository.find({
+      where: { status: TokenRegistryStatus.PENDING },
+    });
+
+    if (pendingPRs.length === 0) {
+      this.logger.log('No pending PRs to check');
+      return;
+    }
+
+    this.logger.log(`Found ${pendingPRs.length} pending PRs to check`);
+
+    for (const pr of pendingPRs) {
+      await this.checkPRStatus(pr);
+    }
+  }
+
+  /**
+   * Check the status of a specific PR
+   */
+  async checkPRStatus(pr: TokenRegistry): Promise<TokenRegistry> {
+    try {
+      const url = `https://api.github.com/repos/${this.repoOwner}/${this.repoName}/pulls/${pr.pr_number}`;
+      const response = await firstValueFrom(this.httpService.get(url));
+
+      pr.last_checked = new Date();
+
+      // Update status based on GitHub response
+      if (response.data.state === 'closed') {
+        if (response.data.merged) {
+          pr.status = TokenRegistryStatus.MERGED;
+          pr.merged_at = new Date(response.data.merged_at);
+          this.logger.log(`PR #${pr.pr_number} for vault ${pr.vault_id} has been merged`);
+        } else {
+          pr.status = TokenRegistryStatus.REJECTED;
+          this.logger.warn(`PR #${pr.pr_number} for vault ${pr.vault_id} was rejected`);
+        }
+      }
+
+      // Save the updated PR record
+      return this.TokenRegistryRepository.save(pr);
+    } catch (error) {
+      this.logger.error(`Error checking PR #${pr.pr_number} status:`, error.message);
+
+      // If PR not found, mark as failed
+      if (error.response?.status === 404) {
+        pr.status = TokenRegistryStatus.FAILED;
+        return this.TokenRegistryRepository.save(pr);
+      }
+
+      // Return the PR without changes for other errors
+      return pr;
     }
   }
 }

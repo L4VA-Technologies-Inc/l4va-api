@@ -15,6 +15,7 @@ import { VaultManagingService } from './vault-managing.service';
 import { WebhookVerificationService } from './webhook-verification.service';
 
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
+import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 
@@ -25,7 +26,7 @@ import { Vault } from '@/database/vault.entity';
     }),
     HttpModule,
     TransactionsModule,
-    TypeOrmModule.forFeature([Vault, Transaction, AssetsWhitelistEntity]),
+    TypeOrmModule.forFeature([Vault, Transaction, AssetsWhitelistEntity, TokenRegistry]),
   ],
   controllers: [BlockchainController],
   providers: [
