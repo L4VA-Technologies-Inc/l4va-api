@@ -13,7 +13,7 @@ import { CreateVaultReq } from './dto/createVault.req';
 import { SortOrder, VaultFilter, VaultSortField } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { PublishVaultDto } from './dto/publish-vault.dto';
-import {VaultAcquireResponse, VaultFullResponse, VaultShortResponse} from './dto/vault.response';
+import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { BlockchainScannerService } from './processing-tx/onchain/blockchain-scanner.service';
 import { MetadataRegistryApiService } from './processing-tx/onchain/metadata-register.service';
@@ -610,19 +610,19 @@ export class VaultsService {
       this.logger.error(`Failed to process transaction ${publishedTx.txHash}:`, error);
     });
 
-    try {
-      this.logger.log(`Create PR to update Vault Metadata`);
-      await this.metadataRegistryApiService.submitTokenMetadata({
-        vaultId: vault.id,
-        subject: `${this.vaultPolicyId}${vault.asset_vault_name}`,
-        name: vault.name,
-        description: vault.description,
-        ticker: vault.vault_token_ticker,
-        decimals: 6,
-      });
-    } catch (error) {
-      this.logger.error('Error updating vault metadata:', error);
-    }
+    // try {
+    //   this.logger.log(`Create PR to update Vault Metadata`);
+    //   await this.metadataRegistryApiService.submitTokenMetadata({
+    //     vaultId: vault.id,
+    //     subject: `${this.vaultPolicyId}${vault.asset_vault_name}`,
+    //     name: vault.name,
+    //     description: vault.description,
+    //     ticker: vault.vault_token_ticker,
+    //     decimals: 6,
+    //   });
+    // } catch (error) {
+    //   this.logger.error('Error updating vault metadata:', error);
+    // }
 
     return plainToInstance(VaultFullResponse, instanceToPlain(vault), { excludeExtraneousValues: true });
   }
@@ -712,7 +712,7 @@ export class VaultsService {
         'vault.acquire_window_duration',
         'vault.privacy',
         'vault.vault_status',
-        'file.file_url'
+        'file.file_url',
       ])
       .where('vault.privacy = :privacy', { privacy: VaultPrivacy.public })
       .andWhere('vault.vault_status = :status', { status: VaultStatus.acquire })
@@ -720,7 +720,7 @@ export class VaultsService {
       .take(5)
       .getMany();
 
-    return vaults.map((vault) => {
+    return vaults.map(vault => {
       const start = new Date(vault.acquire_phase_start);
       const duration = Number(vault.acquire_window_duration);
       const timeLeft = new Date(start.getTime() + duration);
@@ -728,7 +728,7 @@ export class VaultsService {
         ...vault,
         timeLeft: timeLeft.toISOString(),
       } as VaultAcquireResponse;
-    })
+    });
   }
 
   /**
