@@ -16,6 +16,7 @@ import { UsersModule } from './modules/users/users.module';
 import { LpTokensModule } from './modules/vaults/lp-tokens/lp-tokens.module';
 import { AcquireModule } from './modules/vaults/phase-management/acquire/acquire.module';
 import { ContributionModule } from './modules/vaults/phase-management/contribution/contribution.module';
+import { GovernanceModule } from './modules/vaults/phase-management/governance/governance.module';
 import { AssetsModule } from './modules/vaults/processing-tx/assets/assets.module';
 import { TransactionsModule } from './modules/vaults/processing-tx/offchain-tx/transactions.module';
 import { BlockchainModule } from './modules/vaults/processing-tx/onchain/blockchain.module';
@@ -60,6 +61,7 @@ import { VyfiModule } from './modules/vyfi/vyfi.module';
     DistributionModule,
     ClaimsModule,
     VyfiModule,
+    GovernanceModule,
   ],
   controllers: [AppController],
   providers: [AppService],
