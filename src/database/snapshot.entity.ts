@@ -1,28 +1,37 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, CreateDateColumn } from 'typeorm';
+import { Expose } from 'class-transformer';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, CreateDateColumn, JoinColumn } from 'typeorm';
 
 import { Vault } from './vault.entity';
 import { Vote } from './vote.entity';
 
 @Entity()
 export class Snapshot {
+  @Expose({ name: 'id' })
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column()
-  vaultId: string;
-
-  @Column()
+  @Expose({ name: 'assetId' })
+  @Column({ name: 'asset_id' })
   assetId: string;
 
-  @Column({ type: 'jsonb' })
-  addressBalances: Record<string, string>; // address -> amount mapping
+  @Expose({ name: 'addressBalances' })
+  @Column({ name: 'address_balances', type: 'jsonb' })
+  addressBalances: Record<string, string>;
 
-  @CreateDateColumn()
+  @Expose({ name: 'createdAt' })
+  @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
-  @ManyToOne(() => Vault, vault => vault.snapshots)
+  @Expose({ name: 'vault' })
+  @ManyToOne(() => Vault, vault => vault.snapshots, { nullable: false, onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'vault_id' })
   vault: Vault;
 
+  @Expose({ name: 'vaultId' })
+  @Column({ name: 'vault_id' })
+  vaultId: string;
+
+  @Expose({ name: 'votes' })
   @OneToMany(() => Vote, vote => vote.snapshot)
   votes: Vote[];
 }
