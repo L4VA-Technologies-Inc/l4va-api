@@ -27,7 +27,6 @@ import { VoteType } from '@/types/vote.types';
 @Injectable()
 export class GovernanceService {
   private readonly logger = new Logger(GovernanceService.name);
-  private readonly vaultPolicyId: string;
   private blockfrost: BlockFrostAPI;
 
   constructor(
@@ -43,7 +42,6 @@ export class GovernanceService {
     private readonly assetRepository: Repository<Asset>,
     private readonly configService: ConfigService
   ) {
-    this.vaultPolicyId = this.configService.get<string>('SC_POLICY_ID');
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
     });
@@ -63,17 +61,13 @@ export class GovernanceService {
 
       for (const vault of lockedVaults) {
         try {
-          // For each vault, you need to know which asset to track
-          // This could be stored in the vault entity or in a configuration
-          const assetId = vault.policy_id; // TODO: change to accurate asset ID retrieval logic
-
-          if (!assetId) {
+          if (!vault.asset_vault_name || vault.policy_id) {
             this.logger.warn(`No asset ID found for vault ${vault.id}, skipping snapshot`);
             continue;
           }
 
           // Create a snapshot for this vault
-          await this.createAutomaticSnapshot(vault.id, assetId);
+          await this.createAutomaticSnapshot(vault.id, `${vault.policy_id}${vault.asset_vault_name}`);
 
           // Add some delay between requests to not overwhelm the BlockFrost API
           await new Promise(resolve => setTimeout(resolve, 1000));
@@ -89,7 +83,12 @@ export class GovernanceService {
     }
   }
 
-  // Helper method to create an automatic snapshot
+  /**
+   * Creates an automatic snapshot for a vault.
+   * @param vaultId - The ID of the vault
+   * @param assetId - Concatenation of the policy ID and hex-encoded asset name
+   * @returns - List of a addresses containing a specific asset.
+   */
   private async createAutomaticSnapshot(vaultId: string, assetId: string): Promise<Snapshot> {
     this.logger.log(`Creating automatic snapshot for vault ${vaultId} with asset ${assetId}`);
 
@@ -255,13 +254,13 @@ export class GovernanceService {
     const processedProposals = await Promise.all(
       proposals.map(async proposal => {
         const baseProposal = {
-        id: proposal.id,
-        vaultId: proposal.vaultId,
-        title: proposal.title,
-        description: proposal.description,
-        creatorId: proposal.creatorId,
-        status: proposal.status,
-        createdAt: proposal.createdAt,
+          id: proposal.id,
+          vaultId: proposal.vaultId,
+          title: proposal.title,
+          description: proposal.description,
+          creatorId: proposal.creatorId,
+          status: proposal.status,
+          createdAt: proposal.createdAt,
           endDate: proposal.endDate.toISOString(),
         };
 
@@ -297,7 +296,7 @@ export class GovernanceService {
                 yes: yesPercentage,
                 no: noPercentage,
               },
-    };
+            };
           } catch (error) {
             this.logger.error(`Error fetching votes for proposal ${proposal.id}: ${error.message}`, error.stack);
             // Return proposal without votes on error
