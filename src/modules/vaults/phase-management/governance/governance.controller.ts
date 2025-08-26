@@ -4,8 +4,11 @@ import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '../../../auth/auth.guard';
 
 import { CreateProposalReq } from './dto/create-proposal.req';
+import { GetProposalsRes, GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';
 import { GovernanceService } from './governance.service';
+
+import { Asset } from '@/database/asset.entity';
 
 @ApiTags('Governance')
 @Controller('governance')
@@ -24,8 +27,8 @@ export class GovernanceController {
   @Get('vaults/:vaultId/proposals')
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Get all proposals for a vault' })
-  @ApiResponse({ status: 200, description: 'List of proposals' })
-  async getProposals(@Param('vaultId') vaultId: string) {
+  @ApiResponse({ status: 200, description: 'List of proposals', type: [GetProposalsRes] })
+  async getProposals(@Param('vaultId') vaultId: string): Promise<GetProposalsResItem[]> {
     return this.governanceService.getProposals(vaultId);
   }
 
@@ -44,5 +47,46 @@ export class GovernanceController {
   @ApiResponse({ status: 200, description: 'Proposal details' })
   async getProposal(@Param('proposalId') proposalId: string) {
     return this.governanceService.getProposal(proposalId);
+  }
+
+  @Get('vaults/:vaultId/voting-power')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Get user voting power in a vault' })
+  @ApiResponse({ status: 200, description: 'User voting power' })
+  async getVotingPower(@Req() req, @Param('vaultId') vaultId: string): Promise<string> {
+    const userId = req.user.sub;
+    return this.governanceService.getVotingPower(vaultId, userId);
+  }
+
+  @Get('vaults/:vaultId/assets/terminate')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Get assets to terminate for a vault' })
+  @ApiResponse({ status: 200, description: 'List of assets to terminate' })
+  async getAssetsToTerminate(@Param('vaultId') vaultId: string): Promise<Asset[]> {
+    return this.governanceService.getAssetsToTerminate(vaultId);
+  }
+
+  @Get('vaults/:vaultId/assets/stake')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Get assets to stake for a vault' })
+  @ApiResponse({ status: 200, description: 'List of assets to stake' })
+  async getAssetsToStake(@Param('vaultId') vaultId: string): Promise<Asset[]> {
+    return this.governanceService.getAssetsToStake(vaultId);
+  }
+
+  @Get('vaults/:vaultId/assets/distribute')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Get assets to distribute for a vault' })
+  @ApiResponse({ status: 200, description: 'List of assets to distribute' })
+  async getAssetsToDistribute(@Param('vaultId') vaultId: string): Promise<Asset[]> {
+    return this.governanceService.getAssetsToDistribute(vaultId);
+  }
+
+  @Get('vaults/:vaultId/assets/burn')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Get assets to burn for a vault' })
+  @ApiResponse({ status: 200, description: 'List of assets to burn' })
+  async getAssetsToBurn(@Param('vaultId') vaultId: string): Promise<Asset[]> {
+    return this.governanceService.getAssetsToBurn(vaultId);
   }
 }

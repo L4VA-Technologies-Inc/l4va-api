@@ -15,6 +15,7 @@ import {
 } from 'typeorm';
 
 import {
+  ApplyParamsResult,
   ContributionWindowType,
   InvestmentWindowType,
   SmartContractVaultStatus,
@@ -407,6 +408,23 @@ export class Vault {
     default: 1,
   })
   ada_pair_multiplier?: number;
+
+  @Exclude()
+  @Column({
+    name: 'script_hash',
+    type: 'varchar',
+    nullable: true,
+  })
+  script_hash?: string;
+
+  @Exclude()
+  @Column({
+    name: 'apply_params_result',
+    type: 'jsonb',
+    nullable: true,
+    default: () => 'null',
+  })
+  apply_params_result?: ApplyParamsResult;
 
   @Expose({ name: 'lastUpdateTxHash' })
   @Column({

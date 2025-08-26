@@ -8,8 +8,10 @@ import { DraftVaultsService } from './draft-vaults.service';
 import { CreateVaultReq } from './dto/createVault.req';
 import { GetVaultTransactionsDto } from './dto/get-vault-transactions.dto';
 import { GetVaultsDto } from './dto/get-vaults.dto';
+import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { PublishVaultDto } from './dto/publish-vault.dto';
 import { SaveDraftReq } from './dto/saveDraft.req';
+import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { VaultsService } from './vaults.service';
 
@@ -46,7 +48,7 @@ export class VaultsController {
   })
   @UseGuards(AuthGuard)
   @Post('/publish')
-  async publishVault(@Request() req, @Body() publishDto: PublishVaultDto): Promise<any> {
+  async publishVault(@Request() req, @Body() publishDto: PublishVaultDto): Promise<VaultFullResponse> {
     const userId = req.user.sub;
     try {
       return await this.vaultsService.publishVault(userId, publishDto);
@@ -67,9 +69,8 @@ export class VaultsController {
     @Request() req,
     @Body()
     data: SaveDraftReq
-  ) {
+  ): Promise<any> {
     const userId = req.user.sub;
-    this.logger.log('drfat data ', data);
     return this.draftVaultsService.saveDraftVault(userId, data);
   }
 
@@ -81,7 +82,7 @@ export class VaultsController {
   })
   @UseGuards(AuthGuard)
   @Get('my')
-  getMyVaults(@Request() req, @Query() query: GetVaultsDto) {
+  getMyVaults(@Request() req, @Query() query: GetVaultsDto): Promise<PaginatedResponseDto<VaultShortResponse>> {
     const userId = req.user.sub;
     return this.vaultsService.getMyVaults(userId, query.filter, query.page, query.limit, query.sortBy, query.sortOrder);
   }
@@ -92,10 +93,9 @@ export class VaultsController {
     status: 200,
   })
   @Get('acquire')
-  async getAcquire(@Request() req, @Query() query: any) {
-    return this.vaultsService.getAcquire(); 
+  async getAcquire(): Promise<VaultAcquireResponse[]> {
+    return this.vaultsService.getAcquire();
   }
-
 
   @ApiDoc({
     summary: 'Select my draft vaults',
@@ -104,7 +104,7 @@ export class VaultsController {
   })
   @UseGuards(AuthGuard)
   @Get('my/drafts')
-  getMyDraftVaults(@Request() req, @Query() query: GetVaultsDto) {
+  getMyDraftVaults(@Request() req, @Query() query: GetVaultsDto): Promise<PaginatedResponseDto<VaultShortResponse>> {
     const userId = req.user.sub;
     return this.draftVaultsService.getMyDraftVaults(userId, query.page, query.limit, query.sortBy, query.sortOrder);
   }

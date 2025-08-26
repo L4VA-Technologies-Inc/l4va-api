@@ -1,13 +1,21 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  Logger,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { CreateProposalReq } from './dto/create-proposal.req';
+import { GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';
 
+import { Asset } from '@/database/asset.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { Vault } from '@/database/vault.entity';
@@ -18,8 +26,8 @@ import { VoteType } from '@/types/vote.types';
 
 @Injectable()
 export class GovernanceService {
-  private blockfrost: BlockFrostAPI;
   private readonly logger = new Logger(GovernanceService.name);
+  private blockfrost: BlockFrostAPI;
 
   constructor(
     @InjectRepository(Vault)
@@ -30,6 +38,8 @@ export class GovernanceService {
     private readonly proposalRepository: Repository<Proposal>,
     @InjectRepository(Vote)
     private readonly voteRepository: Repository<Vote>,
+    @InjectRepository(Asset)
+    private readonly assetRepository: Repository<Asset>,
     private readonly configService: ConfigService
   ) {
     this.blockfrost = new BlockFrostAPI({
@@ -51,17 +61,13 @@ export class GovernanceService {
 
       for (const vault of lockedVaults) {
         try {
-          // For each vault, you need to know which asset to track
-          // This could be stored in the vault entity or in a configuration
-          const assetId = vault.policy_id; // TODO: change to accurate asset ID retrieval logic
-
-          if (!assetId) {
+          if (!vault.asset_vault_name || vault.policy_id) {
             this.logger.warn(`No asset ID found for vault ${vault.id}, skipping snapshot`);
             continue;
           }
 
           // Create a snapshot for this vault
-          await this.createAutomaticSnapshot(vault.id, assetId);
+          await this.createAutomaticSnapshot(vault.id, `${vault.policy_id}${vault.asset_vault_name}`);
 
           // Add some delay between requests to not overwhelm the BlockFrost API
           await new Promise(resolve => setTimeout(resolve, 1000));
@@ -77,7 +83,12 @@ export class GovernanceService {
     }
   }
 
-  // Helper method to create an automatic snapshot
+  /**
+   * Creates an automatic snapshot for a vault.
+   * @param vaultId - The ID of the vault
+   * @param assetId - Concatenation of the policy ID and hex-encoded asset name
+   * @returns - List of a addresses containing a specific asset.
+   */
   private async createAutomaticSnapshot(vaultId: string, assetId: string): Promise<Snapshot> {
     this.logger.log(`Creating automatic snapshot for vault ${vaultId} with asset ${assetId}`);
 
@@ -225,18 +236,7 @@ export class GovernanceService {
     };
   }
 
-  async getProposals(vaultId: string): Promise<{
-    proposals: {
-      id: string;
-      vaultId: string;
-      title: string;
-      description: string;
-      creatorId: string;
-      status: ProposalStatus;
-      createdAt: Date;
-      endDate: Date;
-    }[];
-  }> {
+  async getProposals(vaultId: string): Promise<GetProposalsResItem[]> {
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
     });
@@ -250,18 +250,67 @@ export class GovernanceService {
       order: { createdAt: 'DESC' },
     });
 
-    return {
-      proposals: proposals.map(proposal => ({
-        id: proposal.id,
-        vaultId: proposal.vaultId,
-        title: proposal.title,
-        description: proposal.description,
-        creatorId: proposal.creatorId,
-        status: proposal.status,
-        createdAt: proposal.createdAt,
-        endDate: proposal.endDate,
-      })),
-    };
+    // Process each proposal to add vote information
+    const processedProposals = await Promise.all(
+      proposals.map(async proposal => {
+        const baseProposal = {
+          id: proposal.id,
+          vaultId: proposal.vaultId,
+          title: proposal.title,
+          description: proposal.description,
+          creatorId: proposal.creatorId,
+          status: proposal.status,
+          createdAt: proposal.createdAt,
+          endDate: proposal.endDate.toISOString(),
+        };
+
+        if (proposal.status !== ProposalStatus.UPCOMMING) {
+          try {
+            const { totals } = await this.getVotes(proposal.id);
+
+            // Calculate total votes
+            const totalVotingPower = BigInt(totals.yes) + BigInt(totals.no) + BigInt(totals.abstain);
+
+            // Calculate percentages
+            let yesPercentage = 0;
+            let noPercentage = 0;
+
+            if (totalVotingPower > 0) {
+              yesPercentage = Number((BigInt(totals.yes) * BigInt(100)) / totalVotingPower);
+              noPercentage = Number((BigInt(totals.no) * BigInt(100)) / totalVotingPower);
+
+              // Adjust to ensure sum is 100
+              if (yesPercentage + noPercentage < 100) {
+                // Add the difference to the larger percentage
+                if (BigInt(totals.yes) >= BigInt(totals.no)) {
+                  yesPercentage = 100 - noPercentage;
+                } else {
+                  noPercentage = 100 - yesPercentage;
+                }
+              }
+            }
+
+            return {
+              ...baseProposal,
+              votes: {
+                yes: yesPercentage,
+                no: noPercentage,
+              },
+            };
+          } catch (error) {
+            this.logger.error(`Error fetching votes for proposal ${proposal.id}: ${error.message}`, error.stack);
+            // Return proposal without votes on error
+            return baseProposal;
+          }
+        }
+        // For other statuses, return base proposal
+        else {
+          return baseProposal;
+        }
+      })
+    );
+
+    return processedProposals;
   }
 
   async vote(
@@ -462,5 +511,80 @@ export class GovernanceService {
       votes,
       totals,
     };
+  }
+
+  async getVotingPower(vaultId: string, userId: string): Promise<string> {
+    try {
+      const snapshot = await this.snapshotRepository.findOne({
+        where: { vaultId },
+        order: { createdAt: 'DESC' },
+      });
+
+      if (!snapshot) {
+        throw new NotFoundException('Snapshot not found');
+      }
+
+      const voteWeight = snapshot.addressBalances[userId];
+
+      if (!voteWeight || voteWeight === '0') {
+        throw new BadRequestException('User has no voting power in the snapshot');
+      }
+
+      return voteWeight;
+    } catch (error) {
+      this.logger.error(
+        `Error getting voting power for user ${userId} in vault ${vaultId}: ${error.message}`,
+        error.stack
+      );
+      throw new InternalServerErrorException('Error getting voting power');
+    }
+  }
+
+  async getAssetsToStake(vaultId: string): Promise<Asset[]> {
+    try {
+      const assets = await this.assetRepository.find({
+        where: { vault: { id: vaultId } },
+      });
+      return assets;
+    } catch (error) {
+      this.logger.error(`Error getting assets to stake for vault ${vaultId}: ${error.message}`, error.stack);
+      throw new InternalServerErrorException('Error getting assets to stake');
+    }
+  }
+
+  async getAssetsToDistribute(vaultId: string): Promise<Asset[]> {
+    try {
+      const assets = await this.assetRepository.find({
+        where: { vault: { id: vaultId } },
+      });
+      return assets;
+    } catch (error) {
+      this.logger.error(`Error getting assets to stake for vault ${vaultId}: ${error.message}`, error.stack);
+      throw new InternalServerErrorException('Error getting assets to stake');
+    }
+  }
+
+  async getAssetsToTerminate(vaultId: string): Promise<Asset[]> {
+    try {
+      const assets = await this.assetRepository.find({
+        where: { vault: { id: vaultId } },
+      });
+      return assets;
+    } catch (error) {
+      this.logger.error(`Error getting assets to stake for vault ${vaultId}: ${error.message}`, error.stack);
+      throw new InternalServerErrorException('Error getting assets to stake');
+    }
+  }
+
+  async getAssetsToBurn(vaultId: string): Promise<Asset[]> {
+    try {
+      const assets = await this.assetRepository.find({
+        where: { vault: { id: vaultId } },
+      });
+      return assets;
+    } catch (error) {
+      this.logger.error(`Error getting assets to stake for vault ${vaultId}: ${error.message}`, error.stack);
+      throw new InternalServerErrorException('Error getting assets to stake');
+    }
   }
 }

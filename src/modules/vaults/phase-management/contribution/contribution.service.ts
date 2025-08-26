@@ -1,9 +1,8 @@
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-
-import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
-import { BlockchainScannerService } from '../../processing-tx/onchain/blockchain-scanner.service';
 
 import { ContributeReq } from './dto/contribute.req';
 
@@ -11,6 +10,9 @@ import { Asset } from '@/database/asset.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
+import { BlockchainScannerService } from '@/modules/vaults/processing-tx/onchain/blockchain-scanner.service';
+import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
 import { AssetStatus, AssetType, AssetOriginType } from '@/types/asset.types';
 import { BlockchainTransactionListItem } from '@/types/blockchain.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -19,6 +21,7 @@ import { VaultPrivacy, VaultStatus } from '@/types/vault.types';
 @Injectable()
 export class ContributionService {
   private readonly logger = new Logger(ContributionService.name);
+  private blockfrost: BlockFrostAPI;
 
   constructor(
     @InjectRepository(Transaction)
@@ -30,8 +33,14 @@ export class ContributionService {
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
     private readonly transactionsService: TransactionsService,
-    private readonly blockchainScanner: BlockchainScannerService
-  ) {}
+    private readonly blockchainScanner: BlockchainScannerService,
+    private readonly configService: ConfigService,
+    private readonly metadataRegistryApiService: MetadataRegistryApiService
+  ) {
+    this.blockfrost = new BlockFrostAPI({
+      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
+    });
+  }
 
   /**
    * Syncs contribution transactions for a vault by comparing on-chain transactions
@@ -81,6 +90,37 @@ export class ContributionService {
 
             // If transaction exists in DB and status is not confirmed, update it
             if (dbTx && dbTx.status !== 'confirmed') {
+              // try {
+              //   // Update the vault with the policy ID of Minted Token if it doesn't have one
+              //   if (dbTx.type === TransactionType.contribute) {
+              //     const vault = await this.vaultRepository.findOne({ where: { id: vaultId } });
+
+              //     if (vault && !vault.policy_id) {
+              //       const extractedPolicyId = await this.extractPolicyIdFromTransaction(tx.tx_hash);
+              //       if (extractedPolicyId) {
+              //         vault.policy_id = extractedPolicyId;
+              //         await this.vaultRepository.save(vault);
+              //         this.logger.log(`Updated vault ${vaultId} with policy ID: ${extractedPolicyId}`);
+
+              //         // try {
+              //         //   this.logger.log(`Create PR to update Vault Metadata`);
+              //         //   await this.metadataRegistryApiService.submitTokenMetadata({
+              //         //     vaultId: vault.id,
+              //         //     subject: `${extractedPolicyId}${vault.asset_vault_name}`,
+              //         //     name: vault.name,
+              //         //     description: vault.description,
+              //         //     ticker: vault.vault_token_ticker,
+              //         //     decimals: 6,
+              //         //   });
+              //         // } catch (error) {
+              //         //   this.logger.error('Error updating vault metadata:', error);
+              //         // }
+              //       }
+              //     }
+              //   }
+              // } catch (error) {
+              //   this.logger.error(`Failed to extract policy ID for tx ${tx.tx_hash}`, error);
+              // }
               try {
                 await this.transactionsService.updateTransactionStatus(
                   tx.tx_hash,
@@ -123,7 +163,16 @@ export class ContributionService {
     }
   }
 
-  async contribute(vaultId: string, contributeReq: ContributeReq, userId: string) {
+  async contribute(
+    vaultId: string,
+    contributeReq: ContributeReq,
+    userId: string
+  ): Promise<{
+    success: boolean;
+    message: string;
+    vaultId: string;
+    txId: string;
+  }> {
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
       relations: ['contributor_whitelist', 'owner', 'assets_whitelist'],
@@ -219,7 +268,15 @@ export class ContributionService {
     };
   }
 
-  async updateTransactionHash(transactionId: string, txHash: string) {
+  async updateTransactionHash(
+    transactionId: string,
+    txHash: string
+  ): Promise<{
+    success: boolean;
+    message: string;
+    txId: string;
+    txHash: string;
+  }> {
     const transaction = await this.transactionsService.findById(transactionId);
     if (!transaction) {
       throw new NotFoundException('Transaction not found');
@@ -232,5 +289,55 @@ export class ContributionService {
       txId: transactionId,
       txHash: txHash,
     };
+  }
+
+  /**
+   * Extract the policy ID of Receipt from a transaction using its hash.
+   * @param txHash The hash of the transaction.
+   * @returns The extracted policy ID or null if not found.
+   */
+  private async extractPolicyIdFromTransaction(txHash: string): Promise<string | null> {
+    try {
+      const txUtxos = await this.blockfrost.txsUtxos(txHash);
+
+      // Extract minted tokens from outputs
+      const mintedTokens: Array<{
+        policy_id: string;
+        asset_name: string;
+        quantity: string;
+      }> = [];
+
+      txUtxos.outputs.forEach(output => {
+        output.amount.forEach(amount => {
+          this.logger.debug('amount.unit', amount.unit);
+
+          if (amount.unit !== 'lovelace' && amount.quantity === '1') {
+            // Extract policy_id and asset_name from the unit
+            const policyId = amount.unit.slice(0, 56); // First 56 characters
+            const assetName = amount.unit.slice(56); // Remaining characters
+
+            mintedTokens.push({
+              policy_id: policyId,
+              asset_name: assetName,
+              quantity: amount.quantity,
+            });
+          }
+        });
+      });
+
+      const mintedToken = mintedTokens[0];
+      this.logger.debug('mintedToken', mintedToken?.asset_name);
+
+      if (mintedToken) {
+        this.logger.log(`Found minted token with policy ID: ${mintedToken.policy_id}`);
+        return mintedToken.policy_id;
+      }
+
+      this.logger.warn(`No minted tokens found in transaction ${txHash}`);
+      return null;
+    } catch (error) {
+      this.logger.error(`Failed to extract policy ID from transaction ${txHash}`, error);
+      return null;
+    }
   }
 }
