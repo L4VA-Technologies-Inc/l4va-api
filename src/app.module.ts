@@ -22,6 +22,7 @@ import { TransactionsModule } from './modules/vaults/processing-tx/offchain-tx/t
 import { BlockchainModule } from './modules/vaults/processing-tx/onchain/blockchain.module';
 import { VaultsModule } from './modules/vaults/vaults.module';
 import { VyfiModule } from './modules/vyfi/vyfi.module';
+import { NotificationModule } from "@/modules/notification/notification.module";
 
 @Module({
   // =)
@@ -63,6 +64,7 @@ import { VyfiModule } from './modules/vyfi/vyfi.module';
     ClaimsModule,
     VyfiModule,
     GovernanceModule,
+    NotificationModule
   ],
   controllers: [AppController],
   providers: [AppService],
