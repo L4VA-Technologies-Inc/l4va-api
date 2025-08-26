@@ -22,8 +22,6 @@ import { SubmitTransactionDto } from './dto/transaction.dto';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
 import { Datum, Redeemer } from './types/type';
-import { applyContributeParams, toPreloadedScript } from './utils/apply_params';
-import * as blueprint from './utils/blueprint.json';
 import { getUtxosExctract } from './utils/lib';
 
 import { Vault } from '@/database/vault.entity';
@@ -119,22 +117,12 @@ export class VaultInsertingService {
       const { output_amount } = txDetail;
       this.logger.log(JSON.stringify(output_amount[output_amount.length - 1].unit));
 
-      const VAULT_POLICY_ID = this.vaultPolicyId;
       const VAULT_ID = vault.asset_vault_name;
-
-      const parameterizedScript = applyContributeParams({
-        vault_policy_id: VAULT_POLICY_ID,
-        vault_id: VAULT_ID,
-      });
-      const POLICY_ID = parameterizedScript.validator.hash;
+      const CONTRIBUTION_SCRIPT_HASH = vault.script_hash;
+      const POLICY_ID = CONTRIBUTION_SCRIPT_HASH;
       const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(POLICY_ID)))
         .to_address()
         .to_bech32();
-
-      const unparameterizedScript = blueprint.validators.find(v => v.title === 'contribute.contribute');
-      if (!unparameterizedScript) {
-        throw new Error('Contribute validator not found');
-      }
 
       const LAST_UPDATE_TX_HASH = vault.publication_hash; // todo need to understand where exactly we need to get it
       const LAST_UPDATE_TX_INDEX = 0;
@@ -176,11 +164,6 @@ export class VaultInsertingService {
           datum: { type: 'inline'; value: Datum; shape: object };
         }[];
         requiredSigners: string[];
-        // Not required if Contribution in ADA
-        preloadedScripts: {
-          type: string;
-          blueprint: any;
-        }[];
         referenceInputs: { txHash: string; index: number }[];
         validityInterval: {
           start: boolean;
@@ -190,7 +173,6 @@ export class VaultInsertingService {
       } = {
         changeAddress: params.changeAddress,
         message: 'Contribution in asset',
-        utxos: isAda ? undefined : utxos,
         mint: [
           {
             version: 'cip25',
@@ -247,11 +229,6 @@ export class VaultInsertingService {
               },
             },
           },
-        ],
-        preloadedScripts: [
-          toPreloadedScript(blueprint, {
-            validators: [parameterizedScript.validator, unparameterizedScript],
-          }),
         ],
         requiredSigners: [this.adminHash],
         referenceInputs: [

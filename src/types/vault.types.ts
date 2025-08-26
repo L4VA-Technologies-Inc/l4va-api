@@ -55,3 +55,57 @@ export enum SmartContractVaultStatus {
   SUCCESSFUL = 2,
   CANCELLED = 3,
 }
+
+export interface ApplyParamsResult {
+  addresses: {
+    [scriptHash: string]: {
+      hex: string;
+      bech32: string;
+    };
+  };
+  preloadedScript: {
+    type: string;
+    blueprint: {
+      preamble: {
+        id: number;
+        title: string;
+        license: string;
+        version: string;
+        clientId: string;
+        compiler: {
+          name: string;
+          version: string;
+        };
+        createdAt: string;
+        updatedAt: string;
+        description: string;
+        plutusVersion: string;
+      };
+      validators: Array<{
+        ref: string;
+        hash: string;
+        datum?: {
+          title: string;
+          schema: {
+            $ref: string;
+          };
+        };
+        title: string;
+        redeemer?: {
+          title?: string;
+          schema: any;
+        };
+        description: string | null;
+        compiledCode: string;
+        parameters?: any;
+      }>;
+    };
+    validatorRefs?: {
+      [hash: string]: {
+        index: number;
+        txHash: string;
+      };
+    };
+  };
+  definitions?: Record<string, any>;
+}
