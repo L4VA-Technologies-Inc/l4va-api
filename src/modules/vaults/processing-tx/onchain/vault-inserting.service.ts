@@ -106,16 +106,15 @@ export class VaultInsertingService {
         throw new Error('Vault publication hash not found - vault may not be properly published');
       }
 
-      const txDetail = await this.blockchainScanner.getTransactionDetails(vault.publication_hash);
+      if (!vault.script_hash) {
+        throw new Error('Vault script hash is missing - vault may not be properly configured');
+      }
 
       const utxos = await getUtxosExctract(Address.from_bech32(params.changeAddress), 0, this.blockfrost); // Any UTXO works.
 
       if (utxos.length === 0) {
         throw new Error('No UTXOs found.');
       }
-
-      const { output_amount } = txDetail;
-      this.logger.log(JSON.stringify(output_amount[output_amount.length - 1].unit));
 
       const VAULT_ID = vault.asset_vault_name;
       const CONTRIBUTION_SCRIPT_HASH = vault.script_hash;
