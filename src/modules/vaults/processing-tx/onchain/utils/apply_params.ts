@@ -6,7 +6,10 @@ import { PlutusScript, EnterpriseAddress, ScriptHash, Credential } from '@emurgo
 
 const blueprint = require('./blueprint.json');
 
-export function applyContributeParams(input: { vault_policy_id: string; vault_id: string }) {
+export function applyContributeParams(input: { vault_policy_id: string; vault_id: string }): {
+  validator: any;
+  address: EnterpriseAddress;
+} {
   const contributeValidator = blueprint.validators.find(v => v.title === 'contribute.contribute');
   if (!contributeValidator) {
     throw new Error('Contribute validator not found');

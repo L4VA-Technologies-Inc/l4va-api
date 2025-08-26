@@ -1,3 +1,4 @@
+import { Expose } from 'class-transformer';
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, CreateDateColumn, JoinColumn } from 'typeorm';
 
 import { ProposalStatus, ProposalType } from '../types/proposal.types';
@@ -11,12 +12,15 @@ export class Proposal {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
+  @Expose({ name: 'title' })
   @Column()
   title: string;
 
+  @Expose({ name: 'description' })
   @Column('text')
   description: string;
 
+  @Expose({ name: 'status' })
   @Column({
     name: 'status',
     type: 'enum',
@@ -25,6 +29,7 @@ export class Proposal {
   })
   status: ProposalStatus;
 
+  @Expose({ name: 'proposalType' })
   @Column({
     name: 'proposal_type',
     type: 'enum',
@@ -33,27 +38,31 @@ export class Proposal {
   })
   proposalType: ProposalType;
 
-  @Column({ nullable: true })
+  @Expose({ name: 'ipfsHash' })
+  @Column({ name: 'ipfsHash', nullable: true })
   ipfsHash: string;
 
-  @Column({ nullable: true })
+  @Expose({ name: 'externalLink' })
+  @Column({ name: 'external_link', nullable: true })
   externalLink: string;
 
-  @CreateDateColumn()
-  createdAt: Date;
-
-  @Column({ nullable: false })
+  @Expose({ name: 'startDate' })
+  @Column({ name: 'start_date', nullable: false })
   startDate: Date;
 
-  @Column({ nullable: true })
+  @Expose({ name: 'endDate' })
+  @Column({ name: 'end_date', nullable: true })
   endDate: Date;
 
-  @Column({ nullable: true })
+  @Expose({ name: 'executionDate' })
+  @Column({ name: 'execution_date', nullable: true })
   executionDate: Date;
 
-  @Column({ nullable: true })
+  @Expose({ name: 'snapshotId' })
+  @Column({ name: 'snapshot_id', nullable: true })
   snapshotId: string;
 
+  @Expose({ name: 'creator' })
   @ManyToOne(() => User, { nullable: false, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'creator_id' })
   creator: User;
@@ -61,13 +70,20 @@ export class Proposal {
   @Column({ name: 'creator_id' })
   creatorId: string;
 
-  @ManyToOne(() => Vault, vault => vault.proposals, { eager: true })
+  @Expose({ name: 'vault' })
+  @ManyToOne(() => Vault, vault => vault.proposals, { eager: true, nullable: false, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'vault_id' })
   vault: Vault;
 
+  @Expose({ name: 'vaultId' })
   @Column({ name: 'vault_id' })
   vaultId: string;
 
+  @Expose({ name: 'votes' })
   @OneToMany(() => Vote, vote => vote.proposal)
   votes: Vote[];
+
+  @Expose({ name: 'createdAt' })
+  @CreateDateColumn({ name: 'created_at' })
+  createdAt: Date;
 }

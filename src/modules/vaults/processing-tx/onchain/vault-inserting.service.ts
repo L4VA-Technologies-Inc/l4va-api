@@ -7,6 +7,7 @@ import {
   Credential,
   FixedTransaction,
   PrivateKey,
+  Address,
 } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -21,8 +22,7 @@ import { SubmitTransactionDto } from './dto/transaction.dto';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
 import { Datum, Redeemer } from './types/type';
-import { applyContributeParams, toPreloadedScript } from './utils/apply_params';
-import * as blueprint from './utils/blueprint.json';
+import { getUtxosExctract } from './utils/lib';
 
 import { Vault } from '@/database/vault.entity';
 import { TransactionStatus } from '@/types/transaction.types';
@@ -68,6 +68,7 @@ export interface TransactionSubmitResponse {
 export class VaultInsertingService {
   private readonly logger = new Logger(VaultInsertingService.name);
   private readonly adminHash: string;
+  private readonly vaultPolicyId: string;
   private readonly adminSKey: string;
   private blockfrost: BlockFrostAPI;
   constructor(
@@ -81,6 +82,8 @@ export class VaultInsertingService {
   ) {
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
+    this.vaultPolicyId = this.configService.get<string>('SC_POLICY_ID');
+
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
     });
@@ -103,28 +106,22 @@ export class VaultInsertingService {
         throw new Error('Vault publication hash not found - vault may not be properly published');
       }
 
-      const txDetail = await this.blockchainScanner.getTransactionDetails(vault.publication_hash);
+      if (!vault.script_hash) {
+        throw new Error('Vault script hash is missing - vault may not be properly configured');
+      }
 
-      const { output_amount } = txDetail;
-      this.logger.log(JSON.stringify(output_amount[output_amount.length - 1].unit));
+      const utxos = await getUtxosExctract(Address.from_bech32(params.changeAddress), 0, this.blockfrost); // Any UTXO works.
 
-      const vaultPolicyPlusName = output_amount[output_amount.length - 1].unit;
-      const VAULT_POLICY_ID = vaultPolicyPlusName.slice(0, 56);
-      const VAULT_ID = vaultPolicyPlusName.slice(56, vaultPolicyPlusName.length);
+      if (utxos.length === 0) {
+        throw new Error('No UTXOs found.');
+      }
 
-      const parameterizedScript = applyContributeParams({
-        vault_policy_id: VAULT_POLICY_ID,
-        vault_id: VAULT_ID,
-      });
-      const POLICY_ID = parameterizedScript.validator.hash;
+      const VAULT_ID = vault.asset_vault_name;
+      const CONTRIBUTION_SCRIPT_HASH = vault.script_hash;
+      const POLICY_ID = CONTRIBUTION_SCRIPT_HASH;
       const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(POLICY_ID)))
         .to_address()
         .to_bech32();
-
-      const unparameterizedScript = blueprint.validators.find(v => v.title === 'contribute.contribute');
-      if (!unparameterizedScript) {
-        throw new Error('Contribute validator not found');
-      }
 
       const LAST_UPDATE_TX_HASH = vault.publication_hash; // todo need to understand where exactly we need to get it
       const LAST_UPDATE_TX_INDEX = 0;
@@ -155,6 +152,7 @@ export class VaultInsertingService {
 
       const input: {
         changeAddress: string;
+        utxos?: string[]; // Only for Contribution in NFT
         message: string;
         mint: Array<object>;
         scriptInteractions: object[];
@@ -165,11 +163,6 @@ export class VaultInsertingService {
           datum: { type: 'inline'; value: Datum; shape: object };
         }[];
         requiredSigners: string[];
-        // Not required if Contribution in ADA
-        preloadedScripts: {
-          type: string;
-          blueprint: any;
-        }[];
         referenceInputs: { txHash: string; index: number }[];
         validityInterval: {
           start: boolean;
@@ -236,11 +229,6 @@ export class VaultInsertingService {
             },
           },
         ],
-        preloadedScripts: [
-          toPreloadedScript(blueprint, {
-            validators: [parameterizedScript.validator, unparameterizedScript],
-          }),
-        ],
         requiredSigners: [this.adminHash],
         referenceInputs: [
           {
@@ -269,7 +257,6 @@ export class VaultInsertingService {
       if (error instanceof NotFoundException) {
         throw new NotFoundException(error.message);
       }
-      this.logger.error('Error building contribution transaction', error);
       throw error;
     }
   }

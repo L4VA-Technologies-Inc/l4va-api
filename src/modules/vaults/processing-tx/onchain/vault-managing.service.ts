@@ -77,6 +77,8 @@ export class VaultManagingService {
   private readonly adminSKey: string;
   private readonly adminAddress: string;
   private readonly blockfrost: BlockFrostAPI;
+  private readonly anvilApi: string;
+  private readonly anvilApiKey: string;
 
   constructor(
     @InjectRepository(Transaction)
@@ -95,6 +97,8 @@ export class VaultManagingService {
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
     });
+    this.anvilApi = this.configService.get<string>('ANVIL_API_URL') + '/services';
+    this.anvilApiKey = this.configService.get<string>('ANVIL_API_KEY');
   }
 
   /**
@@ -106,6 +110,8 @@ export class VaultManagingService {
     presignedTx: string;
     contractAddress: string;
     vaultAssetName: string;
+    scriptHash: string;
+    applyParamsResult: any;
   }> {
     this.scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
       .to_address()
@@ -123,17 +129,84 @@ export class VaultManagingService {
       selectedUtxo.input().index()
     );
 
+    const headers = {
+      'x-api-key': this.anvilApiKey,
+      'Content-Type': 'application/json',
+    };
+
+    // Apply parameters to the blueprint before building the transaction
+    const applyParamsPayload = {
+      params: {
+        //9a9b0bc93c26a40952aaff525ac72a992a77ebfa29012c9cb4a72eb2 contribution script hash
+        '9a9b0bc93c26a40952aaff525ac72a992a77ebfa29012c9cb4a72eb2': [
+          this.scPolicyId, // policy id of the vault
+          assetName, // newly created vault id from generate_tag_from_txhash_index
+        ],
+      },
+      blueprint: {
+        title: 'l4va/vault',
+        version: '0.0.7',
+      },
+    };
+
+    const applyParamsResponse = await fetch(`${this.anvilApi}/blueprints/apply-params`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(applyParamsPayload),
+    });
+
+    const applyParamsResult = await applyParamsResponse.json();
+
+    if (!applyParamsResult.preloadedScript) {
+      throw new Error('Failed to apply parameters to blueprint');
+    }
+
+    // Step 2: Upload the parameterized script to /blueprints
+    const uploadScriptResponse = await fetch(`${this.anvilApi}/blueprints`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        blueprint: {
+          ...applyParamsResult.preloadedScript.blueprint,
+          preamble: {
+            ...applyParamsResult.preloadedScript.blueprint.preamble,
+            id: undefined,
+            title: 'l4va/vault/' + assetName,
+            version: '0.0.1',
+          },
+          validators: applyParamsResult.preloadedScript.blueprint.validators.filter((v: any) =>
+            v.title.includes('contribute')
+          ),
+        },
+      }),
+    });
+
+    await uploadScriptResponse.json();
+
+    const scriptHash =
+      applyParamsResult.preloadedScript.blueprint.validators.find((v: any) => v.title === 'contribute.contribute.mint')
+        ?.hash || '';
+    if (!scriptHash) {
+      throw new Error('Failed to find script hash');
+    }
+
     try {
       const input: {
         changeAddress: string;
         message: string;
         mint: Array<object>;
         scriptInteractions: object[];
-        outputs: {
-          address: string;
-          assets: object[];
-          datum: { type: 'inline'; value: Datum1; shape: object };
-        }[];
+        outputs: (
+          | {
+              address: string;
+              assets: object[];
+              datum: { type: 'inline'; value: Datum1; shape: object };
+            }
+          | {
+              address: string;
+              datum: { type: 'script'; hash: string };
+            }
+        )[];
         requiredInputs: string[];
       } = {
         changeAddress: vaultConfig.customerAddress,
@@ -235,6 +308,13 @@ export class VaultManagingService {
               },
             },
           },
+          {
+            address: vaultConfig.customerAddress,
+            datum: {
+              type: 'script',
+              hash: scriptHash,
+            },
+          },
         ],
         requiredInputs: REQUIRED_INPUTS,
       };
@@ -249,6 +329,8 @@ export class VaultManagingService {
         presignedTx: txToSubmitOnChain.to_hex(),
         contractAddress: this.scAddress,
         vaultAssetName: assetName,
+        scriptHash,
+        applyParamsResult,
       };
     } catch (error) {
       this.logger.error('Failed to create vault:', error);
@@ -451,7 +533,12 @@ export class VaultManagingService {
    * @param signedTx Object containing the transaction and signatures
    * @returns Transaction hash
    */
-  async submitOnChainVaultTx(signedTx: { transaction: string; signatures: string | string[] }): Promise<{
+  async submitOnChainVaultTx(
+    signedTx: { transaction: string; signatures: string | string[] },
+    assetName: string,
+    scriptHash: string,
+    applyParamsResult: any
+  ): Promise<{
     txHash: string;
   }> {
     try {
@@ -462,6 +549,46 @@ export class VaultManagingService {
         transaction: signedTx.transaction,
         signatures,
       });
+      const { txHash } = result;
+
+      if (txHash) {
+        const headers = {
+          'x-api-key': this.anvilApiKey,
+          'Content-Type': 'application/json',
+        };
+
+        // Step 4: Update blueprint with the script transaction reference
+        const blueprintUpdatePayload = {
+          blueprint: {
+            ...applyParamsResult.preloadedScript.blueprint,
+            preamble: {
+              ...applyParamsResult.preloadedScript.blueprint.preamble,
+              id: undefined,
+              title: 'l4va/vault/' + assetName,
+              version: '0.0.1',
+            },
+            validators: applyParamsResult.preloadedScript.blueprint.validators.filter((v: any) =>
+              v.title.includes('contribute')
+            ),
+          },
+          refs: {
+            [scriptHash]: {
+              txHash: txHash,
+              index: 1, // Script output is at index 1 (vault is at index 0)
+            },
+          },
+        };
+
+        await fetch(`${this.anvilApi}/blueprints`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(blueprintUpdatePayload),
+        });
+
+        console.log('✅ Complete workflow finished: vault created, script uploaded, and blueprint updated!');
+      } else {
+        console.error('Failed to create vault and upload script');
+      }
 
       return { txHash: result.txHash };
     } catch (error) {
