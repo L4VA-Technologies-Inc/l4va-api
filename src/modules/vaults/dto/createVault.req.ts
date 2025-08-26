@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Expose, Type } from 'class-transformer';
+import { Expose, Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayNotEmpty,
@@ -281,12 +281,28 @@ export class CreateVaultReq {
     maximum: 100,
     type: Number,
   })
-  @IsNotEmpty()
+  @IsOptional()
   @IsNumber()
   @Min(0)
   @Max(100)
   @Expose()
-  startThreshold: number;
+  @Transform(({ value }) => value ?? 0)
+  startThreshold: number = 0;
+
+  @ApiProperty({
+    description: 'Cosigning threshold percentage (between 0.00 and 100.00)',
+    required: true,
+    minimum: 0,
+    maximum: 100,
+    type: Number,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  @Expose()
+  @Transform(({ value }) => value ?? 0)
+  cosigningThreshold: number;
 
   @ApiProperty({
     description: 'Vote threshold percentage (between 0.00 and 100.00)',
@@ -315,20 +331,6 @@ export class CreateVaultReq {
   @Max(100)
   @Expose()
   executionThreshold: number;
-
-  @ApiProperty({
-    description: 'Cosigning threshold percentage (between 0.00 and 100.00)',
-    required: true,
-    minimum: 0,
-    maximum: 100,
-    type: Number,
-  })
-  @IsNotEmpty()
-  @IsNumber()
-  @Min(0)
-  @Max(100)
-  @Expose()
-  cosigningThreshold: number;
 
   @ApiProperty()
   @IsNotEmpty()
