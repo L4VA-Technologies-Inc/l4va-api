@@ -1,5 +1,5 @@
-import { Injectable } from "@nestjs/common";
-import { Novu } from "@novu/api";
+import { Injectable } from '@nestjs/common';
+import { Novu } from '@novu/api';
 
 export interface INotificationBody {
   address: string;
@@ -9,10 +9,9 @@ export interface INotificationBody {
 
 @Injectable()
 export class NotificationService {
-
   async sendNotification(body: INotificationBody) {
     const novu = new Novu({
-      secretKey: process.env['NOVU_API_KEY']
+      secretKey: process.env['NOVU_API_KEY'],
     });
 
     try {
@@ -22,12 +21,11 @@ export class NotificationService {
         payload: {
           title: body.title,
           description: body.description,
-        }
+        },
       });
       return res;
     } catch (err) {
       return err;
     }
   }
-
 }
