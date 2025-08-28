@@ -309,7 +309,8 @@ export class VaultManagingService {
             },
           },
           {
-            address: vaultConfig.customerAddress,
+            address:
+              'addr_test1qrx2c5gjwmw0zle4ngl9yypca4mpz9ccwunqeshfqhqddy5p9et633htthpeffw4995u7khyug3j90c22hwrgwcg8c6sksutuj',
             datum: {
               type: 'script',
               hash: scriptHash,
