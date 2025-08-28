@@ -9,7 +9,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Not, Repository } from 'typeorm';
 
 import { CreateProposalReq } from './dto/create-proposal.req';
 import { GetProposalsResItem } from './dto/get-proposal.dto';
@@ -20,7 +20,7 @@ import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { Vault } from '@/database/vault.entity';
 import { Vote } from '@/database/vote.entity';
-import { ProposalStatus } from '@/types/proposal.types';
+import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { VaultStatus } from '@/types/vault.types';
 import { VoteType } from '@/types/vote.types';
 
@@ -52,25 +52,25 @@ export class GovernanceService {
     this.logger.log('Starting daily snapshot creation');
 
     try {
-      // Get all locked vaults
       const lockedVaults = await this.vaultRepository.find({
-        where: { vault_status: VaultStatus.locked },
+        where: {
+          vault_status: VaultStatus.locked,
+          asset_vault_name: Not(IsNull()),
+          policy_id: Not(IsNull()),
+        },
       });
 
       this.logger.log(`Found ${lockedVaults.length} locked vaults for snapshots`);
 
       for (const vault of lockedVaults) {
         try {
-          if (!vault.asset_vault_name || vault.policy_id) {
-            this.logger.warn(`No asset ID found for vault ${vault.id}, skipping snapshot`);
+          if (!vault.asset_vault_name || !vault.policy_id) {
+            this.logger.warn(`Vault ${vault.id} missing asset info, skipping snapshot`);
             continue;
           }
 
-          // Create a snapshot for this vault
           await this.createAutomaticSnapshot(vault.id, `${vault.policy_id}${vault.asset_vault_name}`);
-
-          // Add some delay between requests to not overwhelm the BlockFrost API
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          await new Promise(resolve => setTimeout(resolve, 5000)); // Add some delay between requests to not overwhelm the BlockFrost API
         } catch (error) {
           this.logger.error(`Error creating snapshot for vault ${vault.id}: ${error.message}`, error.stack);
           // Continue with the next vault even if one fails
@@ -205,18 +205,55 @@ export class GovernanceService {
       throw new BadRequestException('No snapshot available for voting power determination');
     }
 
-    // Create and save the proposal
+    // Determine start date - use the provided one or now if not provided
+    let startDate: Date;
+    if (createProposalReq.startDate) {
+      startDate = new Date(createProposalReq.startDate);
+    } else if (createProposalReq.proposalStart) {
+      startDate = new Date(createProposalReq.proposalStart);
+    } else {
+      startDate = new Date();
+    }
+
+    // Create the proposal with the appropriate fields based on type
     const proposal = this.proposalRepository.create({
       vaultId,
       title: createProposalReq.title,
       description: createProposalReq.description,
       creatorId: userId,
       proposalType: createProposalReq.type,
-      startDate: new Date(createProposalReq.startDate).toISOString(),
+      startDate: startDate.toISOString(),
       snapshotId: latestSnapshot.id,
       status: ProposalStatus.ACTIVE,
       endDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days from now
     });
+
+    // Set type-specific fields based on proposal type
+    switch (createProposalReq.type) {
+      case ProposalType.STAKING:
+        proposal.fungibleTokens = createProposalReq.fts || [];
+        proposal.nonFungibleTokens = createProposalReq.nfts || [];
+        break;
+
+      case ProposalType.DISTRIBUTION:
+        proposal.distributionAssets = createProposalReq.distributionAssets || [];
+        break;
+
+      case ProposalType.TERMINATION:
+        if (createProposalReq.metadata) {
+          proposal.terminationReason = createProposalReq.metadata.reason;
+          proposal.terminationDate = createProposalReq.metadata.terminationDate
+            ? new Date(createProposalReq.metadata.terminationDate)
+            : undefined;
+        }
+        break;
+
+      case ProposalType.BURNING:
+        if (createProposalReq.metadata) {
+          proposal.burnAssets = createProposalReq.metadata.burnAssets || [];
+        }
+        break;
+    }
 
     await this.proposalRepository.save(proposal);
 

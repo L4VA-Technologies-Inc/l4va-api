@@ -1,5 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 
+import { DistributionAssetDto, FungibleTokenDto, NonFungibleTokenDto } from './create-proposal.req';
+
 import { ProposalStatus } from '@/types/proposal.types';
 
 // For base proposal data
@@ -52,6 +54,24 @@ class BaseProposalDto {
     example: '2023-08-22T10:30:00Z',
   })
   endDate: string;
+
+  @ApiProperty({ required: false, type: [FungibleTokenDto] })
+  fungibleTokens?: FungibleTokenDto[];
+
+  @ApiProperty({ required: false, type: [NonFungibleTokenDto] })
+  nonFungibleTokens?: NonFungibleTokenDto[];
+
+  @ApiProperty({ required: false, type: [DistributionAssetDto] })
+  distributionAssets?: DistributionAssetDto[];
+
+  @ApiProperty({ required: false })
+  terminationReason?: string;
+
+  @ApiProperty({ required: false })
+  terminationDate?: Date;
+
+  @ApiProperty({ required: false, type: [Object] })
+  burnAssets?: any[];
 }
 
 // For active proposals with votes
