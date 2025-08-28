@@ -25,13 +25,11 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { BlockchainService, TransactionBuildResponse } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { Datum, Redeemer, Redeemer1 } from '@/modules/vaults/processing-tx/onchain/types/type';
-import { applyContributeParams, toPreloadedScript } from '@/modules/vaults/processing-tx/onchain/utils/apply_params';
 import { generate_tag_from_txhash_index, getUtxosExctract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const blueprint = require('../vaults/processing-tx/onchain/utils/blueprint.json');
 
 @Injectable()
 export class ClaimsService {
@@ -160,20 +158,12 @@ export class ClaimsService {
         throw new Error('No UTXOs found.');
       }
 
-      const parameterizedScript = applyContributeParams({
-        vault_policy_id: this.vaultPolicyId,
-        vault_id: claim.vault.asset_vault_name,
-      });
-      const POLICY_ID = parameterizedScript.validator.hash;
-
-      const unparameterizedScript = blueprint.validators.find(v => v.title === 'contribute.contribute');
-
-      if (!unparameterizedScript) {
-        throw new Error('Contribute validator not found');
-      }
-
+      const POLICY_ID = vault.script_hash;
       // Extract data from claim metadata
-      const lpsUnit = parameterizedScript.validator.hash + '72656365697074';
+      const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(POLICY_ID)))
+        .to_address()
+        .to_bech32();
+      const lpsUnit = vault.script_hash + '72656365697074';
       const txUtxos = await this.blockfrost.txsUtxos(claim.transaction.tx_hash);
       const output = txUtxos.outputs[0];
       if (!output) {
@@ -189,7 +179,6 @@ export class ClaimsService {
 
       const input: {
         changeAddress: string;
-        utxos?: string[]; // FOR EXCTRACT ASSET TX
         message: string;
         mint?: Array<object>;
         scriptInteractions: object[];
@@ -200,10 +189,6 @@ export class ClaimsService {
           datum?: { type: 'inline'; value: string | Datum; shape?: object };
         }[];
         requiredSigners: string[];
-        preloadedScripts: {
-          type: string;
-          blueprint: unknown;
-        }[];
         referenceInputs: { txHash: string; index: number }[];
         validityInterval: {
           start: boolean;
@@ -264,7 +249,7 @@ export class ClaimsService {
             assets: [
               {
                 assetName: { name: vault.asset_vault_name, format: 'hex' },
-                policyId: parameterizedScript.validator.hash,
+                policyId: vault.script_hash,
                 quantity: claim.amount,
               },
             ],
@@ -273,11 +258,22 @@ export class ClaimsService {
               value: PlutusData.new_bytes(Buffer.from(datumTag, 'hex')).to_hex(),
             },
           },
-        ],
-        preloadedScripts: [
-          toPreloadedScript(blueprint, {
-            validators: [parameterizedScript.validator, unparameterizedScript],
-          }),
+          {
+            address: SC_ADDRESS,
+            lovelace: 50000000,
+            datum: {
+              type: 'inline',
+              value: {
+                policy_id: POLICY_ID,
+                asset_name: vault.asset_vault_name,
+                owner: user.address,
+              },
+              shape: {
+                validatorHash: POLICY_ID,
+                purpose: 'spend',
+              },
+            },
+          },
         ],
         requiredSigners: [this.adminHash],
         referenceInputs: [
@@ -376,23 +372,14 @@ export class ClaimsService {
         throw new Error('No UTXOs found.');
       }
 
-      const parameterizedScript = applyContributeParams({
-        vault_policy_id: this.vaultPolicyId,
-        vault_id: claim.vault.asset_vault_name,
-      });
-      const POLICY_ID = parameterizedScript.validator.hash;
+      const POLICY_ID = vault.script_hash;
+
       const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(POLICY_ID)))
         .to_address()
         .to_bech32();
 
-      const unparameterizedScript = blueprint.validators.find(v => v.title === 'contribute.contribute');
-
-      if (!unparameterizedScript) {
-        throw new Error('Contribute validator not found');
-      }
-
       // Extract data from claim metadata
-      const lpsUnit = parameterizedScript.validator.hash + '72656365697074';
+      const lpsUnit = vault.script_hash + '72656365697074';
       const txUtxos = await this.blockfrost.txsUtxos(claim.transaction.tx_hash);
       const output = txUtxos.outputs[0];
       if (!output) {
@@ -418,10 +405,6 @@ export class ClaimsService {
           datum?: { type: 'inline'; value: string | Datum; shape?: object };
         }[];
         requiredSigners: string[];
-        preloadedScripts: {
-          type: string;
-          blueprint: unknown;
-        }[];
         referenceInputs: { txHash: string; index: number }[];
         validityInterval: {
           start: boolean;
@@ -483,7 +466,7 @@ export class ClaimsService {
             assets: [
               {
                 assetName: { name: vault.asset_vault_name, format: 'hex' },
-                policyId: parameterizedScript.validator.hash,
+                policyId: vault.script_hash,
                 quantity: claim.amount,
               },
             ],
@@ -506,11 +489,22 @@ export class ClaimsService {
               shape: { validatorHash: POLICY_ID, purpose: 'spend' },
             },
           },
-        ],
-        preloadedScripts: [
-          toPreloadedScript(blueprint, {
-            validators: [parameterizedScript.validator, unparameterizedScript],
-          }),
+          {
+            address: SC_ADDRESS,
+            lovelace: 50000000,
+            datum: {
+              type: 'inline',
+              value: {
+                policy_id: POLICY_ID,
+                asset_name: vault.asset_vault_name,
+                owner: user.address,
+              },
+              shape: {
+                validatorHash: POLICY_ID,
+                purpose: 'spend',
+              },
+            },
+          },
         ],
         requiredSigners: [this.adminHash],
         referenceInputs: [
@@ -525,10 +519,6 @@ export class ClaimsService {
         },
         network: 'preprod',
       };
-
-      const inputWithNoPreloaded = { ...input };
-      delete inputWithNoPreloaded.preloadedScripts;
-      this.logger.debug(JSON.stringify(inputWithNoPreloaded));
 
       // Build the transaction
       const buildResponse = await this.blockchainService.buildTransaction(input);
@@ -578,23 +568,12 @@ export class ClaimsService {
         throw new Error('No UTXOs found.');
       }
 
-      const parameterizedScript = applyContributeParams({
-        vault_policy_id: this.vaultPolicyId,
-        vault_id: claim.vault.asset_vault_name,
-      });
-      const POLICY_ID = parameterizedScript.validator.hash;
+      const POLICY_ID = vault.script_hash;
       const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(POLICY_ID)))
         .to_address()
         .to_bech32();
 
-      const unparameterizedScript = blueprint.validators.find(v => v.title === 'contribute.contribute');
-
-      if (!unparameterizedScript) {
-        throw new Error('Contribute validator not found');
-      }
-
-      // Extract data from claim metadata
-      const lpsUnit = parameterizedScript.validator.hash + '72656365697074';
+      const lpsUnit = vault.script_hash + '72656365697074';
       const txUtxos = await this.blockfrost.txsUtxos(claim.transaction.tx_hash);
       const output = txUtxos.outputs[0];
       if (!output) {
@@ -699,21 +678,12 @@ export class ClaimsService {
           ],
           mint,
           outputs: [ownerOutput, changeOutput],
-          preloadedScripts: [
-            toPreloadedScript(blueprint, {
-              validators: [parameterizedScript.validator, unparameterizedScript],
-            }),
-          ],
           requiredSigners: [this.adminHash],
           referenceInputs: [{ txHash: vault.last_update_tx_hash, index: vault.last_update_tx_index }],
           validityInterval: { start: true, end: true },
           network: 'preprod',
         };
 
-        const trimmed: any = { ...payload };
-        delete trimmed.preloadedScripts;
-        console.log('=== Build payload (trimmed) ===');
-        console.log(JSON.stringify(trimmed, null, 2));
         return payload;
       };
 
