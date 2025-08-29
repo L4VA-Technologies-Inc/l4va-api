@@ -23,6 +23,7 @@ import {
   InvestmentWindowType,
   SmartContractVaultStatus,
 } from '@/types/vault.types';
+import {EventEmitter2} from "@nestjs/event-emitter";
 
 @Injectable()
 export class LifecycleService {
@@ -43,7 +44,8 @@ export class LifecycleService {
     private readonly vaultManagingService: VaultManagingService,
     private readonly transactionsService: TransactionsService,
     private readonly distributionService: DistributionService,
-    private readonly taptoolsService: TaptoolsService
+    private readonly taptoolsService: TaptoolsService,
+    private readonly eventEmitter: EventEmitter2
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -77,6 +79,12 @@ export class LifecycleService {
         scStatus = SmartContractVaultStatus.OPEN;
       } else if (newStatus === VaultStatus.failed) {
         scStatus = SmartContractVaultStatus.CANCELLED;
+
+        const { name, owner } = await this.vaultRepository.findOneBy({id: vaultId})
+        this.eventEmitter.emit('vault.failed', {
+          address: owner.address,
+          vaultName: name,
+        });
       } else {
         scStatus = undefined;
       }
@@ -186,6 +194,15 @@ export class LifecycleService {
     if (vault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
       // Start acquire phase immediately when contribution ends
       acquireStartTime = contributionEnd;
+      const contributorIds = vault.assets.map(asset => asset.added_by);
+
+      this.eventEmitter.emit('vault.contribution_complete', {
+        vaultId: vault.id,
+        address: vault.owner.address,
+        vaultName: vault.name,
+        totalValueLocked: vault.total_assets_cost_ada || 0,
+        contributorIds,
+      });
     } else if (vault.acquire_open_window_type === InvestmentWindowType.custom && vault.acquire_open_window_time) {
       // Use custom start time, but ensure it's not before contribution ends
       const customTime = new Date(vault.acquire_open_window_time);
@@ -550,6 +567,17 @@ export class LifecycleService {
           acquirerClaims: finalAcquirerClaims,
         });
 
+        this.eventEmitter.emit('distribution.claim_available', {
+          vaultId: vault.id,
+          vaultName: vault.name,
+          tokenHolderIds: [
+            ...new Set([
+              ...finalAcquirerClaims.map(c => c.user.id),
+              ...finalContributorClaims.map(c => c.user.id),
+            ]),
+          ],
+        });
+
         // Multiplier for LP
         const { adaPairMultiplier } = this.distributionService.calculateLpAdaMultiplier(lpVtAmount, lpAdaAmount);
 
@@ -576,6 +604,21 @@ export class LifecycleService {
           ada_pair_multiplier: adaPairMultiplier,
           vtPrice,
         });
+
+        this.eventEmitter.emit('vault.success', {
+          vaultId: vault.id,
+          vaultName: vault.name,
+          tokenHoldersIds: [
+            ...new Set([
+              ...finalAcquirerClaims.map(c => c.user.id),
+              ...finalContributorClaims.map(c => c.user.id),
+            ]),
+          ],
+          adaSpent: totalAcquiredAda,
+          tokenPercentage:vault.tokens_for_acquires,
+          tokenTicker: vault.vault_token_ticker,
+          impliedVaultValue: totalAcquiredAda + totalContributedValueAda,
+        })
       } else {
         this.logger.warn(
           `Vault ${vault.id} does not meet the threshold: ` +
@@ -589,6 +632,14 @@ export class LifecycleService {
           vaultId: vault.id,
           newStatus: VaultStatus.failed,
           newScStatus: SmartContractVaultStatus.CANCELLED,
+        });
+
+        this.eventEmitter.emit('vault.failed', {
+          vaultId: vault.id,
+          vaultName: vault.name,
+          contributorIds: [
+            ...new Set(contributionTransactions.map(tx => tx.user?.id).filter(Boolean)),
+          ],
         });
       }
     } catch (error) {

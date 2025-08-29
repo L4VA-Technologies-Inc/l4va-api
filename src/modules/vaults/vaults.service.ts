@@ -38,6 +38,8 @@ import {
   VaultPrivacy,
   VaultStatus,
 } from '@/types/vault.types';
+import {Novu} from "@novu/api";
+import {EventEmitter2} from "@nestjs/event-emitter";
 
 /**
  * VaultsService
@@ -84,7 +86,8 @@ export class VaultsService {
     private readonly vaultContractService: VaultManagingService,
     private readonly blockchainScannerService: BlockchainScannerService,
     private readonly taptoolsService: TaptoolsService,
-    private readonly transactionsService: TransactionsService
+    private readonly transactionsService: TransactionsService,
+    private readonly eventEmitter: EventEmitter2
   ) {}
 
   /**
@@ -404,6 +407,8 @@ export class VaultsService {
         })
       );
 
+
+
       newVault.max_contribute_assets = Number(maxCountOf) || 0;
       await this.vaultsRepository.save(newVault);
       // Handle acquirer whitelist
@@ -440,6 +445,12 @@ export class VaultsService {
           wallet_address: item,
         });
       });
+
+      // this.eventEmitter.emit('vault.whitelist_added', {
+      //   vaultId: newVault.id,
+      //   vaultName: newVault.name,
+      //   userIds: [],
+      // });
 
       // Handle tags
       if (data.tags?.length > 0) {
@@ -541,6 +552,13 @@ export class VaultsService {
       finalVault.script_hash = scriptHash;
       finalVault.apply_params_result = applyParamsResult;
       await this.vaultsRepository.save(finalVault);
+
+      this.eventEmitter.emit('vault.launched', {
+        address: finalVault.owner.address,
+        vaultName: finalVault.name,
+        contributionStartDate: new Date(finalVault.contribution_open_window_time).toLocaleDateString(),
+        contributionStartTime: new Date(finalVault.contribution_open_window_time).toLocaleTimeString(),
+      });
       return {
         vaultId: finalVault.id,
         presignedTx,

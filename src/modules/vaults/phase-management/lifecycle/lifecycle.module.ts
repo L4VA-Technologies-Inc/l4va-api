@@ -15,6 +15,7 @@ import { DistributionModule } from '@/modules/distribution/distribution.module';
 import { LifecycleProcessor } from '@/modules/vaults/phase-management/lifecycle/lifecycle.processor';
 import { TransactionsModule } from '@/modules/vaults/processing-tx/offchain-tx/transactions.module';
 import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockchain.module';
+import { EventEmitter } from "typeorm/browser/platform/BrowserPlatformTools";
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockch
     TypeOrmModule.forFeature([Vault, Asset, Claim, Transaction]),
     ScheduleModule.forRoot(),
     BlockchainModule,
+    EventEmitter,
     BullModule.registerQueue({
       name: 'phaseTransition',
     }),
