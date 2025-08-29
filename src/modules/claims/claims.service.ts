@@ -582,8 +582,8 @@ export class ClaimsService {
       const lovelaceChange = Number(output.amount.find(a => a.unit === 'lovelace')?.quantity ?? '0');
       const amountOfLpsToClaim = output.amount.find(a => a.unit === lpsUnit);
       const otherAssets = output.amount
-        .filter((a: any) => a.unit !== 'lovelace' && !a.unit.startsWith(POLICY_ID))
-        .map((a: any) => {
+        .filter(a => a.unit !== 'lovelace' && !a.unit.startsWith(POLICY_ID))
+        .map(a => {
           const unit: string = a.unit;
           const policyId = unit.slice(0, 56);
           const assetNameHex = unit.slice(56);

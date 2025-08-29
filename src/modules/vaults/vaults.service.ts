@@ -16,7 +16,6 @@ import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './d
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { BlockchainScannerService } from './processing-tx/onchain/blockchain-scanner.service';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
-import { applyContributeParams } from './processing-tx/onchain/utils/apply_params';
 import { VaultManagingService } from './processing-tx/onchain/vault-managing.service';
 
 import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
@@ -112,17 +111,7 @@ export class VaultsService {
         throw new Error('Transaction output not found or invalid format');
       }
 
-      const { output_amount } = txDetail;
-      const vaultPolicyPlusName = output_amount[output_amount.length - 1].unit;
-      const VAULT_POLICY_ID = vaultPolicyPlusName.slice(0, 56);
-      const VAULT_ID = vaultPolicyPlusName.slice(56);
-
-      const parameterizedScript = applyContributeParams({
-        vault_policy_id: VAULT_POLICY_ID,
-        vault_id: VAULT_ID,
-      });
-
-      const POLICY_ID = parameterizedScript.validator.hash;
+      const POLICY_ID = vault.script_hash;
       const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(POLICY_ID)))
         .to_address()
         .to_bech32();

@@ -268,29 +268,6 @@ export class ContributionService {
     };
   }
 
-  async updateTransactionHash(
-    transactionId: string,
-    txHash: string
-  ): Promise<{
-    success: boolean;
-    message: string;
-    txId: string;
-    txHash: string;
-  }> {
-    const transaction = await this.transactionsService.findById(transactionId);
-    if (!transaction) {
-      throw new NotFoundException('Transaction not found');
-    }
-
-    await this.transactionsService.updateTransactionHash(transactionId, txHash);
-    return {
-      success: true,
-      message: 'Transaction hash updated',
-      txId: transactionId,
-      txHash: txHash,
-    };
-  }
-
   /**
    * Extract the policy ID of Receipt from a transaction using its hash.
    * @param txHash The hash of the transaction.
