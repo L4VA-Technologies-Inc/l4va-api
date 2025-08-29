@@ -79,6 +79,7 @@ export class VaultManagingService {
   private readonly blockfrost: BlockFrostAPI;
   private readonly anvilApi: string;
   private readonly anvilApiKey: string;
+  private readonly vaultScriptAddress: string;
 
   constructor(
     @InjectRepository(Transaction)
@@ -94,6 +95,7 @@ export class VaultManagingService {
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
+    this.vaultScriptAddress = this.configService.get<string>('VAULT_SCRIPT_ADDRESS');
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
     });
@@ -309,8 +311,7 @@ export class VaultManagingService {
             },
           },
           {
-            address:
-              'addr_test1qrx2c5gjwmw0zle4ngl9yypca4mpz9ccwunqeshfqhqddy5p9et633htthpeffw4995u7khyug3j90c22hwrgwcg8c6sksutuj',
+            address: this.vaultScriptAddress,
             datum: {
               type: 'script',
               hash: scriptHash,
