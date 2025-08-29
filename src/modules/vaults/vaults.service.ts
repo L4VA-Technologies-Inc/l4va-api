@@ -732,25 +732,35 @@ export class VaultsService {
     }
 
     // Get count of locked assets for this vault
-    const lockedAssetsCount = await this.assetsRepository.count({
-      where: {
-        vault: { id },
-        status: AssetStatus.LOCKED,
-        type: AssetType.NFT,
-        origin_type: AssetOriginType.CONTRIBUTED,
-      },
+    const assetCounts = await this.assetsRepository
+      .createQueryBuilder('asset')
+      .select(['asset.type', 'COUNT(asset.id) as count', 'SUM(asset.quantity) as totalQuantity'])
+      .where('asset.vault_id = :vaultId', { vaultId: id })
+      .andWhere('asset.status = :status', { status: AssetStatus.LOCKED })
+      .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
+      .groupBy('asset.type')
+      .getRawMany();
+
+    let lockedNFTCount = 0;
+    let lockedFTsCount = 0;
+
+    assetCounts.forEach(result => {
+      if (result.asset_type === AssetType.NFT) {
+        lockedNFTCount = parseInt(result.count);
+      } else if (result.asset_type === AssetType.FT) {
+        lockedFTsCount = parseInt(result.totalquantity);
+      }
     });
 
-    // todo this is ok for contribution phase, but we need to calculate only assets with origin type CONTRIBUTED
+    const lockedAssetsCount = lockedNFTCount + lockedFTsCount;
     const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(id);
 
-    // Create a new plain object with the additional properties
     const additionalData = {
       maxContributeAssets: Number(vault.max_contribute_assets),
-      assetsCount: lockedAssetsCount,
-      assetsPrices: assetsPrices,
-      requireReservedCostAda: assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01),
       requireReservedCostUsd: assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01),
+      requireReservedCostAda: assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01),
+      assetsCount: lockedAssetsCount,
+      assetsPrices,
     };
 
     const fdv =

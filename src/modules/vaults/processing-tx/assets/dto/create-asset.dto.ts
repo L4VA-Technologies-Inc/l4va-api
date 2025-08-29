@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsString, IsEnum, IsNumber, IsOptional, IsObject, ValidateNested } from 'class-validator';
+
 import { AssetType } from '@/types/asset.types';
 
 export class AssetMetadataDto {

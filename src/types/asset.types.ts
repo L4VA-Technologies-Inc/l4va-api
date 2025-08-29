@@ -1,7 +1,7 @@
 export enum AssetType {
   NFT = 'nft',
-  CNT = 'cnt',
-  // Can be extended with more types as needed
+  FT = 'ft',
+  ADA = 'ada',
 }
 
 export enum AssetStatus {
@@ -11,7 +11,6 @@ export enum AssetStatus {
 }
 
 export enum AssetOriginType {
-  INVESTED = 'invested',
   ACQUIRED = 'acquired',
   CONTRIBUTED = 'contributed',
 }
