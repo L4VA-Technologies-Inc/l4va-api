@@ -97,7 +97,7 @@ export class AcquireService {
           acquireReq.assets.map(async assetItem => {
             const asset = this.assetRepository.create({
               transaction: savedTransaction,
-              type: AssetType.CNT, // Using CNT type for acquire
+              type: AssetType.ADA, // Using ADA type for acquire
               policy_id: assetItem.policyId || '',
               asset_id: assetItem.assetName,
               quantity: assetItem.quantity,

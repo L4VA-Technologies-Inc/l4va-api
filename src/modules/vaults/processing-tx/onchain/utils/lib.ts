@@ -52,10 +52,14 @@ const assetsToValue = (assets: Amount[]): Value => {
   return multiAssetsValue;
 };
 
-export const getUtxos = async (address: Address, min = 0, blockfrost): Promise<TransactionUnspentOutputs> => {
+export const getUtxos = async (
+  address: Address,
+  min = 0,
+  blockfrost: BlockFrostAPI
+): Promise<TransactionUnspentOutputs> => {
   const utxos = await blockfrost.addressesUtxosAll(address.to_bech32());
   const parsedUtxos = TransactionUnspentOutputs.new();
-  utxos.forEach((utxo: any) => {
+  utxos.forEach(utxo => {
     const { tx_hash, output_index, amount } = utxo;
     if (Number(amount[0].quantity) > min) {
       parsedUtxos.add(
@@ -69,10 +73,10 @@ export const getUtxos = async (address: Address, min = 0, blockfrost): Promise<T
   return parsedUtxos;
 };
 
-export const getUtxosExctract = async (address: Address, min = 0, blockfrost): Promise<string[]> => {
+export const getUtxosExctract = async (address: Address, min = 0, blockfrost: BlockFrostAPI): Promise<string[]> => {
   const utxos = await blockfrost.addressesUtxosAll(address.to_bech32());
   const parsedUtxos: string[] = [];
-  utxos.forEach((utxo: any) => {
+  utxos.forEach(utxo => {
     const { tx_hash, output_index, amount } = utxo;
     if (Number(amount[0].quantity) > min) {
       parsedUtxos.push(

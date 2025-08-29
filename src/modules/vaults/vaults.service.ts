@@ -16,7 +16,6 @@ import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './d
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { BlockchainScannerService } from './processing-tx/onchain/blockchain-scanner.service';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
-import { applyContributeParams } from './processing-tx/onchain/utils/apply_params';
 import { VaultManagingService } from './processing-tx/onchain/vault-managing.service';
 
 import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
@@ -112,17 +111,7 @@ export class VaultsService {
         throw new Error('Transaction output not found or invalid format');
       }
 
-      const { output_amount } = txDetail;
-      const vaultPolicyPlusName = output_amount[output_amount.length - 1].unit;
-      const VAULT_POLICY_ID = vaultPolicyPlusName.slice(0, 56);
-      const VAULT_ID = vaultPolicyPlusName.slice(56);
-
-      const parameterizedScript = applyContributeParams({
-        vault_policy_id: VAULT_POLICY_ID,
-        vault_id: VAULT_ID,
-      });
-
-      const POLICY_ID = parameterizedScript.validator.hash;
+      const POLICY_ID = vault.script_hash;
       const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(POLICY_ID)))
         .to_address()
         .to_bech32();
@@ -743,25 +732,35 @@ export class VaultsService {
     }
 
     // Get count of locked assets for this vault
-    const lockedAssetsCount = await this.assetsRepository.count({
-      where: {
-        vault: { id },
-        status: AssetStatus.LOCKED,
-        type: AssetType.NFT,
-        origin_type: AssetOriginType.CONTRIBUTED,
-      },
+    const assetCounts = await this.assetsRepository
+      .createQueryBuilder('asset')
+      .select(['asset.type', 'COUNT(asset.id) as count', 'SUM(asset.quantity) as totalQuantity'])
+      .where('asset.vault_id = :vaultId', { vaultId: id })
+      .andWhere('asset.status = :status', { status: AssetStatus.LOCKED })
+      .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
+      .groupBy('asset.type')
+      .getRawMany();
+
+    let lockedNFTCount = 0;
+    let lockedFTsCount = 0;
+
+    assetCounts.forEach(result => {
+      if (result.asset_type === AssetType.NFT) {
+        lockedNFTCount = parseInt(result.count);
+      } else if (result.asset_type === AssetType.FT) {
+        lockedFTsCount = parseInt(result.totalquantity);
+      }
     });
 
-    // todo this is ok for contribution phase, but we need to calculate only assets with origin type CONTRIBUTED
+    const lockedAssetsCount = lockedNFTCount + lockedFTsCount;
     const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(id);
 
-    // Create a new plain object with the additional properties
     const additionalData = {
       maxContributeAssets: Number(vault.max_contribute_assets),
-      assetsCount: lockedAssetsCount,
-      assetsPrices: assetsPrices,
-      requireReservedCostAda: assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01),
       requireReservedCostUsd: assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01),
+      requireReservedCostAda: assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01),
+      assetsCount: lockedAssetsCount,
+      assetsPrices,
     };
 
     const fdv =

@@ -1,6 +1,11 @@
 import { Expose } from 'class-transformer';
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, CreateDateColumn, JoinColumn } from 'typeorm';
 
+import {
+  DistributionAssetDto,
+  FungibleTokenDto,
+  NonFungibleTokenDto,
+} from '../modules/vaults/phase-management/governance/dto/create-proposal.req';
 import { ProposalStatus, ProposalType } from '../types/proposal.types';
 
 import { User } from './user.entity';
@@ -61,6 +66,31 @@ export class Proposal {
   @Expose({ name: 'snapshotId' })
   @Column({ name: 'snapshot_id', nullable: true })
   snapshotId: string;
+
+  // Add direct columns for each proposal type's specific data
+  @Expose({ name: 'fungibleTokens' })
+  @Column({ name: 'fungible_tokens', type: 'json', nullable: true })
+  fungibleTokens?: FungibleTokenDto[];
+
+  @Expose({ name: 'nonFungibleTokens' })
+  @Column({ name: 'non_fungible_tokens', type: 'json', nullable: true })
+  nonFungibleTokens?: NonFungibleTokenDto[];
+
+  @Expose({ name: 'distributionAssets' })
+  @Column({ name: 'distribution_assets', type: 'json', nullable: true })
+  distributionAssets?: DistributionAssetDto[];
+
+  @Expose({ name: 'terminationReason' })
+  @Column({ name: 'termination_reason', type: 'text', nullable: true })
+  terminationReason?: string;
+
+  @Expose({ name: 'terminationDate' })
+  @Column({ name: 'termination_date', nullable: true })
+  terminationDate?: Date;
+
+  @Expose({ name: 'burnAssets' })
+  @Column({ name: 'burn_assets', type: 'json', nullable: true })
+  burnAssets?: any[];
 
   @Expose({ name: 'creator' })
   @ManyToOne(() => User, { nullable: false, onDelete: 'CASCADE' })

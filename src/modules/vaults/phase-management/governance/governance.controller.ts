@@ -19,9 +19,8 @@ export class GovernanceController {
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Create a new proposal' })
   @ApiResponse({ status: 201, description: 'Proposal created successfully' })
-  async createProposal(@Req() req, @Param('vaultId') vaultId: string, @Body() createProposalReq: CreateProposalReq) {
-    const userId = req.user.sub;
-    return this.governanceService.createProposal(vaultId, createProposalReq, userId);
+  async createProposal(@Req() req, @Param('vaultId') vaultId: string, @Body() data: any) {
+    return this.governanceService.createProposal(vaultId, data, req.user.sub);
   }
 
   @Get('vaults/:vaultId/proposals')

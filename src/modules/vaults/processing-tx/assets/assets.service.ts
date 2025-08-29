@@ -53,8 +53,8 @@ export class AssetsService {
       throw new BadRequestException('Token ID is required for NFT assets');
     }
 
-    if (data.type === AssetType.CNT && !data.dexPrice) {
-      throw new BadRequestException('DEX price is required for CNT assets');
+    if (data.type === AssetType.FT && !data.dexPrice) {
+      throw new BadRequestException('DEX price is required for FT assets');
     }
 
     // Create and save the asset
@@ -235,7 +235,7 @@ export class AssetsService {
       asset.floor_price = floorPrice;
     }
 
-    if (asset.type === AssetType.CNT && dexPrice !== undefined) {
+    if (asset.type === AssetType.FT && dexPrice !== undefined) {
       asset.dex_price = dexPrice;
     }
 
