@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Expose, Type, Transform } from 'class-transformer';
-import { IsArray, IsNotEmpty, IsOptional, ValidateNested, IsString, IsNumber, IsObject } from 'class-validator';
+import { IsArray, IsNotEmpty, IsOptional, ValidateNested, IsString } from 'class-validator';
+
+import { AssetType } from '@/types/asset.types';
 
 class MetadataFile {
   @ApiProperty()
@@ -50,6 +52,14 @@ export class ContributionAsset {
   @IsNotEmpty()
   @Expose()
   policyId: string;
+
+  @ApiProperty({
+    description: 'Type of the asset, e.g. "ada", "ft", "nft"',
+    example: 'ada',
+  })
+  @IsNotEmpty()
+  @Expose()
+  type: AssetType;
 
   @ApiProperty({
     description: 'Asset name within the policy',

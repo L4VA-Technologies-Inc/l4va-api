@@ -13,7 +13,7 @@ import { Vault } from '@/database/vault.entity';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { BlockchainScannerService } from '@/modules/vaults/processing-tx/onchain/blockchain-scanner.service';
 import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
-import { AssetStatus, AssetType, AssetOriginType } from '@/types/asset.types';
+import { AssetStatus, AssetOriginType } from '@/types/asset.types';
 import { BlockchainTransactionListItem } from '@/types/blockchain.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { VaultPrivacy, VaultStatus } from '@/types/vault.types';
@@ -90,37 +90,37 @@ export class ContributionService {
 
             // If transaction exists in DB and status is not confirmed, update it
             if (dbTx && dbTx.status !== 'confirmed') {
-              // try {
-              //   // Update the vault with the policy ID of Minted Token if it doesn't have one
-              //   if (dbTx.type === TransactionType.contribute) {
-              //     const vault = await this.vaultRepository.findOne({ where: { id: vaultId } });
+              try {
+                // Update the vault with the policy ID of Minted Token if it doesn't have one
+                if (dbTx.type === TransactionType.contribute) {
+                  const vault = await this.vaultRepository.findOne({ where: { id: vaultId } });
 
-              //     if (vault && !vault.policy_id) {
-              //       const extractedPolicyId = await this.extractPolicyIdFromTransaction(tx.tx_hash);
-              //       if (extractedPolicyId) {
-              //         vault.policy_id = extractedPolicyId;
-              //         await this.vaultRepository.save(vault);
-              //         this.logger.log(`Updated vault ${vaultId} with policy ID: ${extractedPolicyId}`);
+                  if (vault && !vault.policy_id) {
+                    const extractedPolicyId = await this.extractPolicyIdFromTransaction(tx.tx_hash);
+                    if (extractedPolicyId) {
+                      vault.policy_id = extractedPolicyId;
+                      await this.vaultRepository.save(vault);
 
-              //         // try {
-              //         //   this.logger.log(`Create PR to update Vault Metadata`);
-              //         //   await this.metadataRegistryApiService.submitTokenMetadata({
-              //         //     vaultId: vault.id,
-              //         //     subject: `${extractedPolicyId}${vault.asset_vault_name}`,
-              //         //     name: vault.name,
-              //         //     description: vault.description,
-              //         //     ticker: vault.vault_token_ticker,
-              //         //     decimals: 6,
-              //         //   });
-              //         // } catch (error) {
-              //         //   this.logger.error('Error updating vault metadata:', error);
-              //         // }
-              //       }
-              //     }
-              //   }
-              // } catch (error) {
-              //   this.logger.error(`Failed to extract policy ID for tx ${tx.tx_hash}`, error);
-              // }
+                      this.logger.log(`Updated vault ${vaultId} with policy ID: ${extractedPolicyId}`);
+                      try {
+                        this.logger.log(`Create PR to update Vault Metadata`);
+                        await this.metadataRegistryApiService.submitTokenMetadata({
+                          vaultId: vault.id,
+                          subject: `${extractedPolicyId}${vault.asset_vault_name}`,
+                          name: vault.name,
+                          description: vault.description,
+                          ticker: vault.vault_token_ticker,
+                          decimals: 6,
+                        });
+                      } catch (error) {
+                        this.logger.error('Error updating vault metadata:', error);
+                      }
+                    }
+                  }
+                }
+              } catch (error) {
+                this.logger.error(`Failed to extract policy ID for tx ${tx.tx_hash}`, error);
+              }
               try {
                 await this.transactionsService.updateTransactionStatus(
                   tx.tx_hash,
@@ -238,7 +238,7 @@ export class ContributionService {
           contributeReq.assets.map(async assetItem => {
             const asset = this.assetRepository.create({
               transaction: savedTransaction,
-              type: AssetType.NFT,
+              type: assetItem.type,
               policy_id: assetItem.policyId || '',
               asset_id: assetItem.assetName,
               quantity: assetItem.quantity,
