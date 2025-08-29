@@ -426,13 +426,16 @@ export class TaptoolsService {
       const existingAsset = assetMap.get(key);
 
       if (existingAsset) {
-        // Sum quantities for fungible tokens
-        existingAsset.quantity += 1;
+        if (asset.type === AssetType.NFT) {
+          existingAsset.quantity += 1;
+        } else {
+          existingAsset.quantity += Number(asset.quantity);
+        }
       } else {
         assetMap.set(key, {
           policyId: asset.policy_id,
           assetId: asset.asset_id,
-          quantity: 1,
+          quantity: asset.type === AssetType.NFT ? 1 : Number(asset.quantity),
           isNft: asset.type === AssetType.NFT,
           metadata: asset.metadata || {},
         });
