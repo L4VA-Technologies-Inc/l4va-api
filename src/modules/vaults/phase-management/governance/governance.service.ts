@@ -23,6 +23,7 @@ import { Vote } from '@/database/vote.entity';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { VaultStatus } from '@/types/vault.types';
 import { VoteType } from '@/types/vote.types';
+import { EventEmitter2 } from "@nestjs/event-emitter";
 
 @Injectable()
 export class GovernanceService {
@@ -40,7 +41,8 @@ export class GovernanceService {
     private readonly voteRepository: Repository<Vote>,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly eventEmitter: EventEmitter2
   ) {
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),

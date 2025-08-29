@@ -24,6 +24,7 @@ import { VaultsModule } from './modules/vaults/vaults.module';
 import { VyfiModule } from './modules/vyfi/vyfi.module';
 
 import { NotificationModule } from '@/modules/notification/notification.module';
+import { EventEmitterModule } from "@nestjs/event-emitter";
 
 @Module({
   // =)
@@ -66,6 +67,7 @@ import { NotificationModule } from '@/modules/notification/notification.module';
     VyfiModule,
     GovernanceModule,
     NotificationModule,
+    EventEmitterModule.forRoot(),
   ],
   controllers: [AppController],
   providers: [AppService],

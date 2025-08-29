@@ -19,6 +19,7 @@ import { LinkEntity } from '@/database/link.entity';
 import { TagEntity } from '@/database/tag.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { EventEmitter } from "typeorm/browser/platform/BrowserPlatformTools";
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { Vault } from '@/database/vault.entity';
     LifecycleModule,
     TransactionsModule,
     BlockchainModule,
+    EventEmitter,
     TypeOrmModule.forFeature([
       Vault,
       User,
