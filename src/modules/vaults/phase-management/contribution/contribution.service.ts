@@ -79,8 +79,7 @@ export class ContributionService {
         blockchainTxs
           // Filter out transactions without block height
           .filter(tx => tx.block_height != null)
-          // Process each transaction
-          .map(async tx => {
+          ?.map(async tx => {
             // Find corresponding transaction in database
             const dbTx = await this.transactionRepository.findOne({
               where: { tx_hash: tx.tx_hash },
@@ -204,7 +203,7 @@ export class ContributionService {
 
       if (invalidAssets.length > 0) {
         throw new BadRequestException(
-          `Some assets are not in the vault's whitelist: ${invalidAssets.map(a => a.policyId).join(', ')}`
+          `Some assets are not in the vault's whitelist: ${invalidAssets?.map(a => a.policyId).join(', ')}`
         );
       }
     }
@@ -235,7 +234,7 @@ export class ContributionService {
 
         // Create and save all assets
         const assets = await Promise.all(
-          contributeReq.assets.map(async assetItem => {
+          contributeReq.assets?.map(async assetItem => {
             const asset = this.assetRepository.create({
               transaction: savedTransaction,
               type: assetItem.type,

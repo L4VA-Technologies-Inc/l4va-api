@@ -1,5 +1,6 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Queue } from 'bullmq';
@@ -23,7 +24,6 @@ import {
   InvestmentWindowType,
   SmartContractVaultStatus,
 } from '@/types/vault.types';
-import {EventEmitter2} from "@nestjs/event-emitter";
 
 @Injectable()
 export class LifecycleService {
@@ -80,7 +80,7 @@ export class LifecycleService {
       } else if (newStatus === VaultStatus.failed) {
         scStatus = SmartContractVaultStatus.CANCELLED;
 
-        const { name, owner } = await this.vaultRepository.findOneBy({id: vaultId})
+        const { name, owner } = await this.vaultRepository.findOneBy({ id: vaultId });
         this.eventEmitter.emit('vault.failed', {
           address: owner.address,
           vaultName: name,
@@ -190,28 +190,33 @@ export class LifecycleService {
 
     // Determine acquire phase start time based on vault configuration
     let acquireStartTime: Date;
+    try {
+      if (vault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
+        // Start acquire phase immediately when contribution ends
+        acquireStartTime = contributionEnd;
+        const contributorIds = assets.map(asset => asset.added_by);
 
-    if (vault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
-      // Start acquire phase immediately when contribution ends
-      acquireStartTime = contributionEnd;
-      const contributorIds = vault.assets.map(asset => asset.added_by);
-
-      this.eventEmitter.emit('vault.contribution_complete', {
-        vaultId: vault.id,
-        address: vault.owner.address,
-        vaultName: vault.name,
-        totalValueLocked: vault.total_assets_cost_ada || 0,
-        contributorIds,
-      });
-    } else if (vault.acquire_open_window_type === InvestmentWindowType.custom && vault.acquire_open_window_time) {
-      // Use custom start time, but ensure it's not before contribution ends
-      const customTime = new Date(vault.acquire_open_window_time);
-      acquireStartTime = customTime > contributionEnd ? customTime : contributionEnd;
-    } else {
-      this.logger.warn(`Vault ${vault.id} has invalid acquire window configuration`);
-      return;
+        this.eventEmitter.emit('vault.contribution_complete', {
+          vaultId: vault.id,
+          address: vault.owner.address,
+          vaultName: vault.name,
+          totalValueLocked: vault.total_assets_cost_ada || 0,
+          contributorIds,
+        });
+      } else if (vault.acquire_open_window_type === InvestmentWindowType.custom && vault.acquire_open_window_time) {
+        // Use custom start time, but ensure it's not before contribution ends
+        const customTime = new Date(vault.acquire_open_window_time);
+        acquireStartTime = customTime > contributionEnd ? customTime : contributionEnd;
+      } else {
+        this.logger.warn(`Vault ${vault.id} has invalid acquire window configuration`);
+        return;
+      }
+    } catch (error) {
+      this.logger.error(
+        `queueContributionToAcquireTransition: Failed to queue phase transition for vault ${vault.id}:`,
+        error
+      );
     }
-
     await this.queuePhaseTransition(vault.id, VaultStatus.acquire, acquireStartTime, 'acquire_phase_start');
   }
 
@@ -567,17 +572,17 @@ export class LifecycleService {
           acquirerClaims: finalAcquirerClaims,
         });
 
-        this.eventEmitter.emit('distribution.claim_available', {
-          vaultId: vault.id,
-          vaultName: vault.name,
-          tokenHolderIds: [
-            ...new Set([
-              ...finalAcquirerClaims.map(c => c.user.id),
-              ...finalContributorClaims.map(c => c.user.id),
-            ]),
-          ],
-        });
-
+        try {
+          this.eventEmitter.emit('distribution.claim_available', {
+            vaultId: vault.id,
+            vaultName: vault.name,
+            tokenHolderIds: [
+              ...new Set([...finalAcquirerClaims.map(c => c.user.id), ...finalContributorClaims.map(c => c?.user_id)]),
+            ],
+          });
+        } catch (error) {
+          this.logger.error(`Error emitting distribution.claim_available event for vault ${vault.id}:`, error);
+        }
         // Multiplier for LP
         const { adaPairMultiplier } = this.distributionService.calculateLpAdaMultiplier(lpVtAmount, lpAdaAmount);
 
@@ -605,20 +610,21 @@ export class LifecycleService {
           vtPrice,
         });
 
-        this.eventEmitter.emit('vault.success', {
-          vaultId: vault.id,
-          vaultName: vault.name,
-          tokenHoldersIds: [
-            ...new Set([
-              ...finalAcquirerClaims.map(c => c.user.id),
-              ...finalContributorClaims.map(c => c.user.id),
-            ]),
-          ],
-          adaSpent: totalAcquiredAda,
-          tokenPercentage:vault.tokens_for_acquires,
-          tokenTicker: vault.vault_token_ticker,
-          impliedVaultValue: totalAcquiredAda + totalContributedValueAda,
-        })
+        try {
+          this.eventEmitter.emit('vault.success', {
+            vaultId: vault.id,
+            vaultName: vault.name,
+            tokenHoldersIds: [
+              ...new Set([...finalAcquirerClaims.map(c => c.user.id), ...finalContributorClaims.map(c => c?.user_id)]),
+            ],
+            adaSpent: totalAcquiredAda,
+            tokenPercentage: vault.tokens_for_acquires,
+            tokenTicker: vault.vault_token_ticker,
+            impliedVaultValue: totalAcquiredAda + totalContributedValueAda,
+          });
+        } catch (error) {
+          this.logger.error(`Error emitting vault.success event for vault ${vault.id}:`, error);
+        }
       } else {
         this.logger.warn(
           `Vault ${vault.id} does not meet the threshold: ` +
@@ -634,13 +640,15 @@ export class LifecycleService {
           newScStatus: SmartContractVaultStatus.CANCELLED,
         });
 
-        this.eventEmitter.emit('vault.failed', {
-          vaultId: vault.id,
-          vaultName: vault.name,
-          contributorIds: [
-            ...new Set(contributionTransactions.map(tx => tx.user?.id).filter(Boolean)),
-          ],
-        });
+        try {
+          this.eventEmitter.emit('vault.failed', {
+            vaultId: vault.id,
+            vaultName: vault.name,
+            contributorIds: [...new Set(contributionTransactions.map(tx => tx.user?.id).filter(Boolean))],
+          });
+        } catch (error) {
+          this.logger.error(`Error emitting vault.failed event for vault ${vault.id}:`, error);
+        }
       }
     } catch (error) {
       this.logger.error(`Error executing acquire to governance transition for vault ${vault.id}`, error);

@@ -1,5 +1,6 @@
 import { Credential, EnterpriseAddress, ScriptHash } from '@emurgo/cardano-serialization-lib-nodejs';
 import { BadRequestException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
@@ -37,8 +38,6 @@ import {
   VaultPrivacy,
   VaultStatus,
 } from '@/types/vault.types';
-import {Novu} from "@novu/api";
-import {EventEmitter2} from "@nestjs/event-emitter";
 
 /**
  * VaultsService
@@ -395,8 +394,6 @@ export class VaultsService {
           }
         })
       );
-
-
 
       newVault.max_contribute_assets = Number(maxCountOf) || 0;
       await this.vaultsRepository.save(newVault);

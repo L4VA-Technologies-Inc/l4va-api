@@ -1,9 +1,10 @@
 import { Injectable } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { InjectRepository } from '@nestjs/typeorm';
 import { Novu } from '@novu/api';
-import { EventEmitter2 } from "@nestjs/event-emitter";
-import {InjectRepository} from "@nestjs/typeorm";
-import {Repository} from "typeorm";
-import {User} from "@/database/user.entity";
+import { Repository } from 'typeorm';
+
+import { User } from '@/database/user.entity';
 
 export interface INotificationBody {
   address?: string;
@@ -17,13 +18,10 @@ export interface INotificationBody {
 
 @Injectable()
 export class NotificationService {
-
-  constructor(
-    private readonly eventEmitter: EventEmitter2
-  ) {}
+  constructor(private readonly eventEmitter: EventEmitter2) {}
 
   @InjectRepository(User)
-  private readonly userRepository: Repository<User>
+  private readonly userRepository: Repository<User>;
 
   async sendNotification(body: INotificationBody) {
     const novu = new Novu({
@@ -34,7 +32,7 @@ export class NotificationService {
       const res = await novu.trigger({
         workflowId: 'l4va',
         to: body.address,
-        payload: { ...body }
+        payload: { ...body },
       });
       return res;
     } catch (err) {
@@ -43,10 +41,12 @@ export class NotificationService {
   }
 
   async sendBulkNotification(body: INotificationBody, bulkOptions: string[]) {
-    await Promise.all(bulkOptions.map(async item => {
-      const { address } = await this.userRepository.findOneBy({id: item})
-      body.address = address;
-      await this.sendNotification({ ...body })
-    }))
+    await Promise.all(
+      bulkOptions.map(async item => {
+        const { address } = await this.userRepository.findOneBy({ id: item });
+        body.address = address;
+        await this.sendNotification({ ...body });
+      })
+    );
   }
 }

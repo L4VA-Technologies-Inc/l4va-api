@@ -22,10 +22,13 @@ export class Claim {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Expose({ name: 'userId' })
   @ManyToOne(() => User, (user: User) => user.claims, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
   user: User;
+
+  @Column({ name: 'user_id', nullable: true })
+  @Index()
+  user_id: string;
 
   @Expose({ name: 'vaultId' })
   @ManyToOne(() => Vault, { onDelete: 'CASCADE', nullable: true })
@@ -53,7 +56,6 @@ export class Claim {
   @Column({ type: 'bigint', default: 0 })
   amount: number;
 
-  @Expose({ name: 'transaction' })
   @ManyToOne(() => Transaction, { nullable: true })
   @JoinColumn({ name: 'transaction_id' })
   transaction: Transaction;
