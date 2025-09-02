@@ -276,21 +276,35 @@ export class ContributionService {
     try {
       const txUtxos = await this.blockfrost.txsUtxos(txHash);
 
-      // Extract minted tokens from outputs
-      const mintedTokens: Array<{
-        policy_id: string;
-        asset_name: string;
-        quantity: string;
-      }> = [];
+      // Look for tokens containing "receipt" in the asset name (which gets hex encoded)
+      const receiptHex = Buffer.from('receipt').toString('hex');
+      this.logger.debug(`Looking for receipt tokens with hex suffix: ${receiptHex}`);
 
+      for (const output of txUtxos.outputs) {
+        for (const amount of output.amount) {
+          if (amount.unit === 'lovelace') continue;
+          if (amount.unit.endsWith(receiptHex)) {
+            const policyId = amount.unit.slice(0, 56);
+            this.logger.log(`Found receipt token with policy ID: ${policyId}`);
+            return policyId;
+          }
+        }
+
+        // If we have an inline datum, it might contain the policy ID
+        if (output.inline_datum) {
+          this.logger.debug('Checking inline datum for receipt info:', output.inline_datum);
+          // Extract policy ID from datum if possible
+          // This depends on your specific datum format
+        }
+      }
+
+      // If no receipt token found, fall back to looking for any minted token
+      const mintedTokens = [];
       txUtxos.outputs.forEach(output => {
         output.amount.forEach(amount => {
-          this.logger.debug('amount.unit', amount.unit);
-
           if (amount.unit !== 'lovelace' && amount.quantity === '1') {
-            // Extract policy_id and asset_name from the unit
-            const policyId = amount.unit.slice(0, 56); // First 56 characters
-            const assetName = amount.unit.slice(56); // Remaining characters
+            const policyId = amount.unit.slice(0, 56);
+            const assetName = amount.unit.slice(56);
 
             mintedTokens.push({
               policy_id: policyId,
@@ -301,12 +315,22 @@ export class ContributionService {
         });
       });
 
-      const mintedToken = mintedTokens[0];
-      this.logger.debug('mintedToken', mintedToken?.asset_name);
+      // Check if any token looks like a receipt
+      for (const token of mintedTokens) {
+        // Try to decode the asset name from hex
+        try {
+          const decodedName = Buffer.from(token.asset_name, 'hex').toString();
+          if (decodedName.toLowerCase().includes('receipt')) {
+            this.logger.log(`Found receipt token with policy ID: ${token.policy_id}`);
+            return token.policy_id;
+          }
+        } catch (e) {}
+      }
 
-      if (mintedToken) {
-        this.logger.log(`Found minted token with policy ID: ${mintedToken.policy_id}`);
-        return mintedToken.policy_id;
+      // Last resort - just return first minted token
+      if (mintedTokens.length > 0) {
+        this.logger.warn(`No receipt token found, using first minted token policy: ${mintedTokens[0].policy_id}`);
+        return mintedTokens[0].policy_id;
       }
 
       this.logger.warn(`No minted tokens found in transaction ${txHash}`);
