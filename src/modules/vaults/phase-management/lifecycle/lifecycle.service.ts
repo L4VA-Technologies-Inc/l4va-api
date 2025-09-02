@@ -141,25 +141,24 @@ export class LifecycleService {
       }
 
       vault.vault_status = data.newStatus;
-      if (data.newScStatus !== undefined) {
+
+      if (data.newScStatus === SmartContractVaultStatus.SUCCESSFUL) {
         vault.vault_sc_status = data.newScStatus;
         vault.last_update_tx_hash = data.txHash;
+        vault.locked_at = new Date().toISOString();
+        vault.ada_pair_multiplier = data.ada_pair_multiplier;
+        vault.vt_price = data.vtPrice;
+        vault.acquire_multiplier = data.acquire_multiplier;
+      } else if (data.newScStatus) {
+        vault.vault_sc_status = data.newScStatus;
+      }
+
+      if (data.newScStatus === SmartContractVaultStatus.CANCELLED) {
+        vault.vault_sc_status = data.newScStatus;
       }
 
       if (data.phaseStartField) {
         vault[data.phaseStartField] = new Date().toISOString();
-      }
-
-      if (data.ada_pair_multiplier) {
-        vault.ada_pair_multiplier = data.ada_pair_multiplier;
-      }
-
-      if (data.acquire_multiplier) {
-        vault.acquire_multiplier = data.acquire_multiplier;
-      }
-
-      if (data.vtPrice) {
-        vault.vt_price = data.vtPrice;
       }
 
       await this.vaultRepository.save(vault);
@@ -224,17 +223,21 @@ export class LifecycleService {
       vault.require_reserved_cost_usd = assetsValue.totalValueUsd * (vault.acquire_reserve * 0.01);
 
       const emitContributionCompleteEvent = async (): Promise<void> => {
-        const assets = await this.assetsRepository.find({
-          where: { vault: { id: vault.id }, deleted: false },
-        });
+        try {
+          const assets = await this.assetsRepository.find({
+            where: { vault: { id: vault.id }, deleted: false },
+          });
 
-        const contributorIds = [...new Set(assets.map(asset => asset.added_by))];
-        this.eventEmitter.emit('vault.contribution_complete', {
-          vaultId: vault.id,
-          vaultName: vault.name,
-          totalValueLocked: vault.total_assets_cost_ada || 0,
-          contributorIds,
-        });
+          const contributorIds = [...new Set(assets.map(asset => asset.added_by))];
+          this.eventEmitter.emit('vault.contribution_complete', {
+            vaultId: vault.id,
+            vaultName: vault.name,
+            totalValueLocked: vault.total_assets_cost_ada || 0,
+            contributorIds,
+          });
+        } catch (error) {
+          this.logger.error(`Error emitting contribution complete event for vault ${vault.id}:`, error);
+        }
       };
 
       // For immediate acquire start
@@ -579,17 +582,6 @@ export class LifecycleService {
           acquirerClaims: finalAcquirerClaims,
         });
 
-        try {
-          this.eventEmitter.emit('distribution.claim_available', {
-            vaultId: vault.id,
-            vaultName: vault.name,
-            tokenHolderIds: [
-              ...new Set([...finalAcquirerClaims.map(c => c.user_id), ...finalContributorClaims.map(c => c?.user_id)]),
-            ],
-          });
-        } catch (error) {
-          this.logger.error(`Error emitting distribution.claim_available event for vault ${vault.id}:`, error);
-        }
         // Multiplier for LP
         const { adaPairMultiplier } = this.distributionService.calculateLpAdaMultiplier(lpVtAmount, lpAdaAmount);
 
@@ -616,6 +608,18 @@ export class LifecycleService {
           ada_pair_multiplier: adaPairMultiplier,
           vtPrice,
         });
+
+        try {
+          this.eventEmitter.emit('distribution.claim_available', {
+            vaultId: vault.id,
+            vaultName: vault.name,
+            tokenHolderIds: [
+              ...new Set([...finalAcquirerClaims.map(c => c.user_id), ...finalContributorClaims.map(c => c?.user_id)]),
+            ],
+          });
+        } catch (error) {
+          this.logger.error(`Error emitting distribution.claim_available event for vault ${vault.id}:`, error);
+        }
 
         try {
           this.eventEmitter.emit('vault.success', {

@@ -48,7 +48,7 @@ export class NotificationEventsListener {
   async handleVaultSuccess(event: {
     vaultId: string;
     vaultName: string;
-    tokenHolderIds: string[];
+    tokenHoldersIds: string[];
     adaSpent: number;
     tokenPercentage: number;
     tokenTicker: string;
@@ -61,7 +61,7 @@ export class NotificationEventsListener {
         vaultId: event.vaultId,
         vaultName: event.vaultName,
       },
-      event.tokenHolderIds
+      event.tokenHoldersIds
     );
   }
 
