@@ -217,6 +217,13 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   valuationCurrency?: string;
 
+  @ApiProperty({ description: 'Policy ID', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'policyId' },
+  })
+  policyId?: string;
+
   @ApiProperty({ description: 'Valuation amount', required: false })
   @DtoRepresent({
     transform: ({ value }) => (value ? Number(value) : null),
@@ -500,6 +507,4 @@ export class VaultAcquireResponse {
     expose: true,
   })
   timeLeft: string;
-
 }
-
