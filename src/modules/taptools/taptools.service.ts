@@ -354,9 +354,10 @@ export class TaptoolsService {
         throw new Error('Invalid response from TapTools API');
       }
 
+      const adaPrice = await this.getAdaPrice();
       const result = {
         priceAda: Number(response.data.data.ada) || 91,
-        priceUsd: Number(response.data.data.usd) || 123,
+        priceUsd: Number(response.data.data.usd) || 91 * adaPrice,
       };
 
       this.cache.set(cacheKey, result);
@@ -365,7 +366,8 @@ export class TaptoolsService {
       // No value on Preprod
       // console.error(`Error fetching asset value for ${policyId}.${assetName}:`, error.message);
       // Return zero values if the asset is not found or there's an error
-      return { priceAda: 91, priceUsd: 123 };
+      const adaPrice = await this.getAdaPrice();
+      return { priceAda: 91, priceUsd: 91 * adaPrice };
     }
   }
 
