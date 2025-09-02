@@ -1,10 +1,11 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { classToPlain, instanceToPlain, plainToInstance } from 'class-transformer';
-import { IsNull, Not, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 
 import { transformImageToUrl } from '../../helpers';
 import { AwsService } from '../aws_bucket/aws.service';
+import { TaptoolsService } from '../taptools/taptools.service';
 
 import { PublicProfileRes } from './dto/public-profile.res';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -14,7 +15,7 @@ import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
-import { AssetOriginType, AssetStatus } from '@/types/asset.types';
+import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 
 @Injectable()
 export class UsersService {
@@ -30,7 +31,8 @@ export class UsersService {
     private filesRepository: Repository<FileEntity>,
     @InjectRepository(LinkEntity)
     private linksRepository: Repository<LinkEntity>,
-    private readonly awsService: AwsService
+    private readonly awsService: AwsService,
+    private readonly taptoolsService: TaptoolsService
   ) {}
 
   async findByAddress(address: string): Promise<User | undefined> {
@@ -76,7 +78,7 @@ export class UsersService {
     return this.usersRepository.save(user);
   }
 
-  async getProfile(userId: string): Promise<any> {
+  async getProfile(userId: string): Promise<PublicProfileRes> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
       relations: ['profile_image', 'banner_image', 'social_links'],
@@ -86,31 +88,36 @@ export class UsersService {
       throw new BadRequestException('User not found');
     }
 
+    const adaPrice = await this.taptoolsService.getAdaPrice();
     const ownedVaultsCount = await this.vaultRepository.count({
       where: {
         owner: { id: userId },
         deleted: false,
       },
     });
+    const tvlResult = await this.assetRepository
+      .createQueryBuilder('asset')
+      .select(
+        'SUM(CASE WHEN asset.type = :nftType THEN asset.floor_price::numeric ELSE asset.dex_price::numeric * asset.quantity END)',
+        'tvl'
+      )
+      .where('asset.added_by = :userId', { userId })
+      .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
+      .andWhere('asset.status = :status', { status: AssetStatus.LOCKED })
+      .andWhere(
+        '(asset.type = :nftType AND asset.floor_price IS NOT NULL) OR (asset.type = :ftType AND asset.dex_price IS NOT NULL)'
+      )
+      .setParameter('nftType', AssetType.NFT)
+      .setParameter('ftType', AssetType.FT)
+      .getRawOne();
 
-    const contributedAssestsToVaults = await this.assetRepository.find({
-      where: {
-        added_by: { id: userId },
-        origin_type: AssetOriginType.CONTRIBUTED,
-        status: AssetStatus.LOCKED,
-        dex_price: Not(IsNull()),
-      },
-    });
-
-    const tvl = contributedAssestsToVaults.reduce((acc, asset) => {
-      const price = parseFloat(asset.dex_price as any);
-      return acc + price;
-    }, 0);
-
-    // Calculate total_vaults from the vaults relation
+    const tvl = tvlResult?.tvl ? parseFloat(tvlResult.tvl) : 0;
     user.total_vaults = ownedVaultsCount || 0;
     user.tvl = tvl;
     const plainedUsers = instanceToPlain(user);
+
+    plainedUsers.totalValueUsd = parseFloat((tvl * adaPrice).toFixed(2));
+    plainedUsers.totalValueAda = tvl;
     return plainToInstance(PublicProfileRes, plainedUsers, { excludeExtraneousValues: true });
   }
 

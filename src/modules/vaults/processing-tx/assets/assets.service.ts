@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { classToPlain } from 'class-transformer';
+import { instanceToPlain } from 'class-transformer';
 import { Repository } from 'typeorm';
 
 import { CreateAssetDto } from './dto/create-asset.dto';
@@ -70,7 +70,7 @@ export class AssetsService {
     });
 
     await this.assetsRepository.save(asset);
-    return classToPlain(asset);
+    return instanceToPlain(asset);
   }
 
   async getVaultAssets(
@@ -110,7 +110,7 @@ export class AssetsService {
     });
 
     return {
-      items: assets.map(asset => classToPlain(asset)),
+      items: assets.map(asset => instanceToPlain(asset)),
       total,
       page,
       limit,
@@ -154,7 +154,7 @@ export class AssetsService {
     });
 
     return {
-      items: assets.map(asset => classToPlain(asset)),
+      items: assets.map(asset => instanceToPlain(asset)),
       total,
       page,
       limit,
@@ -184,7 +184,7 @@ export class AssetsService {
     asset.locked_at = new Date();
 
     await this.assetsRepository.save(asset);
-    return classToPlain(asset);
+    return instanceToPlain(asset);
   }
 
   async releaseAsset(userId: string, assetId: string): Promise<Record<string, unknown>> {
@@ -209,7 +209,7 @@ export class AssetsService {
     asset.released_at = new Date();
 
     await this.assetsRepository.save(asset);
-    return classToPlain(asset);
+    return instanceToPlain(asset);
   }
 
   async updateAssetValuation(
@@ -241,7 +241,38 @@ export class AssetsService {
 
     asset.last_valuation = new Date();
     await this.assetsRepository.save(asset);
-    return classToPlain(asset);
+    return instanceToPlain(asset);
+  }
+
+  /**
+   * Updates asset prices and last valuation timestamp after calculation
+   * @param assets List of assets with updated price information
+   */
+  async updateAssetValuations(
+    assets: Array<{
+      policyId: string;
+      isNft: boolean;
+      assetId: string;
+      valueAda: number;
+    }>
+  ): Promise<void> {
+    try {
+      for (const asset of assets) {
+        await this.assetsRepository.update(
+          {
+            policy_id: asset.policyId,
+            asset_id: asset.assetId,
+            deleted: false,
+          },
+          {
+            ...(asset.isNft ? { floor_price: asset.valueAda } : { dex_price: asset.valueAda }),
+            last_valuation: new Date(),
+          }
+        );
+      }
+    } catch (error) {
+      throw new Error(`Failed to update asset valuations: ${error.message}`);
+    }
   }
 
   async updateTransactionAssets(transactionId: string, vaultId: string): Promise<void> {

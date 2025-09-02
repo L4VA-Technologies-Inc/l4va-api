@@ -55,12 +55,19 @@ export class PublicProfileRes {
   })
   socialLinks?: LinkEntity[];
 
-  @ApiProperty()
+  @ApiProperty({ description: 'Total value of all assets in ADA' })
   @DtoRepresent({
     transform: false,
-    expose: true,
+    expose: { name: 'totalValueAda' },
   })
-  tvl: number;
+  totalValueAda: number;
+
+  @ApiProperty({ description: 'Total value of all assets in USD' })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'totalValueUsd' },
+  })
+  totalValueUsd: number;
 
   @ApiProperty()
   @DtoRepresent({

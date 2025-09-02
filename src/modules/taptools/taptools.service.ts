@@ -4,12 +4,12 @@ import axios from 'axios';
 import NodeCache from 'node-cache';
 import { Repository } from 'typeorm';
 
+import { AssetsService } from '../vaults/processing-tx/assets/assets.service';
 import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
 
 import { AssetValueDto } from './dto/asset-value.dto';
 import { WalletSummaryDto } from './dto/wallet-summary.dto';
 
-import { Asset } from '@/database/asset.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 
@@ -25,8 +25,7 @@ export class TaptoolsService {
   constructor(
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
-    @InjectRepository(Asset)
-    private readonly assetRepository: Repository<Asset>
+    private readonly assetsService: AssetsService
   ) {
     this.taptoolsApiKey = process.env.TAPTOOLS_API_KEY || '';
   }
@@ -35,7 +34,7 @@ export class TaptoolsService {
     return address.startsWith('addr_test');
   }
 
-  private async getAdaPrice(): Promise<number> {
+  async getAdaPrice(): Promise<number> {
     const cacheKey = 'ada_price_usd';
     const cachedPrice = this.cache.get<number>(cacheKey);
     if (cachedPrice !== undefined) return cachedPrice;
@@ -379,7 +378,8 @@ export class TaptoolsService {
    */
   async calculateVaultAssetsValue(
     vaultId: string,
-    phase: 'contribute' | 'acquire' = 'contribute'
+    phase: 'contribute' | 'acquire' = 'contribute',
+    updatePrices: boolean = true
   ): Promise<VaultAssetsSummaryDto> {
     // Get the vault to verify it exists
     const vault = await this.vaultRepository.findOne({
@@ -494,6 +494,17 @@ export class TaptoolsService {
         // Skip assets that can't be valued
         console.warn(`Could not value asset ${asset.policyId}.${asset.assetId}:`, error.message);
       }
+    }
+
+    if (updatePrices && assetsWithValues.length > 0) {
+      await this.assetsService.updateAssetValuations(
+        assetsWithValues.map(asset => ({
+          policyId: asset.policyId,
+          assetId: asset.assetId,
+          valueAda: asset.valueAda / asset.quantity, // Get per-unit price
+          isNft: asset.isNft,
+        }))
+      );
     }
 
     const adaPrice = await this.getAdaPrice();
