@@ -194,11 +194,10 @@ export class LifecycleService {
       if (vault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
         // Start acquire phase immediately when contribution ends
         acquireStartTime = contributionEnd;
-        const contributorIds = assets.map(asset => asset.added_by);
+        const contributorIds = [...new Set(assets.map(asset => asset.added_by))];
 
         this.eventEmitter.emit('vault.contribution_complete', {
           vaultId: vault.id,
-          address: vault.owner.address,
           vaultName: vault.name,
           totalValueLocked: vault.total_assets_cost_ada || 0,
           contributorIds,
