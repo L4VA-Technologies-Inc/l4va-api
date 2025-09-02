@@ -576,7 +576,7 @@ export class LifecycleService {
             vaultId: vault.id,
             vaultName: vault.name,
             tokenHolderIds: [
-              ...new Set([...finalAcquirerClaims.map(c => c.user.id), ...finalContributorClaims.map(c => c?.user_id)]),
+              ...new Set([...finalAcquirerClaims.map(c => c.user_id), ...finalContributorClaims.map(c => c?.user_id)]),
             ],
           });
         } catch (error) {
@@ -614,7 +614,7 @@ export class LifecycleService {
             vaultId: vault.id,
             vaultName: vault.name,
             tokenHoldersIds: [
-              ...new Set([...finalAcquirerClaims.map(c => c.user.id), ...finalContributorClaims.map(c => c?.user_id)]),
+              ...new Set([...finalAcquirerClaims.map(c => c.user_id), ...finalContributorClaims.map(c => c?.user_id)]),
             ],
             adaSpent: totalAcquiredAda,
             tokenPercentage: vault.tokens_for_acquires,
