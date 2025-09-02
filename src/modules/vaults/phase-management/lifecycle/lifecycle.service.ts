@@ -194,14 +194,6 @@ export class LifecycleService {
       if (vault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
         // Start acquire phase immediately when contribution ends
         acquireStartTime = contributionEnd;
-        const contributorIds = [...new Set(assets.map(asset => asset.added_by))];
-
-        this.eventEmitter.emit('vault.contribution_complete', {
-          vaultId: vault.id,
-          vaultName: vault.name,
-          totalValueLocked: vault.total_assets_cost_ada || 0,
-          contributorIds,
-        });
       } else if (vault.acquire_open_window_type === InvestmentWindowType.custom && vault.acquire_open_window_time) {
         // Use custom start time, but ensure it's not before contribution ends
         const customTime = new Date(vault.acquire_open_window_time);
@@ -231,6 +223,20 @@ export class LifecycleService {
       vault.require_reserved_cost_ada = assetsValue.totalValueAda * (vault.acquire_reserve * 0.01);
       vault.require_reserved_cost_usd = assetsValue.totalValueUsd * (vault.acquire_reserve * 0.01);
 
+      const emitContributionCompleteEvent = async (): Promise<void> => {
+        const assets = await this.assetsRepository.find({
+          where: { vault: { id: vault.id }, deleted: false },
+        });
+
+        const contributorIds = [...new Set(assets.map(asset => asset.added_by))];
+        this.eventEmitter.emit('vault.contribution_complete', {
+          vaultId: vault.id,
+          vaultName: vault.name,
+          totalValueLocked: vault.total_assets_cost_ada || 0,
+          contributorIds,
+        });
+      };
+
       // For immediate acquire start
       if (vault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
         await this.executePhaseTransition({
@@ -238,6 +244,7 @@ export class LifecycleService {
           newStatus: VaultStatus.acquire,
           phaseStartField: 'acquire_phase_start',
         });
+        await emitContributionCompleteEvent();
       }
       // For custom acquire start time
       else if (vault.acquire_open_window_type === InvestmentWindowType.custom && vault.acquire_open_window_time) {
@@ -250,6 +257,7 @@ export class LifecycleService {
             newStatus: VaultStatus.acquire,
             phaseStartField: 'acquire_phase_start',
           });
+          await emitContributionCompleteEvent();
         } else {
           // Queue for the custom time
           await this.queuePhaseTransition(vault.id, VaultStatus.acquire, customTime, 'acquire_phase_start');
