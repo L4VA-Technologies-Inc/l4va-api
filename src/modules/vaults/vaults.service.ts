@@ -10,7 +10,7 @@ import { AwsService } from '../aws_bucket/aws.service';
 import { TaptoolsService } from '../taptools/taptools.service';
 
 import { CreateVaultReq } from './dto/createVault.req';
-import { SortOrder, VaultFilter, VaultSortField } from './dto/get-vaults.dto';
+import { DateRangeDto, SortOrder, TVLCurrency, VaultFilter, VaultSortField } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { PublishVaultDto } from './dto/publish-vault.dto';
 import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
@@ -820,22 +820,39 @@ export class VaultsService {
    * @param sortOrder - Sort order
    * @returns Paginated response of vaults
    */
-  async getVaults(
-    userId?: string,
-    filter?: VaultFilter,
-    page: number = 1,
-    limit: number = 10,
-    sortBy?: VaultSortField,
-    sortOrder: SortOrder = SortOrder.DESC,
-    tags?: string[],
-    reserveMet?: boolean,
-    vaultStage?: string,
-    minInitialVaultOffered?: number,
-    maxInitialVaultOffered?: number,
-    minTvl?: number,
-    maxTvl?: number,
-    tvlCurrency?: string
-  ): Promise<PaginatedResponseDto<VaultShortResponse>> {
+  async getVaults(data: {
+    userId?: string;
+    filter?: VaultFilter;
+    page?: number;
+    limit?: number;
+    sortBy?: VaultSortField;
+    sortOrder?: SortOrder;
+    tags?: string[];
+    reserveMet?: boolean;
+    minInitialVaultOffered?: number;
+    maxInitialVaultOffered?: number;
+    minTvl?: number;
+    maxTvl?: number;
+    tvlCurrency?: TVLCurrency;
+    contributionWindow?: DateRangeDto;
+    acquireWindow?: DateRangeDto;
+  }): Promise<PaginatedResponseDto<VaultShortResponse>> {
+    const {
+      userId,
+      sortBy,
+      tvlCurrency,
+      minTvl,
+      maxTvl,
+      minInitialVaultOffered,
+      maxInitialVaultOffered,
+      contributionWindow,
+      acquireWindow,
+      tags,
+      filter,
+      page = 1,
+      limit = 10,
+      sortOrder = SortOrder.DESC,
+    } = data;
     // Get user's wallet address
     const user = await this.usersRepository.findOne({
       where: { id: userId },
@@ -930,6 +947,48 @@ export class VaultsService {
             })
           );
       }
+    }
+
+    if (tags && tags.length > 0) {
+      queryBuilder.andWhere('tags.name IN (:...tags)', { tags });
+    }
+
+    if (contributionWindow) {
+      queryBuilder.andWhere('vault.contribution_open_window_time BETWEEN :start AND :end', {
+        start: contributionWindow.from,
+        end: contributionWindow.to,
+      });
+    }
+
+    if (acquireWindow) {
+      queryBuilder.andWhere('vault.acquire_open_window_time BETWEEN :start AND :end', {
+        start: acquireWindow.from,
+        end: acquireWindow.to,
+      });
+    }
+
+    if (minTvl) {
+      if (tvlCurrency === TVLCurrency.USD) {
+        queryBuilder.andWhere('vault.total_assets_cost_usd >= :minTvl', { minTvl });
+      } else if (tvlCurrency === TVLCurrency.ADA) {
+        queryBuilder.andWhere('vault.total_assets_cost_ada >= :minTvl', { minTvl });
+      }
+    }
+
+    if (maxTvl) {
+      if (tvlCurrency === TVLCurrency.USD) {
+        queryBuilder.andWhere('vault.total_assets_cost_usd <= :maxTvl', { maxTvl });
+      } else if (tvlCurrency === TVLCurrency.ADA) {
+        queryBuilder.andWhere('vault.total_assets_cost_ada <= :maxTvl', { maxTvl });
+      }
+    }
+
+    if (maxInitialVaultOffered) {
+      queryBuilder.andWhere('(100 - vault.acquire_reserve) <= :maxInitialVaultOffered', { maxInitialVaultOffered });
+    }
+
+    if (minInitialVaultOffered) {
+      queryBuilder.andWhere('(100 - vault.acquire_reserve) >= :minInitialVaultOffered', { minInitialVaultOffered });
     }
 
     // Apply sorting

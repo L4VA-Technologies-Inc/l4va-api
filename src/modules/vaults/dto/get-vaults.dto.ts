@@ -54,17 +54,43 @@ export enum VaultTagFilter {
   WRAPPED = 'Wrapped',
 }
 
-export enum VaultStageFilter {
-  CREATED = 'created',
-  CONTRIBUTION = 'contribution',
-  ACQUIRE = 'acquire',
-  LOCKED = 'locked',
-  TERMINATED = 'terminated',
-}
-
 export enum TVLCurrency {
   ADA = 'ADA',
   USD = 'USD',
+}
+
+export class DateRangeDto {
+  @IsOptional()
+  @ApiProperty({
+    example: '2025-09-03T12:00:00.000Z',
+    required: false,
+    description: 'Start date of the range (ISO string)',
+  })
+  @Expose()
+  @Transform(({ value }) => {
+    if (value && typeof value === 'string') {
+      const date = new Date(value);
+      return isNaN(date.getTime()) ? undefined : date;
+    }
+    return value;
+  })
+  from?: Date;
+
+  @IsOptional()
+  @ApiProperty({
+    example: '2025-09-10T12:00:00.000Z',
+    required: false,
+    description: 'End date of the range (ISO string)',
+  })
+  @Expose()
+  @Transform(({ value }) => {
+    if (value && typeof value === 'string') {
+      const date = new Date(value);
+      return isNaN(date.getTime()) ? undefined : date;
+    }
+    return value;
+  })
+  to?: Date;
 }
 
 export class GetVaultsDto extends PaginationDto {
@@ -129,17 +155,6 @@ export class GetVaultsDto extends PaginationDto {
     return value;
   })
   reserveMet?: boolean;
-
-  // Vault Stage Filter
-  @IsEnum(VaultStageFilter)
-  @IsOptional()
-  @ApiProperty({
-    enum: VaultStageFilter,
-    required: false,
-    description: 'Filter by vault stage',
-  })
-  @Expose()
-  vaultStage?: VaultStageFilter;
 
   // Initial % Vault Offered Range
   @IsNumber()
@@ -209,4 +224,26 @@ export class GetVaultsDto extends PaginationDto {
   })
   @Expose()
   tvlCurrency?: TVLCurrency = TVLCurrency.USD;
+
+  // Contribution Window Filters
+  @ApiProperty({
+    type: DateRangeDto,
+    required: false,
+    description: 'Filter by contribution window date range',
+  })
+  @Expose()
+  @Type(() => DateRangeDto)
+  @IsOptional()
+  contributionWindow?: DateRangeDto;
+
+  // Acquire Window Filters
+  @ApiProperty({
+    type: DateRangeDto,
+    required: false,
+    description: 'Filter by acquire window date range',
+  })
+  @Expose()
+  @Type(() => DateRangeDto)
+  @IsOptional()
+  acquireWindow?: DateRangeDto;
 }

@@ -75,6 +75,21 @@ export class VaultsController {
   }
 
   @ApiDoc({
+    summary: 'List of public vaults',
+    description:
+      'Returns paginated list of all published vaults. Default page: 1, default limit: 10. Supports sorting by name, created_at, or updated_at. Response includes total count and total pages.',
+    status: 200,
+  })
+  @Post('search')
+  getVaults(@Body() filters: GetVaultsDto, @Request() req): Promise<PaginatedResponseDto<VaultShortResponse>> {
+    const userId = req.user?.sub;
+    return this.vaultsService.getVaults({
+      userId,
+      ...filters,
+    });
+  }
+
+  @ApiDoc({
     summary: 'Select my vaults',
     description:
       'Returns list of my vaults. Can be filtered by status: open (published, contribution, acquire) or locked. Supports sorting by name, created_at, or updated_at.',
@@ -131,19 +146,6 @@ export class VaultsController {
       }
       throw error;
     }
-  }
-
-  @ApiDoc({
-    summary: 'List of public vaults',
-    description:
-      'Returns paginated list of all published vaults. Default page: 1, default limit: 10. Supports sorting by name, created_at, or updated_at. Response includes total count and total pages.',
-    status: 200,
-  })
-  @Get()
-  getVaults(@Query() query: GetVaultsDto, @Request() req) {
-    const userId = req.user?.sub;
-
-    return this.vaultsService.getVaults(userId, query.filter, query.page, query.limit, query.sortBy, query.sortOrder);
   }
 
   @ApiDoc({
