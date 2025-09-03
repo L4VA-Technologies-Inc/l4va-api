@@ -118,8 +118,18 @@ export class VaultsService {
         .to_address()
         .to_bech32();
 
-      vault.contract_address = SC_ADDRESS;
-      await this.vaultsRepository.save(vault);
+      const freshVault = await this.vaultsRepository.findOne({
+        where: { id: vault.id },
+      });
+
+      if (!freshVault) {
+        this.logger.error(`Vault ${vault.id} not found during transaction confirmation`);
+        return;
+      }
+
+      // Only update the contract_address
+      freshVault.contract_address = SC_ADDRESS;
+      await this.vaultsRepository.save(freshVault);
 
       this.logger.log(`Successfully processed transaction ${txHash} for vault ${vault.id}`);
     } catch (error) {
@@ -137,7 +147,6 @@ export class VaultsService {
       return this.confirmAndProcessTransaction(txHash, vault, attempt + 1);
     }
   }
-
   /**
    * Parses a CSV file from AWS S3 and extracts valid Cardano addresses.
    * @param file_key - S3 file key
