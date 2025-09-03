@@ -332,12 +332,37 @@ export class TaptoolsService {
    * @returns Promise with the asset value in ADA and USD
    */
   async getAssetValue(policyId: string, assetName: string): Promise<{ priceAda: number; priceUsd: number }> {
-    const cacheKey = `asset_value_${policyId}_${assetName}`;
-    const cached = this.cache.get<{ priceAda: number; priceUsd: number }>(cacheKey);
-
-    if (cached) return cached;
-
     try {
+      const adaPrice = await this.getAdaPrice();
+
+      // Hardcoded testnet policy IDs and their prices
+      const testnetPrices: Record<string, number> = {
+        f61a534fd4484b4b58d5ff18cb77cfc9e74ad084a18c0409321c811a: 0.00526,
+        ed8145e0a4b8b54967e8f7700a5ee660196533ded8a55db620cc6a37: 0.00374,
+        '755457ffd6fffe7b20b384d002be85b54a0b3820181f19c5f9032c2e': 250.0,
+        fd948c7248ecef7654f77a0264a188dccc76bae5b73415fc51824cf3: 19000.0,
+        add6529cc60380af5d51566e32925287b5b04328332652ccac8de0a9: 36.0,
+        '4e529151fe66164ebcf52f81033eb0ec55cc012cb6c436104b30fa36': 69.0,
+        '0b89a746fd2d859e0b898544487c17d9ac94b187ea4c74fd0bfbab16': 3400.0,
+        '436ca2e51fa2887fa306e8f6aa0c8bda313dd5882202e21ae2972ac8': 115.93,
+        '0d27d4483fc9e684193466d11bc6d90a0ff1ab10a12725462197188a': 188.57,
+        '53173a3d7ae0a0015163cc55f9f1c300c7eab74da26ed9af8c052646': 100000.0,
+        '91918871f0baf335d32be00af3f0604a324b2e0728d8623c0d6e2601': 250000.0,
+      };
+
+      if (testnetPrices[policyId]) {
+        const hardcodedPriceAda = testnetPrices[policyId];
+        return {
+          priceAda: hardcodedPriceAda,
+          priceUsd: hardcodedPriceAda * adaPrice,
+        };
+      }
+
+      const cacheKey = `asset_value_${policyId}_${assetName}`;
+      const cached = this.cache.get<{ priceAda: number; priceUsd: number }>(cacheKey);
+
+      if (cached) return cached;
+
       const response = await axios.get(`${this.baseUrl}/token/price`, {
         headers: {
           'x-api-key': this.taptoolsApiKey,
@@ -353,7 +378,6 @@ export class TaptoolsService {
         throw new Error('Invalid response from TapTools API');
       }
 
-      const adaPrice = await this.getAdaPrice();
       const result = {
         priceAda: Number(response.data.data.ada) || 91,
         priceUsd: Number(response.data.data.usd) || 91 * adaPrice,
