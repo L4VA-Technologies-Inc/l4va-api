@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Transform, Type } from 'class-transformer';
-import { IsBoolean, IsEnum, IsNumber, IsOptional, Max, Min } from 'class-validator';
+import { IsBoolean, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
 
 import { PaginationDto } from './pagination.dto';
 
@@ -60,35 +60,35 @@ export enum TVLCurrency {
 }
 
 export class DateRangeDto {
-  @IsOptional()
+  @IsNotEmpty({
+    message: 'from must be a valid ISO date string',
+  })
   @ApiProperty({
     example: '2025-09-03T12:00:00.000Z',
     required: false,
     description: 'Start date of the range (ISO string)',
   })
   @Expose()
+  @IsString()
   @Transform(({ value }) => {
-    if (value && typeof value === 'string') {
-      const date = new Date(value);
-      return isNaN(date.getTime()) ? undefined : date;
-    }
-    return value;
+    const date = new Date(value);
+    return isNaN(date.getTime()) ? undefined : date;
   })
   from?: Date;
 
-  @IsOptional()
+  @IsNotEmpty({
+    message: 'to must be a valid ISO date string',
+  })
   @ApiProperty({
     example: '2025-09-10T12:00:00.000Z',
     required: false,
     description: 'End date of the range (ISO string)',
   })
   @Expose()
+  @IsString()
   @Transform(({ value }) => {
-    if (value && typeof value === 'string') {
-      const date = new Date(value);
-      return isNaN(date.getTime()) ? undefined : date;
-    }
-    return value;
+    const date = new Date(value);
+    return isNaN(date.getTime()) ? undefined : date;
   })
   to?: Date;
 }
