@@ -394,4 +394,91 @@ export class MetadataRegistryApiService {
       return pr;
     }
   }
+
+  /**
+   * Closes an open pull request on GitHub
+   * @param prNumber The pull request number to close
+   * @param reason Optional comment to add when closing the PR
+   * @returns Object indicating success or failure
+   */
+  async closePullRequest(prNumber: number, reason?: string): Promise<{ success: boolean; message: string }> {
+    try {
+      this.logger.log(`Attempting to close PR #${prNumber}`);
+
+      // Import Octokit
+      const { Octokit } = await import('@octokit/rest');
+      const octokit = new Octokit({
+        auth: this.githubToken,
+      });
+
+      // Find the PR in our database
+      const pr = await this.TokenRegistryRepository.findOne({
+        where: { pr_number: prNumber },
+      });
+
+      if (!pr) {
+        throw new NotFoundException(`PR #${prNumber} not found in database`);
+      }
+
+      // First, check if PR is still open
+      const { data: prData } = await octokit.pulls.get({
+        owner: this.repoOwner,
+        repo: this.repoName,
+        pull_number: prNumber,
+      });
+
+      if (prData.state !== 'open') {
+        // Update our record if PR is already closed
+        if (prData.merged) {
+          pr.status = TokenRegistryStatus.MERGED;
+          pr.merged_at = new Date(prData.merged_at);
+        } else {
+          pr.status = TokenRegistryStatus.REJECTED;
+        }
+        await this.TokenRegistryRepository.save(pr);
+
+        return {
+          success: false,
+          message: `PR #${prNumber} is already ${prData.merged ? 'merged' : 'closed'}`,
+        };
+      }
+
+      // Add a comment if reason is provided
+      if (reason) {
+        await octokit.issues.createComment({
+          owner: this.repoOwner,
+          repo: this.repoName,
+          issue_number: prNumber,
+          body: `Closing PR: ${reason}`,
+        });
+      }
+
+      // Close the PR
+      await octokit.pulls.update({
+        owner: this.repoOwner,
+        repo: this.repoName,
+        pull_number: prNumber,
+        state: 'closed',
+      });
+
+      // Update our database record
+      pr.status = TokenRegistryStatus.REJECTED;
+      pr.last_checked = new Date();
+      await this.TokenRegistryRepository.save(pr);
+
+      this.logger.log(`Successfully closed PR #${prNumber}`);
+      return { success: true, message: `PR #${prNumber} closed successfully` };
+    } catch (error) {
+      this.logger.error(`Failed to close PR #${prNumber}:`, error);
+
+      // Map GitHub API errors to appropriate NestJS exceptions
+      if (error.status === 401 || error.status === 403) {
+        throw new UnauthorizedException(`GitHub authentication failed: ${error.message}`);
+      } else if (error.status === 404) {
+        throw new NotFoundException(`PR not found: ${error.message}`);
+      }
+
+      throw new InternalServerErrorException(`Failed to close PR: ${error.message}`);
+    }
+  }
 }
