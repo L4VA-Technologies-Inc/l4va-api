@@ -831,6 +831,7 @@ export class VaultsService {
     reserveMet?: boolean;
     minInitialVaultOffered?: number;
     maxInitialVaultOffered?: number;
+    assetWhitelist?: string;
     minTvl?: number;
     maxTvl?: number;
     tvlCurrency?: TVLCurrency;
@@ -848,6 +849,7 @@ export class VaultsService {
       contributionWindow,
       acquireWindow,
       tags,
+      assetWhitelist,
       filter,
       page = 1,
       limit = 10,
@@ -950,7 +952,18 @@ export class VaultsService {
     }
 
     if (tags && tags.length > 0) {
-      queryBuilder.andWhere('tags.name IN (:...tags)', { tags });
+      const normalizedTags = tags.map(tag => tag.toLowerCase());
+      // OR logic: Returns vaults that have ANY of the specified tags
+      queryBuilder.andWhere(
+        `EXISTS (
+          SELECT 1 
+          FROM vault_tags vt 
+          INNER JOIN tags t ON t.id = vt.tag_id 
+          WHERE vt.vault_id = vault.id 
+          AND LOWER(t.name) IN (:...tags)
+        )`,
+        { tags: normalizedTags }
+      );
     }
 
     if (contributionWindow) {
@@ -989,6 +1002,18 @@ export class VaultsService {
 
     if (minInitialVaultOffered) {
       queryBuilder.andWhere('(100 - vault.acquire_reserve) >= :minInitialVaultOffered', { minInitialVaultOffered });
+    }
+
+    if (assetWhitelist) {
+      queryBuilder.andWhere(
+        `EXISTS (
+          SELECT 1 
+          FROM assets_whitelist aw 
+          WHERE aw.vault_id = vault.id 
+          AND aw.policy_id = :assetWhitelist
+        )`,
+        { assetWhitelist }
+      );
     }
 
     // Apply sorting

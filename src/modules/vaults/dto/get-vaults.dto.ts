@@ -187,6 +187,17 @@ export class GetVaultsDto extends PaginationDto {
   @Type(() => Number)
   maxInitialVaultOffered?: number;
 
+  @IsString()
+  @IsOptional()
+  @ApiProperty({
+    type: String,
+    required: false,
+    description: 'Filter by asset whitelist (exact match)',
+  })
+  @Expose()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  assetWhitelist?: string;
+
   // TVL Range
   @IsNumber()
   @IsOptional()
