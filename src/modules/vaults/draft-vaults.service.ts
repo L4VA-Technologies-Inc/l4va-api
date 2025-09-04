@@ -81,7 +81,7 @@ export class DraftVaultsService {
     };
   }
 
-  async getDraftVaultById(id: string, userId: string): Promise<any> {
+  async getDraftVaultById(id: string, userId: string): Promise<Record<string, unknown>> {
     const vault = await this.vaultsRepository.findOne({
       where: {
         id,

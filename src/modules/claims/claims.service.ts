@@ -617,7 +617,7 @@ export class ClaimsService {
           },
         };
 
-        const changeOutput: any = {
+        const changeOutput = {
           address: SC_ADDRESS,
           lovelace: lovelaceChange,
           assets: otherAssets.length ? otherAssets : undefined,
@@ -698,11 +698,10 @@ export class ClaimsService {
       if (!build1?.complete) {
         const traced = this.parseTracesForExpectedLP(build1, POLICY_ID, vault.asset_vault_name);
         if (traced) {
-          console.log('Detected expected LP from traces:', traced);
           lpQuantity = traced;
           const build2 = await tryBuild(lpQuantity);
           if (!build2?.complete) {
-            console.error('Build failed. See traces above.');
+            this.logger.error('Build failed. See traces above.');
             return;
           } else {
             const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(build2.complete, 'hex'));
@@ -726,8 +725,8 @@ export class ClaimsService {
             };
           }
         } else {
-          console.error('Could not extract expected LP from traces.');
-          console.error('Build failed. See traces above.');
+          this.logger.error('Could not extract expected LP from traces.');
+          this.logger.error('Build failed. See traces above.');
           return;
         }
       } else {
