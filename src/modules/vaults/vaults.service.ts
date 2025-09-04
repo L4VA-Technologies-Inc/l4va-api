@@ -828,6 +828,7 @@ export class VaultsService {
     sortBy?: VaultSortField;
     sortOrder?: SortOrder;
     tags?: string[];
+    isOwner?: boolean;
     reserveMet?: boolean;
     minInitialVaultOffered?: number;
     maxInitialVaultOffered?: number;
@@ -850,6 +851,7 @@ export class VaultsService {
       acquireWindow,
       tags,
       assetWhitelist,
+      isOwner,
       filter,
       page = 1,
       limit = 10,
@@ -899,6 +901,10 @@ export class VaultsService {
         })
       );
 
+    if (isOwner) {
+      queryBuilder.andWhere('vault.owner_id = :userId', { userId });
+    }
+
     // Apply status filter and corresponding whitelist check
     if (filter) {
       switch (filter) {
@@ -938,6 +944,9 @@ export class VaultsService {
           break;
         case VaultFilter.locked:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked });
+          break;
+        case VaultFilter.draft:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.draft });
           break;
         case VaultFilter.published:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.published }).andWhere(

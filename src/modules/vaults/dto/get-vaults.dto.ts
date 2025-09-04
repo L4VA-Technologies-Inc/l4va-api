@@ -10,6 +10,7 @@ export enum VaultFilter {
   contribution = 'contribution',
   acquire = 'acquire',
   published = 'published',
+  draft = 'draft',
 }
 
 export enum VaultSortField {
@@ -109,6 +110,22 @@ export class GetVaultsDto extends PaginationDto {
   })
   @Expose()
   sortBy?: VaultSortField;
+
+  @IsBoolean()
+  @IsOptional()
+  @ApiProperty({
+    type: Boolean,
+    required: false,
+    description: 'Filter to show only vaults owned by the user',
+  })
+  @Expose()
+  @Transform(({ value }) => {
+    if (typeof value === 'string') {
+      return value === 'true';
+    }
+    return value;
+  })
+  isOwner?: boolean;
 
   @IsEnum(SortOrder)
   @IsOptional()
