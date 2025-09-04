@@ -68,8 +68,9 @@ export interface TransactionSubmitResponse {
 export class VaultInsertingService {
   private readonly logger = new Logger(VaultInsertingService.name);
   private readonly adminHash: string;
-  private readonly vaultPolicyId: string;
+  private readonly feeAddress: string;
   private readonly adminSKey: string;
+  private readonly FLAT_FEE = 2000000; // 2 ADA in lovelace
   private blockfrost: BlockFrostAPI;
   constructor(
     @InjectRepository(Vault)
@@ -82,7 +83,7 @@ export class VaultInsertingService {
   ) {
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
-    this.vaultPolicyId = this.configService.get<string>('SC_POLICY_ID');
+    this.feeAddress = this.configService.get<string>('FEE_ADDRESS');
 
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
@@ -156,12 +157,19 @@ export class VaultInsertingService {
         message: string;
         mint: Array<object>;
         scriptInteractions: object[];
-        outputs: {
-          address: string;
-          assets: object[];
-          lovelace?: number; // Required if Contribution in ADA
-          datum: { type: 'inline'; value: Datum; shape: object };
-        }[];
+        outputs: (
+          | {
+              address: string;
+              assets: object[];
+              lovelace?: number; // Required if Contribution in ADA
+              datum: { type: 'inline'; value: Datum; shape: object };
+            }
+          // Fee output
+          | {
+              address: string;
+              lovelace: number;
+            }
+        )[];
         requiredSigners: string[];
         referenceInputs: { txHash: string; index: number }[];
         validityInterval: {
@@ -227,6 +235,16 @@ export class VaultInsertingService {
                 purpose: 'spend',
               },
             },
+          },
+          // Flat fee
+          {
+            address: SC_ADDRESS,
+            lovelace: this.FLAT_FEE,
+          },
+          // Protocol Fee
+          transaction.fee > 0 && {
+            address: this.feeAddress,
+            lovelace: transaction.fee * 1000000,
           },
         ],
         requiredSigners: [this.adminHash],

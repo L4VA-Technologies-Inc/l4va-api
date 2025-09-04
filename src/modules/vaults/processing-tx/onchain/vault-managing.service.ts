@@ -80,6 +80,9 @@ export class VaultManagingService {
   private readonly anvilApi: string;
   private readonly anvilApiKey: string;
   private readonly vaultScriptAddress: string;
+  private readonly VLRM_HEX_ASSET_NAME = '4d494e';
+  private readonly VLRM_POLICY_ID = 'e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed72';
+  private readonly VLRM_CREATOR_FEE = 1000;
 
   constructor(
     @InjectRepository(Transaction)
@@ -192,6 +195,10 @@ export class VaultManagingService {
       throw new Error('Failed to find script hash');
     }
 
+    const vaultAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(scriptHash)))
+      .to_address()
+      .to_bech32();
+
     try {
       const input: {
         changeAddress: string;
@@ -203,6 +210,10 @@ export class VaultManagingService {
               address: string;
               assets: object[];
               datum: { type: 'inline'; value: Datum1; shape: object };
+            }
+          | {
+              address: string;
+              assets: object[];
             }
           | {
               address: string;
@@ -309,6 +320,16 @@ export class VaultManagingService {
                 purpose: 'spend',
               },
             },
+          },
+          {
+            address: vaultAddress,
+            assets: [
+              {
+                assetName: { name: this.VLRM_HEX_ASSET_NAME, format: 'hex' },
+                policyId: this.VLRM_POLICY_ID,
+                quantity: this.VLRM_CREATOR_FEE,
+              },
+            ],
           },
           {
             address: this.vaultScriptAddress,

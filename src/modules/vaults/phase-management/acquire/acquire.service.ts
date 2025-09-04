@@ -17,6 +17,7 @@ import { VaultStatus } from '@/types/vault.types';
 @Injectable()
 export class AcquireService {
   private readonly logger = new Logger(AcquireService.name);
+  private readonly PROTOCOL_ACQUIRERS_FEE = 4000000; // 4 ADA in lovelace
 
   constructor(
     @InjectRepository(Vault)
@@ -82,6 +83,7 @@ export class AcquireService {
       vault_id: vaultId,
       type: TransactionType.acquire,
       amount: acquireReq.assets.reduce((sum, asset) => sum + (asset.quantity || 0), 0),
+      fee: this.PROTOCOL_ACQUIRERS_FEE,
       assets: [],
       userId,
     });

@@ -1,4 +1,5 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
+import { assets } from '@blockfrost/blockfrost-js/lib/endpoints/api/assets';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -21,6 +22,7 @@ import { VaultPrivacy, VaultStatus } from '@/types/vault.types';
 @Injectable()
 export class ContributionService {
   private readonly logger = new Logger(ContributionService.name);
+  private readonly PROTOCOL_CONTRIBUTORS_FEE = 4000000; // 4 ADA in lovelace
   private blockfrost: BlockFrostAPI;
 
   constructor(
@@ -221,6 +223,7 @@ export class ContributionService {
     const transaction = await this.transactionsService.createTransaction({
       vault_id: vaultId,
       type: TransactionType.contribute,
+      fee: assets.length * this.PROTOCOL_CONTRIBUTORS_FEE,
       assets: [],
       userId,
     });
