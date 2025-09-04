@@ -4,7 +4,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
-import { Brackets, In, Repository } from 'typeorm';
+import { Brackets, Repository } from 'typeorm';
 
 import { AwsService } from '../aws_bucket/aws.service';
 import { TaptoolsService } from '../taptools/taptools.service';
@@ -628,66 +628,6 @@ export class VaultsService {
     return plainToInstance(VaultFullResponse, instanceToPlain(vault), { excludeExtraneousValues: true });
   }
 
-  async getMyVaults(
-    userId: string,
-    filter?: VaultFilter,
-    page: number = 1,
-    limit: number = 10,
-    sortBy?: VaultSortField,
-    sortOrder: SortOrder = SortOrder.DESC
-  ): Promise<PaginatedResponseDto<VaultShortResponse>> {
-    const query = {
-      where: {
-        owner: { id: userId },
-        deleted: false,
-      },
-      relations: ['social_links', 'vault_image', 'banner_image'],
-      skip: (page - 1) * limit,
-      take: limit,
-      order: {},
-    };
-
-    if (filter) {
-      switch (filter) {
-        case VaultFilter.open:
-          query.where['vault_status'] = In([VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire]);
-          break;
-        case VaultFilter.locked:
-          query.where['vault_status'] = VaultStatus.locked;
-          break;
-        case VaultFilter.contribution:
-          query.where['vault_status'] = VaultStatus.contribution;
-          break;
-        case VaultFilter.acquire:
-          query.where['vault_status'] = VaultStatus.acquire;
-          break;
-      }
-    }
-
-    // Add sorting if specified
-    if (sortBy) {
-      query.order[sortBy] = sortOrder;
-    } else {
-      // Default sort by created_at DESC if no sort specified
-      query.order['created_at'] = SortOrder.DESC;
-    }
-
-    const [listOfVaults, total] = await this.vaultsRepository.findAndCount(query);
-
-    // Transform vault images to URLs and convert to VaultShortResponse
-    const transformedItems = listOfVaults.map(vault => {
-      return plainToInstance(VaultShortResponse, instanceToPlain(vault), { excludeExtraneousValues: true });
-    });
-
-    return {
-      items: transformedItems,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
-  }
-
   async prepareDraftResponse(id: string): Promise<VaultFullResponse> {
     const vault = await this.vaultsRepository.findOne({
       where: { id },
@@ -902,7 +842,7 @@ export class VaultsService {
       );
 
     if (isOwner) {
-      queryBuilder.andWhere('vault.owner_id = :userId', { userId });
+      queryBuilder.andWhere('vault.owner_id = :userId', { userId: user.id });
     }
 
     // Apply status filter and corresponding whitelist check

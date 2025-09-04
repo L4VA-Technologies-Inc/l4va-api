@@ -92,19 +92,6 @@ export class VaultsController {
   }
 
   @ApiDoc({
-    summary: 'Select my vaults',
-    description:
-      'Returns list of my vaults. Can be filtered by status: open (published, contribution, acquire) or locked. Supports sorting by name, created_at, or updated_at.',
-    status: 200,
-  })
-  @UseGuards(AuthGuard)
-  @Get('my')
-  getMyVaults(@Request() req, @Query() query: GetVaultsDto): Promise<PaginatedResponseDto<VaultShortResponse>> {
-    const userId = req.user.sub;
-    return this.vaultsService.getMyVaults(userId, query.filter, query.page, query.limit, query.sortBy, query.sortOrder);
-  }
-
-  @ApiDoc({
     summary: 'List of biggest investments',
     description: 'Returns list of biggest transaction.',
     status: 200,
