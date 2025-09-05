@@ -1,15 +1,22 @@
 import { Credential, EnterpriseAddress, ScriptHash } from '@emurgo/cardano-serialization-lib-nodejs';
-import { BadRequestException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
-import { Brackets, Repository } from 'typeorm';
+import { Brackets, In, Repository } from 'typeorm';
 
 import { AwsService } from '../aws_bucket/aws.service';
 import { TaptoolsService } from '../taptools/taptools.service';
 
 import { CreateVaultReq } from './dto/createVault.req';
+import { VaultStatisticsResponse } from './dto/get-vaults-statistics.dto';
 import { DateRangeDto, SortOrder, TVLCurrency, VaultFilter, VaultSortField } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { PublishVaultDto } from './dto/publish-vault.dto';
@@ -381,6 +388,19 @@ export class VaultsService {
       // Handle assets whitelist
       // TODO: Add lovelace support
       let maxCountOf = 0;
+      const uniquePolicyIds = new Set();
+
+      // First, validate for duplicate policy IDs
+      for (const assetItem of data.assetsWhitelist) {
+        if (assetItem.policyId) {
+          if (uniquePolicyIds.has(assetItem.policyId)) {
+            throw new BadRequestException(`Duplicate policy ID in assets whitelist: ${assetItem.policyId}`);
+          }
+          uniquePolicyIds.add(assetItem.policyId);
+        }
+      }
+
+      // Then process them
       await Promise.all(
         data.assetsWhitelist.map(assetItem => {
           if (assetItem.policyId) {
@@ -584,6 +604,185 @@ export class VaultsService {
       }
 
       throw new BadRequestException('Failed to create vault. Please check your input and try again.');
+    }
+  }
+
+  /**
+   * Retrieves statistics about vaults for the landing page.
+   *
+   * @returns Object containing platform statistics
+   */
+  async getVaultStatistics(): Promise<VaultStatisticsResponse> {
+    try {
+      // Count active vaults (published, contribution, acquire, locked)
+      const activeVaultsCount = await this.vaultsRepository.count({
+        where: {
+          vault_status: In([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked]),
+          deleted: false,
+        },
+      });
+
+      const totalVaultsCount = await this.vaultsRepository.count({
+        where: {
+          vault_status: In([VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked]),
+        },
+      });
+      // Get sum of total assets value for locked vaults only
+      const totalValueQuery = await this.vaultsRepository
+        .createQueryBuilder('vault')
+        .select('SUM(vault.total_assets_cost_usd)', 'totalValueUsd')
+        .addSelect('SUM(vault.total_assets_cost_ada)', 'totalValueAda')
+        .where('vault.vault_status = :status', { status: VaultStatus.locked })
+        .andWhere('vault.deleted = :deleted', { deleted: false })
+        .getRawOne();
+
+      // Count total assets contributed across all vaults
+      const totalContributedQuery = await this.assetsRepository
+        .createQueryBuilder('asset')
+        .select('COUNT(asset.id)', 'count')
+        .where('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
+        .getRawOne();
+
+      // Count total assets ever contributed (all time, including removed)
+      const totalAssetsQuery = await this.assetsRepository
+        .createQueryBuilder('asset')
+        .select('COUNT(asset.id)', 'count')
+        .getRawOne();
+
+      // Get total acquired value (both ADA and USD) across all vaults
+      const totalAcquiredQuery = await this.vaultsRepository
+        .createQueryBuilder('vault')
+        .select('SUM(vault.total_acquired_value_ada)', 'totalAcquiredAda')
+        .getRawOne();
+
+      const vaultsByStage = await this.getVaultsByStageData();
+      const vaultsByType = await this.getVaultsByTypeData();
+
+      const adaPrice = await this.taptoolsService.getAdaPrice();
+
+      const statistics = {
+        activeVaults: activeVaultsCount,
+        totalVaults: totalVaultsCount,
+        totalValueUsd: Number(totalValueQuery?.totalValueUsd || 0),
+        totalValueAda: Number(totalValueQuery?.totalValueAda || 0),
+        totalContributed: Number(totalContributedQuery?.count || 0),
+        totalAssets: Number(totalAssetsQuery?.count || 0),
+        totalAcquiredAda: Number(totalAcquiredQuery?.totalAcquiredAda || 0),
+        totalAcquiredUsd: parseFloat((Number(totalAcquiredQuery?.totalAcquiredAda || 0) * adaPrice).toFixed(2)),
+        vaultsByStage,
+        vaultsByType,
+      };
+
+      return plainToInstance(VaultStatisticsResponse, statistics, {
+        excludeExtraneousValues: true,
+      });
+    } catch (error) {
+      this.logger.error('Error retrieving vault statistics:', error);
+      throw new InternalServerErrorException('Failed to retrieve vault statistics');
+    }
+  }
+
+  /**
+   * Gets distribution of vaults by stage with TVL in both ADA and USD
+   * @returns Record of stages with percentages and TVL values
+   */
+  private async getVaultsByStageData(): Promise<
+    Record<string, { percentage: number; valueAda: string; valueUsd: string }>
+  > {
+    try {
+      // Get TVL by vault status for both currencies
+      const statusResults = await this.vaultsRepository
+        .createQueryBuilder('vault')
+        .select('vault.vault_status', 'status')
+        .addSelect('SUM(vault.total_assets_cost_ada)', 'valueAda')
+        .addSelect('SUM(vault.total_assets_cost_usd)', 'valueUsd')
+        .addSelect('COUNT(vault.id)', 'count')
+        .where('vault.deleted = :deleted', { deleted: false })
+        .groupBy('vault.vault_status')
+        .getRawMany();
+
+      // Calculate total ADA value for percentages
+      const totalValueAda = statusResults.reduce((sum, item) => sum + Number(item.valueAda || 0), 0);
+
+      const result = {};
+
+      // Map status values to friendly names
+      const statusMap = {
+        draft: 'Draft',
+        created: 'Created',
+        published: 'Published',
+        contribution: 'Contribution',
+        acquire: 'Acquire',
+        locked: 'Locked',
+        terminated: 'Terminated',
+      };
+
+      // Process each status
+      statusResults.forEach(item => {
+        const status = statusMap[item.status] || item.status;
+        const valueAda = Number(item.valueAda || 0);
+        const valueUsd = Number(item.valueUsd || 0);
+        const percentage = totalValueAda > 0 ? (valueAda / totalValueAda) * 100 : 0;
+
+        result[status.toLowerCase()] = {
+          percentage: parseFloat(percentage.toFixed(2)),
+          valueAda,
+          valueUsd,
+        };
+      });
+
+      return result;
+    } catch (error) {
+      this.logger.error('Error calculating vaults by stage:', error);
+      return {};
+    }
+  }
+
+  /**
+   * Gets distribution of vaults by privacy type with TVL in both ADA and USD
+   * @returns Record of privacy types with percentages and TVL values
+   */
+  private async getVaultsByTypeData(): Promise<
+    Record<string, { percentage: number; valueAda: string; valueUsd: string }>
+  > {
+    try {
+      // Get TVL by privacy type for both currencies
+      const privacyResults = await this.vaultsRepository
+        .createQueryBuilder('vault')
+        .select('vault.privacy', 'type')
+        .addSelect('SUM(vault.total_assets_cost_ada)', 'valueAda')
+        .addSelect('SUM(vault.total_assets_cost_usd)', 'valueUsd')
+        .addSelect('COUNT(vault.id)', 'count')
+        .where('vault.deleted = :deleted', { deleted: false })
+        .groupBy('vault.privacy')
+        .getRawMany();
+
+      // Calculate total ADA value for percentages
+      const totalValueAda = privacyResults.reduce((sum, item) => sum + Number(item.valueAda || 0), 0);
+
+      const result = {};
+
+      // Process each privacy type
+      privacyResults.forEach(item => {
+        if (item.type) {
+          const type = item.type;
+          const valueAda = Number(item.valueAda || 0);
+          const valueUsd = Number(item.valueUsd || 0);
+          const percentage = parseFloat((totalValueAda > 0 ? (valueAda / totalValueAda) * 100 : 0).toFixed(2)) || 0;
+
+          const key = type === 'Semi-Private' ? 'semiPrivate' : type.toLowerCase();
+          result[key] = {
+            percentage,
+            valueAda,
+            valueUsd,
+          };
+        }
+      });
+
+      return result;
+    } catch (error) {
+      this.logger.error('Error calculating vaults by type:', error);
+      return {};
     }
   }
 
