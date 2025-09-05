@@ -118,18 +118,12 @@ export class VaultsService {
         .to_address()
         .to_bech32();
 
-      const freshVault = await this.vaultsRepository.findOne({
-        where: { id: vault.id },
-      });
+      const updateResult = await this.vaultsRepository.update({ id: vault.id }, { contract_address: SC_ADDRESS });
 
-      if (!freshVault) {
+      if (updateResult.affected === 0) {
         this.logger.error(`Vault ${vault.id} not found during transaction confirmation`);
         return;
       }
-
-      // Only update the contract_address
-      freshVault.contract_address = SC_ADDRESS;
-      await this.vaultsRepository.save(freshVault);
 
       this.logger.log(`Successfully processed transaction ${txHash} for vault ${vault.id}`);
     } catch (error) {
@@ -886,6 +880,9 @@ export class VaultsService {
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked });
           break;
         case VaultFilter.draft:
+          if (!isOwner) {
+            throw new BadRequestException('Draft filter can only be used when isOwner is true');
+          }
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.draft });
           break;
         case VaultFilter.published:
