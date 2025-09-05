@@ -4,13 +4,13 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
-import { Brackets, In, Repository } from 'typeorm';
+import { Brackets, Repository } from 'typeorm';
 
 import { AwsService } from '../aws_bucket/aws.service';
 import { TaptoolsService } from '../taptools/taptools.service';
 
 import { CreateVaultReq } from './dto/createVault.req';
-import { SortOrder, VaultFilter, VaultSortField } from './dto/get-vaults.dto';
+import { DateRangeDto, SortOrder, TVLCurrency, VaultFilter, VaultSortField } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { PublishVaultDto } from './dto/publish-vault.dto';
 import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
@@ -118,8 +118,12 @@ export class VaultsService {
         .to_address()
         .to_bech32();
 
-      vault.contract_address = SC_ADDRESS;
-      await this.vaultsRepository.save(vault);
+      const updateResult = await this.vaultsRepository.update({ id: vault.id }, { contract_address: SC_ADDRESS });
+
+      if (updateResult.affected === 0) {
+        this.logger.error(`Vault ${vault.id} not found during transaction confirmation`);
+        return;
+      }
 
       this.logger.log(`Successfully processed transaction ${txHash} for vault ${vault.id}`);
     } catch (error) {
@@ -137,7 +141,6 @@ export class VaultsService {
       return this.confirmAndProcessTransaction(txHash, vault, attempt + 1);
     }
   }
-
   /**
    * Parses a CSV file from AWS S3 and extracts valid Cardano addresses.
    * @param file_key - S3 file key
@@ -619,66 +622,6 @@ export class VaultsService {
     return plainToInstance(VaultFullResponse, instanceToPlain(vault), { excludeExtraneousValues: true });
   }
 
-  async getMyVaults(
-    userId: string,
-    filter?: VaultFilter,
-    page: number = 1,
-    limit: number = 10,
-    sortBy?: VaultSortField,
-    sortOrder: SortOrder = SortOrder.DESC
-  ): Promise<PaginatedResponseDto<VaultShortResponse>> {
-    const query = {
-      where: {
-        owner: { id: userId },
-        deleted: false,
-      },
-      relations: ['social_links', 'vault_image', 'banner_image'],
-      skip: (page - 1) * limit,
-      take: limit,
-      order: {},
-    };
-
-    if (filter) {
-      switch (filter) {
-        case VaultFilter.open:
-          query.where['vault_status'] = In([VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire]);
-          break;
-        case VaultFilter.locked:
-          query.where['vault_status'] = VaultStatus.locked;
-          break;
-        case VaultFilter.contribution:
-          query.where['vault_status'] = VaultStatus.contribution;
-          break;
-        case VaultFilter.acquire:
-          query.where['vault_status'] = VaultStatus.acquire;
-          break;
-      }
-    }
-
-    // Add sorting if specified
-    if (sortBy) {
-      query.order[sortBy] = sortOrder;
-    } else {
-      // Default sort by created_at DESC if no sort specified
-      query.order['created_at'] = SortOrder.DESC;
-    }
-
-    const [listOfVaults, total] = await this.vaultsRepository.findAndCount(query);
-
-    // Transform vault images to URLs and convert to VaultShortResponse
-    const transformedItems = listOfVaults.map(vault => {
-      return plainToInstance(VaultShortResponse, instanceToPlain(vault), { excludeExtraneousValues: true });
-    });
-
-    return {
-      items: transformedItems,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
-  }
-
   async prepareDraftResponse(id: string): Promise<VaultFullResponse> {
     const vault = await this.vaultsRepository.findOne({
       where: { id },
@@ -811,22 +754,43 @@ export class VaultsService {
    * @param sortOrder - Sort order
    * @returns Paginated response of vaults
    */
-  async getVaults(
-    userId?: string,
-    filter?: VaultFilter,
-    page: number = 1,
-    limit: number = 10,
-    sortBy?: VaultSortField,
-    sortOrder: SortOrder = SortOrder.DESC,
-    tags?: string[],
-    reserveMet?: boolean,
-    vaultStage?: string,
-    minInitialVaultOffered?: number,
-    maxInitialVaultOffered?: number,
-    minTvl?: number,
-    maxTvl?: number,
-    tvlCurrency?: string
-  ): Promise<PaginatedResponseDto<VaultShortResponse>> {
+  async getVaults(data: {
+    userId?: string;
+    filter?: VaultFilter;
+    page?: number;
+    limit?: number;
+    sortBy?: VaultSortField;
+    sortOrder?: SortOrder;
+    tags?: string[];
+    isOwner?: boolean;
+    reserveMet?: boolean;
+    minInitialVaultOffered?: number;
+    maxInitialVaultOffered?: number;
+    assetWhitelist?: string;
+    minTvl?: number;
+    maxTvl?: number;
+    tvlCurrency?: TVLCurrency;
+    contributionWindow?: DateRangeDto;
+    acquireWindow?: DateRangeDto;
+  }): Promise<PaginatedResponseDto<VaultShortResponse>> {
+    const {
+      userId,
+      sortBy,
+      tvlCurrency,
+      minTvl,
+      maxTvl,
+      minInitialVaultOffered,
+      maxInitialVaultOffered,
+      contributionWindow,
+      acquireWindow,
+      tags,
+      assetWhitelist,
+      isOwner,
+      filter,
+      page = 1,
+      limit = 10,
+      sortOrder = SortOrder.DESC,
+    } = data;
     // Get user's wallet address
     const user = await this.usersRepository.findOne({
       where: { id: userId },
@@ -871,6 +835,10 @@ export class VaultsService {
         })
       );
 
+    if (isOwner) {
+      queryBuilder.andWhere('vault.owner_id = :userId', { userId: user.id });
+    }
+
     // Apply status filter and corresponding whitelist check
     if (filter) {
       switch (filter) {
@@ -911,6 +879,12 @@ export class VaultsService {
         case VaultFilter.locked:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked });
           break;
+        case VaultFilter.draft:
+          if (!isOwner) {
+            throw new BadRequestException('Draft filter can only be used when isOwner is true');
+          }
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.draft });
+          break;
         case VaultFilter.published:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.published }).andWhere(
             new Brackets(qb => {
@@ -921,6 +895,71 @@ export class VaultsService {
             })
           );
       }
+    }
+
+    if (tags && tags.length > 0) {
+      const normalizedTags = tags.map(tag => tag.toLowerCase());
+      // OR logic: Returns vaults that have ANY of the specified tags
+      queryBuilder.andWhere(
+        `EXISTS (
+          SELECT 1 
+          FROM vault_tags vt 
+          INNER JOIN tags t ON t.id = vt.tag_id 
+          WHERE vt.vault_id = vault.id 
+          AND LOWER(t.name) IN (:...tags)
+        )`,
+        { tags: normalizedTags }
+      );
+    }
+
+    if (contributionWindow) {
+      queryBuilder.andWhere('vault.contribution_open_window_time BETWEEN :start AND :end', {
+        start: contributionWindow.from,
+        end: contributionWindow.to,
+      });
+    }
+
+    if (acquireWindow) {
+      queryBuilder.andWhere('vault.acquire_open_window_time BETWEEN :start AND :end', {
+        start: acquireWindow.from,
+        end: acquireWindow.to,
+      });
+    }
+
+    if (minTvl) {
+      if (tvlCurrency === TVLCurrency.USD) {
+        queryBuilder.andWhere('vault.total_assets_cost_usd >= :minTvl', { minTvl });
+      } else if (tvlCurrency === TVLCurrency.ADA) {
+        queryBuilder.andWhere('vault.total_assets_cost_ada >= :minTvl', { minTvl });
+      }
+    }
+
+    if (maxTvl) {
+      if (tvlCurrency === TVLCurrency.USD) {
+        queryBuilder.andWhere('vault.total_assets_cost_usd <= :maxTvl', { maxTvl });
+      } else if (tvlCurrency === TVLCurrency.ADA) {
+        queryBuilder.andWhere('vault.total_assets_cost_ada <= :maxTvl', { maxTvl });
+      }
+    }
+
+    if (maxInitialVaultOffered) {
+      queryBuilder.andWhere('(100 - vault.acquire_reserve) <= :maxInitialVaultOffered', { maxInitialVaultOffered });
+    }
+
+    if (minInitialVaultOffered) {
+      queryBuilder.andWhere('(100 - vault.acquire_reserve) >= :minInitialVaultOffered', { minInitialVaultOffered });
+    }
+
+    if (assetWhitelist) {
+      queryBuilder.andWhere(
+        `EXISTS (
+          SELECT 1 
+          FROM assets_whitelist aw 
+          WHERE aw.vault_id = vault.id 
+          AND aw.policy_id = :assetWhitelist
+        )`,
+        { assetWhitelist }
+      );
     }
 
     // Apply sorting

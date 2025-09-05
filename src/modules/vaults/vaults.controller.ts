@@ -15,6 +15,8 @@ import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './d
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { VaultsService } from './vaults.service';
 
+import { Transaction } from '@/database/transaction.entity';
+
 @ApiTags('vaults')
 @Controller('vaults')
 export class VaultsController {
@@ -75,16 +77,18 @@ export class VaultsController {
   }
 
   @ApiDoc({
-    summary: 'Select my vaults',
+    summary: 'List of public vaults',
     description:
-      'Returns list of my vaults. Can be filtered by status: open (published, contribution, acquire) or locked. Supports sorting by name, created_at, or updated_at.',
+      'Returns paginated list of all published vaults. Default page: 1, default limit: 10. Supports sorting by name, created_at, or updated_at. Response includes total count and total pages.',
     status: 200,
   })
-  @UseGuards(AuthGuard)
-  @Get('my')
-  getMyVaults(@Request() req, @Query() query: GetVaultsDto): Promise<PaginatedResponseDto<VaultShortResponse>> {
-    const userId = req.user.sub;
-    return this.vaultsService.getMyVaults(userId, query.filter, query.page, query.limit, query.sortBy, query.sortOrder);
+  @Post('search')
+  getVaults(@Body() filters: GetVaultsDto, @Request() req): Promise<PaginatedResponseDto<VaultShortResponse>> {
+    const userId = req.user?.sub;
+    return this.vaultsService.getVaults({
+      userId,
+      ...filters,
+    });
   }
 
   @ApiDoc({
@@ -115,7 +119,7 @@ export class VaultsController {
     status: 200,
   })
   @Get(':id')
-  async getVaultById(@Param('id') id: string, @Request() req) {
+  async getVaultById(@Param('id') id: string, @Request() req): Promise<VaultFullResponse | Record<string, unknown>> {
     const userId = req.user?.sub;
 
     if (!userId) {
@@ -134,26 +138,13 @@ export class VaultsController {
   }
 
   @ApiDoc({
-    summary: 'List of public vaults',
-    description:
-      'Returns paginated list of all published vaults. Default page: 1, default limit: 10. Supports sorting by name, created_at, or updated_at. Response includes total count and total pages.',
-    status: 200,
-  })
-  @Get()
-  getVaults(@Query() query: GetVaultsDto, @Request() req) {
-    const userId = req.user?.sub;
-
-    return this.vaultsService.getVaults(userId, query.filter, query.page, query.limit, query.sortBy, query.sortOrder);
-  }
-
-  @ApiDoc({
     summary: 'Get vault transactions',
     description: 'Returns list of vault transactions. By default shows only confirmed transactions.',
     status: 200,
   })
   @UseGuards(AuthGuard)
   @Get(':id/transactions')
-  async getVaultTransactions(@Param('id') id: string, @Query() query: GetVaultTransactionsDto) {
+  async getVaultTransactions(@Param('id') id: string, @Query() query: GetVaultTransactionsDto): Promise<Transaction[]> {
     // Verify vault exists and user has access
     await this.vaultsService.getVaultById(id);
     return this.transactionsService.getVaultTransactions(id, query.status, query.type);
@@ -166,7 +157,15 @@ export class VaultsController {
   })
   @UseGuards(AuthGuard)
   @Post('burn-build/:id')
-  async burnVaultAttempt(@Param('id') id: string, @Query() query: GetVaultTransactionsDto, @Request() req) {
+  async burnVaultAttempt(
+    @Param('id') id: string,
+    @Query() query: GetVaultTransactionsDto,
+    @Request() req
+  ): Promise<{
+    txId: string;
+    presignedTx: string;
+    contractAddress: string;
+  }> {
     const userId = req.user.sub;
     return await this.vaultsService.burnVaultAttempt(id, userId);
   }
@@ -183,7 +182,7 @@ export class VaultsController {
     @Query() query: GetVaultTransactionsDto,
     @Body() publishDto: PublishVaultDto,
     @Request() req
-  ) {
+  ): Promise<unknown> {
     const userId = req.user.sub;
 
     return await this.vaultsService.burnVaultPublishTx(id, userId, publishDto);
