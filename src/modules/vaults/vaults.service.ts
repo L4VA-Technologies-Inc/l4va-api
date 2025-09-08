@@ -748,10 +748,9 @@ export class VaultsService {
    * @returns Record of privacy types with percentages and TVL values
    */
   private async getVaultsByTypeData(): Promise<
-    Record<string, { percentage: number; valueAda: string; valueUsd: string }>
+    Record<string, { percentage: number; valueAda: number; valueUsd: number }>
   > {
     try {
-      // Get TVL by privacy type for both currencies
       const privacyResults = await this.vaultsRepository
         .createQueryBuilder('vault')
         .select('vault.privacy', 'type')
@@ -762,12 +761,26 @@ export class VaultsService {
         .groupBy('vault.privacy')
         .getRawMany();
 
-      // Calculate total ADA value for percentages
       const totalValueAda = privacyResults.reduce((sum, item) => sum + Number(item.valueAda || 0), 0);
 
-      const result = {};
+      const result = {
+        private: {
+          percentage: 0,
+          valueAda: 0,
+          valueUsd: 0,
+        },
+        public: {
+          percentage: 0,
+          valueAda: 0,
+          valueUsd: 0,
+        },
+        semiPrivate: {
+          percentage: 0,
+          valueAda: 0,
+          valueUsd: 0,
+        },
+      };
 
-      // Process each privacy type
       privacyResults.forEach(item => {
         if (item.type) {
           const type = item.type;
@@ -775,7 +788,7 @@ export class VaultsService {
           const valueUsd = Number(item.valueUsd || 0);
           const percentage = parseFloat((totalValueAda > 0 ? (valueAda / totalValueAda) * 100 : 0).toFixed(2)) || 0;
 
-          const key = type === 'Semi-Private' ? 'semiPrivate' : type.toLowerCase();
+          const key = type === 'semi-private' ? 'semiPrivate' : type.toLowerCase();
           result[key] = {
             percentage,
             valueAda,
@@ -787,7 +800,11 @@ export class VaultsService {
       return result;
     } catch (error) {
       this.logger.error('Error calculating vaults by type:', error);
-      return {};
+      return {
+        private: { percentage: 0, valueAda: 0, valueUsd: 0 },
+        public: { percentage: 0, valueAda: 0, valueUsd: 0 },
+        semiPrivate: { percentage: 0, valueAda: 0, valueUsd: 0 },
+      };
     }
   }
 
