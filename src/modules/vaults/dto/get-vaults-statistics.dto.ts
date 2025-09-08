@@ -31,11 +31,18 @@ export class VaultStatisticsResponse {
   totalValueAda: number;
 
   @ApiProperty({
-    description: 'Total number of contributed assets across all vaults',
+    description: 'Total number of contributed assets in usd across all vaults',
     example: 750,
   })
   @Expose()
-  totalContributed: number;
+  totalContributedUsd: number;
+
+  @ApiProperty({
+    description: 'Total number of contributed assets in ada across all vaults',
+    example: 1000,
+  })
+  @Expose()
+  totalContributedAda: number;
 
   @ApiProperty({
     description: 'Total number of assets ever contributed to any vault',

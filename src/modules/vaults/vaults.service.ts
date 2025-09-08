@@ -637,10 +637,14 @@ export class VaultsService {
         .getRawOne();
 
       // Count total assets contributed across all vaults
-      const totalContributedQuery = await this.assetsRepository
-        .createQueryBuilder('asset')
-        .select('COUNT(asset.id)', 'count')
-        .where('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
+      const totalContributedQuery = await this.vaultsRepository
+        .createQueryBuilder('vault')
+        .select('SUM(vault.total_assets_cost_usd)', 'totalValueUsd')
+        .addSelect('SUM(vault.total_assets_cost_ada)', 'totalValueAda')
+        .where('vault.vault_status IN (:...statuses)', {
+          statuses: [VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked, VaultStatus.failed],
+        })
+        .andWhere('vault.deleted = :deleted', { deleted: false })
         .getRawOne();
 
       // Count total assets ever contributed (all time, including removed)
@@ -665,7 +669,8 @@ export class VaultsService {
         totalVaults: totalVaultsCount,
         totalValueUsd: Number(totalValueQuery?.totalValueUsd || 0),
         totalValueAda: Number(totalValueQuery?.totalValueAda || 0),
-        totalContributed: Number(totalContributedQuery?.count || 0),
+        totalContributedUsd: Number(totalContributedQuery?.totalValueUsd || 0),
+        totalContributedAda: Number(totalContributedQuery?.totalValueAda || 0),
         totalAssets: Number(totalAssetsQuery?.count || 0),
         totalAcquiredAda: Number(totalAcquiredQuery?.totalAcquiredAda || 0),
         totalAcquiredUsd: parseFloat((Number(totalAcquiredQuery?.totalAcquiredAda || 0) * adaPrice).toFixed(2)),
