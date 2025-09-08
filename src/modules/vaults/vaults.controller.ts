@@ -107,7 +107,7 @@ export class VaultsController {
 
   @ApiDoc({
     summary: 'Get vault statistics for landing page',
-    description: 'Returns statxistics about active vaults, total value in USD and ADA, and total contributed assets',
+    description: 'Returns statistics about active vaults, total value in USD and ADA, and total contributed assets',
     status: 200,
   })
   @Get('statistics')
