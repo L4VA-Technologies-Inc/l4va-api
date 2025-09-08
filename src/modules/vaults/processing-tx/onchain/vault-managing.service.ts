@@ -80,6 +80,7 @@ export class VaultManagingService {
   private readonly anvilApi: string;
   private readonly anvilApiKey: string;
   private readonly vaultScriptAddress: string;
+  private readonly vaultScriptSKey: string;
   private readonly VLRM_HEX_ASSET_NAME = '4d494e';
   private readonly VLRM_POLICY_ID = 'e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed72';
   private readonly VLRM_CREATOR_FEE = 1000;
@@ -99,6 +100,7 @@ export class VaultManagingService {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.vaultScriptAddress = this.configService.get<string>('VAULT_SCRIPT_ADDRESS');
+    this.vaultScriptSKey = this.configService.get<string>('VAULT_SCRIPT_SKEY');
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
     });
@@ -195,9 +197,9 @@ export class VaultManagingService {
       throw new Error('Failed to find script hash');
     }
 
-    const vaultAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(scriptHash)))
-      .to_address()
-      .to_bech32();
+    // const vaultAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(scriptHash)))
+    //   .to_address()
+    //   .to_bech32();
 
     try {
       const input: {
@@ -321,16 +323,16 @@ export class VaultManagingService {
               },
             },
           },
-          {
-            address: vaultAddress,
-            assets: [
-              {
-                assetName: { name: this.VLRM_HEX_ASSET_NAME, format: 'hex' },
-                policyId: this.VLRM_POLICY_ID,
-                quantity: this.VLRM_CREATOR_FEE,
-              },
-            ],
-          },
+          // {
+          //   address: vaultAddress,
+          //   assets: [
+          //     {
+          //       assetName: { name: this.VLRM_HEX_ASSET_NAME, format: 'hex' },
+          //       policyId: this.VLRM_POLICY_ID,
+          //       quantity: this.VLRM_CREATOR_FEE,
+          //     },
+          //   ],
+          // },
           {
             address: this.vaultScriptAddress,
             datum: {
@@ -552,6 +554,78 @@ export class VaultManagingService {
   }
 
   /**
+   * Refunds collateral from vault script address back to vault owner
+   * @param vaultOwnerAddress Address of the vault owner who will receive the refund
+   * @param collateralUtxo UTXO containing the collateral (format: txHash#index)
+   * @returns Transaction hash of the refund transaction
+   */
+  async createRefundCollateralTx({
+    vaultOwnerAddress,
+    collateralUtxo,
+  }: {
+    vaultOwnerAddress: string;
+    collateralUtxo: string;
+  }): Promise<{
+    txHash: string;
+  }> {
+    try {
+      this.logger.log(`Creating refund transaction for collateral UTXO ${collateralUtxo} to ${vaultOwnerAddress}`);
+
+      const [txHash, indexStr] = collateralUtxo.split('#');
+      const index = parseInt(indexStr);
+
+      if (!txHash || isNaN(index)) {
+        throw new Error('Invalid UTXO format. Expected format: txHash#index');
+      }
+
+      const utxoDetails = await this.blockfrost.txsUtxos(txHash);
+
+      if (!utxoDetails || !utxoDetails.outputs || utxoDetails.outputs.length <= index) {
+        throw new Error(`UTXO ${collateralUtxo} not found`);
+      }
+
+      // Find the output with the script address that contains the collateral
+      const scriptOutput = utxoDetails.outputs.find(output => output.address === this.vaultScriptAddress);
+
+      if (!scriptOutput) {
+        throw new Error(`No output found with vault script address ${this.vaultScriptAddress}`);
+      }
+
+      const amount = Number(scriptOutput.amount[0].quantity);
+
+      if (amount <= 0) {
+        throw new Error(`Collateral UTXO has zero or negative ADA amount: ${amount}`);
+      }
+
+      const input = {
+        changeAddress: this.vaultScriptAddress,
+        message: 'Refund Collateral',
+        // utxos: REQUIRED_INPUTS,
+        outputs: [
+          {
+            address: vaultOwnerAddress,
+            lovelace: amount - 1000000,
+          },
+        ],
+      };
+
+      const buildResponse = await this.blockchainService.buildTransaction(input);
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.vaultScriptSKey));
+
+      const result = await this.blockchainService.submitTransaction({
+        transaction: txToSubmitOnChain.to_hex(),
+        signatures: [],
+      });
+
+      return { txHash: result.txHash };
+    } catch (error) {
+      this.logger.error('Failed to create refund collateral transaction:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Submit a signed vault transaction to the blockchain
    * @param signedTx Object containing the transaction and signatures
    * @returns Transaction hash
@@ -608,12 +682,12 @@ export class VaultManagingService {
           body: JSON.stringify(blueprintUpdatePayload),
         });
 
-        console.log('✅ Complete workflow finished: vault created, script uploaded, and blueprint updated!');
+        this.logger.log('✅ Complete workflow finished: vault created, script uploaded, and blueprint updated!');
       } else {
         console.error('Failed to create vault and upload script');
       }
 
-      return { txHash: result.txHash };
+      return { txHash };
     } catch (error) {
       this.logger.error('Failed to submit vault transaction', error);
       throw new Error(`Failed to submit transaction: ${error.message}`);
