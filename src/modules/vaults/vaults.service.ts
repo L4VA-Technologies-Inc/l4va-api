@@ -32,6 +32,7 @@ import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
+import { AddTotalAcquiredValueInAda1750670509513 } from '@/database/migrations/1750670509513-addTotalAcquiredValueInAda';
 import { TagEntity } from '@/database/tag.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
@@ -1214,7 +1215,8 @@ export class VaultsService {
         // Merge calculated values with plain object
         const enrichedVault = {
           ...plainVault,
-          tvl: vault.total_assets_cost_usd,
+          totalValueUsd: vault.total_assets_cost_usd,
+          totalValueAda: vault.total_assets_cost_ada,
           baseAllocation: null,
           total: null,
           invested: vault.total_acquired_value_ada,
