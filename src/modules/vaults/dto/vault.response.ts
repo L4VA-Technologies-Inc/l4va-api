@@ -41,12 +41,25 @@ export class VaultShortResponse {
   })
   description?: string;
 
-  @ApiProperty({ description: 'Tvl', required: true })
+  @ApiProperty({
+    description: 'Total value of locked vaults in USD',
+    example: 1250000,
+  })
   @DtoRepresent({
-    transform: ({ value }) => (value ? Number(value) : null),
+    transform: false,
     expose: true,
   })
-  tvl: number;
+  totalValueUsd: number;
+
+  @ApiProperty({
+    description: 'Total value of locked vaults in ADA',
+    example: 3500000,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  totalValueAda: number;
 
   @ApiProperty({ description: 'Tvl', required: true })
   @DtoRepresent({

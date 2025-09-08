@@ -7,6 +7,7 @@ import { AuthGuard } from '../auth/auth.guard';
 import { DraftVaultsService } from './draft-vaults.service';
 import { CreateVaultReq } from './dto/createVault.req';
 import { GetVaultTransactionsDto } from './dto/get-vault-transactions.dto';
+import { VaultStatisticsResponse } from './dto/get-vaults-statistics.dto';
 import { GetVaultsDto } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { PublishVaultDto } from './dto/publish-vault.dto';
@@ -38,7 +39,10 @@ export class VaultsController {
     @Request() req,
     @Body()
     data: CreateVaultReq
-  ) {
+  ): Promise<{
+    vaultId: string;
+    presignedTx: string;
+  }> {
     const userId = req.user.sub;
     return this.vaultsService.createVault(userId, data);
   }
@@ -99,6 +103,16 @@ export class VaultsController {
   @Get('acquire')
   async getAcquire(): Promise<VaultAcquireResponse[]> {
     return this.vaultsService.getAcquire();
+  }
+
+  @ApiDoc({
+    summary: 'Get vault statistics for landing page',
+    description: 'Returns statistics about active vaults, total value in USD and ADA, and total contributed assets',
+    status: 200,
+  })
+  @Get('statistics')
+  async getVaultStatistics(): Promise<VaultStatisticsResponse> {
+    return await this.vaultsService.getVaultStatistics();
   }
 
   @ApiDoc({
