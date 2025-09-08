@@ -561,14 +561,15 @@ export class VaultsService {
       finalVault.asset_vault_name = vaultAssetName;
       finalVault.script_hash = scriptHash;
       finalVault.apply_params_result = applyParamsResult;
+      
       await this.vaultsRepository.save(finalVault);
 
       this.eventEmitter.emit('vault.launched', {
         vaultId: finalVault.id,
         address: finalVault.owner.address,
         vaultName: finalVault.name,
-        contributionStartDate: new Date(finalVault.contribution_open_window_time).toLocaleDateString(),
-        contributionStartTime: new Date(finalVault.contribution_open_window_time).toLocaleTimeString(),
+        contributionStartDate: new Date(startTime).toLocaleDateString(),
+        contributionStartTime: new Date(startTime).toLocaleTimeString(),
       });
       return {
         vaultId: finalVault.id,
