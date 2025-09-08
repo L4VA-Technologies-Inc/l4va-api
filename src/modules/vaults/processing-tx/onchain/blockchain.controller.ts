@@ -114,14 +114,14 @@ export class BlockchainController {
     }
 
     // Log headers and event info for debugging
-    console.log('Received webhook event:', {
-      signature,
-      timestamp: req.headers['blockfrost-timestamp'],
-      eventId: event.id,
-      webhookId: event.webhook_id,
-      rawBodyLength: rawBody.length,
-      rawBodyPreview: rawBody.substring(0, 100) + '...',
-    });
+    // console.log('Received webhook event:', {
+    //   signature,
+    //   timestamp: req.headers['blockfrost-timestamp'],
+    //   eventId: event.id,
+    //   webhookId: event.webhook_id,
+    //   rawBodyLength: rawBody.length,
+    //   rawBodyPreview: rawBody.substring(0, 100) + '...',
+    // });
 
     // Verify webhook signature using the raw body
     const isValid = this.webhookVerificationService.verifySignature(rawBody, signature);

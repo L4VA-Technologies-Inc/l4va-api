@@ -54,8 +54,6 @@ export class BlockchainService {
 
       const buildResponse = await contractDeployed.json();
 
-      console.log('error', buildResponse);
-
       if (!buildResponse.complete) {
         throw new Error('Failed to build complete transaction' + JSON.stringify(buildResponse));
       }
