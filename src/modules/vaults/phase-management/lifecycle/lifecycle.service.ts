@@ -147,7 +147,6 @@ export class LifecycleService {
       }
 
       if (data.newStatus === VaultStatus.failed) {
-        // Find any pending PRs for this vault
         const pr = await this.tokenRegistryRepository.findOne({
           where: {
             vault: { id: data.vaultId },
@@ -155,7 +154,6 @@ export class LifecycleService {
           },
         });
 
-        // Close each pending PR
         if (pr) {
           try {
             await this.metadataRegistryApiService.closePullRequest(
@@ -672,8 +670,90 @@ export class LifecycleService {
             `Required: ${requiredThresholdAda} ADA`
         );
 
-        // TODO: Burn the vault and refund assets
-        this.logger.warn(`Vault ${vault.id} needs to be burned and assets refunded`);
+        const cancelClaims: Partial<Claim>[] = [];
+
+        for (const tx of [...acquisitionTransactions, ...contributionTransactions]) {
+          if (!tx.user || !tx.user.id) continue;
+
+          const userId = tx.user.id;
+          const adaSent = tx.amount || 0;
+
+          // Skip transactions with zero amount
+          if (adaSent <= 0) continue;
+
+          try {
+            // Check if a claim for this transaction already exists
+            const existingClaim = await this.claimRepository.findOne({
+              where: {
+                transaction: { id: tx.id },
+                type: ClaimType.FINAL_DISTRIBUTION,
+              },
+            });
+
+            if (existingClaim) {
+              this.logger.log(`Claim already exists for acquirer transaction ${tx.id}, skipping.`);
+              continue;
+            }
+
+            if (tx.type === TransactionType.contribute) {
+              // Get assets associated with this transaction
+              const txAssets = await this.assetsRepository.find({
+                where: {
+                  transaction: { id: tx.id },
+                  origin_type: AssetOriginType.CONTRIBUTED,
+                  deleted: false,
+                },
+              });
+
+              // Create claim record with asset information
+              const claim = this.claimRepository.create({
+                user: { id: userId },
+                vault: { id: vault.id },
+                type: ClaimType.FINAL_DISTRIBUTION,
+                status: ClaimStatus.AVAILABLE,
+                metadata: {
+                  assets: txAssets.map(asset => ({
+                    id: asset.id,
+                    policyId: asset.policy_id,
+                    assetId: asset.asset_id,
+                    quantity: asset.quantity,
+                    type: asset.type,
+                  })),
+                  assetIds: txAssets.map(asset => asset.id),
+                  isContribution: true,
+                },
+                transaction: { id: tx.id },
+              });
+              cancelClaims.push(claim);
+            }
+            // For acquisition transactions
+            else if (tx.type === TransactionType.acquire) {
+              const claim = this.claimRepository.create({
+                user: { id: userId },
+                vault: { id: vault.id },
+                type: ClaimType.FINAL_DISTRIBUTION,
+                status: ClaimStatus.AVAILABLE,
+                metadata: {
+                  adaAmount: tx.amount,
+                  isAcquisition: true,
+                },
+                transaction: { id: tx.id },
+              });
+              cancelClaims.push(claim);
+            }
+          } catch (error) {
+            this.logger.error(`Failed to create cancel claim for user ${userId} transaction ${tx.id}:`, error);
+          }
+        }
+
+        if (cancelClaims.length > 0) {
+          try {
+            await this.claimRepository.save(cancelClaims);
+          } catch (error) {
+            this.logger.error(`Failed to save batch of acquirer claims:`, error);
+          }
+        }
+
         await this.executePhaseTransition({
           vaultId: vault.id,
           newStatus: VaultStatus.failed,

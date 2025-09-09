@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain } from 'class-transformer';
 import { Repository } from 'typeorm';
@@ -303,5 +303,20 @@ export class AssetsService {
         return this.assetsRepository.save(asset);
       })
     );
+  }
+
+  async cancelAsset(assetId: string, userId: string): Promise<void> {
+    const asset = await this.assetsRepository.findOne({
+      where: { id: assetId, added_by: { id: userId }, deleted: false },
+    });
+
+    if (!asset) {
+      throw new NotFoundException('Asset not found');
+    }
+
+    asset.deleted = true;
+    asset.updated_at = new Date();
+
+    await this.assetsRepository.save(asset);
   }
 }
