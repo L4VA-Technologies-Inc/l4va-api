@@ -76,6 +76,26 @@ export class MetadataRegistryApiService {
     this.repoName = this.configService.get<string>('METADATA_REGISTRY_TESTNET_REPO');
   }
 
+  @Cron(CronExpression.EVERY_HOUR)
+  async checkPendingPRs(): Promise<void> {
+    this.logger.log('Checking pending token registry PRs');
+
+    const pendingPRs = await this.TokenRegistryRepository.find({
+      where: { status: TokenRegistryStatus.PENDING },
+    });
+
+    if (pendingPRs.length === 0) {
+      this.logger.log('No pending PRs to check');
+      return;
+    }
+
+    this.logger.log(`Found ${pendingPRs.length} pending PRs to check`);
+
+    for (const pr of pendingPRs) {
+      await this.checkPRStatus(pr);
+    }
+  }
+
   /**
    * Submits token metadata via API
    * @param metadata Token metadata
@@ -161,6 +181,148 @@ export class MetadataRegistryApiService {
         return false;
       }
       throw error;
+    }
+  }
+
+  /**
+   * Check the status of a specific PR
+   */
+  async checkPRStatus(pr: TokenRegistry): Promise<TokenRegistry> {
+    try {
+      const url = `https://api.github.com/repos/${this.repoOwner}/${this.repoName}/pulls/${pr.pr_number}`;
+      const response = await firstValueFrom(this.httpService.get(url));
+
+      pr.last_checked = new Date();
+
+      // Update status based on GitHub response
+      if (response.data.state === 'closed') {
+        if (response.data.merged) {
+          pr.status = TokenRegistryStatus.MERGED;
+          pr.merged_at = new Date(response.data.merged_at);
+          this.logger.log(`PR #${pr.pr_number} for vault ${pr.vault_id} has been merged`);
+        } else {
+          pr.status = TokenRegistryStatus.REJECTED;
+          this.logger.warn(`PR #${pr.pr_number} for vault ${pr.vault_id} was rejected`);
+        }
+      }
+
+      // Save the updated PR record
+      return this.TokenRegistryRepository.save(pr);
+    } catch (error) {
+      this.logger.error(`Error checking PR #${pr.pr_number} status:`, error.message);
+
+      // If PR not found, mark as failed
+      if (error.response?.status === 404) {
+        pr.status = TokenRegistryStatus.FAILED;
+        return this.TokenRegistryRepository.save(pr);
+      }
+
+      // Return the PR without changes for other errors
+      return pr;
+    }
+  }
+
+  /**
+   * Closes an open pull request on GitHub
+   * @param prNumber The pull request number to close
+   * @param reason Optional comment to add when closing the PR
+   * @returns Object indicating success or failure
+   */
+  async closePullRequest(prNumber: number, reason?: string): Promise<{ success: boolean; message: string }> {
+    try {
+      this.logger.log(`Attempting to close PR #${prNumber}`);
+
+      // Import Octokit
+      const { Octokit } = await import('@octokit/rest');
+      const octokit = new Octokit({
+        auth: this.githubToken,
+      });
+
+      // Find the PR in our database
+      const pr = await this.TokenRegistryRepository.findOne({
+        where: { pr_number: prNumber },
+      });
+
+      if (!pr) {
+        throw new NotFoundException(`PR #${prNumber} not found in database`);
+      }
+
+      // First, check if PR is still open
+      const { data: prData } = await octokit.pulls.get({
+        owner: this.repoOwner,
+        repo: this.repoName,
+        pull_number: prNumber,
+      });
+
+      if (prData.state !== 'open') {
+        // Update our record if PR is already closed
+        if (prData.merged) {
+          pr.status = TokenRegistryStatus.MERGED;
+          pr.merged_at = new Date(prData.merged_at);
+        } else {
+          pr.status = TokenRegistryStatus.REJECTED;
+        }
+        await this.TokenRegistryRepository.save(pr);
+
+        return {
+          success: false,
+          message: `PR #${prNumber} is already ${prData.merged ? 'merged' : 'closed'}`,
+        };
+      }
+
+      // Add a comment if reason is provided
+      if (reason) {
+        await octokit.issues.createComment({
+          owner: this.repoOwner,
+          repo: this.repoName,
+          issue_number: prNumber,
+          body: `Closing PR: ${reason}`,
+        });
+      }
+
+      // Close the PR
+      await octokit.pulls.update({
+        owner: this.repoOwner,
+        repo: this.repoName,
+        pull_number: prNumber,
+        state: 'closed',
+      });
+
+      // Update our database record
+      pr.status = TokenRegistryStatus.REJECTED;
+      pr.last_checked = new Date();
+      await this.TokenRegistryRepository.save(pr);
+
+      this.logger.log(`Successfully closed PR #${prNumber}`);
+      return { success: true, message: `PR #${prNumber} closed successfully` };
+    } catch (error) {
+      this.logger.error(`Failed to close PR #${prNumber}:`, error);
+
+      // Map GitHub API errors to appropriate NestJS exceptions
+      if (error.status === 401 || error.status === 403) {
+        throw new UnauthorizedException(`GitHub authentication failed: ${error.message}`);
+      } else if (error.status === 404) {
+        throw new NotFoundException(`PR not found: ${error.message}`);
+      }
+
+      throw new InternalServerErrorException(`Failed to close PR: ${error.message}`);
+    }
+  }
+
+  private async convertImgToBytes(imgUrl: string): Promise<string> {
+    try {
+      this.logger.log(`Converting image to byte string: ${imgUrl}`);
+
+      // Fetch the image data
+      const response = await firstValueFrom(this.httpService.get(imgUrl, { responseType: 'arraybuffer' }));
+
+      // Convert the image data to base64
+      const base64Image = Buffer.from(response.data, 'binary').toString('base64');
+
+      return base64Image;
+    } catch (error) {
+      this.logger.error(`Failed to convert image to byte string: ${error.message}`);
+      throw new InternalServerErrorException('Failed to convert image to byte string');
     }
   }
 
@@ -344,168 +506,6 @@ export class MetadataRegistryApiService {
       }
 
       throw new InternalServerErrorException(`Failed to create PR: ${error.message}`);
-    }
-  }
-
-  @Cron(CronExpression.EVERY_HOUR)
-  async checkPendingPRs(): Promise<void> {
-    this.logger.log('Checking pending token registry PRs');
-
-    const pendingPRs = await this.TokenRegistryRepository.find({
-      where: { status: TokenRegistryStatus.PENDING },
-    });
-
-    if (pendingPRs.length === 0) {
-      this.logger.log('No pending PRs to check');
-      return;
-    }
-
-    this.logger.log(`Found ${pendingPRs.length} pending PRs to check`);
-
-    for (const pr of pendingPRs) {
-      await this.checkPRStatus(pr);
-    }
-  }
-
-  /**
-   * Check the status of a specific PR
-   */
-  async checkPRStatus(pr: TokenRegistry): Promise<TokenRegistry> {
-    try {
-      const url = `https://api.github.com/repos/${this.repoOwner}/${this.repoName}/pulls/${pr.pr_number}`;
-      const response = await firstValueFrom(this.httpService.get(url));
-
-      pr.last_checked = new Date();
-
-      // Update status based on GitHub response
-      if (response.data.state === 'closed') {
-        if (response.data.merged) {
-          pr.status = TokenRegistryStatus.MERGED;
-          pr.merged_at = new Date(response.data.merged_at);
-          this.logger.log(`PR #${pr.pr_number} for vault ${pr.vault_id} has been merged`);
-        } else {
-          pr.status = TokenRegistryStatus.REJECTED;
-          this.logger.warn(`PR #${pr.pr_number} for vault ${pr.vault_id} was rejected`);
-        }
-      }
-
-      // Save the updated PR record
-      return this.TokenRegistryRepository.save(pr);
-    } catch (error) {
-      this.logger.error(`Error checking PR #${pr.pr_number} status:`, error.message);
-
-      // If PR not found, mark as failed
-      if (error.response?.status === 404) {
-        pr.status = TokenRegistryStatus.FAILED;
-        return this.TokenRegistryRepository.save(pr);
-      }
-
-      // Return the PR without changes for other errors
-      return pr;
-    }
-  }
-
-  /**
-   * Closes an open pull request on GitHub
-   * @param prNumber The pull request number to close
-   * @param reason Optional comment to add when closing the PR
-   * @returns Object indicating success or failure
-   */
-  async closePullRequest(prNumber: number, reason?: string): Promise<{ success: boolean; message: string }> {
-    try {
-      this.logger.log(`Attempting to close PR #${prNumber}`);
-
-      // Import Octokit
-      const { Octokit } = await import('@octokit/rest');
-      const octokit = new Octokit({
-        auth: this.githubToken,
-      });
-
-      // Find the PR in our database
-      const pr = await this.TokenRegistryRepository.findOne({
-        where: { pr_number: prNumber },
-      });
-
-      if (!pr) {
-        throw new NotFoundException(`PR #${prNumber} not found in database`);
-      }
-
-      // First, check if PR is still open
-      const { data: prData } = await octokit.pulls.get({
-        owner: this.repoOwner,
-        repo: this.repoName,
-        pull_number: prNumber,
-      });
-
-      if (prData.state !== 'open') {
-        // Update our record if PR is already closed
-        if (prData.merged) {
-          pr.status = TokenRegistryStatus.MERGED;
-          pr.merged_at = new Date(prData.merged_at);
-        } else {
-          pr.status = TokenRegistryStatus.REJECTED;
-        }
-        await this.TokenRegistryRepository.save(pr);
-
-        return {
-          success: false,
-          message: `PR #${prNumber} is already ${prData.merged ? 'merged' : 'closed'}`,
-        };
-      }
-
-      // Add a comment if reason is provided
-      if (reason) {
-        await octokit.issues.createComment({
-          owner: this.repoOwner,
-          repo: this.repoName,
-          issue_number: prNumber,
-          body: `Closing PR: ${reason}`,
-        });
-      }
-
-      // Close the PR
-      await octokit.pulls.update({
-        owner: this.repoOwner,
-        repo: this.repoName,
-        pull_number: prNumber,
-        state: 'closed',
-      });
-
-      // Update our database record
-      pr.status = TokenRegistryStatus.REJECTED;
-      pr.last_checked = new Date();
-      await this.TokenRegistryRepository.save(pr);
-
-      this.logger.log(`Successfully closed PR #${prNumber}`);
-      return { success: true, message: `PR #${prNumber} closed successfully` };
-    } catch (error) {
-      this.logger.error(`Failed to close PR #${prNumber}:`, error);
-
-      // Map GitHub API errors to appropriate NestJS exceptions
-      if (error.status === 401 || error.status === 403) {
-        throw new UnauthorizedException(`GitHub authentication failed: ${error.message}`);
-      } else if (error.status === 404) {
-        throw new NotFoundException(`PR not found: ${error.message}`);
-      }
-
-      throw new InternalServerErrorException(`Failed to close PR: ${error.message}`);
-    }
-  }
-
-  private async convertImgToBytes(imgUrl: string): Promise<string> {
-    try {
-      this.logger.log(`Converting image to byte string: ${imgUrl}`);
-
-      // Fetch the image data
-      const response = await firstValueFrom(this.httpService.get(imgUrl, { responseType: 'arraybuffer' }));
-
-      // Convert the image data to base64
-      const base64Image = Buffer.from(response.data, 'binary').toString('base64');
-
-      return base64Image;
-    } catch (error) {
-      this.logger.error(`Failed to convert image to byte string: ${error.message}`);
-      throw new InternalServerErrorException('Failed to convert image to byte string');
     }
   }
 }
