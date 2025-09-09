@@ -108,7 +108,7 @@ export class MetadataRegistryApiService {
         return { success: false, message: 'Token already exists' };
       }
     } catch (error) {
-      console.error('Error checking token existence:', error);
+      this.logger.error('Error checking token existence:', error);
     }
 
     try {
@@ -161,7 +161,7 @@ export class MetadataRegistryApiService {
         throw error; // Re-throw NestJS exceptions
       }
 
-      console.error('Failed to submit token metadata:', error);
+      this.logger.error('Failed to submit token metadata:', error);
       throw new InternalServerErrorException(error.response?.data?.message || 'Failed to submit token metadata');
     }
   }
@@ -232,13 +232,11 @@ export class MetadataRegistryApiService {
     try {
       this.logger.log(`Attempting to close PR #${prNumber}`);
 
-      // Import Octokit
       const { Octokit } = await import('@octokit/rest');
       const octokit = new Octokit({
         auth: this.githubToken,
       });
 
-      // Find the PR in our database
       const pr = await this.TokenRegistryRepository.findOne({
         where: { pr_number: prNumber },
       });
@@ -248,26 +246,10 @@ export class MetadataRegistryApiService {
       }
 
       // First, check if PR is still open
-      const { data: prData } = await octokit.pulls.get({
-        owner: this.repoOwner,
-        repo: this.repoName,
-        pull_number: prNumber,
-      });
+      const updatedPR = await this.checkPRStatus(pr);
 
-      if (prData.state !== 'open') {
-        // Update our record if PR is already closed
-        if (prData.merged) {
-          pr.status = TokenRegistryStatus.MERGED;
-          pr.merged_at = new Date(prData.merged_at);
-        } else {
-          pr.status = TokenRegistryStatus.REJECTED;
-        }
-        await this.TokenRegistryRepository.save(pr);
-
-        return {
-          success: false,
-          message: `PR #${prNumber} is already ${prData.merged ? 'merged' : 'closed'}`,
-        };
+      if (updatedPR.status !== TokenRegistryStatus.PENDING) {
+        throw new ConflictException(`PR #${prNumber} is not open and cannot be closed`);
       }
 
       // Add a comment if reason is provided
@@ -289,9 +271,9 @@ export class MetadataRegistryApiService {
       });
 
       // Update our database record
-      pr.status = TokenRegistryStatus.REJECTED;
-      pr.last_checked = new Date();
-      await this.TokenRegistryRepository.save(pr);
+      updatedPR.status = TokenRegistryStatus.REJECTED;
+      updatedPR.last_checked = new Date();
+      await this.TokenRegistryRepository.save(updatedPR);
 
       this.logger.log(`Successfully closed PR #${prNumber}`);
       return { success: true, message: `PR #${prNumber} closed successfully` };
@@ -332,19 +314,17 @@ export class MetadataRegistryApiService {
    * @returns true if format is correct
    */
   private validateTokenMetadata(metadata: TokenMetaData): boolean {
-    // Перевірка обов'язкових полів
     if (!metadata.subject || !metadata.name || !metadata.description) {
-      console.error('Required fields missing in metadata');
+      this.logger.error('Required fields missing in metadata');
       return false;
     }
 
-    // Перевірка підписів
+    // Signing check
     if (!metadata.name.signatures?.length || !metadata.description.signatures?.length) {
-      console.error('Signatures missing in metadata');
+      this.logger.error('Signatures missing in metadata');
       return false;
     }
 
-    // Додаткові перевірки можна додати за потреби
     return true;
   }
 
@@ -494,7 +474,7 @@ export class MetadataRegistryApiService {
         prUrl: pr.html_url,
       };
     } catch (error) {
-      console.error('Failed to create token registry PR:', error);
+      this.logger.error('Failed to create token registry PR:', error);
 
       // Map GitHub API errors to appropriate NestJS exceptions
       if (error.status === 401 || error.status === 403) {
