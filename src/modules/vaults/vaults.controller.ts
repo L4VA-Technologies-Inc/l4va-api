@@ -165,15 +165,14 @@ export class VaultsController {
   }
 
   @ApiDoc({
-    summary: 'Burn vault',
-    description: 'Returns list of vault transactions. By default shows only confirmed transactions.',
+    summary: 'Build burn transaction',
+    description: 'Builds a burn transaction for the specified vault and returns the presigned transaction.',
     status: 200,
   })
   @UseGuards(AuthGuard)
-  @Post('burn-build/:id')
+  @Post(':id/burn/build')
   async burnVaultAttempt(
     @Param('id') id: string,
-    @Query() query: GetVaultTransactionsDto,
     @Request() req
   ): Promise<{
     txId: string;
@@ -181,24 +180,24 @@ export class VaultsController {
     contractAddress: string;
   }> {
     const userId = req.user.sub;
-    return await this.vaultsService.burnVaultAttempt(id, userId);
+    return await this.vaultsService.buildBurnTransaction(id, userId);
   }
 
   @ApiDoc({
-    summary: 'Burn vault',
-    description: 'Returns list of vault transactions. By default shows only confirmed transactions.',
+    summary: 'Publish burn tx',
+    description: 'Publishes a signed burn transaction for the specified vault.',
     status: 200,
   })
   @UseGuards(AuthGuard)
-  @Post('burn-publish/:id')
+  @Post(':id/burn/publish')
   async burnPublishAtempt(
     @Param('id') id: string,
-    @Query() query: GetVaultTransactionsDto,
     @Body() publishDto: PublishVaultDto,
     @Request() req
-  ): Promise<unknown> {
+  ): Promise<{
+    txHash: string;
+  }> {
     const userId = req.user.sub;
-
-    return await this.vaultsService.burnVaultPublishTx(id, userId, publishDto);
+    return await this.vaultsService.publishBurnTransaction(id, userId, publishDto);
   }
 }
