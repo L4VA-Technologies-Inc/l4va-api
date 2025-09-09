@@ -32,7 +32,6 @@ import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
-import { AddTotalAcquiredValueInAda1750670509513 } from '@/database/migrations/1750670509513-addTotalAcquiredValueInAda';
 import { TagEntity } from '@/database/tag.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
@@ -561,7 +560,7 @@ export class VaultsService {
       finalVault.asset_vault_name = vaultAssetName;
       finalVault.script_hash = scriptHash;
       finalVault.apply_params_result = applyParamsResult;
-      
+
       await this.vaultsRepository.save(finalVault);
 
       this.eventEmitter.emit('vault.launched', {
@@ -1099,8 +1098,8 @@ export class VaultsService {
             })
           );
           break;
-        case VaultFilter.locked:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked });
+        case VaultFilter.locked || VaultFilter.failed:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: filter });
           break;
         case VaultFilter.draft:
           if (!isOwner) {

@@ -11,6 +11,7 @@ export enum VaultFilter {
   acquire = 'acquire',
   published = 'published',
   draft = 'draft',
+  failed = 'failed',
 }
 
 export enum VaultSortField {
