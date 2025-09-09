@@ -156,14 +156,16 @@ export class LifecycleService {
         });
 
         // Close each pending PR
-        try {
-          await this.metadataRegistryApiService.closePullRequest(
-            pr.pr_number,
-            `Closing PR automatically because vault ${vault.name} has failed.`
-          );
-          this.logger.log(`Successfully closed PR #${pr.pr_number} for failed vault ${data.vaultId}`);
-        } catch (error) {
-          this.logger.error(`Failed to close PR #${pr.pr_number} for vault ${data.vaultId}:`, error);
+        if (pr) {
+          try {
+            await this.metadataRegistryApiService.closePullRequest(
+              pr.pr_number,
+              `Closing PR automatically because vault ${vault.name} has failed.`
+            );
+            this.logger.log(`Successfully closed PR #${pr.pr_number} for failed vault ${data.vaultId}`);
+          } catch (error) {
+            this.logger.error(`Failed to close PR #${pr.pr_number} for vault ${data.vaultId}:`, error);
+          }
         }
       }
 
