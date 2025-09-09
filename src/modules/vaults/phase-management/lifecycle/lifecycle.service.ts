@@ -56,13 +56,9 @@ export class LifecycleService {
 
   @Cron(CronExpression.EVERY_MINUTE)
   async handleVaultLifecycleTransitions(): Promise<void> {
-    await this.handlePublishedToContribution();
-
-    // Handle contribution -> acquire transitions
-    await this.handleContributionToInvestment();
-
-    // Handle acquire -> governance transitions
-    await this.handleInvestmentToGovernance();
+    await this.handlePublishedToContribution(); // Handle created vault -> contribution transitin
+    await this.handleContributionToAcquire(); // Handle contribution -> acquire transitions
+    await this.handleAcquireToGovernance(); // Handle acquire -> governance transitions
   }
 
   private async queuePhaseTransition(
@@ -806,7 +802,7 @@ export class LifecycleService {
     }
   }
 
-  private async handleContributionToInvestment(): Promise<void> {
+  private async handleContributionToAcquire(): Promise<void> {
     const now = new Date();
     const contributionVaults = await this.vaultRepository
       .createQueryBuilder('vault')
@@ -814,6 +810,7 @@ export class LifecycleService {
       .andWhere('vault.contribution_phase_start IS NOT NULL')
       .andWhere('vault.contribution_duration IS NOT NULL')
       .leftJoinAndSelect('vault.owner', 'owner')
+      .leftJoinAndSelect('vault.assets_whitelist', 'assetsWhitelist')
       .getMany();
 
     for (const vault of contributionVaults) {
@@ -829,55 +826,57 @@ export class LifecycleService {
 
       await this.contributionService.syncContributionTransactions(vault.id);
 
-      const assets = await this.assetsRepository.find({ where: { vault: { id: vault.id }, deleted: false } });
-      // Check if vault has any non-deleted assets
-      const hasAssets = assets?.some(asset => !asset.deleted) || false;
+      const assets = await this.assetsRepository.find({
+        where: { vault: { id: vault.id }, deleted: false },
+        select: ['id', 'policy_id', 'quantity'],
+      });
 
-      // If no assets, burn the vault using admin wallet
-      if (!hasAssets) {
-        try {
-          this.logger.log(`Vault ${vault.id} has no assets and contribution period has ended. Burning vault...`);
-          // Update vault status to failed
+      const policyIdCounts = assets.reduce(
+        (counts, asset) => {
+          if (!counts[asset.policy_id]) {
+            counts[asset.policy_id] = 0;
+          }
+          counts[asset.policy_id] += asset.quantity || 1;
+          return counts;
+        },
+        {} as Record<string, number>
+      );
+
+      let assetsWithinThreshold = true;
+      const thresholdViolations: Array<{ policyId: string; count: number; min: number; max: number }> = [];
+
+      if (vault.assets_whitelist && vault.assets_whitelist.length > 0) {
+        for (const whitelistItem of vault.assets_whitelist) {
+          const policyId = whitelistItem.policy_id;
+          const count = policyIdCounts[policyId] || 0;
+
+          if (count < whitelistItem.asset_count_cap_min || count > whitelistItem.asset_count_cap_max) {
+            assetsWithinThreshold = false;
+            thresholdViolations.push({
+              policyId,
+              count,
+              min: whitelistItem.asset_count_cap_min,
+              max: whitelistItem.asset_count_cap_max,
+            });
+          }
+        }
+
+        if (!assetsWithinThreshold) {
+          // If assets don't meet threshold requirements, fail the vault
           await this.executePhaseTransition({
             vaultId: vault.id,
             newStatus: VaultStatus.failed,
             newScStatus: SmartContractVaultStatus.CANCELLED,
           });
 
-          // // Use admin wallet to burn the vault
-          // const burnTx = await this.vaultContractService.createBurnTx({
-          //   customerAddress: vault.owner.address, // Still track the original owner
-          //   assetVaultName: vault.asset_vault_name,
-          // });
-
-          // // Submit the transaction using admin wallet
-          // const { txHash } = await this.vaultContractService.submitOnChainVaultTx({
-          //   transaction: burnTx.presignedTx,
-          //   signatures: [], // Admin signature is already included in presignedTx
-          // });
-
-          // // Update vault status
-          // vault.deleted = true;
-          // vault.liquidation_hash = txHash;
-          // await this.vaultRepository.save(vault);
-
-          // this.logger.log(`Successfully burned empty vault ${vault.id} in transaction ${txHash}`);
-
-          continue;
-        } catch (error) {
-          this.logger.error(`Failed to burn empty vault ${vault.id}:`, error.message);
-          // Continue with other vaults even if one fails
+          return;
         }
-        continue;
       }
-
-      // If we get here, the vault has assets and the contribution period has ended
-      // Execute the transition immediately since the time has passed
       await this.executeContributionToAcquireTransition(vault);
     }
   }
 
-  private async handleInvestmentToGovernance(): Promise<void> {
+  private async handleAcquireToGovernance(): Promise<void> {
     const acquireVaults = await this.vaultRepository
       .createQueryBuilder('vault')
       .where('vault.vault_status = :status', { status: VaultStatus.acquire })
