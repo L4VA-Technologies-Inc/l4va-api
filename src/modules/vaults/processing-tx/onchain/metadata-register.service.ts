@@ -65,7 +65,7 @@ export class MetadataRegistryApiService {
 
   constructor(
     @InjectRepository(TokenRegistry)
-    private readonly TokenRegistryRepository: Repository<TokenRegistry>,
+    private readonly tokenRegistryRepository: Repository<TokenRegistry>,
     private readonly configService: ConfigService,
     private readonly httpService: HttpService
   ) {
@@ -80,7 +80,7 @@ export class MetadataRegistryApiService {
   async checkPendingPRs(): Promise<void> {
     this.logger.log('Checking pending token registry PRs');
 
-    const pendingPRs = await this.TokenRegistryRepository.find({
+    const pendingPRs = await this.tokenRegistryRepository.find({
       where: { status: TokenRegistryStatus.PENDING },
     });
 
@@ -207,14 +207,14 @@ export class MetadataRegistryApiService {
       }
 
       // Save the updated PR record
-      return this.TokenRegistryRepository.save(pr);
+      return this.tokenRegistryRepository.save(pr);
     } catch (error) {
       this.logger.error(`Error checking PR #${pr.pr_number} status:`, error.message);
 
       // If PR not found, mark as failed
       if (error.response?.status === 404) {
         pr.status = TokenRegistryStatus.FAILED;
-        return this.TokenRegistryRepository.save(pr);
+        return this.tokenRegistryRepository.save(pr);
       }
 
       // Return the PR without changes for other errors
@@ -237,7 +237,7 @@ export class MetadataRegistryApiService {
         auth: this.githubToken,
       });
 
-      const pr = await this.TokenRegistryRepository.findOne({
+      const pr = await this.tokenRegistryRepository.findOne({
         where: { pr_number: prNumber },
       });
 
@@ -273,7 +273,7 @@ export class MetadataRegistryApiService {
       // Update our database record
       updatedPR.status = TokenRegistryStatus.REJECTED;
       updatedPR.last_checked = new Date();
-      await this.TokenRegistryRepository.save(updatedPR);
+      await this.tokenRegistryRepository.save(updatedPR);
 
       this.logger.log(`Successfully closed PR #${prNumber}`);
       return { success: true, message: `PR #${prNumber} closed successfully` };
@@ -453,12 +453,12 @@ export class MetadataRegistryApiService {
       if (pr.number) {
         try {
           // Create a new TokenRegistry record
-          const tokenRegistryRecord = this.TokenRegistryRepository.create({
+          const tokenRegistryRecord = this.tokenRegistryRepository.create({
             pr_number: pr.number,
             status: TokenRegistryStatus.PENDING,
             vault: { id: vaultId },
           });
-          await this.TokenRegistryRepository.save(tokenRegistryRecord);
+          await this.tokenRegistryRepository.save(tokenRegistryRecord);
           this.logger.log(`Saved PR #${pr.number} information to database for vault ${vaultId}`);
         } catch (dbError) {
           this.logger.error('Failed to save PR information to database:', dbError);

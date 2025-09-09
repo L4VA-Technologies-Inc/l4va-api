@@ -8,15 +8,18 @@ import { Repository } from 'typeorm';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
+import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { DistributionService } from '@/modules/distribution/distribution.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { ContributionService } from '@/modules/vaults/phase-management/contribution/contribution.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
+import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
 import { AssetOriginType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
+import { TokenRegistryStatus } from '@/types/tokenRegistry.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import {
   VaultStatus,
@@ -40,11 +43,14 @@ export class LifecycleService {
     private readonly claimRepository: Repository<Claim>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
+    @InjectRepository(TokenRegistry)
+    private readonly tokenRegistryRepository: Repository<TokenRegistry>,
     private readonly contributionService: ContributionService,
     private readonly vaultManagingService: VaultManagingService,
     private readonly transactionsService: TransactionsService,
     private readonly distributionService: DistributionService,
     private readonly taptoolsService: TaptoolsService,
+    private readonly metadataRegistryApiService: MetadataRegistryApiService,
     private readonly eventEmitter: EventEmitter2
   ) {}
 
@@ -138,6 +144,27 @@ export class LifecycleService {
       if (!vault) {
         this.logger.error(`Vault ${data.vaultId} not found for phase transition`);
         return;
+      }
+
+      if (data.newStatus === VaultStatus.failed) {
+        // Find any pending PRs for this vault
+        const pr = await this.tokenRegistryRepository.findOne({
+          where: {
+            vault: { id: data.vaultId },
+            status: TokenRegistryStatus.PENDING,
+          },
+        });
+
+        // Close each pending PR
+        try {
+          await this.metadataRegistryApiService.closePullRequest(
+            pr.pr_number,
+            `Closing PR automatically because vault ${vault.name} has failed.`
+          );
+          this.logger.log(`Successfully closed PR #${pr.pr_number} for failed vault ${data.vaultId}`);
+        } catch (error) {
+          this.logger.error(`Failed to close PR #${pr.pr_number} for vault ${data.vaultId}:`, error);
+        }
       }
 
       vault.vault_status = data.newStatus;
