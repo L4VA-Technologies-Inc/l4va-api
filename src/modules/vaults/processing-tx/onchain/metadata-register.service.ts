@@ -98,10 +98,20 @@ export class MetadataRegistryApiService {
       // Optional fields
       const ticker = raw.ticker ? this.signItemData(raw.subject, 0, raw.ticker) : undefined;
       const url = raw.url ? this.signItemData(raw.subject, 0, raw.url) : undefined;
-      // The base16-encoded CBOR "policy": "82018201828200581cf950845fdf374bba64605f96a9d5940890cc2bb92c4b5b55139cc00982051a09bde472",
-      const policy = raw.policy ? raw.policy : undefined;
-      const logo = raw.logo ? this.signItemData(raw.subject, 0, raw.logo) : undefined;
+      const policy = raw.policy ? raw.policy : undefined; // The base16-encoded CBOR "policy": "82018201828200581cf950845fdf374bba64605f96a9d5940890cc2bb92c4b5b55139cc00982051a09bde472",
       const decimals = raw.decimals ? this.signItemData(raw.subject, 0, raw.decimals) : undefined;
+
+      let logoData: ItemData | undefined;
+      if (raw.logo) {
+        // If raw.logo is a URL, convert it to byte string
+        if (raw.logo.startsWith('http')) {
+          const logoBytes = await this.convertImgToBytes(raw.logo);
+          logoData = this.signItemData(raw.subject, 0, logoBytes);
+        } else {
+          // If it's already a byte string, use it directly
+          logoData = this.signItemData(raw.subject, 0, raw.logo);
+        }
+      }
 
       // Build full metadata object
       const metadata: TokenMetaData = {
@@ -111,7 +121,7 @@ export class MetadataRegistryApiService {
         description,
         ticker,
         url,
-        logo,
+        logo: logoData,
         decimals,
       };
 
@@ -479,6 +489,23 @@ export class MetadataRegistryApiService {
       }
 
       throw new InternalServerErrorException(`Failed to close PR: ${error.message}`);
+    }
+  }
+
+  private async convertImgToBytes(imgUrl: string): Promise<string> {
+    try {
+      this.logger.log(`Converting image to byte string: ${imgUrl}`);
+
+      // Fetch the image data
+      const response = await firstValueFrom(this.httpService.get(imgUrl, { responseType: 'arraybuffer' }));
+
+      // Convert the image data to base64
+      const base64Image = Buffer.from(response.data, 'binary').toString('base64');
+
+      return base64Image;
+    } catch (error) {
+      this.logger.error(`Failed to convert image to byte string: ${error.message}`);
+      throw new InternalServerErrorException('Failed to convert image to byte string');
     }
   }
 }

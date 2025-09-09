@@ -92,7 +92,19 @@ export class ContributionService {
               try {
                 // Update the vault with the policy ID of Minted Token if it doesn't have one
                 if (dbTx.type === TransactionType.contribute) {
-                  const vault = await this.vaultRepository.findOne({ where: { id: vaultId } });
+                  const vault = await this.vaultRepository.findOne({
+                    where: { id: vaultId },
+                    select: [
+                      'id',
+                      'policy_id',
+                      'asset_vault_name',
+                      'name',
+                      'description',
+                      'ft_token_img',
+                      'vault_token_ticker',
+                    ],
+                    relations: ['ft_token_img'],
+                  });
 
                   if (vault && !vault.policy_id) {
                     const extractedPolicyId = await this.extractPolicyIdFromTransaction(tx.tx_hash);
@@ -109,6 +121,7 @@ export class ContributionService {
                           name: vault.name,
                           description: vault.description,
                           ticker: vault.vault_token_ticker,
+                          logo: vault.ft_token_img.file_url,
                           decimals: 6,
                         });
                       } catch (error) {
