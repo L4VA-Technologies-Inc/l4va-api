@@ -862,6 +862,84 @@ export class LifecycleService {
         }
 
         if (!assetsWithinThreshold) {
+          this.logger.warn(
+            `Vault ${vault.id} assets do not meet threshold requirements: ${JSON.stringify(thresholdViolations)}`
+          );
+
+          const contributionTransactions = await this.transactionsRepository.find({
+            where: {
+              vault_id: vault.id,
+              type: TransactionType.contribute,
+              status: TransactionStatus.confirmed,
+            },
+            relations: ['user'],
+          });
+
+          const cancelClaims: Partial<Claim>[] = [];
+
+          for (const tx of contributionTransactions) {
+            if (!tx.user || !tx.user.id) continue;
+
+            const userId = tx.user.id;
+
+            try {
+              // Check if a claim for this transaction already exists
+              const existingClaim = await this.claimRepository.findOne({
+                where: {
+                  transaction: { id: tx.id },
+                  type: ClaimType.FINAL_DISTRIBUTION,
+                },
+              });
+
+              if (existingClaim) {
+                this.logger.log(`Claim already exists for contribution transaction ${tx.id}, skipping.`);
+                continue;
+              }
+
+              // Get assets associated with this transaction
+              const txAssets = await this.assetsRepository.find({
+                where: {
+                  transaction: { id: tx.id },
+                  origin_type: AssetOriginType.CONTRIBUTED,
+                  deleted: false,
+                },
+              });
+
+              // Create claim record with asset information
+              const claim = this.claimRepository.create({
+                user: { id: userId },
+                vault: { id: vault.id },
+                type: ClaimType.FINAL_DISTRIBUTION,
+                status: ClaimStatus.AVAILABLE,
+                metadata: {
+                  assets: txAssets.map(asset => ({
+                    id: asset.id,
+                    policyId: asset.policy_id,
+                    assetId: asset.asset_id,
+                    quantity: asset.quantity,
+                    type: asset.type,
+                  })),
+                  assetIds: txAssets.map(asset => asset.id),
+                  isContribution: true,
+                  failureReason: 'threshold_violation',
+                  violations: thresholdViolations,
+                },
+                transaction: { id: tx.id },
+              });
+              cancelClaims.push(claim);
+            } catch (error) {
+              this.logger.error(`Failed to create cancel claim for user ${userId} transaction ${tx.id}:`, error);
+            }
+          }
+
+          if (cancelClaims.length > 0) {
+            try {
+              await this.claimRepository.save(cancelClaims);
+              this.logger.log(`Created ${cancelClaims.length} cancellation claims for failed vault ${vault.id}`);
+            } catch (error) {
+              this.logger.error(`Failed to save batch of cancellation claims:`, error);
+            }
+          }
           // If assets don't meet threshold requirements, fail the vault
           await this.executePhaseTransition({
             vaultId: vault.id,
