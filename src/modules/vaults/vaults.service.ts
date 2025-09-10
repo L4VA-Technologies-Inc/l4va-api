@@ -833,7 +833,7 @@ export class VaultsService {
     const publishedTx = await this.vaultContractService.submitOnChainVaultTx(
       signedTx,
       vault.asset_vault_name,
-      vault.liquidation_hash,
+      vault.script_hash,
       vault.apply_params_result
     );
     vault.vault_status = VaultStatus.published;
