@@ -1113,8 +1113,11 @@ export class VaultsService {
             })
           );
           break;
-        case VaultFilter.locked || VaultFilter.failed:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: filter });
+        case VaultFilter.locked:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.locked });
+          break;
+        case VaultFilter.failed:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.failed });
           break;
         case VaultFilter.draft:
           if (!isOwner) {
@@ -1147,8 +1150,10 @@ export class VaultsService {
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.acquire });
           break;
         case VaultFilter.locked:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.locked });
+          break;
         case VaultFilter.failed:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: filter });
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.failed });
           break;
         case VaultFilter.published:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.published });
