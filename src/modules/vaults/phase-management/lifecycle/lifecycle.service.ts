@@ -56,13 +56,9 @@ export class LifecycleService {
 
   @Cron(CronExpression.EVERY_MINUTE)
   async handleVaultLifecycleTransitions(): Promise<void> {
-    await this.handlePublishedToContribution();
-
-    // Handle contribution -> acquire transitions
-    await this.handleContributionToInvestment();
-
-    // Handle acquire -> governance transitions
-    await this.handleInvestmentToGovernance();
+    await this.handlePublishedToContribution(); // Handle created vault -> contribution transitin
+    await this.handleContributionToAcquire(); // Handle contribution -> acquire transitions
+    await this.handleAcquireToGovernance(); // Handle acquire -> governance transitions
   }
 
   private async queuePhaseTransition(
@@ -147,7 +143,6 @@ export class LifecycleService {
       }
 
       if (data.newStatus === VaultStatus.failed) {
-        // Find any pending PRs for this vault
         const pr = await this.tokenRegistryRepository.findOne({
           where: {
             vault: { id: data.vaultId },
@@ -155,7 +150,6 @@ export class LifecycleService {
           },
         });
 
-        // Close each pending PR
         if (pr) {
           try {
             await this.metadataRegistryApiService.closePullRequest(
@@ -672,8 +666,90 @@ export class LifecycleService {
             `Required: ${requiredThresholdAda} ADA`
         );
 
-        // TODO: Burn the vault and refund assets
-        this.logger.warn(`Vault ${vault.id} needs to be burned and assets refunded`);
+        const cancelClaims: Partial<Claim>[] = [];
+
+        for (const tx of [...acquisitionTransactions, ...contributionTransactions]) {
+          if (!tx.user || !tx.user.id) continue;
+
+          const userId = tx.user.id;
+          const adaSent = tx.amount || 0;
+
+          // Skip transactions with zero amount
+          if (adaSent <= 0) continue;
+
+          try {
+            // Check if a claim for this transaction already exists
+            const existingClaim = await this.claimRepository.findOne({
+              where: {
+                transaction: { id: tx.id },
+                type: ClaimType.FINAL_DISTRIBUTION,
+              },
+            });
+
+            if (existingClaim) {
+              this.logger.log(`Claim already exists for acquirer transaction ${tx.id}, skipping.`);
+              continue;
+            }
+
+            if (tx.type === TransactionType.contribute) {
+              // Get assets associated with this transaction
+              const txAssets = await this.assetsRepository.find({
+                where: {
+                  transaction: { id: tx.id },
+                  origin_type: AssetOriginType.CONTRIBUTED,
+                  deleted: false,
+                },
+              });
+
+              // Create claim record with asset information
+              const claim = this.claimRepository.create({
+                user: { id: userId },
+                vault: { id: vault.id },
+                type: ClaimType.FINAL_DISTRIBUTION,
+                status: ClaimStatus.AVAILABLE,
+                metadata: {
+                  assets: txAssets.map(asset => ({
+                    id: asset.id,
+                    policyId: asset.policy_id,
+                    assetId: asset.asset_id,
+                    quantity: asset.quantity,
+                    type: asset.type,
+                  })),
+                  assetIds: txAssets.map(asset => asset.id),
+                  isContribution: true,
+                },
+                transaction: { id: tx.id },
+              });
+              cancelClaims.push(claim);
+            }
+            // For acquisition transactions
+            else if (tx.type === TransactionType.acquire) {
+              const claim = this.claimRepository.create({
+                user: { id: userId },
+                vault: { id: vault.id },
+                type: ClaimType.FINAL_DISTRIBUTION,
+                status: ClaimStatus.AVAILABLE,
+                metadata: {
+                  adaAmount: tx.amount,
+                  isAcquisition: true,
+                },
+                transaction: { id: tx.id },
+              });
+              cancelClaims.push(claim);
+            }
+          } catch (error) {
+            this.logger.error(`Failed to create cancel claim for user ${userId} transaction ${tx.id}:`, error);
+          }
+        }
+
+        if (cancelClaims.length > 0) {
+          try {
+            await this.claimRepository.save(cancelClaims);
+          } catch (error) {
+            this.logger.error(`Failed to save batch of acquirer claims:`, error);
+          }
+        }
+
         await this.executePhaseTransition({
           vaultId: vault.id,
           newStatus: VaultStatus.failed,
@@ -726,7 +802,7 @@ export class LifecycleService {
     }
   }
 
-  private async handleContributionToInvestment(): Promise<void> {
+  private async handleContributionToAcquire(): Promise<void> {
     const now = new Date();
     const contributionVaults = await this.vaultRepository
       .createQueryBuilder('vault')
@@ -734,6 +810,7 @@ export class LifecycleService {
       .andWhere('vault.contribution_phase_start IS NOT NULL')
       .andWhere('vault.contribution_duration IS NOT NULL')
       .leftJoinAndSelect('vault.owner', 'owner')
+      .leftJoinAndSelect('vault.assets_whitelist', 'assetsWhitelist')
       .getMany();
 
     for (const vault of contributionVaults) {
@@ -749,55 +826,135 @@ export class LifecycleService {
 
       await this.contributionService.syncContributionTransactions(vault.id);
 
-      const assets = await this.assetsRepository.find({ where: { vault: { id: vault.id }, deleted: false } });
-      // Check if vault has any non-deleted assets
-      const hasAssets = assets?.some(asset => !asset.deleted) || false;
+      const assets = await this.assetsRepository.find({
+        where: { vault: { id: vault.id }, deleted: false },
+        select: ['id', 'policy_id', 'quantity'],
+      });
 
-      // If no assets, burn the vault using admin wallet
-      if (!hasAssets) {
-        try {
-          this.logger.log(`Vault ${vault.id} has no assets and contribution period has ended. Burning vault...`);
-          // Update vault status to failed
+      const policyIdCounts = assets.reduce(
+        (counts, asset) => {
+          if (!counts[asset.policy_id]) {
+            counts[asset.policy_id] = 0;
+          }
+          counts[asset.policy_id] += asset.quantity || 1;
+          return counts;
+        },
+        {} as Record<string, number>
+      );
+
+      let assetsWithinThreshold = true;
+      const thresholdViolations: Array<{ policyId: string; count: number; min: number; max: number }> = [];
+
+      if (vault.assets_whitelist && vault.assets_whitelist.length > 0) {
+        for (const whitelistItem of vault.assets_whitelist) {
+          const policyId = whitelistItem.policy_id;
+          const count = policyIdCounts[policyId] || 0;
+
+          if (count < whitelistItem.asset_count_cap_min || count > whitelistItem.asset_count_cap_max) {
+            assetsWithinThreshold = false;
+            thresholdViolations.push({
+              policyId,
+              count,
+              min: whitelistItem.asset_count_cap_min,
+              max: whitelistItem.asset_count_cap_max,
+            });
+          }
+        }
+
+        if (!assetsWithinThreshold) {
+          this.logger.warn(
+            `Vault ${vault.id} assets do not meet threshold requirements: ${JSON.stringify(thresholdViolations)}`
+          );
+
+          const contributionTransactions = await this.transactionsRepository.find({
+            where: {
+              vault_id: vault.id,
+              type: TransactionType.contribute,
+              status: TransactionStatus.confirmed,
+            },
+            relations: ['user'],
+          });
+
+          const cancelClaims: Partial<Claim>[] = [];
+
+          for (const tx of contributionTransactions) {
+            if (!tx.user || !tx.user.id) continue;
+
+            const userId = tx.user.id;
+
+            try {
+              // Check if a claim for this transaction already exists
+              const existingClaim = await this.claimRepository.findOne({
+                where: {
+                  transaction: { id: tx.id },
+                  type: ClaimType.FINAL_DISTRIBUTION,
+                },
+              });
+
+              if (existingClaim) {
+                this.logger.log(`Claim already exists for contribution transaction ${tx.id}, skipping.`);
+                continue;
+              }
+
+              // Get assets associated with this transaction
+              const txAssets = await this.assetsRepository.find({
+                where: {
+                  transaction: { id: tx.id },
+                  origin_type: AssetOriginType.CONTRIBUTED,
+                  deleted: false,
+                },
+              });
+
+              // Create claim record with asset information
+              const claim = this.claimRepository.create({
+                user: { id: userId },
+                vault: { id: vault.id },
+                type: ClaimType.FINAL_DISTRIBUTION,
+                status: ClaimStatus.AVAILABLE,
+                metadata: {
+                  assets: txAssets.map(asset => ({
+                    id: asset.id,
+                    policyId: asset.policy_id,
+                    assetId: asset.asset_id,
+                    quantity: asset.quantity,
+                    type: asset.type,
+                  })),
+                  assetIds: txAssets.map(asset => asset.id),
+                  isContribution: true,
+                  failureReason: 'threshold_violation',
+                  violations: thresholdViolations,
+                },
+                transaction: { id: tx.id },
+              });
+              cancelClaims.push(claim);
+            } catch (error) {
+              this.logger.error(`Failed to create cancel claim for user ${userId} transaction ${tx.id}:`, error);
+            }
+          }
+
+          if (cancelClaims.length > 0) {
+            try {
+              await this.claimRepository.save(cancelClaims);
+              this.logger.log(`Created ${cancelClaims.length} cancellation claims for failed vault ${vault.id}`);
+            } catch (error) {
+              this.logger.error(`Failed to save batch of cancellation claims:`, error);
+            }
+          }
+          // If assets don't meet threshold requirements, fail the vault
           await this.executePhaseTransition({
             vaultId: vault.id,
             newStatus: VaultStatus.failed,
             newScStatus: SmartContractVaultStatus.CANCELLED,
           });
 
-          // // Use admin wallet to burn the vault
-          // const burnTx = await this.vaultContractService.createBurnTx({
-          //   customerAddress: vault.owner.address, // Still track the original owner
-          //   assetVaultName: vault.asset_vault_name,
-          // });
-
-          // // Submit the transaction using admin wallet
-          // const { txHash } = await this.vaultContractService.submitOnChainVaultTx({
-          //   transaction: burnTx.presignedTx,
-          //   signatures: [], // Admin signature is already included in presignedTx
-          // });
-
-          // // Update vault status
-          // vault.deleted = true;
-          // vault.liquidation_hash = txHash;
-          // await this.vaultRepository.save(vault);
-
-          // this.logger.log(`Successfully burned empty vault ${vault.id} in transaction ${txHash}`);
-
-          continue;
-        } catch (error) {
-          this.logger.error(`Failed to burn empty vault ${vault.id}:`, error.message);
-          // Continue with other vaults even if one fails
+          return;
         }
-        continue;
       }
-
-      // If we get here, the vault has assets and the contribution period has ended
-      // Execute the transition immediately since the time has passed
       await this.executeContributionToAcquireTransition(vault);
     }
   }
 
-  private async handleInvestmentToGovernance(): Promise<void> {
+  private async handleAcquireToGovernance(): Promise<void> {
     const acquireVaults = await this.vaultRepository
       .createQueryBuilder('vault')
       .where('vault.vault_status = :status', { status: VaultStatus.acquire })

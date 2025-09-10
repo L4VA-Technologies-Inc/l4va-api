@@ -10,7 +10,7 @@ import {
   PrivateKey,
   ScriptHash,
 } from '@emurgo/cardano-serialization-lib-nodejs';
-import { Injectable, NotFoundException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { plainToInstance } from 'class-transformer';
@@ -23,6 +23,7 @@ import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { AssetsService } from '@/modules/vaults/processing-tx/assets/assets.service';
 import { BlockchainService, TransactionBuildResponse } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { Datum, Redeemer, Redeemer1 } from '@/modules/vaults/processing-tx/onchain/types/type';
 import { generate_tag_from_txhash_index, getUtxosExctract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
@@ -36,7 +37,6 @@ export class ClaimsService {
   private readonly logger = new Logger(ClaimsService.name);
   private readonly adminSKey: string;
   private readonly adminHash: string;
-  private readonly vaultPolicyId: string;
   private blockfrost: BlockFrostAPI;
 
   constructor(
@@ -45,11 +45,11 @@ export class ClaimsService {
     @InjectRepository(Claim)
     private claimRepository: Repository<Claim>,
     private readonly configService: ConfigService,
+    private readonly assetService: AssetsService,
     private readonly blockchainService: BlockchainService
   ) {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
-    this.vaultPolicyId = this.configService.get<string>('SC_POLICY_ID');
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
     });
@@ -117,16 +117,12 @@ export class ClaimsService {
   }
 
   /**
-   * Build a transaction to extract Ada or NFT from a vault
-   *
-   * → scanner call webhook with tx detail when tx will exist on chain.
-   *
-   * → using information txHash we will update internal tx and maybe claim status
+   * Extract = Keep assets in vault + mint vault tokens + burn receipt (admin-initiated, after window)
    *
    * @param claimId - ID of the claim to process
    * @returns Object containing transaction details
    */
-  async buildExctractTransaction(claimId: string): Promise<{
+  async buildExtractTransaction(claimId: string): Promise<{
     success: boolean;
     transactionId: string;
     presignedTx: string;
@@ -322,6 +318,126 @@ export class ClaimsService {
       claim.status = ClaimStatus.AVAILABLE;
       await this.claimRepository.save(claim);
       throw error;
+    }
+  }
+
+  /**
+   * Cancel = Return assets to contributor + burn receipt (contributor-initiated, during window)
+   */
+  async buildCancelTransaction(claimId: string): Promise<{
+    success: boolean;
+    transactionId: string;
+    presignedTx: string;
+  }> {
+    this.logger.log(`Building cancel transaction for claim ${claimId}`);
+
+    try {
+      const claim = await this.claimRepository.findOne({
+        where: { id: claimId },
+        relations: ['user', 'vault', 'transaction'],
+      });
+
+      if (!claim) {
+        throw new NotFoundException(`Claim with ID ${claimId} not found`);
+      }
+
+      const { vault, user, transaction } = claim;
+
+      if (claim.status !== ClaimStatus.AVAILABLE && claim.status !== ClaimStatus.PENDING) {
+        throw new BadRequestException(`Claim is not available for cancellation (current status: ${claim.status})`);
+      }
+
+      if (!vault || !user) {
+        throw new BadRequestException('Vault or user not found for claim');
+      }
+
+      const POLICY_ID = vault.script_hash;
+
+      const input = {
+        changeAddress: user.address,
+        message: 'Cancel asset contribution',
+        scriptInteractions: [
+          {
+            purpose: 'spend',
+            hash: POLICY_ID,
+            outputRef: {
+              txHash: transaction.tx_hash,
+              index: 0,
+            },
+            redeemer: {
+              type: 'json',
+              value: {
+                __variant: 'CancelAsset',
+                __data: {
+                  cancel_output_index: 0,
+                },
+              },
+            },
+          },
+          {
+            purpose: 'mint',
+            hash: POLICY_ID,
+            redeemer: {
+              type: 'json',
+              value: 'CancelContribution',
+            },
+          },
+        ],
+        mint: [
+          {
+            version: 'cip25',
+            assetName: { name: 'receipt', format: 'utf8' },
+            policyId: POLICY_ID,
+            type: 'plutus',
+            quantity: -1,
+            metadata: {},
+          },
+        ],
+        outputs: [], // Outputs are determined automatically by cardano-cli
+        requiredSigners: [this.adminHash],
+        referenceInputs: [
+          {
+            txHash: vault.last_update_tx_hash || vault.publication_hash,
+            index: vault.last_update_tx_hash ? vault.last_update_tx_index : 0,
+          },
+        ],
+        validityInterval: {
+          start: true,
+          end: true,
+        },
+        network: 'preprod',
+      };
+
+      const buildResponse = await this.blockchainService.buildTransaction(input);
+
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+      const internalTx = await this.transactionRepository.save({
+        user_id: user.id,
+        vault_id: vault.id,
+        type: TransactionType.cancel,
+        status: TransactionStatus.created,
+      });
+
+      claim.status = ClaimStatus.PENDING;
+      await this.claimRepository.save(claim);
+
+      this.logger.log(`Successfully built cancel transaction for claim ${claimId}`);
+
+      return {
+        success: true,
+        transactionId: internalTx.id,
+        presignedTx: txToSubmitOnChain.to_hex(),
+      };
+    } catch (error) {
+      this.logger.error(`Failed to build cancel transaction for claim ${claimId}:`, error);
+
+      if (error instanceof NotFoundException || error instanceof BadRequestException) {
+        throw error;
+      }
+
+      throw new Error(`Failed to build cancel transaction: ${error.message}`);
     }
   }
 
@@ -788,6 +904,27 @@ export class ClaimsService {
       internalTx.status = TransactionStatus.submitted;
       await this.transactionRepository.save(internalTx);
 
+      if (internalTx.type === TransactionType.cancel) {
+        const claim = await this.claimRepository.findOne({
+          where: { id: signedTx.claimId },
+          select: ['id', 'metadata', 'type'],
+        });
+
+        if (claim && claim.metadata) {
+          if (claim.type === ClaimType.FINAL_DISTRIBUTION && claim.metadata.isContribution && claim.metadata.assetIds) {
+            for (const assetId of claim.metadata.assetIds) {
+              try {
+                // Update asset status in database
+                await this.assetService.cancelAsset(assetId, claim.user_id);
+                this.logger.log(`Asset ${assetId} marked as deleted after cancellation`);
+              } catch (assetError) {
+                this.logger.error(`Failed to mark asset ${assetId} as deleted:`, assetError);
+              }
+            }
+          }
+        }
+      }
+
       // Update the claim status
       try {
         const claim = await this.claimRepository.findOne({
@@ -811,36 +948,6 @@ export class ClaimsService {
       throw error;
     }
   }
-
-  async processConfirmedTransaction(txHash: string): Promise<void> {
-    // Find the internal transaction by blockchain hash
-    const internalTx = await this.transactionRepository.findOne({
-      where: { tx_hash: txHash },
-    });
-
-    if (!internalTx) {
-      this.logger.warn(`No internal transaction found for blockchain hash: ${txHash}`);
-      return;
-    }
-
-    // Update transaction status
-    internalTx.status = TransactionStatus.confirmed;
-    await this.transactionRepository.save(internalTx);
-
-    // Update the claim status
-    if (internalTx.metadata?.claimId) {
-      const claim = await this.claimRepository.findOne({
-        where: { id: internalTx.metadata.claimId },
-      });
-
-      if (claim) {
-        claim.status = ClaimStatus.CLAIMED;
-        await this.claimRepository.save(claim);
-        this.logger.log(`Claim ${claim.id} marked as CLAIMED with tx ${txHash}`);
-      }
-    }
-  }
-
   private parseTracesForExpectedLP(msg: any, policyId: string, assetHex: string): string | null {
     try {
       const text = typeof msg === 'string' ? msg : JSON.stringify(msg);

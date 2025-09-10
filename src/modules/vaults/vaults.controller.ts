@@ -3,6 +3,7 @@ import { ApiTags } from '@nestjs/swagger';
 
 import { ApiDoc } from '../../decorators/api-doc.decorator';
 import { AuthGuard } from '../auth/auth.guard';
+import { AuthRequest } from '../auth/dto/auth-user.interface';
 
 import { DraftVaultsService } from './draft-vaults.service';
 import { CreateVaultReq } from './dto/createVault.req';
@@ -87,11 +88,30 @@ export class VaultsController {
     status: 200,
   })
   @Post('search')
-  getVaults(@Body() filters: GetVaultsDto, @Request() req): Promise<PaginatedResponseDto<VaultShortResponse>> {
+  @UseGuards(AuthGuard)
+  getVaults(
+    @Body() filters: GetVaultsDto,
+    @Request() req: AuthRequest
+  ): Promise<PaginatedResponseDto<VaultShortResponse>> {
     const userId = req.user?.sub;
     return this.vaultsService.getVaults({
       userId,
       ...filters,
+    });
+  }
+
+  @ApiDoc({
+    summary: 'List of public vaults (no authentication required)',
+    description:
+      'Returns paginated list of all published public vaults. Default page: 1, default limit: 10. Supports sorting by name, created_at, or updated_at.',
+    status: 200,
+  })
+  @Post('search/public')
+  searchPublicVaults(@Body() filters: GetVaultsDto): Promise<PaginatedResponseDto<VaultShortResponse>> {
+    return this.vaultsService.getVaults({
+      ...filters,
+      isOwner: false,
+      isPublicOnly: true,
     });
   }
 
@@ -165,15 +185,14 @@ export class VaultsController {
   }
 
   @ApiDoc({
-    summary: 'Burn vault',
-    description: 'Returns list of vault transactions. By default shows only confirmed transactions.',
+    summary: 'Build burn transaction',
+    description: 'Builds a burn transaction for the specified vault and returns the presigned transaction.',
     status: 200,
   })
   @UseGuards(AuthGuard)
-  @Post('burn-build/:id')
+  @Post(':id/burn/build')
   async burnVaultAttempt(
     @Param('id') id: string,
-    @Query() query: GetVaultTransactionsDto,
     @Request() req
   ): Promise<{
     txId: string;
@@ -181,24 +200,24 @@ export class VaultsController {
     contractAddress: string;
   }> {
     const userId = req.user.sub;
-    return await this.vaultsService.burnVaultAttempt(id, userId);
+    return await this.vaultsService.buildBurnTransaction(id, userId);
   }
 
   @ApiDoc({
-    summary: 'Burn vault',
-    description: 'Returns list of vault transactions. By default shows only confirmed transactions.',
+    summary: 'Publish burn tx',
+    description: 'Publishes a signed burn transaction for the specified vault.',
     status: 200,
   })
   @UseGuards(AuthGuard)
-  @Post('burn-publish/:id')
+  @Post(':id/burn/publish')
   async burnPublishAtempt(
     @Param('id') id: string,
-    @Query() query: GetVaultTransactionsDto,
     @Body() publishDto: PublishVaultDto,
     @Request() req
-  ): Promise<unknown> {
+  ): Promise<{
+    txHash: string;
+  }> {
     const userId = req.user.sub;
-
-    return await this.vaultsService.burnVaultPublishTx(id, userId, publishDto);
+    return await this.vaultsService.publishBurnTransaction(id, userId, publishDto);
   }
 }

@@ -23,6 +23,7 @@ import { PublishVaultDto } from './dto/publish-vault.dto';
 import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { BlockchainScannerService } from './processing-tx/onchain/blockchain-scanner.service';
+import { BlockchainService } from './processing-tx/onchain/blockchain.service';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
 import { VaultManagingService } from './processing-tx/onchain/vault-managing.service';
 
@@ -32,7 +33,6 @@ import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
-import { AddTotalAcquiredValueInAda1750670509513 } from '@/database/migrations/1750670509513-addTotalAcquiredValueInAda';
 import { TagEntity } from '@/database/tag.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
@@ -91,6 +91,8 @@ export class VaultsService {
     private readonly awsService: AwsService,
     private readonly vaultContractService: VaultManagingService,
     private readonly blockchainScannerService: BlockchainScannerService,
+    private readonly blockchainService: BlockchainService,
+
     private readonly taptoolsService: TaptoolsService,
     private readonly transactionsService: TransactionsService,
     private readonly eventEmitter: EventEmitter2
@@ -561,7 +563,7 @@ export class VaultsService {
       finalVault.asset_vault_name = vaultAssetName;
       finalVault.script_hash = scriptHash;
       finalVault.apply_params_result = applyParamsResult;
-      
+
       await this.vaultsRepository.save(finalVault);
 
       this.eventEmitter.emit('vault.launched', {
@@ -831,7 +833,7 @@ export class VaultsService {
     const publishedTx = await this.vaultContractService.submitOnChainVaultTx(
       signedTx,
       vault.asset_vault_name,
-      vault.liquidation_hash,
+      vault.script_hash,
       vault.apply_params_result
     );
     vault.vault_status = VaultStatus.published;
@@ -987,6 +989,7 @@ export class VaultsService {
     tags?: string[];
     isOwner?: boolean;
     reserveMet?: boolean;
+    isPublicOnly?: boolean;
     minInitialVaultOffered?: number;
     maxInitialVaultOffered?: number;
     assetWhitelist?: string;
@@ -1013,17 +1016,8 @@ export class VaultsService {
       page = 1,
       limit = 10,
       sortOrder = SortOrder.DESC,
+      isPublicOnly = false,
     } = data;
-    // Get user's wallet address
-    const user = await this.usersRepository.findOne({
-      where: { id: userId },
-    });
-
-    if (!user) {
-      throw new BadRequestException('User not found');
-    }
-
-    const userWalletAddress = user.address;
 
     // Create base query for all vaults
     const queryBuilder = this.vaultsRepository
@@ -1038,32 +1032,52 @@ export class VaultsService {
       .leftJoinAndSelect('vault.acquirer_whitelist', 'acquirer_whitelist')
       .where('vault.vault_status != :draftStatus', { draftStatus: VaultStatus.draft })
       .andWhere('vault.deleted != :deleted', { deleted: true })
-      .andWhere('vault.vault_status != :createdStatus', { createdStatus: VaultStatus.created })
-      // Get public vaults OR private vaults where user is whitelisted based on filter
-      .andWhere(
-        new Brackets(qb => {
-          qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
-            new Brackets(qb2 => {
-              qb2.where('vault.privacy = :privatePrivacy', { privatePrivacy: VaultPrivacy.private }).andWhere(
-                new Brackets(qb3 => {
-                  // Default case - check both whitelists if no filter
-                  qb3.where(
-                    '(EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress) OR EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress))',
-                    { userWalletAddress }
+      .andWhere('vault.vault_status != :createdStatus', { createdStatus: VaultStatus.created });
+
+    // If userId is provided, retrieve user information and apply personalized filters
+    let userWalletAddress: string | null = null;
+
+    if (userId) {
+      const user = await this.usersRepository.findOne({
+        where: { id: userId },
+      });
+
+      if (user) {
+        userWalletAddress = user.address;
+
+        // Apply owner filter if requested
+        if (isOwner) {
+          queryBuilder.andWhere('vault.owner_id = :userId', { userId: user.id });
+        }
+
+        // Add whitelist conditions if not public-only mode
+        if (!isPublicOnly) {
+          queryBuilder.andWhere(
+            new Brackets(qb => {
+              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
+                new Brackets(qb2 => {
+                  qb2.where('vault.privacy = :privatePrivacy', { privatePrivacy: VaultPrivacy.private }).andWhere(
+                    new Brackets(qb3 => {
+                      // Check both whitelists
+                      qb3.where(
+                        '(EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress) OR EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress))',
+                        { userWalletAddress }
+                      );
+                    })
                   );
                 })
               );
             })
           );
-        })
-      );
-
-    if (isOwner) {
-      queryBuilder.andWhere('vault.owner_id = :userId', { userId: user.id });
+        }
+      }
+    } else {
+      // For anonymous users or when isPublicOnly is true, only show public vaults
+      queryBuilder.andWhere('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public });
     }
 
     // Apply status filter and corresponding whitelist check
-    if (filter) {
+    if (filter && userWalletAddress) {
       switch (filter) {
         case VaultFilter.open:
           queryBuilder
@@ -1100,7 +1114,10 @@ export class VaultsService {
           );
           break;
         case VaultFilter.locked:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked });
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.locked });
+          break;
+        case VaultFilter.failed:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.failed });
           break;
         case VaultFilter.draft:
           if (!isOwner) {
@@ -1117,6 +1134,32 @@ export class VaultsService {
               );
             })
           );
+      }
+    } else if (filter) {
+      // For anonymous users with filters, only apply status filters without whitelist checks
+      switch (filter) {
+        case VaultFilter.open:
+          queryBuilder.andWhere('vault.vault_status IN (:...statuses)', {
+            statuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire],
+          });
+          break;
+        case VaultFilter.contribution:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.contribution });
+          break;
+        case VaultFilter.acquire:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.acquire });
+          break;
+        case VaultFilter.locked:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.locked });
+          break;
+        case VaultFilter.failed:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.failed });
+          break;
+        case VaultFilter.published:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.published });
+          break;
+        case VaultFilter.draft:
+          throw new BadRequestException('Draft filter requires authentication');
       }
     }
 
@@ -1321,7 +1364,7 @@ export class VaultsService {
    * @param userId - User ID
    * @returns Burn transaction result
    */
-  async burnVaultAttempt(
+  async buildBurnTransaction(
     vaultId: string,
     userId: string
   ): Promise<{
@@ -1366,30 +1409,45 @@ export class VaultsService {
    * @param userId - User ID
    * @param publishDto - PublishVaultDto containing transaction data
    */
-  async burnVaultPublishTx(vaultId: string, userId: string, publishDto: PublishVaultDto): Promise<void> {
-    // const { txHash } = await this.vaultContractService.submitOnChainVaultTx({
-    //   transaction: publishDto.transaction,
-    //   signatures: publishDto.signatures,
-    // });
-    // const vault = await this.vaultsRepository.findOne({
-    //   where: {
-    //     id: vaultId,
-    //     owner: {
-    //       id: userId,
-    //     },
-    //   },
-    //   relations: ['assets', 'owner'],
-    // });
-    // if (!vault) {
-    //   throw new Error('Vault is not found or you are not owner of this vault!');
-    // }
-    // if (vault.assets.length !== 0) {
-    //   throw new Error('The vault cant be burned it need to extract and refound assets ');
-    // }
-    // vault.deleted = true;
-    // vault.liquidation_hash = txHash;
-    // // todo need to wait tx approvement from scanner ?
-    // await this.transactionsService.updateTransactionHash(publishDto.txId, txHash);
-    // await this.vaultsRepository.save(vault);
+  async publishBurnTransaction(
+    vaultId: string,
+    userId: string,
+    publishDto: PublishVaultDto
+  ): Promise<{
+    txHash: string;
+  }> {
+    this.logger.log(`Attempting to publish burn transaction for vault ${vaultId} by user ${userId}`);
+
+    try {
+      const vault = await this.vaultsRepository.findOne({
+        where: {
+          id: vaultId,
+          owner: { id: userId },
+        },
+      });
+
+      if (!vault) {
+        throw new UnauthorizedException('Vault is not found or you are not the owner of this vault');
+      }
+
+      const { txHash } = await this.blockchainService.submitTransaction({
+        transaction: publishDto.transaction,
+        signatures: publishDto.signatures,
+      });
+
+      vault.deleted = true;
+      vault.liquidation_hash = txHash;
+      vault.vault_status = VaultStatus.burned;
+
+      await this.vaultsRepository.save(vault);
+      await this.transactionsService.updateTransactionHash(publishDto.txId, txHash);
+
+      this.logger.log(`Vault ${vaultId} successfully marked as burned`);
+
+      return { txHash };
+    } catch (error) {
+      this.logger.error(`Error publishing burn transaction for vault ${vaultId}:`, error);
+      throw error;
+    }
   }
 }

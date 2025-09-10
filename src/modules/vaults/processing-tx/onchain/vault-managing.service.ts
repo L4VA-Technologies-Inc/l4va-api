@@ -9,7 +9,14 @@ import {
   FixedTransaction,
   PrivateKey,
 } from '@emurgo/cardano-serialization-lib-nodejs';
-import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -344,50 +351,83 @@ export class VaultManagingService {
     presignedTx: string;
     contractAddress: string;
   }> {
-    const vaultUtxo = await getVaultUtxo(this.scPolicyId, burnConfig.assetVaultName, this.blockfrost);
-    const input = {
-      changeAddress: burnConfig.customerAddress,
-      message: 'Vault Burn',
-      scriptInteractions: [
-        {
-          purpose: 'spend',
-          outputRef: vaultUtxo,
-          hash: this.scPolicyId,
-          redeemer: {
-            type: 'json',
-            value: 'VaultBurn',
-          },
-        },
-        {
-          purpose: 'mint',
-          hash: this.scPolicyId,
-          redeemer: {
-            type: 'json',
-            value: 'VaultBurn',
-          },
-        },
-      ],
-      mint: [
-        {
-          version: 'cip25',
-          assetName: { name: burnConfig.assetVaultName, format: 'hex' },
-          policyId: this.scPolicyId,
-          type: 'plutus',
-          quantity: -1,
-        },
-      ],
-      requiredSigners: [this.adminHash],
-    };
-    const buildResponse = await this.blockchainService.buildTransaction(input);
+    this.logger.log(`Creating burn transaction for vault ${burnConfig.assetVaultName}`);
 
-    // Sign the transaction
-    const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-    txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+    try {
+      if (!burnConfig.customerAddress) {
+        throw new BadRequestException('Customer address is required');
+      }
 
-    return {
-      presignedTx: txToSubmitOnChain.to_hex(),
-      contractAddress: this.scAddress,
-    };
+      if (!burnConfig.assetVaultName) {
+        throw new BadRequestException('Asset vault name is required');
+      }
+
+      // Get the vault UTXO
+      const vaultUtxo = await getVaultUtxo(this.scPolicyId, burnConfig.assetVaultName, this.blockfrost);
+
+      if (!vaultUtxo) {
+        throw new NotFoundException(`Vault UTXO not found for asset name ${burnConfig.assetVaultName}`);
+      }
+
+      // Create transaction input
+      const input = {
+        changeAddress: burnConfig.customerAddress,
+        message: 'Vault Burn',
+        scriptInteractions: [
+          {
+            purpose: 'spend',
+            outputRef: vaultUtxo,
+            hash: this.scPolicyId,
+            redeemer: {
+              type: 'json',
+              value: 'VaultBurn',
+            },
+          },
+          {
+            purpose: 'mint',
+            hash: this.scPolicyId,
+            redeemer: {
+              type: 'json',
+              value: 'VaultBurn',
+            },
+          },
+        ],
+        mint: [
+          {
+            version: 'cip25',
+            assetName: { name: burnConfig.assetVaultName, format: 'hex' },
+            policyId: this.scPolicyId,
+            type: 'plutus',
+            quantity: -1,
+          },
+        ],
+        requiredSigners: [this.adminHash],
+      };
+
+      const buildResponse = await this.blockchainService.buildTransaction(input);
+
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+      this.logger.log(`Successfully created burn transaction for vault ${burnConfig.assetVaultName}`);
+
+      return {
+        presignedTx: txToSubmitOnChain.to_hex(),
+        contractAddress: this.scAddress,
+      };
+    } catch (error) {
+      // this.logger.error(`Failed to create burn transaction for vault ${burnConfig.assetVaultName}:`, error);
+
+      if (error instanceof NotFoundException || error instanceof BadRequestException) {
+        throw error;
+      }
+
+      if (error.status_code && error.message) {
+        throw new InternalServerErrorException(`Blockchain API error (${error.status_code}): ${error.message}`);
+      }
+
+      throw new InternalServerErrorException(`Failed to create burn transaction: ${error.message || 'Unknown error'}`);
+    }
   }
 
   // Create a transaction to update the vault's metadata
