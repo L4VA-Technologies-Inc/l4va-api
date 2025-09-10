@@ -989,6 +989,7 @@ export class VaultsService {
     tags?: string[];
     isOwner?: boolean;
     reserveMet?: boolean;
+    isPublicOnly?: boolean;
     minInitialVaultOffered?: number;
     maxInitialVaultOffered?: number;
     assetWhitelist?: string;
@@ -1015,17 +1016,8 @@ export class VaultsService {
       page = 1,
       limit = 10,
       sortOrder = SortOrder.DESC,
+      isPublicOnly = false,
     } = data;
-    // Get user's wallet address
-    const user = await this.usersRepository.findOne({
-      where: { id: userId },
-    });
-
-    if (!user) {
-      throw new BadRequestException('User not found');
-    }
-
-    const userWalletAddress = user.address;
 
     // Create base query for all vaults
     const queryBuilder = this.vaultsRepository
@@ -1040,32 +1032,52 @@ export class VaultsService {
       .leftJoinAndSelect('vault.acquirer_whitelist', 'acquirer_whitelist')
       .where('vault.vault_status != :draftStatus', { draftStatus: VaultStatus.draft })
       .andWhere('vault.deleted != :deleted', { deleted: true })
-      .andWhere('vault.vault_status != :createdStatus', { createdStatus: VaultStatus.created })
-      // Get public vaults OR private vaults where user is whitelisted based on filter
-      .andWhere(
-        new Brackets(qb => {
-          qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
-            new Brackets(qb2 => {
-              qb2.where('vault.privacy = :privatePrivacy', { privatePrivacy: VaultPrivacy.private }).andWhere(
-                new Brackets(qb3 => {
-                  // Default case - check both whitelists if no filter
-                  qb3.where(
-                    '(EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress) OR EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress))',
-                    { userWalletAddress }
+      .andWhere('vault.vault_status != :createdStatus', { createdStatus: VaultStatus.created });
+
+    // If userId is provided, retrieve user information and apply personalized filters
+    let userWalletAddress: string | null = null;
+
+    if (userId) {
+      const user = await this.usersRepository.findOne({
+        where: { id: userId },
+      });
+
+      if (user) {
+        userWalletAddress = user.address;
+
+        // Apply owner filter if requested
+        if (isOwner) {
+          queryBuilder.andWhere('vault.owner_id = :userId', { userId: user.id });
+        }
+
+        // Add whitelist conditions if not public-only mode
+        if (!isPublicOnly) {
+          queryBuilder.andWhere(
+            new Brackets(qb => {
+              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
+                new Brackets(qb2 => {
+                  qb2.where('vault.privacy = :privatePrivacy', { privatePrivacy: VaultPrivacy.private }).andWhere(
+                    new Brackets(qb3 => {
+                      // Check both whitelists
+                      qb3.where(
+                        '(EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress) OR EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress))',
+                        { userWalletAddress }
+                      );
+                    })
                   );
                 })
               );
             })
           );
-        })
-      );
-
-    if (isOwner) {
-      queryBuilder.andWhere('vault.owner_id = :userId', { userId: user.id });
+        }
+      }
+    } else {
+      // For anonymous users or when isPublicOnly is true, only show public vaults
+      queryBuilder.andWhere('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public });
     }
 
     // Apply status filter and corresponding whitelist check
-    if (filter) {
+    if (filter && userWalletAddress) {
       switch (filter) {
         case VaultFilter.open:
           queryBuilder
@@ -1119,6 +1131,30 @@ export class VaultsService {
               );
             })
           );
+      }
+    } else if (filter) {
+      // For anonymous users with filters, only apply status filters without whitelist checks
+      switch (filter) {
+        case VaultFilter.open:
+          queryBuilder.andWhere('vault.vault_status IN (:...statuses)', {
+            statuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire],
+          });
+          break;
+        case VaultFilter.contribution:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.contribution });
+          break;
+        case VaultFilter.acquire:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.acquire });
+          break;
+        case VaultFilter.locked:
+        case VaultFilter.failed:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: filter });
+          break;
+        case VaultFilter.published:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.published });
+          break;
+        case VaultFilter.draft:
+          throw new BadRequestException('Draft filter requires authentication');
       }
     }
 
