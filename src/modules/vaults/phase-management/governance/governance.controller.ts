@@ -3,7 +3,6 @@ import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { AuthGuard } from '../../../auth/auth.guard';
 
-import { CreateProposalReq } from './dto/create-proposal.req';
 import { AssetBuySellDto } from './dto/get-assets.dto';
 import { GetProposalsRes, GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';

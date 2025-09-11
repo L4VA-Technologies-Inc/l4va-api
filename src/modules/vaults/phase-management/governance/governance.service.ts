@@ -286,6 +286,27 @@ export class GovernanceService {
           proposal.burnAssets = createProposalReq.metadata.burnAssets || [];
         }
         break;
+
+      case ProposalType.BUY_SELL:
+        if (createProposalReq.metadata) {
+          // Store the options
+          proposal.buyingSellingOptions = createProposalReq.metadata.buyingSellingOptions || [];
+
+          // Store the abstain setting
+          proposal.abstain = createProposalReq.metadata.abstain || false;
+
+          // Validate assets exist
+          for (const option of proposal.buyingSellingOptions) {
+            const asset = await this.assetRepository.findOne({
+              where: { id: option.assetId },
+            });
+
+            if (!asset) {
+              throw new BadRequestException(`Asset with ID ${option.assetId} not found`);
+            }
+          }
+        }
+        break;
     }
 
     await this.proposalRepository.save(proposal);
