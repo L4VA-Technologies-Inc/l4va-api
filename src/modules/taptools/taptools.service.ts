@@ -19,7 +19,7 @@ export class TaptoolsService {
 
   private readonly baseUrl = 'https://openapi.taptools.io/api/v1';
   private readonly blockfrostTestnetUrl = 'https://cardano-preprod.blockfrost.io/api/v0/';
-  private cache = new NodeCache({ stdTTL: 60 }); // cache for 60 seconds
+  private cache = new NodeCache({ stdTTL: 540 }); // cache for 540 seconds
   private readonly taptoolsApiKey: string;
 
   constructor(
