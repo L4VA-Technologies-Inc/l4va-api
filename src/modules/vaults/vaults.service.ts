@@ -707,26 +707,29 @@ export class VaultsService {
         .addSelect('SUM(vault.total_assets_cost_usd)', 'valueUsd')
         .addSelect('COUNT(vault.id)', 'count')
         .where('vault.deleted = :deleted', { deleted: false })
+        .andWhere('vault.vault_status IN (:...statuses)', {
+          statuses: ['contribution', 'acquire', 'locked', 'burned'],
+        })
         .groupBy('vault.vault_status')
         .getRawMany();
 
       // Calculate total ADA value for percentages
       const totalValueAda = statusResults.reduce((sum, item) => sum + Number(item.valueAda || 0), 0);
 
-      const result = {};
-
-      // Map status values to friendly names
-      const statusMap = {
-        draft: 'Draft',
-        created: 'Created',
-        published: 'Published',
-        contribution: 'Contribution',
-        acquire: 'Acquire',
-        locked: 'Locked',
-        terminated: 'Terminated',
+      const result = {
+        contribution: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        acquire: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        locked: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        terminated: { percentage: 0, valueAda: '0', valueUsd: '0' },
       };
 
-      // Process each status
+      const statusMap = {
+        contribution: 'contribution',
+        acquire: 'acquire',
+        locked: 'locked',
+        burned: 'terminated',
+      };
+
       statusResults.forEach(item => {
         const status = statusMap[item.status] || item.status;
         const valueAda = Number(item.valueAda || 0);
@@ -743,7 +746,13 @@ export class VaultsService {
       return result;
     } catch (error) {
       this.logger.error('Error calculating vaults by stage:', error);
-      return {};
+      // Return default object with zero values for all required statuses
+      return {
+        contribution: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        acquire: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        locked: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        terminated: { percentage: 0, valueAda: '0', valueUsd: '0' },
+      };
     }
   }
 
