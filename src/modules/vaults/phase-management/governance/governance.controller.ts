@@ -4,6 +4,7 @@ import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '../../../auth/auth.guard';
 
 import { CreateProposalReq } from './dto/create-proposal.req';
+import { AssetBuySellDto } from './dto/get-assets.dto';
 import { GetProposalsRes, GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';
 import { GovernanceService } from './governance.service';
@@ -57,12 +58,16 @@ export class GovernanceController {
     return this.governanceService.getVotingPower(vaultId, userId);
   }
 
-  @Get('vaults/:vaultId/assets/terminate')
+  @Get('vaults/:vaultId/assets/buy-sell')
   @UseGuards(AuthGuard)
-  @ApiOperation({ summary: 'Get assets to terminate for a vault' })
-  @ApiResponse({ status: 200, description: 'List of assets to terminate' })
-  async getAssetsToTerminate(@Param('vaultId') vaultId: string): Promise<Asset[]> {
-    return this.governanceService.getAssetsToTerminate(vaultId);
+  @ApiOperation({ summary: 'Get assets available for buying/selling proposals' })
+  @ApiResponse({
+    status: 200,
+    description: 'List of assets available for trading',
+    type: [AssetBuySellDto],
+  })
+  async getAssetsToBuySell(@Param('vaultId') vaultId: string): Promise<AssetBuySellDto[]> {
+    return await this.governanceService.getAssetsToBuySell(vaultId);
   }
 
   @Get('vaults/:vaultId/assets/stake')
@@ -79,6 +84,14 @@ export class GovernanceController {
   @ApiResponse({ status: 200, description: 'List of assets to distribute' })
   async getAssetsToDistribute(@Param('vaultId') vaultId: string): Promise<Asset[]> {
     return this.governanceService.getAssetsToDistribute(vaultId);
+  }
+
+  @Get('vaults/:vaultId/assets/terminate')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Get assets to terminate for a vault' })
+  @ApiResponse({ status: 200, description: 'List of assets to terminate' })
+  async getAssetsToTerminate(@Param('vaultId') vaultId: string): Promise<Asset[]> {
+    return this.governanceService.getAssetsToTerminate(vaultId);
   }
 
   @Get('vaults/:vaultId/assets/burn')

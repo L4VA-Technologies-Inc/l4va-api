@@ -94,36 +94,36 @@ export class VaultInsertingService {
   }> {
     try {
       // Validate that the transaction exists and get its current state
-      const transaction = await this.transactionsService.validateTransactionExists(params.txId);
+      // const transaction = await this.transactionsService.validateTransactionExists(params.txId);
 
-      const vault = await this.vaultsRepository.findOne({
-        where: {
-          id: transaction.vault_id,
-        },
-      });
+      // const vault = await this.vaultsRepository.findOne({
+      //   where: {
+      //     id: transaction.vault_id,
+      //   },
+      // });
 
-      if (!vault.publication_hash) {
-        throw new Error('Vault publication hash not found - vault may not be properly published');
-      }
+      // if (!vault.publication_hash) {
+      //   throw new Error('Vault publication hash not found - vault may not be properly published');
+      // }
 
-      if (!vault.script_hash) {
-        throw new Error('Vault script hash is missing - vault may not be properly configured');
-      }
+      // if (!vault.script_hash) {
+      //   throw new Error('Vault script hash is missing - vault may not be properly configured');
+      // }
 
-      const utxos = await getUtxosExctract(Address.from_bech32(params.changeAddress), 0, this.blockfrost); // Any UTXO works.
+      // const utxos = await getUtxosExctract(Address.from_bech32(params.changeAddress), 0, this.blockfrost); // Any UTXO works.
 
-      if (utxos.length === 0) {
-        throw new Error('No UTXOs found.');
-      }
+      // if (utxos.length === 0) {
+      //   throw new Error('No UTXOs found.');
+      // }
 
-      const VAULT_ID = vault.asset_vault_name;
-      const CONTRIBUTION_SCRIPT_HASH = vault.script_hash;
+      const VAULT_ID = 'be835f0f6b956283ba01f4d47c75cd80300c057718dcd98c9a2d95027463fa93';
+      const CONTRIBUTION_SCRIPT_HASH = '0f9d90277089b2f442bef581dcc1d333a92c3fedf688700c4e39ab89';
       const POLICY_ID = CONTRIBUTION_SCRIPT_HASH;
       const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(POLICY_ID)))
         .to_address()
         .to_bech32();
 
-      const LAST_UPDATE_TX_HASH = vault.publication_hash; // todo need to understand where exactly we need to get it
+      const LAST_UPDATE_TX_HASH = 'ff17a39a255c5b14bb7b231e4e892364aa501b30227004892648ee59b7af2da5'; // todo need to understand where exactly we need to get it
       const LAST_UPDATE_TX_INDEX = 0;
       const isAda = params.outputs[0].assets[0].assetName === 'lovelace';
       let quantity = 0;
@@ -242,6 +242,8 @@ export class VaultInsertingService {
         },
         network: 'preprod',
       };
+
+      console.log('Building transaction with input:', JSON.stringify(input));
 
       // Build the transaction using BlockchainService
       const buildResponse = await this.blockchainService.buildTransaction(input);

@@ -10,9 +10,11 @@ import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
+import { plainToInstance } from 'class-transformer';
 import { IsNull, Not, Repository } from 'typeorm';
 
 import { CreateProposalReq } from './dto/create-proposal.req';
+import { AssetBuySellDto } from './dto/get-assets.dto';
 import { GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';
 
@@ -21,6 +23,7 @@ import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { Vault } from '@/database/vault.entity';
 import { Vote } from '@/database/vote.entity';
+import { AssetStatus, AssetType } from '@/types/asset.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { VaultStatus } from '@/types/vault.types';
 import { VoteType } from '@/types/vote.types';
@@ -624,6 +627,26 @@ export class GovernanceService {
     } catch (error) {
       this.logger.error(`Error getting assets to stake for vault ${vaultId}: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Error getting assets to stake');
+    }
+  }
+
+  async getAssetsToBuySell(vaultId: string): Promise<AssetBuySellDto[]> {
+    try {
+      // Get all assets in the vault
+      const assets = await this.assetRepository.find({
+        where: [
+          { vault: { id: vaultId }, type: AssetType.NFT, status: AssetStatus.LOCKED },
+          { vault: { id: vaultId }, type: AssetType.FT, status: AssetStatus.LOCKED },
+        ],
+        select: ['id', 'policy_id', 'quantity', 'dex_price', 'floor_price', 'metadata', 'type'],
+      });
+
+      return plainToInstance(AssetBuySellDto, assets, {
+        excludeExtraneousValues: true,
+      });
+    } catch (error) {
+      this.logger.error(`Error getting assets for buy-sell proposals for vault ${vaultId}: ${error.message}`);
+      throw new InternalServerErrorException('Error getting assets for buying/selling');
     }
   }
 }
