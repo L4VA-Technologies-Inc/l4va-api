@@ -234,8 +234,8 @@ export class GovernanceService {
       order: { createdAt: 'DESC' },
     });
 
-    if (!latestSnapshot) {
-      throw new BadRequestException('No snapshot available for voting power determination');
+    if (!latestSnapshot || !(latestSnapshot.createdAt > new Date(Date.now() - TWO_HOURS))) {
+      await this.createAutomaticSnapshot(vaultId, `${vault.policy_id}${vault.asset_vault_name}`);
     }
 
     // Determine start date - use the provided one or now if not provided
@@ -258,7 +258,7 @@ export class GovernanceService {
       startDate: startDate.toISOString(),
       snapshotId: latestSnapshot.id,
       status: ProposalStatus.ACTIVE,
-      endDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days from now
+      endDate: new Date(Date.now() + SEVEN_DAYS), // SEVEN
     });
 
     // Set type-specific fields based on proposal type
