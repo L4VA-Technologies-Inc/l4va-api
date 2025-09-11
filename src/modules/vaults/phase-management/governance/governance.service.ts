@@ -28,6 +28,34 @@ import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { VaultStatus } from '@/types/vault.types';
 import { VoteType } from '@/types/vote.types';
 
+const TWO_HOURS = 2 * 60 * 60 * 1000;
+const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+
+/*
+        .-""""-.
+       / -   -  \
+      |  .-. .- |
+      |  \o| |o (
+      \     ^    \
+       '.  )--'  /
+         '-...-'`
+    BLOCKCHAIN COUNCIL
+    { } { } { } { } { }
+     |   |   |   |   |
+    /     VOTING     \
+   /-------------------\
+  |  YES   NO  ABSTAIN |
+  |   |     |     |    |
+  |  [X]   [ ]   [ ]   |
+   \__________________/
+      /   |   |   \
+     /    |   |    \
+    /     |   |     \
+   /      |   |      \
+  /_______|___|_______\
+
+*/
+
 @Injectable()
 export class GovernanceService {
   private readonly logger = new Logger(GovernanceService.name);
