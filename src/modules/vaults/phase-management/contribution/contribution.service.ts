@@ -106,6 +106,7 @@ export class ContributionService {
                     relations: ['ft_token_img'],
                   });
 
+                  // TODO: Handle where pr fails to submit, maybe retry later
                   if (vault && !vault.policy_id) {
                     const extractedPolicyId = await this.extractPolicyIdFromTransaction(tx.tx_hash);
                     if (extractedPolicyId) {
@@ -121,7 +122,7 @@ export class ContributionService {
                           name: vault.name,
                           description: vault.description,
                           ticker: vault.vault_token_ticker,
-                          logo: vault.ft_token_img.file_url,
+                          logo: vault.ft_token_img?.file_url || '',
                           decimals: 6,
                         });
                       } catch (error) {
