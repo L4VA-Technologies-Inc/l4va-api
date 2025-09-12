@@ -55,12 +55,32 @@ export class VaultsController {
   })
   @UseGuards(AuthGuard)
   @Post('/publish')
-  async publishVault(@Request() req, @Body() publishDto: PublishVaultDto): Promise<VaultFullResponse> {
+  async publishVault(
+    @Request() req,
+    @Body() publishDto: PublishVaultDto
+  ): Promise<{ vaultId: string; presignedTx: string }> {
     const userId = req.user.sub;
     try {
       return await this.vaultsService.publishVault(userId, publishDto);
     } catch (error) {
       this.logger.error('Error publishing vault', error);
+      throw error;
+    }
+  }
+
+  @ApiDoc({
+    summary: 'Publish vault blueprints',
+    description: 'Publishes a vault with the provided blueprints',
+    status: 200,
+  })
+  @UseGuards(AuthGuard)
+  @Post('/publish-blueprints')
+  async publishVaultBlueprints(@Request() req, @Body() publishDto: PublishVaultDto): Promise<VaultFullResponse> {
+    const userId = req.user.sub;
+    try {
+      return await this.vaultsService.publishVaultBlueprints(userId, publishDto);
+    } catch (error) {
+      this.logger.error('Error publishing vault blueprints', error);
       throw error;
     }
   }
