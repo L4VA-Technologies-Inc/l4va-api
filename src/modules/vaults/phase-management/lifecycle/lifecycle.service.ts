@@ -471,7 +471,7 @@ export class LifecycleService {
               continue;
             }
 
-            const vtReceived = await this.distributionService.calculateAcquirerTokens({
+            const rawVtReceived = await this.distributionService.calculateAcquirerTokens({
               vaultId: vault.id,
               adaSent,
               numAcquirers: Object.keys(userAcquiredAdaMap).length,
@@ -483,8 +483,11 @@ export class LifecycleService {
               ASSETS_OFFERED_PERCENT,
             });
 
+            const multiplier = Math.floor(rawVtReceived / adaSent / 1_000_000);
+            const adjustedVtAmount = multiplier * adaSent * 1_000_000;
+
             this.logger.debug(
-              `--- Acquirer ${userId} will receive VT: ${vtReceived} (for ADA sent: ${adaSent} in tx ${tx.id})`
+              `Acquirer ${userId} - Raw VT: ${rawVtReceived}, Multiplier: ${multiplier}, Adjusted VT: ${adjustedVtAmount}`
             );
 
             // Create claim record for this specific acquisition transaction
@@ -492,14 +495,11 @@ export class LifecycleService {
               user: { id: userId },
               vault: { id: vault.id },
               type: ClaimType.ACQUIRER,
-              amount: vtReceived,
+              amount: adjustedVtAmount,
               status: ClaimStatus.AVAILABLE,
               transaction: { id: tx.id },
             });
             acquirerClaims.push(claim);
-            this.logger.log(
-              `Created acquirer claim for user ${userId}: ${vtReceived} VT tokens for transaction ${tx.id}`
-            );
           } catch (error) {
             this.logger.error(`Failed to create acquirer claim for user ${userId} transaction ${tx.id}:`, error);
           }
