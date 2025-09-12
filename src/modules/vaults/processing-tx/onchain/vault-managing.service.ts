@@ -142,12 +142,14 @@ export class VaultManagingService {
       'x-api-key': this.anvilApiKey,
       'Content-Type': 'application/json',
     };
+    //9a9b0bc93c26a40952aaff525ac72a992a77ebfa29012c9cb4a72eb2 contribution script hash
+    //0f9d90277089b2f442bef581dcc1d333a92c3fedf688700c4e39ab89 contribution script hash with verbous
+    const unparametizedScriptHash = '9a9b0bc93c26a40952aaff525ac72a992a77ebfa29012c9cb4a72eb2';
 
     // Apply parameters to the blueprint before building the transaction
     const applyParamsPayload = {
       params: {
-        //9a9b0bc93c26a40952aaff525ac72a992a77ebfa29012c9cb4a72eb2 contribution script hash
-        '9a9b0bc93c26a40952aaff525ac72a992a77ebfa29012c9cb4a72eb2': [
+        [unparametizedScriptHash]: [
           this.scPolicyId, // policy id of the vault
           assetName, // newly created vault id from generate_tag_from_txhash_index
         ],
@@ -183,8 +185,8 @@ export class VaultManagingService {
             title: 'l4va/vault/' + assetName,
             version: '0.0.1',
           },
-          validators: applyParamsResult.preloadedScript.blueprint.validators.filter((v: any) =>
-            v.title.includes('contribute')
+          validators: applyParamsResult.preloadedScript.blueprint.validators.filter(
+            (v: any) => v.title.includes('contribute') && v.hash !== unparametizedScriptHash
           ),
         },
       }),
@@ -193,8 +195,9 @@ export class VaultManagingService {
     await uploadScriptResponse.json();
 
     const scriptHash =
-      applyParamsResult.preloadedScript.blueprint.validators.find((v: any) => v.title === 'contribute.contribute.mint')
-        ?.hash || '';
+      applyParamsResult.preloadedScript.blueprint.validators.find(
+        (v: any) => v.title === 'contribute.contribute.mint' && v.hash !== unparametizedScriptHash
+      )?.hash || '';
     if (!scriptHash) {
       throw new Error('Failed to find script hash');
     }
