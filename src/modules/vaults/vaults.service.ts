@@ -257,8 +257,6 @@ export class VaultsService {
             this.logger.log(
               `Vault image file ${imgKey} is already in use by vault ${existingVaultWithImage.id}, allowing reuse`
             );
-            // We'll allow reuse by setting vaultImg to null so it won't be assigned
-            vaultImg = null;
           }
         }
       }
@@ -280,8 +278,6 @@ export class VaultsService {
             this.logger.log(
               `FT token image file ${ftTokenImgKey} is already in use by vault ${existingVaultWithFtImage.id}, allowing reuse`
             );
-            // We'll allow reuse by setting ftTokenImg to null so it won't be assigned
-            ftTokenImg = null;
           }
         }
       }
