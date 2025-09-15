@@ -467,15 +467,14 @@ export class VaultManagingService {
         : [];
     const contract_type = vault.privacy === VaultPrivacy.private ? 0 : vault.privacy === VaultPrivacy.public ? 1 : 2;
 
-    const scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
+    this.scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
       .to_address()
       .to_bech32();
-    this.logger.debug(`Smart contract address for vault ${vault.id}: ${scAddress}`);
 
     const vaultUtxo = await getVaultUtxo(this.scPolicyId, vault.asset_vault_name, this.blockfrost);
     const input = {
       changeAddress: this.adminAddress,
-      message: 'Vault Update',
+      message: `Vault ${vault.id} Update`,
       scriptInteractions: [
         {
           purpose: 'spend',
@@ -492,7 +491,7 @@ export class VaultManagingService {
       ],
       outputs: [
         {
-          address: scAddress,
+          address: this.scAddress,
           assets: [
             {
               assetName: vault.asset_vault_name,
