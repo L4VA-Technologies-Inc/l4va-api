@@ -222,7 +222,7 @@ export class VaultManagingService {
         requiredInputs: string[];
       } = {
         changeAddress: vaultConfig.customerAddress,
-        message: vaultConfig.vaultName,
+        message: `${vaultConfig.vaultName} Vault Creation`,
         mint: [
           {
             version: 'cip25',

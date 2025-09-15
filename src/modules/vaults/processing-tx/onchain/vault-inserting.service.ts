@@ -171,7 +171,7 @@ export class VaultInsertingService {
         network: string;
       } = {
         changeAddress: params.changeAddress,
-        message: 'Contribution in asset',
+        message: 'Asset(s) contributed to vault',
         mint: [
           {
             version: 'cip25',

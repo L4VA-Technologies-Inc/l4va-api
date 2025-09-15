@@ -423,22 +423,33 @@ export class LifecycleService {
       );
 
       if (meetsThreshold) {
+        const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
         // 3. Calculate LP Tokens
         const { lpAdaAmount, lpVtAmount, vtPrice } = await this.distributionService.calculateLpTokens({
-          vtSupply: vault.ft_token_supply || 0,
+          vtSupply,
           totalAcquiredAda,
           assetsOfferedPercent: vault.tokens_for_acquires * 0.01,
           lpPercent: vault.liquidity_pool_contribution * 0.01,
         });
         // Create LP claim record
         try {
-          await this.claimRepository.save({
-            vault: { id: vault.id },
-            type: ClaimType.LP,
-            amount: lpVtAmount,
-            status: ClaimStatus.AVAILABLE,
+          const lpClaim = await this.claimRepository.findOne({
+            where: {
+              vault: { id: vault.id },
+              type: ClaimType.LP,
+            },
           });
-          this.logger.log(`Created LP claim for vault owner: ${lpVtAmount} VT tokens (${lpAdaAmount} ADA)`);
+          if (!lpClaim) {
+            await this.claimRepository.save({
+              vault: { id: vault.id },
+              type: ClaimType.LP,
+              amount: lpVtAmount,
+              status: ClaimStatus.AVAILABLE,
+            });
+            this.logger.log(`Created LP claim for vault owner: ${lpVtAmount} VT tokens (${lpAdaAmount} ADA)`);
+          } else {
+            this.logger.log(`LP claim already exists for vault ${vault.id}, skipping creation.`);
+          }
         } catch (error) {
           this.logger.error(`Failed to create LP claim for vault ${vault.id}:`, error);
         }
@@ -479,7 +490,7 @@ export class LifecycleService {
               lpAdaAmount,
               lpVtAmount,
               vtPrice,
-              VT_SUPPLY: vault.ft_token_supply,
+              vtSupply,
               ASSETS_OFFERED_PERCENT,
             });
 
@@ -549,7 +560,7 @@ export class LifecycleService {
               lpAdaAmount,
               lpVtAmount,
               vtPrice,
-              VT_SUPPLY: vault.ft_token_supply,
+              vtSupply,
               ASSETS_OFFERED_PERCENT,
               LP_PERCENT,
             });
