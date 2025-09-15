@@ -98,6 +98,7 @@ export class BlockchainService {
       this.logger.log(`Transaction submitted successfully: ${response.data.txHash}`);
       return { txHash: response.data.txHash };
     } catch (error) {
+      console.error(error);
       this.logger.error('Error submitting transaction', error);
       throw new Error(`Failed to submit transaction: ${error.message}`);
     }
