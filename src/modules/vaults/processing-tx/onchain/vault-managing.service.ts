@@ -467,9 +467,10 @@ export class VaultManagingService {
         : [];
     const contract_type = vault.privacy === VaultPrivacy.private ? 0 : vault.privacy === VaultPrivacy.public ? 1 : 2;
 
-    this.scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
+    const scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
       .to_address()
       .to_bech32();
+    this.logger.debug(`Smart contract address for vault ${vault.id}: ${scAddress}`);
 
     const vaultUtxo = await getVaultUtxo(this.scPolicyId, vault.asset_vault_name, this.blockfrost);
     const input = {
@@ -491,7 +492,7 @@ export class VaultManagingService {
       ],
       outputs: [
         {
-          address: this.scAddress,
+          address: scAddress,
           assets: [
             {
               assetName: vault.asset_vault_name,
@@ -527,16 +528,7 @@ export class VaultManagingService {
                 },
               },
               valuation_type: vault.value_method === 'fixed' ? 0 : 1,
-              custom_metadata: [
-                // <Data,Data>
-                // [
-                //   PlutusData.new_bytes(Buffer.from("foo")).to_hex(),
-                //   PlutusData.new_bytes(Buffer.from("bar")).to_hex(),
-                // ],
-                [toHex('foo'), toHex('bar')],
-                [toHex('bar'), toHex('foo')],
-                [toHex('inc'), toHex('3')],
-              ],
+              custom_metadata: [],
               admin: this.adminHash,
               minting_key: this.adminHash,
               // New fields from update_vault.ts
