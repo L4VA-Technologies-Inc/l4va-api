@@ -10,9 +10,11 @@ import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
+import { plainToInstance } from 'class-transformer';
 import { IsNull, Not, Repository } from 'typeorm';
 
 import { CreateProposalReq } from './dto/create-proposal.req';
+import { AssetBuySellDto } from './dto/get-assets.dto';
 import { GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';
 
@@ -21,9 +23,38 @@ import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { Vault } from '@/database/vault.entity';
 import { Vote } from '@/database/vote.entity';
+import { AssetStatus, AssetType } from '@/types/asset.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { VaultStatus } from '@/types/vault.types';
 import { VoteType } from '@/types/vote.types';
+
+const TWO_HOURS = 2 * 60 * 60 * 1000;
+const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+
+/*
+        .-""""-.
+       / -   -  \
+      |  .-. .- |
+      |  \o| |o (
+      \     ^    \
+       '.  )--'  /
+         '-...-'`
+    BLOCKCHAIN COUNCIL
+    { } { } { } { } { }
+     |   |   |   |   |
+    /     VOTING     \
+   /-------------------\
+  |  YES   NO  ABSTAIN |
+  |   |     |     |    |
+  |  [X]   [ ]   [ ]   |
+   \__________________/
+      /   |   |   \
+     /    |   |    \
+    /     |   |     \
+   /      |   |      \
+  /_______|___|_______\
+
+*/
 
 @Injectable()
 export class GovernanceService {
@@ -198,13 +229,14 @@ export class GovernanceService {
     }
 
     // Get the latest snapshot for the vault
-    const latestSnapshot = await this.snapshotRepository.findOne({
+    let latestSnapshot = await this.snapshotRepository.findOne({
       where: { vaultId },
       order: { createdAt: 'DESC' },
     });
 
-    if (!latestSnapshot) {
-      throw new BadRequestException('No snapshot available for voting power determination');
+    // If no recent snapshot, create a new one and use its ID
+    if (!latestSnapshot || !(latestSnapshot.createdAt > new Date(Date.now() - TWO_HOURS))) {
+      latestSnapshot = await this.createAutomaticSnapshot(vaultId, `${vault.policy_id}${vault.asset_vault_name}`);
     }
 
     // Determine start date - use the provided one or now if not provided
@@ -227,7 +259,7 @@ export class GovernanceService {
       startDate: startDate.toISOString(),
       snapshotId: latestSnapshot.id,
       status: ProposalStatus.ACTIVE,
-      endDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days from now
+      endDate: new Date(Date.now() + SEVEN_DAYS), // SEVEN
     });
 
     // Set type-specific fields based on proposal type
@@ -253,6 +285,27 @@ export class GovernanceService {
       case ProposalType.BURNING:
         if (createProposalReq.metadata) {
           proposal.burnAssets = createProposalReq.metadata.burnAssets || [];
+        }
+        break;
+
+      case ProposalType.BUY_SELL:
+        if (createProposalReq.metadata) {
+          // Store the options
+          proposal.buyingSellingOptions = createProposalReq.metadata.buyingSellingOptions || [];
+
+          // Store the abstain setting
+          proposal.abstain = createProposalReq.metadata.abstain || false;
+
+          // Validate assets exist
+          for (const option of proposal.buyingSellingOptions) {
+            const asset = await this.assetRepository.findOne({
+              where: { id: option.assetId },
+            });
+
+            if (!asset) {
+              throw new BadRequestException(`Asset with ID ${option.assetId} not found`);
+            }
+          }
         }
         break;
     }
@@ -303,7 +356,7 @@ export class GovernanceService {
           endDate: proposal.endDate.toISOString(),
         };
 
-        if (proposal.status !== ProposalStatus.UPCOMMING) {
+        if (proposal.status !== ProposalStatus.UPCOMING) {
           try {
             const { totals } = await this.getVotes(proposal.id);
 
@@ -624,6 +677,26 @@ export class GovernanceService {
     } catch (error) {
       this.logger.error(`Error getting assets to stake for vault ${vaultId}: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Error getting assets to stake');
+    }
+  }
+
+  async getAssetsToBuySell(vaultId: string): Promise<AssetBuySellDto[]> {
+    try {
+      // Get all assets in the vault
+      const assets = await this.assetRepository.find({
+        where: [
+          { vault: { id: vaultId }, type: AssetType.NFT, status: AssetStatus.LOCKED },
+          { vault: { id: vaultId }, type: AssetType.FT, status: AssetStatus.LOCKED },
+        ],
+        select: ['id', 'policy_id', 'quantity', 'dex_price', 'floor_price', 'metadata', 'type'],
+      });
+
+      return plainToInstance(AssetBuySellDto, assets, {
+        excludeExtraneousValues: true,
+      });
+    } catch (error) {
+      this.logger.error(`Error getting assets for buy-sell proposals for vault ${vaultId}: ${error.message}`);
+      throw new InternalServerErrorException('Error getting assets for buying/selling');
     }
   }
 }

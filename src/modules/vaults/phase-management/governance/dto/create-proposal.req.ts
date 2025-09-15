@@ -1,6 +1,16 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsNotEmpty, IsString, IsEnum, IsOptional, IsDateString, ValidateNested, IsArray } from 'class-validator';
+import {
+  IsNotEmpty,
+  IsString,
+  IsEnum,
+  IsOptional,
+  IsDateString,
+  ValidateNested,
+  IsArray,
+  IsNumber,
+  IsBoolean,
+} from 'class-validator';
 
 import { ProposalType } from '@/types/proposal.types';
 
@@ -138,4 +148,77 @@ export class CreateProposalReq {
   })
   @IsOptional()
   metadata?: Record<string, any>;
+}
+
+export enum ExecType {
+  BUY = 'BUY',
+  SELL = 'SELL',
+}
+
+export enum SellType {
+  MARKET = 'Market',
+  LIST = 'List',
+}
+
+export enum MethodType {
+  NA = 'N/A',
+  GTC = 'GTC',
+}
+
+export class BuyingSellOptionDto {
+  @ApiProperty({ description: 'Asset ID in the system' })
+  @IsString()
+  assetId: string;
+
+  @ApiProperty({ description: 'Asset name for display' })
+  @IsString()
+  assetName: string;
+
+  @ApiProperty({ description: 'Buy or sell', enum: ExecType })
+  @IsEnum(ExecType)
+  exec: ExecType;
+
+  @ApiProperty({ description: 'Quantity to buy/sell' })
+  @IsString()
+  quantity: string;
+
+  @ApiProperty({ description: 'Market or List sale type', enum: SellType })
+  @IsEnum(SellType)
+  sellType: SellType;
+
+  @ApiProperty({ description: 'Duration in milliseconds' })
+  @IsNumber()
+  duration: number;
+
+  @ApiProperty({ description: 'Is maximum quantity flag' })
+  @IsBoolean()
+  isMax: boolean;
+
+  @ApiProperty({ description: 'Method (N/A or GTC)', enum: MethodType })
+  @IsEnum(MethodType)
+  method: MethodType;
+
+  @ApiProperty({ description: 'Market platform' })
+  @IsString()
+  market: string;
+
+  @ApiProperty({ description: 'Price in ADA' })
+  @IsString()
+  price: string;
+}
+
+export class BuyingSellMetadataDto {
+  @ApiProperty({ description: 'List of buying/selling options' })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => BuyingSellOptionDto)
+  buyingSellingOptions: BuyingSellOptionDto[];
+
+  @ApiProperty({ description: 'Proposal start delay in milliseconds' })
+  @IsNumber()
+  proposalStart: number;
+
+  @ApiProperty({ description: 'Allow abstain voting' })
+  @IsBoolean()
+  abstain: boolean;
 }

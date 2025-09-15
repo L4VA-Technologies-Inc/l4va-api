@@ -68,7 +68,6 @@ export interface TransactionSubmitResponse {
 export class VaultInsertingService {
   private readonly logger = new Logger(VaultInsertingService.name);
   private readonly adminHash: string;
-  private readonly vaultPolicyId: string;
   private readonly adminSKey: string;
   private blockfrost: BlockFrostAPI;
   constructor(
@@ -82,7 +81,6 @@ export class VaultInsertingService {
   ) {
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
-    this.vaultPolicyId = this.configService.get<string>('SC_POLICY_ID');
 
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
@@ -123,7 +121,7 @@ export class VaultInsertingService {
         .to_address()
         .to_bech32();
 
-      const LAST_UPDATE_TX_HASH = vault.publication_hash; // todo need to understand where exactly we need to get it
+      const LAST_UPDATE_TX_HASH = vault.publication_hash;
       const LAST_UPDATE_TX_INDEX = 0;
       const isAda = params.outputs[0].assets[0].assetName === 'lovelace';
       let quantity = 0;
@@ -437,54 +435,5 @@ export class VaultInsertingService {
         // console.log('Transaction details:', JSON.stringify(transferDetails, null, 2));
       }
     }
-  }
-
-  async handleBurnVault(userId: string, vaultId: string): Promise<void> {
-    // todo need to check if user is owner and if vault is exists
-    this.logger.log(`Run delete vault process for  vaultId: ${vaultId}  by user with userId: ${userId}`);
-
-    // todo need to create tx for extract vaults
-    // todo then need to burn LP tokens
-    // todo then need to burn vault
-    const CUSTOMER_ADDRESS = '';
-    const vaultUtxo = '';
-    const POLICY_ID = '';
-    const VAULT_ID = '';
-    const ADMIN_KEY_HASH = '';
-    // input for burn vault
-    const input = {
-      changeAddress: CUSTOMER_ADDRESS,
-      message: 'Vault Burn',
-      scriptInteractions: [
-        {
-          purpose: 'spend',
-          outputRef: vaultUtxo,
-          hash: POLICY_ID,
-          redeemer: {
-            type: 'json',
-            value: 'VaultBurn',
-          },
-        },
-        {
-          purpose: 'mint',
-          hash: POLICY_ID,
-          redeemer: {
-            type: 'json',
-            value: 'VaultBurn',
-          },
-        },
-      ],
-      mint: [
-        {
-          version: 'cip25',
-          assetName: { name: VAULT_ID, format: 'hex' },
-          policyId: POLICY_ID,
-          type: 'plutus',
-          quantity: -1,
-        },
-      ],
-      requiredSigners: [ADMIN_KEY_HASH],
-    };
-    // todo then need to mark vaults as deleted
   }
 }
