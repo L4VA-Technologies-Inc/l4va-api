@@ -123,7 +123,7 @@ export class ContributionService {
                           description: vault.description,
                           ticker: vault.vault_token_ticker,
                           logo: vault.ft_token_img?.file_url || '',
-                          decimals: 6,
+                          decimals: vault.ft_token_decimals || 6,
                         });
                       } catch (error) {
                         this.logger.error('Error updating vault metadata:', error);
