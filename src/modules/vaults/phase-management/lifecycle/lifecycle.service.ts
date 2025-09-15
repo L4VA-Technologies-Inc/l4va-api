@@ -242,8 +242,10 @@ export class LifecycleService {
       vault.total_assets_cost_usd = assetsValue.totalValueUsd;
 
       // Calculate threshold Price
-      vault.require_reserved_cost_ada = assetsValue.totalValueAda * (vault.acquire_reserve * 0.01);
-      vault.require_reserved_cost_usd = assetsValue.totalValueUsd * (vault.acquire_reserve * 0.01);
+      vault.require_reserved_cost_ada =
+        assetsValue.totalValueAda * (vault.tokens_for_acquires * 0.01) * (vault.acquire_reserve * 0.01);
+      vault.require_reserved_cost_usd =
+        assetsValue.totalValueUsd * (vault.tokens_for_acquires * 0.01) * (vault.acquire_reserve * 0.01);
 
       const emitContributionCompleteEvent = async (): Promise<void> => {
         try {
