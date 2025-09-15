@@ -989,7 +989,6 @@ export class VaultsService {
       .leftJoinAndSelect('vault.tags', 'tags')
       .leftJoinAndSelect('vault.contributor_whitelist', 'contributor_whitelist')
       .leftJoinAndSelect('vault.acquirer_whitelist', 'acquirer_whitelist')
-      .where('vault.vault_status != :draftStatus', { draftStatus: VaultStatus.draft })
       .andWhere('vault.deleted != :deleted', { deleted: true })
       .andWhere('vault.vault_status != :createdStatus', { createdStatus: VaultStatus.created });
 
