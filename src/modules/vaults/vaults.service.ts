@@ -243,70 +243,25 @@ export class VaultsService {
       const imgKey = data.vaultImage?.split('image/')[1];
       let vaultImg = null;
       if (imgKey) {
-        vaultImg = await this.filesRepository.findOne({
-          where: { file_key: imgKey },
-        });
-
-        if (vaultImg) {
-          // Check if this file is already used by another vault
-          const existingVaultWithImage = await this.vaultsRepository.findOne({
-            where: { vault_image: { id: vaultImg.id } },
-          });
-
-          if (existingVaultWithImage) {
-            this.logger.log(
-              `Vault image file ${imgKey} is already in use by vault ${existingVaultWithImage.id}, allowing reuse`
-            );
-            // We'll allow reuse by setting vaultImg to null so it won't be assigned
-            vaultImg = null;
-          }
-        }
+        // Create a new file record that points to the same S3 object
+        vaultImg = await this.awsService.createFileRecordForVault(imgKey);
+        this.logger.log(`Created new file record for vault image: ${imgKey}`);
       }
 
+      // Same for FT token image
       const ftTokenImgKey = data.ftTokenImg?.split('image/')[1];
       let ftTokenImg = null;
       if (ftTokenImgKey) {
-        ftTokenImg = await this.filesRepository.findOne({
-          where: { file_key: ftTokenImgKey },
-        });
-
-        if (ftTokenImg) {
-          // Check if this file is already used by another vault
-          const existingVaultWithFtImage = await this.vaultsRepository.findOne({
-            where: { ft_token_img: { id: ftTokenImg.id } },
-          });
-
-          if (existingVaultWithFtImage) {
-            this.logger.log(
-              `FT token image file ${ftTokenImgKey} is already in use by vault ${existingVaultWithFtImage.id}, allowing reuse`
-            );
-            // We'll allow reuse by setting ftTokenImg to null so it won't be assigned
-            ftTokenImg = null;
-          }
-        }
+        ftTokenImg = await this.awsService.createFileRecordForVault(ftTokenImgKey);
+        this.logger.log(`Created new file record for FT token image: ${ftTokenImgKey}`);
       }
 
+      // Same for whitelist CSVs
       const acquirerWhitelistCsvKey = data.acquirerWhitelistCsv?.key;
       let acquirerWhitelistFile = null;
       if (acquirerWhitelistCsvKey) {
-        acquirerWhitelistFile = await this.filesRepository.findOne({
-          where: { file_key: acquirerWhitelistCsvKey },
-        });
-
-        if (acquirerWhitelistFile) {
-          // Check if this file is already used by another vault
-          const existingVaultWithCsv = await this.vaultsRepository.findOne({
-            where: { acquirer_whitelist_csv: { id: acquirerWhitelistFile.id } },
-          });
-
-          if (existingVaultWithCsv) {
-            this.logger.log(
-              `Acquirer whitelist CSV file ${acquirerWhitelistCsvKey} is already in use by vault ${existingVaultWithCsv.id}, allowing reuse`
-            );
-            // We'll allow reuse by setting acquirerWhitelistFile to null so it won't be assigned
-            acquirerWhitelistFile = null;
-          }
-        }
+        acquirerWhitelistFile = await this.awsService.createFileRecordForVault(acquirerWhitelistCsvKey);
+        this.logger.log(`Created new file record for acquirer whitelist: ${acquirerWhitelistCsvKey}`);
       }
 
       const contributorWhitelistCsvKey = data.contributorWhitelistCsv?.split('csv/')[1];
@@ -981,12 +936,6 @@ export class VaultsService {
 
   /**
    * Retrieves paginated and filtered list of vaults accessible to the user, with access control and sorting.
-   * @param userId - ID of the user
-   * @param filter - Optional vault filter
-   * @param page - Page number
-   * @param limit - Items per page
-   * @param sortBy - Field to sort by
-   * @param sortOrder - Sort order
    * @returns Paginated response of vaults
    */
   async getVaults(data: {
@@ -1064,19 +1013,16 @@ export class VaultsService {
         if (!isPublicOnly) {
           queryBuilder.andWhere(
             new Brackets(qb => {
-              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
-                new Brackets(qb2 => {
-                  qb2.where('vault.privacy = :privatePrivacy', { privatePrivacy: VaultPrivacy.private }).andWhere(
-                    new Brackets(qb3 => {
-                      // Check both whitelists
-                      qb3.where(
-                        '(EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress) OR EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress))',
-                        { userWalletAddress }
-                      );
-                    })
-                  );
-                })
-              );
+              // Include public vaults OR vaults where user is whitelisted
+              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public })
+                .orWhere(
+                  '(vault.privacy != :publicPrivacy AND EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress))',
+                  { publicPrivacy: VaultPrivacy.public, userWalletAddress }
+                )
+                .orWhere(
+                  '(vault.privacy != :publicPrivacy AND EXISTS (SELECT 1 FROM acquirer_whitelist aw WHERE aw.vault_id = vault.id AND aw.wallet_address = :userWalletAddress))',
+                  { publicPrivacy: VaultPrivacy.public, userWalletAddress }
+                );
             })
           );
         }

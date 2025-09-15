@@ -160,4 +160,33 @@ export class AwsService {
       throw new BadRequestException('Failed to upload image file');
     }
   }
+
+  /**
+   * Creates a new file record in the database for a vault, referencing an existing S3 object.
+   *
+   * @param fileKey - The S3 key of the original file to reference.
+   * @returns A promise that resolves to the newly created FileEntity.
+   * @throws {BadRequestException} If the original file with the given key is not found.
+   */
+  async createFileRecordForVault(fileKey: string): Promise<FileEntity> {
+    // Find the original file to get its metadata
+    const originalFile = await this.fileRepository.findOne({
+      where: { file_key: fileKey },
+    });
+
+    if (!originalFile) {
+      throw new BadRequestException(`File with key ${fileKey} not found`);
+    }
+
+    // Create a new file entity that points to the same S3 object
+    const newFile = this.fileRepository.create({
+      file_key: originalFile.file_key, // Same S3 key
+      file_url: originalFile.file_url,
+      file_name: originalFile.file_name,
+      file_type: originalFile.file_type,
+    });
+
+    // Save and return the new file entity
+    return this.fileRepository.save(newFile);
+  }
 }
