@@ -206,19 +206,87 @@ export class ContributionService {
       throw new BadRequestException('Vault is not in contribution phase');
     }
 
+    // Check if adding these assets would exceed the vault's maximum capacity
+    const currentAssetCount = await this.assetRepository.count({
+      where: {
+        vault: { id: vaultId },
+        status: AssetStatus.LOCKED,
+        origin_type: AssetOriginType.CONTRIBUTED,
+      },
+    });
+
+    if (currentAssetCount + contributeReq.assets.length > vault.max_contribute_assets) {
+      throw new BadRequestException(
+        `Adding ${contributeReq.assets.length} assets would exceed the vault's maximum capacity of ${vault.max_contribute_assets}. ` +
+          `The vault currently has ${currentAssetCount} assets.`
+      );
+    }
+
     // For private/semi-private vaults, validate assets against whitelist
     if (
       (vault.privacy === VaultPrivacy.private || vault.privacy === VaultPrivacy.semiPrivate) &&
       contributeReq.assets.length > 0
     ) {
-      const invalidAssets = contributeReq.assets.filter(asset => {
-        return !vault.assets_whitelist?.some(whitelistedAsset => whitelistedAsset.policy_id === asset.policyId);
-      });
+      // Group assets by policy ID to check against whitelist caps
+      const assetsByPolicy = contributeReq.assets.reduce((acc, asset) => {
+        if (!acc[asset.policyId]) {
+          acc[asset.policyId] = [];
+        }
+        acc[asset.policyId].push(asset);
+        return acc;
+      }, {});
+
+      // Check if any policy is not in the whitelist
+      const invalidAssets = [];
+
+      for (const policyId of Object.keys(assetsByPolicy)) {
+        const whitelistedAsset = vault.assets_whitelist?.find(wa => wa.policy_id === policyId);
+
+        if (!whitelistedAsset) {
+          invalidAssets.push(policyId);
+          continue;
+        }
+
+        // Check minimum and maximum asset counts per policy if specified
+        const assetsCount = assetsByPolicy[policyId].length;
+
+        // Check if user is trying to contribute too many assets of this policy
+        if (
+          whitelistedAsset.asset_count_cap_max !== null &&
+          whitelistedAsset.asset_count_cap_max > 0 &&
+          assetsCount > whitelistedAsset.asset_count_cap_max
+        ) {
+          throw new BadRequestException(
+            `You can contribute at most ${whitelistedAsset.asset_count_cap_max} assets for policy ${policyId}. ` +
+              `You're trying to contribute ${assetsCount}.`
+          );
+        }
+
+        // Check current count of this policy in the vault
+        const existingPolicyCount = await this.assetRepository.count({
+          where: {
+            vault: { id: vaultId },
+            policy_id: policyId,
+            status: AssetStatus.LOCKED,
+            origin_type: AssetOriginType.CONTRIBUTED,
+          },
+        });
+
+        // Check if adding these assets would exceed the maximum for this policy
+        if (
+          whitelistedAsset.asset_count_cap_max !== null &&
+          whitelistedAsset.asset_count_cap_max > 0 &&
+          existingPolicyCount + assetsCount > whitelistedAsset.asset_count_cap_max
+        ) {
+          throw new BadRequestException(
+            `The vault already has ${existingPolicyCount} assets for policy ${policyId}. ` +
+              `Adding ${assetsCount} more would exceed the maximum of ${whitelistedAsset.asset_count_cap_max}.`
+          );
+        }
+      }
 
       if (invalidAssets.length > 0) {
-        throw new BadRequestException(
-          `Some assets are not in the vault's whitelist: ${invalidAssets?.map(a => a.policyId).join(', ')}`
-        );
+        throw new BadRequestException(`Some assets are not in the vault's whitelist: ${invalidAssets.join(', ')}`);
       }
     }
 
