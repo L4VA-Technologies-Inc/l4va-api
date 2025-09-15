@@ -1,5 +1,5 @@
 export enum ProposalStatus {
-  UPCOMMING = 'upcomming',
+  UPCOMING = 'upcoming',
   ACTIVE = 'active',
   PASSED = 'passed',
   REJECTED = 'rejected',

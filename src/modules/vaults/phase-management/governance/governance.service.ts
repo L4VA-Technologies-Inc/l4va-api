@@ -229,13 +229,14 @@ export class GovernanceService {
     }
 
     // Get the latest snapshot for the vault
-    const latestSnapshot = await this.snapshotRepository.findOne({
+    let latestSnapshot = await this.snapshotRepository.findOne({
       where: { vaultId },
       order: { createdAt: 'DESC' },
     });
 
+    // If no recent snapshot, create a new one and use its ID
     if (!latestSnapshot || !(latestSnapshot.createdAt > new Date(Date.now() - TWO_HOURS))) {
-      await this.createAutomaticSnapshot(vaultId, `${vault.policy_id}${vault.asset_vault_name}`);
+      latestSnapshot = await this.createAutomaticSnapshot(vaultId, `${vault.policy_id}${vault.asset_vault_name}`);
     }
 
     // Determine start date - use the provided one or now if not provided
@@ -355,7 +356,7 @@ export class GovernanceService {
           endDate: proposal.endDate.toISOString(),
         };
 
-        if (proposal.status !== ProposalStatus.UPCOMMING) {
+        if (proposal.status !== ProposalStatus.UPCOMING) {
           try {
             const { totals } = await this.getVotes(proposal.id);
 
