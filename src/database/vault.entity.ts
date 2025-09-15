@@ -452,7 +452,7 @@ export class Vault {
   vault_policy_id?: string;
 
   @Expose({ name: 'vaultImage' })
-  @ManyToOne(() => FileEntity)
+  @OneToOne(() => FileEntity)
   @JoinColumn({
     name: 'vault_image_id',
   })
@@ -473,7 +473,7 @@ export class Vault {
   acquirer_whitelist_csv?: FileEntity;
 
   @Expose({ name: 'ftTokenImg' })
-  @ManyToOne(() => FileEntity)
+  @OneToOne(() => FileEntity)
   @JoinColumn({
     name: 'ft_token_img_id',
   })

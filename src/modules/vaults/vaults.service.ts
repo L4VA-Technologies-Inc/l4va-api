@@ -243,66 +243,25 @@ export class VaultsService {
       const imgKey = data.vaultImage?.split('image/')[1];
       let vaultImg = null;
       if (imgKey) {
-        vaultImg = await this.filesRepository.findOne({
-          where: { file_key: imgKey },
-        });
-
-        if (vaultImg) {
-          // Check if this file is already used by another vault
-          const existingVaultWithImage = await this.vaultsRepository.findOne({
-            where: { vault_image: { id: vaultImg.id } },
-          });
-
-          if (existingVaultWithImage) {
-            this.logger.log(
-              `Vault image file ${imgKey} is already in use by vault ${existingVaultWithImage.id}, allowing reuse`
-            );
+        // Create a new file record that points to the same S3 object
+        vaultImg = await this.awsService.createFileRecordForVault(imgKey);
+        this.logger.log(`Created new file record for vault image: ${imgKey}`);
           }
-        }
-      }
 
+      // Same for FT token image
       const ftTokenImgKey = data.ftTokenImg?.split('image/')[1];
       let ftTokenImg = null;
       if (ftTokenImgKey) {
-        ftTokenImg = await this.filesRepository.findOne({
-          where: { file_key: ftTokenImgKey },
-        });
-
-        if (ftTokenImg) {
-          // Check if this file is already used by another vault
-          const existingVaultWithFtImage = await this.vaultsRepository.findOne({
-            where: { ft_token_img: { id: ftTokenImg.id } },
-          });
-
-          if (existingVaultWithFtImage) {
-            this.logger.log(
-              `FT token image file ${ftTokenImgKey} is already in use by vault ${existingVaultWithFtImage.id}, allowing reuse`
-            );
-          }
-        }
+        ftTokenImg = await this.awsService.createFileRecordForVault(ftTokenImgKey);
+        this.logger.log(`Created new file record for FT token image: ${ftTokenImgKey}`);
       }
 
+      // Same for whitelist CSVs
       const acquirerWhitelistCsvKey = data.acquirerWhitelistCsv?.key;
       let acquirerWhitelistFile = null;
       if (acquirerWhitelistCsvKey) {
-        acquirerWhitelistFile = await this.filesRepository.findOne({
-          where: { file_key: acquirerWhitelistCsvKey },
-        });
-
-        if (acquirerWhitelistFile) {
-          // Check if this file is already used by another vault
-          const existingVaultWithCsv = await this.vaultsRepository.findOne({
-            where: { acquirer_whitelist_csv: { id: acquirerWhitelistFile.id } },
-          });
-
-          if (existingVaultWithCsv) {
-            this.logger.log(
-              `Acquirer whitelist CSV file ${acquirerWhitelistCsvKey} is already in use by vault ${existingVaultWithCsv.id}, allowing reuse`
-            );
-            // We'll allow reuse by setting acquirerWhitelistFile to null so it won't be assigned
-            acquirerWhitelistFile = null;
-          }
-        }
+        acquirerWhitelistFile = await this.awsService.createFileRecordForVault(acquirerWhitelistCsvKey);
+        this.logger.log(`Created new file record for acquirer whitelist: ${acquirerWhitelistCsvKey}`);
       }
 
       const contributorWhitelistCsvKey = data.contributorWhitelistCsv?.split('csv/')[1];
