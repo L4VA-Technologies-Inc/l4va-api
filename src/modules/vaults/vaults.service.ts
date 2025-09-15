@@ -246,7 +246,7 @@ export class VaultsService {
         // Create a new file record that points to the same S3 object
         vaultImg = await this.awsService.createFileRecordForVault(imgKey);
         this.logger.log(`Created new file record for vault image: ${imgKey}`);
-          }
+      }
 
       // Same for FT token image
       const ftTokenImgKey = data.ftTokenImg?.split('image/')[1];
@@ -936,12 +936,6 @@ export class VaultsService {
 
   /**
    * Retrieves paginated and filtered list of vaults accessible to the user, with access control and sorting.
-   * @param userId - ID of the user
-   * @param filter - Optional vault filter
-   * @param page - Page number
-   * @param limit - Items per page
-   * @param sortBy - Field to sort by
-   * @param sortOrder - Sort order
    * @returns Paginated response of vaults
    */
   async getVaults(data: {
@@ -1019,19 +1013,16 @@ export class VaultsService {
         if (!isPublicOnly) {
           queryBuilder.andWhere(
             new Brackets(qb => {
-              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
-                new Brackets(qb2 => {
-                  qb2.where('vault.privacy = :privatePrivacy', { privatePrivacy: VaultPrivacy.private }).andWhere(
-                    new Brackets(qb3 => {
-                      // Check both whitelists
-                      qb3.where(
-                        '(EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress) OR EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress))',
-                        { userWalletAddress }
-                      );
-                    })
-                  );
-                })
-              );
+              // Include public vaults OR vaults where user is whitelisted
+              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public })
+                .orWhere(
+                  '(vault.privacy != :publicPrivacy AND EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress))',
+                  { publicPrivacy: VaultPrivacy.public, userWalletAddress }
+                )
+                .orWhere(
+                  '(vault.privacy != :publicPrivacy AND EXISTS (SELECT 1 FROM acquirer_whitelist aw WHERE aw.vault_id = vault.id AND aw.wallet_address = :userWalletAddress))',
+                  { publicPrivacy: VaultPrivacy.public, userWalletAddress }
+                );
             })
           );
         }
