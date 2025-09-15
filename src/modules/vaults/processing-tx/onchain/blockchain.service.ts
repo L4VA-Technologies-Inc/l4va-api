@@ -60,6 +60,8 @@ export class BlockchainService {
 
       return buildResponse;
     } catch (error) {
+      console.log('build', error)
+
       this.logger.error('Error building transaction', error);
       throw new Error(`Failed to build transaction: ${error.message}`);
     }
@@ -98,6 +100,7 @@ export class BlockchainService {
       this.logger.log(`Transaction submitted successfully: ${response.data.txHash}`);
       return { txHash: response.data.txHash };
     } catch (error) {
+      console.log(error)
       this.logger.error('Error submitting transaction', error);
       throw new Error(`Failed to submit transaction: ${error.message}`);
     }

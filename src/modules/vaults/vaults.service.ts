@@ -831,7 +831,7 @@ export class VaultsService {
     const publishedTx = await this.vaultContractService.submitOnChainVaultTx(
       signedTx,
       vault.asset_vault_name,
-      vault.liquidation_hash,
+      vault.script_hash,
       vault.apply_params_result
     );
     vault.vault_status = VaultStatus.published;
@@ -1014,10 +1014,15 @@ export class VaultsService {
       limit = 10,
       sortOrder = SortOrder.DESC,
     } = data;
-    // Get user's wallet address
+
+    console.log(userId)
+
     const user = await this.usersRepository.findOne({
       where: { id: userId },
     });
+
+    console.log('user',user)
+    console.log('userid', user.id)
 
     if (!user) {
       throw new BadRequestException('User not found');

@@ -25,6 +25,8 @@ import { VyfiModule } from './modules/vyfi/vyfi.module';
 
 import { NotificationModule } from '@/modules/notification/notification.module';
 import { EventEmitterModule } from "@nestjs/event-emitter";
+import { DexHunterModule } from './modules/dexhunter/dexhunter.module';
+import { WayUpModule } from './modules/wayup/wayup.module';
 
 @Module({
   // =)
@@ -67,6 +69,8 @@ import { EventEmitterModule } from "@nestjs/event-emitter";
     VyfiModule,
     GovernanceModule,
     NotificationModule,
+    DexHunterModule,
+    WayUpModule,
     EventEmitterModule.forRoot(),
   ],
   controllers: [AppController],
