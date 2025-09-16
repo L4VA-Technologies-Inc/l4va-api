@@ -115,10 +115,6 @@ export class LifecycleService {
       );
     } else {
       // If more than 1 minute away, don't queue - let future cron runs handle it
-      this.logger.log(
-        `Vault ${vaultId} phase transition to ${newStatus} scheduled in ${Math.round(delay / 1000)} seconds. ` +
-          `Will be queued when closer to transition time.`
-      );
     }
   }
 
