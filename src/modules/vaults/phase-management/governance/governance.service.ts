@@ -11,7 +11,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { plainToInstance } from 'class-transformer';
-import { IsNull, Not, Repository } from 'typeorm';
+import { In, IsNull, Not, Repository } from 'typeorm';
 
 import { CreateProposalReq } from './dto/create-proposal.req';
 import { AssetBuySellDto } from './dto/get-assets.dto';
@@ -19,11 +19,13 @@ import { GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';
 
 import { Asset } from '@/database/asset.entity';
+import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { Vault } from '@/database/vault.entity';
 import { Vote } from '@/database/vote.entity';
 import { AssetStatus, AssetType } from '@/types/asset.types';
+import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { VaultStatus } from '@/types/vault.types';
 import { VoteType } from '@/types/vote.types';
@@ -68,6 +70,8 @@ export class GovernanceService {
     private readonly snapshotRepository: Repository<Snapshot>,
     @InjectRepository(Proposal)
     private readonly proposalRepository: Repository<Proposal>,
+    @InjectRepository(Claim)
+    private readonly claimRepository: Repository<Claim>,
     @InjectRepository(Vote)
     private readonly voteRepository: Repository<Vote>,
     @InjectRepository(Asset)
@@ -126,22 +130,57 @@ export class GovernanceService {
     this.logger.log(`Creating automatic snapshot for vault ${vaultId} with asset ${assetId}`);
 
     try {
+      // First, check if there's at least one claimed contribution or acquisition for this vault
+      const claimedContributions = await this.claimRepository.count({
+        where: {
+          vault: { id: vaultId },
+          status: ClaimStatus.CLAIMED,
+          type: In([ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER]),
+        },
+      });
+
+      if (claimedContributions === 0) {
+        throw new BadRequestException(
+          `No claimed contributions or acquisitions found for vault ${vaultId}. Cannot create snapshot.`
+        );
+      }
+
       // Fetch all addresses holding the asset using BlockFrost
       const addressBalances: Record<string, string> = {};
       let page = 1;
       let hasMorePages = true;
 
       while (hasMorePages) {
-        const response = await this.blockfrost.assetsAddresses(assetId, { page, order: 'desc' });
+        try {
+          const response = await this.blockfrost.assetsAddresses(assetId, { page, order: 'desc' });
 
-        if (response.length === 0) {
-          hasMorePages = false;
-        } else {
-          // Add addresses and balances to the mapping
-          for (const item of response) {
-            addressBalances[item.address] = item.quantity;
+          if (response.length === 0) {
+            hasMorePages = false;
+          } else {
+            // Add addresses and balances to the mapping
+            for (const item of response) {
+              addressBalances[item.address] = item.quantity;
+            }
+            page++;
           }
-          page++;
+        } catch (error) {
+          if (error.message.includes('not been found') || error.status_code === 404) {
+            this.logger.warn(`Asset ${assetId} not found on blockchain. Verify policy ID and asset name are correct.`);
+
+            if (Object.keys(addressBalances).length === 0) {
+              try {
+                await this.blockfrost.assetsById(assetId);
+              } catch (assetError) {
+                this.logger.error(`Asset ${assetId} does not exist on blockchain: ${assetError.message}`);
+                throw new NotFoundException(
+                  `Asset ${assetId} not found on blockchain. Check policy ID and asset name.`
+                );
+              }
+            }
+          }
+
+          // Stop fetching more pages on any error
+          hasMorePages = false;
         }
       }
 
