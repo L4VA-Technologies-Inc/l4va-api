@@ -4,6 +4,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { ApiDoc } from '../../decorators/api-doc.decorator';
 import { AuthGuard } from '../auth/auth.guard';
 import { AuthRequest } from '../auth/dto/auth-user.interface';
+import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 
 import { DraftVaultsService } from './draft-vaults.service';
 import { CreateVaultReq } from './dto/createVault.req';
@@ -152,12 +153,12 @@ export class VaultsController {
     description: 'Returns vault if user is the owner. Uses draft service for draft vaults.',
     status: 200,
   })
+  @UseGuards(OptionalAuthGuard)
   @Get(':id')
   async getVaultById(@Param('id') id: string, @Request() req): Promise<VaultFullResponse | Record<string, unknown>> {
     const userId = req.user?.sub;
 
     if (!userId) {
-      // If user is not authenticated, return public vault
       return this.vaultsService.getVaultById(id);
     }
 

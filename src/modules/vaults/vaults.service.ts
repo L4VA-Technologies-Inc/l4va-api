@@ -10,7 +10,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
-import { Brackets, In, Repository } from 'typeorm';
+import { Brackets, In, Not, Repository } from 'typeorm';
 
 import { AwsService } from '../aws_bucket/aws.service';
 import { TaptoolsService } from '../taptools/taptools.service';
@@ -863,7 +863,7 @@ export class VaultsService {
    */
   async getVaultById(id: string): Promise<VaultFullResponse> {
     const vault = await this.vaultsRepository.findOne({
-      where: { id, deleted: false },
+      where: { id, deleted: false, vault_status: Not(VaultStatus.draft) },
       relations: [
         'owner',
         'social_links',
