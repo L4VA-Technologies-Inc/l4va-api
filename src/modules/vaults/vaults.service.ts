@@ -1021,7 +1021,8 @@ export class VaultsService {
                 .orWhere(
                   '(vault.privacy != :publicPrivacy AND EXISTS (SELECT 1 FROM acquirer_whitelist aw WHERE aw.vault_id = vault.id AND aw.wallet_address = :userWalletAddress))',
                   { publicPrivacy: VaultPrivacy.public, userWalletAddress }
-                );
+                )
+                .orWhere('vault.owner_id = :userId', { userId });
             })
           );
         }
