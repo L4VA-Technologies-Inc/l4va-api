@@ -1002,33 +1002,24 @@ export class VaultsService {
 
       if (user) {
         userWalletAddress = user.address;
-
-        // Apply owner filter if requested
-        if (isOwner) {
-          queryBuilder.andWhere('vault.owner_id = :userId', { userId: user.id });
-        }
-
-        // Add whitelist conditions if not public-only mode
-        if (!isPublicOnly) {
-          queryBuilder.andWhere(
-            new Brackets(qb => {
-              // Include public vaults OR vaults where user is whitelisted
-              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public })
-                .orWhere(
-                  '(vault.privacy != :publicPrivacy AND EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress))',
-                  { publicPrivacy: VaultPrivacy.public, userWalletAddress }
-                )
-                .orWhere(
-                  '(vault.privacy != :publicPrivacy AND EXISTS (SELECT 1 FROM acquirer_whitelist aw WHERE aw.vault_id = vault.id AND aw.wallet_address = :userWalletAddress))',
-                  { publicPrivacy: VaultPrivacy.public, userWalletAddress }
-                )
-                .orWhere('vault.owner_id = :userId', { userId });
-            })
-          );
-        }
+        queryBuilder.andWhere(
+          new Brackets(qb => {
+            // Include public vaults OR vaults where user is whitelisted or the owner
+            qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public })
+              .orWhere('vault.owner_id = :userId', { userId })
+              .orWhere(
+                '(vault.privacy != :publicPrivacy AND EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress))',
+                { publicPrivacy: VaultPrivacy.public, userWalletAddress }
+              )
+              .orWhere(
+                '(vault.privacy != :publicPrivacy AND EXISTS (SELECT 1 FROM acquirer_whitelist aw WHERE aw.vault_id = vault.id AND aw.wallet_address = :userWalletAddress))',
+                { publicPrivacy: VaultPrivacy.public, userWalletAddress }
+              );
+          })
+        );
       }
     } else {
-      // For anonymous users or when isPublicOnly is true, only show public vaults
+      // only show public vaults
       queryBuilder.andWhere('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public });
     }
 
@@ -1050,24 +1041,10 @@ export class VaultsService {
             );
           break;
         case VaultFilter.contribution:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.contribution }).andWhere(
-            new Brackets(qb => {
-              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
-                'EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress)',
-                { userWalletAddress }
-              );
-            })
-          );
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.contribution });
           break;
         case VaultFilter.acquire:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.acquire }).andWhere(
-            new Brackets(qb => {
-              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
-                'EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress)',
-                { userWalletAddress }
-              );
-            })
-          );
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.acquire });
           break;
         case VaultFilter.locked:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.locked });

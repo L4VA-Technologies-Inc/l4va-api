@@ -83,36 +83,27 @@ export class VaultsController {
   }
 
   @ApiDoc({
-    summary: 'List of public vaults',
+    summary: 'List of vaults - works with or without authentication',
     description:
-      'Returns paginated list of all published vaults. Default page: 1, default limit: 10. Supports sorting by name, created_at, or updated_at. Response includes total count and total pages.',
+      'Returns paginated list of vaults. For authenticated users, includes private vaults they have access to. For unauthenticated users, shows only public vaults. Default page: 1, default limit: 10. Supports sorting by name, created_at, or updated_at.',
     status: 200,
   })
   @Post('search')
-  @UseGuards(AuthGuard)
-  getVaults(
-    @Body() filters: GetVaultsDto,
-    @Request() req: AuthRequest
-  ): Promise<PaginatedResponseDto<VaultShortResponse>> {
+  @UseGuards(OptionalAuthGuard)
+  getVaults(@Body() filters: GetVaultsDto, @Request() req: any): Promise<PaginatedResponseDto<VaultShortResponse>> {
     const userId = req.user?.sub;
+
+    // If no user is authenticated, only show public vaults
+    if (!userId) {
+      return this.vaultsService.getVaults({
+        ...filters,
+      });
+    }
+
+    // For authenticated users, show all vaults they have access to
     return this.vaultsService.getVaults({
       userId,
       ...filters,
-    });
-  }
-
-  @ApiDoc({
-    summary: 'List of public vaults (no authentication required)',
-    description:
-      'Returns paginated list of all published public vaults. Default page: 1, default limit: 10. Supports sorting by name, created_at, or updated_at.',
-    status: 200,
-  })
-  @Post('search/public')
-  searchPublicVaults(@Body() filters: GetVaultsDto): Promise<PaginatedResponseDto<VaultShortResponse>> {
-    return this.vaultsService.getVaults({
-      ...filters,
-      isOwner: false,
-      isPublicOnly: true,
     });
   }
 
