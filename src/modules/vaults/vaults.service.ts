@@ -1023,54 +1023,7 @@ export class VaultsService {
     }
 
     // Apply status filter and corresponding whitelist check
-    if (filter && userWalletAddress) {
-      switch (filter) {
-        case VaultFilter.open:
-          queryBuilder
-            .andWhere('vault.vault_status IN (:...statuses)', {
-              statuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire],
-            })
-            .andWhere(
-              new Brackets(qb => {
-                qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
-                  'EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress)',
-                  { userWalletAddress }
-                );
-              })
-            );
-          break;
-        case VaultFilter.contribution:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.contribution });
-          break;
-        case VaultFilter.acquire:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.acquire });
-          break;
-        case VaultFilter.locked:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.locked });
-          break;
-        case VaultFilter.failed:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.failed });
-          break;
-        case VaultFilter.draft:
-          if (!isOwner) {
-            throw new BadRequestException('Draft filter can only be used when isOwner is true');
-          }
-          queryBuilder
-            .andWhere('vault.vault_status = :status', { status: VaultStatus.draft })
-            .andWhere('vault.owner_id = :userId', { userId });
-          break;
-        case VaultFilter.published:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.published }).andWhere(
-            new Brackets(qb => {
-              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
-                'EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress)',
-                { userWalletAddress }
-              );
-            })
-          );
-      }
-    } else if (filter) {
-      // For anonymous users with filters, only apply status filters without whitelist checks
+    if (filter) {
       switch (filter) {
         case VaultFilter.open:
           queryBuilder.andWhere('vault.vault_status IN (:...statuses)', {
@@ -1089,11 +1042,16 @@ export class VaultsService {
         case VaultFilter.failed:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.failed });
           break;
+        case VaultFilter.draft:
+          if (!isOwner || !userId) {
+            throw new BadRequestException('Draft filter requires authentication');
+          }
+          queryBuilder
+            .andWhere('vault.vault_status = :status', { status: VaultStatus.draft })
+            .andWhere('vault.owner_id = :userId', { userId });
+          break;
         case VaultFilter.published:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.published });
-          break;
-        case VaultFilter.draft:
-          throw new BadRequestException('Draft filter requires authentication');
       }
     }
 
