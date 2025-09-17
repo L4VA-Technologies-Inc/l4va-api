@@ -522,13 +522,6 @@ export class VaultsService {
 
       await this.vaultsRepository.save(finalVault);
 
-      this.eventEmitter.emit('vault.launched', {
-        vaultId: finalVault.id,
-        address: finalVault.owner.address,
-        vaultName: finalVault.name,
-        contributionStartDate: new Date(startTime).toLocaleDateString(),
-        contributionStartTime: new Date(startTime).toLocaleTimeString(),
-      });
       return {
         vaultId: finalVault.id,
         presignedTx,
