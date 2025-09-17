@@ -222,11 +222,7 @@ export class ContributionService {
       );
     }
 
-    // For private/semi-private vaults, validate assets against whitelist
-    if (
-      (vault.privacy === VaultPrivacy.private || vault.privacy === VaultPrivacy.semiPrivate) &&
-      contributeReq.assets.length > 0
-    ) {
+    if (contributeReq.assets.length > 0) {
       // Group assets by policy ID to check against whitelist caps
       const assetsByPolicy = contributeReq.assets.reduce((acc, asset) => {
         if (!acc[asset.policyId]) {
@@ -249,18 +245,6 @@ export class ContributionService {
 
         // Check minimum and maximum asset counts per policy if specified
         const assetsCount = assetsByPolicy[policyId].length;
-
-        // Check if user is trying to contribute too many assets of this policy
-        if (
-          whitelistedAsset.asset_count_cap_max !== null &&
-          whitelistedAsset.asset_count_cap_max > 0 &&
-          assetsCount > whitelistedAsset.asset_count_cap_max
-        ) {
-          throw new BadRequestException(
-            `You can contribute at most ${whitelistedAsset.asset_count_cap_max} assets for policy ${policyId}. ` +
-              `You're trying to contribute ${assetsCount}.`
-          );
-        }
 
         // Check current count of this policy in the vault
         const existingPolicyCount = await this.assetRepository.count({

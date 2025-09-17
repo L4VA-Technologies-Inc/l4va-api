@@ -975,7 +975,6 @@ export class VaultsService {
       page = 1,
       limit = 10,
       sortOrder = SortOrder.DESC,
-      isPublicOnly = false,
     } = data;
 
     // Create base query for all vaults
@@ -1056,7 +1055,9 @@ export class VaultsService {
           if (!isOwner) {
             throw new BadRequestException('Draft filter can only be used when isOwner is true');
           }
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.draft });
+          queryBuilder
+            .andWhere('vault.vault_status = :status', { status: VaultStatus.draft })
+            .andWhere('vault.owner_id = :userId', { userId });
           break;
         case VaultFilter.published:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.published }).andWhere(
