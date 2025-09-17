@@ -135,11 +135,18 @@ export class LifecycleService {
     try {
       const vault = await this.vaultRepository.findOne({
         where: { id: data.vaultId },
+        relations: ['owner'],
       });
 
       if (!vault) {
         this.logger.error(`Vault ${data.vaultId} not found for phase transition`);
         return;
+      }
+
+      vault.vault_status = data.newStatus;
+
+      if (data.phaseStartField) {
+        vault[data.phaseStartField] = new Date().toISOString();
       }
 
       if (data.newStatus === VaultStatus.failed) {
@@ -163,7 +170,15 @@ export class LifecycleService {
         }
       }
 
-      vault.vault_status = data.newStatus;
+      if (data.newStatus === VaultStatus.contribution) {
+        this.eventEmitter.emit('vault.launched', {
+          vaultId: vault.id,
+          address: vault.owner.address,
+          vaultName: vault.name,
+          contributionStartDate: new Date(vault.contribution_phase_start).toLocaleDateString(),
+          contributionStartTime: new Date(vault.contribution_phase_start).toLocaleTimeString(),
+        });
+      }
 
       if (data.newScStatus === SmartContractVaultStatus.SUCCESSFUL) {
         vault.vault_sc_status = data.newScStatus;
@@ -178,10 +193,6 @@ export class LifecycleService {
 
       if (data.newScStatus === SmartContractVaultStatus.CANCELLED) {
         vault.vault_sc_status = data.newScStatus;
-      }
-
-      if (data.phaseStartField) {
-        vault[data.phaseStartField] = new Date().toISOString();
       }
 
       await this.vaultRepository.save(vault);
