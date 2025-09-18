@@ -993,6 +993,10 @@ export class VaultsService {
       });
 
       if (user) {
+        if (isOwner) {
+          queryBuilder.andWhere('vault.owner_id = :userId', { userId });
+        }
+
         userWalletAddress = user.address;
         queryBuilder.andWhere(
           new Brackets(qb => {
