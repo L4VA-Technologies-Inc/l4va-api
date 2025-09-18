@@ -22,6 +22,7 @@ import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
+import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { Vote } from '@/database/vote.entity';
 import { AssetStatus, AssetType } from '@/types/asset.types';
@@ -76,6 +77,8 @@ export class GovernanceService {
     private readonly voteRepository: Repository<Vote>,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
     private readonly configService: ConfigService,
     private readonly eventEmitter: EventEmitter2
   ) {
@@ -267,16 +270,16 @@ export class GovernanceService {
       throw new BadRequestException('Governance is only available for locked vaults');
     }
 
-    // Get the latest snapshot for the vault
     let latestSnapshot = await this.snapshotRepository.findOne({
       where: { vaultId },
       order: { createdAt: 'DESC' },
     });
 
-    // If no recent snapshot, create a new one and use its ID
-    if (!latestSnapshot || !(latestSnapshot.createdAt > new Date(Date.now() - TWO_HOURS))) {
+    if (!latestSnapshot || new Date().getTime() - new Date(latestSnapshot.createdAt).getTime() > TWO_HOURS) {
       latestSnapshot = await this.createAutomaticSnapshot(vaultId, `${vault.policy_id}${vault.asset_vault_name}`);
     }
+
+    await this.getVotingPower(vaultId, userId, 'create_proposal');
 
     // Determine start date - use the provided one or now if not provided
     let startDate: Date;
@@ -329,13 +332,9 @@ export class GovernanceService {
 
       case ProposalType.BUY_SELL:
         if (createProposalReq.metadata) {
-          // Store the options
           proposal.buyingSellingOptions = createProposalReq.metadata.buyingSellingOptions || [];
-
-          // Store the abstain setting
           proposal.abstain = createProposalReq.metadata.abstain || false;
 
-          // Validate assets exist
           for (const option of proposal.buyingSellingOptions) {
             const asset = await this.assetRepository.findOne({
               where: { id: option.assetId },
@@ -644,7 +643,7 @@ export class GovernanceService {
     };
   }
 
-  async getVotingPower(vaultId: string, userId: string): Promise<string> {
+  async getVotingPower(vaultId: string, userId: string, action?: 'vote' | 'create_proposal'): Promise<string> {
     try {
       const snapshot = await this.snapshotRepository.findOne({
         where: { vaultId },
@@ -652,22 +651,61 @@ export class GovernanceService {
       });
 
       if (!snapshot) {
-        throw new NotFoundException('Snapshot not found');
+        throw new NotFoundException('No voting snapshot found for this vault');
       }
 
-      const voteWeight = snapshot.addressBalances[userId];
+      const vault = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        select: ['creation_threshold', 'vote_threshold'],
+      });
+
+      if (!vault) {
+        throw new NotFoundException('Vault not found');
+      }
+
+      const user = await this.userRepository.findOne({
+        where: { id: userId },
+        select: ['id', 'address'],
+      });
+
+      if (!user) {
+        throw new NotFoundException('User not found');
+      }
+
+      const voteWeight = snapshot.addressBalances[user.address];
 
       if (!voteWeight || voteWeight === '0') {
-        throw new BadRequestException('User has no voting power in the snapshot');
+        throw new BadRequestException(
+          'NO_VOTING_POWER',
+          'You have no voting power in this vault. You must hold vault tokens to vote.'
+        );
+      }
+
+      if (+voteWeight < vault.creation_threshold && action === 'vote') {
+        throw new BadRequestException(
+          'BELOW_THRESHOLD',
+          `Your voting power (${voteWeight}) is below the minimum threshold (${vault.creation_threshold}).`
+        );
+      }
+
+      if (+voteWeight < vault.vote_threshold && action === 'create_proposal') {
+        throw new BadRequestException(
+          'BELOW_THRESHOLD',
+          `Your voting power (${voteWeight}) is below the minimum threshold (${vault.vote_threshold}).`
+        );
       }
 
       return voteWeight;
     } catch (error) {
+      if (error instanceof BadRequestException || error instanceof NotFoundException) {
+        throw error;
+      }
+
       this.logger.error(
         `Error getting voting power for user ${userId} in vault ${vaultId}: ${error.message}`,
         error.stack
       );
-      throw new InternalServerErrorException('Error getting voting power');
+      throw new InternalServerErrorException('Error getting voting power. Please try again later.');
     }
   }
 

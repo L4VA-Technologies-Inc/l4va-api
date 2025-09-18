@@ -22,7 +22,7 @@ export class AwsService {
     private readonly fileRepository: Repository<FileEntity>,
     private readonly httpService: HttpService
   ) {}
-  getS3() {
+  getS3(): AWS.S3 {
     if (this.s3) {
       return this.s3;
     }
@@ -60,7 +60,7 @@ export class AwsService {
     });
   }
 
-  async getPreSignedURL(bucketName: string, key: string, contentType: string) {
+  async getPreSignedURL(bucketName: string, key: string, contentType: string): Promise<string> {
     const s3 = this.getS3();
     const params = {
       Bucket: bucketName,
@@ -76,6 +76,7 @@ export class AwsService {
     return this.httpService.get(preSignedUrl, { responseType: 'stream' }).toPromise();
   }
 
+  // TODO: Remove csv upload to S3
   async getCsv(bucketKey: string) {
     const preSignedUrl = await this.getPreSignedURL(this.bucketName, bucketKey, 'text/csv');
     return this.httpService.get(preSignedUrl, { responseType: 'stream' }).toPromise();
