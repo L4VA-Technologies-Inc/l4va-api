@@ -20,6 +20,8 @@ import { BlockchainScannerService } from './blockchain-scanner.service';
 import { BlockchainService } from './blockchain.service';
 import { SubmitTransactionDto } from './dto/transaction.dto';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
+import { UTxOInsufficientException } from './exceptions/utxo-insufficient.exception';
+import { MissingUtxoException } from './exceptions/utxo-missing.exception';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
 import { Datum, Redeemer } from './types/type';
 import { getUtxosExctract } from './utils/lib';
@@ -255,6 +257,15 @@ export class VaultInsertingService {
       if (error instanceof NotFoundException) {
         throw new NotFoundException(error.message);
       }
+
+      if (error instanceof UTxOInsufficientException) {
+        throw new UTxOInsufficientException();
+      }
+
+      if (error instanceof MissingUtxoException) {
+        throw new MissingUtxoException();
+      }
+
       throw error;
     }
   }

@@ -3,6 +3,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 
+import { UTxOInsufficientException } from './exceptions/utxo-insufficient.exception';
+import { MissingUtxoException } from './exceptions/utxo-missing.exception';
+
 export enum OnchainTransactionStatus {
   PENDING = 'pending',
   CONFIRMED = 'confirmed',
@@ -55,11 +58,41 @@ export class BlockchainService {
       const buildResponse = await contractDeployed.json();
 
       if (!buildResponse.complete) {
+        if (
+          buildResponse.message?.includes('UTxO Balance Insufficient') ||
+          buildResponse.message?.includes('Balance Insufficient')
+        ) {
+          this.logger.warn(`UTxO Balance Insufficient error: ${JSON.stringify(buildResponse)}`);
+          throw new UTxOInsufficientException(buildResponse.message);
+        }
+
+        if (
+          buildResponse.message?.includes('Unknown transaction input') ||
+          buildResponse.message?.includes('missing from UTxO set')
+        ) {
+          // Try to extract the specific UTxO reference
+          const match = buildResponse.message.match(
+            /Unknown transaction input \(missing from UTxO set\): ([a-f0-9]+)#(\d+)/
+          );
+          if (match) {
+            const [_, txHash, indexStr] = match;
+            this.logger.warn(`Missing UTxO reference: ${txHash}#${indexStr}`);
+            throw new MissingUtxoException(txHash, parseInt(indexStr));
+          } else {
+            this.logger.warn(`Missing UTxO reference (unspecified): ${buildResponse.message}`);
+            throw new MissingUtxoException();
+          }
+        }
+
         throw new Error('Failed to build complete transaction' + JSON.stringify(buildResponse));
       }
 
       return buildResponse;
     } catch (error) {
+      if (error instanceof UTxOInsufficientException || error instanceof MissingUtxoException) {
+        throw error;
+      }
+
       this.logger.error('Error building transaction', error);
       throw new Error(`Failed to build transaction: ${error.message}`);
     }

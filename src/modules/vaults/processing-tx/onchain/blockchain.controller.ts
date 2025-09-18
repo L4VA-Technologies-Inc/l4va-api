@@ -29,7 +29,9 @@ export class BlockchainController {
     type: TransactionBuildResponseDto,
   })
   @UseGuards(AuthGuard)
-  async buildTransaction(@Body() params: BuildTransactionDto): Promise<any> {
+  async buildTransaction(@Body() params: BuildTransactionDto): Promise<{
+    presignedTx: string;
+  }> {
     return this.transactionService.buildTransaction(params);
   }
 
