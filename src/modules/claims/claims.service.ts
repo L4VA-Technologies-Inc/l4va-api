@@ -96,6 +96,8 @@ export class ClaimsService {
         vault: {
           id: true,
           name: true,
+          vault_token_ticker: true,
+          ft_token_decimals: true,
         },
       },
     });
@@ -103,10 +105,10 @@ export class ClaimsService {
     return claims.map(claim => {
       const cleanClaim = {
         ...claim,
+        amount: claim.amount / 10 ** (claim.vault?.ft_token_decimals || 0),
         vault: {
-          id: claim.vault?.id,
-          name: claim.vault?.name,
-          image: claim.vault?.vault_image?.file_url || null,
+          ...claim.vault,
+          vaultImage: claim.vault?.vault_image?.file_url || null,
         },
       };
 
