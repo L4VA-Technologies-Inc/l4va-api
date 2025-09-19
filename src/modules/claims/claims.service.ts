@@ -650,7 +650,7 @@ export class ClaimsService {
         user_id: user.id,
         vault_id: vault.id,
         // amount: claim.amount,
-        type: TransactionType.extract,
+        type: TransactionType.claim,
         status: TransactionStatus.created,
       });
 
@@ -829,7 +829,7 @@ export class ClaimsService {
               user_id: user.id,
               vault_id: vault.id,
               // amount: claim.amount,
-              type: TransactionType.extract,
+              type: TransactionType.claim,
               status: TransactionStatus.created,
             });
 
