@@ -1,5 +1,5 @@
 export enum ProposalStatus {
-  UPCOMMING = 'upcomming',
+  UPCOMING = 'upcoming',
   ACTIVE = 'active',
   PASSED = 'passed',
   REJECTED = 'rejected',
@@ -14,4 +14,5 @@ export enum ProposalType {
   DISTRIBUTION = 'distribution',
   TERMINATION = 'termination',
   BURNING = 'burning',
+  BUY_SELL = 'buy_sell',
 }

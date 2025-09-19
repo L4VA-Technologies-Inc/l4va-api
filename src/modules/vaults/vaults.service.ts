@@ -10,7 +10,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
-import { Brackets, In, Repository } from 'typeorm';
+import { Brackets, In, Not, Repository } from 'typeorm';
 
 import { AwsService } from '../aws_bucket/aws.service';
 import { TaptoolsService } from '../taptools/taptools.service';
@@ -243,70 +243,25 @@ export class VaultsService {
       const imgKey = data.vaultImage?.split('image/')[1];
       let vaultImg = null;
       if (imgKey) {
-        vaultImg = await this.filesRepository.findOne({
-          where: { file_key: imgKey },
-        });
-
-        if (vaultImg) {
-          // Check if this file is already used by another vault
-          const existingVaultWithImage = await this.vaultsRepository.findOne({
-            where: { vault_image: { id: vaultImg.id } },
-          });
-
-          if (existingVaultWithImage) {
-            this.logger.log(
-              `Vault image file ${imgKey} is already in use by vault ${existingVaultWithImage.id}, allowing reuse`
-            );
-            // We'll allow reuse by setting vaultImg to null so it won't be assigned
-            vaultImg = null;
-          }
-        }
+        // Create a new file record that points to the same S3 object
+        vaultImg = await this.awsService.createFileRecordForVault(imgKey);
+        this.logger.log(`Created new file record for vault image: ${imgKey}`);
       }
 
+      // Same for FT token image
       const ftTokenImgKey = data.ftTokenImg?.split('image/')[1];
       let ftTokenImg = null;
       if (ftTokenImgKey) {
-        ftTokenImg = await this.filesRepository.findOne({
-          where: { file_key: ftTokenImgKey },
-        });
-
-        if (ftTokenImg) {
-          // Check if this file is already used by another vault
-          const existingVaultWithFtImage = await this.vaultsRepository.findOne({
-            where: { ft_token_img: { id: ftTokenImg.id } },
-          });
-
-          if (existingVaultWithFtImage) {
-            this.logger.log(
-              `FT token image file ${ftTokenImgKey} is already in use by vault ${existingVaultWithFtImage.id}, allowing reuse`
-            );
-            // We'll allow reuse by setting ftTokenImg to null so it won't be assigned
-            ftTokenImg = null;
-          }
-        }
+        ftTokenImg = await this.awsService.createFileRecordForVault(ftTokenImgKey);
+        this.logger.log(`Created new file record for FT token image: ${ftTokenImgKey}`);
       }
 
+      // Same for whitelist CSVs
       const acquirerWhitelistCsvKey = data.acquirerWhitelistCsv?.key;
       let acquirerWhitelistFile = null;
       if (acquirerWhitelistCsvKey) {
-        acquirerWhitelistFile = await this.filesRepository.findOne({
-          where: { file_key: acquirerWhitelistCsvKey },
-        });
-
-        if (acquirerWhitelistFile) {
-          // Check if this file is already used by another vault
-          const existingVaultWithCsv = await this.vaultsRepository.findOne({
-            where: { acquirer_whitelist_csv: { id: acquirerWhitelistFile.id } },
-          });
-
-          if (existingVaultWithCsv) {
-            this.logger.log(
-              `Acquirer whitelist CSV file ${acquirerWhitelistCsvKey} is already in use by vault ${existingVaultWithCsv.id}, allowing reuse`
-            );
-            // We'll allow reuse by setting acquirerWhitelistFile to null so it won't be assigned
-            acquirerWhitelistFile = null;
-          }
-        }
+        acquirerWhitelistFile = await this.awsService.createFileRecordForVault(acquirerWhitelistCsvKey);
+        this.logger.log(`Created new file record for acquirer whitelist: ${acquirerWhitelistCsvKey}`);
       }
 
       const contributorWhitelistCsvKey = data.contributorWhitelistCsv?.split('csv/')[1];
@@ -563,16 +518,10 @@ export class VaultsService {
       finalVault.asset_vault_name = vaultAssetName;
       finalVault.script_hash = scriptHash;
       finalVault.apply_params_result = applyParamsResult;
+      finalVault.ft_token_decimals = 6; // Hardcoded to 6 for now as per requirements
 
       await this.vaultsRepository.save(finalVault);
 
-      this.eventEmitter.emit('vault.launched', {
-        vaultId: finalVault.id,
-        address: finalVault.owner.address,
-        vaultName: finalVault.name,
-        contributionStartDate: new Date(startTime).toLocaleDateString(),
-        contributionStartTime: new Date(startTime).toLocaleTimeString(),
-      });
       return {
         vaultId: finalVault.id,
         presignedTx,
@@ -936,7 +885,7 @@ export class VaultsService {
    */
   async getVaultById(id: string): Promise<VaultFullResponse> {
     const vault = await this.vaultsRepository.findOne({
-      where: { id, deleted: false },
+      where: { id, deleted: false, vault_status: Not(VaultStatus.draft) },
       relations: [
         'owner',
         'social_links',
@@ -1009,12 +958,6 @@ export class VaultsService {
 
   /**
    * Retrieves paginated and filtered list of vaults accessible to the user, with access control and sorting.
-   * @param userId - ID of the user
-   * @param filter - Optional vault filter
-   * @param page - Page number
-   * @param limit - Items per page
-   * @param sortBy - Field to sort by
-   * @param sortOrder - Sort order
    * @returns Paginated response of vaults
    */
   async getVaults(data: {
@@ -1054,7 +997,6 @@ export class VaultsService {
       page = 1,
       limit = 10,
       sortOrder = SortOrder.DESC,
-      isPublicOnly = false,
     } = data;
 
     // Create base query for all vaults
@@ -1068,7 +1010,6 @@ export class VaultsService {
       .leftJoinAndSelect('vault.tags', 'tags')
       .leftJoinAndSelect('vault.contributor_whitelist', 'contributor_whitelist')
       .leftJoinAndSelect('vault.acquirer_whitelist', 'acquirer_whitelist')
-      .where('vault.vault_status != :draftStatus', { draftStatus: VaultStatus.draft })
       .andWhere('vault.deleted != :deleted', { deleted: true })
       .andWhere('vault.vault_status != :createdStatus', { createdStatus: VaultStatus.created });
 
@@ -1081,100 +1022,34 @@ export class VaultsService {
       });
 
       if (user) {
-        userWalletAddress = user.address;
-
-        // Apply owner filter if requested
         if (isOwner) {
-          queryBuilder.andWhere('vault.owner_id = :userId', { userId: user.id });
+          queryBuilder.andWhere('vault.owner_id = :userId', { userId });
         }
 
-        // Add whitelist conditions if not public-only mode
-        if (!isPublicOnly) {
-          queryBuilder.andWhere(
-            new Brackets(qb => {
-              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
-                new Brackets(qb2 => {
-                  qb2.where('vault.privacy = :privatePrivacy', { privatePrivacy: VaultPrivacy.private }).andWhere(
-                    new Brackets(qb3 => {
-                      // Check both whitelists
-                      qb3.where(
-                        '(EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress) OR EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress))',
-                        { userWalletAddress }
-                      );
-                    })
-                  );
-                })
+        userWalletAddress = user.address;
+        queryBuilder.andWhere(
+          new Brackets(qb => {
+            // Include public vaults OR vaults where user is whitelisted or the owner
+            qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public })
+              .orWhere('vault.owner_id = :userId', { userId })
+              .orWhere(
+                '(vault.privacy != :publicPrivacy AND EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress))',
+                { publicPrivacy: VaultPrivacy.public, userWalletAddress }
+              )
+              .orWhere(
+                '(vault.privacy != :publicPrivacy AND EXISTS (SELECT 1 FROM acquirer_whitelist aw WHERE aw.vault_id = vault.id AND aw.wallet_address = :userWalletAddress))',
+                { publicPrivacy: VaultPrivacy.public, userWalletAddress }
               );
-            })
-          );
-        }
+          })
+        );
       }
     } else {
-      // For anonymous users or when isPublicOnly is true, only show public vaults
+      // only show public vaults
       queryBuilder.andWhere('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public });
     }
 
     // Apply status filter and corresponding whitelist check
-    if (filter && userWalletAddress) {
-      switch (filter) {
-        case VaultFilter.open:
-          queryBuilder
-            .andWhere('vault.vault_status IN (:...statuses)', {
-              statuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire],
-            })
-            .andWhere(
-              new Brackets(qb => {
-                qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
-                  'EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress)',
-                  { userWalletAddress }
-                );
-              })
-            );
-          break;
-        case VaultFilter.contribution:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.contribution }).andWhere(
-            new Brackets(qb => {
-              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
-                'EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress)',
-                { userWalletAddress }
-              );
-            })
-          );
-          break;
-        case VaultFilter.acquire:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.acquire }).andWhere(
-            new Brackets(qb => {
-              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
-                'EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress)',
-                { userWalletAddress }
-              );
-            })
-          );
-          break;
-        case VaultFilter.locked:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.locked });
-          break;
-        case VaultFilter.failed:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.failed });
-          break;
-        case VaultFilter.draft:
-          if (!isOwner) {
-            throw new BadRequestException('Draft filter can only be used when isOwner is true');
-          }
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.draft });
-          break;
-        case VaultFilter.published:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.published }).andWhere(
-            new Brackets(qb => {
-              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
-                'EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress)',
-                { userWalletAddress }
-              );
-            })
-          );
-      }
-    } else if (filter) {
-      // For anonymous users with filters, only apply status filters without whitelist checks
+    if (filter) {
       switch (filter) {
         case VaultFilter.open:
           queryBuilder.andWhere('vault.vault_status IN (:...statuses)', {
@@ -1193,11 +1068,16 @@ export class VaultsService {
         case VaultFilter.failed:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.failed });
           break;
+        case VaultFilter.draft:
+          if (!isOwner || !userId) {
+            throw new BadRequestException('Draft filter requires authentication');
+          }
+          queryBuilder
+            .andWhere('vault.vault_status = :status', { status: VaultStatus.draft })
+            .andWhere('vault.owner_id = :userId', { userId });
+          break;
         case VaultFilter.published:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.published });
-          break;
-        case VaultFilter.draft:
-          throw new BadRequestException('Draft filter requires authentication');
       }
     }
 

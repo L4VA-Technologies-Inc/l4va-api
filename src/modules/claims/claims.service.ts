@@ -605,22 +605,23 @@ export class ClaimsService {
               shape: { validatorHash: POLICY_ID, purpose: 'spend' },
             },
           },
-          {
-            address: SC_ADDRESS,
-            lovelace: 50000000,
-            datum: {
-              type: 'inline',
-              value: {
-                policy_id: POLICY_ID,
-                asset_name: vault.asset_vault_name,
-                owner: user.address,
-              },
-              shape: {
-                validatorHash: POLICY_ID,
-                purpose: 'spend',
-              },
-            },
-          },
+          // this caused -50 ada from account on acquire claim
+          // {
+          //   address: SC_ADDRESS,
+          //   lovelace: 50000000,
+          //   datum: {
+          //     type: 'inline',
+          //     value: {
+          //       policy_id: POLICY_ID,
+          //       asset_name: vault.asset_vault_name,
+          //       owner: user.address,
+          //     },
+          //     shape: {
+          //       validatorHash: POLICY_ID,
+          //       purpose: 'spend',
+          //     },
+          //   },
+          // },
         ],
         requiredSigners: [this.adminHash],
         referenceInputs: [
@@ -649,7 +650,7 @@ export class ClaimsService {
         user_id: user.id,
         vault_id: vault.id,
         // amount: claim.amount,
-        type: TransactionType.extract,
+        type: TransactionType.claim,
         status: TransactionStatus.created,
       });
 
@@ -828,7 +829,7 @@ export class ClaimsService {
               user_id: user.id,
               vault_id: vault.id,
               // amount: claim.amount,
-              type: TransactionType.extract,
+              type: TransactionType.claim,
               status: TransactionStatus.created,
             });
 

@@ -294,15 +294,57 @@ export class MetadataRegistryApiService {
   private async convertImgToBytes(imgUrl: string): Promise<string> {
     try {
       this.logger.log(`Converting image to byte string: ${imgUrl}`);
-      const response = await firstValueFrom(this.httpService.get(imgUrl, { responseType: 'arraybuffer' }));
 
-      // TODO: test this, maybe add 'binary'
-      const base64Image = Buffer.from(response.data).toString('base64');
+      const response = await firstValueFrom(
+        this.httpService.get(imgUrl, {
+          responseType: 'arraybuffer',
+          timeout: 10000,
+          maxContentLength: 5 * 1024 * 1024,
+        })
+      );
+
+      const sharp = await import('sharp');
+
+      const resizedImageBuffer = await sharp
+        .default(response.data)
+        .resize({
+          width: 128,
+          height: 128,
+          fit: 'inside',
+          withoutEnlargement: true,
+        })
+        .png({ quality: 85, compressionLevel: 9 })
+        .toBuffer();
+
+      if (resizedImageBuffer.length > 250 * 1024) {
+        this.logger.warn(
+          `Image still too large after resizing (${Math.round(resizedImageBuffer.length / 1024)}KB), using placeholder`
+        );
+
+        const tinyImageBuffer = await sharp
+          .default(response.data)
+          .resize(64, 64, { fit: 'inside' })
+          .png({ quality: 60, compressionLevel: 9 })
+          .toBuffer();
+
+        if (tinyImageBuffer.length > 250 * 1024) {
+          return '';
+        }
+
+        return Buffer.from(tinyImageBuffer).toString('base64');
+      }
+
+      const base64Image = Buffer.from(resizedImageBuffer).toString('base64');
+
+      if (base64Image.length > 350 * 1024) {
+        this.logger.warn(`Base64 image too large (${Math.round(base64Image.length / 1024)}KB), using placeholder`);
+        return '';
+      }
 
       return base64Image;
     } catch (error) {
       this.logger.error(`Failed to convert image to byte string: ${error.message}`);
-      throw new InternalServerErrorException('Failed to convert image to byte string');
+      return '';
     }
   }
 

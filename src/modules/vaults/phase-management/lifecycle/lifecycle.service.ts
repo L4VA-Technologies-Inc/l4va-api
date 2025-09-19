@@ -115,10 +115,6 @@ export class LifecycleService {
       );
     } else {
       // If more than 1 minute away, don't queue - let future cron runs handle it
-      this.logger.log(
-        `Vault ${vaultId} phase transition to ${newStatus} scheduled in ${Math.round(delay / 1000)} seconds. ` +
-          `Will be queued when closer to transition time.`
-      );
     }
   }
 
@@ -135,11 +131,18 @@ export class LifecycleService {
     try {
       const vault = await this.vaultRepository.findOne({
         where: { id: data.vaultId },
+        relations: ['owner'],
       });
 
       if (!vault) {
         this.logger.error(`Vault ${data.vaultId} not found for phase transition`);
         return;
+      }
+
+      vault.vault_status = data.newStatus;
+
+      if (data.phaseStartField) {
+        vault[data.phaseStartField] = new Date().toISOString();
       }
 
       if (data.newStatus === VaultStatus.failed) {
@@ -163,7 +166,15 @@ export class LifecycleService {
         }
       }
 
-      vault.vault_status = data.newStatus;
+      if (data.newStatus === VaultStatus.contribution) {
+        this.eventEmitter.emit('vault.launched', {
+          vaultId: vault.id,
+          address: vault.owner.address,
+          vaultName: vault.name,
+          contributionStartDate: new Date(vault.contribution_phase_start).toLocaleDateString(),
+          contributionStartTime: new Date(vault.contribution_phase_start).toLocaleTimeString(),
+        });
+      }
 
       if (data.newScStatus === SmartContractVaultStatus.SUCCESSFUL) {
         vault.vault_sc_status = data.newScStatus;
@@ -178,10 +189,6 @@ export class LifecycleService {
 
       if (data.newScStatus === SmartContractVaultStatus.CANCELLED) {
         vault.vault_sc_status = data.newScStatus;
-      }
-
-      if (data.phaseStartField) {
-        vault[data.phaseStartField] = new Date().toISOString();
       }
 
       await this.vaultRepository.save(vault);
@@ -242,8 +249,10 @@ export class LifecycleService {
       vault.total_assets_cost_usd = assetsValue.totalValueUsd;
 
       // Calculate threshold Price
-      vault.require_reserved_cost_ada = assetsValue.totalValueAda * (vault.acquire_reserve * 0.01);
-      vault.require_reserved_cost_usd = assetsValue.totalValueUsd * (vault.acquire_reserve * 0.01);
+      vault.require_reserved_cost_ada =
+        assetsValue.totalValueAda * (vault.tokens_for_acquires * 0.01) * (vault.acquire_reserve * 0.01);
+      vault.require_reserved_cost_usd =
+        assetsValue.totalValueUsd * (vault.tokens_for_acquires * 0.01) * (vault.acquire_reserve * 0.01);
 
       const emitContributionCompleteEvent = async (): Promise<void> => {
         try {
@@ -423,22 +432,33 @@ export class LifecycleService {
       );
 
       if (meetsThreshold) {
+        const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
         // 3. Calculate LP Tokens
         const { lpAdaAmount, lpVtAmount, vtPrice } = await this.distributionService.calculateLpTokens({
-          vtSupply: vault.ft_token_supply || 0,
+          vtSupply,
           totalAcquiredAda,
           assetsOfferedPercent: vault.tokens_for_acquires * 0.01,
           lpPercent: vault.liquidity_pool_contribution * 0.01,
         });
         // Create LP claim record
         try {
-          await this.claimRepository.save({
-            vault: { id: vault.id },
-            type: ClaimType.LP,
-            amount: lpVtAmount,
-            status: ClaimStatus.AVAILABLE,
+          const lpClaim = await this.claimRepository.findOne({
+            where: {
+              vault: { id: vault.id },
+              type: ClaimType.LP,
+            },
           });
-          this.logger.log(`Created LP claim for vault owner: ${lpVtAmount} VT tokens (${lpAdaAmount} ADA)`);
+          if (!lpClaim) {
+            await this.claimRepository.save({
+              vault: { id: vault.id },
+              type: ClaimType.LP,
+              amount: lpVtAmount,
+              status: ClaimStatus.AVAILABLE,
+            });
+            this.logger.log(`Created LP claim for vault owner: ${lpVtAmount} VT tokens (${lpAdaAmount} ADA)`);
+          } else {
+            this.logger.log(`LP claim already exists for vault ${vault.id}, skipping creation.`);
+          }
         } catch (error) {
           this.logger.error(`Failed to create LP claim for vault ${vault.id}:`, error);
         }
@@ -479,7 +499,7 @@ export class LifecycleService {
               lpAdaAmount,
               lpVtAmount,
               vtPrice,
-              VT_SUPPLY: vault.ft_token_supply,
+              vtSupply,
               ASSETS_OFFERED_PERCENT,
             });
 
@@ -549,7 +569,7 @@ export class LifecycleService {
               lpAdaAmount,
               lpVtAmount,
               vtPrice,
-              VT_SUPPLY: vault.ft_token_supply,
+              vtSupply,
               ASSETS_OFFERED_PERCENT,
               LP_PERCENT,
             });
@@ -666,89 +686,90 @@ export class LifecycleService {
             `Required: ${requiredThresholdAda} ADA`
         );
 
-        const cancelClaims: Partial<Claim>[] = [];
+        // TODO: Automatic refund assets
+        // const cancelClaims: Partial<Claim>[] = [];
 
-        for (const tx of [...acquisitionTransactions, ...contributionTransactions]) {
-          if (!tx.user || !tx.user.id) continue;
+        // for (const tx of [...acquisitionTransactions, ...contributionTransactions]) {
+        //   if (!tx.user || !tx.user.id) continue;
 
-          const userId = tx.user.id;
-          const adaSent = tx.amount || 0;
+        //   const userId = tx.user.id;
+        //   const adaSent = tx.amount || 0;
 
-          // Skip transactions with zero amount
-          if (adaSent <= 0) continue;
+        //   // Skip transactions with zero amount
+        //   if (adaSent <= 0) continue;
 
-          try {
-            // Check if a claim for this transaction already exists
-            const existingClaim = await this.claimRepository.findOne({
-              where: {
-                transaction: { id: tx.id },
-                type: ClaimType.FINAL_DISTRIBUTION,
-              },
-            });
+        //   try {
+        //     // Check if a claim for this transaction already exists
+        //     const existingClaim = await this.claimRepository.findOne({
+        //       where: {
+        //         transaction: { id: tx.id },
+        //         type: ClaimType.FINAL_DISTRIBUTION,
+        //       },
+        //     });
 
-            if (existingClaim) {
-              this.logger.log(`Claim already exists for acquirer transaction ${tx.id}, skipping.`);
-              continue;
-            }
+        //     if (existingClaim) {
+        //       this.logger.log(`Claim already exists for acquirer transaction ${tx.id}, skipping.`);
+        //       continue;
+        //     }
 
-            if (tx.type === TransactionType.contribute) {
-              // Get assets associated with this transaction
-              const txAssets = await this.assetsRepository.find({
-                where: {
-                  transaction: { id: tx.id },
-                  origin_type: AssetOriginType.CONTRIBUTED,
-                  deleted: false,
-                },
-              });
+        //     if (tx.type === TransactionType.contribute) {
+        //       // Get assets associated with this transaction
+        //       const txAssets = await this.assetsRepository.find({
+        //         where: {
+        //           transaction: { id: tx.id },
+        //           origin_type: AssetOriginType.CONTRIBUTED,
+        //           deleted: false,
+        //         },
+        //       });
 
-              // Create claim record with asset information
-              const claim = this.claimRepository.create({
-                user: { id: userId },
-                vault: { id: vault.id },
-                type: ClaimType.FINAL_DISTRIBUTION,
-                status: ClaimStatus.AVAILABLE,
-                metadata: {
-                  assets: txAssets.map(asset => ({
-                    id: asset.id,
-                    policyId: asset.policy_id,
-                    assetId: asset.asset_id,
-                    quantity: asset.quantity,
-                    type: asset.type,
-                  })),
-                  assetIds: txAssets.map(asset => asset.id),
-                  isContribution: true,
-                },
-                transaction: { id: tx.id },
-              });
-              cancelClaims.push(claim);
-            }
-            // For acquisition transactions
-            else if (tx.type === TransactionType.acquire) {
-              const claim = this.claimRepository.create({
-                user: { id: userId },
-                vault: { id: vault.id },
-                type: ClaimType.FINAL_DISTRIBUTION,
-                status: ClaimStatus.AVAILABLE,
-                metadata: {
-                  adaAmount: tx.amount,
-                  isAcquisition: true,
-                },
-                transaction: { id: tx.id },
-              });
-              cancelClaims.push(claim);
-            }
-          } catch (error) {
-            this.logger.error(`Failed to create cancel claim for user ${userId} transaction ${tx.id}:`, error);
-          }
-        }
+        //       // Create claim record with asset information
+        //       const claim = this.claimRepository.create({
+        //         user: { id: userId },
+        //         vault: { id: vault.id },
+        //         type: ClaimType.FINAL_DISTRIBUTION,
+        //         status: ClaimStatus.AVAILABLE,
+        //         metadata: {
+        //           assets: txAssets.map(asset => ({
+        //             id: asset.id,
+        //             policyId: asset.policy_id,
+        //             assetId: asset.asset_id,
+        //             quantity: asset.quantity,
+        //             type: asset.type,
+        //           })),
+        //           assetIds: txAssets.map(asset => asset.id),
+        //           isContribution: true,
+        //         },
+        //         transaction: { id: tx.id },
+        //       });
+        //       cancelClaims.push(claim);
+        //     }
+        //     // For acquisition transactions
+        //     else if (tx.type === TransactionType.acquire) {
+        //       const claim = this.claimRepository.create({
+        //         user: { id: userId },
+        //         vault: { id: vault.id },
+        //         type: ClaimType.FINAL_DISTRIBUTION,
+        //         status: ClaimStatus.AVAILABLE,
+        //         metadata: {
+        //           adaAmount: tx.amount,
+        //           isAcquisition: true,
+        //         },
+        //         transaction: { id: tx.id },
+        //       });
+        //       cancelClaims.push(claim);
+        //     }
+        //   } catch (error) {
+        //     this.logger.error(`Failed to create cancel claim for user ${userId} transaction ${tx.id}:`, error);
+        //   }
+        // }
 
-        if (cancelClaims.length > 0) {
-          try {
-            await this.claimRepository.save(cancelClaims);
-          } catch (error) {
-            this.logger.error(`Failed to save batch of acquirer claims:`, error);
-          }
-        }
+        // if (cancelClaims.length > 0) {
+        //   try {
+        //     await this.claimRepository.save(cancelClaims);
+        //   } catch (error) {
+        //     this.logger.error(`Failed to save batch of acquirer claims:`, error);
+        //   }
+        // }
 
         await this.executePhaseTransition({
           vaultId: vault.id,

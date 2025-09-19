@@ -142,7 +142,8 @@ export class VaultManagingService {
       'x-api-key': this.anvilApiKey,
       'Content-Type': 'application/json',
     };
-
+    //9a9b0bc93c26a40952aaff525ac72a992a77ebfa29012c9cb4a72eb2 contribution script hash
+    //0f9d90277089b2f442bef581dcc1d333a92c3fedf688700c4e39ab89 contribution script hash with verbous
     const unparametizedScriptHash = '0f9d90277089b2f442bef581dcc1d333a92c3fedf688700c4e39ab89';
 
     // Apply parameters to the blueprint before building the transaction
@@ -216,7 +217,7 @@ export class VaultManagingService {
         requiredInputs: string[];
       } = {
         changeAddress: vaultConfig.customerAddress,
-        message: vaultConfig.vaultName,
+        message: `${vaultConfig.vaultName} Vault Creation`,
         mint: [
           {
             version: 'cip25',
@@ -463,7 +464,7 @@ export class VaultManagingService {
     const vaultUtxo = await getVaultUtxo(this.scPolicyId, vault.asset_vault_name, this.blockfrost);
     const input = {
       changeAddress: this.adminAddress,
-      message: 'Vault Update',
+      message: `Vault ${vault.id} Update`,
       scriptInteractions: [
         {
           purpose: 'spend',
@@ -516,16 +517,7 @@ export class VaultManagingService {
                 },
               },
               valuation_type: vault.value_method === 'fixed' ? 0 : 1,
-              custom_metadata: [
-                // <Data,Data>
-                // [
-                //   PlutusData.new_bytes(Buffer.from("foo")).to_hex(),
-                //   PlutusData.new_bytes(Buffer.from("bar")).to_hex(),
-                // ],
-                [toHex('foo'), toHex('bar')],
-                [toHex('bar'), toHex('foo')],
-                [toHex('inc'), toHex('3')],
-              ],
+              custom_metadata: [],
               admin: this.adminHash,
               minting_key: this.adminHash,
               // New fields from update_vault.ts

@@ -10,20 +10,54 @@ import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Not, Repository } from 'typeorm';
+import { plainToInstance } from 'class-transformer';
+import { In, IsNull, Not, Repository } from 'typeorm';
 
 import { CreateProposalReq } from './dto/create-proposal.req';
+import { AssetBuySellDto } from './dto/get-assets.dto';
 import { GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';
 
 import { Asset } from '@/database/asset.entity';
+import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
+import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { Vote } from '@/database/vote.entity';
+import { AssetStatus, AssetType } from '@/types/asset.types';
+import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { VaultStatus } from '@/types/vault.types';
 import { VoteType } from '@/types/vote.types';
+
+const TWO_HOURS = 2 * 60 * 60 * 1000;
+const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+
+/*
+        .-""""-.
+       / -   -  \
+      |  .-. .- |
+      |  \o| |o (
+      \     ^    \
+       '.  )--'  /
+         '-...-'`
+    BLOCKCHAIN COUNCIL
+    { } { } { } { } { }
+     |   |   |   |   |
+    /     VOTING     \
+   /-------------------\
+  |  YES   NO  ABSTAIN |
+  |   |     |     |    |
+  |  [X]   [ ]   [ ]   |
+   \__________________/
+      /   |   |   \
+     /    |   |    \
+    /     |   |     \
+   /      |   |      \
+  /_______|___|_______\
+
+*/
 
 @Injectable()
 export class GovernanceService {
@@ -37,10 +71,14 @@ export class GovernanceService {
     private readonly snapshotRepository: Repository<Snapshot>,
     @InjectRepository(Proposal)
     private readonly proposalRepository: Repository<Proposal>,
+    @InjectRepository(Claim)
+    private readonly claimRepository: Repository<Claim>,
     @InjectRepository(Vote)
     private readonly voteRepository: Repository<Vote>,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
     private readonly configService: ConfigService,
     private readonly eventEmitter: EventEmitter2
   ) {
@@ -95,22 +133,57 @@ export class GovernanceService {
     this.logger.log(`Creating automatic snapshot for vault ${vaultId} with asset ${assetId}`);
 
     try {
+      // First, check if there's at least one claimed contribution or acquisition for this vault
+      const claimedContributions = await this.claimRepository.count({
+        where: {
+          vault: { id: vaultId },
+          status: ClaimStatus.CLAIMED,
+          type: In([ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER]),
+        },
+      });
+
+      if (claimedContributions === 0) {
+        throw new BadRequestException(
+          `No claimed contributions or acquisitions found for vault ${vaultId}. Cannot create snapshot.`
+        );
+      }
+
       // Fetch all addresses holding the asset using BlockFrost
       const addressBalances: Record<string, string> = {};
       let page = 1;
       let hasMorePages = true;
 
       while (hasMorePages) {
-        const response = await this.blockfrost.assetsAddresses(assetId, { page, order: 'desc' });
+        try {
+          const response = await this.blockfrost.assetsAddresses(assetId, { page, order: 'desc' });
 
-        if (response.length === 0) {
-          hasMorePages = false;
-        } else {
-          // Add addresses and balances to the mapping
-          for (const item of response) {
-            addressBalances[item.address] = item.quantity;
+          if (response.length === 0) {
+            hasMorePages = false;
+          } else {
+            // Add addresses and balances to the mapping
+            for (const item of response) {
+              addressBalances[item.address] = item.quantity;
+            }
+            page++;
           }
-          page++;
+        } catch (error) {
+          if (error.message.includes('not been found') || error.status_code === 404) {
+            this.logger.warn(`Asset ${assetId} not found on blockchain. Verify policy ID and asset name are correct.`);
+
+            if (Object.keys(addressBalances).length === 0) {
+              try {
+                await this.blockfrost.assetsById(assetId);
+              } catch (assetError) {
+                this.logger.error(`Asset ${assetId} does not exist on blockchain: ${assetError.message}`);
+                throw new NotFoundException(
+                  `Asset ${assetId} not found on blockchain. Check policy ID and asset name.`
+                );
+              }
+            }
+          }
+
+          // Stop fetching more pages on any error
+          hasMorePages = false;
         }
       }
 
@@ -197,15 +270,16 @@ export class GovernanceService {
       throw new BadRequestException('Governance is only available for locked vaults');
     }
 
-    // Get the latest snapshot for the vault
-    const latestSnapshot = await this.snapshotRepository.findOne({
+    let latestSnapshot = await this.snapshotRepository.findOne({
       where: { vaultId },
       order: { createdAt: 'DESC' },
     });
 
-    if (!latestSnapshot) {
-      throw new BadRequestException('No snapshot available for voting power determination');
+    if (!latestSnapshot || new Date().getTime() - new Date(latestSnapshot.createdAt).getTime() > TWO_HOURS) {
+      latestSnapshot = await this.createAutomaticSnapshot(vaultId, `${vault.policy_id}${vault.asset_vault_name}`);
     }
+
+    await this.getVotingPower(vaultId, userId, 'create_proposal');
 
     // Determine start date - use the provided one or now if not provided
     let startDate: Date;
@@ -227,7 +301,7 @@ export class GovernanceService {
       startDate: startDate.toISOString(),
       snapshotId: latestSnapshot.id,
       status: ProposalStatus.ACTIVE,
-      endDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days from now
+      endDate: new Date(Date.now() + SEVEN_DAYS), // SEVEN
     });
 
     // Set type-specific fields based on proposal type
@@ -253,6 +327,23 @@ export class GovernanceService {
       case ProposalType.BURNING:
         if (createProposalReq.metadata) {
           proposal.burnAssets = createProposalReq.metadata.burnAssets || [];
+        }
+        break;
+
+      case ProposalType.BUY_SELL:
+        if (createProposalReq.metadata) {
+          proposal.buyingSellingOptions = createProposalReq.metadata.buyingSellingOptions || [];
+          proposal.abstain = createProposalReq.metadata.abstain || false;
+
+          for (const option of proposal.buyingSellingOptions) {
+            const asset = await this.assetRepository.findOne({
+              where: { id: option.assetId },
+            });
+
+            if (!asset) {
+              throw new BadRequestException(`Asset with ID ${option.assetId} not found`);
+            }
+          }
         }
         break;
     }
@@ -303,7 +394,7 @@ export class GovernanceService {
           endDate: proposal.endDate.toISOString(),
         };
 
-        if (proposal.status !== ProposalStatus.UPCOMMING) {
+        if (proposal.status !== ProposalStatus.UPCOMING) {
           try {
             const { totals } = await this.getVotes(proposal.id);
 
@@ -552,7 +643,7 @@ export class GovernanceService {
     };
   }
 
-  async getVotingPower(vaultId: string, userId: string): Promise<string> {
+  async getVotingPower(vaultId: string, userId: string, action?: 'vote' | 'create_proposal'): Promise<string> {
     try {
       const snapshot = await this.snapshotRepository.findOne({
         where: { vaultId },
@@ -560,22 +651,61 @@ export class GovernanceService {
       });
 
       if (!snapshot) {
-        throw new NotFoundException('Snapshot not found');
+        throw new NotFoundException('No voting snapshot found for this vault');
       }
 
-      const voteWeight = snapshot.addressBalances[userId];
+      const vault = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        select: ['creation_threshold', 'vote_threshold'],
+      });
+
+      if (!vault) {
+        throw new NotFoundException('Vault not found');
+      }
+
+      const user = await this.userRepository.findOne({
+        where: { id: userId },
+        select: ['id', 'address'],
+      });
+
+      if (!user) {
+        throw new NotFoundException('User not found');
+      }
+
+      const voteWeight = snapshot.addressBalances[user.address];
 
       if (!voteWeight || voteWeight === '0') {
-        throw new BadRequestException('User has no voting power in the snapshot');
+        throw new BadRequestException(
+          'NO_VOTING_POWER',
+          'You have no voting power in this vault. You must hold vault tokens to vote.'
+        );
+      }
+
+      if (+voteWeight < vault.creation_threshold && action === 'vote') {
+        throw new BadRequestException(
+          'BELOW_THRESHOLD',
+          `Your voting power (${voteWeight}) is below the minimum threshold (${vault.creation_threshold}).`
+        );
+      }
+
+      if (+voteWeight < vault.vote_threshold && action === 'create_proposal') {
+        throw new BadRequestException(
+          'BELOW_THRESHOLD',
+          `Your voting power (${voteWeight}) is below the minimum threshold (${vault.vote_threshold}).`
+        );
       }
 
       return voteWeight;
     } catch (error) {
+      if (error instanceof BadRequestException || error instanceof NotFoundException) {
+        throw error;
+      }
+
       this.logger.error(
         `Error getting voting power for user ${userId} in vault ${vaultId}: ${error.message}`,
         error.stack
       );
-      throw new InternalServerErrorException('Error getting voting power');
+      throw new InternalServerErrorException('Error getting voting power. Please try again later.');
     }
   }
 
@@ -624,6 +754,26 @@ export class GovernanceService {
     } catch (error) {
       this.logger.error(`Error getting assets to stake for vault ${vaultId}: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Error getting assets to stake');
+    }
+  }
+
+  async getAssetsToBuySell(vaultId: string): Promise<AssetBuySellDto[]> {
+    try {
+      // Get all assets in the vault
+      const assets = await this.assetRepository.find({
+        where: [
+          { vault: { id: vaultId }, type: AssetType.NFT, status: AssetStatus.LOCKED },
+          { vault: { id: vaultId }, type: AssetType.FT, status: AssetStatus.LOCKED },
+        ],
+        select: ['id', 'policy_id', 'quantity', 'dex_price', 'floor_price', 'metadata', 'type'],
+      });
+
+      return plainToInstance(AssetBuySellDto, assets, {
+        excludeExtraneousValues: true,
+      });
+    } catch (error) {
+      this.logger.error(`Error getting assets for buy-sell proposals for vault ${vaultId}: ${error.message}`);
+      throw new InternalServerErrorException('Error getting assets for buying/selling');
     }
   }
 }

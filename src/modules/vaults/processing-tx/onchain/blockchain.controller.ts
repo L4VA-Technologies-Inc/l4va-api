@@ -29,20 +29,10 @@ export class BlockchainController {
     type: TransactionBuildResponseDto,
   })
   @UseGuards(AuthGuard)
-  async buildTransaction(@Body() params: BuildTransactionDto): Promise<any> {
+  async buildTransaction(@Body() params: BuildTransactionDto): Promise<{
+    presignedTx: string;
+  }> {
     return this.transactionService.buildTransaction(params);
-  }
-  @Post('burn-vault')
-  @ApiOperation({ summary: 'Build a Cardano transaction for burn vault' })
-  @ApiResponse({
-    status: 200,
-    description: 'Transaction built successfully',
-    type: TransactionBuildResponseDto,
-  })
-  @UseGuards(AuthGuard)
-  async burnVault(@Request() req, @Body() data: any): Promise<any> {
-    const userId = req.user.sub;
-    return this.transactionService.handleBurnVault(userId, data.vaultId);
   }
 
   @Post('transaction/submit')

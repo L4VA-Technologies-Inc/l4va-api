@@ -92,6 +92,14 @@ export class Proposal {
   @Column({ name: 'burn_assets', type: 'json', nullable: true })
   burnAssets?: any[];
 
+  @Expose({ name: 'buyingSellingOptions' })
+  @Column({ name: 'buying_selling_options', type: 'json', nullable: true })
+  buyingSellingOptions?: any[];
+
+  @Expose({ name: 'abstain' })
+  @Column({ name: 'abstain', type: 'boolean', nullable: true, default: false })
+  abstain?: boolean;
+
   @Expose({ name: 'creator' })
   @ManyToOne(() => User, { nullable: false, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'creator_id' })
