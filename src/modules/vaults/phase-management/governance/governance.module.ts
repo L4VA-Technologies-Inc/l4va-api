@@ -11,9 +11,10 @@ import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { Vote } from '@/database/vote.entity';
+import { VoteOption } from '@/database/voteOption.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Vault, Asset, Snapshot, Proposal, Vote, Claim, User])],
+  imports: [TypeOrmModule.forFeature([Vault, Asset, Snapshot, Proposal, Vote, Claim, User, VoteOption])],
   controllers: [GovernanceController],
   providers: [GovernanceService],
   exports: [GovernanceService],
