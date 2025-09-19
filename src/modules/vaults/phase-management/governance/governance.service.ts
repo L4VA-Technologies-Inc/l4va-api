@@ -25,11 +25,11 @@ import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { Vote } from '@/database/vote.entity';
+import { VoteOption } from '@/database/voteOption.entity';
 import { AssetStatus, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { VaultStatus } from '@/types/vault.types';
-import { VoteType } from '@/types/vote.types';
 
 const TWO_HOURS = 2 * 60 * 60 * 1000;
 const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
@@ -79,6 +79,8 @@ export class GovernanceService {
     private readonly assetRepository: Repository<Asset>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(VoteOption)
+    private readonly voteOptionRepository: Repository<VoteOption>,
     private readonly configService: ConfigService,
     private readonly eventEmitter: EventEmitter2
   ) {
@@ -456,7 +458,6 @@ export class GovernanceService {
       voterId: string;
       voterAddress: string;
       voteWeight: string;
-      vote: VoteType;
       timestamp: Date;
     };
   }> {
@@ -487,22 +488,15 @@ export class GovernanceService {
 
     // Check if the user's address has voting power in the snapshot
     const voterAddress = voteReq.voterAddress;
-    const voteWeight = snapshot.addressBalances[voterAddress];
-
-    if (!voteWeight || voteWeight === '0') {
-      throw new BadRequestException('Address has no voting power in the snapshot');
-    }
+    const { voteWeight } = await this.getVotingPowerFromSnapshot(snapshot, voterAddress, 'vote');
 
     // Check if user has already voted
-    const existingVote = await this.voteRepository.findOne({
-      where: {
-        proposalId,
-        voterAddress,
-      },
+    const voteOption = await this.voteOptionRepository.findOne({
+      where: { id: voteReq.voteOptionId, proposalId },
     });
 
-    if (existingVote) {
-      throw new BadRequestException('Address has already voted on this proposal');
+    if (!voteOption) {
+      throw new BadRequestException('Invalid vote option');
     }
 
     // Create and save the vote
@@ -512,7 +506,7 @@ export class GovernanceService {
       voterId: userId,
       voterAddress,
       voteWeight,
-      vote: voteReq.vote,
+      voteOptionId: voteReq.voteOptionId,
     });
 
     await this.voteRepository.save(vote);
@@ -526,30 +520,18 @@ export class GovernanceService {
         voterId: userId,
         voterAddress,
         voteWeight,
-        vote: voteReq.vote,
         timestamp: vote.timestamp,
       },
     };
   }
 
   async getVotes(proposalId: string): Promise<{
-    votes: {
-      id: string;
-      proposalId: string;
-      voterId: string;
-      voterAddress: string;
-      voteWeight: string;
-      vote: VoteType;
-      timestamp: Date;
-    }[];
-    totals: {
-      yes: string;
-      no: string;
-      abstain: string;
-    };
+    votes: any[];
+    totals: Record<string, string>;
   }> {
     const proposal = await this.proposalRepository.findOne({
       where: { id: proposalId },
+      relations: ['voteOptions'],
     });
 
     if (!proposal) {
@@ -561,18 +543,16 @@ export class GovernanceService {
       order: { timestamp: 'DESC' },
     });
 
-    // Calculate vote totals
-    const totals = {
-      yes: '0',
-      no: '0',
-      abstain: '0',
-    };
+    // Ініціалізація підрахунку голосів для кожної опції
+    const totals: Record<string, string> = {};
+    proposal.voteOptions.forEach(option => {
+      totals[option.id] = '0';
+    });
 
+    // Підрахунок голосів
     votes.forEach(vote => {
-      if (vote.vote === VoteType.YES) {
-        totals.yes = (BigInt(totals.yes) + BigInt(vote.voteWeight)).toString();
-      } else if (vote.vote === VoteType.NO) {
-        totals.no = (BigInt(totals.no) + BigInt(vote.voteWeight)).toString();
+      if (totals[vote.voteOptionId]) {
+        totals[vote.voteOptionId] = (BigInt(totals[vote.voteOptionId]) + BigInt(vote.voteWeight)).toString();
       }
     });
 
@@ -583,7 +563,7 @@ export class GovernanceService {
         voterId: vote.voterId,
         voterAddress: vote.voterAddress,
         voteWeight: vote.voteWeight,
-        vote: vote.vote,
+        voteOptionId: vote.voteOptionId,
         timestamp: vote.timestamp,
       })),
       totals,
@@ -607,14 +587,10 @@ export class GovernanceService {
       voterId: string;
       voterAddress: string;
       voteWeight: string;
-      vote: VoteType;
+      vote: Record<string, string>;
       timestamp: Date;
     }[];
-    totals: {
-      yes: string;
-      no: string;
-      abstain: string;
-    };
+    totals: Record<string, string>;
   }> {
     const proposal = await this.proposalRepository.findOne({
       where: { id: proposalId },
@@ -707,6 +683,50 @@ export class GovernanceService {
       );
       throw new InternalServerErrorException('Error getting voting power. Please try again later.');
     }
+  }
+
+  private async getVotingPowerFromSnapshot(
+    snapshot: Snapshot,
+    voterAddress: string,
+    action?: 'vote' | 'create_proposal'
+  ): Promise<{
+    voteWeight: string;
+    voteWeightPercent: string;
+  }> {
+    const vault = await this.vaultRepository.findOne({
+      where: { id: snapshot.vaultId },
+      select: ['creation_threshold', 'vote_threshold', 'ft_token_supply', 'ft_token_decimals'],
+    });
+
+    if (!vault) {
+      throw new NotFoundException('Vault not found');
+    }
+
+    const voteWeight = snapshot.addressBalances[voterAddress];
+    const voteWeightPercent = ((+voteWeight / (+vault.ft_token_supply) ** +vault.ft_token_decimals) * 100).toFixed(2);
+
+    if (!voteWeight || voteWeight === '0') {
+      throw new BadRequestException(
+        'NO_VOTING_POWER',
+        'You have no voting power in this vault. You must hold vault tokens to vote.'
+      );
+    }
+
+    if (+voteWeight < vault.creation_threshold && action === 'vote') {
+      throw new BadRequestException(
+        'BELOW_THRESHOLD',
+        `Your voting power (${voteWeight}) is below the minimum threshold (${vault.creation_threshold}).`
+      );
+    }
+
+    if (+voteWeight < vault.vote_threshold && action === 'create_proposal') {
+      throw new BadRequestException(
+        'BELOW_THRESHOLD',
+        `Your voting power (${voteWeight}) is below the minimum threshold (${vault.vote_threshold}).`
+      );
+    }
+
+    return { voteWeight, voteWeightPercent };
   }
 
   async getAssetsToStake(vaultId: string): Promise<Asset[]> {

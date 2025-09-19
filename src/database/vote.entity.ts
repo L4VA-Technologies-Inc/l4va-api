@@ -1,8 +1,6 @@
 import { Expose } from 'class-transformer';
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn, JoinColumn } from 'typeorm';
 
-import { VoteType } from '../types/vote.types';
-
 import { Proposal } from './proposal.entity';
 import { Snapshot } from './snapshot.entity';
 import { User } from './user.entity';
@@ -24,14 +22,8 @@ export class Vote {
   @Column({ name: 'vote_weight' })
   voteWeight: string;
 
-  @Expose({ name: 'vote' })
-  @Column({
-    name: 'vote',
-    type: 'enum',
-    enum: VoteType,
-    nullable: false,
-  })
-  vote: VoteType;
+  @Column({ name: 'vote_option_id' })
+  voteOptionId: string;
 
   @Expose({ name: 'timestamp' })
   @CreateDateColumn({ name: 'timestamp' })

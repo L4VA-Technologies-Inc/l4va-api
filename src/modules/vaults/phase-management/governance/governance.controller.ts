@@ -35,7 +35,7 @@ export class GovernanceController {
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Vote on a proposal' })
   @ApiResponse({ status: 201, description: 'Vote recorded successfully' })
-  async vote(@Req() req, @Param('proposalId') proposalId: string, @Body() voteReq: VoteReq) {
+  async vote(@Req() req, @Param('proposalId') proposalId: string, @Body() voteReq: any) {
     const userId = req.user.sub;
     return this.governanceService.vote(proposalId, voteReq, userId);
   }

@@ -11,6 +11,7 @@ import { ProposalStatus, ProposalType } from '../types/proposal.types';
 import { User } from './user.entity';
 import { Vault } from './vault.entity';
 import { Vote } from './vote.entity';
+import { VoteOption } from './voteOption.entity';
 
 @Entity()
 export class Proposal {
@@ -120,6 +121,14 @@ export class Proposal {
   @Expose({ name: 'votes' })
   @OneToMany(() => Vote, vote => vote.proposal)
   votes: Vote[];
+
+  @Expose({ name: 'voteOptions' })
+  @OneToMany(() => VoteOption, voteOption => voteOption.proposal)
+  voteOptions: VoteOption[];
+
+  @Expose({ name: 'hasCustomVoteOptions' })
+  @Column({ name: 'has_custom_vote_options', type: 'boolean', default: false })
+  hasCustomVoteOptions: boolean;
 
   @Expose({ name: 'createdAt' })
   @CreateDateColumn({ name: 'created_at' })

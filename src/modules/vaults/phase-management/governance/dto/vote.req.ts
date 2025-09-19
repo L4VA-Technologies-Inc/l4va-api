@@ -1,17 +1,14 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEnum, IsNotEmpty, IsString } from 'class-validator';
-
-import { VoteType } from '@/types/vote.types';
+import { IsNotEmpty, IsString } from 'class-validator';
 
 export class VoteReq {
   @ApiProperty({
-    description: 'Selected voting option',
-    example: 'yes',
-    enum: VoteType,
+    description: 'ID of the voting option',
+    example: '123e4567-e89b-12d3-a456-426614174000',
   })
   @IsNotEmpty()
-  @IsEnum(VoteType)
-  vote: VoteType;
+  @IsString()
+  voteOptionId: string;
 
   @ApiProperty({
     description: "The voter's Cardano address",
@@ -20,12 +17,4 @@ export class VoteReq {
   @IsNotEmpty()
   @IsString()
   voterAddress: string;
-
-  @ApiProperty({
-    description: 'Optional reason for the vote',
-    required: false,
-    example: 'I support this proposal because...',
-  })
-  @IsString()
-  reason?: string;
 }

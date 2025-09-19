@@ -12,6 +12,8 @@ import {
   IsBoolean,
 } from 'class-validator';
 
+import { VoteOptionDto } from './vote-option.dto';
+
 import { ProposalType } from '@/types/proposal.types';
 
 // Common FT asset class for staking
@@ -88,6 +90,25 @@ export class CreateProposalReq {
   })
   @IsEnum(ProposalType)
   type: ProposalType;
+
+  @ApiProperty({
+    description: 'Custom voting options for this proposal',
+    required: false,
+    type: [VoteOptionDto],
+  })
+  @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => VoteOptionDto)
+  voteOptions?: VoteOptionDto[];
+
+  @ApiProperty({
+    description: 'Whether this proposal uses custom voting options',
+    required: false,
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  hasCustomVoteOptions?: boolean;
 
   @ApiProperty({
     description: 'Start date and time when voting begins. If not provided, starts immediately.',
