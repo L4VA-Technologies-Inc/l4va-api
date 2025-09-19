@@ -1340,7 +1340,7 @@ export class VaultsService {
     }
   }
 
-  async viewVault(vaultId: string) {
+  async incrementViewCount(vaultId: string) {
     return await this.vaultsRepository.increment({ id: vaultId }, 'count_view', 1);
   }
 }

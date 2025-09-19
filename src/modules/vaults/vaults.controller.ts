@@ -1,5 +1,5 @@
-import { Controller, Post, Body, Get, Param, Request, UseGuards, Query, Logger } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { Controller, Post, Body, Get, Param, Request, UseGuards, Query, Logger, ParseUUIDPipe } from '@nestjs/common';
+import { ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 
 import { ApiDoc } from '../../decorators/api-doc.decorator';
 import { AuthGuard } from '../auth/auth.guard';
@@ -107,9 +107,11 @@ export class VaultsController {
     });
   }
 
-  @Post('view')
-  async viewVault(@Body() data: { vaultId: string }) {
-    return this.vaultsService.viewVault(data.vaultId);
+  @ApiOperation({ summary: 'Increment view count for a vault by vault id' })
+  @ApiParam({ name: 'id', description: 'Vault ID' })
+  @Post(':id/view')
+  async incrementViewCount(@Param('id', new ParseUUIDPipe()) vaultId: string) {
+    return this.vaultsService.incrementViewCount(vaultId);
   }
 
   @ApiDoc({
