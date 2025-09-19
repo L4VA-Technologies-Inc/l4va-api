@@ -107,6 +107,11 @@ export class VaultsController {
     });
   }
 
+  @Post('view')
+  async viewVault(@Body() data: { vaultId: string }) {
+    return this.vaultsService.viewVault(data.vaultId);
+  }
+
   @ApiDoc({
     summary: 'List of biggest investments',
     description: 'Returns list of biggest transaction.',

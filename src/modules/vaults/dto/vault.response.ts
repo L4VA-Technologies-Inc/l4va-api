@@ -483,6 +483,13 @@ export class VaultFullResponse extends VaultShortResponse {
     expose: true,
   })
   updatedAt: string;
+
+  @ApiProperty({ description: 'Count view', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  countView: number;
 }
 
 export class VaultAcquireResponse {
