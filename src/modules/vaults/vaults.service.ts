@@ -777,7 +777,7 @@ export class VaultsService {
    * @param signedTx - Signed transaction object
    * @returns Full vault response
    */
-  async publishVault(userId: string, signedTx): Promise<VaultFullResponse> {
+  async publishVault(userId: string, signedTx: any): Promise<{ vaultId: string; presignedTx: string }> {
     const vault = await this.vaultsRepository.findOne({
       where: {
         id: signedTx.vaultId,
@@ -788,21 +788,50 @@ export class VaultsService {
       throw new UnauthorizedException('You must be an owner of vault!');
     }
 
-    const publishedTx = await this.vaultContractService.submitOnChainVaultTx(
+    const { presignedScriptTx, txHash } = await this.vaultContractService.submitOnChainVaultTx(
       signedTx,
-      vault.asset_vault_name,
       vault.script_hash,
-      vault.apply_params_result
+      vault.owner.address
     );
-    vault.vault_status = VaultStatus.published;
-    vault.publication_hash = publishedTx.txHash;
+    vault.publication_hash = txHash;
     await this.vaultsRepository.save(vault);
-    // Start transaction confirmation process in background
-    this.confirmAndProcessTransaction(publishedTx.txHash, vault).catch(error => {
-      this.logger.error(`Failed to process transaction ${publishedTx.txHash}:`, error);
-    });
+    return {
+      vaultId: vault.id,
+      presignedTx: presignedScriptTx,
+    };
+  }
 
-    return plainToInstance(VaultFullResponse, instanceToPlain(vault), { excludeExtraneousValues: true });
+  async publishVaultBlueprints(userId: string, signedTx: any): Promise<VaultFullResponse> {
+    try {
+      const vault = await this.vaultsRepository.findOne({
+        where: {
+          id: signedTx.vaultId,
+        },
+        relations: ['owner'],
+      });
+      if (vault.owner.id !== userId) {
+        throw new UnauthorizedException('You must be an owner of vault!');
+      }
+
+      await this.vaultContractService.submitOnChainBlueprints(
+        signedTx,
+        vault.asset_vault_name,
+        vault.script_hash,
+        vault.apply_params_result
+      );
+      vault.vault_status = VaultStatus.published;
+      await this.vaultsRepository.save(vault);
+
+      // Start transaction confirmation process in background
+      this.confirmAndProcessTransaction(vault.publication_hash, vault).catch(error => {
+        this.logger.error(`Failed to process transaction ${vault.publication_hash}:`, error);
+      });
+
+      return plainToInstance(VaultFullResponse, instanceToPlain(vault), { excludeExtraneousValues: true });
+    } catch (error) {
+      this.logger.error('Error publishing vault blueprints:', error);
+      throw new BadRequestException('Failed to publish vault blueprints. Please try again.');
+    }
   }
 
   async prepareDraftResponse(id: string): Promise<VaultFullResponse> {

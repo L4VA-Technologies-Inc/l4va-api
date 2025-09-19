@@ -144,7 +144,7 @@ export class VaultManagingService {
     };
     //9a9b0bc93c26a40952aaff525ac72a992a77ebfa29012c9cb4a72eb2 contribution script hash
     //0f9d90277089b2f442bef581dcc1d333a92c3fedf688700c4e39ab89 contribution script hash with verbous
-    const unparametizedScriptHash = '9a9b0bc93c26a40952aaff525ac72a992a77ebfa29012c9cb4a72eb2';
+    const unparametizedScriptHash = '0f9d90277089b2f442bef581dcc1d333a92c3fedf688700c4e39ab89';
 
     // Apply parameters to the blueprint before building the transaction
     const applyParamsPayload = {
@@ -198,6 +198,7 @@ export class VaultManagingService {
       applyParamsResult.preloadedScript.blueprint.validators.find(
         (v: any) => v.title === 'contribute.contribute.mint' && v.hash !== unparametizedScriptHash
       )?.hash || '';
+
     if (!scriptHash) {
       throw new Error('Failed to find script hash');
     }
@@ -208,17 +209,11 @@ export class VaultManagingService {
         message: string;
         mint: Array<object>;
         scriptInteractions: object[];
-        outputs: (
-          | {
-              address: string;
-              assets: object[];
-              datum: { type: 'inline'; value: Datum1; shape: object };
-            }
-          | {
-              address: string;
-              datum: { type: 'script'; hash: string };
-            }
-        )[];
+        outputs: {
+          address: string;
+          assets: object[];
+          datum: { type: 'inline'; value: Datum1; shape: object };
+        }[];
         requiredInputs: string[];
       } = {
         changeAddress: vaultConfig.customerAddress,
@@ -298,9 +293,6 @@ export class VaultManagingService {
                   //   PlutusData.new_bytes(Buffer.from("foo")).to_hex(),
                   //   PlutusData.new_bytes(Buffer.from("bar")).to_hex(),
                   // ],
-                  [toHex('foo'), toHex('bar')],
-                  [toHex('bar'), toHex('foo')],
-                  [toHex('vaultId'), toHex(vaultConfig.vaultId)],
                 ], // like a tuple
 
                 // termination: {
@@ -320,18 +312,16 @@ export class VaultManagingService {
               },
             },
           },
-          {
-            address: this.vaultScriptAddress,
-            datum: {
-              type: 'script',
-              hash: scriptHash,
-            },
-          },
         ],
         requiredInputs: REQUIRED_INPUTS,
       };
+
+      console.log('Vault transaction input:', JSON.stringify(input));
+
       // Build the transaction using BlockchainService
       const buildResponse = await this.blockchainService.buildTransaction(input);
+
+      console.log('Vault transaction result:', JSON.stringify(buildResponse));
 
       // Sign the transaction
       const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
@@ -571,11 +561,11 @@ export class VaultManagingService {
    */
   async submitOnChainVaultTx(
     signedTx: { transaction: string; signatures: string | string[] },
-    assetName: string,
     scriptHash: string,
-    applyParamsResult: any
+    ownerAddress: string
   ): Promise<{
     txHash: string;
+    presignedScriptTx: string;
   }> {
     try {
       // Ensure signatures is always an array
@@ -588,48 +578,82 @@ export class VaultManagingService {
       const { txHash } = result;
 
       if (txHash) {
-        const headers = {
-          'x-api-key': this.anvilApiKey,
-          'Content-Type': 'application/json',
+        const scriptInput = {
+          changeAddress: ownerAddress,
+          message: 'Script Upload',
+          outputs: [
+            {
+              address: this.vaultScriptAddress,
+              datum: {
+                type: 'script',
+                hash: scriptHash,
+              },
+            },
+          ],
         };
 
-        // Step 4: Update blueprint with the script transaction reference
-        const blueprintUpdatePayload = {
-          blueprint: {
-            ...applyParamsResult.preloadedScript.blueprint,
-            preamble: {
-              ...applyParamsResult.preloadedScript.blueprint.preamble,
-              id: undefined,
-              title: 'l4va/vault/' + assetName,
-              version: '0.0.1',
-            },
-            validators: applyParamsResult.preloadedScript.blueprint.validators.filter((v: any) =>
-              v.title.includes('contribute')
-            ),
-          },
-          refs: {
-            [scriptHash]: {
-              txHash: txHash,
-              index: 1, // Script output is at index 1 (vault is at index 0)
-            },
-          },
-        };
+        const buildResponse = await this.blockchainService.buildTransaction(scriptInput);
+        const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
 
-        await fetch(`${this.anvilApi}/blueprints`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(blueprintUpdatePayload),
-        });
-
-        console.log('✅ Complete workflow finished: vault created, script uploaded, and blueprint updated!');
-      } else {
-        console.error('Failed to create vault and upload script');
+        return { txHash: result.txHash, presignedScriptTx: txToSubmitOnChain.to_hex() };
       }
-
-      return { txHash: result.txHash };
     } catch (error) {
       this.logger.error('Failed to submit vault transaction', error);
       throw new Error(`Failed to submit transaction: ${error.message}`);
+    }
+  }
+
+  async submitOnChainBlueprints(
+    signedTx: { transaction: string; signatures: string | string[] },
+    assetName: string,
+    scriptHash: string,
+    applyParamsResult: any
+  ): Promise<void> {
+    try {
+      const signatures = Array.isArray(signedTx.signatures) ? signedTx.signatures : [signedTx.signatures];
+
+      const scriptSubmitted = await this.blockchainService.submitTransaction({
+        transaction: signedTx.transaction,
+        signatures,
+      });
+
+      const { txHash: scriptTxHash } = scriptSubmitted;
+
+      // Step 4: Update blueprint with the script transaction reference
+      const blueprintUpdatePayload = {
+        blueprint: {
+          ...applyParamsResult.preloadedScript.blueprint,
+          preamble: {
+            ...applyParamsResult.preloadedScript.blueprint.preamble,
+            id: undefined,
+            title: 'l4va/vault/' + assetName,
+            version: '0.0.1',
+          },
+          validators: applyParamsResult.preloadedScript.blueprint.validators.filter((v: any) =>
+            v.title.includes('contribute')
+          ),
+        },
+        refs: {
+          [scriptHash]: {
+            txHash: scriptTxHash,
+            index: 0, // Script output is at index 0
+          },
+        },
+      };
+
+      await fetch(`${this.anvilApi}/blueprints`, {
+        method: 'POST',
+        headers: {
+          'x-api-key': this.anvilApiKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(blueprintUpdatePayload),
+      });
+
+      this.logger.log('✅ Complete workflow finished: vault created, script uploaded, and blueprint updated!');
+    } catch (error) {
+      this.logger.error('Failed to submit on-chain blueprints', error);
+      throw new Error(`Failed to submit on-chain blueprints: ${error.message}`);
     }
   }
 }
