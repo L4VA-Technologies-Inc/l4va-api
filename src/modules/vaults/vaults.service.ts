@@ -939,7 +939,7 @@ export class VaultsService {
     sortBy?: VaultSortField;
     sortOrder?: SortOrder;
     tags?: string[];
-    isOwner?: boolean;
+    myVaults?: boolean;
     reserveMet?: boolean;
     isPublicOnly?: boolean;
     minInitialVaultOffered?: number;
@@ -963,7 +963,7 @@ export class VaultsService {
       acquireWindow,
       tags,
       assetWhitelist,
-      isOwner,
+      myVaults,
       filter,
       page = 1,
       limit = 10,
@@ -993,8 +993,20 @@ export class VaultsService {
       });
 
       if (user) {
-        if (isOwner) {
-          queryBuilder.andWhere('vault.owner_id = :userId', { userId });
+        if (myVaults) {
+          queryBuilder.andWhere(
+            new Brackets(qb => {
+              qb.where('vault.owner_id = :userId', { userId }).orWhere(
+                `EXISTS (
+                  SELECT 1 FROM assets
+                  WHERE assets.vault_id = vault.id 
+                  AND assets.added_by = :userId
+                  AND assets.status = 'locked'
+                )`,
+                { userId }
+              );
+            })
+          );
         }
 
         userWalletAddress = user.address;
@@ -1040,12 +1052,10 @@ export class VaultsService {
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.failed });
           break;
         case VaultFilter.draft:
-          if (!isOwner || !userId) {
+          if (!myVaults || !userId) {
             throw new BadRequestException('Draft filter requires authentication');
           }
-          queryBuilder
-            .andWhere('vault.vault_status = :status', { status: VaultStatus.draft })
-            .andWhere('vault.owner_id = :userId', { userId });
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.draft });
           break;
         case VaultFilter.published:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.published });

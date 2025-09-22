@@ -117,7 +117,7 @@ export class GetVaultsDto extends PaginationDto {
   @ApiProperty({
     type: Boolean,
     required: false,
-    description: 'Filter to show only vaults owned by the user',
+    description: 'Filter to show only vaults user is participating in',
   })
   @Expose()
   @Transform(({ value }) => {
@@ -126,7 +126,7 @@ export class GetVaultsDto extends PaginationDto {
     }
     return value;
   })
-  isOwner?: boolean;
+  myVaults?: boolean;
 
   @IsEnum(SortOrder)
   @IsOptional()
