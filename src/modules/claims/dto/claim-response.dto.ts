@@ -10,7 +10,13 @@ class SimpleVaultDto {
   name: string;
 
   @Expose()
-  image: string;
+  vaultImage: string;
+
+  @Expose({ name: 'vault_token_ticker' })
+  vaultTokenTicker: string;
+
+  @Expose({ name: 'ft_token_decimals' })
+  ftTokenDecimals: number;
 }
 
 export class ClaimResponseDto {
@@ -35,11 +41,8 @@ export class ClaimResponseDto {
   @Expose()
   created_at: string;
 
-  @Expose()
-  updated_at: string;
-
-  @Expose()
-  userId: string;
+  @Expose({ name: 'updated_at' })
+  updatedAt: string;
 
   @Expose()
   @Type(() => SimpleVaultDto)

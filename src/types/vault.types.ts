@@ -46,6 +46,7 @@ export enum VaultStatus {
   investment = 'investment',
   locked = 'locked',
   failed = 'failed',
+  burned = 'burned',
 }
 
 // Mapping for smart contract vault status

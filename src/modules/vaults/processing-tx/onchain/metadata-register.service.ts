@@ -65,7 +65,7 @@ export class MetadataRegistryApiService {
 
   constructor(
     @InjectRepository(TokenRegistry)
-    private readonly TokenRegistryRepository: Repository<TokenRegistry>,
+    private readonly tokenRegistryRepository: Repository<TokenRegistry>,
     private readonly configService: ConfigService,
     private readonly httpService: HttpService
   ) {
@@ -74,6 +74,26 @@ export class MetadataRegistryApiService {
     this.apiBaseUrl = this.configService.get<string>('METADATA_API_TESTNET_URL');
     this.repoOwner = this.configService.get<string>('METADATA_REGISTRY_TESTNET_OWNER');
     this.repoName = this.configService.get<string>('METADATA_REGISTRY_TESTNET_REPO');
+  }
+
+  @Cron(CronExpression.EVERY_HOUR)
+  async checkPendingPRs(): Promise<void> {
+    this.logger.log('Checking pending token registry PRs');
+
+    const pendingPRs = await this.tokenRegistryRepository.find({
+      where: { status: TokenRegistryStatus.PENDING },
+    });
+
+    if (pendingPRs.length === 0) {
+      this.logger.log('No pending PRs to check');
+      return;
+    }
+
+    this.logger.log(`Found ${pendingPRs.length} pending PRs to check`);
+
+    for (const pr of pendingPRs) {
+      await this.checkPRStatus(pr);
+    }
   }
 
   /**
@@ -88,7 +108,7 @@ export class MetadataRegistryApiService {
         return { success: false, message: 'Token already exists' };
       }
     } catch (error) {
-      console.error('Error checking token existence:', error);
+      this.logger.error('Error checking token existence:', error);
     }
 
     try {
@@ -98,10 +118,20 @@ export class MetadataRegistryApiService {
       // Optional fields
       const ticker = raw.ticker ? this.signItemData(raw.subject, 0, raw.ticker) : undefined;
       const url = raw.url ? this.signItemData(raw.subject, 0, raw.url) : undefined;
-      // The base16-encoded CBOR "policy": "82018201828200581cf950845fdf374bba64605f96a9d5940890cc2bb92c4b5b55139cc00982051a09bde472",
-      const policy = raw.policy ? raw.policy : undefined;
-      const logo = raw.logo ? this.signItemData(raw.subject, 0, raw.logo) : undefined;
+      const policy = raw.policy ? raw.policy : undefined; // The base16-encoded CBOR "policy": "82018201828200581cf950845fdf374bba64605f96a9d5940890cc2bb92c4b5b55139cc00982051a09bde472",
       const decimals = raw.decimals ? this.signItemData(raw.subject, 0, raw.decimals) : undefined;
+
+      let logoData: ItemData | undefined;
+      if (raw.logo) {
+        // If raw.logo is a URL, convert it to byte string
+        if (raw.logo.startsWith('http')) {
+          const logoBytes = await this.convertImgToBytes(raw.logo);
+          logoData = this.signItemData(raw.subject, 0, logoBytes);
+        } else {
+          // If it's already a byte string, use it directly
+          logoData = this.signItemData(raw.subject, 0, raw.logo);
+        }
+      }
 
       // Build full metadata object
       const metadata: TokenMetaData = {
@@ -111,7 +141,7 @@ export class MetadataRegistryApiService {
         description,
         ticker,
         url,
-        logo,
+        logo: logoData,
         decimals,
       };
 
@@ -131,7 +161,7 @@ export class MetadataRegistryApiService {
         throw error; // Re-throw NestJS exceptions
       }
 
-      console.error('Failed to submit token metadata:', error);
+      this.logger.error('Failed to submit token metadata:', error);
       throw new InternalServerErrorException(error.response?.data?.message || 'Failed to submit token metadata');
     }
   }
@@ -155,24 +185,186 @@ export class MetadataRegistryApiService {
   }
 
   /**
+   * Check the status of a specific PR
+   */
+  async checkPRStatus(pr: TokenRegistry): Promise<TokenRegistry> {
+    try {
+      const url = `https://api.github.com/repos/${this.repoOwner}/${this.repoName}/pulls/${pr.pr_number}`;
+      const response = await firstValueFrom(this.httpService.get(url));
+
+      pr.last_checked = new Date();
+
+      // Update status based on GitHub response
+      if (response.data.state === 'closed') {
+        if (response.data.merged) {
+          pr.status = TokenRegistryStatus.MERGED;
+          pr.merged_at = new Date(response.data.merged_at);
+          this.logger.log(`PR #${pr.pr_number} for vault ${pr.vault_id} has been merged`);
+        } else {
+          pr.status = TokenRegistryStatus.REJECTED;
+          this.logger.warn(`PR #${pr.pr_number} for vault ${pr.vault_id} was rejected`);
+        }
+      }
+
+      // Save the updated PR record
+      return this.tokenRegistryRepository.save(pr);
+    } catch (error) {
+      this.logger.error(`Error checking PR #${pr.pr_number} status:`, error.message);
+
+      // If PR not found, mark as failed
+      if (error.response?.status === 404) {
+        pr.status = TokenRegistryStatus.FAILED;
+        return this.tokenRegistryRepository.save(pr);
+      }
+
+      // Return the PR without changes for other errors
+      return pr;
+    }
+  }
+
+  /**
+   * Closes an open pull request on GitHub
+   * @param prNumber The pull request number to close
+   * @param reason Optional comment to add when closing the PR
+   * @returns Object indicating success or failure
+   */
+  async closePullRequest(prNumber: number, reason?: string): Promise<{ success: boolean; message: string }> {
+    try {
+      this.logger.log(`Attempting to close PR #${prNumber}`);
+
+      const { Octokit } = await import('@octokit/rest');
+      const octokit = new Octokit({
+        auth: this.githubToken,
+      });
+
+      const pr = await this.tokenRegistryRepository.findOne({
+        where: { pr_number: prNumber },
+      });
+
+      if (!pr) {
+        throw new NotFoundException(`PR #${prNumber} not found in database`);
+      }
+
+      // First, check if PR is still open
+      const updatedPR = await this.checkPRStatus(pr);
+
+      if (updatedPR.status !== TokenRegistryStatus.PENDING) {
+        throw new ConflictException(`PR #${prNumber} is not open and cannot be closed`);
+      }
+
+      // Add a comment if reason is provided
+      if (reason) {
+        await octokit.issues.createComment({
+          owner: this.repoOwner,
+          repo: this.repoName,
+          issue_number: prNumber,
+          body: `Closing PR: ${reason}`,
+        });
+      }
+
+      // Close the PR
+      await octokit.pulls.update({
+        owner: this.repoOwner,
+        repo: this.repoName,
+        pull_number: prNumber,
+        state: 'closed',
+      });
+
+      // Update our database record
+      updatedPR.status = TokenRegistryStatus.REJECTED;
+      updatedPR.last_checked = new Date();
+      await this.tokenRegistryRepository.save(updatedPR);
+
+      this.logger.log(`Successfully closed PR #${prNumber}`);
+      return { success: true, message: `PR #${prNumber} closed successfully` };
+    } catch (error) {
+      this.logger.error(`Failed to close PR #${prNumber}:`, error);
+
+      // Map GitHub API errors to appropriate NestJS exceptions
+      if (error.status === 401 || error.status === 403) {
+        throw new UnauthorizedException(`GitHub authentication failed: ${error.message}`);
+      } else if (error.status === 404) {
+        throw new NotFoundException(`PR not found: ${error.message}`);
+      }
+
+      throw new InternalServerErrorException(`Failed to close PR: ${error.message}`);
+    }
+  }
+
+  private async convertImgToBytes(imgUrl: string): Promise<string> {
+    try {
+      this.logger.log(`Converting image to byte string: ${imgUrl}`);
+
+      const response = await firstValueFrom(
+        this.httpService.get(imgUrl, {
+          responseType: 'arraybuffer',
+          timeout: 10000,
+          maxContentLength: 5 * 1024 * 1024,
+        })
+      );
+
+      const sharp = await import('sharp');
+
+      const resizedImageBuffer = await sharp
+        .default(response.data)
+        .resize({
+          width: 128,
+          height: 128,
+          fit: 'inside',
+          withoutEnlargement: true,
+        })
+        .png({ quality: 85, compressionLevel: 9 })
+        .toBuffer();
+
+      if (resizedImageBuffer.length > 250 * 1024) {
+        this.logger.warn(
+          `Image still too large after resizing (${Math.round(resizedImageBuffer.length / 1024)}KB), using placeholder`
+        );
+
+        const tinyImageBuffer = await sharp
+          .default(response.data)
+          .resize(64, 64, { fit: 'inside' })
+          .png({ quality: 60, compressionLevel: 9 })
+          .toBuffer();
+
+        if (tinyImageBuffer.length > 250 * 1024) {
+          return '';
+        }
+
+        return Buffer.from(tinyImageBuffer).toString('base64');
+      }
+
+      const base64Image = Buffer.from(resizedImageBuffer).toString('base64');
+
+      if (base64Image.length > 350 * 1024) {
+        this.logger.warn(`Base64 image too large (${Math.round(base64Image.length / 1024)}KB), using placeholder`);
+        return '';
+      }
+
+      return base64Image;
+    } catch (error) {
+      this.logger.error(`Failed to convert image to byte string: ${error.message}`);
+      return '';
+    }
+  }
+
+  /**
    * Validates token metadata
    * @param metadata Token metadata
    * @returns true if format is correct
    */
   private validateTokenMetadata(metadata: TokenMetaData): boolean {
-    // Перевірка обов'язкових полів
     if (!metadata.subject || !metadata.name || !metadata.description) {
-      console.error('Required fields missing in metadata');
+      this.logger.error('Required fields missing in metadata');
       return false;
     }
 
-    // Перевірка підписів
+    // Signing check
     if (!metadata.name.signatures?.length || !metadata.description.signatures?.length) {
-      console.error('Signatures missing in metadata');
+      this.logger.error('Signatures missing in metadata');
       return false;
     }
 
-    // Додаткові перевірки можна додати за потреби
     return true;
   }
 
@@ -301,12 +493,12 @@ export class MetadataRegistryApiService {
       if (pr.number) {
         try {
           // Create a new TokenRegistry record
-          const tokenRegistryRecord = this.TokenRegistryRepository.create({
+          const tokenRegistryRecord = this.tokenRegistryRepository.create({
             pr_number: pr.number,
             status: TokenRegistryStatus.PENDING,
             vault: { id: vaultId },
           });
-          await this.TokenRegistryRepository.save(tokenRegistryRecord);
+          await this.tokenRegistryRepository.save(tokenRegistryRecord);
           this.logger.log(`Saved PR #${pr.number} information to database for vault ${vaultId}`);
         } catch (dbError) {
           this.logger.error('Failed to save PR information to database:', dbError);
@@ -322,7 +514,7 @@ export class MetadataRegistryApiService {
         prUrl: pr.html_url,
       };
     } catch (error) {
-      console.error('Failed to create token registry PR:', error);
+      this.logger.error('Failed to create token registry PR:', error);
 
       // Map GitHub API errors to appropriate NestJS exceptions
       if (error.status === 401 || error.status === 403) {
@@ -334,64 +526,6 @@ export class MetadataRegistryApiService {
       }
 
       throw new InternalServerErrorException(`Failed to create PR: ${error.message}`);
-    }
-  }
-
-  @Cron(CronExpression.EVERY_HOUR)
-  async checkPendingPRs(): Promise<void> {
-    this.logger.log('Checking pending token registry PRs');
-
-    const pendingPRs = await this.TokenRegistryRepository.find({
-      where: { status: TokenRegistryStatus.PENDING },
-    });
-
-    if (pendingPRs.length === 0) {
-      this.logger.log('No pending PRs to check');
-      return;
-    }
-
-    this.logger.log(`Found ${pendingPRs.length} pending PRs to check`);
-
-    for (const pr of pendingPRs) {
-      await this.checkPRStatus(pr);
-    }
-  }
-
-  /**
-   * Check the status of a specific PR
-   */
-  async checkPRStatus(pr: TokenRegistry): Promise<TokenRegistry> {
-    try {
-      const url = `https://api.github.com/repos/${this.repoOwner}/${this.repoName}/pulls/${pr.pr_number}`;
-      const response = await firstValueFrom(this.httpService.get(url));
-
-      pr.last_checked = new Date();
-
-      // Update status based on GitHub response
-      if (response.data.state === 'closed') {
-        if (response.data.merged) {
-          pr.status = TokenRegistryStatus.MERGED;
-          pr.merged_at = new Date(response.data.merged_at);
-          this.logger.log(`PR #${pr.pr_number} for vault ${pr.vault_id} has been merged`);
-        } else {
-          pr.status = TokenRegistryStatus.REJECTED;
-          this.logger.warn(`PR #${pr.pr_number} for vault ${pr.vault_id} was rejected`);
-        }
-      }
-
-      // Save the updated PR record
-      return this.TokenRegistryRepository.save(pr);
-    } catch (error) {
-      this.logger.error(`Error checking PR #${pr.pr_number} status:`, error.message);
-
-      // If PR not found, mark as failed
-      if (error.response?.status === 404) {
-        pr.status = TokenRegistryStatus.FAILED;
-        return this.TokenRegistryRepository.save(pr);
-      }
-
-      // Return the PR without changes for other errors
-      return pr;
     }
   }
 }

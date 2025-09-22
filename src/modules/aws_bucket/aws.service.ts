@@ -22,7 +22,7 @@ export class AwsService {
     private readonly fileRepository: Repository<FileEntity>,
     private readonly httpService: HttpService
   ) {}
-  getS3() {
+  getS3(): AWS.S3 {
     if (this.s3) {
       return this.s3;
     }
@@ -60,7 +60,7 @@ export class AwsService {
     });
   }
 
-  async getPreSignedURL(bucketName: string, key: string, contentType: string) {
+  async getPreSignedURL(bucketName: string, key: string, contentType: string): Promise<string> {
     const s3 = this.getS3();
     const params = {
       Bucket: bucketName,
@@ -76,6 +76,7 @@ export class AwsService {
     return this.httpService.get(preSignedUrl, { responseType: 'stream' }).toPromise();
   }
 
+  // TODO: Remove csv upload to S3
   async getCsv(bucketKey: string) {
     const preSignedUrl = await this.getPreSignedURL(this.bucketName, bucketKey, 'text/csv');
     return this.httpService.get(preSignedUrl, { responseType: 'stream' }).toPromise();
@@ -159,5 +160,34 @@ export class AwsService {
       this.logger.error('Error uploading image file:', error);
       throw new BadRequestException('Failed to upload image file');
     }
+  }
+
+  /**
+   * Creates a new file record in the database for a vault, referencing an existing S3 object.
+   *
+   * @param fileKey - The S3 key of the original file to reference.
+   * @returns A promise that resolves to the newly created FileEntity.
+   * @throws {BadRequestException} If the original file with the given key is not found.
+   */
+  async createFileRecordForVault(fileKey: string): Promise<FileEntity> {
+    // Find the original file to get its metadata
+    const originalFile = await this.fileRepository.findOne({
+      where: { file_key: fileKey },
+    });
+
+    if (!originalFile) {
+      throw new BadRequestException(`File with key ${fileKey} not found`);
+    }
+
+    // Create a new file entity that points to the same S3 object
+    const newFile = this.fileRepository.create({
+      file_key: originalFile.file_key, // Same S3 key
+      file_url: originalFile.file_url,
+      file_name: originalFile.file_name,
+      file_type: originalFile.file_type,
+    });
+
+    // Save and return the new file entity
+    return this.fileRepository.save(newFile);
   }
 }

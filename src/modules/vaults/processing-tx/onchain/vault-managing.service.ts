@@ -9,7 +9,14 @@ import {
   FixedTransaction,
   PrivateKey,
 } from '@emurgo/cardano-serialization-lib-nodejs';
-import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -140,12 +147,14 @@ export class VaultManagingService {
       'x-api-key': this.anvilApiKey,
       'Content-Type': 'application/json',
     };
+    //9a9b0bc93c26a40952aaff525ac72a992a77ebfa29012c9cb4a72eb2 contribution script hash
+    //0f9d90277089b2f442bef581dcc1d333a92c3fedf688700c4e39ab89 contribution script hash with verbous
+    const unparametizedScriptHash = '9a9b0bc93c26a40952aaff525ac72a992a77ebfa29012c9cb4a72eb2';
 
     // Apply parameters to the blueprint before building the transaction
     const applyParamsPayload = {
       params: {
-        //9a9b0bc93c26a40952aaff525ac72a992a77ebfa29012c9cb4a72eb2 contribution script hash
-        '9a9b0bc93c26a40952aaff525ac72a992a77ebfa29012c9cb4a72eb2': [
+        [unparametizedScriptHash]: [
           this.scPolicyId, // policy id of the vault
           assetName, // newly created vault id from generate_tag_from_txhash_index
         ],
@@ -181,8 +190,8 @@ export class VaultManagingService {
             title: 'l4va/vault/' + assetName,
             version: '0.0.1',
           },
-          validators: applyParamsResult.preloadedScript.blueprint.validators.filter((v: any) =>
-            v.title.includes('contribute')
+          validators: applyParamsResult.preloadedScript.blueprint.validators.filter(
+            (v: any) => v.title.includes('contribute') && v.hash !== unparametizedScriptHash
           ),
         },
       }),
@@ -191,8 +200,9 @@ export class VaultManagingService {
     await uploadScriptResponse.json();
 
     const scriptHash =
-      applyParamsResult.preloadedScript.blueprint.validators.find((v: any) => v.title === 'contribute.contribute.mint')
-        ?.hash || '';
+      applyParamsResult.preloadedScript.blueprint.validators.find(
+        (v: any) => v.title === 'contribute.contribute.mint' && v.hash !== unparametizedScriptHash
+      )?.hash || '';
     if (!scriptHash) {
       throw new Error('Failed to find script hash');
     }
@@ -225,7 +235,7 @@ export class VaultManagingService {
         requiredInputs: string[];
       } = {
         changeAddress: vaultConfig.customerAddress,
-        message: vaultConfig.vaultName,
+        message: `${vaultConfig.vaultName} Vault Creation`,
         mint: [
           {
             version: 'cip25',
@@ -367,50 +377,83 @@ export class VaultManagingService {
     presignedTx: string;
     contractAddress: string;
   }> {
-    const vaultUtxo = await getVaultUtxo(this.scPolicyId, burnConfig.assetVaultName, this.blockfrost);
-    const input = {
-      changeAddress: burnConfig.customerAddress,
-      message: 'Vault Burn',
-      scriptInteractions: [
-        {
-          purpose: 'spend',
-          outputRef: vaultUtxo,
-          hash: this.scPolicyId,
-          redeemer: {
-            type: 'json',
-            value: 'VaultBurn',
-          },
-        },
-        {
-          purpose: 'mint',
-          hash: this.scPolicyId,
-          redeemer: {
-            type: 'json',
-            value: 'VaultBurn',
-          },
-        },
-      ],
-      mint: [
-        {
-          version: 'cip25',
-          assetName: { name: burnConfig.assetVaultName, format: 'hex' },
-          policyId: this.scPolicyId,
-          type: 'plutus',
-          quantity: -1,
-        },
-      ],
-      requiredSigners: [this.adminHash],
-    };
-    const buildResponse = await this.blockchainService.buildTransaction(input);
+    this.logger.log(`Creating burn transaction for vault ${burnConfig.assetVaultName}`);
 
-    // Sign the transaction
-    const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-    txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+    try {
+      if (!burnConfig.customerAddress) {
+        throw new BadRequestException('Customer address is required');
+      }
 
-    return {
-      presignedTx: txToSubmitOnChain.to_hex(),
-      contractAddress: this.scAddress,
-    };
+      if (!burnConfig.assetVaultName) {
+        throw new BadRequestException('Asset vault name is required');
+      }
+
+      // Get the vault UTXO
+      const vaultUtxo = await getVaultUtxo(this.scPolicyId, burnConfig.assetVaultName, this.blockfrost);
+
+      if (!vaultUtxo) {
+        throw new NotFoundException(`Vault UTXO not found for asset name ${burnConfig.assetVaultName}`);
+      }
+
+      // Create transaction input
+      const input = {
+        changeAddress: burnConfig.customerAddress,
+        message: 'Vault Burn',
+        scriptInteractions: [
+          {
+            purpose: 'spend',
+            outputRef: vaultUtxo,
+            hash: this.scPolicyId,
+            redeemer: {
+              type: 'json',
+              value: 'VaultBurn',
+            },
+          },
+          {
+            purpose: 'mint',
+            hash: this.scPolicyId,
+            redeemer: {
+              type: 'json',
+              value: 'VaultBurn',
+            },
+          },
+        ],
+        mint: [
+          {
+            version: 'cip25',
+            assetName: { name: burnConfig.assetVaultName, format: 'hex' },
+            policyId: this.scPolicyId,
+            type: 'plutus',
+            quantity: -1,
+          },
+        ],
+        requiredSigners: [this.adminHash],
+      };
+
+      const buildResponse = await this.blockchainService.buildTransaction(input);
+
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+      this.logger.log(`Successfully created burn transaction for vault ${burnConfig.assetVaultName}`);
+
+      return {
+        presignedTx: txToSubmitOnChain.to_hex(),
+        contractAddress: this.scAddress,
+      };
+    } catch (error) {
+      // this.logger.error(`Failed to create burn transaction for vault ${burnConfig.assetVaultName}:`, error);
+
+      if (error instanceof NotFoundException || error instanceof BadRequestException) {
+        throw error;
+      }
+
+      if (error.status_code && error.message) {
+        throw new InternalServerErrorException(`Blockchain API error (${error.status_code}): ${error.message}`);
+      }
+
+      throw new InternalServerErrorException(`Failed to create burn transaction: ${error.message || 'Unknown error'}`);
+    }
   }
 
   // Create a transaction to update the vault's metadata
@@ -454,7 +497,7 @@ export class VaultManagingService {
     const vaultUtxo = await getVaultUtxo(this.scPolicyId, vault.asset_vault_name, this.blockfrost);
     const input = {
       changeAddress: this.adminAddress,
-      message: 'Vault Update',
+      message: `Vault ${vault.id} Update`,
       scriptInteractions: [
         {
           purpose: 'spend',
@@ -507,16 +550,7 @@ export class VaultManagingService {
                 },
               },
               valuation_type: vault.value_method === 'fixed' ? 0 : 1,
-              custom_metadata: [
-                // <Data,Data>
-                // [
-                //   PlutusData.new_bytes(Buffer.from("foo")).to_hex(),
-                //   PlutusData.new_bytes(Buffer.from("bar")).to_hex(),
-                // ],
-                [toHex('foo'), toHex('bar')],
-                [toHex('bar'), toHex('foo')],
-                [toHex('inc'), toHex('3')],
-              ],
+              custom_metadata: [],
               admin: this.adminHash,
               minting_key: this.adminHash,
               // New fields from update_vault.ts

@@ -22,14 +22,14 @@ export class DistributionService {
     lpVtAmount: number;
     lpAdaAmount: number;
     vtPrice: number;
-    VT_SUPPLY: number;
+    vtSupply: number;
     ASSETS_OFFERED_PERCENT: number;
     LP_PERCENT: number;
   }): number {
-    const { VT_SUPPLY, ASSETS_OFFERED_PERCENT, valueContributed, totalTvl } = params;
+    const { vtSupply, ASSETS_OFFERED_PERCENT, valueContributed, totalTvl } = params;
 
     const contributorShare = valueContributed / totalTvl;
-    const vtRetained = this.round6(VT_SUPPLY * (1 - ASSETS_OFFERED_PERCENT) * contributorShare);
+    const vtRetained = this.round6(vtSupply * (1 - ASSETS_OFFERED_PERCENT) * contributorShare);
     // const lpVtRetained = this.round6(lpVtAmount * LP_PERCENT);
     // const lpAdaRetained = this.round6(lpAdaAmount * LP_PERCENT);
     // const vtAdaValue = this.round6(vtRetained * vtPrice);
@@ -45,15 +45,15 @@ export class DistributionService {
     totalAcquiredValueAda: number;
     lpVtAmount: number;
     lpAdaAmount: number;
-    VT_SUPPLY: number;
+    vtSupply: number;
     ASSETS_OFFERED_PERCENT: number;
     vtPrice: number;
   }): number {
-    const { adaSent, VT_SUPPLY, ASSETS_OFFERED_PERCENT, totalAcquiredValueAda, lpVtAmount } = params;
+    const { adaSent, vtSupply, ASSETS_OFFERED_PERCENT, totalAcquiredValueAda, lpVtAmount } = params;
 
     // ((ADA sent to the vault / total acquire ADA) * Assets Offered Percent) * (VT Supply - LP VT)
     const percentOfTotalAcquireAdaSent = this.round6(adaSent / totalAcquiredValueAda);
-    const vtReceived = this.round6(percentOfTotalAcquireAdaSent * ASSETS_OFFERED_PERCENT * (VT_SUPPLY - lpVtAmount));
+    const vtReceived = this.round6(percentOfTotalAcquireAdaSent * ASSETS_OFFERED_PERCENT * (vtSupply - lpVtAmount));
 
     // const vtValueInAda = this.round6(vtReceived * vtPrice);
     // const lpAdaInitialShare = this.round6(percentOfTotalAcquireAdaSent * lpAdaAmount);
@@ -84,7 +84,7 @@ export class DistributionService {
     const vtPrice = this.round6(
       this.calculateVtPrice({
         totalAcquiredAda,
-        VT_SUPPLY: vtSupply,
+        vtSupply: vtSupply,
         ASSETS_OFFERED_PERCENT: assetsOfferedPercent,
       })
     );
@@ -169,14 +169,14 @@ export class DistributionService {
 
   private calculateVtPrice({
     totalAcquiredAda,
-    VT_SUPPLY,
+    vtSupply,
     ASSETS_OFFERED_PERCENT,
   }: {
     totalAcquiredAda: number;
-    VT_SUPPLY: number;
+    vtSupply: number;
     ASSETS_OFFERED_PERCENT: number;
   }): number {
-    return totalAcquiredAda / ASSETS_OFFERED_PERCENT / VT_SUPPLY;
+    return totalAcquiredAda / ASSETS_OFFERED_PERCENT / vtSupply;
   }
 
   private calculateTotalValueRetained(netAda: number, vtAda: number, lpAda: number, lpVtAda: number): number {

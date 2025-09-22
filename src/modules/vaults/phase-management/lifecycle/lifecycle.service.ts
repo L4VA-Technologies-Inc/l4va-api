@@ -8,15 +8,18 @@ import { Repository } from 'typeorm';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
+import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { DistributionService } from '@/modules/distribution/distribution.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { ContributionService } from '@/modules/vaults/phase-management/contribution/contribution.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
+import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
 import { AssetOriginType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
+import { TokenRegistryStatus } from '@/types/tokenRegistry.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import {
   VaultStatus,
@@ -40,23 +43,22 @@ export class LifecycleService {
     private readonly claimRepository: Repository<Claim>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
+    @InjectRepository(TokenRegistry)
+    private readonly tokenRegistryRepository: Repository<TokenRegistry>,
     private readonly contributionService: ContributionService,
     private readonly vaultManagingService: VaultManagingService,
     private readonly transactionsService: TransactionsService,
     private readonly distributionService: DistributionService,
     private readonly taptoolsService: TaptoolsService,
+    private readonly metadataRegistryApiService: MetadataRegistryApiService,
     private readonly eventEmitter: EventEmitter2
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
   async handleVaultLifecycleTransitions(): Promise<void> {
-    await this.handlePublishedToContribution();
-
-    // Handle contribution -> acquire transitions
-    await this.handleContributionToInvestment();
-
-    // Handle acquire -> governance transitions
-    await this.handleInvestmentToGovernance();
+    await this.handlePublishedToContribution(); // Handle created vault -> contribution transitin
+    await this.handleContributionToAcquire(); // Handle contribution -> acquire transitions
+    await this.handleAcquireToGovernance(); // Handle acquire -> governance transitions
   }
 
   private async queuePhaseTransition(
@@ -113,10 +115,6 @@ export class LifecycleService {
       );
     } else {
       // If more than 1 minute away, don't queue - let future cron runs handle it
-      this.logger.log(
-        `Vault ${vaultId} phase transition to ${newStatus} scheduled in ${Math.round(delay / 1000)} seconds. ` +
-          `Will be queued when closer to transition time.`
-      );
     }
   }
 
@@ -133,6 +131,7 @@ export class LifecycleService {
     try {
       const vault = await this.vaultRepository.findOne({
         where: { id: data.vaultId },
+        relations: ['owner'],
       });
 
       if (!vault) {
@@ -141,6 +140,41 @@ export class LifecycleService {
       }
 
       vault.vault_status = data.newStatus;
+
+      if (data.phaseStartField) {
+        vault[data.phaseStartField] = new Date().toISOString();
+      }
+
+      if (data.newStatus === VaultStatus.failed) {
+        const pr = await this.tokenRegistryRepository.findOne({
+          where: {
+            vault: { id: data.vaultId },
+            status: TokenRegistryStatus.PENDING,
+          },
+        });
+
+        if (pr) {
+          try {
+            await this.metadataRegistryApiService.closePullRequest(
+              pr.pr_number,
+              `Closing PR automatically because vault ${vault.name} has failed.`
+            );
+            this.logger.log(`Successfully closed PR #${pr.pr_number} for failed vault ${data.vaultId}`);
+          } catch (error) {
+            this.logger.error(`Failed to close PR #${pr.pr_number} for vault ${data.vaultId}:`, error);
+          }
+        }
+      }
+
+      if (data.newStatus === VaultStatus.contribution) {
+        this.eventEmitter.emit('vault.launched', {
+          vaultId: vault.id,
+          address: vault.owner.address,
+          vaultName: vault.name,
+          contributionStartDate: new Date(vault.contribution_phase_start).toLocaleDateString(),
+          contributionStartTime: new Date(vault.contribution_phase_start).toLocaleTimeString(),
+        });
+      }
 
       if (data.newScStatus === SmartContractVaultStatus.SUCCESSFUL) {
         vault.vault_sc_status = data.newScStatus;
@@ -155,10 +189,6 @@ export class LifecycleService {
 
       if (data.newScStatus === SmartContractVaultStatus.CANCELLED) {
         vault.vault_sc_status = data.newScStatus;
-      }
-
-      if (data.phaseStartField) {
-        vault[data.phaseStartField] = new Date().toISOString();
       }
 
       await this.vaultRepository.save(vault);
@@ -219,8 +249,10 @@ export class LifecycleService {
       vault.total_assets_cost_usd = assetsValue.totalValueUsd;
 
       // Calculate threshold Price
-      vault.require_reserved_cost_ada = assetsValue.totalValueAda * (vault.acquire_reserve * 0.01);
-      vault.require_reserved_cost_usd = assetsValue.totalValueUsd * (vault.acquire_reserve * 0.01);
+      vault.require_reserved_cost_ada =
+        assetsValue.totalValueAda * (vault.tokens_for_acquires * 0.01) * (vault.acquire_reserve * 0.01);
+      vault.require_reserved_cost_usd =
+        assetsValue.totalValueUsd * (vault.tokens_for_acquires * 0.01) * (vault.acquire_reserve * 0.01);
 
       const emitContributionCompleteEvent = async (): Promise<void> => {
         try {
@@ -400,22 +432,33 @@ export class LifecycleService {
       );
 
       if (meetsThreshold) {
+        const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
         // 3. Calculate LP Tokens
         const { lpAdaAmount, lpVtAmount, vtPrice } = await this.distributionService.calculateLpTokens({
-          vtSupply: vault.ft_token_supply || 0,
+          vtSupply,
           totalAcquiredAda,
           assetsOfferedPercent: vault.tokens_for_acquires * 0.01,
           lpPercent: vault.liquidity_pool_contribution * 0.01,
         });
         // Create LP claim record
         try {
-          await this.claimRepository.save({
-            vault: { id: vault.id },
-            type: ClaimType.LP,
-            amount: lpVtAmount,
-            status: ClaimStatus.AVAILABLE,
+          const lpClaim = await this.claimRepository.findOne({
+            where: {
+              vault: { id: vault.id },
+              type: ClaimType.LP,
+            },
           });
-          this.logger.log(`Created LP claim for vault owner: ${lpVtAmount} VT tokens (${lpAdaAmount} ADA)`);
+          if (!lpClaim) {
+            await this.claimRepository.save({
+              vault: { id: vault.id },
+              type: ClaimType.LP,
+              amount: lpVtAmount,
+              status: ClaimStatus.AVAILABLE,
+            });
+            this.logger.log(`Created LP claim for vault owner: ${lpVtAmount} VT tokens (${lpAdaAmount} ADA)`);
+          } else {
+            this.logger.log(`LP claim already exists for vault ${vault.id}, skipping creation.`);
+          }
         } catch (error) {
           this.logger.error(`Failed to create LP claim for vault ${vault.id}:`, error);
         }
@@ -448,7 +491,7 @@ export class LifecycleService {
               continue;
             }
 
-            const vtReceived = await this.distributionService.calculateAcquirerTokens({
+            const rawVtReceived = await this.distributionService.calculateAcquirerTokens({
               vaultId: vault.id,
               adaSent,
               numAcquirers: Object.keys(userAcquiredAdaMap).length,
@@ -456,12 +499,15 @@ export class LifecycleService {
               lpAdaAmount,
               lpVtAmount,
               vtPrice,
-              VT_SUPPLY: vault.ft_token_supply,
+              vtSupply,
               ASSETS_OFFERED_PERCENT,
             });
 
+            const multiplier = Math.floor(rawVtReceived / adaSent / 1_000_000);
+            const adjustedVtAmount = multiplier * adaSent * 1_000_000;
+
             this.logger.debug(
-              `--- Acquirer ${userId} will receive VT: ${vtReceived} (for ADA sent: ${adaSent} in tx ${tx.id})`
+              `Acquirer ${userId} - Raw VT: ${rawVtReceived}, Multiplier: ${multiplier}, Adjusted VT: ${adjustedVtAmount}`
             );
 
             // Create claim record for this specific acquisition transaction
@@ -469,14 +515,11 @@ export class LifecycleService {
               user: { id: userId },
               vault: { id: vault.id },
               type: ClaimType.ACQUIRER,
-              amount: vtReceived,
+              amount: adjustedVtAmount,
               status: ClaimStatus.AVAILABLE,
               transaction: { id: tx.id },
             });
             acquirerClaims.push(claim);
-            this.logger.log(
-              `Created acquirer claim for user ${userId}: ${vtReceived} VT tokens for transaction ${tx.id}`
-            );
           } catch (error) {
             this.logger.error(`Failed to create acquirer claim for user ${userId} transaction ${tx.id}:`, error);
           }
@@ -526,7 +569,7 @@ export class LifecycleService {
               lpAdaAmount,
               lpVtAmount,
               vtPrice,
-              VT_SUPPLY: vault.ft_token_supply,
+              vtSupply,
               ASSETS_OFFERED_PERCENT,
               LP_PERCENT,
             });
@@ -643,8 +686,91 @@ export class LifecycleService {
             `Required: ${requiredThresholdAda} ADA`
         );
 
-        // TODO: Burn the vault and refund assets
-        this.logger.warn(`Vault ${vault.id} needs to be burned and assets refunded`);
+        // TODO: Automatic refund assets
+        // const cancelClaims: Partial<Claim>[] = [];
+
+        // for (const tx of [...acquisitionTransactions, ...contributionTransactions]) {
+        //   if (!tx.user || !tx.user.id) continue;
+
+        //   const userId = tx.user.id;
+        //   const adaSent = tx.amount || 0;
+
+        //   // Skip transactions with zero amount
+        //   if (adaSent <= 0) continue;
+
+        //   try {
+        //     // Check if a claim for this transaction already exists
+        //     const existingClaim = await this.claimRepository.findOne({
+        //       where: {
+        //         transaction: { id: tx.id },
+        //         type: ClaimType.FINAL_DISTRIBUTION,
+        //       },
+        //     });
+
+        //     if (existingClaim) {
+        //       this.logger.log(`Claim already exists for acquirer transaction ${tx.id}, skipping.`);
+        //       continue;
+        //     }
+
+        //     if (tx.type === TransactionType.contribute) {
+        //       // Get assets associated with this transaction
+        //       const txAssets = await this.assetsRepository.find({
+        //         where: {
+        //           transaction: { id: tx.id },
+        //           origin_type: AssetOriginType.CONTRIBUTED,
+        //           deleted: false,
+        //         },
+        //       });
+
+        //       // Create claim record with asset information
+        //       const claim = this.claimRepository.create({
+        //         user: { id: userId },
+        //         vault: { id: vault.id },
+        //         type: ClaimType.FINAL_DISTRIBUTION,
+        //         status: ClaimStatus.AVAILABLE,
+        //         metadata: {
+        //           assets: txAssets.map(asset => ({
+        //             id: asset.id,
+        //             policyId: asset.policy_id,
+        //             assetId: asset.asset_id,
+        //             quantity: asset.quantity,
+        //             type: asset.type,
+        //           })),
+        //           assetIds: txAssets.map(asset => asset.id),
+        //           isContribution: true,
+        //         },
+        //         transaction: { id: tx.id },
+        //       });
+        //       cancelClaims.push(claim);
+        //     }
+        //     // For acquisition transactions
+        //     else if (tx.type === TransactionType.acquire) {
+        //       const claim = this.claimRepository.create({
+        //         user: { id: userId },
+        //         vault: { id: vault.id },
+        //         type: ClaimType.FINAL_DISTRIBUTION,
+        //         status: ClaimStatus.AVAILABLE,
+        //         metadata: {
+        //           adaAmount: tx.amount,
+        //           isAcquisition: true,
+        //         },
+        //         transaction: { id: tx.id },
+        //       });
+        //       cancelClaims.push(claim);
+        //     }
+        //   } catch (error) {
+        //     this.logger.error(`Failed to create cancel claim for user ${userId} transaction ${tx.id}:`, error);
+        //   }
+        // }
+
+        // if (cancelClaims.length > 0) {
+        //   try {
+        //     await this.claimRepository.save(cancelClaims);
+        //   } catch (error) {
+        //     this.logger.error(`Failed to save batch of acquirer claims:`, error);
+        //   }
+        // }
+
         await this.executePhaseTransition({
           vaultId: vault.id,
           newStatus: VaultStatus.failed,
@@ -655,7 +781,7 @@ export class LifecycleService {
           this.eventEmitter.emit('vault.failed', {
             vaultId: vault.id,
             vaultName: vault.name,
-            contributorIds: [...new Set(contributionTransactions.map(tx => tx.user?.id).filter(Boolean))],
+            contributorIds: [...new Set(contributionTransactions.map(tx => tx.user_id).filter(Boolean))],
           });
         } catch (error) {
           this.logger.error(`Error emitting vault.failed event for vault ${vault.id}:`, error);
@@ -697,7 +823,7 @@ export class LifecycleService {
     }
   }
 
-  private async handleContributionToInvestment(): Promise<void> {
+  private async handleContributionToAcquire(): Promise<void> {
     const now = new Date();
     const contributionVaults = await this.vaultRepository
       .createQueryBuilder('vault')
@@ -705,6 +831,7 @@ export class LifecycleService {
       .andWhere('vault.contribution_phase_start IS NOT NULL')
       .andWhere('vault.contribution_duration IS NOT NULL')
       .leftJoinAndSelect('vault.owner', 'owner')
+      .leftJoinAndSelect('vault.assets_whitelist', 'assetsWhitelist')
       .getMany();
 
     for (const vault of contributionVaults) {
@@ -720,55 +847,135 @@ export class LifecycleService {
 
       await this.contributionService.syncContributionTransactions(vault.id);
 
-      const assets = await this.assetsRepository.find({ where: { vault: { id: vault.id }, deleted: false } });
-      // Check if vault has any non-deleted assets
-      const hasAssets = assets?.some(asset => !asset.deleted) || false;
+      const assets = await this.assetsRepository.find({
+        where: { vault: { id: vault.id }, deleted: false },
+        select: ['id', 'policy_id', 'quantity'],
+      });
 
-      // If no assets, burn the vault using admin wallet
-      if (!hasAssets) {
-        try {
-          this.logger.log(`Vault ${vault.id} has no assets and contribution period has ended. Burning vault...`);
-          // Update vault status to failed
+      const policyIdCounts = assets.reduce(
+        (counts, asset) => {
+          if (!counts[asset.policy_id]) {
+            counts[asset.policy_id] = 0;
+          }
+          counts[asset.policy_id] += asset.quantity || 1;
+          return counts;
+        },
+        {} as Record<string, number>
+      );
+
+      let assetsWithinThreshold = true;
+      const thresholdViolations: Array<{ policyId: string; count: number; min: number; max: number }> = [];
+
+      if (vault.assets_whitelist && vault.assets_whitelist.length > 0) {
+        for (const whitelistItem of vault.assets_whitelist) {
+          const policyId = whitelistItem.policy_id;
+          const count = policyIdCounts[policyId] || 0;
+
+          if (count < whitelistItem.asset_count_cap_min || count > whitelistItem.asset_count_cap_max) {
+            assetsWithinThreshold = false;
+            thresholdViolations.push({
+              policyId,
+              count,
+              min: whitelistItem.asset_count_cap_min,
+              max: whitelistItem.asset_count_cap_max,
+            });
+          }
+        }
+
+        if (!assetsWithinThreshold) {
+          this.logger.warn(
+            `Vault ${vault.id} assets do not meet threshold requirements: ${JSON.stringify(thresholdViolations)}`
+          );
+
+          const contributionTransactions = await this.transactionsRepository.find({
+            where: {
+              vault_id: vault.id,
+              type: TransactionType.contribute,
+              status: TransactionStatus.confirmed,
+            },
+            relations: ['user'],
+          });
+
+          const cancelClaims: Partial<Claim>[] = [];
+
+          for (const tx of contributionTransactions) {
+            if (!tx.user || !tx.user.id) continue;
+
+            const userId = tx.user.id;
+
+            try {
+              // Check if a claim for this transaction already exists
+              const existingClaim = await this.claimRepository.findOne({
+                where: {
+                  transaction: { id: tx.id },
+                  type: ClaimType.FINAL_DISTRIBUTION,
+                },
+              });
+
+              if (existingClaim) {
+                this.logger.log(`Claim already exists for contribution transaction ${tx.id}, skipping.`);
+                continue;
+              }
+
+              // Get assets associated with this transaction
+              const txAssets = await this.assetsRepository.find({
+                where: {
+                  transaction: { id: tx.id },
+                  origin_type: AssetOriginType.CONTRIBUTED,
+                  deleted: false,
+                },
+              });
+
+              // Create claim record with asset information
+              const claim = this.claimRepository.create({
+                user: { id: userId },
+                vault: { id: vault.id },
+                type: ClaimType.FINAL_DISTRIBUTION,
+                status: ClaimStatus.AVAILABLE,
+                metadata: {
+                  assets: txAssets.map(asset => ({
+                    id: asset.id,
+                    policyId: asset.policy_id,
+                    assetId: asset.asset_id,
+                    quantity: asset.quantity,
+                    type: asset.type,
+                  })),
+                  assetIds: txAssets.map(asset => asset.id),
+                  isContribution: true,
+                  failureReason: 'threshold_violation',
+                  violations: thresholdViolations,
+                },
+                transaction: { id: tx.id },
+              });
+              cancelClaims.push(claim);
+            } catch (error) {
+              this.logger.error(`Failed to create cancel claim for user ${userId} transaction ${tx.id}:`, error);
+            }
+          }
+
+          if (cancelClaims.length > 0) {
+            try {
+              await this.claimRepository.save(cancelClaims);
+              this.logger.log(`Created ${cancelClaims.length} cancellation claims for failed vault ${vault.id}`);
+            } catch (error) {
+              this.logger.error(`Failed to save batch of cancellation claims:`, error);
+            }
+          }
+          // If assets don't meet threshold requirements, fail the vault
           await this.executePhaseTransition({
             vaultId: vault.id,
             newStatus: VaultStatus.failed,
             newScStatus: SmartContractVaultStatus.CANCELLED,
           });
 
-          // // Use admin wallet to burn the vault
-          // const burnTx = await this.vaultContractService.createBurnTx({
-          //   customerAddress: vault.owner.address, // Still track the original owner
-          //   assetVaultName: vault.asset_vault_name,
-          // });
-
-          // // Submit the transaction using admin wallet
-          // const { txHash } = await this.vaultContractService.submitOnChainVaultTx({
-          //   transaction: burnTx.presignedTx,
-          //   signatures: [], // Admin signature is already included in presignedTx
-          // });
-
-          // // Update vault status
-          // vault.deleted = true;
-          // vault.liquidation_hash = txHash;
-          // await this.vaultRepository.save(vault);
-
-          // this.logger.log(`Successfully burned empty vault ${vault.id} in transaction ${txHash}`);
-
-          continue;
-        } catch (error) {
-          this.logger.error(`Failed to burn empty vault ${vault.id}:`, error.message);
-          // Continue with other vaults even if one fails
+          return;
         }
-        continue;
       }
-
-      // If we get here, the vault has assets and the contribution period has ended
-      // Execute the transition immediately since the time has passed
       await this.executeContributionToAcquireTransition(vault);
     }
   }
 
-  private async handleInvestmentToGovernance(): Promise<void> {
+  private async handleAcquireToGovernance(): Promise<void> {
     const acquireVaults = await this.vaultRepository
       .createQueryBuilder('vault')
       .where('vault.vault_status = :status', { status: VaultStatus.acquire })

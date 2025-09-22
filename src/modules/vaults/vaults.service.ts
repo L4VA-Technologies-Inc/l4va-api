@@ -1,21 +1,29 @@
 import { Credential, EnterpriseAddress, ScriptHash } from '@emurgo/cardano-serialization-lib-nodejs';
-import { BadRequestException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
-import { Brackets, In, Repository } from 'typeorm';
+import { Brackets, In, Not, Repository } from 'typeorm';
 
 import { AwsService } from '../aws_bucket/aws.service';
 import { TaptoolsService } from '../taptools/taptools.service';
 
 import { CreateVaultReq } from './dto/createVault.req';
-import { SortOrder, VaultFilter, VaultSortField } from './dto/get-vaults.dto';
+import { VaultStatisticsResponse } from './dto/get-vaults-statistics.dto';
+import { DateRangeDto, SortOrder, TVLCurrency, VaultFilter, VaultSortField } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { PublishVaultDto } from './dto/publish-vault.dto';
 import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { BlockchainScannerService } from './processing-tx/onchain/blockchain-scanner.service';
+import { BlockchainService } from './processing-tx/onchain/blockchain.service';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
 import { VaultManagingService } from './processing-tx/onchain/vault-managing.service';
 
@@ -83,6 +91,8 @@ export class VaultsService {
     private readonly awsService: AwsService,
     private readonly vaultContractService: VaultManagingService,
     private readonly blockchainScannerService: BlockchainScannerService,
+    private readonly blockchainService: BlockchainService,
+
     private readonly taptoolsService: TaptoolsService,
     private readonly transactionsService: TransactionsService,
     private readonly eventEmitter: EventEmitter2
@@ -118,8 +128,12 @@ export class VaultsService {
         .to_address()
         .to_bech32();
 
-      vault.contract_address = SC_ADDRESS;
-      await this.vaultsRepository.save(vault);
+      const updateResult = await this.vaultsRepository.update({ id: vault.id }, { contract_address: SC_ADDRESS });
+
+      if (updateResult.affected === 0) {
+        this.logger.error(`Vault ${vault.id} not found during transaction confirmation`);
+        return;
+      }
 
       this.logger.log(`Successfully processed transaction ${txHash} for vault ${vault.id}`);
     } catch (error) {
@@ -137,7 +151,6 @@ export class VaultsService {
       return this.confirmAndProcessTransaction(txHash, vault, attempt + 1);
     }
   }
-
   /**
    * Parses a CSV file from AWS S3 and extracts valid Cardano addresses.
    * @param file_key - S3 file key
@@ -230,70 +243,25 @@ export class VaultsService {
       const imgKey = data.vaultImage?.split('image/')[1];
       let vaultImg = null;
       if (imgKey) {
-        vaultImg = await this.filesRepository.findOne({
-          where: { file_key: imgKey },
-        });
-
-        if (vaultImg) {
-          // Check if this file is already used by another vault
-          const existingVaultWithImage = await this.vaultsRepository.findOne({
-            where: { vault_image: { id: vaultImg.id } },
-          });
-
-          if (existingVaultWithImage) {
-            this.logger.log(
-              `Vault image file ${imgKey} is already in use by vault ${existingVaultWithImage.id}, allowing reuse`
-            );
-            // We'll allow reuse by setting vaultImg to null so it won't be assigned
-            vaultImg = null;
-          }
-        }
+        // Create a new file record that points to the same S3 object
+        vaultImg = await this.awsService.createFileRecordForVault(imgKey);
+        this.logger.log(`Created new file record for vault image: ${imgKey}`);
       }
 
+      // Same for FT token image
       const ftTokenImgKey = data.ftTokenImg?.split('image/')[1];
       let ftTokenImg = null;
       if (ftTokenImgKey) {
-        ftTokenImg = await this.filesRepository.findOne({
-          where: { file_key: ftTokenImgKey },
-        });
-
-        if (ftTokenImg) {
-          // Check if this file is already used by another vault
-          const existingVaultWithFtImage = await this.vaultsRepository.findOne({
-            where: { ft_token_img: { id: ftTokenImg.id } },
-          });
-
-          if (existingVaultWithFtImage) {
-            this.logger.log(
-              `FT token image file ${ftTokenImgKey} is already in use by vault ${existingVaultWithFtImage.id}, allowing reuse`
-            );
-            // We'll allow reuse by setting ftTokenImg to null so it won't be assigned
-            ftTokenImg = null;
-          }
-        }
+        ftTokenImg = await this.awsService.createFileRecordForVault(ftTokenImgKey);
+        this.logger.log(`Created new file record for FT token image: ${ftTokenImgKey}`);
       }
 
+      // Same for whitelist CSVs
       const acquirerWhitelistCsvKey = data.acquirerWhitelistCsv?.key;
       let acquirerWhitelistFile = null;
       if (acquirerWhitelistCsvKey) {
-        acquirerWhitelistFile = await this.filesRepository.findOne({
-          where: { file_key: acquirerWhitelistCsvKey },
-        });
-
-        if (acquirerWhitelistFile) {
-          // Check if this file is already used by another vault
-          const existingVaultWithCsv = await this.vaultsRepository.findOne({
-            where: { acquirer_whitelist_csv: { id: acquirerWhitelistFile.id } },
-          });
-
-          if (existingVaultWithCsv) {
-            this.logger.log(
-              `Acquirer whitelist CSV file ${acquirerWhitelistCsvKey} is already in use by vault ${existingVaultWithCsv.id}, allowing reuse`
-            );
-            // We'll allow reuse by setting acquirerWhitelistFile to null so it won't be assigned
-            acquirerWhitelistFile = null;
-          }
-        }
+        acquirerWhitelistFile = await this.awsService.createFileRecordForVault(acquirerWhitelistCsvKey);
+        this.logger.log(`Created new file record for acquirer whitelist: ${acquirerWhitelistCsvKey}`);
       }
 
       const contributorWhitelistCsvKey = data.contributorWhitelistCsv?.split('csv/')[1];
@@ -378,6 +346,19 @@ export class VaultsService {
       // Handle assets whitelist
       // TODO: Add lovelace support
       let maxCountOf = 0;
+      const uniquePolicyIds = new Set();
+
+      // First, validate for duplicate policy IDs
+      for (const assetItem of data.assetsWhitelist) {
+        if (assetItem.policyId) {
+          if (uniquePolicyIds.has(assetItem.policyId)) {
+            throw new BadRequestException(`Duplicate policy ID in assets whitelist: ${assetItem.policyId}`);
+          }
+          uniquePolicyIds.add(assetItem.policyId);
+        }
+      }
+
+      // Then process them
       await Promise.all(
         data.assetsWhitelist.map(assetItem => {
           if (assetItem.policyId) {
@@ -537,15 +518,10 @@ export class VaultsService {
       finalVault.asset_vault_name = vaultAssetName;
       finalVault.script_hash = scriptHash;
       finalVault.apply_params_result = applyParamsResult;
+      finalVault.ft_token_decimals = 6; // Hardcoded to 6 for now as per requirements
+
       await this.vaultsRepository.save(finalVault);
 
-      this.eventEmitter.emit('vault.launched', {
-        vaultId: finalVault.id,
-        address: finalVault.owner.address,
-        vaultName: finalVault.name,
-        contributionStartDate: new Date(finalVault.contribution_open_window_time).toLocaleDateString(),
-        contributionStartTime: new Date(finalVault.contribution_open_window_time).toLocaleTimeString(),
-      });
       return {
         vaultId: finalVault.id,
         presignedTx,
@@ -585,6 +561,216 @@ export class VaultsService {
   }
 
   /**
+   * Retrieves statistics about vaults for the landing page.
+   *
+   * @returns Object containing platform statistics
+   */
+  async getVaultStatistics(): Promise<VaultStatisticsResponse> {
+    try {
+      // Count active vaults (published, contribution, acquire, locked)
+      const activeVaultsCount = await this.vaultsRepository.count({
+        where: {
+          vault_status: In([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked]),
+          deleted: false,
+        },
+      });
+
+      const totalVaultsCount = await this.vaultsRepository.count({
+        where: {
+          vault_status: In([VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked]),
+        },
+      });
+      // Get sum of total assets value for locked vaults only
+      const totalValueQuery = await this.vaultsRepository
+        .createQueryBuilder('vault')
+        .select('SUM(vault.total_assets_cost_usd)', 'totalValueUsd')
+        .addSelect('SUM(vault.total_assets_cost_ada)', 'totalValueAda')
+        .where('vault.vault_status = :status', { status: VaultStatus.locked })
+        .andWhere('vault.deleted = :deleted', { deleted: false })
+        .getRawOne();
+
+      // Count total assets contributed across all vaults
+      const totalContributedQuery = await this.vaultsRepository
+        .createQueryBuilder('vault')
+        .select('SUM(vault.total_assets_cost_usd)', 'totalValueUsd')
+        .addSelect('SUM(vault.total_assets_cost_ada)', 'totalValueAda')
+        .where('vault.vault_status IN (:...statuses)', {
+          statuses: [VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked, VaultStatus.failed],
+        })
+        .andWhere('vault.deleted = :deleted', { deleted: false })
+        .getRawOne();
+
+      // Count total assets ever contributed (all time, including removed)
+      const totalAssetsQuery = await this.assetsRepository
+        .createQueryBuilder('asset')
+        .select('COUNT(asset.id)', 'count')
+        .getRawOne();
+
+      // Get total acquired value (both ADA and USD) across all vaults
+      const totalAcquiredQuery = await this.vaultsRepository
+        .createQueryBuilder('vault')
+        .select('SUM(vault.total_acquired_value_ada)', 'totalAcquiredAda')
+        .getRawOne();
+
+      const vaultsByStage = await this.getVaultsByStageData();
+      const vaultsByType = await this.getVaultsByTypeData();
+
+      const adaPrice = await this.taptoolsService.getAdaPrice();
+
+      const statistics = {
+        activeVaults: activeVaultsCount,
+        totalVaults: totalVaultsCount,
+        totalValueUsd: Number(totalValueQuery?.totalValueUsd || 0),
+        totalValueAda: Number(totalValueQuery?.totalValueAda || 0),
+        totalContributedUsd: Number(totalContributedQuery?.totalValueUsd || 0),
+        totalContributedAda: Number(totalContributedQuery?.totalValueAda || 0),
+        totalAssets: Number(totalAssetsQuery?.count || 0),
+        totalAcquiredAda: Number(totalAcquiredQuery?.totalAcquiredAda || 0),
+        totalAcquiredUsd: parseFloat((Number(totalAcquiredQuery?.totalAcquiredAda || 0) * adaPrice).toFixed(2)),
+        vaultsByStage,
+        vaultsByType,
+      };
+
+      return plainToInstance(VaultStatisticsResponse, statistics, {
+        excludeExtraneousValues: true,
+      });
+    } catch (error) {
+      this.logger.error('Error retrieving vault statistics:', error);
+      throw new InternalServerErrorException('Failed to retrieve vault statistics');
+    }
+  }
+
+  /**
+   * Gets distribution of vaults by stage with TVL in both ADA and USD
+   * @returns Record of stages with percentages and TVL values
+   */
+  private async getVaultsByStageData(): Promise<
+    Record<string, { percentage: number; valueAda: string; valueUsd: string }>
+  > {
+    try {
+      // Get TVL by vault status for both currencies
+      const statusResults = await this.vaultsRepository
+        .createQueryBuilder('vault')
+        .select('vault.vault_status', 'status')
+        .addSelect('SUM(vault.total_assets_cost_ada)', 'valueAda')
+        .addSelect('SUM(vault.total_assets_cost_usd)', 'valueUsd')
+        .addSelect('COUNT(vault.id)', 'count')
+        .where('vault.deleted = :deleted', { deleted: false })
+        .andWhere('vault.vault_status IN (:...statuses)', {
+          statuses: ['contribution', 'acquire', 'locked', 'burned'],
+        })
+        .groupBy('vault.vault_status')
+        .getRawMany();
+
+      // Calculate total ADA value for percentages
+      const totalValueAda = statusResults.reduce((sum, item) => sum + Number(item.valueAda || 0), 0);
+
+      const result = {
+        contribution: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        acquire: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        locked: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        terminated: { percentage: 0, valueAda: '0', valueUsd: '0' },
+      };
+
+      const statusMap = {
+        contribution: 'contribution',
+        acquire: 'acquire',
+        locked: 'locked',
+        burned: 'terminated',
+      };
+
+      statusResults.forEach(item => {
+        const status = statusMap[item.status] || item.status;
+        const valueAda = Number(item.valueAda || 0);
+        const valueUsd = Number(item.valueUsd || 0);
+        const percentage = totalValueAda > 0 ? (valueAda / totalValueAda) * 100 : 0;
+
+        result[status.toLowerCase()] = {
+          percentage: parseFloat(percentage.toFixed(2)),
+          valueAda,
+          valueUsd,
+        };
+      });
+
+      return result;
+    } catch (error) {
+      this.logger.error('Error calculating vaults by stage:', error);
+      // Return default object with zero values for all required statuses
+      return {
+        contribution: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        acquire: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        locked: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        terminated: { percentage: 0, valueAda: '0', valueUsd: '0' },
+      };
+    }
+  }
+
+  /**
+   * Gets distribution of vaults by privacy type with TVL in both ADA and USD
+   * @returns Record of privacy types with percentages and TVL values
+   */
+  private async getVaultsByTypeData(): Promise<
+    Record<string, { percentage: number; valueAda: number; valueUsd: number }>
+  > {
+    try {
+      const privacyResults = await this.vaultsRepository
+        .createQueryBuilder('vault')
+        .select('vault.privacy', 'type')
+        .addSelect('SUM(vault.total_assets_cost_ada)', 'valueAda')
+        .addSelect('SUM(vault.total_assets_cost_usd)', 'valueUsd')
+        .addSelect('COUNT(vault.id)', 'count')
+        .where('vault.deleted = :deleted', { deleted: false })
+        .groupBy('vault.privacy')
+        .getRawMany();
+
+      const totalValueAda = privacyResults.reduce((sum, item) => sum + Number(item.valueAda || 0), 0);
+
+      const result = {
+        private: {
+          percentage: 0,
+          valueAda: 0,
+          valueUsd: 0,
+        },
+        public: {
+          percentage: 0,
+          valueAda: 0,
+          valueUsd: 0,
+        },
+        semiPrivate: {
+          percentage: 0,
+          valueAda: 0,
+          valueUsd: 0,
+        },
+      };
+
+      privacyResults.forEach(item => {
+        if (item.type) {
+          const type = item.type;
+          const valueAda = Number(item.valueAda || 0);
+          const valueUsd = Number(item.valueUsd || 0);
+          const percentage = parseFloat((totalValueAda > 0 ? (valueAda / totalValueAda) * 100 : 0).toFixed(2)) || 0;
+
+          const key = type === 'semi-private' ? 'semiPrivate' : type.toLowerCase();
+          result[key] = {
+            percentage,
+            valueAda,
+            valueUsd,
+          };
+        }
+      });
+
+      return result;
+    } catch (error) {
+      this.logger.error('Error calculating vaults by type:', error);
+      return {
+        private: { percentage: 0, valueAda: 0, valueUsd: 0 },
+        public: { percentage: 0, valueAda: 0, valueUsd: 0 },
+        semiPrivate: { percentage: 0, valueAda: 0, valueUsd: 0 },
+      };
+    }
+  }
+
+  /**
    * Publishes a vault by submitting a signed transaction and updating vault status.
    * Starts transaction confirmation in the background.
    * @param userId - ID of the vault owner
@@ -605,7 +791,7 @@ export class VaultsService {
     const publishedTx = await this.vaultContractService.submitOnChainVaultTx(
       signedTx,
       vault.asset_vault_name,
-      vault.liquidation_hash,
+      vault.script_hash,
       vault.apply_params_result
     );
     vault.vault_status = VaultStatus.published;
@@ -617,66 +803,6 @@ export class VaultsService {
     });
 
     return plainToInstance(VaultFullResponse, instanceToPlain(vault), { excludeExtraneousValues: true });
-  }
-
-  async getMyVaults(
-    userId: string,
-    filter?: VaultFilter,
-    page: number = 1,
-    limit: number = 10,
-    sortBy?: VaultSortField,
-    sortOrder: SortOrder = SortOrder.DESC
-  ): Promise<PaginatedResponseDto<VaultShortResponse>> {
-    const query = {
-      where: {
-        owner: { id: userId },
-        deleted: false,
-      },
-      relations: ['social_links', 'vault_image', 'banner_image'],
-      skip: (page - 1) * limit,
-      take: limit,
-      order: {},
-    };
-
-    if (filter) {
-      switch (filter) {
-        case VaultFilter.open:
-          query.where['vault_status'] = In([VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire]);
-          break;
-        case VaultFilter.locked:
-          query.where['vault_status'] = VaultStatus.locked;
-          break;
-        case VaultFilter.contribution:
-          query.where['vault_status'] = VaultStatus.contribution;
-          break;
-        case VaultFilter.acquire:
-          query.where['vault_status'] = VaultStatus.acquire;
-          break;
-      }
-    }
-
-    // Add sorting if specified
-    if (sortBy) {
-      query.order[sortBy] = sortOrder;
-    } else {
-      // Default sort by created_at DESC if no sort specified
-      query.order['created_at'] = SortOrder.DESC;
-    }
-
-    const [listOfVaults, total] = await this.vaultsRepository.findAndCount(query);
-
-    // Transform vault images to URLs and convert to VaultShortResponse
-    const transformedItems = listOfVaults.map(vault => {
-      return plainToInstance(VaultShortResponse, instanceToPlain(vault), { excludeExtraneousValues: true });
-    });
-
-    return {
-      items: transformedItems,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
   }
 
   async prepareDraftResponse(id: string): Promise<VaultFullResponse> {
@@ -730,7 +856,7 @@ export class VaultsService {
    */
   async getVaultById(id: string): Promise<VaultFullResponse> {
     const vault = await this.vaultsRepository.findOne({
-      where: { id, deleted: false },
+      where: { id, deleted: false, vault_status: Not(VaultStatus.draft) },
       relations: [
         'owner',
         'social_links',
@@ -803,40 +929,46 @@ export class VaultsService {
 
   /**
    * Retrieves paginated and filtered list of vaults accessible to the user, with access control and sorting.
-   * @param userId - ID of the user
-   * @param filter - Optional vault filter
-   * @param page - Page number
-   * @param limit - Items per page
-   * @param sortBy - Field to sort by
-   * @param sortOrder - Sort order
    * @returns Paginated response of vaults
    */
-  async getVaults(
-    userId?: string,
-    filter?: VaultFilter,
-    page: number = 1,
-    limit: number = 10,
-    sortBy?: VaultSortField,
-    sortOrder: SortOrder = SortOrder.DESC,
-    tags?: string[],
-    reserveMet?: boolean,
-    vaultStage?: string,
-    minInitialVaultOffered?: number,
-    maxInitialVaultOffered?: number,
-    minTvl?: number,
-    maxTvl?: number,
-    tvlCurrency?: string
-  ): Promise<PaginatedResponseDto<VaultShortResponse>> {
-    // Get user's wallet address
-    const user = await this.usersRepository.findOne({
-      where: { id: userId },
-    });
-
-    if (!user) {
-      throw new BadRequestException('User not found');
-    }
-
-    const userWalletAddress = user.address;
+  async getVaults(data: {
+    userId?: string;
+    filter?: VaultFilter;
+    page?: number;
+    limit?: number;
+    sortBy?: VaultSortField;
+    sortOrder?: SortOrder;
+    tags?: string[];
+    isOwner?: boolean;
+    reserveMet?: boolean;
+    isPublicOnly?: boolean;
+    minInitialVaultOffered?: number;
+    maxInitialVaultOffered?: number;
+    assetWhitelist?: string;
+    minTvl?: number;
+    maxTvl?: number;
+    tvlCurrency?: TVLCurrency;
+    contributionWindow?: DateRangeDto;
+    acquireWindow?: DateRangeDto;
+  }): Promise<PaginatedResponseDto<VaultShortResponse>> {
+    const {
+      userId,
+      sortBy,
+      tvlCurrency,
+      minTvl,
+      maxTvl,
+      minInitialVaultOffered,
+      maxInitialVaultOffered,
+      contributionWindow,
+      acquireWindow,
+      tags,
+      assetWhitelist,
+      isOwner,
+      filter,
+      page = 1,
+      limit = 10,
+      sortOrder = SortOrder.DESC,
+    } = data;
 
     // Create base query for all vaults
     const queryBuilder = this.vaultsRepository
@@ -849,78 +981,140 @@ export class VaultsService {
       .leftJoinAndSelect('vault.tags', 'tags')
       .leftJoinAndSelect('vault.contributor_whitelist', 'contributor_whitelist')
       .leftJoinAndSelect('vault.acquirer_whitelist', 'acquirer_whitelist')
-      .where('vault.vault_status != :draftStatus', { draftStatus: VaultStatus.draft })
       .andWhere('vault.deleted != :deleted', { deleted: true })
-      .andWhere('vault.vault_status != :createdStatus', { createdStatus: VaultStatus.created })
-      // Get public vaults OR private vaults where user is whitelisted based on filter
-      .andWhere(
-        new Brackets(qb => {
-          qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
-            new Brackets(qb2 => {
-              qb2.where('vault.privacy = :privatePrivacy', { privatePrivacy: VaultPrivacy.private }).andWhere(
-                new Brackets(qb3 => {
-                  // Default case - check both whitelists if no filter
-                  qb3.where(
-                    '(EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress) OR EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress))',
-                    { userWalletAddress }
-                  );
-                })
+      .andWhere('vault.vault_status != :createdStatus', { createdStatus: VaultStatus.created });
+
+    // If userId is provided, retrieve user information and apply personalized filters
+    let userWalletAddress: string | null = null;
+
+    if (userId) {
+      const user = await this.usersRepository.findOne({
+        where: { id: userId },
+      });
+
+      if (user) {
+        if (isOwner) {
+          queryBuilder.andWhere('vault.owner_id = :userId', { userId });
+        }
+
+        userWalletAddress = user.address;
+        queryBuilder.andWhere(
+          new Brackets(qb => {
+            // Include public vaults OR vaults where user is whitelisted or the owner
+            qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public })
+              .orWhere('vault.owner_id = :userId', { userId })
+              .orWhere(
+                '(vault.privacy != :publicPrivacy AND EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress))',
+                { publicPrivacy: VaultPrivacy.public, userWalletAddress }
+              )
+              .orWhere(
+                '(vault.privacy != :publicPrivacy AND EXISTS (SELECT 1 FROM acquirer_whitelist aw WHERE aw.vault_id = vault.id AND aw.wallet_address = :userWalletAddress))',
+                { publicPrivacy: VaultPrivacy.public, userWalletAddress }
               );
-            })
-          );
-        })
-      );
+          })
+        );
+      }
+    } else {
+      // only show public vaults
+      queryBuilder.andWhere('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public });
+    }
 
     // Apply status filter and corresponding whitelist check
     if (filter) {
       switch (filter) {
         case VaultFilter.open:
-          queryBuilder
-            .andWhere('vault.vault_status IN (:...statuses)', {
-              statuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire],
-            })
-            .andWhere(
-              new Brackets(qb => {
-                qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
-                  'EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress)',
-                  { userWalletAddress }
-                );
-              })
-            );
+          queryBuilder.andWhere('vault.vault_status IN (:...statuses)', {
+            statuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire],
+          });
           break;
         case VaultFilter.contribution:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.contribution }).andWhere(
-            new Brackets(qb => {
-              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
-                'EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress)',
-                { userWalletAddress }
-              );
-            })
-          );
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.contribution });
           break;
         case VaultFilter.acquire:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.acquire }).andWhere(
-            new Brackets(qb => {
-              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
-                'EXISTS (SELECT 1 FROM acquirer_whitelist iw WHERE iw.vault_id = vault.id AND iw.wallet_address = :userWalletAddress)',
-                { userWalletAddress }
-              );
-            })
-          );
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.acquire });
           break;
         case VaultFilter.locked:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked });
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.locked });
+          break;
+        case VaultFilter.failed:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.failed });
+          break;
+        case VaultFilter.draft:
+          if (!isOwner || !userId) {
+            throw new BadRequestException('Draft filter requires authentication');
+          }
+          queryBuilder
+            .andWhere('vault.vault_status = :status', { status: VaultStatus.draft })
+            .andWhere('vault.owner_id = :userId', { userId });
           break;
         case VaultFilter.published:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.published }).andWhere(
-            new Brackets(qb => {
-              qb.where('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public }).orWhere(
-                'EXISTS (SELECT 1 FROM contributor_whitelist cw WHERE cw.vault_id = vault.id AND cw.wallet_address = :userWalletAddress)',
-                { userWalletAddress }
-              );
-            })
-          );
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.published });
       }
+    }
+
+    if (tags && tags.length > 0) {
+      const normalizedTags = tags.map(tag => tag.toLowerCase());
+      // OR logic: Returns vaults that have ANY of the specified tags
+      queryBuilder.andWhere(
+        `EXISTS (
+          SELECT 1 
+          FROM vault_tags vt 
+          INNER JOIN tags t ON t.id = vt.tag_id 
+          WHERE vt.vault_id = vault.id 
+          AND LOWER(t.name) IN (:...tags)
+        )`,
+        { tags: normalizedTags }
+      );
+    }
+
+    if (contributionWindow) {
+      queryBuilder.andWhere('vault.contribution_open_window_time BETWEEN :start AND :end', {
+        start: contributionWindow.from,
+        end: contributionWindow.to,
+      });
+    }
+
+    if (acquireWindow) {
+      queryBuilder.andWhere('vault.acquire_open_window_time BETWEEN :start AND :end', {
+        start: acquireWindow.from,
+        end: acquireWindow.to,
+      });
+    }
+
+    if (minTvl) {
+      if (tvlCurrency === TVLCurrency.USD) {
+        queryBuilder.andWhere('vault.total_assets_cost_usd >= :minTvl', { minTvl });
+      } else if (tvlCurrency === TVLCurrency.ADA) {
+        queryBuilder.andWhere('vault.total_assets_cost_ada >= :minTvl', { minTvl });
+      }
+    }
+
+    if (maxTvl) {
+      if (tvlCurrency === TVLCurrency.USD) {
+        queryBuilder.andWhere('vault.total_assets_cost_usd <= :maxTvl', { maxTvl });
+      } else if (tvlCurrency === TVLCurrency.ADA) {
+        queryBuilder.andWhere('vault.total_assets_cost_ada <= :maxTvl', { maxTvl });
+      }
+    }
+
+    if (maxInitialVaultOffered) {
+      queryBuilder.andWhere('(100 - vault.acquire_reserve) <= :maxInitialVaultOffered', { maxInitialVaultOffered });
+    }
+
+    if (minInitialVaultOffered) {
+      queryBuilder.andWhere('(100 - vault.acquire_reserve) >= :minInitialVaultOffered', { minInitialVaultOffered });
+    }
+
+    if (assetWhitelist) {
+      queryBuilder.andWhere(
+        `EXISTS (
+          SELECT 1 
+          FROM assets_whitelist aw 
+          WHERE aw.vault_id = vault.id 
+          AND aw.policy_id = :assetWhitelist
+        )`,
+        { assetWhitelist }
+      );
     }
 
     // Apply sorting
@@ -954,7 +1148,8 @@ export class VaultsService {
         // Merge calculated values with plain object
         const enrichedVault = {
           ...plainVault,
-          tvl: vault.total_assets_cost_usd,
+          totalValueUsd: vault.total_assets_cost_usd,
+          totalValueAda: vault.total_assets_cost_ada,
           baseAllocation: null,
           total: null,
           invested: vault.total_acquired_value_ada,
@@ -1058,7 +1253,7 @@ export class VaultsService {
    * @param userId - User ID
    * @returns Burn transaction result
    */
-  async burnVaultAttempt(
+  async buildBurnTransaction(
     vaultId: string,
     userId: string
   ): Promise<{
@@ -1103,30 +1298,49 @@ export class VaultsService {
    * @param userId - User ID
    * @param publishDto - PublishVaultDto containing transaction data
    */
-  async burnVaultPublishTx(vaultId: string, userId: string, publishDto: PublishVaultDto): Promise<void> {
-    // const { txHash } = await this.vaultContractService.submitOnChainVaultTx({
-    //   transaction: publishDto.transaction,
-    //   signatures: publishDto.signatures,
-    // });
-    // const vault = await this.vaultsRepository.findOne({
-    //   where: {
-    //     id: vaultId,
-    //     owner: {
-    //       id: userId,
-    //     },
-    //   },
-    //   relations: ['assets', 'owner'],
-    // });
-    // if (!vault) {
-    //   throw new Error('Vault is not found or you are not owner of this vault!');
-    // }
-    // if (vault.assets.length !== 0) {
-    //   throw new Error('The vault cant be burned it need to extract and refound assets ');
-    // }
-    // vault.deleted = true;
-    // vault.liquidation_hash = txHash;
-    // // todo need to wait tx approvement from scanner ?
-    // await this.transactionsService.updateTransactionHash(publishDto.txId, txHash);
-    // await this.vaultsRepository.save(vault);
+  async publishBurnTransaction(
+    vaultId: string,
+    userId: string,
+    publishDto: PublishVaultDto
+  ): Promise<{
+    txHash: string;
+  }> {
+    this.logger.log(`Attempting to publish burn transaction for vault ${vaultId} by user ${userId}`);
+
+    try {
+      const vault = await this.vaultsRepository.findOne({
+        where: {
+          id: vaultId,
+          owner: { id: userId },
+        },
+      });
+
+      if (!vault) {
+        throw new UnauthorizedException('Vault is not found or you are not the owner of this vault');
+      }
+
+      const { txHash } = await this.blockchainService.submitTransaction({
+        transaction: publishDto.transaction,
+        signatures: publishDto.signatures,
+      });
+
+      vault.deleted = true;
+      vault.liquidation_hash = txHash;
+      vault.vault_status = VaultStatus.burned;
+
+      await this.vaultsRepository.save(vault);
+      await this.transactionsService.updateTransactionHash(publishDto.txId, txHash);
+
+      this.logger.log(`Vault ${vaultId} successfully marked as burned`);
+
+      return { txHash };
+    } catch (error) {
+      this.logger.error(`Error publishing burn transaction for vault ${vaultId}:`, error);
+      throw error;
+    }
+  }
+
+  async incrementViewCount(vaultId: string) {
+    return await this.vaultsRepository.increment({ id: vaultId }, 'count_view', 1);
   }
 }

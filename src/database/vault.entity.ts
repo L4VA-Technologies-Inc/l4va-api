@@ -88,6 +88,10 @@ export class Vault {
   @Column({ name: 'policy_id', nullable: true })
   policy_id: string;
 
+  @Expose({ name: 'countView' })
+  @Column({ name: 'count_view', type: 'integer', default: 0 })
+  count_view: number;
+
   @Expose({ name: 'assetVaultName' })
   @Column({
     name: 'asset_vault_name',
