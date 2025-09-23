@@ -142,11 +142,12 @@ export class DistributionService {
     adaPairMultiplier: number;
     precisionLoss: number;
   } {
+    const lpLovelaceAmount = lpAdaAmount * 1_000_000;
     // Calculate the multiplier (VT per ADA)
-    const multiplier = Math.floor(lpVtAmount / lpAdaAmount);
+    const multiplier = Math.floor(lpVtAmount / lpLovelaceAmount);
 
     // Validate precision loss
-    const reconstructedVT = multiplier * lpAdaAmount;
+    const reconstructedVT = multiplier * lpLovelaceAmount;
     const difference = Math.abs(reconstructedVT - lpVtAmount);
     const precisionLoss = (difference / lpVtAmount) * 100;
 
