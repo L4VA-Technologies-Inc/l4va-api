@@ -209,6 +209,39 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   requireReservedCostUsd: number;
 
+  @ApiProperty({
+    description: 'Indicates whether the user can create proposals for this vault',
+    type: Boolean,
+    default: false,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  canCreateProposal: boolean;
+
+  @ApiProperty({
+    description: 'Indicates whether the user can acquire from this vault',
+    type: Boolean,
+    default: true,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  isWhitelistedAcquirer: boolean;
+
+  @ApiProperty({
+    description: 'Indicates whether the user can contribute to this vault',
+    type: Boolean,
+    default: true,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  isWhitelistedContributor: boolean;
+
   @ApiProperty({ description: 'Valuation type', enum: ValueMethod, required: false })
   @DtoRepresent({
     transform: false,

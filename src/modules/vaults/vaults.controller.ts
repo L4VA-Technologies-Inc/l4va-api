@@ -3,7 +3,6 @@ import { ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 
 import { ApiDoc } from '../../decorators/api-doc.decorator';
 import { AuthGuard } from '../auth/auth.guard';
-import { AuthRequest } from '../auth/dto/auth-user.interface';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 
 import { DraftVaultsService } from './draft-vaults.service';
@@ -164,7 +163,7 @@ export class VaultsController {
       return await this.draftVaultsService.getDraftVaultById(id, userId);
     } catch (error) {
       if (error?.message === 'Draft vault not found') {
-        return this.vaultsService.getVaultById(id);
+        return this.vaultsService.getVaultById(id, userId);
       }
       throw error;
     }

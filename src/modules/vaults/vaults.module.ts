@@ -4,9 +4,6 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AwsModule } from '../aws_bucket/aws.module';
 
 import { DraftVaultsService } from './draft-vaults.service';
-import { LifecycleModule } from './phase-management/lifecycle/lifecycle.module';
-import { TransactionsModule } from './processing-tx/offchain-tx/transactions.module';
-import { BlockchainModule } from './processing-tx/onchain/blockchain.module';
 import { VaultsController } from './vaults.controller';
 import { VaultsService } from './vaults.service';
 
@@ -19,6 +16,10 @@ import { LinkEntity } from '@/database/link.entity';
 import { TagEntity } from '@/database/tag.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { GovernanceModule } from '@/modules/vaults/phase-management/governance/governance.module';
+import { LifecycleModule } from '@/modules/vaults/phase-management/lifecycle/lifecycle.module';
+import { TransactionsModule } from '@/modules/vaults/processing-tx/offchain-tx/transactions.module';
+import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockchain.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { Vault } from '@/database/vault.entity';
     LifecycleModule,
     TransactionsModule,
     BlockchainModule,
+    GovernanceModule,
     TypeOrmModule.forFeature([
       Vault,
       User,

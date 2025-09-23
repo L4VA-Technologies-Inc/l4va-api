@@ -21,6 +21,7 @@ import { DateRangeDto, SortOrder, TVLCurrency, VaultFilter, VaultSortField } fro
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { PublishVaultDto } from './dto/publish-vault.dto';
 import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
+import { GovernanceService } from './phase-management/governance/governance.service';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { BlockchainScannerService } from './processing-tx/onchain/blockchain-scanner.service';
 import { BlockchainService } from './processing-tx/onchain/blockchain.service';
@@ -92,7 +93,7 @@ export class VaultsService {
     private readonly vaultContractService: VaultManagingService,
     private readonly blockchainScannerService: BlockchainScannerService,
     private readonly blockchainService: BlockchainService,
-
+    private readonly governanceService: GovernanceService,
     private readonly taptoolsService: TaptoolsService,
     private readonly transactionsService: TransactionsService,
     private readonly eventEmitter: EventEmitter2
@@ -851,12 +852,13 @@ export class VaultsService {
 
   /**
    * Retrieves a vault by ID for a user, including asset and price calculations.
-   * @param id - Vault ID
+   * @param vaultId - Vault ID
+   * @param userId - (Optional) User ID for access control
    * @returns Full vault response
    */
-  async getVaultById(id: string): Promise<VaultFullResponse> {
+  async getVaultById(vaultId: string, userId?: string): Promise<VaultFullResponse> {
     const vault = await this.vaultsRepository.findOne({
-      where: { id, deleted: false, vault_status: Not(VaultStatus.draft) },
+      where: { id: vaultId, deleted: false, vault_status: Not(VaultStatus.draft) },
       relations: [
         'owner',
         'social_links',
@@ -877,7 +879,7 @@ export class VaultsService {
     const assetCounts = await this.assetsRepository
       .createQueryBuilder('asset')
       .select(['asset.type', 'COUNT(asset.id) as count', 'SUM(asset.quantity) as totalQuantity'])
-      .where('asset.vault_id = :vaultId', { vaultId: id })
+      .where('asset.vault_id = :vaultId', { vaultId: vaultId })
       .andWhere('asset.status = :status', { status: AssetStatus.LOCKED })
       .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
       .groupBy('asset.type')
@@ -895,7 +897,7 @@ export class VaultsService {
     });
 
     const lockedAssetsCount = lockedNFTCount + lockedFTsCount;
-    const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(id);
+    const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(vaultId);
 
     const additionalData = {
       maxContributeAssets: Number(vault.max_contribute_assets),
@@ -905,13 +907,49 @@ export class VaultsService {
       assetsPrices,
     };
 
-    const fdv =
-      vault.ft_token_supply !== null && vault.vt_price !== null ? vault.ft_token_supply * vault.vt_price : null;
+    const fdv = vault.vt_price !== null ? vault.ft_token_supply * vault.vt_price : null;
 
     let fdvTvl = null;
     if (fdv !== null && assetsPrices?.totalValueUsd && assetsPrices.totalValueUsd > 0) {
       fdvTvl = (fdv / assetsPrices.totalValueUsd).toFixed(2);
     }
+
+    let canCreateProposal = false;
+
+    if (userId && vault.vault_status === VaultStatus.locked) {
+      try {
+        await this.governanceService.getVotingPower(vaultId, userId, 'create_proposal');
+        canCreateProposal = true;
+      } catch (error) {
+        canCreateProposal = false;
+      }
+    }
+
+    let isWhitelistedContributor = vault.privacy === VaultPrivacy.public || vault.owner.id === userId;
+    let isWhitelistedAcquirer = vault.privacy === VaultPrivacy.public || vault.owner.id === userId;
+
+    if (userId && vault.privacy !== VaultPrivacy.public && vault.owner.id !== userId) {
+      const user = await this.usersRepository.findOne({
+        where: { id: userId },
+        select: ['address'],
+      });
+
+      if (user) {
+        isWhitelistedContributor = await this.contributorWhitelistRepository.exists({
+          where: { vault: { id: vaultId }, wallet_address: user.address },
+        });
+
+        isWhitelistedAcquirer = await this.acquirerWhitelistRepository.exists({
+          where: { vault: { id: vaultId }, wallet_address: user.address },
+        });
+      }
+    }
+
+    additionalData['isWhitelistedContributor'] = isWhitelistedContributor;
+    additionalData['isWhitelistedAcquirer'] = isWhitelistedAcquirer;
+    additionalData['canCreateProposal'] = canCreateProposal;
+    additionalData['fdvTvl'] = fdvTvl;
+    additionalData['fdv'] = fdv;
 
     // First transform the vault to plain object with class-transformer
     const plainVault = instanceToPlain(vault);
@@ -920,8 +958,6 @@ export class VaultsService {
     const result = {
       ...plainVault,
       ...additionalData,
-      fdvTvl,
-      fdv,
     };
 
     return plainToInstance(VaultFullResponse, result, { excludeExtraneousValues: true });
