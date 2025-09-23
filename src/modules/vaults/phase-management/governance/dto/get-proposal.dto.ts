@@ -70,8 +70,13 @@ class BaseProposalDto {
   @ApiProperty({ required: false })
   terminationDate?: Date;
 
-  @ApiProperty({ required: false, type: [Object] })
-  burnAssets?: any[];
+  @ApiProperty({
+    description: 'Array of asset IDs to burn',
+    example: ['assetid1', 'assetid2', 'assetid3'],
+    required: false,
+    type: [String],
+  })
+  burnAssets?: string[];
 }
 
 // For active proposals with votes

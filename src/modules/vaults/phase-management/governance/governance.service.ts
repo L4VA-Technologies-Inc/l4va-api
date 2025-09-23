@@ -726,15 +726,25 @@ export class GovernanceService {
     }
   }
 
-  async getAssetsToBurn(vaultId: string): Promise<Asset[]> {
+  async getAssetsToBurn(vaultId: string): Promise<AssetBuySellDto[]> {
     try {
       const assets = await this.assetRepository.find({
-        where: { vault: { id: vaultId } },
+        where: {
+          vault: { id: vaultId },
+          type: In([AssetType.NFT, AssetType.FT]),
+          status: AssetStatus.LOCKED,
+          deleted: false,
+        },
+        relations: ['vault'],
+        select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'dex_price', 'floor_price', 'metadata'],
       });
-      return assets;
+
+      return plainToInstance(AssetBuySellDto, assets, {
+        excludeExtraneousValues: true,
+      });
     } catch (error) {
-      this.logger.error(`Error getting assets to stake for vault ${vaultId}: ${error.message}`, error.stack);
-      throw new InternalServerErrorException('Error getting assets to stake');
+      this.logger.error(`Error getting assets to burn for vault ${vaultId}: ${error.message}`, error.stack);
+      throw new InternalServerErrorException('Error getting assets to burn');
     }
   }
 

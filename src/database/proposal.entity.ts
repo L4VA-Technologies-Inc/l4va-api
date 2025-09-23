@@ -90,7 +90,7 @@ export class Proposal {
 
   @Expose({ name: 'burnAssets' })
   @Column({ name: 'burn_assets', type: 'json', nullable: true })
-  burnAssets?: any[];
+  burnAssets?: string[]; // Array of asset IDs to burn
 
   @Expose({ name: 'buyingSellingOptions' })
   @Column({ name: 'buying_selling_options', type: 'json', nullable: true })

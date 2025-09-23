@@ -98,7 +98,7 @@ export class GovernanceController {
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Get assets to burn for a vault' })
   @ApiResponse({ status: 200, description: 'List of assets to burn' })
-  async getAssetsToBurn(@Param('vaultId') vaultId: string): Promise<Asset[]> {
+  async getAssetsToBurn(@Param('vaultId') vaultId: string): Promise<AssetBuySellDto[]> {
     return this.governanceService.getAssetsToBurn(vaultId);
   }
 }
