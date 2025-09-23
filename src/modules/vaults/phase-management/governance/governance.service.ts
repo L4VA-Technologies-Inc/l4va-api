@@ -591,16 +591,7 @@ export class GovernanceService {
   }
 
   async getProposal(proposalId: string): Promise<{
-    proposal: {
-      id: string;
-      vaultId: string;
-      title: string;
-      description: string;
-      creatorId: string;
-      status: ProposalStatus;
-      createdAt: Date;
-      endDate: Date;
-    };
+    proposal: Proposal;
     votes: {
       id: string;
       proposalId: string;
@@ -624,20 +615,10 @@ export class GovernanceService {
       throw new NotFoundException('Proposal not found');
     }
 
-    // Get votes for this proposal
     const { votes, totals } = await this.getVotes(proposalId);
 
     return {
-      proposal: {
-        id: proposal.id,
-        vaultId: proposal.vaultId,
-        title: proposal.title,
-        description: proposal.description,
-        creatorId: proposal.creatorId,
-        status: proposal.status,
-        createdAt: proposal.createdAt,
-        endDate: proposal.endDate,
-      },
+      proposal,
       votes,
       totals,
     };

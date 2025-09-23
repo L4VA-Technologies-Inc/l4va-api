@@ -3,6 +3,7 @@ import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { AuthGuard } from '../../../auth/auth.guard';
 
+import { CreateProposalReq } from './dto/create-proposal.req';
 import { AssetBuySellDto } from './dto/get-assets.dto';
 import { GetProposalsRes, GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';
@@ -19,7 +20,7 @@ export class GovernanceController {
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Create a new proposal' })
   @ApiResponse({ status: 201, description: 'Proposal created successfully' })
-  async createProposal(@Req() req, @Param('vaultId') vaultId: string, @Body() data: any) {
+  async createProposal(@Req() req, @Param('vaultId') vaultId: string, @Body() data: CreateProposalReq) {
     return this.governanceService.createProposal(vaultId, data, req.user.sub);
   }
 

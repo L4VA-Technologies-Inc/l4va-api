@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Expose, Type } from 'class-transformer';
 import {
   IsNotEmpty,
   IsString,
@@ -71,6 +71,7 @@ export class CreateProposalReq {
   })
   @IsNotEmpty()
   @IsString()
+  @Expose()
   title: string;
 
   @ApiProperty({
@@ -79,6 +80,7 @@ export class CreateProposalReq {
   })
   @IsNotEmpty()
   @IsString()
+  @Expose()
   description: string;
 
   @ApiProperty({
@@ -87,6 +89,7 @@ export class CreateProposalReq {
     example: ProposalType.DISTRIBUTION,
   })
   @IsEnum(ProposalType)
+  @Expose()
   type: ProposalType;
 
   @ApiProperty({
@@ -98,6 +101,7 @@ export class CreateProposalReq {
   })
   @IsOptional()
   @IsDateString()
+  @Expose()
   startDate?: string;
 
   @ApiProperty({
@@ -109,6 +113,7 @@ export class CreateProposalReq {
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => FungibleTokenDto)
+  @Expose()
   fts?: FungibleTokenDto[];
 
   @ApiProperty({
@@ -120,6 +125,7 @@ export class CreateProposalReq {
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => NonFungibleTokenDto)
+  @Expose()
   nfts?: NonFungibleTokenDto[];
 
   @ApiProperty({
@@ -131,6 +137,7 @@ export class CreateProposalReq {
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => DistributionAssetDto)
+  @Expose()
   distributionAssets?: DistributionAssetDto[];
 
   @ApiProperty({
@@ -139,6 +146,7 @@ export class CreateProposalReq {
   })
   @IsOptional()
   @IsString()
+  @Expose()
   proposalStart?: string;
 
   @ApiProperty({
@@ -147,6 +155,7 @@ export class CreateProposalReq {
     example: { assetId: 'xyz-123', targetPrice: '1000' },
   })
   @IsOptional()
+  @Expose()
   metadata?: Record<string, any>;
 }
 
