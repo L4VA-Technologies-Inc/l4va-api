@@ -16,7 +16,7 @@ import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/oncha
 import { AssetStatus, AssetOriginType } from '@/types/asset.types';
 import { BlockchainTransactionListItem } from '@/types/blockchain.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { VaultPrivacy, VaultStatus } from '@/types/vault.types';
+import { VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class ContributionService {
@@ -207,13 +207,15 @@ export class ContributionService {
     }
 
     // Check if adding these assets would exceed the vault's maximum capacity
-    const currentAssetCount = await this.assetRepository.count({
-      where: {
-        vault: { id: vaultId },
-        status: AssetStatus.LOCKED,
-        origin_type: AssetOriginType.CONTRIBUTED,
-      },
-    });
+    const currentAssetCountResult = await this.assetRepository
+      .createQueryBuilder('asset')
+      .select('SUM(asset.quantity)', 'totalQuantity')
+      .where('asset.vault_id = :vaultId', { vaultId })
+      .andWhere('asset.status = :status', { status: AssetStatus.LOCKED })
+      .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
+      .getRawOne();
+
+    const currentAssetCount = Number(currentAssetCountResult?.totalQuantity || 0);
 
     if (currentAssetCount + contributeReq.assets.length > vault.max_contribute_assets) {
       throw new BadRequestException(
@@ -243,28 +245,30 @@ export class ContributionService {
           continue;
         }
 
-        // Check minimum and maximum asset counts per policy if specified
-        const assetsCount = assetsByPolicy[policyId].length;
+        const existingPolicyCountResult = await this.assetRepository
+          .createQueryBuilder('asset')
+          .select('SUM(asset.quantity)', 'totalQuantity')
+          .where('asset.vault_id = :vaultId', { vaultId })
+          .andWhere('asset.policy_id = :policyId', { policyId })
+          .andWhere('asset.status = :status', { status: AssetStatus.LOCKED })
+          .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
+          .getRawOne();
 
-        // Check current count of this policy in the vault
-        const existingPolicyCount = await this.assetRepository.count({
-          where: {
-            vault: { id: vaultId },
-            policy_id: policyId,
-            status: AssetStatus.LOCKED,
-            origin_type: AssetOriginType.CONTRIBUTED,
-          },
-        });
+        const existingPolicyCount = Number(existingPolicyCountResult?.totalQuantity || 0);
+        const policyAssetsQuantity = assetsByPolicy[policyId].reduce(
+          (total, asset) => total + (Number(asset.quantity) || 1),
+          0
+        );
 
         // Check if adding these assets would exceed the maximum for this policy
         if (
           whitelistedAsset.asset_count_cap_max !== null &&
           whitelistedAsset.asset_count_cap_max > 0 &&
-          existingPolicyCount + assetsCount > whitelistedAsset.asset_count_cap_max
+          existingPolicyCount + policyAssetsQuantity > whitelistedAsset.asset_count_cap_max
         ) {
           throw new BadRequestException(
-            `The vault already has ${existingPolicyCount} assets for policy ${policyId}. ` +
-              `Adding ${assetsCount} more would exceed the maximum of ${whitelistedAsset.asset_count_cap_max}.`
+            `The vault already has ${existingPolicyCount} quantity for policy ${policyId}. ` +
+              `Adding ${policyAssetsQuantity} more would exceed the maximum of ${whitelistedAsset.asset_count_cap_max}.`
           );
         }
       }
