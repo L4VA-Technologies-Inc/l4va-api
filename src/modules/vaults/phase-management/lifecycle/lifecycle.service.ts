@@ -504,7 +504,7 @@ export class LifecycleService {
             });
 
             const multiplier = Math.floor(rawVtReceived / adaSent / 1_000_000);
-            const adjustedVtAmount = multiplier * adaSent;
+            const adjustedVtAmount = multiplier * adaSent * 1_000_000;
 
             this.logger.debug(
               `Acquirer ${userId} - Raw VT: ${rawVtReceived}, Multiplier: ${multiplier}, Adjusted VT: ${adjustedVtAmount}`
@@ -518,6 +518,9 @@ export class LifecycleService {
               amount: adjustedVtAmount,
               status: ClaimStatus.AVAILABLE,
               transaction: { id: tx.id },
+              metadata: {
+                multiplier: multiplier,
+              },
             });
             acquirerClaims.push(claim);
           } catch (error) {

@@ -125,7 +125,8 @@ export class DistributionService {
     }
 
     for (const claim of acquirerClaims) {
-      multipliers.push(['', '', Math.floor(claim.amount / claim.transaction.amount / 1_000_000)]);
+      const multiplier = claim.metadata?.multiplier || Math.floor(claim.amount / claim.transaction.amount / 1_000_000);
+      multipliers.push(['', '', multiplier]);
     }
 
     return multipliers;
