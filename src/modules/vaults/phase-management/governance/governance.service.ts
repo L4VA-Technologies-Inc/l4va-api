@@ -585,7 +585,7 @@ export class GovernanceService {
         totals.yes = (BigInt(totals.yes) + BigInt(vote.voteWeight)).toString();
       } else if (vote.vote === VoteType.NO) {
         totals.no = (BigInt(totals.no) + BigInt(vote.voteWeight)).toString();
-      } else if (vote.vote === VoteType.ABSTAIN) {
+      } else if (vote.vote === VoteType.ABSTAIN && proposal.abstain) {
         totals.abstain = (BigInt(totals.abstain) + BigInt(vote.voteWeight)).toString();
       }
     });
@@ -770,7 +770,7 @@ export class GovernanceService {
     }
   }
 
-  async getAssetsToTerminate(vaultId: string) {
+  async getAssetsToTerminate(vaultId: string): Promise<AssetBuySellDto[]> {
     try {
       // Get all assets in the vault eligible for termination
       const assets = await this.assetRepository.find({
