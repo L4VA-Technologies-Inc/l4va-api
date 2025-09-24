@@ -156,6 +156,13 @@ export class VaultShortResponse {
     expose: true,
   })
   ftTokenImg: FileEntity;
+
+  @ApiProperty({ description: 'VT token ticker', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  vaultTokenTicker?: string;
 }
 
 export class VaultFullResponse extends VaultShortResponse {
