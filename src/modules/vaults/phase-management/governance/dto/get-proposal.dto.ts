@@ -55,6 +55,12 @@ class BaseProposalDto {
   })
   endDate: string;
 
+  @ApiProperty({
+    description: 'Indicates if the proposal allows abstain votes',
+    example: true,
+  })
+  abstain: boolean;
+
   @ApiProperty({ required: false, type: [FungibleTokenDto] })
   fungibleTokens?: FungibleTokenDto[];
 
