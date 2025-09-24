@@ -683,14 +683,14 @@ export class GovernanceService {
         );
       }
 
-      if (voteWeightPercentFromAll < vault.creation_threshold && action === 'vote') {
+      if (voteWeightPercentFromAll < vault.creation_threshold && action === 'create_proposal') {
         throw new BadRequestException(
           'BELOW_THRESHOLD',
           `Your voting power (${voteWeightPercentFromAll}) is below the minimum threshold (${vault.creation_threshold}).`
         );
       }
 
-      if (voteWeightPercentFromAll < vault.vote_threshold && action === 'create_proposal') {
+      if (voteWeightPercentFromAll < vault.vote_threshold && action === 'vote') {
         throw new BadRequestException(
           'BELOW_THRESHOLD',
           `Your voting power (${voteWeightPercentFromAll}) is below the minimum threshold (${vault.vote_threshold}).`
