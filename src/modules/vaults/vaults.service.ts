@@ -860,7 +860,6 @@ export class VaultsService {
     const vault = await this.vaultsRepository.findOne({
       where: { id: vaultId, deleted: false, vault_status: Not(VaultStatus.draft) },
       relations: [
-        'owner',
         'social_links',
         'assets_whitelist',
         'acquirer_whitelist',
@@ -869,6 +868,16 @@ export class VaultsService {
         'ft_token_img',
         'tags',
       ],
+      join: {
+        alias: 'vault',
+        leftJoinAndSelect: {
+          owner: 'vault.owner',
+        },
+      },
+      loadRelationIds: {
+        relations: ['owner'],
+        disableMixedMap: true,
+      },
     });
 
     if (!vault) {

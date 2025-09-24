@@ -17,7 +17,6 @@ import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
-import { User } from '@/database/user.entity';
 
 export class VaultShortResponse {
   @ApiProperty({ description: 'Unique identifier of the vault' })
@@ -402,13 +401,6 @@ export class VaultFullResponse extends VaultShortResponse {
     expose: true,
   })
   vaultAppreciation: number;
-
-  @ApiProperty({ description: 'Vault owner', type: () => User })
-  @DtoRepresent({
-    transform: false,
-    expose: true,
-  })
-  owner: User;
 
   @ApiProperty({ description: 'Creation threshold', required: false })
   @DtoRepresent({
