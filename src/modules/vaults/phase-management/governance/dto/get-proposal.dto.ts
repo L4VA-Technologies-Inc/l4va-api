@@ -13,12 +13,6 @@ class BaseProposalDto {
   id: string;
 
   @ApiProperty({
-    description: 'Vault ID this proposal belongs to',
-    example: '123e4567-e89b-12d3-a456-426614174001',
-  })
-  vaultId: string;
-
-  @ApiProperty({
     description: 'Title of the proposal',
     example: 'Stake NFTs in the Cardano Summit staking pool',
   })

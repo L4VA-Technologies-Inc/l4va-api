@@ -98,6 +98,7 @@ export class GovernanceService {
           asset_vault_name: Not(IsNull()),
           policy_id: Not(IsNull()),
         },
+        select: ['id', 'asset_vault_name', 'policy_id'],
       });
 
       this.logger.log(`Found ${lockedVaults.length} locked vaults for snapshots`);
@@ -207,39 +208,6 @@ export class GovernanceService {
     }
   }
 
-  async getSnapshots(vaultId: string): Promise<{
-    snapshots: {
-      id: string;
-      vaultId: string;
-      assetId: string;
-      addressCount: number;
-      createdAt: Date;
-    }[];
-  }> {
-    const vault = await this.vaultRepository.findOne({
-      where: { id: vaultId },
-    });
-
-    if (!vault) {
-      throw new NotFoundException('Vault not found');
-    }
-
-    const snapshots = await this.snapshotRepository.find({
-      where: { vaultId },
-      order: { createdAt: 'DESC' },
-    });
-
-    return {
-      snapshots: snapshots.map(snapshot => ({
-        id: snapshot.id,
-        vaultId: snapshot.vaultId,
-        assetId: snapshot.assetId,
-        addressCount: Object.keys(snapshot.addressBalances).length,
-        createdAt: snapshot.createdAt,
-      })),
-    };
-  }
-
   async createProposal(
     vaultId: string,
     createProposalReq: CreateProposalReq,
@@ -260,6 +228,7 @@ export class GovernanceService {
   }> {
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
+      select: ['id', 'vault_status', 'policy_id', 'asset_vault_name'],
     });
 
     if (!vault) {
@@ -367,11 +336,11 @@ export class GovernanceService {
   }
 
   async getProposals(vaultId: string): Promise<GetProposalsResItem[]> {
-    const vault = await this.vaultRepository.findOne({
+    const vaultExists = await this.vaultRepository.exists({
       where: { id: vaultId },
     });
 
-    if (!vault) {
+    if (!vaultExists) {
       throw new NotFoundException('Vault not found');
     }
 
@@ -385,7 +354,6 @@ export class GovernanceService {
       proposals.map(async proposal => {
         const baseProposal = {
           id: proposal.id,
-          vaultId: proposal.vaultId,
           title: proposal.title,
           description: proposal.description,
           creatorId: proposal.creatorId,
@@ -434,6 +402,87 @@ export class GovernanceService {
     );
 
     return processedProposals;
+  }
+
+  async getProposal(
+    proposalId: string,
+    userId: string
+  ): Promise<{
+    proposal: Proposal;
+    votes: {
+      id: string;
+      voterAddress: string;
+      voteWeight: string;
+      vote: VoteType;
+      timestamp: Date;
+    }[];
+    totals: {
+      yes: string;
+      no: string;
+      abstain: string;
+      votedPercentage: number;
+    };
+    canVote: boolean;
+    selectedVote: VoteType | null;
+  }> {
+    const proposal = await this.proposalRepository.findOne({
+      where: { id: proposalId },
+    });
+
+    if (!proposal) {
+      throw new NotFoundException('Proposal not found');
+    }
+
+    const { votes, totals } = await this.getVotes(proposalId);
+
+    let canVote = false;
+    let selectedVote: VoteType | null = null;
+
+    try {
+      const isActive = proposal.status === ProposalStatus.ACTIVE && new Date() <= proposal.endDate;
+
+      const user = await this.userRepository.findOne({
+        where: { id: userId },
+        select: ['id', 'address'],
+      });
+
+      if (user && user.address) {
+        const snapshot = await this.snapshotRepository.findOne({
+          where: { id: proposal.snapshotId },
+        });
+
+        if (snapshot) {
+          const voteWeight = snapshot.addressBalances[user.address];
+          const hasVotingPower = voteWeight && voteWeight !== '0';
+
+          const existingVote = await this.voteRepository.findOne({
+            where: {
+              proposalId,
+              voterAddress: user.address,
+            },
+            select: ['vote'],
+          });
+
+          if (existingVote) {
+            selectedVote = existingVote.vote;
+          } else {
+            canVote = isActive && hasVotingPower;
+          }
+        }
+      }
+    } catch (error) {
+      this.logger.error(
+        `Error checking voting eligibility for user ${userId} on proposal ${proposalId}: ${error.message}`
+      );
+    }
+
+    return {
+      proposal,
+      votes,
+      totals,
+      canVote,
+      selectedVote,
+    };
   }
 
   async vote(
@@ -605,87 +654,6 @@ export class GovernanceService {
         timestamp: vote.timestamp,
       })),
       totals,
-    };
-  }
-
-  async getProposal(
-    proposalId: string,
-    userId: string
-  ): Promise<{
-    proposal: Proposal;
-    votes: {
-      id: string;
-      voterAddress: string;
-      voteWeight: string;
-      vote: VoteType;
-      timestamp: Date;
-    }[];
-    totals: {
-      yes: string;
-      no: string;
-      abstain: string;
-      votedPercentage: number;
-    };
-    canVote: boolean;
-    selectedVote: VoteType | null;
-  }> {
-    const proposal = await this.proposalRepository.findOne({
-      where: { id: proposalId },
-    });
-
-    if (!proposal) {
-      throw new NotFoundException('Proposal not found');
-    }
-
-    const { votes, totals } = await this.getVotes(proposalId);
-
-    let canVote = false;
-    let selectedVote: VoteType | null = null;
-
-    try {
-      const isActive = proposal.status === ProposalStatus.ACTIVE && new Date() <= proposal.endDate;
-
-      const user = await this.userRepository.findOne({
-        where: { id: userId },
-        select: ['id', 'address'],
-      });
-
-      if (user && user.address) {
-        const snapshot = await this.snapshotRepository.findOne({
-          where: { id: proposal.snapshotId },
-        });
-
-        if (snapshot) {
-          const voteWeight = snapshot.addressBalances[user.address];
-          const hasVotingPower = voteWeight && voteWeight !== '0';
-
-          const existingVote = await this.voteRepository.findOne({
-            where: {
-              proposalId,
-              voterAddress: user.address,
-            },
-            select: ['vote'],
-          });
-
-          if (existingVote) {
-            selectedVote = existingVote.vote;
-          } else {
-            canVote = isActive && hasVotingPower;
-          }
-        }
-      }
-    } catch (error) {
-      this.logger.error(
-        `Error checking voting eligibility for user ${userId} on proposal ${proposalId}: ${error.message}`
-      );
-    }
-
-    return {
-      proposal,
-      votes,
-      totals,
-      canVote,
-      selectedVote,
     };
   }
 
