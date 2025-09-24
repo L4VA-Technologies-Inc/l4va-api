@@ -522,28 +522,11 @@ export class GovernanceService {
       throw new BadRequestException('Abstain option is not allowed for this proposal');
     }
 
-    // Get the snapshot associated with the proposal
-    const snapshot = await this.snapshotRepository.findOne({
-      where: { id: proposal.snapshotId },
-    });
-
-    if (!snapshot) {
-      throw new NotFoundException('Snapshot not found');
-    }
-
-    // Check if the user's address has voting power in the snapshot
-    const voterAddress = voteReq.voterAddress;
-    const voteWeight = snapshot.addressBalances[voterAddress];
-
-    if (!voteWeight || voteWeight === '0') {
-      throw new BadRequestException('Address has no voting power in the snapshot');
-    }
-
     // Check if user has already voted
-    const existingVote = await this.voteRepository.findOne({
+    const existingVote = await this.voteRepository.exists({
       where: {
         proposalId,
-        voterAddress,
+        voterAddress: voteReq.voterAddress,
       },
     });
 
@@ -551,12 +534,13 @@ export class GovernanceService {
       throw new BadRequestException('Address has already voted on this proposal');
     }
 
-    // Create and save the vote
+    const voteWeight = await this.getVotingPower(proposal.vaultId, userId, 'vote');
+
     const vote = this.voteRepository.create({
       proposalId,
-      snapshotId: snapshot.id,
+      snapshotId: proposal.snapshotId,
       voterId: userId,
-      voterAddress,
+      voterAddress: voteReq.voterAddress,
       voteWeight,
       vote: voteReq.vote,
     });
@@ -570,7 +554,7 @@ export class GovernanceService {
         id: vote.id,
         proposalId,
         voterId: userId,
-        voterAddress,
+        voterAddress: voteReq.voterAddress,
         voteWeight,
         vote: voteReq.vote,
         timestamp: vote.timestamp,
@@ -687,6 +671,10 @@ export class GovernanceService {
       }
 
       const voteWeight = snapshot.addressBalances[user.address];
+      const totalVotingPower = Object.values(snapshot.addressBalances)
+        .reduce((sum, balance) => BigInt(sum) + BigInt(balance), BigInt(0))
+        .toString();
+      const voteWeightPercentFromAll = (BigInt(voteWeight) * BigInt(100)) / BigInt(totalVotingPower);
 
       if (!voteWeight || voteWeight === '0') {
         throw new BadRequestException(
@@ -695,17 +683,17 @@ export class GovernanceService {
         );
       }
 
-      if (+voteWeight < vault.creation_threshold && action === 'vote') {
+      if (voteWeightPercentFromAll < vault.creation_threshold && action === 'vote') {
         throw new BadRequestException(
           'BELOW_THRESHOLD',
-          `Your voting power (${voteWeight}) is below the minimum threshold (${vault.creation_threshold}).`
+          `Your voting power (${voteWeightPercentFromAll}) is below the minimum threshold (${vault.creation_threshold}).`
         );
       }
 
-      if (+voteWeight < vault.vote_threshold && action === 'create_proposal') {
+      if (voteWeightPercentFromAll < vault.vote_threshold && action === 'create_proposal') {
         throw new BadRequestException(
           'BELOW_THRESHOLD',
-          `Your voting power (${voteWeight}) is below the minimum threshold (${vault.vote_threshold}).`
+          `Your voting power (${voteWeightPercentFromAll}) is below the minimum threshold (${vault.vote_threshold}).`
         );
       }
 
