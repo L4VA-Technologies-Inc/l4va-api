@@ -86,11 +86,13 @@ class ActiveProposalDto extends BaseProposalDto {
     example: {
       yes: 65,
       no: 35,
+      abstain: 0, // Abstain percentage is 0 for non-abstain proposals
     },
   })
   votes: {
     yes: number;
     no: number;
+    abstain: number;
   };
 }
 

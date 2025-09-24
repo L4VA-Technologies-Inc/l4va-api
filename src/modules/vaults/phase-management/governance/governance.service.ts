@@ -404,18 +404,24 @@ export class GovernanceService {
             // Calculate percentages
             let yesPercentage = 0;
             let noPercentage = 0;
+            let abstainPercentage = 0;
 
             if (totalVotingPower > 0) {
               yesPercentage = Number((BigInt(totals.yes) * BigInt(100)) / totalVotingPower);
               noPercentage = Number((BigInt(totals.no) * BigInt(100)) / totalVotingPower);
-
-              // Adjust to ensure sum is 100
-              if (yesPercentage + noPercentage < 100) {
-                // Add the difference to the larger percentage
-                if (BigInt(totals.yes) >= BigInt(totals.no)) {
-                  yesPercentage = 100 - noPercentage;
+              if (proposal.abstain) {
+                abstainPercentage = Number((BigInt(totals.abstain) * BigInt(100)) / totalVotingPower);
+              }
+              // Ensure percentages sum to 100% due to integer division
+              const sumPercentages = yesPercentage + noPercentage + abstainPercentage;
+              if (sumPercentages < 100) {
+                // Find the largest percentage and add the difference to it
+                if (yesPercentage >= noPercentage && yesPercentage >= abstainPercentage) {
+                  yesPercentage += 100 - sumPercentages;
+                } else if (noPercentage >= yesPercentage && noPercentage >= abstainPercentage) {
+                  noPercentage += 100 - sumPercentages;
                 } else {
-                  noPercentage = 100 - yesPercentage;
+                  abstainPercentage += 100 - sumPercentages;
                 }
               }
             }
@@ -425,6 +431,7 @@ export class GovernanceService {
               votes: {
                 yes: yesPercentage,
                 no: noPercentage,
+                abstain: abstainPercentage,
               },
             };
           } catch (error) {
@@ -474,6 +481,10 @@ export class GovernanceService {
 
     if (new Date() > proposal.endDate) {
       throw new BadRequestException('Voting period has ended');
+    }
+
+    if (!proposal.abstain && voteReq.vote === VoteType.ABSTAIN) {
+      throw new BadRequestException('Abstain option is not allowed for this proposal');
     }
 
     // Get the snapshot associated with the proposal
@@ -573,6 +584,8 @@ export class GovernanceService {
         totals.yes = (BigInt(totals.yes) + BigInt(vote.voteWeight)).toString();
       } else if (vote.vote === VoteType.NO) {
         totals.no = (BigInt(totals.no) + BigInt(vote.voteWeight)).toString();
+      } else if (vote.vote === VoteType.ABSTAIN) {
+        totals.abstain = (BigInt(totals.abstain) + BigInt(vote.voteWeight)).toString();
       }
     });
 
