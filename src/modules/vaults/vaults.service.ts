@@ -910,8 +910,10 @@ export class VaultsService {
 
     const additionalData = {
       maxContributeAssets: Number(vault.max_contribute_assets),
-      requireReservedCostUsd: assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01),
-      requireReservedCostAda: assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01),
+      requireReservedCostUsd:
+        assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01),
+      requireReservedCostAda:
+        assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01),
       assetsCount: lockedAssetsCount,
       assetsPrices,
     };
