@@ -45,8 +45,8 @@ export class GovernanceController {
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Get proposal details' })
   @ApiResponse({ status: 200, description: 'Proposal details' })
-  async getProposal(@Param('proposalId') proposalId: string) {
-    return this.governanceService.getProposal(proposalId);
+  async getProposal(@Param('proposalId') proposalId: string, @Req() req) {
+    return this.governanceService.getProposal(proposalId, req.user.sub);
   }
 
   @Get('vaults/:vaultId/voting-power')
@@ -89,8 +89,12 @@ export class GovernanceController {
   @Get('vaults/:vaultId/assets/terminate')
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Get assets to terminate for a vault' })
-  @ApiResponse({ status: 200, description: 'List of assets to terminate' })
-  async getAssetsToTerminate(@Param('vaultId') vaultId: string): Promise<Asset[]> {
+  @ApiResponse({
+    status: 200,
+    description: 'List of assets to terminate',
+    type: [AssetBuySellDto],
+  })
+  async getAssetsToTerminate(@Param('vaultId') vaultId: string): Promise<AssetBuySellDto[]> {
     return this.governanceService.getAssetsToTerminate(vaultId);
   }
 
@@ -98,7 +102,7 @@ export class GovernanceController {
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Get assets to burn for a vault' })
   @ApiResponse({ status: 200, description: 'List of assets to burn' })
-  async getAssetsToBurn(@Param('vaultId') vaultId: string): Promise<Asset[]> {
+  async getAssetsToBurn(@Param('vaultId') vaultId: string): Promise<AssetBuySellDto[]> {
     return this.governanceService.getAssetsToBurn(vaultId);
   }
 }

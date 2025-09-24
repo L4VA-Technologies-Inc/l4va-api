@@ -55,6 +55,12 @@ class BaseProposalDto {
   })
   endDate: string;
 
+  @ApiProperty({
+    description: 'Indicates if the proposal allows abstain votes',
+    example: true,
+  })
+  abstain: boolean;
+
   @ApiProperty({ required: false, type: [FungibleTokenDto] })
   fungibleTokens?: FungibleTokenDto[];
 
@@ -70,8 +76,13 @@ class BaseProposalDto {
   @ApiProperty({ required: false })
   terminationDate?: Date;
 
-  @ApiProperty({ required: false, type: [Object] })
-  burnAssets?: any[];
+  @ApiProperty({
+    description: 'Array of asset IDs to burn',
+    example: ['assetid1', 'assetid2', 'assetid3'],
+    required: false,
+    type: [String],
+  })
+  burnAssets?: string[];
 }
 
 // For active proposals with votes
@@ -81,11 +92,13 @@ class ActiveProposalDto extends BaseProposalDto {
     example: {
       yes: 65,
       no: 35,
+      abstain: 0, // Abstain percentage is 0 for non-abstain proposals
     },
   })
   votes: {
     yes: number;
     no: number;
+    abstain: number;
   };
 }
 

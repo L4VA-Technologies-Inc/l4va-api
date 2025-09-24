@@ -392,6 +392,7 @@ export class GovernanceService {
           status: proposal.status,
           createdAt: proposal.createdAt,
           endDate: proposal.endDate.toISOString(),
+          abstain: proposal.abstain,
         };
 
         if (proposal.status !== ProposalStatus.UPCOMING) {
@@ -404,18 +405,24 @@ export class GovernanceService {
             // Calculate percentages
             let yesPercentage = 0;
             let noPercentage = 0;
+            let abstainPercentage = 0;
 
             if (totalVotingPower > 0) {
               yesPercentage = Number((BigInt(totals.yes) * BigInt(100)) / totalVotingPower);
               noPercentage = Number((BigInt(totals.no) * BigInt(100)) / totalVotingPower);
-
-              // Adjust to ensure sum is 100
-              if (yesPercentage + noPercentage < 100) {
-                // Add the difference to the larger percentage
-                if (BigInt(totals.yes) >= BigInt(totals.no)) {
-                  yesPercentage = 100 - noPercentage;
+              if (proposal.abstain) {
+                abstainPercentage = Number((BigInt(totals.abstain) * BigInt(100)) / totalVotingPower);
+              }
+              // Ensure percentages sum to 100% due to integer division
+              const sumPercentages = yesPercentage + noPercentage + abstainPercentage;
+              if (sumPercentages < 100) {
+                // Find the largest percentage and add the difference to it
+                if (yesPercentage >= noPercentage && yesPercentage >= abstainPercentage) {
+                  yesPercentage += 100 - sumPercentages;
+                } else if (noPercentage >= yesPercentage && noPercentage >= abstainPercentage) {
+                  noPercentage += 100 - sumPercentages;
                 } else {
-                  noPercentage = 100 - yesPercentage;
+                  abstainPercentage += 100 - sumPercentages;
                 }
               }
             }
@@ -425,6 +432,7 @@ export class GovernanceService {
               votes: {
                 yes: yesPercentage,
                 no: noPercentage,
+                abstain: abstainPercentage,
               },
             };
           } catch (error) {
@@ -474,6 +482,10 @@ export class GovernanceService {
 
     if (new Date() > proposal.endDate) {
       throw new BadRequestException('Voting period has ended');
+    }
+
+    if (!proposal.abstain && voteReq.vote === VoteType.ABSTAIN) {
+      throw new BadRequestException('Abstain option is not allowed for this proposal');
     }
 
     // Get the snapshot associated with the proposal
@@ -573,6 +585,8 @@ export class GovernanceService {
         totals.yes = (BigInt(totals.yes) + BigInt(vote.voteWeight)).toString();
       } else if (vote.vote === VoteType.NO) {
         totals.no = (BigInt(totals.no) + BigInt(vote.voteWeight)).toString();
+      } else if (vote.vote === VoteType.ABSTAIN && proposal.abstain) {
+        totals.abstain = (BigInt(totals.abstain) + BigInt(vote.voteWeight)).toString();
       }
     });
 
@@ -590,7 +604,10 @@ export class GovernanceService {
     };
   }
 
-  async getProposal(proposalId: string): Promise<{
+  async getProposal(
+    proposalId: string,
+    userId: string
+  ): Promise<{
     proposal: Proposal;
     votes: {
       id: string;
@@ -606,6 +623,7 @@ export class GovernanceService {
       no: string;
       abstain: string;
     };
+    canVote: boolean;
   }> {
     const proposal = await this.proposalRepository.findOne({
       where: { id: proposalId },
@@ -617,10 +635,48 @@ export class GovernanceService {
 
     const { votes, totals } = await this.getVotes(proposalId);
 
+    let canVote = false;
+
+    try {
+      const isActive = proposal.status === ProposalStatus.ACTIVE && new Date() <= proposal.endDate;
+
+      if (isActive) {
+        const user = await this.userRepository.findOne({
+          where: { id: userId },
+          select: ['id', 'address'],
+        });
+
+        if (user && user.address) {
+          const snapshot = await this.snapshotRepository.findOne({
+            where: { id: proposal.snapshotId },
+          });
+
+          if (snapshot) {
+            const voteWeight = snapshot.addressBalances[user.address];
+            const hasVotingPower = voteWeight && voteWeight !== '0';
+
+            const existingVote = await this.voteRepository.findOne({
+              where: {
+                proposalId,
+                voterAddress: user.address,
+              },
+            });
+
+            canVote = hasVotingPower && !existingVote;
+          }
+        }
+      }
+    } catch (error) {
+      this.logger.error(
+        `Error checking voting eligibility for user ${userId} on proposal ${proposalId}: ${error.message}`
+      );
+    }
+
     return {
       proposal,
       votes,
       totals,
+      canVote,
     };
   }
 
@@ -714,27 +770,48 @@ export class GovernanceService {
     }
   }
 
-  async getAssetsToTerminate(vaultId: string): Promise<Asset[]> {
+  async getAssetsToTerminate(vaultId: string): Promise<AssetBuySellDto[]> {
     try {
+      // Get all assets in the vault eligible for termination
       const assets = await this.assetRepository.find({
-        where: { vault: { id: vaultId } },
+        where: {
+          vault: { id: vaultId },
+          type: In([AssetType.NFT, AssetType.FT]),
+          status: AssetStatus.LOCKED,
+          deleted: false,
+        },
+        relations: ['vault'],
+        select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'dex_price', 'floor_price', 'metadata'],
       });
-      return assets;
+
+      return plainToInstance(AssetBuySellDto, assets, {
+        excludeExtraneousValues: true,
+      });
     } catch (error) {
-      this.logger.error(`Error getting assets to stake for vault ${vaultId}: ${error.message}`, error.stack);
-      throw new InternalServerErrorException('Error getting assets to stake');
+      this.logger.error(`Error getting assets to terminate for vault ${vaultId}: ${error.message}`, error.stack);
+      throw new InternalServerErrorException('Error getting assets to terminate');
     }
   }
 
-  async getAssetsToBurn(vaultId: string): Promise<Asset[]> {
+  async getAssetsToBurn(vaultId: string): Promise<AssetBuySellDto[]> {
     try {
       const assets = await this.assetRepository.find({
-        where: { vault: { id: vaultId } },
+        where: {
+          vault: { id: vaultId },
+          type: In([AssetType.NFT, AssetType.FT]),
+          status: AssetStatus.LOCKED,
+          deleted: false,
+        },
+        relations: ['vault'],
+        select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'dex_price', 'floor_price', 'metadata'],
       });
-      return assets;
+
+      return plainToInstance(AssetBuySellDto, assets, {
+        excludeExtraneousValues: true,
+      });
     } catch (error) {
-      this.logger.error(`Error getting assets to stake for vault ${vaultId}: ${error.message}`, error.stack);
-      throw new InternalServerErrorException('Error getting assets to stake');
+      this.logger.error(`Error getting assets to burn for vault ${vaultId}: ${error.message}`, error.stack);
+      throw new InternalServerErrorException('Error getting assets to burn');
     }
   }
 
