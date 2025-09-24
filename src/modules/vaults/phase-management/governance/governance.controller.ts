@@ -10,6 +10,7 @@ import { VoteReq } from './dto/vote.req';
 import { GovernanceService } from './governance.service';
 
 import { Asset } from '@/database/asset.entity';
+import { OptionalAuthGuard } from '@/modules/auth/optional-auth.guard';
 
 @ApiTags('Governance')
 @Controller('governance')
@@ -25,7 +26,7 @@ export class GovernanceController {
   }
 
   @Get('vaults/:vaultId/proposals')
-  @UseGuards(AuthGuard)
+  @UseGuards(OptionalAuthGuard)
   @ApiOperation({ summary: 'Get all proposals for a vault' })
   @ApiResponse({ status: 200, description: 'List of proposals', type: [GetProposalsRes] })
   async getProposals(@Param('vaultId') vaultId: string): Promise<GetProposalsResItem[]> {

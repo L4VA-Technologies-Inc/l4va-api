@@ -532,8 +532,6 @@ export class GovernanceService {
   async getVotes(proposalId: string): Promise<{
     votes: {
       id: string;
-      proposalId: string;
-      voterId: string;
       voterAddress: string;
       voteWeight: string;
       vote: VoteType;
@@ -558,6 +556,7 @@ export class GovernanceService {
     const votes = await this.voteRepository.find({
       where: { proposalId },
       order: { timestamp: 'DESC' },
+      select: ['id', 'voterAddress', 'voteWeight', 'vote', 'timestamp'],
     });
 
     const snapshot = await this.snapshotRepository.findOne({
@@ -600,8 +599,6 @@ export class GovernanceService {
     return {
       votes: votes.map(vote => ({
         id: vote.id,
-        proposalId: vote.proposalId,
-        voterId: vote.voterId,
         voterAddress: vote.voterAddress,
         voteWeight: vote.voteWeight,
         vote: vote.vote,
@@ -618,8 +615,6 @@ export class GovernanceService {
     proposal: Proposal;
     votes: {
       id: string;
-      proposalId: string;
-      voterId: string;
       voterAddress: string;
       voteWeight: string;
       vote: VoteType;
@@ -629,8 +624,10 @@ export class GovernanceService {
       yes: string;
       no: string;
       abstain: string;
+      votedPercentage: number;
     };
     canVote: boolean;
+    selectedVote: VoteType | null;
   }> {
     const proposal = await this.proposalRepository.findOne({
       where: { id: proposalId },
@@ -643,33 +640,37 @@ export class GovernanceService {
     const { votes, totals } = await this.getVotes(proposalId);
 
     let canVote = false;
+    let selectedVote: VoteType | null = null;
 
     try {
       const isActive = proposal.status === ProposalStatus.ACTIVE && new Date() <= proposal.endDate;
 
-      if (isActive) {
-        const user = await this.userRepository.findOne({
-          where: { id: userId },
-          select: ['id', 'address'],
+      const user = await this.userRepository.findOne({
+        where: { id: userId },
+        select: ['id', 'address'],
+      });
+
+      if (user && user.address) {
+        const snapshot = await this.snapshotRepository.findOne({
+          where: { id: proposal.snapshotId },
         });
 
-        if (user && user.address) {
-          const snapshot = await this.snapshotRepository.findOne({
-            where: { id: proposal.snapshotId },
+        if (snapshot) {
+          const voteWeight = snapshot.addressBalances[user.address];
+          const hasVotingPower = voteWeight && voteWeight !== '0';
+
+          const existingVote = await this.voteRepository.findOne({
+            where: {
+              proposalId,
+              voterAddress: user.address,
+            },
+            select: ['vote'],
           });
 
-          if (snapshot) {
-            const voteWeight = snapshot.addressBalances[user.address];
-            const hasVotingPower = voteWeight && voteWeight !== '0';
-
-            const existingVote = await this.voteRepository.findOne({
-              where: {
-                proposalId,
-                voterAddress: user.address,
-              },
-            });
-
-            canVote = hasVotingPower && !existingVote;
+          if (existingVote) {
+            selectedVote = existingVote.vote;
+          } else {
+            canVote = isActive && hasVotingPower;
           }
         }
       }
@@ -684,6 +685,7 @@ export class GovernanceService {
       votes,
       totals,
       canVote,
+      selectedVote,
     };
   }
 
