@@ -604,7 +604,10 @@ export class GovernanceService {
     };
   }
 
-  async getProposal(proposalId: string): Promise<{
+  async getProposal(
+    proposalId: string,
+    userId: string
+  ): Promise<{
     proposal: Proposal;
     votes: {
       id: string;
@@ -620,6 +623,7 @@ export class GovernanceService {
       no: string;
       abstain: string;
     };
+    canVote: boolean;
   }> {
     const proposal = await this.proposalRepository.findOne({
       where: { id: proposalId },
@@ -631,10 +635,48 @@ export class GovernanceService {
 
     const { votes, totals } = await this.getVotes(proposalId);
 
+    let canVote = false;
+
+    try {
+      const isActive = proposal.status === ProposalStatus.ACTIVE && new Date() <= proposal.endDate;
+
+      if (isActive) {
+        const user = await this.userRepository.findOne({
+          where: { id: userId },
+          select: ['id', 'address'],
+        });
+
+        if (user && user.address) {
+          const snapshot = await this.snapshotRepository.findOne({
+            where: { id: proposal.snapshotId },
+          });
+
+          if (snapshot) {
+            const voteWeight = snapshot.addressBalances[user.address];
+            const hasVotingPower = voteWeight && voteWeight !== '0';
+
+            const existingVote = await this.voteRepository.findOne({
+              where: {
+                proposalId,
+                voterAddress: user.address,
+              },
+            });
+
+            canVote = hasVotingPower && !existingVote;
+          }
+        }
+      }
+    } catch (error) {
+      this.logger.error(
+        `Error checking voting eligibility for user ${userId} on proposal ${proposalId}: ${error.message}`
+      );
+    }
+
     return {
       proposal,
       votes,
       totals,
+      canVote,
     };
   }
 
@@ -728,15 +770,26 @@ export class GovernanceService {
     }
   }
 
-  async getAssetsToTerminate(vaultId: string): Promise<Asset[]> {
+  async getAssetsToTerminate(vaultId: string) {
     try {
+      // Get all assets in the vault eligible for termination
       const assets = await this.assetRepository.find({
-        where: { vault: { id: vaultId } },
+        where: {
+          vault: { id: vaultId },
+          type: In([AssetType.NFT, AssetType.FT]),
+          status: AssetStatus.LOCKED,
+          deleted: false,
+        },
+        relations: ['vault'],
+        select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'dex_price', 'floor_price', 'metadata'],
       });
-      return assets;
+
+      return plainToInstance(AssetBuySellDto, assets, {
+        excludeExtraneousValues: true,
+      });
     } catch (error) {
-      this.logger.error(`Error getting assets to stake for vault ${vaultId}: ${error.message}`, error.stack);
-      throw new InternalServerErrorException('Error getting assets to stake');
+      this.logger.error(`Error getting assets to terminate for vault ${vaultId}: ${error.message}`, error.stack);
+      throw new InternalServerErrorException('Error getting assets to terminate');
     }
   }
 
