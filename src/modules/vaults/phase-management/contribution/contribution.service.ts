@@ -45,6 +45,10 @@ export class ContributionService {
   /**
    * Syncs contribution transactions for a vault by comparing on-chain transactions
    * with the transactions stored in the database
+   *
+   * BUG: script_hash and policy_id are the same
+   *
+   * TODO: Handle where pr fails to submit, maybe retry later
    * @param vaultId - The ID of the vault to sync transactions for
    * @returns An object containing processed blockchain transactions and database transactions
    */
@@ -60,7 +64,17 @@ export class ContributionService {
       // Get the vault with contract address
       const vault = await this.vaultRepository.findOne({
         where: { id: vaultId },
-        select: ['id', 'contract_address'],
+        select: [
+          'id',
+          'policy_id',
+          'asset_vault_name',
+          'name',
+          'script_hash',
+          'description',
+          'ft_token_img',
+          'vault_token_ticker',
+        ],
+        relations: ['ft_token_img'],
       });
 
       if (!vault) {
@@ -89,51 +103,30 @@ export class ContributionService {
 
             // If transaction exists in DB and status is not confirmed, update it
             if (dbTx && dbTx.status !== 'confirmed') {
-              try {
-                // Update the vault with the policy ID of Minted Token if it doesn't have one
-                if (dbTx.type === TransactionType.contribute) {
-                  const vault = await this.vaultRepository.findOne({
-                    where: { id: vaultId },
-                    select: [
-                      'id',
-                      'policy_id',
-                      'asset_vault_name',
-                      'name',
-                      'description',
-                      'ft_token_img',
-                      'vault_token_ticker',
-                    ],
-                    relations: ['ft_token_img'],
-                  });
-
-                  // TODO: Handle where pr fails to submit, maybe retry later
-                  if (vault && !vault.policy_id) {
-                    const extractedPolicyId = await this.extractPolicyIdFromTransaction(tx.tx_hash);
-                    if (extractedPolicyId) {
-                      vault.policy_id = extractedPolicyId;
-                      await this.vaultRepository.save(vault);
-
-                      this.logger.log(`Updated vault ${vaultId} with policy ID: ${extractedPolicyId}`);
-                      try {
-                        this.logger.log(`Create PR to update Vault Metadata`);
-                        await this.metadataRegistryApiService.submitTokenMetadata({
-                          vaultId: vault.id,
-                          subject: `${extractedPolicyId}${vault.asset_vault_name}`,
-                          name: vault.name,
-                          description: vault.description,
-                          ticker: vault.vault_token_ticker,
-                          logo: vault.ft_token_img?.file_url || '',
-                          decimals: vault.ft_token_decimals || 6,
-                        });
-                      } catch (error) {
-                        this.logger.error('Error updating vault metadata:', error);
-                      }
-                    }
+              // Update the vault with the policy ID
+              if (dbTx.type === TransactionType.contribute && !vault.policy_id) {
+                try {
+                  vault.policy_id = vault.script_hash;
+                  await this.vaultRepository.save(vault);
+                  try {
+                    this.logger.log(`Create PR to update Vault Metadata`);
+                    await this.metadataRegistryApiService.submitTokenMetadata({
+                      vaultId: vault.id,
+                      subject: `${vault.script_hash}${vault.asset_vault_name}`,
+                      name: vault.name,
+                      description: vault.description,
+                      ticker: vault.vault_token_ticker,
+                      logo: vault.ft_token_img?.file_url || '',
+                      decimals: vault.ft_token_decimals || 6,
+                    });
+                  } catch (error) {
+                    this.logger.error('Error updating vault metadata:', error);
                   }
+                } catch (error) {
+                  this.logger.error(`Failed to extract policy ID for tx ${tx.tx_hash}`, error);
                 }
-              } catch (error) {
-                this.logger.error(`Failed to extract policy ID for tx ${tx.tx_hash}`, error);
               }
+
               try {
                 await this.transactionsService.updateTransactionStatus(
                   tx.tx_hash,
@@ -335,79 +328,5 @@ export class ContributionService {
       vaultId,
       txId: transaction.id,
     };
-  }
-
-  /**
-   * Extract the policy ID of Receipt from a transaction using its hash.
-   * @param txHash The hash of the transaction.
-   * @returns The extracted policy ID or null if not found.
-   */
-  private async extractPolicyIdFromTransaction(txHash: string): Promise<string | null> {
-    try {
-      const txUtxos = await this.blockfrost.txsUtxos(txHash);
-
-      // Look for tokens containing "receipt" in the asset name (which gets hex encoded)
-      const receiptHex = Buffer.from('receipt').toString('hex');
-      this.logger.debug(`Looking for receipt tokens with hex suffix: ${receiptHex}`);
-
-      for (const output of txUtxos.outputs) {
-        for (const amount of output.amount) {
-          if (amount.unit === 'lovelace') continue;
-          if (amount.unit.endsWith(receiptHex)) {
-            const policyId = amount.unit.slice(0, 56);
-            this.logger.log(`Found receipt token with policy ID: ${policyId}`);
-            return policyId;
-          }
-        }
-
-        // If we have an inline datum, it might contain the policy ID
-        if (output.inline_datum) {
-          this.logger.debug('Checking inline datum for receipt info:', output.inline_datum);
-          // Extract policy ID from datum if possible
-          // This depends on your specific datum format
-        }
-      }
-
-      // If no receipt token found, fall back to looking for any minted token
-      const mintedTokens = [];
-      txUtxos.outputs.forEach(output => {
-        output.amount.forEach(amount => {
-          if (amount.unit !== 'lovelace' && amount.quantity === '1') {
-            const policyId = amount.unit.slice(0, 56);
-            const assetName = amount.unit.slice(56);
-
-            mintedTokens.push({
-              policy_id: policyId,
-              asset_name: assetName,
-              quantity: amount.quantity,
-            });
-          }
-        });
-      });
-
-      // Check if any token looks like a receipt
-      for (const token of mintedTokens) {
-        // Try to decode the asset name from hex
-        try {
-          const decodedName = Buffer.from(token.asset_name, 'hex').toString();
-          if (decodedName.toLowerCase().includes('receipt')) {
-            this.logger.log(`Found receipt token with policy ID: ${token.policy_id}`);
-            return token.policy_id;
-          }
-        } catch (e) {}
-      }
-
-      // Last resort - just return first minted token
-      if (mintedTokens.length > 0) {
-        this.logger.warn(`No receipt token found, using first minted token policy: ${mintedTokens[0].policy_id}`);
-        return mintedTokens[0].policy_id;
-      }
-
-      this.logger.warn(`No minted tokens found in transaction ${txHash}`);
-      return null;
-    } catch (error) {
-      this.logger.error(`Failed to extract policy ID from transaction ${txHash}`, error);
-      return null;
-    }
   }
 }
