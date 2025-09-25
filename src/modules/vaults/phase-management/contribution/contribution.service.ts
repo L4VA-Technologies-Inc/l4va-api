@@ -1,8 +1,6 @@
-import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 
 import { ContributeReq } from './dto/contribute.req';
 
@@ -21,7 +19,6 @@ import { VaultStatus } from '@/types/vault.types';
 @Injectable()
 export class ContributionService {
   private readonly logger = new Logger(ContributionService.name);
-  private blockfrost: BlockFrostAPI;
 
   constructor(
     @InjectRepository(Transaction)
@@ -34,13 +31,8 @@ export class ContributionService {
     private readonly assetRepository: Repository<Asset>,
     private readonly transactionsService: TransactionsService,
     private readonly blockchainScanner: BlockchainScannerService,
-    private readonly configService: ConfigService,
     private readonly metadataRegistryApiService: MetadataRegistryApiService
-  ) {
-    this.blockfrost = new BlockFrostAPI({
-      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
-    });
-  }
+  ) {}
 
   /**
    * Syncs contribution transactions for a vault by comparing on-chain transactions
@@ -61,12 +53,13 @@ export class ContributionService {
     databaseTxs: Transaction[];
   }> {
     try {
-      // Get the vault with contract address
+      // Get the vault with all necessary fields in one query
       const vault = await this.vaultRepository.findOne({
         where: { id: vaultId },
         select: [
           'id',
           'policy_id',
+          'contract_address',
           'asset_vault_name',
           'name',
           'script_hash',
@@ -88,65 +81,98 @@ export class ContributionService {
       // Get transactions from blockchain and process them
       const blockchainTxs = await this.blockchainScanner.getAddressTransactions(vault.contract_address);
 
-      // Process blockchain transactions
-      const processedBlockchainTxs = await Promise.all(
-        blockchainTxs
-          // Filter out transactions without block height
-          .filter(tx => tx.block_height != null)
-          ?.map(async tx => {
-            // Find corresponding transaction in database
-            const dbTx = await this.transactionRepository.findOne({
-              where: { tx_hash: tx.tx_hash },
+      // Filter transactions we need to process
+      const filteredTxs = blockchainTxs.filter(tx => tx.block_height != null);
+
+      // If no transactions to process, return early
+      if (filteredTxs.length === 0) {
+        const databaseTxs = await this.transactionRepository.find({
+          where: {
+            vault_id: vaultId,
+            type: TransactionType.contribute,
+          },
+          order: { id: 'DESC' },
+        });
+
+        return {
+          processedBlockchainTxs: [],
+          databaseTxs,
+        };
+      }
+
+      const txHashes = filteredTxs.map(tx => tx.tx_hash);
+
+      const dbTxs = await this.transactionRepository.find({
+        where: { tx_hash: In(txHashes) },
+      });
+
+      // Create lookup map for faster access
+      const dbTxMap = new Map(dbTxs.map(tx => [tx.tx_hash, tx]));
+
+      // Collect transactions that need status updates
+      const txsToUpdate: { tx_hash: string; tx_index: number }[] = [];
+
+      const needsPolicyIdUpdate = !vault.policy_id;
+
+      // Process each transaction
+      const processedBlockchainTxs = filteredTxs.map(tx => {
+        const dbTx = dbTxMap.get(tx.tx_hash) || null;
+        let statusUpdated = false;
+
+        // If transaction exists in DB and status is not confirmed, mark for update
+        if (dbTx && dbTx.status !== TransactionStatus.confirmed) {
+          // Mark for status update
+          txsToUpdate.push({
+            tx_hash: tx.tx_hash,
+            tx_index: tx.tx_index,
+          });
+
+          statusUpdated = true;
+        }
+
+        return {
+          tx,
+          dbTx,
+          statusUpdated,
+        };
+      });
+
+      // If we need to update policy ID, do it once
+      if (needsPolicyIdUpdate && txsToUpdate.length > 0) {
+        try {
+          vault.policy_id = vault.script_hash;
+          await this.vaultRepository.save(vault);
+          try {
+            this.logger.log(`Create PR to update Vault Metadata`);
+            await this.metadataRegistryApiService.submitTokenMetadata({
+              vaultId: vault.id,
+              subject: `${vault.script_hash}${vault.asset_vault_name}`,
+              name: vault.name,
+              description: vault.description,
+              ticker: vault.vault_token_ticker,
+              logo: vault.ft_token_img?.file_url || '',
+              decimals: vault.ft_token_decimals || 6,
             });
+          } catch (error) {
+            this.logger.error('Error updating vault metadata:', error);
+          }
+        } catch (error) {
+          this.logger.error(`Failed to update vault policy ID`, error);
+        }
+      }
 
-            let statusUpdated = false;
-
-            // If transaction exists in DB and status is not confirmed, update it
-            if (dbTx && dbTx.status !== 'confirmed') {
-              // Update the vault with the policy ID
-              if (dbTx.type === TransactionType.contribute && !vault.policy_id) {
-                try {
-                  vault.policy_id = vault.script_hash;
-                  await this.vaultRepository.save(vault);
-                  try {
-                    this.logger.log(`Create PR to update Vault Metadata`);
-                    await this.metadataRegistryApiService.submitTokenMetadata({
-                      vaultId: vault.id,
-                      subject: `${vault.script_hash}${vault.asset_vault_name}`,
-                      name: vault.name,
-                      description: vault.description,
-                      ticker: vault.vault_token_ticker,
-                      logo: vault.ft_token_img?.file_url || '',
-                      decimals: vault.ft_token_decimals || 6,
-                    });
-                  } catch (error) {
-                    this.logger.error('Error updating vault metadata:', error);
-                  }
-                } catch (error) {
-                  this.logger.error(`Failed to extract policy ID for tx ${tx.tx_hash}`, error);
-                }
-              }
-
-              try {
-                await this.transactionsService.updateTransactionStatus(
-                  tx.tx_hash,
-                  tx.tx_index,
-                  TransactionStatus.confirmed
-                );
-                statusUpdated = true;
-                this.logger.log(`Updated transaction ${tx.tx_hash} status to confirmed`);
-              } catch (updateError) {
-                this.logger.error(`Failed to update transaction ${tx.tx_hash} status`, updateError);
-              }
-            }
-
-            return {
-              tx,
-              dbTx: dbTx || null,
-              statusUpdated,
-            };
-          })
-      );
+      if (txsToUpdate.length > 0) {
+        try {
+          await Promise.all(
+            txsToUpdate.map(tx =>
+              this.transactionsService.updateTransactionStatus(tx.tx_hash, tx.tx_index, TransactionStatus.confirmed)
+            )
+          );
+          this.logger.log(`Updated ${txsToUpdate.length} transactions to confirmed status`);
+        } catch (error) {
+          this.logger.error('Failed to update transaction statuses', error);
+        }
+      }
 
       // Get all transactions from database for this vault
       const databaseTxs = await this.transactionRepository.find({
