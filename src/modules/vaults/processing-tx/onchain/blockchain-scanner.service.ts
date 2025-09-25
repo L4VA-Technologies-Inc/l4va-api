@@ -14,7 +14,7 @@ import {
 } from '../../../../types/blockchain.types';
 
 const DEFAULT_MAX_RETRIES = 5;
-const DEFAULT_INITIAL_DELAY_MS = 1000; // 1 second
+const DEFAULT_INITIAL_DELAY_MS = 2000; // 2 seconds
 const DEFAULT_MAX_DELAY_MS = 30000; // 30 seconds
 
 @Injectable()
