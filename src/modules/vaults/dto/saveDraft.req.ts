@@ -377,7 +377,7 @@ export class SaveDraftReq {
   @IsArray()
   @Type(() => ContributorWhitelist)
   @Expose()
-  whitelistContributors?: ContributorWhitelist[] | null;
+  contributorWhitelist?: ContributorWhitelist[] | null;
 
   @ApiProperty({ required: false, nullable: true, type: [SocialLink] })
   @IsOptional()
