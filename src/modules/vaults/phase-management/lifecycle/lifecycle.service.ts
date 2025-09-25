@@ -127,6 +127,8 @@ export class LifecycleService {
     acquire_multiplier?: [string, string, number][];
     ada_pair_multiplier?: number;
     vtPrice?: number;
+    fdv?: number;
+    fdvTvl?: number;
   }): Promise<void> {
     try {
       const vault = await this.vaultRepository.findOne({
@@ -183,6 +185,8 @@ export class LifecycleService {
         vault.ada_pair_multiplier = data.ada_pair_multiplier;
         vault.vt_price = data.vtPrice;
         vault.acquire_multiplier = data.acquire_multiplier;
+        vault.fdv = data.fdv;
+        vault.fdv_tvl = data.fdvTvl;
       } else if (data.newScStatus) {
         vault.vault_sc_status = data.newScStatus;
       }
@@ -436,7 +440,7 @@ export class LifecycleService {
         const ASSETS_OFFERED_PERCENT = vault.tokens_for_acquires * 0.01;
         const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
         // 3. Calculate LP Tokens
-        const { lpAdaAmount, lpVtAmount, vtPrice } = await this.distributionService.calculateLpTokens({
+        const { lpAdaAmount, lpVtAmount, vtPrice, fdv } = await this.distributionService.calculateLpTokens({
           vtSupply,
           totalAcquiredAda,
           assetsOfferedPercent: ASSETS_OFFERED_PERCENT,
@@ -491,9 +495,7 @@ export class LifecycleService {
             }
 
             const rawVtReceived = await this.distributionService.calculateAcquirerTokens({
-              vaultId: vault.id,
               adaSent,
-              numAcquirers: Object.keys(userAcquiredAdaMap).length,
               totalAcquiredValueAda: totalAcquiredAda,
               lpAdaAmount,
               lpVtAmount,
@@ -652,6 +654,8 @@ export class LifecycleService {
           acquire_multiplier: acquireMultiplier,
           ada_pair_multiplier: adaPairMultiplier,
           vtPrice,
+          fdv,
+          fdvTvl: +(fdv / totalContributedValueAda).toFixed(2) || 0,
         });
 
         try {

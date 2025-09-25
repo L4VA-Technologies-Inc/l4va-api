@@ -26,10 +26,11 @@ export class DistributionService {
     ASSETS_OFFERED_PERCENT: number;
     LP_PERCENT: number;
   }): number {
-    const { vtSupply, ASSETS_OFFERED_PERCENT, valueContributed, totalTvl } = params;
+    const { vtSupply, ASSETS_OFFERED_PERCENT, valueContributed, totalTvl, lpVtAmount } = params;
 
     const contributorShare = valueContributed / totalTvl;
-    const vtRetained = this.round6(vtSupply * (1 - ASSETS_OFFERED_PERCENT) * contributorShare);
+    const vtRetained = this.round6((vtSupply - lpVtAmount) * (1 - ASSETS_OFFERED_PERCENT) * contributorShare);
+
     // const lpVtRetained = this.round6(lpVtAmount * LP_PERCENT);
     // const lpAdaRetained = this.round6(lpAdaAmount * LP_PERCENT);
     // const vtAdaValue = this.round6(vtRetained * vtPrice);
@@ -39,9 +40,7 @@ export class DistributionService {
   }
 
   calculateAcquirerTokens(params: {
-    vaultId: string;
     adaSent: number;
-    numAcquirers: number;
     totalAcquiredValueAda: number;
     lpVtAmount: number;
     lpAdaAmount: number;
@@ -75,24 +74,31 @@ export class DistributionService {
   }): Promise<{
     lpAdaAmount: number;
     lpVtAmount: number;
-    lpTokensReceived: number;
     vtPrice: number;
+    fdv: number;
   }> {
     const { totalAcquiredAda, vtSupply, assetsOfferedPercent, lpPercent } = params;
 
-    const lpAdaAmount = this.round6(lpPercent * totalAcquiredAda); // Calculate ADA allocated to LP
-    const vtPrice = this.round6(totalAcquiredAda / assetsOfferedPercent / vtSupply); // Calculate VT price
-    const lpVtAmount = this.round6(lpAdaAmount / vtPrice); // Calculate VT tokens allocated to LP
+    // Calculate VT price (this part is correct in your current code)
+    const vtPrice = this.round6(totalAcquiredAda / assetsOfferedPercent / vtSupply);
 
-    // Calculate LP tokens received (simplified approximation)
-    // In reality, this would depend on the specific DEX formula
-    const lpTokensReceived = this.round6(Math.sqrt(lpAdaAmount * lpVtAmount));
+    const fdv = this.round6(totalAcquiredAda / assetsOfferedPercent);
+
+    // LP gets lpPercent of the total vault value
+    const lpTotalValue = this.round6(fdv * lpPercent);
+
+    // Divide equally between ADA and VT
+    const lpAdaAmount = this.round6(lpTotalValue / 2);
+    const lpVtValue = this.round6(lpTotalValue / 2);
+
+    // Convert VT value to tokens
+    const lpVtAmount = this.round6(lpVtValue / vtPrice);
 
     return {
       lpAdaAmount,
       lpVtAmount,
-      lpTokensReceived,
       vtPrice,
+      fdv,
     };
   }
 

@@ -351,6 +351,26 @@ export class Vault {
   })
   require_reserved_cost_ada: number;
 
+  @Expose({ name: 'fdv' })
+  @Transform(({ value }) => (value ? Number(value) : null))
+  @Column({
+    name: 'fdv',
+    type: 'numeric',
+    nullable: true,
+    default: 0,
+  })
+  fdv: number;
+
+  @Expose({ name: 'fdvTvl' })
+  @Transform(({ value }) => (value ? Number(value) : null))
+  @Column({
+    name: 'fdv_tvl',
+    type: 'numeric',
+    nullable: true,
+    default: 0,
+  })
+  fdv_tvl: number;
+
   @Expose({ name: 'vaultStatus' })
   @Column({
     name: 'vault_status',

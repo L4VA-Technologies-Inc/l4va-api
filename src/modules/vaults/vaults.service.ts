@@ -918,13 +918,6 @@ export class VaultsService {
       assetsPrices,
     };
 
-    const fdv = vault.vt_price !== null ? vault.ft_token_supply * vault.vt_price : null;
-
-    let fdvTvl = null;
-    if (fdv !== null && assetsPrices?.totalValueUsd && assetsPrices.totalValueUsd > 0) {
-      fdvTvl = (fdv / assetsPrices.totalValueUsd).toFixed(2);
-    }
-
     let canCreateProposal = false;
 
     if (userId && vault.vault_status === VaultStatus.locked) {
@@ -959,8 +952,6 @@ export class VaultsService {
     additionalData['isWhitelistedContributor'] = isWhitelistedContributor;
     additionalData['isWhitelistedAcquirer'] = isWhitelistedAcquirer;
     additionalData['canCreateProposal'] = canCreateProposal;
-    additionalData['fdvTvl'] = fdvTvl;
-    additionalData['fdv'] = fdv;
 
     // First transform the vault to plain object with class-transformer
     const plainVault = instanceToPlain(vault);
