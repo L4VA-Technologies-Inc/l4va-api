@@ -327,8 +327,8 @@ export class DraftVaultsService {
       }
 
       // Handle contributor whitelist only if provided and vault is private
-      if (data.whitelistContributors !== undefined && data.whitelistContributors.length > 0) {
-        const contributorItems = data.whitelistContributors.map(item => {
+      if (data.contributorWhitelist !== undefined && data.contributorWhitelist.length > 0) {
+        const contributorItems = data.contributorWhitelist.map(item => {
           return this.contributorWhitelistRepository.create({
             vault: vault,
             wallet_address: item.policyId,
