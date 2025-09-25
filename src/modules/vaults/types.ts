@@ -22,7 +22,7 @@ export class ContributorWhitelist {
   @ApiProperty()
   @IsString()
   @Expose()
-  policyId: string;
+  walletAddress: string;
 
   constructor(partial: Partial<ContributorWhitelist>) {
     Object.assign(this, partial);
