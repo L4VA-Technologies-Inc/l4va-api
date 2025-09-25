@@ -1098,6 +1098,9 @@ export class VaultsService {
         case VaultFilter.failed:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.failed });
           break;
+        case VaultFilter.terminated:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.burned });
+          break;
         case VaultFilter.draft:
           if (!myVaults || !userId) {
             throw new BadRequestException('Draft filter requires authentication');
