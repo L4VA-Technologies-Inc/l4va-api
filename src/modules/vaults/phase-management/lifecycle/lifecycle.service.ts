@@ -433,12 +433,14 @@ export class LifecycleService {
 
       if (meetsThreshold) {
         const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
+        const ASSETS_OFFERED_PERCENT = vault.tokens_for_acquires * 0.01;
+        const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
         // 3. Calculate LP Tokens
         const { lpAdaAmount, lpVtAmount, vtPrice } = await this.distributionService.calculateLpTokens({
           vtSupply,
           totalAcquiredAda,
-          assetsOfferedPercent: vault.tokens_for_acquires * 0.01,
-          lpPercent: vault.liquidity_pool_contribution * 0.01,
+          assetsOfferedPercent: ASSETS_OFFERED_PERCENT,
+          lpPercent: LP_PERCENT,
         });
         // Create LP claim record
         try {
@@ -462,9 +464,6 @@ export class LifecycleService {
         } catch (error) {
           this.logger.error(`Failed to create LP claim for vault ${vault.id}:`, error);
         }
-
-        const ASSETS_OFFERED_PERCENT = vault.tokens_for_acquires * 0.01;
-        const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
 
         // 4. Create claims for each acquisition transaction
         const acquirerClaims: Partial<Claim>[] = [];

@@ -455,6 +455,7 @@ export class VaultManagingService {
 
     const assetsWhitelist = await this.assetsWhitelistRepository.find({
       where: { vault: { id: vault.id } },
+      select: ['policy_id'],
     });
 
     if (!transaction || transaction.type !== TransactionType.updateVault) {

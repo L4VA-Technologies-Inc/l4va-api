@@ -80,20 +80,9 @@ export class DistributionService {
   }> {
     const { totalAcquiredAda, vtSupply, assetsOfferedPercent, lpPercent } = params;
 
-    // Calculate VT token price
-    const vtPrice = this.round6(
-      this.calculateVtPrice({
-        totalAcquiredAda,
-        vtSupply: vtSupply,
-        ASSETS_OFFERED_PERCENT: assetsOfferedPercent,
-      })
-    );
-
-    // Calculate ADA allocated to LP
-    const lpAdaAmount = this.round6(this.calculateLpAda(totalAcquiredAda, lpPercent));
-
-    // Calculate VT tokens allocated to LP
-    const lpVtAmount = this.round6(vtSupply * assetsOfferedPercent * lpPercent);
+    const lpAdaAmount = this.round6(lpPercent * totalAcquiredAda); // Calculate ADA allocated to LP
+    const vtPrice = this.round6(totalAcquiredAda / assetsOfferedPercent / vtSupply); // Calculate VT price
+    const lpVtAmount = this.round6(lpAdaAmount / vtPrice); // Calculate VT tokens allocated to LP
 
     // Calculate LP tokens received (simplified approximation)
     // In reality, this would depend on the specific DEX formula
@@ -169,23 +158,7 @@ export class DistributionService {
     return Math.round(amount * 1e6) / 1e6;
   }
 
-  private calculateVtPrice({
-    totalAcquiredAda,
-    vtSupply,
-    ASSETS_OFFERED_PERCENT,
-  }: {
-    totalAcquiredAda: number;
-    vtSupply: number;
-    ASSETS_OFFERED_PERCENT: number;
-  }): number {
-    return totalAcquiredAda / ASSETS_OFFERED_PERCENT / vtSupply;
-  }
-
   private calculateTotalValueRetained(netAda: number, vtAda: number, lpAda: number, lpVtAda: number): number {
     return this.round6(netAda + vtAda + lpAda + lpVtAda);
-  }
-
-  private calculateLpAda(adaSent: number, LP_PERCENT: number): number {
-    return adaSent * LP_PERCENT;
   }
 }
