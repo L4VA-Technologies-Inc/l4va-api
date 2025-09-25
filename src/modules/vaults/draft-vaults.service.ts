@@ -331,7 +331,7 @@ export class DraftVaultsService {
         const contributorItems = data.contributorWhitelist.map(item => {
           return this.contributorWhitelistRepository.create({
             vault: vault,
-            wallet_address: item.policyId,
+            wallet_address: item.walletAddress,
           });
         });
         await this.contributorWhitelistRepository.save(contributorItems);

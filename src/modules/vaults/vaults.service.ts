@@ -401,7 +401,7 @@ export class VaultsService {
         : [];
 
       const contributorList = data.contributorWhitelist
-        ? [...(data.contributorWhitelist.map(item => item.policyId) || [])]
+        ? [...(data.contributorWhitelist.map(item => item.walletAddress) || [])]
         : [];
 
       const allContributors = new Set([...contributorList, ...contributorsFromCsv]);
