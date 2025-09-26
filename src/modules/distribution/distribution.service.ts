@@ -29,12 +29,12 @@ export class DistributionService {
     const { vtSupply, ASSETS_OFFERED_PERCENT, valueContributed, totalTvl, lpVtAmount } = params;
 
     const contributorShare = valueContributed / totalTvl;
-    const vtRetained = this.round6((vtSupply - lpVtAmount) * (1 - ASSETS_OFFERED_PERCENT) * contributorShare);
+    const vtRetained = this.round15((vtSupply - lpVtAmount) * (1 - ASSETS_OFFERED_PERCENT) * contributorShare);
 
-    // const lpVtRetained = this.round6(lpVtAmount * LP_PERCENT);
-    // const lpAdaRetained = this.round6(lpAdaAmount * LP_PERCENT);
-    // const vtAdaValue = this.round6(vtRetained * vtPrice);
-    // const totalRetainedValue = this.round6(this.calculateTotalValueRetained(0, vtAdaValue, lpAdaRetained, 0));
+    // const lpVtRetained = this.round15(lpVtAmount * LP_PERCENT);
+    // const lpAdaRetained = this.round15(lpAdaAmount * LP_PERCENT);
+    // const vtAdaValue = this.round15(vtRetained * vtPrice);
+    // const totalRetainedValue = this.round15(this.calculateTotalValueRetained(0, vtAdaValue, lpAdaRetained, 0));
 
     return Math.round(vtRetained);
   }
@@ -51,15 +51,15 @@ export class DistributionService {
     const { adaSent, vtSupply, ASSETS_OFFERED_PERCENT, totalAcquiredValueAda, lpVtAmount } = params;
 
     // ((ADA sent to the vault / total acquire ADA) * Assets Offered Percent) * (VT Supply - LP VT)
-    const percentOfTotalAcquireAdaSent = this.round6(adaSent / totalAcquiredValueAda);
-    const vtReceived = this.round6(percentOfTotalAcquireAdaSent * ASSETS_OFFERED_PERCENT * (vtSupply - lpVtAmount));
+    const percentOfTotalAcquireAdaSent = this.round15(adaSent / totalAcquiredValueAda);
+    const vtReceived = this.round15(percentOfTotalAcquireAdaSent * ASSETS_OFFERED_PERCENT * (vtSupply - lpVtAmount));
 
-    // const vtValueInAda = this.round6(vtReceived * vtPrice);
-    // const lpAdaInitialShare = this.round6(percentOfTotalAcquireAdaSent * lpAdaAmount);
-    // const lpVtInitialShare = this.round6(percentOfTotalAcquireAdaSent * lpVtAmount);
-    // const lpVtAdaValue = this.round6(lpVtInitialShare * vtPrice);
-    // const totalValueInAdaRetained = this.round6(adaSent + vtValueInAda + lpAdaInitialShare + lpVtAdaValue);
-    // const valueInAdaRetainedNetOfFees = this.round6(totalValueInAdaRetained - l4vaFee - trxnReserveFee);
+    // const vtValueInAda = this.round15(vtReceived * vtPrice);
+    // const lpAdaInitialShare = this.round15(percentOfTotalAcquireAdaSent * lpAdaAmount);
+    // const lpVtInitialShare = this.round15(percentOfTotalAcquireAdaSent * lpVtAmount);
+    // const lpVtAdaValue = this.round15(lpVtInitialShare * vtPrice);
+    // const totalValueInAdaRetained = this.round15(adaSent + vtValueInAda + lpAdaInitialShare + lpVtAdaValue);
+    // const valueInAdaRetainedNetOfFees = this.round15(totalValueInAdaRetained - l4vaFee - trxnReserveFee);
     return Math.round(vtReceived);
   }
 
@@ -80,19 +80,19 @@ export class DistributionService {
     const { totalAcquiredAda, vtSupply, assetsOfferedPercent, lpPercent } = params;
 
     // Calculate VT price (this part is correct in your current code)
-    const vtPrice = this.round6(totalAcquiredAda / assetsOfferedPercent / vtSupply);
+    const vtPrice = this.round15(totalAcquiredAda / assetsOfferedPercent / vtSupply);
 
-    const fdv = this.round6(totalAcquiredAda / assetsOfferedPercent);
+    const fdv = this.round15(totalAcquiredAda / assetsOfferedPercent);
 
     // LP gets lpPercent of the total vault value
-    const lpTotalValue = this.round6(fdv * lpPercent);
+    const lpTotalValue = this.round15(fdv * lpPercent);
 
     // Divide equally between ADA and VT
-    const lpAdaAmount = this.round6(lpTotalValue / 2);
-    const lpVtValue = this.round6(lpTotalValue / 2);
+    const lpAdaAmount = this.round15(lpTotalValue / 2);
+    const lpVtValue = this.round15(lpTotalValue / 2);
 
     // Convert VT value to tokens
-    const lpVtAmount = this.round6(lpVtValue / vtPrice);
+    const lpVtAmount = this.round15(lpVtValue / vtPrice);
 
     return {
       lpAdaAmount,
@@ -160,11 +160,11 @@ export class DistributionService {
     };
   }
 
-  private round6(amount: number): number {
-    return Math.round(amount * 1e6) / 1e6;
+  private round15(amount: number): number {
+    return Math.round(amount * 1e15) / 1e15;
   }
 
   private calculateTotalValueRetained(netAda: number, vtAda: number, lpAda: number, lpVtAda: number): number {
-    return this.round6(netAda + vtAda + lpAda + lpVtAda);
+    return this.round15(netAda + vtAda + lpAda + lpVtAda);
   }
 }
