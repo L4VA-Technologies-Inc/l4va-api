@@ -966,6 +966,7 @@ export class VaultsService {
     const result = {
       ...plainVault,
       ...additionalData,
+      policyId: vault.script_hash,
     };
 
     return plainToInstance(VaultFullResponse, result, { excludeExtraneousValues: true });
