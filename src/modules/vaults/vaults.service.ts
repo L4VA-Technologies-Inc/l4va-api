@@ -353,7 +353,7 @@ export class VaultsService {
       for (const assetItem of data.assetsWhitelist) {
         if (assetItem.policyId) {
           if (uniquePolicyIds.has(assetItem.policyId)) {
-            throw new BadRequestException(`Duplicate policy ID in assets whitelist: ${assetItem.policyId}`);
+            this.logger.warn(`Remove duplicate policy ID in assets whitelist: ${assetItem.policyId}`);
           }
           uniquePolicyIds.add(assetItem.policyId);
         }
@@ -361,18 +361,24 @@ export class VaultsService {
 
       // Then process them
       await Promise.all(
-        data.assetsWhitelist.map(assetItem => {
+        data.assetsWhitelist.map(async assetItem => {
           if (assetItem.policyId) {
-            // Sum up the countCapMax values
-            if (assetItem.countCapMax) {
-              maxCountOf += assetItem.countCapMax;
-            }
-            return this.assetsWhitelistRepository.save({
-              vault: newVault,
-              policy_id: assetItem.policyId,
-              asset_count_cap_min: assetItem.countCapMin,
-              asset_count_cap_max: assetItem.countCapMax,
+            const exists = await this.assetsWhitelistRepository.findOne({
+              where: { vault: newVault, policy_id: assetItem.policyId },
             });
+            if (!exists) {
+              // Sum up the countCapMax values
+              if (assetItem.countCapMax) {
+                maxCountOf += assetItem.countCapMax;
+              }
+
+              return this.assetsWhitelistRepository.save({
+                vault: newVault,
+                policy_id: assetItem.policyId,
+                asset_count_cap_min: assetItem.countCapMin,
+                asset_count_cap_max: assetItem.countCapMax,
+              });
+            }
           }
         })
       );

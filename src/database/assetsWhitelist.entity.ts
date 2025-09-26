@@ -1,10 +1,20 @@
 import { Expose } from 'class-transformer';
 import { Matches } from 'class-validator';
-import { BeforeInsert, BeforeUpdate, Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
+import {
+  BeforeInsert,
+  BeforeUpdate,
+  Column,
+  Entity,
+  JoinColumn,
+  ManyToOne,
+  PrimaryGeneratedColumn,
+  Unique,
+} from 'typeorm';
 
 import { Vault } from './vault.entity';
 
 @Entity({ name: 'assets_whitelist' })
+@Unique(['vault', 'policy_id'])
 export class AssetsWhitelistEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
