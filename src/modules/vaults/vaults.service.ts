@@ -957,6 +957,10 @@ export class VaultsService {
     additionalData['isWhitelistedContributor'] = isWhitelistedContributor;
     additionalData['isWhitelistedAcquirer'] = isWhitelistedAcquirer;
     additionalData['canCreateProposal'] = canCreateProposal;
+    additionalData['valuationAmount'] =
+      vault.total_acquired_value_ada && vault.tokens_for_acquires
+        ? parseFloat((vault.total_acquired_value_ada / (vault.tokens_for_acquires * 0.01)).toFixed(2))
+        : 0;
 
     // First transform the vault to plain object with class-transformer
     const plainVault = instanceToPlain(vault);
