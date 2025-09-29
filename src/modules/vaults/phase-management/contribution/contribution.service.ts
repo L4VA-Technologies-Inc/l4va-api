@@ -89,7 +89,6 @@ export class ContributionService {
         const databaseTxs = await this.transactionRepository.find({
           where: {
             vault_id: vaultId,
-            type: TransactionType.contribute,
           },
           order: { id: 'DESC' },
         });
@@ -230,7 +229,7 @@ export class ContributionService {
       .createQueryBuilder('asset')
       .select('SUM(asset.quantity)', 'totalQuantity')
       .where('asset.vault_id = :vaultId', { vaultId })
-      .andWhere('asset.status = :status', { status: AssetStatus.LOCKED })
+      .andWhere('asset.status IN (:...statuses)', { statuses: [AssetStatus.LOCKED, AssetStatus.PENDING] })
       .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
       .getRawOne();
 
@@ -269,7 +268,7 @@ export class ContributionService {
           .select('SUM(asset.quantity)', 'totalQuantity')
           .where('asset.vault_id = :vaultId', { vaultId })
           .andWhere('asset.policy_id = :policyId', { policyId })
-          .andWhere('asset.status = :status', { status: AssetStatus.LOCKED })
+          .andWhere('asset.status IN (:...statuses)', { statuses: [AssetStatus.LOCKED, AssetStatus.PENDING] })
           .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
           .getRawOne();
 
@@ -312,42 +311,9 @@ export class ContributionService {
       type: TransactionType.contribute,
       assets: [],
       userId,
+      metadata: contributeReq.assets,
     });
-    if (contributeReq.assets.length > 0) {
-      try {
-        // First, ensure the transaction exists and is loaded with relations if needed
-        const savedTransaction = await this.transactionRepository.findOneOrFail({
-          where: { id: transaction.id },
-          relations: ['assets'],
-        });
 
-        // Create and save all assets
-        const assets = await Promise.all(
-          contributeReq.assets?.map(async assetItem => {
-            const asset = this.assetRepository.create({
-              transaction: savedTransaction,
-              type: assetItem.type,
-              policy_id: assetItem.policyId || '',
-              asset_id: assetItem.assetName,
-              quantity: assetItem.quantity,
-              status: AssetStatus.PENDING,
-              origin_type: AssetOriginType.CONTRIBUTED,
-              added_by: user,
-              metadata: assetItem?.metadata || {},
-            });
-
-            const savedAsset = await this.assetRepository.save(asset);
-            this.logger.log(`Created asset ${savedAsset.id} for transaction ${savedTransaction.id}`);
-            return savedAsset;
-          })
-        );
-
-        this.logger.log(`Successfully created ${assets.length} assets for transaction ${savedTransaction.id}`);
-      } catch (error) {
-        this.logger.error(`Failed to save assets for transaction ${transaction.id}`, error);
-        throw new Error(`Failed to save contribution assets: ${error.message}`);
-      }
-    }
     return {
       success: true,
       message: 'Contribution request accepted, transaction created',

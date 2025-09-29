@@ -6,11 +6,12 @@ import { TransactionsService } from './transactions.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Transaction } from '@/database/transaction.entity';
+import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { TaptoolsModule } from '@/modules/taptools/taptools.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Transaction, Asset, Vault]), TaptoolsModule],
+  imports: [TypeOrmModule.forFeature([Transaction, Asset, Vault, User]), TaptoolsModule],
   providers: [TransactionsService],
   controllers: [TransactionsController],
   exports: [TransactionsService],

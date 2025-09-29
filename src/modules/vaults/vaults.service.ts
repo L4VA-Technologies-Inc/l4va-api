@@ -116,7 +116,7 @@ export class VaultsService {
    */
   private async confirmAndProcessTransaction(txHash: string, vault: Vault, attempt = 0): Promise<void> {
     try {
-      this.logger.log(`Checking transaction status (attempt ${attempt + 1}): ${txHash}`);
+      await this.wait(12000); // Initial wait before first attempt
 
       const txDetail = await this.blockchainScannerService.getTransactionDetails(txHash);
 
@@ -138,7 +138,6 @@ export class VaultsService {
 
       this.logger.log(`Successfully processed transaction ${txHash} for vault ${vault.id}`);
     } catch (error) {
-      this.logger.log('Publication tx failed ');
       if (attempt >= this.MAX_RETRIES - 1) {
         this.logger.error(`Max retries reached for transaction ${txHash}:`, error);
         return;
@@ -146,7 +145,7 @@ export class VaultsService {
 
       // Exponential backoff: 3s, 6s, 12s, 24s, etc.
       const delay = this.INITIAL_RETRY_DELAY * Math.pow(2, attempt);
-      this.logger.log(`Retrying in ${delay}ms...`);
+      this.logger.log(`Retrying confirm vault ${vault.id} tx in ${delay}ms...`);
 
       await this.wait(delay);
       return this.confirmAndProcessTransaction(txHash, vault, attempt + 1);

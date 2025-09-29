@@ -108,7 +108,7 @@ export class BlockchainScannerService {
 
         // Calculate delay with exponential backoff and jitter
         const baseDelay = Math.min(initialDelayMs * Math.pow(2, attempt), maxDelayMs);
-        const jitter = Math.random() * baseDelay * 0.2; // Add up to 20% jitter
+        const jitter = Math.random() * baseDelay * 0.3; // Add up to 30% jitter
         const delay = Math.min(baseDelay + jitter, maxDelayMs);
 
         this.logger.warn(`Attempt ${attempt + 1}/${maxRetries} failed. Retrying in ${Math.round(delay)}ms...`, {
@@ -165,6 +165,7 @@ export class BlockchainScannerService {
             // Only retry on network or server errors
             return this.isRetryableError(err);
           },
+          initialDelayMs: 2500,
         });
         this.logger.log(`Successfully registered address ${vaultAddress} for monitoring`);
         return true;

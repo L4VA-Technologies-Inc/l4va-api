@@ -7,10 +7,8 @@ import { ContributionAsset } from '../contribution/dto/contribute.req';
 
 import { AcquireReq } from './dto/acquire.req';
 
-import { Asset } from '@/database/asset.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
-import { AssetType, AssetStatus, AssetOriginType } from '@/types/asset.types';
 import { TransactionType } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';
 
@@ -23,8 +21,6 @@ export class AcquireService {
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-    @InjectRepository(Asset)
-    private readonly assetRepository: Repository<Asset>,
     private readonly transactionsService: TransactionsService
   ) {}
 
@@ -84,37 +80,8 @@ export class AcquireService {
       amount: acquireReq.assets.reduce((sum, asset) => sum + (asset.quantity || 0), 0),
       assets: [],
       userId,
+      metadata: acquireReq.assets,
     });
-
-    // Create assets for the transaction
-    if (acquireReq.assets.length > 0) {
-      try {
-        // Ensure the transaction exists and is loaded with relations if needed
-        const savedTransaction = await this.transactionsService.findById(transaction.id);
-
-        // Create and save all assets
-        await Promise.all(
-          acquireReq.assets.map(async assetItem => {
-            const asset = this.assetRepository.create({
-              transaction: savedTransaction,
-              type: AssetType.ADA, // Using ADA type for acquire
-              policy_id: assetItem.policyId || '',
-              asset_id: assetItem.assetName,
-              quantity: assetItem.quantity,
-              status: AssetStatus.PENDING,
-              origin_type: AssetOriginType.ACQUIRED,
-              added_by: user,
-              metadata: assetItem?.metadata || {},
-            });
-
-            await this.assetRepository.save(asset);
-          })
-        );
-      } catch (error) {
-        this.logger.error(`Error creating assets for acquire transaction ${transaction.id}:`, error);
-        throw new BadRequestException('Failed to create assets for the transaction');
-      }
-    }
 
     return {
       success: true,

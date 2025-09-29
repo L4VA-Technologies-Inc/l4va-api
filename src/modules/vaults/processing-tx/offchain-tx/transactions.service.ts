@@ -1,11 +1,12 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { AssetStatus } from 'src/types/asset.types';
+import { AssetOriginType, AssetStatus, AssetType } from 'src/types/asset.types';
 import { TransactionStatus, TransactionType } from 'src/types/transaction.types';
 import { Repository } from 'typeorm';
 
 import { Asset } from '@/database/asset.entity';
 import { Transaction } from '@/database/transaction.entity';
+import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 
@@ -20,6 +21,8 @@ export class TransactionsService {
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
+    @InjectRepository(User)
+    private readonly usersRepository: Repository<User>,
     private readonly taptoolsService: TaptoolsService
   ) {}
 
@@ -29,6 +32,7 @@ export class TransactionsService {
     assets: Asset[];
     amount?: number;
     userId?: string;
+    metadata?: object;
   }): Promise<Transaction> {
     return this.transactionRepository.save({
       vault_id: data.vault_id,
@@ -37,6 +41,7 @@ export class TransactionsService {
       assets: data.assets,
       amount: data.amount,
       user_id: data.userId,
+      metadata: data.metadata,
     });
   }
 
@@ -206,5 +211,72 @@ export class TransactionsService {
     });
 
     return transactions.length > 0 ? transactions[0] : null;
+  }
+
+  async createAssets(txId: string): Promise<{ success: boolean }> {
+    this.logger.debug(`Creating assets for transaction ${txId}`);
+
+    const transaction = await this.transactionRepository.findOne({
+      where: { id: txId },
+    });
+
+    if (!transaction) {
+      throw new NotFoundException('Transaction not found');
+    }
+
+    const pendingAssets = transaction.metadata || [];
+
+    // If everything is ok, create the actual assets and update transaction status
+    const user = await this.usersRepository.findOne({
+      where: { id: transaction.user_id },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found for the transaction');
+    }
+
+    if (transaction.type === TransactionType.acquire) {
+      await Promise.all(
+        pendingAssets.map(async assetItem => {
+          const asset = this.assetRepository.create({
+            transaction,
+            type: AssetType.ADA, // Using ADA type for acquire
+            policy_id: assetItem.policyId || '',
+            asset_id: assetItem.assetName,
+            quantity: assetItem.quantity,
+            status: AssetStatus.PENDING,
+            origin_type: AssetOriginType.ACQUIRED,
+            added_by: user,
+            metadata: assetItem?.metadata || {},
+          });
+
+          await this.assetRepository.save(asset);
+        })
+      );
+    } else if (transaction.type === TransactionType.contribute) {
+      await Promise.all(
+        pendingAssets.map(async assetItem => {
+          const asset = this.assetRepository.create({
+            transaction,
+            type: assetItem.type,
+            policy_id: assetItem.policyId || '',
+            asset_id: assetItem.assetName,
+            quantity: assetItem.quantity,
+            status: AssetStatus.PENDING,
+            origin_type: AssetOriginType.CONTRIBUTED,
+            added_by: user,
+            metadata: assetItem?.metadata || {},
+          });
+
+          return this.assetRepository.save(asset);
+        })
+      );
+    }
+
+    this.logger.debug(`Finished creating assets for transaction ${txId}`);
+
+    return {
+      success: true,
+    };
   }
 }

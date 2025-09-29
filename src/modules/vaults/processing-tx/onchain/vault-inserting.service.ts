@@ -297,6 +297,7 @@ export class VaultInsertingService {
 
       try {
         // Update the transaction hash in our database
+        await this.transactionsService.createAssets(signedTx.txId);
         await this.transactionsService.updateTransactionHash(signedTx.txId, result.txHash);
         this.logger.log(`Successfully updated transaction ${signedTx.txId} with hash ${result.txHash}`);
 
