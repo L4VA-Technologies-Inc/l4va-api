@@ -11,6 +11,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { plainToInstance } from 'class-transformer';
+import NodeCache from 'node-cache';
 import { In, IsNull, Not, Repository } from 'typeorm';
 
 import { CreateProposalReq } from './dto/create-proposal.req';
@@ -63,6 +64,17 @@ const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
 export class GovernanceService {
   private readonly logger = new Logger(GovernanceService.name);
   private blockfrost: BlockFrostAPI;
+  private readonly votingPowerCache: NodeCache;
+  private readonly proposalCreationCache: NodeCache;
+  // private readonly snapshotCache: NodeCache;
+
+  private readonly CACHE_TTL = {
+    VOTING_POWER: 300, // 5 minutes - for general voting power checks
+    CAN_CREATE_PROPOSAL: 1800, // 30 minutes - for canCreateProposal checks
+    SNAPSHOT_DATA: 1800, // 30 minutes - for snapshot data
+    NO_VOTING_POWER: 600, // 10 minutes - cache negative results longer to reduce spam
+    PROPOSAL_DATA: 120, // 2 minutes - for proposal-specific data
+  };
 
   constructor(
     @InjectRepository(Vault)
@@ -85,6 +97,23 @@ export class GovernanceService {
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
     });
+    this.votingPowerCache = new NodeCache({
+      stdTTL: this.CACHE_TTL.VOTING_POWER,
+      checkperiod: 120,
+      useClones: false,
+    });
+
+    this.proposalCreationCache = new NodeCache({
+      stdTTL: this.CACHE_TTL.CAN_CREATE_PROPOSAL,
+      checkperiod: 300,
+      useClones: false,
+    });
+
+    // this.snapshotCache = new NodeCache({
+    //   stdTTL: this.CACHE_TTL.SNAPSHOT_DATA,
+    //   checkperiod: 600,
+    //   useClones: false,
+    // });
   }
 
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
@@ -642,72 +671,71 @@ export class GovernanceService {
   }
 
   async getVotingPower(vaultId: string, userId: string, action?: 'vote' | 'create_proposal'): Promise<string> {
+    const cacheKey = `voting_power:${vaultId}:${userId}:${action || 'general'}`;
+
+    // Check cache first
+    const cached = this.votingPowerCache.get<{
+      power: string;
+      error?: { type: string; message: string };
+    }>(cacheKey);
+
+    if (cached !== undefined) {
+      this.logger.debug(`Cache hit for voting power: ${cacheKey}`);
+      if (cached.error) {
+        // Re-throw cached error
+        if (cached.error.type === 'BadRequestException') {
+          throw new BadRequestException(cached.error.message);
+        } else if (cached.error.type === 'NotFoundException') {
+          throw new NotFoundException(cached.error.message);
+        }
+      }
+      return cached.power;
+    }
+
     try {
-      const snapshot = await this.snapshotRepository.findOne({
-        where: { vaultId },
-        order: { createdAt: 'DESC' },
-      });
+      const power = await this._getVotingPowerUncached(vaultId, userId, action);
 
-      if (!snapshot) {
-        throw new NotFoundException('No voting snapshot found for this vault');
-      }
+      // Cache successful result
+      this.votingPowerCache.set(cacheKey, { power }, this.CACHE_TTL.VOTING_POWER);
 
-      const vault = await this.vaultRepository.findOne({
-        where: { id: vaultId },
-        select: ['creation_threshold', 'vote_threshold'],
-      });
-
-      if (!vault) {
-        throw new NotFoundException('Vault not found');
-      }
-
-      const user = await this.userRepository.findOne({
-        where: { id: userId },
-        select: ['id', 'address'],
-      });
-
-      if (!user) {
-        throw new NotFoundException('User not found');
-      }
-
-      const voteWeight = snapshot.addressBalances[user.address];
-      const totalVotingPower = Object.values(snapshot.addressBalances)
-        .reduce((sum, balance) => BigInt(sum) + BigInt(balance), BigInt(0))
-        .toString();
-      const voteWeightPercentFromAll = (BigInt(voteWeight) * BigInt(100)) / BigInt(totalVotingPower);
-
-      if (!voteWeight || voteWeight === '0') {
-        throw new BadRequestException(
-          'NO_VOTING_POWER',
-          'You have no voting power in this vault. You must hold vault tokens to vote.'
-        );
-      }
-
-      if (voteWeightPercentFromAll < vault.creation_threshold && action === 'create_proposal') {
-        throw new BadRequestException(
-          'BELOW_THRESHOLD',
-          `Your voting power (${voteWeightPercentFromAll}) is below the minimum threshold (${vault.creation_threshold}).`
-        );
-      }
-
-      if (voteWeightPercentFromAll < vault.vote_threshold && action === 'vote') {
-        throw new BadRequestException(
-          'BELOW_THRESHOLD',
-          `Your voting power (${voteWeightPercentFromAll}) is below the minimum threshold (${vault.vote_threshold}).`
-        );
-      }
-
-      return voteWeight;
+      return power;
     } catch (error) {
-      if (error instanceof BadRequestException || error instanceof NotFoundException) {
-        throw error;
+      let cacheTTL = this.CACHE_TTL.VOTING_POWER;
+
+      // Cache errors with longer TTL to redce repeated failed calls
+      if (error instanceof BadRequestException) {
+        if (error.message.includes('NO_VOTING_POWER')) {
+          cacheTTL = this.CACHE_TTL.NO_VOTING_POWER;
+        }
+
+        this.votingPowerCache.set(
+          cacheKey,
+          {
+            power: '0',
+            error: { type: 'BadRequestException', message: error.message },
+          },
+          cacheTTL
+        );
+
+        if (!error.message.includes('NO_VOTING_POWER')) {
+          this.logger.warn(`Voting power check failed for ${userId} in vault ${vaultId}: ${error.message}`);
+        }
+      } else if (error instanceof NotFoundException) {
+        this.votingPowerCache.set(
+          cacheKey,
+          {
+            power: '0',
+            error: { type: 'NotFoundException', message: error.message },
+          },
+          cacheTTL
+        );
+
+        this.logger.warn(`Voting power check failed for ${userId} in vault ${vaultId}: ${error.message}`);
+      } else {
+        this.logger.error(`Unexpected error in voting power check for ${userId} in vault ${vaultId}:`, error);
       }
 
-      this.logger.error(
-        `Error getting voting power for user ${userId} in vault ${vaultId}: ${error.message}`,
-        error.stack
-      );
-      throw new InternalServerErrorException('Error getting voting power. Please try again later.');
+      throw error;
     }
   }
 
@@ -797,6 +825,108 @@ export class GovernanceService {
     } catch (error) {
       this.logger.error(`Error getting assets for buy-sell proposals for vault ${vaultId}: ${error.message}`);
       throw new InternalServerErrorException('Error getting assets for buying/selling');
+    }
+  }
+
+  async canUserCreateProposal(vaultId: string, userId: string): Promise<boolean> {
+    const cacheKey = `can_create_proposal:${vaultId}:${userId}`;
+
+    const cached = this.proposalCreationCache.get<boolean>(cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    try {
+      const vault = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        select: ['id', 'vault_status'],
+      });
+
+      if (!vault || vault.vault_status !== VaultStatus.locked) {
+        this.proposalCreationCache.set(cacheKey, false, this.CACHE_TTL.CAN_CREATE_PROPOSAL);
+        return false;
+      }
+      await this.getVotingPower(vaultId, userId, 'create_proposal');
+      this.proposalCreationCache.set(cacheKey, true, this.CACHE_TTL.CAN_CREATE_PROPOSAL);
+      return true;
+    } catch (error) {
+      this.proposalCreationCache.set(cacheKey, false, this.CACHE_TTL.CAN_CREATE_PROPOSAL);
+      return false;
+    }
+  }
+
+  private async _getVotingPowerUncached(
+    vaultId: string,
+    userId: string,
+    action?: 'vote' | 'create_proposal'
+  ): Promise<string> {
+    try {
+      const snapshot = await this.snapshotRepository.findOne({
+        where: { vaultId },
+        order: { createdAt: 'DESC' },
+      });
+
+      if (!snapshot) {
+        throw new NotFoundException('No voting snapshot found for this vault');
+      }
+
+      const vault = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        select: ['creation_threshold', 'vote_threshold'],
+      });
+
+      if (!vault) {
+        throw new NotFoundException('Vault not found');
+      }
+
+      const user = await this.userRepository.findOne({
+        where: { id: userId },
+        select: ['id', 'address'],
+      });
+
+      if (!user) {
+        throw new NotFoundException('User not found');
+      }
+
+      const voteWeight = snapshot.addressBalances[user.address];
+
+      if (!voteWeight || voteWeight === '0') {
+        throw new BadRequestException(
+          'NO_VOTING_POWER',
+          'You have no voting power in this vault. You must hold vault tokens to vote.'
+        );
+      }
+
+      const totalVotingPower = Object.values(snapshot.addressBalances)
+        .reduce((sum, balance) => BigInt(sum) + BigInt(balance), BigInt(0))
+        .toString();
+      const voteWeightPercentFromAll = (BigInt(voteWeight) * BigInt(100)) / BigInt(totalVotingPower);
+
+      if (voteWeightPercentFromAll < vault.creation_threshold && action === 'create_proposal') {
+        throw new BadRequestException(
+          'BELOW_THRESHOLD',
+          `Your voting power (${voteWeightPercentFromAll}) is below the minimum threshold (${vault.creation_threshold}).`
+        );
+      }
+
+      if (voteWeightPercentFromAll < vault.vote_threshold && action === 'vote') {
+        throw new BadRequestException(
+          'BELOW_THRESHOLD',
+          `Your voting power (${voteWeightPercentFromAll}) is below the minimum threshold (${vault.vote_threshold}).`
+        );
+      }
+
+      return voteWeight;
+    } catch (error) {
+      if (error instanceof BadRequestException || error instanceof NotFoundException) {
+        throw error;
+      }
+
+      this.logger.error(
+        `Error getting voting power for user ${userId} in vault ${vaultId}: ${error.message}`,
+        error.stack
+      );
+      throw new InternalServerErrorException('Error getting voting power. Please try again later.');
     }
   }
 }

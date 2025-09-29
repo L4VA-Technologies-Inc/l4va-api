@@ -927,8 +927,7 @@ export class VaultsService {
 
     if (userId && vault.vault_status === VaultStatus.locked) {
       try {
-        await this.governanceService.getVotingPower(vaultId, userId, 'create_proposal');
-        canCreateProposal = true;
+        canCreateProposal = await this.governanceService.canUserCreateProposal(vaultId, userId);
       } catch (error) {
         canCreateProposal = false;
       }
