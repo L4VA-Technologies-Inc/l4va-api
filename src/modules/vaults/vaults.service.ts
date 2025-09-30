@@ -239,6 +239,19 @@ export class VaultsService {
         }
       }
 
+      // Validate whether ticker is already used in active vaults (Contribution, Acquire, Locked)
+      if (data.vaultTokenTicker) {
+        const existingVaultWithTicker = await this.vaultsRepository.exists({
+          where: {
+            vault_token_ticker: data.vaultTokenTicker,
+            vault_status: In([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked]),
+          },
+        });
+        if (existingVaultWithTicker) {
+          throw new BadRequestException('Ticker is already in use by another active vault');
+        }
+      }
+
       // Process image files - allow reuse of existing files
       const imgKey = data.vaultImage?.split('image/')[1];
       let vaultImg = null;
