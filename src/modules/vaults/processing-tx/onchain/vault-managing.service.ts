@@ -155,8 +155,8 @@ export class VaultManagingService {
         ],
       },
       blueprint: {
-        title: 'l4va/vault',
-        version: '0.0.7',
+        title: 'l4va/vault-verbose',
+        version: '0.0.8',
       },
     };
 
