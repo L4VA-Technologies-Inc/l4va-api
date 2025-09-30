@@ -214,8 +214,6 @@ export class TransactionsService {
   }
 
   async createAssets(txId: string): Promise<{ success: boolean }> {
-    this.logger.debug(`Creating assets for transaction ${txId}`);
-
     const transaction = await this.transactionRepository.findOne({
       where: { id: txId },
     });
@@ -272,8 +270,6 @@ export class TransactionsService {
         })
       );
     }
-
-    this.logger.debug(`Finished creating assets for transaction ${txId}`);
 
     return {
       success: true,
