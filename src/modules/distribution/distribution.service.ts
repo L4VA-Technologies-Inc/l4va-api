@@ -92,7 +92,7 @@ export class DistributionService {
     const lpVtValue = this.round15(lpTotalValue / 2);
 
     // Convert VT value to tokens
-    const lpVtAmount = this.round15(lpVtValue / vtPrice);
+    const lpVtAmount = Math.round(lpVtValue / vtPrice);
 
     return {
       lpAdaAmount,
