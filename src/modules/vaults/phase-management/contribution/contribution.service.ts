@@ -82,11 +82,15 @@ export class ContributionService {
         where: {
           vault_id: vaultId,
           tx_hash: Not(IsNull()),
+          status: Not(TransactionStatus.confirmed),
         },
       });
 
       if (!vaultHasTxs) {
-        return;
+        return {
+          processedBlockchainTxs: [],
+          databaseTxs: [],
+        };
       }
 
       // Get transactions from blockchain and process them
