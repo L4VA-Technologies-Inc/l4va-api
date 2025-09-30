@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, IsNull, Not, Repository } from 'typeorm';
 
 import { ContributeReq } from './dto/contribute.req';
 
@@ -76,6 +76,17 @@ export class ContributionService {
 
       if (!vault.contract_address) {
         throw new BadRequestException('Vault does not have a contract address');
+      }
+
+      const vaultHasTxs = await this.transactionRepository.exists({
+        where: {
+          vault_id: vaultId,
+          tx_hash: Not(IsNull()),
+        },
+      });
+
+      if (!vaultHasTxs) {
+        return;
       }
 
       // Get transactions from blockchain and process them
