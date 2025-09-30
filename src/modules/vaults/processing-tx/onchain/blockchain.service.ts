@@ -5,6 +5,7 @@ import { firstValueFrom } from 'rxjs';
 
 import { UTxOInsufficientException } from './exceptions/utxo-insufficient.exception';
 import { MissingUtxoException } from './exceptions/utxo-missing.exception';
+import { ValidityIntervalException } from './exceptions/validity-interval.exception';
 
 export enum OnchainTransactionStatus {
   PENDING = 'pending',
@@ -131,9 +132,78 @@ export class BlockchainService {
       this.logger.log(`Transaction submitted successfully: ${response.data.txHash}`);
       return { txHash: response.data.txHash };
     } catch (error) {
-      console.error(error);
-      this.logger.error('Error submitting transaction', error);
+      if (error.response?.status === 422 && error.response?.data?.message) {
+        const errorMessage = error.response.data.message;
+
+        if (errorMessage.includes('OutsideValidityIntervalUTxO') || errorMessage.includes('ValidityInterval')) {
+          const validityInfo = this.parseValidityIntervalError(errorMessage);
+          this.logger.warn(`Validity interval error during submission: ${JSON.stringify(validityInfo)}`);
+
+          throw new ValidityIntervalException(
+            validityInfo.invalidBefore,
+            validityInfo.invalidHereafter,
+            validityInfo.currentSlot,
+            `Transaction validity window expired or not yet valid during submission. Please retry the transaction.`
+          );
+        }
+
+        if (errorMessage.includes('UTxO Balance Insufficient')) {
+          this.logger.warn(`UTxO Balance Insufficient during submission: ${errorMessage}`);
+          throw new UTxOInsufficientException(errorMessage);
+        }
+
+        if (errorMessage.includes('Unknown transaction input') || errorMessage.includes('missing from UTxO set')) {
+          const match = errorMessage.match(/Unknown transaction input \(missing from UTxO set\): ([a-f0-9]+)#(\d+)/);
+          if (match) {
+            const [_, txHash, indexStr] = match;
+            this.logger.warn(`Missing UTxO reference during submission: ${txHash}#${indexStr}`);
+            throw new MissingUtxoException(txHash, parseInt(indexStr));
+          } else {
+            this.logger.warn(`Missing UTxO reference during submission: ${errorMessage}`);
+            throw new MissingUtxoException();
+          }
+        }
+
+        this.logger.error(`Transaction submission failed with validation error: ${errorMessage}`);
+        throw new Error(`Transaction validation failed: ${errorMessage}`);
+      }
+
+      // Log the full error for debugging
+      console.error('Full submission error:', error);
+      this.logger.error('Error submitting transaction', error.message);
       throw new Error(`Failed to submit transaction: ${error.message}`);
     }
+  }
+
+  private parseValidityIntervalError(errorMessage: string): {
+    invalidBefore?: number;
+    invalidHereafter?: number;
+    currentSlot?: number;
+  } {
+    // Parse: OutsideValidityIntervalUTxO (ValidityInterval {invalidBefore = SJust (SlotNo 103557269), invalidHereafter = SJust (SlotNo 103564469)}) (SlotNo 103557260)
+    const validityMatch = errorMessage.match(
+      /OutsideValidityIntervalUTxO.*?invalidBefore = SJust \(SlotNo (\d+)\).*?invalidHereafter = SJust \(SlotNo (\d+)\).*?\(SlotNo (\d+)\)/
+    );
+
+    if (validityMatch) {
+      return {
+        invalidBefore: parseInt(validityMatch[1]),
+        invalidHereafter: parseInt(validityMatch[2]),
+        currentSlot: parseInt(validityMatch[3]),
+      };
+    }
+
+    // Alternative parsing for different error formats
+    const slotMatch = errorMessage.match(/SlotNo (\d+)/g);
+    if (slotMatch && slotMatch.length >= 3) {
+      const slots = slotMatch.map(s => parseInt(s.match(/\d+/)[0]));
+      return {
+        invalidBefore: slots[0],
+        invalidHereafter: slots[1],
+        currentSlot: slots[2],
+      };
+    }
+
+    return {};
   }
 }
