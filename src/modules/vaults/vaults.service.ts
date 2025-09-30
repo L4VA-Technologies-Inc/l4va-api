@@ -239,12 +239,17 @@ export class VaultsService {
         }
       }
 
-      // Validate whether ticker is already used in active vaults (Contribution, Acquire, Locked)
+      // Validate whether ticker is already used in active vaults (Published, Contribution, Acquire, Locked)
       if (data.vaultTokenTicker) {
         const existingVaultWithTicker = await this.vaultsRepository.exists({
           where: {
             vault_token_ticker: data.vaultTokenTicker,
-            vault_status: In([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked]),
+            vault_status: In([
+              VaultStatus.published,
+              VaultStatus.contribution,
+              VaultStatus.acquire,
+              VaultStatus.locked,
+            ]),
           },
         });
         if (existingVaultWithTicker) {
