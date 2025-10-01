@@ -6,6 +6,7 @@ import { firstValueFrom } from 'rxjs';
 import { UTxOInsufficientException } from './exceptions/utxo-insufficient.exception';
 import { MissingUtxoException } from './exceptions/utxo-missing.exception';
 import { ValidityIntervalException } from './exceptions/validity-interval.exception';
+import { VaultValidationException } from './exceptions/vault-validation.exception';
 
 export enum OnchainTransactionStatus {
   PENDING = 'pending',
@@ -59,6 +60,16 @@ export class BlockchainService {
       const buildResponse = await contractDeployed.json();
 
       if (!buildResponse.complete) {
+        // Check for vault script evaluation errors first
+        if (
+          buildResponse.message?.includes('Failed to evaluate tx') &&
+          buildResponse.message?.includes('Some scripts of the transactions terminated with error') &&
+          (buildResponse.code === 3010 || buildResponse.code === 3012)
+        ) {
+          this.logger.warn(`Vault validation error during transaction building`);
+          throw new VaultValidationException('Validation error on vault during transaction building');
+        }
+
         if (
           buildResponse.message?.includes('UTxO Balance Insufficient') ||
           buildResponse.message?.includes('Balance Insufficient')
@@ -90,7 +101,11 @@ export class BlockchainService {
 
       return buildResponse;
     } catch (error) {
-      if (error instanceof UTxOInsufficientException || error instanceof MissingUtxoException) {
+      if (
+        error instanceof UTxOInsufficientException ||
+        error instanceof MissingUtxoException ||
+        error instanceof VaultValidationException
+      ) {
         throw error;
       }
 

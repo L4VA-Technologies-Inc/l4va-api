@@ -25,6 +25,7 @@ import { GovernanceService } from './phase-management/governance/governance.serv
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { BlockchainScannerService } from './processing-tx/onchain/blockchain-scanner.service';
 import { BlockchainService } from './processing-tx/onchain/blockchain.service';
+import { VaultValidationException } from './processing-tx/onchain/exceptions/vault-validation.exception';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
 import { VaultManagingService } from './processing-tx/onchain/vault-managing.service';
 
@@ -554,7 +555,7 @@ export class VaultsService {
       this.logger.error('Error creating vault:', error);
 
       // If it's already a BadRequestException, re-throw it
-      if (error instanceof BadRequestException) {
+      if (error instanceof BadRequestException || error instanceof VaultValidationException) {
         throw error;
       }
 
