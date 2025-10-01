@@ -2,6 +2,7 @@ import { Controller, Get, Post, Param, Body, UseGuards, Query, Request } from '@
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 
 import { AuthGuard } from '../auth/auth.guard';
+import { AuthRequest } from '../auth/dto/auth-user.interface';
 
 import { ClaimsService } from './claims.service';
 import { ClaimResponseDto } from './dto/claim-response.dto';
@@ -22,7 +23,7 @@ export class ClaimsController {
   @UseGuards(AuthGuard)
   @Get('my')
   @ApiResponse({ type: [ClaimResponseDto] })
-  async getMyClaims(@Request() req, @Query() query: GetClaimsDto) {
+  async getMyClaims(@Request() req: AuthRequest, @Query() query: GetClaimsDto): Promise<ClaimResponseDto[]> {
     const userId = req.user.sub;
     return this.claimsService.getUserClaims(userId, query);
   }
@@ -30,7 +31,11 @@ export class ClaimsController {
   @UseGuards(AuthGuard)
   @Post(':claimId/build')
   @ApiOperation({ summary: 'Process claim and build transaction' })
-  async processClaim(@Param('claimId') claimId: string) {
+  async processClaim(@Param('claimId') claimId: string): Promise<{
+    success: boolean;
+    transactionId: string;
+    presignedTx: string;
+  }> {
     return this.claimsService.buildClaimTransaction(claimId);
   }
 
@@ -44,7 +49,11 @@ export class ClaimsController {
   async submitSignedClaimTransaction(
     @Param('transactionId') transactionId: string,
     @Body() body: { transaction: string; signatures: string | string[]; txId: string; claimId: string }
-  ) {
+  ): Promise<{
+    success: boolean;
+    transactionId: string;
+    blockchainTxHash: string;
+  }> {
     return this.claimsService.submitSignedTransaction(transactionId, body);
   }
 }

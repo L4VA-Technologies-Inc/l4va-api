@@ -19,6 +19,7 @@ import { Express } from 'express';
 
 import { ApiDoc } from '../../decorators/api-doc.decorator';
 import { AuthGuard } from '../auth/auth.guard';
+import { AuthRequest } from '../auth/dto/auth-user.interface';
 import { mbMultiplication } from '../aws_bucket/aws.controller';
 
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -36,7 +37,7 @@ export class UsersController {
   })
   @UseGuards(AuthGuard)
   @Get('profile')
-  async getProfile(@Request() req) {
+  async getProfile(@Request() req: AuthRequest) {
     const userId = req.user.sub;
     return this.usersService.getProfile(userId);
   }
@@ -58,7 +59,7 @@ export class UsersController {
   })
   @UseGuards(AuthGuard)
   @Patch('profile')
-  async updateProfile(@Request() req, @Body() updateData: UpdateProfileDto) {
+  async updateProfile(@Request() req: AuthRequest, @Body() updateData: UpdateProfileDto) {
     const userId = req.user.sub;
     return this.usersService.updateProfile(userId, updateData);
   }
@@ -73,7 +74,7 @@ export class UsersController {
   @Post('profile/image')
   @UseInterceptors(FileInterceptor('file'))
   async uploadProfileImage(
-    @Request() req,
+    @Request() req: AuthRequest,
     @UploadedFile(
       new ParseFilePipe({
         validators: [
@@ -98,7 +99,7 @@ export class UsersController {
   @Post('profile/banner')
   @UseInterceptors(FileInterceptor('file'))
   async uploadBannerImage(
-    @Request() req,
+    @Request() req: AuthRequest,
     @UploadedFile(
       new ParseFilePipe({
         validators: [
