@@ -531,7 +531,7 @@ export class ClaimsService {
         network: string;
       } = {
         changeAddress: user.address,
-        message: 'Claim LPs from ada contribution',
+        message: 'Claim VTs from ADA contribution',
         scriptInteractions: [
           {
             purpose: 'spend',
@@ -752,7 +752,6 @@ export class ClaimsService {
           },
         };
 
-        // повернули version: "cip25", але без metadata — мінімально
         const mint = [
           {
             version: 'cip25' as const,
@@ -772,7 +771,7 @@ export class ClaimsService {
 
         const payload = {
           changeAddress: user.address,
-          // message: "Claim LPs from ada contribution", // забрали для економії байтів
+          message: 'Claim VTs from asset contribution',
           scriptInteractions: [
             {
               purpose: 'spend',

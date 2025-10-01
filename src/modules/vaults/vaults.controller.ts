@@ -3,6 +3,7 @@ import { ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 
 import { ApiDoc } from '../../decorators/api-doc.decorator';
 import { AuthGuard } from '../auth/auth.guard';
+import { AuthRequest } from '../auth/dto/auth-user.interface';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 
 import { DraftVaultsService } from './draft-vaults.service';
@@ -37,7 +38,7 @@ export class VaultsController {
   @UseGuards(AuthGuard)
   @Post()
   createVault(
-    @Request() req,
+    @Request() req: AuthRequest,
     @Body()
     data: CreateVaultReq
   ): Promise<{
@@ -73,7 +74,7 @@ export class VaultsController {
   @UseGuards(AuthGuard)
   @Post('save-draft')
   saveDraft(
-    @Request() req,
+    @Request() req: AuthRequest,
     @Body()
     data: SaveDraftReq
   ): Promise<any> {
@@ -191,7 +192,7 @@ export class VaultsController {
   @Post(':id/burn/build')
   async burnVaultAttempt(
     @Param('id') id: string,
-    @Request() req
+    @Request() req: AuthRequest
   ): Promise<{
     txId: string;
     presignedTx: string;
@@ -211,7 +212,7 @@ export class VaultsController {
   async burnPublishAtempt(
     @Param('id') id: string,
     @Body() publishDto: PublishVaultDto,
-    @Request() req
+    @Request() req: AuthRequest
   ): Promise<{
     txHash: string;
   }> {
