@@ -751,10 +751,14 @@ export class GovernanceService {
     }
   }
 
+  /**
+   *  Distribute: Should not allow to distribute NFTs.
+   * WH
+   */
   async getAssetsToDistribute(vaultId: string): Promise<Asset[]> {
     try {
       const assets = await this.assetRepository.find({
-        where: { vault: { id: vaultId } },
+        where: { vault: { id: vaultId }, type: AssetType.FT, status: AssetStatus.LOCKED },
       });
       return assets;
     } catch (error) {
