@@ -423,7 +423,8 @@ export class LifecycleService {
         userContributedValueMap[tx.user.id] += transactionValueAda;
       }
 
-      const requiredThresholdAda = totalContributedValueAda * vault.acquire_reserve * 0.01;
+      const requiredThresholdAda =
+        totalContributedValueAda * vault.tokens_for_acquires * 0.01 * vault.acquire_reserve * 0.01;
       const meetsThreshold = totalAcquiredAda >= requiredThresholdAda;
 
       vault.total_acquired_value_ada = totalAcquiredAda;
