@@ -162,23 +162,6 @@ export class BlockchainService {
           );
         }
 
-        if (errorMessage.includes('UTxO Balance Insufficient')) {
-          this.logger.warn(`UTxO Balance Insufficient during submission: ${errorMessage}`);
-          throw new UTxOInsufficientException(errorMessage);
-        }
-
-        if (errorMessage.includes('Unknown transaction input') || errorMessage.includes('missing from UTxO set')) {
-          const match = errorMessage.match(/Unknown transaction input \(missing from UTxO set\): ([a-f0-9]+)#(\d+)/);
-          if (match) {
-            const [_, txHash, indexStr] = match;
-            this.logger.warn(`Missing UTxO reference during submission: ${txHash}#${indexStr}`);
-            throw new MissingUtxoException(txHash, parseInt(indexStr));
-          } else {
-            this.logger.warn(`Missing UTxO reference during submission: ${errorMessage}`);
-            throw new MissingUtxoException();
-          }
-        }
-
         this.logger.error(`Transaction submission failed with validation error: ${errorMessage}`);
         throw new Error(`Transaction validation failed: ${errorMessage}`);
       }

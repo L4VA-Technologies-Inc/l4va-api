@@ -20,6 +20,7 @@ import { BlockchainScannerService } from './blockchain-scanner.service';
 import { BlockchainService } from './blockchain.service';
 import { SubmitTransactionDto } from './dto/transaction.dto';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
+import { ValidityIntervalException } from './exceptions/validity-interval.exception';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
 import { Datum, Redeemer } from './types/type';
 import { getUtxosExctract } from './utils/lib';
@@ -315,6 +316,9 @@ export class VaultInsertingService {
       }
     } catch (error) {
       this.logger.error('Error submitting transaction', error);
+      if (error instanceof ValidityIntervalException) {
+        throw error;
+      }
       throw new Error(`Failed to submit transaction: ${error.message}`);
     }
   }

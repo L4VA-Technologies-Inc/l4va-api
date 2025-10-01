@@ -7,11 +7,7 @@ export class ValidityIntervalException extends BadRequestException {
     public readonly currentSlot?: number,
     message?: string
   ) {
-    const defaultMessage =
-      `Transaction validity interval error. ` +
-      `Current slot: ${currentSlot}, ` +
-      `Valid from: ${invalidBefore || 'N/A'}, ` +
-      `Valid until: ${invalidHereafter || 'N/A'}`;
+    const defaultMessage = `Transaction validity interval error. Please retry building and submitting the transaction.`;
 
     super(message || defaultMessage, 'VALIDITY_INTERVAL_ERROR');
     this.name = 'ValidityIntervalException';
