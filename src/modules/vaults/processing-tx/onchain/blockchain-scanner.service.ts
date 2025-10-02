@@ -165,7 +165,7 @@ export class BlockchainScannerService {
             // Only retry on network or server errors
             return this.isRetryableError(err);
           },
-          initialDelayMs: 2500,
+          initialDelayMs: Math.floor(1000 + Math.random() * 5000), // Random between 1-5 seconds
         });
         this.logger.log(`Successfully registered address ${vaultAddress} for monitoring`);
         return true;
