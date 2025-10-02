@@ -82,7 +82,7 @@ export class DistributionService {
     // Calculate VT price (this part is correct in your current code)
     const vtPrice = this.round15(totalAcquiredAda / assetsOfferedPercent / vtSupply);
 
-    const fdv = this.round15(totalAcquiredAda / assetsOfferedPercent);
+    const fdv = this.round2(totalAcquiredAda / assetsOfferedPercent);
 
     // LP gets lpPercent of the total vault value
     const lpTotalValue = this.round15(fdv * lpPercent);
@@ -162,6 +162,10 @@ export class DistributionService {
 
   private round15(amount: number): number {
     return Math.round(amount * 1e15) / 1e15;
+  }
+
+  protected round2(amount: number): number {
+    return Math.round(amount * 1e2) / 1e2;
   }
 
   private calculateTotalValueRetained(netAda: number, vtAda: number, lpAda: number, lpVtAda: number): number {
