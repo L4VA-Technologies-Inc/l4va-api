@@ -30,8 +30,6 @@ import { generate_tag_from_txhash_index, getUtxosExctract } from '@/modules/vaul
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-
 @Injectable()
 export class ClaimsService {
   private readonly logger = new Logger(ClaimsService.name);
@@ -157,10 +155,6 @@ export class ClaimsService {
       }
 
       const POLICY_ID = vault.script_hash;
-      // Extract data from claim metadata
-      const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(POLICY_ID)))
-        .to_address()
-        .to_bech32();
       const lpsUnit = vault.script_hash + '72656365697074';
       const txUtxos = await this.blockfrost.txsUtxos(claim.transaction.tx_hash);
       const output = txUtxos.outputs[0];
@@ -254,22 +248,6 @@ export class ClaimsService {
             datum: {
               type: 'inline',
               value: PlutusData.new_bytes(Buffer.from(datumTag, 'hex')).to_hex(),
-            },
-          },
-          {
-            address: SC_ADDRESS,
-            lovelace: 50000000,
-            datum: {
-              type: 'inline',
-              value: {
-                policy_id: POLICY_ID,
-                asset_name: vault.asset_vault_name,
-                owner: user.address,
-              },
-              shape: {
-                validatorHash: POLICY_ID,
-                purpose: 'spend',
-              },
             },
           },
         ],
@@ -471,6 +449,80 @@ export class ClaimsService {
       return await this.claimAcquirer(claim, user, vault);
     } else if (claim.type === ClaimType.CONTRIBUTOR) {
       return await this.claimContributor(claim, user, vault);
+    }
+  }
+
+  async submitSignedTransaction(
+    transactionId: string,
+    signedTx: { transaction: string; signatures: string | string[]; txId: string; claimId: string }
+  ): Promise<{
+    success: boolean;
+    transactionId: string;
+    blockchainTxHash: string;
+  }> {
+    // Find the internal transaction
+    const internalTx = await this.transactionRepository.findOne({
+      where: { id: transactionId },
+    });
+
+    if (!internalTx) {
+      throw new NotFoundException('Transaction not found');
+    }
+
+    try {
+      const signatures = Array.isArray(signedTx.signatures) ? signedTx.signatures : [signedTx.signatures];
+
+      const result = await this.blockchainService.submitTransaction({
+        transaction: signedTx.transaction,
+        signatures,
+      });
+
+      internalTx.tx_hash = result.txHash;
+      internalTx.status = TransactionStatus.submitted;
+      await this.transactionRepository.save(internalTx);
+
+      if (internalTx.type === TransactionType.cancel) {
+        const claim = await this.claimRepository.findOne({
+          where: { id: signedTx.claimId },
+          select: ['id', 'metadata', 'type'],
+        });
+
+        if (claim && claim.metadata) {
+          if (claim.type === ClaimType.FINAL_DISTRIBUTION && claim.metadata.isContribution && claim.metadata.assetIds) {
+            for (const assetId of claim.metadata.assetIds) {
+              try {
+                // Update asset status in database
+                await this.assetService.cancelAsset(assetId, claim.user_id);
+                this.logger.log(`Asset ${assetId} marked as deleted after cancellation`);
+              } catch (assetError) {
+                this.logger.error(`Failed to mark asset ${assetId} as deleted:`, assetError);
+              }
+            }
+          }
+        }
+      }
+
+      // Update the claim status
+      try {
+        const claim = await this.claimRepository.findOne({
+          where: { id: signedTx.claimId },
+        });
+        if (claim) {
+          claim.status = ClaimStatus.CLAIMED;
+          await this.claimRepository.save(claim);
+        }
+      } catch (error) {
+        this.logger.error(`Failed to update claim status: ${error.message}`, error);
+      }
+
+      return {
+        success: true,
+        transactionId: internalTx.id,
+        blockchainTxHash: result.txHash,
+      };
+    } catch (error) {
+      await this.transactionRepository.save(internalTx);
+      throw error;
     }
   }
 
@@ -877,79 +929,6 @@ export class ClaimsService {
     }
   }
 
-  async submitSignedTransaction(
-    transactionId: string,
-    signedTx: { transaction: string; signatures: string | string[]; txId: string; claimId: string }
-  ): Promise<{
-    success: boolean;
-    transactionId: string;
-    blockchainTxHash: string;
-  }> {
-    // Find the internal transaction
-    const internalTx = await this.transactionRepository.findOne({
-      where: { id: transactionId },
-    });
-
-    if (!internalTx) {
-      throw new NotFoundException('Transaction not found');
-    }
-
-    try {
-      const signatures = Array.isArray(signedTx.signatures) ? signedTx.signatures : [signedTx.signatures];
-
-      const result = await this.blockchainService.submitTransaction({
-        transaction: signedTx.transaction,
-        signatures,
-      });
-
-      internalTx.tx_hash = result.txHash;
-      internalTx.status = TransactionStatus.submitted;
-      await this.transactionRepository.save(internalTx);
-
-      if (internalTx.type === TransactionType.cancel) {
-        const claim = await this.claimRepository.findOne({
-          where: { id: signedTx.claimId },
-          select: ['id', 'metadata', 'type'],
-        });
-
-        if (claim && claim.metadata) {
-          if (claim.type === ClaimType.FINAL_DISTRIBUTION && claim.metadata.isContribution && claim.metadata.assetIds) {
-            for (const assetId of claim.metadata.assetIds) {
-              try {
-                // Update asset status in database
-                await this.assetService.cancelAsset(assetId, claim.user_id);
-                this.logger.log(`Asset ${assetId} marked as deleted after cancellation`);
-              } catch (assetError) {
-                this.logger.error(`Failed to mark asset ${assetId} as deleted:`, assetError);
-              }
-            }
-          }
-        }
-      }
-
-      // Update the claim status
-      try {
-        const claim = await this.claimRepository.findOne({
-          where: { id: signedTx.claimId },
-        });
-        if (claim) {
-          claim.status = ClaimStatus.CLAIMED;
-          await this.claimRepository.save(claim);
-        }
-      } catch (error) {
-        this.logger.error(`Failed to update claim status: ${error.message}`, error);
-      }
-
-      return {
-        success: true,
-        transactionId: internalTx.id,
-        blockchainTxHash: result.txHash,
-      };
-    } catch (error) {
-      await this.transactionRepository.save(internalTx);
-      throw error;
-    }
-  }
   private parseTracesForExpectedLP(msg: any, policyId: string, assetHex: string): string | null {
     try {
       const text = typeof msg === 'string' ? msg : JSON.stringify(msg);
