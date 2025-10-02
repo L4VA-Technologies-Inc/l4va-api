@@ -63,11 +63,11 @@ export class BlockchainService {
         // Check for vault script evaluation errors first
         if (
           buildResponse.message?.includes('Failed to evaluate tx') &&
-          buildResponse.message?.includes('Some scripts of the transactions terminated with error') &&
-          (buildResponse.code === 3010 || buildResponse.code === 3012)
+          (buildResponse.message?.includes('Some scripts of the transactions terminated with error') ||
+            buildResponse.message?.includes('Some of the scripts failed to evaluate to a positive outcome'))
         ) {
           this.logger.warn(`Vault validation error during transaction building`);
-          throw new VaultValidationException('Validation error on vault during transaction building');
+          throw new VaultValidationException();
         }
 
         if (
