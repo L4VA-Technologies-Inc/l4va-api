@@ -1,4 +1,4 @@
-import { Controller, Get, Query, Param } from '@nestjs/common';
+import { Controller, Get, Post, Body, Query, Param } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 
 import { PaginationDto } from '../../dto/pagination.dto';
@@ -17,9 +17,9 @@ export class AssetsController {
     description: 'Get paginated list of assets for a specific vault',
     status: 200,
   })
-  @Get('contributed/:vaultId')
-  getContributedAssets(@Param('vaultId') vaultId: string, @Query() query: PaginationDto) {
-    return this.assetsService.getVaultAssets(vaultId, query.page, query.limit);
+  @Post('contributed/:vaultId')
+  getContributedAssets(@Param('vaultId') vaultId: string, @Body() body: {search: string, page: number, limit: number}) {
+    return this.assetsService.getVaultAssets(vaultId, body.page, body.limit, body.search);
   }
 
   @ApiDoc({

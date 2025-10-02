@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain } from 'class-transformer';
-import { Repository } from 'typeorm';
+import { Like, Repository, Raw } from 'typeorm';
 
 import { CreateAssetDto } from './dto/create-asset.dto';
 
@@ -76,7 +76,8 @@ export class AssetsService {
   async getVaultAssets(
     vaultId: string,
     page: number = 1,
-    limit: number = 10
+    limit: number = 10,
+    search: string = ''
   ): Promise<{
     items: Record<string, unknown>[];
     total: number;
@@ -94,20 +95,20 @@ export class AssetsService {
     if (!vault) {
       throw new BadRequestException('Vault not found or access denied');
     }
+    let queryBuilder = this.assetsRepository
+      .createQueryBuilder('asset')
+      .where('asset.vault_id = :vaultId', { vaultId })
+      .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED });
 
-    const [assets, total] = await this.assetsRepository.findAndCount({
-      where: {
-        vault: {
-          id: vaultId,
-        },
-        origin_type: AssetOriginType.CONTRIBUTED,
-      },
-      skip: (page - 1) * limit,
-      take: limit,
-      order: {
-        added_at: 'DESC',
-      },
-    });
+    if (search) {
+      queryBuilder = queryBuilder.andWhere('asset.metadata::text ILIKE :search', { search: `%${search}%` });
+    }
+
+    const [assets, total] = await queryBuilder
+      .skip((page - 1) * limit)
+      .take(limit)
+      .orderBy('asset.added_at', 'DESC')
+      .getManyAndCount();
 
     return {
       items: assets.map(asset => instanceToPlain(asset)),
