@@ -19,6 +19,7 @@ import { In, Repository } from 'typeorm';
 import { ClaimResponseDto } from './dto/claim-response.dto';
 import { GetClaimsDto } from './dto/get-claims.dto';
 
+import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
@@ -27,6 +28,7 @@ import { AssetsService } from '@/modules/vaults/processing-tx/assets/assets.serv
 import { BlockchainService, TransactionBuildResponse } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { Datum, Redeemer, Redeemer1 } from '@/modules/vaults/processing-tx/onchain/types/type';
 import { generate_tag_from_txhash_index, getUtxosExctract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import { AssetOriginType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
@@ -40,6 +42,8 @@ export class ClaimsService {
   constructor(
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
+    @InjectRepository(Asset)
+    private readonly assetsRepository: Repository<Asset>,
     @InjectRepository(Claim)
     private claimRepository: Repository<Claim>,
     private readonly configService: ConfigService,
@@ -301,125 +305,344 @@ export class ClaimsService {
     }
   }
 
+  async createCancellationClaims(vault: Vault, reason: string): Promise<void> {
+    const contributionTransactions = await this.transactionRepository.find({
+      where: {
+        vault_id: vault.id,
+        type: TransactionType.contribute,
+        status: TransactionStatus.confirmed,
+      },
+      relations: ['user'],
+    });
+
+    const acquisitionTransactions = await this.transactionRepository.find({
+      where: {
+        vault_id: vault.id,
+        type: TransactionType.acquire,
+        status: TransactionStatus.confirmed,
+      },
+      relations: ['user'],
+    });
+
+    const cancelClaims: Partial<Claim>[] = [];
+
+    // Create cancellation claims for contributions (return assets)
+    for (const tx of contributionTransactions) {
+      if (!tx.user?.id) continue;
+
+      try {
+        const existingClaim = await this.claimRepository.exists({
+          where: {
+            transaction: { id: tx.id },
+            type: ClaimType.CANCELLATION,
+          },
+        });
+
+        if (existingClaim) {
+          this.logger.log(`Cancellation claim already exists for transaction ${tx.id}`);
+          continue;
+        }
+
+        // Get assets for this transaction
+        const txAssets = await this.assetsRepository.find({
+          where: {
+            transaction: { id: tx.id },
+            origin_type: AssetOriginType.CONTRIBUTED,
+            deleted: false,
+          },
+        });
+
+        if (txAssets.length === 0) continue;
+
+        const claim = this.claimRepository.create({
+          user: { id: tx.user.id },
+          vault: { id: vault.id },
+          type: ClaimType.CANCELLATION,
+          status: ClaimStatus.AVAILABLE,
+          description: `Return contributed assets from failed vault: ${vault.name}`,
+          metadata: {
+            transactionType: 'contribution',
+            assets: txAssets.map(asset => ({
+              id: asset.id,
+              policyId: asset.policy_id,
+              assetId: asset.asset_id,
+              quantity: asset.quantity,
+              type: asset.type,
+            })),
+            assetIds: txAssets.map(asset => asset.id),
+            failureReason: reason,
+            originalTxHash: tx.tx_hash,
+            outputIndex: 0, // Assuming contribution UTXOs are at index 0
+          },
+          transaction: { id: tx.id },
+        });
+        cancelClaims.push(claim);
+      } catch (error) {
+        this.logger.error(`Failed to create cancellation claim for contribution ${tx.id}:`, error);
+      }
+    }
+
+    // Create cancellation claims for acquisitions (return ADA)
+    for (const tx of acquisitionTransactions) {
+      if (!tx.user?.id || !tx.amount) continue;
+
+      try {
+        const existingClaim = await this.claimRepository.findOne({
+          where: {
+            transaction: { id: tx.id },
+            type: ClaimType.CANCELLATION,
+          },
+        });
+
+        if (existingClaim) {
+          this.logger.log(`Cancellation claim already exists for transaction ${tx.id}`);
+          continue;
+        }
+
+        const claim = this.claimRepository.create({
+          user: { id: tx.user.id },
+          vault: { id: vault.id },
+          type: ClaimType.CANCELLATION,
+          amount: tx.amount, // ADA amount to return
+          status: ClaimStatus.AVAILABLE,
+          description: `Return ADA from failed vault acquisition: ${vault.name}`,
+          metadata: {
+            transactionType: 'acquisition',
+            adaAmount: tx.amount,
+            failureReason: reason,
+            originalTxHash: tx.tx_hash,
+            outputIndex: 0,
+          },
+          transaction: { id: tx.id },
+        });
+        cancelClaims.push(claim);
+      } catch (error) {
+        this.logger.error(`Failed to create cancellation claim for acquisition ${tx.id}:`, error);
+      }
+    }
+
+    // Save all claims
+    if (cancelClaims.length > 0) {
+      try {
+        await this.claimRepository.save(cancelClaims);
+        this.logger.log(`Created ${cancelClaims.length} cancellation claims for vault ${vault.id}`);
+      } catch (error) {
+        this.logger.error(`Failed to save cancellation claims for vault ${vault.id}:`, error);
+      }
+    }
+  }
+
   /**
    * Cancel = Return assets to contributor + burn receipt (contributor-initiated, during window)
    */
-  async buildCancelTransaction(claimId: string): Promise<{
+  async buildAndSubmitCancellationTransaction(claimId: string): Promise<{
+    txHash: string;
     success: boolean;
-    transactionId: string;
-    presignedTx: string;
   }> {
-    this.logger.log(`Building cancel transaction for claim ${claimId}`);
+    this.logger.debug(`Building cancellation transaction for claim ${claimId}`);
+
+    const claim = await this.claimRepository.findOne({
+      where: { id: claimId, type: ClaimType.CANCELLATION },
+      relations: ['user', 'vault', 'transaction'],
+    });
+
+    if (!claim) {
+      throw new NotFoundException('Cancellation claim not found');
+    }
+
+    if (claim.status !== ClaimStatus.AVAILABLE) {
+      throw new BadRequestException('Cancellation claim is not available');
+    }
+
+    const { vault, user, transaction } = claim;
+    const isContribution = claim.metadata?.transactionType === 'contribution';
+    const isAcquisition = claim.metadata?.transactionType === 'acquisition';
+    throw new BadRequestException('Unknown cancellation type');
 
     try {
-      const claim = await this.claimRepository.findOne({
-        where: { id: claimId },
-        relations: ['user', 'vault', 'transaction'],
-      });
-
-      if (!claim) {
-        throw new NotFoundException(`Claim with ID ${claimId} not found`);
+      if (isContribution) {
+        // return await this.buildAssetCancellationTx(claim, user, vault, transaction);
+      } else if (isAcquisition) {
+        // return await this.buildAdaCancellationTx(claim, user, vault, transaction);
+      } else {
+        throw new BadRequestException('Unknown cancellation type');
       }
-
-      const { vault, user, transaction } = claim;
-
-      if (claim.status !== ClaimStatus.AVAILABLE && claim.status !== ClaimStatus.PENDING) {
-        throw new BadRequestException(`Claim is not available for cancellation (current status: ${claim.status})`);
-      }
-
-      if (!vault || !user) {
-        throw new BadRequestException('Vault or user not found for claim');
-      }
-
-      const POLICY_ID = vault.script_hash;
-
-      const input = {
-        changeAddress: user.address,
-        message: 'Cancel asset contribution',
-        scriptInteractions: [
-          {
-            purpose: 'spend',
-            hash: POLICY_ID,
-            outputRef: {
-              txHash: transaction.tx_hash,
-              index: 0,
-            },
-            redeemer: {
-              type: 'json',
-              value: {
-                __variant: 'CancelAsset',
-                __data: {
-                  cancel_output_index: 0,
-                },
-              },
-            },
-          },
-          {
-            purpose: 'mint',
-            hash: POLICY_ID,
-            redeemer: {
-              type: 'json',
-              value: 'CancelContribution',
-            },
-          },
-        ],
-        mint: [
-          {
-            version: 'cip25',
-            assetName: { name: 'receipt', format: 'utf8' },
-            policyId: POLICY_ID,
-            type: 'plutus',
-            quantity: -1,
-            metadata: {},
-          },
-        ],
-        outputs: [], // Outputs are determined automatically by cardano-cli
-        requiredSigners: [this.adminHash],
-        referenceInputs: [
-          {
-            txHash: vault.last_update_tx_hash || vault.publication_hash,
-            index: vault.last_update_tx_hash ? vault.last_update_tx_index : 0,
-          },
-        ],
-        validityInterval: {
-          start: true,
-          end: true,
-        },
-        network: 'preprod',
-      };
-
-      const buildResponse = await this.blockchainService.buildTransaction(input);
-
-      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
-
-      const internalTx = await this.transactionRepository.save({
-        user_id: user.id,
-        vault_id: vault.id,
-        type: TransactionType.cancel,
-        status: TransactionStatus.created,
-      });
-
-      claim.status = ClaimStatus.PENDING;
-      await this.claimRepository.save(claim);
-
-      this.logger.log(`Successfully built cancel transaction for claim ${claimId}`);
-
-      return {
-        success: true,
-        transactionId: internalTx.id,
-        presignedTx: txToSubmitOnChain.to_hex(),
-      };
     } catch (error) {
-      this.logger.error(`Failed to build cancel transaction for claim ${claimId}:`, error);
-
-      if (error instanceof NotFoundException || error instanceof BadRequestException) {
-        throw error;
-      }
-
-      throw new Error(`Failed to build cancel transaction: ${error.message}`);
+      this.logger.error(`Failed to build cancellation transaction for claim ${claimId}:`, error);
+      throw error;
     }
   }
+
+  // private async buildAssetCancellationTx(
+  //   claim: Claim,
+  //   user: User,
+  //   vault: Vault,
+  //   transaction: Transaction
+  // ): Promise<{
+  //   txHash: string;
+  //   success: boolean;
+  // }> {
+  //   const POLICY_ID = vault.script_hash;
+
+  //   const input = {
+  //     changeAddress: user.address,
+  //     message: 'Cancel asset contribution - return assets to contributor',
+  //     scriptInteractions: [
+  //       {
+  //         purpose: 'spend',
+  //         hash: POLICY_ID,
+  //         outputRef: {
+  //           txHash: transaction.tx_hash,
+  //           index: claim.metadata?.outputIndex || 0,
+  //         },
+  //         redeemer: {
+  //           type: 'json',
+  //           value: {
+  //             __variant: 'CancelAsset',
+  //             __data: {},
+  //           },
+  //         },
+  //       },
+  //       {
+  //         purpose: 'mint',
+  //         hash: POLICY_ID,
+  //         redeemer: {
+  //           type: 'json',
+  //           value: 'CancelContribution',
+  //         },
+  //       },
+  //     ],
+  //     mint: [
+  //       {
+  //         version: 'cip25',
+  //         assetName: { name: 'receipt', format: 'utf8' },
+  //         policyId: POLICY_ID,
+  //         type: 'plutus',
+  //         quantity: -1, // Burn the receipt
+  //         metadata: {},
+  //       },
+  //     ],
+  //     outputs: [], // Let Cardano handle the outputs automatically
+  //     requiredSigners: [this.adminHash],
+  //     referenceInputs: [
+  //       {
+  //         txHash: vault.last_update_tx_hash || vault.publication_hash,
+  //         index: vault.last_update_tx_hash ? vault.last_update_tx_index : 0,
+  //       },
+  //     ],
+  //     validityInterval: {
+  //       start: true,
+  //       end: true,
+  //     },
+  //     network: 'preprod',
+  //   };
+
+  //   const buildResponse = await this.blockchainService.buildTransaction(input);
+  //   const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+  //   txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+  //   const internalTx = await this.transactionRepository.save({
+  //     user_id: user.id,
+  //     vault_id: vault.id,
+  //     type: TransactionType.cancel,
+  //     status: TransactionStatus.created,
+  //   });
+
+  //   // Mark claim as pending
+  //   claim.status = ClaimStatus.PENDING;
+  //   await this.claimRepository.save(claim);
+
+  //   return {
+  //     success: true,
+  //     transactionId: internalTx.id,
+  //     presignedTx: txToSubmitOnChain.to_hex(),
+  //   };
+  // }
+
+  // private async buildAdaCancellationTx(
+  //   claim: Claim,
+  //   user: User,
+  //   vault: Vault,
+  //   transaction: Transaction
+  // ): Promise<{
+  //   txHash: string;
+  //   success: boolean;
+  // }> {
+  //   const POLICY_ID = vault.script_hash;
+
+  //   const input = {
+  //     changeAddress: user.address,
+  //     message: 'Cancel ADA acquisition - return ADA to acquirer',
+  //     scriptInteractions: [
+  //       {
+  //         purpose: 'spend',
+  //         hash: POLICY_ID,
+  //         outputRef: {
+  //           txHash: transaction.tx_hash,
+  //           index: claim.metadata?.outputIndex || 0,
+  //         },
+  //         redeemer: {
+  //           type: 'json',
+  //           value: {
+  //             __variant: 'CancelAsset', // Same redeemer for ADA cancellation
+  //             __data: {},
+  //           } satisfies Redeemer1,
+  //         },
+  //       },
+  //       {
+  //         purpose: 'mint',
+  //         hash: POLICY_ID,
+  //         redeemer: {
+  //           type: 'json',
+  //           value: 'CancelContribution' satisfies Redeemer,
+  //         },
+  //       },
+  //     ],
+  //     mint: [
+  //       {
+  //         version: 'cip25',
+  //         assetName: { name: 'receipt', format: 'utf8' },
+  //         policyId: POLICY_ID,
+  //         type: 'plutus',
+  //         quantity: -1,
+  //         metadata: {},
+  //       },
+  //     ],
+  //     outputs: [], // ADA will be returned to user automatically
+  //     requiredSigners: [this.adminHash],
+  //     referenceInputs: [
+  //       {
+  //         txHash: vault.last_update_tx_hash || vault.publication_hash,
+  //         index: vault.last_update_tx_hash ? vault.last_update_tx_index : 0,
+  //       },
+  //     ],
+  //     validityInterval: {
+  //       start: true,
+  //       end: true,
+  //     },
+  //     network: 'preprod',
+  //   };
+
+  //   const buildResponse = await this.blockchainService.buildTransaction(input);
+  //   const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+  //   txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+  //   const internalTx = await this.transactionRepository.save({
+  //     user_id: user.id,
+  //     vault_id: vault.id,
+  //     type: TransactionType.cancel,
+  //     status: TransactionStatus.created,
+  //   });
+
+  //   claim.status = ClaimStatus.PENDING;
+  //   await this.claimRepository.save(claim);
+
+  //   return {
+  //     success: true,
+  //     transactionId: internalTx.id,
+  //     presignedTx: txToSubmitOnChain.to_hex(),
+  //   };
+  // }
 
   async buildClaimTransaction(claimId: string): Promise<{
     success: boolean;
