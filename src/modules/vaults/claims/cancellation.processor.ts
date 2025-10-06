@@ -24,8 +24,7 @@ export class CancellationProcessor extends WorkerHost {
   async process(job: Job<{ claimId: string }, any, string>): Promise<any> {
     switch (job.name) {
       case 'process-cancellation': {
-        return this.logger.debug('--- IGNORE ---');
-        // return await this.processCancellationClaim(job);
+        return await this.processCancellationClaim(job);
       }
       default: {
         this.logger.warn(`Unknown job name: ${job.name}`);
@@ -73,8 +72,6 @@ export class CancellationProcessor extends WorkerHost {
         throw new Error('Failed to submit cancellation transaction');
       }
     } catch (error) {
-      this.logger.error(`Failed to process cancellation claim ${claimId}:`, error);
-
       // Mark claim as failed after multiple attempts
       if (job.attemptsMade >= job.opts.attempts) {
         const claim = await this.claimRepository.findOne({ where: { id: claimId } });
