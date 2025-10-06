@@ -19,7 +19,7 @@ export class AutomaticCancellationService {
     private readonly cancellationQueue: Queue
   ) {}
 
-  @Cron(CronExpression.EVERY_5_HOURS)
+  @Cron(CronExpression.EVERY_10_MINUTES)
   async processPendingCancellations(): Promise<void> {
     const pendingClaims = await this.claimRepository.find({
       select: ['id'],
@@ -27,7 +27,7 @@ export class AutomaticCancellationService {
         type: ClaimType.CANCELLATION,
         status: ClaimStatus.AVAILABLE,
       },
-      take: 10, // Process in batches
+      take: 5, // Process in batches
     });
 
     if (pendingClaims.length > 0) {
@@ -39,10 +39,12 @@ export class AutomaticCancellationService {
         'process-cancellation',
         { claimId: claim.id },
         {
-          delay: 30000 + Math.random() * 120000, // Random delay to avoid congestion
-          attempts: 3,
+          delay: 1000 + Math.random() * 1000, // Random delay to avoid congestion
+          attempts: 2,
           backoff: {
             type: 'exponential',
+            delay: 5000,
+            jitter: 0.3,
           },
           removeOnComplete: 5,
           removeOnFail: 5,
