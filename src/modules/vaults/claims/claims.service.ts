@@ -36,6 +36,7 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 export class ClaimsService {
   private readonly logger = new Logger(ClaimsService.name);
   private readonly adminSKey: string;
+  private readonly adminAddress: string;
   private readonly adminHash: string;
   private blockfrost: BlockFrostAPI;
 
@@ -51,6 +52,7 @@ export class ClaimsService {
     private readonly blockchainService: BlockchainService
   ) {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
+    this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
@@ -433,7 +435,7 @@ export class ClaimsService {
   }
 
   /**
-   * Cancel = Return assets to contributor + burn receipt (contributor-initiated, during window)
+   * Cancel
    */
   async buildAndSubmitCancellationTransaction(claimId: string): Promise<{
     txHash: string;
@@ -455,194 +457,153 @@ export class ClaimsService {
     }
 
     const { vault, user, transaction } = claim;
-    const isContribution = claim.metadata?.transactionType === 'contribution';
-    const isAcquisition = claim.metadata?.transactionType === 'acquisition';
-    throw new BadRequestException('Unknown cancellation type');
 
-    try {
-      if (isContribution) {
-        // return await this.buildAssetCancellationTx(claim, user, vault, transaction);
-      } else if (isAcquisition) {
-        // return await this.buildAdaCancellationTx(claim, user, vault, transaction);
-      } else {
-        throw new BadRequestException('Unknown cancellation type');
-      }
-    } catch (error) {
-      this.logger.error(`Failed to build cancellation transaction for claim ${claimId}:`, error);
-      throw error;
+    if (transaction.type !== TransactionType.contribute && transaction.type !== TransactionType.acquire) {
+      throw new BadRequestException('Transaction is not a contribution or acquisition');
     }
+
+    const POLICY_ID = vault.script_hash;
+    const lpsUnit = vault.script_hash + '72656365697074';
+    const txUtxos = await this.blockfrost.txsUtxos(transaction.tx_hash);
+    const output = txUtxos.outputs[0];
+    if (!output) {
+      throw new Error('No output found');
+    }
+    const amountOfLpsToClaim = output.amount.find((a: { unit: string; quantity: string }) => a.unit === lpsUnit);
+
+    if (!amountOfLpsToClaim) {
+      throw new Error('No lps to claim.');
+    }
+
+    const datumTag = generate_tag_from_txhash_index(transaction.tx_hash, 0);
+
+    const refundAssets: any[] = [];
+    let refundLovelace = 0;
+
+    // Process ALL amounts from the original UTXO to build exact refund
+    for (const amount of output.amount) {
+      if (amount.unit === 'lovelace') {
+        refundLovelace = parseInt(amount.quantity);
+      } else if (amount.unit !== lpsUnit) {
+        refundAssets.push({
+          assetName: { name: amount.unit.slice(56), format: 'hex' },
+          policyId: amount.unit.slice(0, 56),
+          quantity: parseInt(amount.quantity),
+        });
+      }
+      // Skip receipt token as it gets burned
+    }
+
+    const input: {
+      changeAddress: string;
+      message: string;
+      mint?: Array<object>;
+      scriptInteractions: object[];
+      outputs: {
+        address: string;
+        assets?: object[];
+        lovelace?: number;
+        datum?: { type: 'inline'; value: string | Datum; shape?: object };
+      }[];
+      requiredSigners: string[];
+      referenceInputs: { txHash: string; index: number }[];
+      validityInterval: {
+        start: boolean;
+        end: boolean;
+      };
+      network: string;
+    } = {
+      changeAddress: this.adminAddress,
+      message: 'Cancel asset contribution - return assets to contributor',
+      scriptInteractions: [
+        {
+          purpose: 'spend',
+          hash: POLICY_ID,
+          outputRef: {
+            txHash: transaction.tx_hash,
+            index: 0,
+          },
+          redeemer: {
+            type: 'json',
+            value: {
+              __variant: 'CancelAsset', // Check for ADA
+              __data: {
+                cancel_output_index: 0,
+              },
+            } satisfies Redeemer1,
+          },
+        },
+        {
+          purpose: 'mint',
+          hash: POLICY_ID,
+          redeemer: {
+            type: 'json',
+            value: 'CancelContribution' satisfies Redeemer,
+          },
+        },
+      ],
+      mint: [
+        {
+          version: 'cip25',
+          assetName: { name: 'receipt', format: 'utf8' },
+          policyId: POLICY_ID,
+          type: 'plutus',
+          quantity: -1, // Burn the receipt
+          metadata: {},
+        },
+      ],
+      outputs: [
+        {
+          address: user.address,
+          assets: refundAssets.length > 0 ? refundAssets : undefined,
+          lovelace: refundLovelace,
+          datum: {
+            type: 'inline',
+            value: PlutusData.new_bytes(Buffer.from(datumTag, 'hex')).to_hex(),
+          },
+        },
+      ],
+      requiredSigners: [this.adminHash],
+      referenceInputs: [
+        {
+          txHash: vault.last_update_tx_hash,
+          index: 0,
+        },
+      ],
+      validityInterval: {
+        start: true,
+        end: true,
+      },
+      network: 'preprod',
+    };
+
+    const buildResponse = await this.blockchainService.buildTransaction(input);
+    const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+    txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+    const internalTx = await this.transactionRepository.save({
+      user_id: user.id,
+      vault_id: vault.id,
+      type: TransactionType.cancel,
+      status: TransactionStatus.created,
+    });
+
+    const response = await this.blockchainService.submitTransaction({
+      transaction: txToSubmitOnChain.to_hex(),
+    });
+
+    if (response.txHash) {
+      await this.transactionRepository.update(
+        { id: internalTx.id },
+        { tx_hash: response.txHash, status: TransactionStatus.confirmed }
+      );
+      return {
+        success: true,
+        txHash: response.txHash,
+      };
+    }
+    throw new Error('Failed to submit cancellation transaction');
   }
-
-  // private async buildAssetCancellationTx(
-  //   claim: Claim,
-  //   user: User,
-  //   vault: Vault,
-  //   transaction: Transaction
-  // ): Promise<{
-  //   txHash: string;
-  //   success: boolean;
-  // }> {
-  //   const POLICY_ID = vault.script_hash;
-
-  //   const input = {
-  //     changeAddress: user.address,
-  //     message: 'Cancel asset contribution - return assets to contributor',
-  //     scriptInteractions: [
-  //       {
-  //         purpose: 'spend',
-  //         hash: POLICY_ID,
-  //         outputRef: {
-  //           txHash: transaction.tx_hash,
-  //           index: claim.metadata?.outputIndex || 0,
-  //         },
-  //         redeemer: {
-  //           type: 'json',
-  //           value: {
-  //             __variant: 'CancelAsset',
-  //             __data: {},
-  //           },
-  //         },
-  //       },
-  //       {
-  //         purpose: 'mint',
-  //         hash: POLICY_ID,
-  //         redeemer: {
-  //           type: 'json',
-  //           value: 'CancelContribution',
-  //         },
-  //       },
-  //     ],
-  //     mint: [
-  //       {
-  //         version: 'cip25',
-  //         assetName: { name: 'receipt', format: 'utf8' },
-  //         policyId: POLICY_ID,
-  //         type: 'plutus',
-  //         quantity: -1, // Burn the receipt
-  //         metadata: {},
-  //       },
-  //     ],
-  //     outputs: [], // Let Cardano handle the outputs automatically
-  //     requiredSigners: [this.adminHash],
-  //     referenceInputs: [
-  //       {
-  //         txHash: vault.last_update_tx_hash || vault.publication_hash,
-  //         index: vault.last_update_tx_hash ? vault.last_update_tx_index : 0,
-  //       },
-  //     ],
-  //     validityInterval: {
-  //       start: true,
-  //       end: true,
-  //     },
-  //     network: 'preprod',
-  //   };
-
-  //   const buildResponse = await this.blockchainService.buildTransaction(input);
-  //   const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-  //   txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
-
-  //   const internalTx = await this.transactionRepository.save({
-  //     user_id: user.id,
-  //     vault_id: vault.id,
-  //     type: TransactionType.cancel,
-  //     status: TransactionStatus.created,
-  //   });
-
-  //   // Mark claim as pending
-  //   claim.status = ClaimStatus.PENDING;
-  //   await this.claimRepository.save(claim);
-
-  //   return {
-  //     success: true,
-  //     transactionId: internalTx.id,
-  //     presignedTx: txToSubmitOnChain.to_hex(),
-  //   };
-  // }
-
-  // private async buildAdaCancellationTx(
-  //   claim: Claim,
-  //   user: User,
-  //   vault: Vault,
-  //   transaction: Transaction
-  // ): Promise<{
-  //   txHash: string;
-  //   success: boolean;
-  // }> {
-  //   const POLICY_ID = vault.script_hash;
-
-  //   const input = {
-  //     changeAddress: user.address,
-  //     message: 'Cancel ADA acquisition - return ADA to acquirer',
-  //     scriptInteractions: [
-  //       {
-  //         purpose: 'spend',
-  //         hash: POLICY_ID,
-  //         outputRef: {
-  //           txHash: transaction.tx_hash,
-  //           index: claim.metadata?.outputIndex || 0,
-  //         },
-  //         redeemer: {
-  //           type: 'json',
-  //           value: {
-  //             __variant: 'CancelAsset', // Same redeemer for ADA cancellation
-  //             __data: {},
-  //           } satisfies Redeemer1,
-  //         },
-  //       },
-  //       {
-  //         purpose: 'mint',
-  //         hash: POLICY_ID,
-  //         redeemer: {
-  //           type: 'json',
-  //           value: 'CancelContribution' satisfies Redeemer,
-  //         },
-  //       },
-  //     ],
-  //     mint: [
-  //       {
-  //         version: 'cip25',
-  //         assetName: { name: 'receipt', format: 'utf8' },
-  //         policyId: POLICY_ID,
-  //         type: 'plutus',
-  //         quantity: -1,
-  //         metadata: {},
-  //       },
-  //     ],
-  //     outputs: [], // ADA will be returned to user automatically
-  //     requiredSigners: [this.adminHash],
-  //     referenceInputs: [
-  //       {
-  //         txHash: vault.last_update_tx_hash || vault.publication_hash,
-  //         index: vault.last_update_tx_hash ? vault.last_update_tx_index : 0,
-  //       },
-  //     ],
-  //     validityInterval: {
-  //       start: true,
-  //       end: true,
-  //     },
-  //     network: 'preprod',
-  //   };
-
-  //   const buildResponse = await this.blockchainService.buildTransaction(input);
-  //   const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-  //   txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
-
-  //   const internalTx = await this.transactionRepository.save({
-  //     user_id: user.id,
-  //     vault_id: vault.id,
-  //     type: TransactionType.cancel,
-  //     status: TransactionStatus.created,
-  //   });
-
-  //   claim.status = ClaimStatus.PENDING;
-  //   await this.claimRepository.save(claim);
-
-  //   return {
-  //     success: true,
-  //     transactionId: internalTx.id,
-  //     presignedTx: txToSubmitOnChain.to_hex(),
-  //   };
-  // }
 
   async buildClaimTransaction(claimId: string): Promise<{
     success: boolean;

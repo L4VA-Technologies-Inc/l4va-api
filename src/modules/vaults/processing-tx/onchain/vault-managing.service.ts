@@ -439,11 +439,13 @@ export class VaultManagingService {
     transactionId,
     acquireMultiplier,
     adaPairMultiplier,
+    vaultStatus,
   }: {
     vault: Vault;
     transactionId: string;
-    acquireMultiplier: [string, string | null, number][];
-    adaPairMultiplier: number;
+    vaultStatus: SmartContractVaultStatus;
+    acquireMultiplier?: [string, string | null, number][];
+    adaPairMultiplier?: number;
   }): Promise<{
     success: boolean;
     txHash: string;
@@ -503,7 +505,7 @@ export class VaultManagingService {
           datum: {
             type: 'inline',
             value: {
-              vault_status: SmartContractVaultStatus.SUCCESSFUL, // Added vault_status field
+              vault_status: vaultStatus, // Added vault_status field
               contract_type: contract_type,
               asset_whitelist: allowedPolicies,
               // contributor_whitelist: vaultConfig.allowedContributors || [],

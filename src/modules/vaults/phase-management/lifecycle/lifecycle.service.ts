@@ -196,6 +196,7 @@ export class LifecycleService {
 
       if (data.newScStatus === SmartContractVaultStatus.CANCELLED) {
         vault.vault_sc_status = data.newScStatus;
+        vault.last_update_tx_hash = data.txHash;
       }
 
       await this.vaultRepository.save(vault);
@@ -647,6 +648,7 @@ export class LifecycleService {
           transactionId: transaction.id,
           acquireMultiplier,
           adaPairMultiplier,
+          vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
         });
 
         await this.executePhaseTransition({
@@ -696,12 +698,25 @@ export class LifecycleService {
             `Required: ${requiredThresholdAda} ADA`
         );
 
+        const transaction = await this.transactionsService.createTransaction({
+          vault_id: vault.id,
+          type: TransactionType.updateVault,
+          assets: [], // No assets needed for this transaction as it's metadata update
+        });
+
+        const data = await this.vaultManagingService.updateVaultMetadataTx({
+          vault,
+          transactionId: transaction.id,
+          vaultStatus: SmartContractVaultStatus.CANCELLED,
+        });
+
         await this.claimsService.createCancellationClaims(vault, 'threshold_not_met');
 
         await this.executePhaseTransition({
           vaultId: vault.id,
           newStatus: VaultStatus.failed,
           newScStatus: SmartContractVaultStatus.CANCELLED,
+          txHash: data.txHash,
         });
 
         try {
@@ -814,6 +829,18 @@ export class LifecycleService {
             `Vault ${vault.id} assets do not meet threshold requirements: ${JSON.stringify(thresholdViolations)}`
           );
 
+          const transaction = await this.transactionsService.createTransaction({
+            vault_id: vault.id,
+            type: TransactionType.updateVault,
+            assets: [], // No assets needed for this transaction as it's metadata update
+          });
+
+          const data = await this.vaultManagingService.updateVaultMetadataTx({
+            vault,
+            transactionId: transaction.id,
+            vaultStatus: SmartContractVaultStatus.CANCELLED,
+          });
+
           await this.claimsService.createCancellationClaims(vault, 'threshold_violation');
 
           // If assets don't meet threshold requirements, fail the vault
@@ -821,6 +848,7 @@ export class LifecycleService {
             vaultId: vault.id,
             newStatus: VaultStatus.failed,
             newScStatus: SmartContractVaultStatus.CANCELLED,
+            txHash: data.txHash,
           });
 
           return;
