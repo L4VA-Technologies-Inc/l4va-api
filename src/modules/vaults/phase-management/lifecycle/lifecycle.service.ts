@@ -95,27 +95,24 @@ export class LifecycleService {
       }
 
       await this.executePhaseTransition({ vaultId, newStatus, phaseStartField, newScStatus: scStatus });
-    } else if (delay <= ONE_MINUTE_MS && newStatus !== VaultStatus.locked) {
+    } else if (delay <= ONE_MINUTE_MS) {
+      // Refactor queue to execute with validation, not just changing status
       // If transition should happen within the next minute, create a precise delay job
-      await this.phaseTransitionQueue.add(
-        'transitionPhase',
-        {
-          vaultId,
-          newStatus,
-          phaseStartField,
-        },
-        {
-          delay,
-          // Remove any existing jobs for this vault and phase to avoid duplicates
-          jobId: `${vaultId}-${newStatus}`,
-          removeOnComplete: 10,
-          removeOnFail: 10,
-        }
-      );
-      this.logger.log(
-        `Queued precise phase transition for vault ${vaultId} to ${newStatus} ` +
-          `in ${Math.round(delay / 1000)} seconds`
-      );
+      // await this.phaseTransitionQueue.add(
+      //   'transitionPhase',
+      //   {
+      //     vaultId,
+      //     newStatus,
+      //     phaseStartField,
+      //   },
+      //   {
+      //     delay,
+      //     // Remove any existing jobs for this vault and phase to avoid duplicates
+      //     jobId: `${vaultId}-${newStatus}`,
+      //     removeOnComplete: 10,
+      //     removeOnFail: 10,
+      //   }
+      // );
     } else {
       // If more than 1 minute away, don't queue - let future cron runs handle it
     }

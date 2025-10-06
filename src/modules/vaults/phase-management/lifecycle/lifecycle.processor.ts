@@ -5,7 +5,7 @@ import { Job } from 'bullmq';
 import { Repository } from 'typeorm';
 
 import { Vault } from '@/database/vault.entity';
-import { SmartContractVaultStatus, VaultStatus } from '@/types/vault.types';
+import { VaultStatus } from '@/types/vault.types';
 
 @Processor('phaseTransition')
 @Injectable()
@@ -40,12 +40,6 @@ export class LifecycleProcessor extends WorkerHost {
       if (!vault) {
         this.logger.error(`Vault ${data.vaultId} not found`);
         return;
-      }
-
-      // Update vault status
-      vault.vault_status = data.newStatus;
-      if (data.newStatus === VaultStatus.failed) {
-        vault.vault_sc_status = SmartContractVaultStatus.CANCELLED;
       }
 
       // Set phase start time if specified
