@@ -62,6 +62,13 @@ export class CancellationProcessor extends WorkerHost {
         // Update job progress to complete
         await job.updateProgress(100);
 
+        await this.claimRepository.update(
+          { id: claimId },
+          {
+            status: ClaimStatus.CLAIMED,
+          }
+        );
+
         return {
           success: true,
           claimId,
