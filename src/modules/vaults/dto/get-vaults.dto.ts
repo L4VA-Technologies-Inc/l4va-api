@@ -13,6 +13,7 @@ export enum VaultFilter {
   draft = 'draft',
   failed = 'failed',
   terminated = 'terminated',
+  all = 'all',
 }
 
 export enum VaultSortField {

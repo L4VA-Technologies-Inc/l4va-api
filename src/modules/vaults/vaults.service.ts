@@ -152,6 +152,7 @@ export class VaultsService {
       return this.confirmAndProcessTransaction(txHash, vault, attempt + 1);
     }
   }
+
   /**
    * Parses a CSV file from AWS S3 and extracts valid Cardano addresses.
    * @param file_key - S3 file key
@@ -1128,6 +1129,22 @@ export class VaultsService {
           break;
         case VaultFilter.published:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.published });
+          break;
+        case VaultFilter.all:
+          const statuses = [
+            VaultStatus.published,
+            VaultStatus.contribution,
+            VaultStatus.acquire,
+            VaultStatus.locked,
+            VaultStatus.burned,
+          ];
+
+          if (myVaults) {
+            statuses.push(VaultStatus.draft);
+          }
+
+          queryBuilder.andWhere('vault.vault_status IN (:...statuses)', { statuses });
+          break;
       }
     }
 
