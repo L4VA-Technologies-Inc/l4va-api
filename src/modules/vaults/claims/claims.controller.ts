@@ -1,8 +1,8 @@
 import { Controller, Get, Post, Param, Body, UseGuards, Query, Request } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 
-import { AuthGuard } from '../auth/auth.guard';
-import { AuthRequest } from '../auth/dto/auth-user.interface';
+import { AuthGuard } from '../../auth/auth.guard';
+import { AuthRequest } from '../../auth/dto/auth-user.interface';
 
 import { ClaimsService } from './claims.service';
 import { ClaimResponseDto } from './dto/claim-response.dto';

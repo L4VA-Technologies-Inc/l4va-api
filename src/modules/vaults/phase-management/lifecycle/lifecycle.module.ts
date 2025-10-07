@@ -3,6 +3,8 @@ import { Module } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { ClaimsModule } from '../../claims/claims.module';
+
 import { LifecycleService } from './lifecycle.service';
 
 import { Asset } from '@/database/asset.entity';
@@ -21,6 +23,7 @@ import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockch
     ContributionModule,
     DistributionModule,
     TransactionsModule,
+    ClaimsModule,
     TypeOrmModule.forFeature([Vault, Asset, Claim, Transaction, TokenRegistry]),
     ScheduleModule.forRoot(),
     BlockchainModule,

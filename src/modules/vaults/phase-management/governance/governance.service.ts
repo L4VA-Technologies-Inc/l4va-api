@@ -299,7 +299,7 @@ export class GovernanceService {
       startDate: startDate.toISOString(),
       snapshotId: latestSnapshot.id,
       status: ProposalStatus.ACTIVE,
-      endDate: new Date(Date.now() + SEVEN_DAYS), // SEVEN
+      endDate: new Date(startDate.getTime() + SEVEN_DAYS), // SEVEN
     });
 
     // Set type-specific fields based on proposal type

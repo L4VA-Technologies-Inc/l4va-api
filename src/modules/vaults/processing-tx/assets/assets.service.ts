@@ -1,11 +1,12 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain } from 'class-transformer';
-import { Like, Repository, Raw } from 'typeorm';
+import { Repository } from 'typeorm';
 
 import { CreateAssetDto } from './dto/create-asset.dto';
 
 import { Asset } from '@/database/asset.entity';
+import { Claim } from '@/database/claim.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
@@ -16,6 +17,8 @@ export class AssetsService {
   constructor(
     @InjectRepository(Asset)
     private readonly assetsRepository: Repository<Asset>,
+    @InjectRepository(Claim)
+    private readonly claimsRepository: Repository<Claim>,
     @InjectRepository(Vault)
     private readonly vaultsRepository: Repository<Vault>,
     @InjectRepository(User)
@@ -98,7 +101,10 @@ export class AssetsService {
     let queryBuilder = this.assetsRepository
       .createQueryBuilder('asset')
       .where('asset.vault_id = :vaultId', { vaultId })
-      .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED });
+      .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
+      .andWhere('asset.status = :status', {
+        status: AssetStatus.LOCKED,
+      });
 
     if (search) {
       queryBuilder = queryBuilder.andWhere('asset.metadata::text ILIKE :search', { search: `%${search}%` });
@@ -146,6 +152,7 @@ export class AssetsService {
           id: vaultId,
         },
         origin_type: AssetOriginType.ACQUIRED,
+        status: AssetStatus.LOCKED,
       },
       skip: (page - 1) * limit,
       take: limit,
@@ -163,54 +170,57 @@ export class AssetsService {
     };
   }
 
-  async lockAsset(userId: string, assetId: string): Promise<Record<string, unknown>> {
-    const asset = await this.assetsRepository.findOne({
-      where: { id: assetId },
-      relations: ['vault', 'vault.owner'],
-    });
+  async releaseAssetByClaimId(claimId: string): Promise<void> {
+    const claimWithAsset = await this.claimsRepository
+      .createQueryBuilder('claim')
+      .select([
+        'claim.id',
+        'claim.status',
+        'transaction.id',
+        'asset.id',
+        'asset.status',
+        'asset.type',
+        'asset.quantity',
+        'asset.policy_id',
+        'asset.asset_id',
+        'asset.metadata',
+        'asset.added_at',
+        'asset.locked_at',
+        'vault.id',
+        'vault.vault_status',
+      ])
+      .innerJoin('claim.transaction', 'transaction')
+      .innerJoin('transaction.assets', 'asset')
+      .innerJoin('asset.vault', 'vault')
+      .where('claim.id = :claimId', { claimId })
+      .andWhere('asset.deleted = false')
+      .getOne();
 
-    if (!asset || asset.vault.owner.id !== userId) {
-      throw new BadRequestException('Asset not found or access denied');
+    if (!claimWithAsset) {
+      throw new BadRequestException('Claim not found or no associated asset');
     }
 
-    if (asset.vault.vault_status !== VaultStatus.contribution) {
-      throw new BadRequestException('Assets can only be locked during the contribution phase');
-    }
+    const asset = claimWithAsset.transaction.assets[0];
 
-    if (asset.status !== AssetStatus.PENDING) {
-      throw new BadRequestException('Only pending assets can be locked');
-    }
-
-    asset.status = AssetStatus.LOCKED;
-    asset.locked_at = new Date();
-
-    await this.assetsRepository.save(asset);
-    return instanceToPlain(asset);
-  }
-
-  async releaseAsset(userId: string, assetId: string): Promise<Record<string, unknown>> {
-    const asset = await this.assetsRepository.findOne({
-      where: { id: assetId },
-      relations: ['vault', 'vault.owner'],
-    });
-
-    if (!asset || asset.vault.owner.id !== userId) {
-      throw new BadRequestException('Asset not found or access denied');
-    }
-
-    if (asset.vault.vault_status !== VaultStatus.contribution) {
-      throw new BadRequestException('Assets can only be released during the contribution phase');
+    if (!asset) {
+      throw new BadRequestException('No asset associated with this claim');
     }
 
     if (asset.status !== AssetStatus.LOCKED) {
-      throw new BadRequestException('Only locked assets can be released');
+      throw new BadRequestException(
+        `Asset cannot be released. Current status: ${asset.status}. Only locked assets can be released.`
+      );
     }
 
-    asset.status = AssetStatus.RELEASED;
-    asset.released_at = new Date();
-
-    await this.assetsRepository.save(asset);
-    return instanceToPlain(asset);
+    const now = new Date();
+    await this.assetsRepository.update(
+      { id: asset.id },
+      {
+        status: AssetStatus.RELEASED,
+        released_at: now,
+        updated_at: now,
+      }
+    );
   }
 
   async updateAssetValuation(

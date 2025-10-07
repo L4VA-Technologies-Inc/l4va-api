@@ -117,11 +117,6 @@ export class VaultInsertingService {
 
       const VAULT_ID = vault.asset_vault_name;
       const CONTRIBUTION_SCRIPT_HASH = vault.script_hash;
-      const POLICY_ID = CONTRIBUTION_SCRIPT_HASH;
-      const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(POLICY_ID)))
-        .to_address()
-        .to_bech32();
-
       const LAST_UPDATE_TX_HASH = vault.publication_hash;
       const LAST_UPDATE_TX_INDEX = 0;
       const isAda = params.outputs[0].assets[0].assetName === 'lovelace';
@@ -129,7 +124,7 @@ export class VaultInsertingService {
       let assetsList = [
         {
           assetName: { name: VAULT_ID, format: 'hex' },
-          policyId: POLICY_ID,
+          policyId: CONTRIBUTION_SCRIPT_HASH,
           quantity: 1000,
         },
         {
@@ -175,7 +170,7 @@ export class VaultInsertingService {
           {
             version: 'cip25',
             assetName: { name: 'receipt', format: 'utf8' },
-            policyId: POLICY_ID,
+            policyId: CONTRIBUTION_SCRIPT_HASH,
             type: 'plutus',
             quantity: 1, // Mint 1 VT token
             metadata: {},
@@ -184,7 +179,7 @@ export class VaultInsertingService {
         scriptInteractions: [
           {
             purpose: 'mint',
-            hash: POLICY_ID,
+            hash: CONTRIBUTION_SCRIPT_HASH,
             redeemer: {
               type: 'json',
               value: {
@@ -196,20 +191,20 @@ export class VaultInsertingService {
         ],
         outputs: [
           {
-            address: SC_ADDRESS,
+            address: vault.contract_address,
             lovelace: isAda ? (quantity > 0 ? quantity : 10000000) : undefined,
             assets: isAda
               ? [
                   {
                     assetName: { name: 'receipt', format: 'utf8' },
-                    policyId: POLICY_ID,
+                    policyId: CONTRIBUTION_SCRIPT_HASH,
                     quantity: 1,
                   },
                 ]
               : [
                   {
                     assetName: { name: 'receipt', format: 'utf8' },
-                    policyId: POLICY_ID,
+                    policyId: CONTRIBUTION_SCRIPT_HASH,
                     quantity: 1,
                   },
                   ...assetsList,
@@ -217,12 +212,12 @@ export class VaultInsertingService {
             datum: {
               type: 'inline',
               value: {
-                policy_id: POLICY_ID,
+                policy_id: CONTRIBUTION_SCRIPT_HASH,
                 asset_name: VAULT_ID,
                 owner: params.changeAddress,
               },
               shape: {
-                validatorHash: POLICY_ID,
+                validatorHash: CONTRIBUTION_SCRIPT_HASH,
                 purpose: 'spend',
               },
             },

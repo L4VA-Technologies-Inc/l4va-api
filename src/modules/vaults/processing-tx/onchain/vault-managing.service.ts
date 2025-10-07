@@ -352,7 +352,6 @@ export class VaultManagingService {
 
   async createBurnTx(burnConfig: { customerAddress: string; assetVaultName: string }): Promise<{
     presignedTx: string;
-    contractAddress: string;
   }> {
     this.logger.log(`Creating burn transaction for vault ${burnConfig.assetVaultName}`);
 
@@ -416,7 +415,6 @@ export class VaultManagingService {
 
       return {
         presignedTx: txToSubmitOnChain.to_hex(),
-        contractAddress: this.scAddress,
       };
     } catch (error) {
       // this.logger.error(`Failed to create burn transaction for vault ${burnConfig.assetVaultName}:`, error);
@@ -439,11 +437,13 @@ export class VaultManagingService {
     transactionId,
     acquireMultiplier,
     adaPairMultiplier,
+    vaultStatus,
   }: {
     vault: Vault;
     transactionId: string;
-    acquireMultiplier: [string, string | null, number][];
-    adaPairMultiplier: number;
+    vaultStatus: SmartContractVaultStatus;
+    acquireMultiplier?: [string, string | null, number][];
+    adaPairMultiplier?: number;
   }): Promise<{
     success: boolean;
     txHash: string;
@@ -468,10 +468,6 @@ export class VaultManagingService {
         : [];
     const contract_type = vault.privacy === VaultPrivacy.private ? 0 : vault.privacy === VaultPrivacy.public ? 1 : 2;
 
-    this.scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
-      .to_address()
-      .to_bech32();
-
     const vaultUtxo = await getVaultUtxo(this.scPolicyId, vault.asset_vault_name, this.blockfrost);
     const input = {
       changeAddress: this.adminAddress,
@@ -492,7 +488,7 @@ export class VaultManagingService {
       ],
       outputs: [
         {
-          address: this.scAddress,
+          address: vault.contract_address,
           assets: [
             {
               assetName: vault.asset_vault_name,
@@ -503,7 +499,7 @@ export class VaultManagingService {
           datum: {
             type: 'inline',
             value: {
-              vault_status: SmartContractVaultStatus.SUCCESSFUL, // Added vault_status field
+              vault_status: vaultStatus, // Added vault_status field
               contract_type: contract_type,
               asset_whitelist: allowedPolicies,
               // contributor_whitelist: vaultConfig.allowedContributors || [],
@@ -621,8 +617,6 @@ export class VaultManagingService {
           headers,
           body: JSON.stringify(blueprintUpdatePayload),
         });
-
-        console.log('✅ Complete workflow finished: vault created, script uploaded, and blueprint updated!');
       } else {
         console.error('Failed to create vault and upload script');
       }

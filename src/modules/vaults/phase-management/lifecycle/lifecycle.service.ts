@@ -6,6 +6,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Queue } from 'bullmq';
 import { Repository } from 'typeorm';
 
+import { ClaimsService } from '../../claims/claims.service';
+
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
@@ -51,6 +53,7 @@ export class LifecycleService {
     private readonly distributionService: DistributionService,
     private readonly taptoolsService: TaptoolsService,
     private readonly metadataRegistryApiService: MetadataRegistryApiService,
+    private readonly claimsService: ClaimsService,
     private readonly eventEmitter: EventEmitter2
   ) {}
 
@@ -92,27 +95,24 @@ export class LifecycleService {
       }
 
       await this.executePhaseTransition({ vaultId, newStatus, phaseStartField, newScStatus: scStatus });
-    } else if (delay <= ONE_MINUTE_MS && newStatus !== VaultStatus.locked) {
+    } else if (delay <= ONE_MINUTE_MS) {
+      // Refactor queue to execute with validation, not just changing status
       // If transition should happen within the next minute, create a precise delay job
-      await this.phaseTransitionQueue.add(
-        'transitionPhase',
-        {
-          vaultId,
-          newStatus,
-          phaseStartField,
-        },
-        {
-          delay,
-          // Remove any existing jobs for this vault and phase to avoid duplicates
-          jobId: `${vaultId}-${newStatus}`,
-          removeOnComplete: 10,
-          removeOnFail: 10,
-        }
-      );
-      this.logger.log(
-        `Queued precise phase transition for vault ${vaultId} to ${newStatus} ` +
-          `in ${Math.round(delay / 1000)} seconds`
-      );
+      // await this.phaseTransitionQueue.add(
+      //   'transitionPhase',
+      //   {
+      //     vaultId,
+      //     newStatus,
+      //     phaseStartField,
+      //   },
+      //   {
+      //     delay,
+      //     // Remove any existing jobs for this vault and phase to avoid duplicates
+      //     jobId: `${vaultId}-${newStatus}`,
+      //     removeOnComplete: 10,
+      //     removeOnFail: 10,
+      //   }
+      // );
     } else {
       // If more than 1 minute away, don't queue - let future cron runs handle it
     }
@@ -193,6 +193,7 @@ export class LifecycleService {
 
       if (data.newScStatus === SmartContractVaultStatus.CANCELLED) {
         vault.vault_sc_status = data.newScStatus;
+        vault.last_update_tx_hash = data.txHash;
       }
 
       await this.vaultRepository.save(vault);
@@ -207,42 +208,42 @@ export class LifecycleService {
     }
   }
 
-  private async queueContributionToAcquireTransition(vault: Vault, contributionEnd: Date): Promise<void> {
-    // Check if vault has assets before queuing transition
-    await this.contributionService.syncContributionTransactions(vault.id);
-    const assets = await this.assetsRepository.find({
-      where: { vault: { id: vault.id }, deleted: false },
-    });
-    const hasAssets = assets?.some(asset => !asset.deleted) || false;
+  // private async queueContributionToAcquireTransition(vault: Vault, contributionEnd: Date): Promise<void> {
+  //   // Check if vault has assets before queuing transition
+  //   await this.contributionService.syncContributionTransactions(vault.id);
+  //   const assets = await this.assetsRepository.find({
+  //     where: { vault: { id: vault.id }, deleted: false },
+  //   });
+  //   const hasAssets = assets?.some(asset => !asset.deleted) || false;
 
-    if (!hasAssets) {
-      // Queue failure transition
-      await this.queuePhaseTransition(vault.id, VaultStatus.failed, contributionEnd);
-      return;
-    }
+  //   if (!hasAssets) {
+  //     // Queue failure transition
+  //     await this.queuePhaseTransition(vault.id, VaultStatus.failed, contributionEnd);
+  //     return;
+  //   }
 
-    // Determine acquire phase start time based on vault configuration
-    let acquireStartTime: Date;
-    try {
-      if (vault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
-        // Start acquire phase immediately when contribution ends
-        acquireStartTime = contributionEnd;
-      } else if (vault.acquire_open_window_type === InvestmentWindowType.custom && vault.acquire_open_window_time) {
-        // Use custom start time, but ensure it's not before contribution ends
-        const customTime = new Date(vault.acquire_open_window_time);
-        acquireStartTime = customTime > contributionEnd ? customTime : contributionEnd;
-      } else {
-        this.logger.warn(`Vault ${vault.id} has invalid acquire window configuration`);
-        return;
-      }
-    } catch (error) {
-      this.logger.error(
-        `queueContributionToAcquireTransition: Failed to queue phase transition for vault ${vault.id}:`,
-        error
-      );
-    }
-    await this.queuePhaseTransition(vault.id, VaultStatus.acquire, acquireStartTime, 'acquire_phase_start');
-  }
+  //   // Determine acquire phase start time based on vault configuration
+  //   let acquireStartTime: Date;
+  //   try {
+  //     if (vault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
+  //       // Start acquire phase immediately when contribution ends
+  //       acquireStartTime = contributionEnd;
+  //     } else if (vault.acquire_open_window_type === InvestmentWindowType.custom && vault.acquire_open_window_time) {
+  //       // Use custom start time, but ensure it's not before contribution ends
+  //       const customTime = new Date(vault.acquire_open_window_time);
+  //       acquireStartTime = customTime > contributionEnd ? customTime : contributionEnd;
+  //     } else {
+  //       this.logger.warn(`Vault ${vault.id} has invalid acquire window configuration`);
+  //       return;
+  //     }
+  //   } catch (error) {
+  //     this.logger.error(
+  //       `queueContributionToAcquireTransition: Failed to queue phase transition for vault ${vault.id}:`,
+  //       error
+  //     );
+  //   }
+  //   // await this.queuePhaseTransition(vault.id, VaultStatus.acquire, acquireStartTime, 'acquire_phase_start');
+  // }
 
   private async executeContributionToAcquireTransition(vault: Vault): Promise<void> {
     try {
@@ -644,6 +645,7 @@ export class LifecycleService {
           transactionId: transaction.id,
           acquireMultiplier,
           adaPairMultiplier,
+          vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
         });
 
         await this.executePhaseTransition({
@@ -693,95 +695,25 @@ export class LifecycleService {
             `Required: ${requiredThresholdAda} ADA`
         );
 
-        // TODO: Automatic refund assets
-        // const cancelClaims: Partial<Claim>[] = [];
+        const transaction = await this.transactionsService.createTransaction({
+          vault_id: vault.id,
+          type: TransactionType.updateVault,
+          assets: [], // No assets needed for this transaction as it's metadata update
+        });
 
-        // for (const tx of [...acquisitionTransactions, ...contributionTransactions]) {
-        //   if (!tx.user || !tx.user.id) continue;
+        const data = await this.vaultManagingService.updateVaultMetadataTx({
+          vault,
+          transactionId: transaction.id,
+          vaultStatus: SmartContractVaultStatus.CANCELLED,
+        });
 
-        //   const userId = tx.user.id;
-        //   const adaSent = tx.amount || 0;
-
-        //   // Skip transactions with zero amount
-        //   if (adaSent <= 0) continue;
-
-        //   try {
-        //     // Check if a claim for this transaction already exists
-        //     const existingClaim = await this.claimRepository.findOne({
-        //       where: {
-        //         transaction: { id: tx.id },
-        //         type: ClaimType.FINAL_DISTRIBUTION,
-        //       },
-        //     });
-
-        //     if (existingClaim) {
-        //       this.logger.log(`Claim already exists for acquirer transaction ${tx.id}, skipping.`);
-        //       continue;
-        //     }
-
-        //     if (tx.type === TransactionType.contribute) {
-        //       // Get assets associated with this transaction
-        //       const txAssets = await this.assetsRepository.find({
-        //         where: {
-        //           transaction: { id: tx.id },
-        //           origin_type: AssetOriginType.CONTRIBUTED,
-        //           deleted: false,
-        //         },
-        //       });
-
-        //       // Create claim record with asset information
-        //       const claim = this.claimRepository.create({
-        //         user: { id: userId },
-        //         vault: { id: vault.id },
-        //         type: ClaimType.FINAL_DISTRIBUTION,
-        //         status: ClaimStatus.AVAILABLE,
-        //         metadata: {
-        //           assets: txAssets.map(asset => ({
-        //             id: asset.id,
-        //             policyId: asset.policy_id,
-        //             assetId: asset.asset_id,
-        //             quantity: asset.quantity,
-        //             type: asset.type,
-        //           })),
-        //           assetIds: txAssets.map(asset => asset.id),
-        //           isContribution: true,
-        //         },
-        //         transaction: { id: tx.id },
-        //       });
-        //       cancelClaims.push(claim);
-        //     }
-        //     // For acquisition transactions
-        //     else if (tx.type === TransactionType.acquire) {
-        //       const claim = this.claimRepository.create({
-        //         user: { id: userId },
-        //         vault: { id: vault.id },
-        //         type: ClaimType.FINAL_DISTRIBUTION,
-        //         status: ClaimStatus.AVAILABLE,
-        //         metadata: {
-        //           adaAmount: tx.amount,
-        //           isAcquisition: true,
-        //         },
-        //         transaction: { id: tx.id },
-        //       });
-        //       cancelClaims.push(claim);
-        //     }
-        //   } catch (error) {
-        //     this.logger.error(`Failed to create cancel claim for user ${userId} transaction ${tx.id}:`, error);
-        //   }
-        // }
-
-        // if (cancelClaims.length > 0) {
-        //   try {
-        //     await this.claimRepository.save(cancelClaims);
-        //   } catch (error) {
-        //     this.logger.error(`Failed to save batch of acquirer claims:`, error);
-        //   }
-        // }
+        await this.claimsService.createCancellationClaims(vault, 'threshold_not_met');
 
         await this.executePhaseTransition({
           vaultId: vault.id,
           newStatus: VaultStatus.failed,
           newScStatus: SmartContractVaultStatus.CANCELLED,
+          txHash: data.txHash,
         });
 
         try {
@@ -830,6 +762,19 @@ export class LifecycleService {
     }
   }
 
+  /**
+   * Validation scenarios:
+   *
+   * Scenario 1: Vault has assets, policy has 1 asset, min=1, max=5 → ✅ PASS (soft requirement, within max)
+   *
+   * Scenario 2: Vault has assets, policy has 0 assets, min=1, max=5 → ✅ PASS (soft requirement ignores min)
+   *
+   * Scenario 3: Vault has assets, policy has 6 assets, min=1, max=5 → ❌ FAIL (exceeds maximum)
+   *
+   * Scenario 4: Vault has assets, policy has 1 asset, min=2, max=5 → ❌ FAIL (below required minimum)
+   *
+   *  Scenario 5: Vault has no assets, any policy → ALL THRESHOLDS ENFORCED
+   */
   private async handleContributionToAcquire(): Promise<void> {
     const now = new Date();
     const contributionVaults = await this.vaultRepository
@@ -848,7 +793,7 @@ export class LifecycleService {
 
       // If contribution period hasn't ended yet, queue the transition
       if (now < contributionEnd) {
-        await this.queueContributionToAcquireTransition(vault, contributionEnd);
+        // await this.queueContributionToAcquireTransition(vault, contributionEnd);
         continue;
       }
 
@@ -873,18 +818,35 @@ export class LifecycleService {
       let assetsWithinThreshold = true;
       const thresholdViolations: Array<{ policyId: string; count: number; min: number; max: number }> = [];
 
+      // Check if vault has at least one asset
+      const hasAnyAssets = assets.length > 0;
+
       if (vault.assets_whitelist && vault.assets_whitelist.length > 0) {
         for (const whitelistItem of vault.assets_whitelist) {
           const policyId = whitelistItem.policy_id;
           const count = policyIdCounts[policyId] || 0;
+          const minRequired = whitelistItem.asset_count_cap_min;
+          const maxAllowed = whitelistItem.asset_count_cap_max;
 
-          if (count < whitelistItem.asset_count_cap_min || count > whitelistItem.asset_count_cap_max) {
+          // Apply soft requirement logic:
+          // If vault has assets AND min requirement is 1,
+          // then skip MINIMUM validation (soft requirement)
+          // BUT still enforce MAXIMUM validation
+          const isSoftRequirement = hasAnyAssets && minRequired === 1;
+
+          // Check minimum threshold (skip if soft requirement)
+          const violatesMinimum = !isSoftRequirement && count < minRequired;
+
+          // Always check maximum threshold (even for soft requirements)
+          const violatesMaximum = count > maxAllowed;
+
+          if (violatesMinimum || violatesMaximum) {
             assetsWithinThreshold = false;
             thresholdViolations.push({
               policyId,
               count,
-              min: whitelistItem.asset_count_cap_min,
-              max: whitelistItem.asset_count_cap_max,
+              min: minRequired,
+              max: maxAllowed,
             });
           }
         }
@@ -894,85 +856,26 @@ export class LifecycleService {
             `Vault ${vault.id} assets do not meet threshold requirements: ${JSON.stringify(thresholdViolations)}`
           );
 
-          const contributionTransactions = await this.transactionsRepository.find({
-            where: {
-              vault_id: vault.id,
-              type: TransactionType.contribute,
-              status: TransactionStatus.confirmed,
-            },
-            relations: ['user'],
+          const transaction = await this.transactionsService.createTransaction({
+            vault_id: vault.id,
+            type: TransactionType.updateVault,
+            assets: [], // No assets needed for this transaction as it's metadata update
           });
 
-          const cancelClaims: Partial<Claim>[] = [];
+          const data = await this.vaultManagingService.updateVaultMetadataTx({
+            vault,
+            transactionId: transaction.id,
+            vaultStatus: SmartContractVaultStatus.CANCELLED,
+          });
 
-          for (const tx of contributionTransactions) {
-            if (!tx.user || !tx.user.id) continue;
+          await this.claimsService.createCancellationClaims(vault, 'threshold_violation');
 
-            const userId = tx.user.id;
-
-            try {
-              // Check if a claim for this transaction already exists
-              const existingClaim = await this.claimRepository.findOne({
-                where: {
-                  transaction: { id: tx.id },
-                  type: ClaimType.FINAL_DISTRIBUTION,
-                },
-              });
-
-              if (existingClaim) {
-                this.logger.log(`Claim already exists for contribution transaction ${tx.id}, skipping.`);
-                continue;
-              }
-
-              // Get assets associated with this transaction
-              const txAssets = await this.assetsRepository.find({
-                where: {
-                  transaction: { id: tx.id },
-                  origin_type: AssetOriginType.CONTRIBUTED,
-                  deleted: false,
-                },
-              });
-
-              // Create claim record with asset information
-              const claim = this.claimRepository.create({
-                user: { id: userId },
-                vault: { id: vault.id },
-                type: ClaimType.FINAL_DISTRIBUTION,
-                status: ClaimStatus.AVAILABLE,
-                metadata: {
-                  assets: txAssets.map(asset => ({
-                    id: asset.id,
-                    policyId: asset.policy_id,
-                    assetId: asset.asset_id,
-                    quantity: asset.quantity,
-                    type: asset.type,
-                  })),
-                  assetIds: txAssets.map(asset => asset.id),
-                  isContribution: true,
-                  failureReason: 'threshold_violation',
-                  violations: thresholdViolations,
-                },
-                transaction: { id: tx.id },
-              });
-              cancelClaims.push(claim);
-            } catch (error) {
-              this.logger.error(`Failed to create cancel claim for user ${userId} transaction ${tx.id}:`, error);
-            }
-          }
-
-          if (cancelClaims.length > 0) {
-            try {
-              await this.claimRepository.save(cancelClaims);
-              this.logger.log(`Created ${cancelClaims.length} cancellation claims for failed vault ${vault.id}`);
-            } catch (error) {
-              this.logger.error(`Failed to save batch of cancellation claims:`, error);
-            }
-          }
           // If assets don't meet threshold requirements, fail the vault
           await this.executePhaseTransition({
             vaultId: vault.id,
             newStatus: VaultStatus.failed,
             newScStatus: SmartContractVaultStatus.CANCELLED,
+            txHash: data.txHash,
           });
 
           return;
