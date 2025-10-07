@@ -366,21 +366,15 @@ export class VaultsService {
       // Handle assets whitelist
       // TODO: Add lovelace support
       let maxCountOf = 0;
-      const uniquePolicyIds = new Set();
 
-      // First, validate for duplicate policy IDs
-      for (const assetItem of data.assetsWhitelist) {
-        if (assetItem.policyId) {
-          if (uniquePolicyIds.has(assetItem.policyId)) {
-            this.logger.warn(`Remove duplicate policy ID in assets whitelist: ${assetItem.policyId}`);
-          }
-          uniquePolicyIds.add(assetItem.policyId);
-        }
-      }
 
       // Then process them
+      const uniquePolicyIds = Array.from(
+        new Map(data.assetsWhitelist.map(obj => [obj.policyId, obj])).values()
+      );
+      
       await Promise.all(
-        data.assetsWhitelist.map(async assetItem => {
+        uniquePolicyIds.map(async assetItem => {
           if (assetItem.policyId) {
             const exists = await this.assetsWhitelistRepository.findOne({
               where: { vault: newVault, policy_id: assetItem.policyId },
@@ -483,8 +477,8 @@ export class VaultsService {
         throw new BadRequestException('Failed to retrieve created vault');
       }
 
-      const policyWhitelist = finalVault?.assets_whitelist.map(item => item.policy_id);
-      const contributorWhitelist = finalVault?.contributor_whitelist.map(item => item.wallet_address);
+      const policyWhitelist = [...new Set(finalVault?.assets_whitelist.map(item => item.policy_id))];
+      const contributorWhitelist = [...new Set(finalVault?.contributor_whitelist.map(item => item.wallet_address))];
 
       const privacy = vault_sc_privacy[finalVault.privacy as VaultPrivacy];
       const valueMethod = valuation_sc_type[finalVault.value_method as ValueMethod];
