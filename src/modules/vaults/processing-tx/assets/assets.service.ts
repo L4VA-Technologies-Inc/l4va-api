@@ -101,7 +101,10 @@ export class AssetsService {
     let queryBuilder = this.assetsRepository
       .createQueryBuilder('asset')
       .where('asset.vault_id = :vaultId', { vaultId })
-      .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED });
+      .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
+      .andWhere('asset.status = :status', {
+        status: AssetStatus.LOCKED,
+      });
 
     if (search) {
       queryBuilder = queryBuilder.andWhere('asset.metadata::text ILIKE :search', { search: `%${search}%` });
@@ -149,6 +152,7 @@ export class AssetsService {
           id: vaultId,
         },
         origin_type: AssetOriginType.ACQUIRED,
+        status: AssetStatus.LOCKED,
       },
       skip: (page - 1) * limit,
       take: limit,
