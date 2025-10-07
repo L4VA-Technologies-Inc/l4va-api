@@ -1,15 +1,7 @@
 import { Buffer } from 'node:buffer';
 
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import {
-  Address,
-  Credential,
-  EnterpriseAddress,
-  FixedTransaction,
-  PlutusData,
-  PrivateKey,
-  ScriptHash,
-} from '@emurgo/cardano-serialization-lib-nodejs';
+import { Address, FixedTransaction, PlutusData, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable, NotFoundException, Logger, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -749,10 +741,6 @@ export class ClaimsService {
 
       const POLICY_ID = vault.script_hash;
 
-      const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(POLICY_ID)))
-        .to_address()
-        .to_bech32();
-
       // Extract data from claim metadata
       const lpsUnit = vault.script_hash + '72656365697074';
       const txUtxos = await this.blockfrost.txsUtxos(claim.transaction.tx_hash);
@@ -851,7 +839,7 @@ export class ClaimsService {
             },
           },
           {
-            address: SC_ADDRESS,
+            address: vault.contract_address,
             lovelace: lovelaceChange,
             datum: {
               type: 'inline',
@@ -945,10 +933,6 @@ export class ClaimsService {
       }
 
       const POLICY_ID = vault.script_hash;
-      const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(POLICY_ID)))
-        .to_address()
-        .to_bech32();
-
       const lpsUnit = vault.script_hash + '72656365697074';
       const txUtxos = await this.blockfrost.txsUtxos(claim.transaction.tx_hash);
       const output = txUtxos.outputs[0];
@@ -994,7 +978,7 @@ export class ClaimsService {
         };
 
         const changeOutput = {
-          address: SC_ADDRESS,
+          address: vault.contract_address,
           lovelace: lovelaceChange,
           assets: otherAssets.length ? otherAssets : undefined,
           datum: {
