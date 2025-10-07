@@ -277,4 +277,13 @@ export class GetVaultsDto extends PaginationDto {
   @Type(() => DateRangeDto)
   @IsOptional()
   acquireWindow?: DateRangeDto;
+
+  @ApiProperty({
+    type: String,
+    description: 'User ID of the vault owner (used to get public vaults of another user)',
+    example: 'user-uuid-1234',
+  })
+  @Expose()
+  @IsOptional()
+  ownerId?: string;
 }
