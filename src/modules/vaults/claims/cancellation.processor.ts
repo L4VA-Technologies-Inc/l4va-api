@@ -44,8 +44,6 @@ export class CancellationProcessor extends WorkerHost {
     try {
       this.logger.log(`Processing automatic cancellation for claim ${claimId}`);
 
-      await job.updateProgress(10);
-
       const result = await this.claimsService.buildAndSubmitCancellationTransaction(claimId);
 
       if (!result.success) {
@@ -60,9 +58,10 @@ export class CancellationProcessor extends WorkerHost {
         );
 
         // Update job progress to complete
-        await job.updateProgress(100);
         await this.claimsService.updateClaimStatus(claimId, ClaimStatus.CLAIMED);
         await this.assetsService.releaseAssetByClaimId(claimId);
+
+        await job.updateProgress(100);
 
         return {
           success: true,
