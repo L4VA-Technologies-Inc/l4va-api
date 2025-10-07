@@ -762,6 +762,19 @@ export class LifecycleService {
     }
   }
 
+  /**
+   * Validation scenarios:
+   *
+   * Scenario 1: Vault has assets, policy has 1 asset, min=1, max=5 → ✅ PASS (soft requirement, within max)
+   *
+   * Scenario 2: Vault has assets, policy has 0 assets, min=1, max=5 → ✅ PASS (soft requirement ignores min)
+   *
+   * Scenario 3: Vault has assets, policy has 6 assets, min=1, max=5 → ❌ FAIL (exceeds maximum)
+   *
+   * Scenario 4: Vault has assets, policy has 1 asset, min=2, max=5 → ❌ FAIL (below required minimum)
+   *
+   *  Scenario 5: Vault has no assets, any policy → ALL THRESHOLDS ENFORCED
+   */
   private async handleContributionToAcquire(): Promise<void> {
     const now = new Date();
     const contributionVaults = await this.vaultRepository
@@ -805,18 +818,35 @@ export class LifecycleService {
       let assetsWithinThreshold = true;
       const thresholdViolations: Array<{ policyId: string; count: number; min: number; max: number }> = [];
 
+      // Check if vault has at least one asset
+      const hasAnyAssets = assets.length > 0;
+
       if (vault.assets_whitelist && vault.assets_whitelist.length > 0) {
         for (const whitelistItem of vault.assets_whitelist) {
           const policyId = whitelistItem.policy_id;
           const count = policyIdCounts[policyId] || 0;
+          const minRequired = whitelistItem.asset_count_cap_min;
+          const maxAllowed = whitelistItem.asset_count_cap_max;
 
-          if (count < whitelistItem.asset_count_cap_min || count > whitelistItem.asset_count_cap_max) {
+          // Apply soft requirement logic:
+          // If vault has assets AND min requirement is 1,
+          // then skip MINIMUM validation (soft requirement)
+          // BUT still enforce MAXIMUM validation
+          const isSoftRequirement = hasAnyAssets && minRequired === 1;
+
+          // Check minimum threshold (skip if soft requirement)
+          const violatesMinimum = !isSoftRequirement && count < minRequired;
+
+          // Always check maximum threshold (even for soft requirements)
+          const violatesMaximum = count > maxAllowed;
+
+          if (violatesMinimum || violatesMaximum) {
             assetsWithinThreshold = false;
             thresholdViolations.push({
               policyId,
               count,
-              min: whitelistItem.asset_count_cap_min,
-              max: whitelistItem.asset_count_cap_max,
+              min: minRequired,
+              max: maxAllowed,
             });
           }
         }
