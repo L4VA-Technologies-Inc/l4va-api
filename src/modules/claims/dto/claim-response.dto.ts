@@ -19,7 +19,21 @@ class SimpleVaultDto {
   ftTokenDecimals: number;
 }
 
+
 export class ClaimResponseDto {
+  @Expose()
+  page: number;
+
+  @Expose()
+  limit: number;
+
+  @Expose()
+  total: number;
+
+  @Expose()
+  items: ClaimResponseItemsDto[];
+}
+export class ClaimResponseItemsDto {
   @Expose()
   id: string;
 

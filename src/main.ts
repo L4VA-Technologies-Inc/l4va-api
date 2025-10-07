@@ -34,7 +34,7 @@ async function bootstrap() {
       whitelist: true,
       forbidNonWhitelisted: false,
       transform: true,
-      transformOptions: { excludeExtraneousValues: true },
+      transformOptions: { excludeExtraneousValues: false },
     })
   );
 
