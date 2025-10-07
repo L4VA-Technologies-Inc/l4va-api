@@ -27,7 +27,6 @@ import { VyfiModule } from './modules/vyfi/vyfi.module';
 import { NotificationModule } from '@/modules/notification/notification.module';
 
 @Module({
-  // =)
   imports: [
     ScheduleModule.forRoot(),
     ConfigModule.forRoot({
