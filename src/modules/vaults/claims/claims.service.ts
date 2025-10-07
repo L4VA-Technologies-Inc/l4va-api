@@ -686,18 +686,7 @@ export class ClaimsService {
         }
       }
 
-      // Update the claim status
-      try {
-        const claim = await this.claimRepository.findOne({
-          where: { id: signedTx.claimId },
-        });
-        if (claim) {
-          claim.status = ClaimStatus.CLAIMED;
-          await this.claimRepository.save(claim);
-        }
-      } catch (error) {
-        this.logger.error(`Failed to update claim status: ${error.message}`, error);
-      }
+      await this.updateClaimStatus(signedTx.claimId, ClaimStatus.CLAIMED);
 
       return {
         success: true,
@@ -707,6 +696,38 @@ export class ClaimsService {
     } catch (error) {
       await this.transactionRepository.save(internalTx);
       throw error;
+    }
+  }
+
+  /**
+   * Updates the status of a claim with optional metadata
+   *
+   * @param claimId - The ID of the claim to update
+   * @param status - The new status to set
+   * @param metadata - Optional metadata to set
+   * @returns Promise<void>
+   */
+  async updateClaimStatus(claimId: string, status: ClaimStatus, metadata?: Record<string, any>): Promise<void> {
+    try {
+      const updateData: Partial<Claim> = {
+        status,
+      };
+
+      if (metadata) {
+        const existingClaim = await this.claimRepository.findOne({
+          where: { id: claimId },
+          select: ['metadata'],
+        });
+
+        updateData.metadata = {
+          ...(existingClaim?.metadata || {}),
+          ...metadata,
+        };
+      }
+
+      await this.claimRepository.update({ id: claimId }, updateData);
+    } catch (error) {
+      this.logger.error(`Failed to update claim ${claimId} status to ${status}:`, error);
     }
   }
 

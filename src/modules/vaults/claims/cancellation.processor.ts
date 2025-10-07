@@ -2,11 +2,11 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Job } from 'bullmq';
-import { Repository } from 'typeorm';
 
 import { ClaimsService } from './claims.service';
 
 import { Claim } from '@/database/claim.entity';
+import { AssetsService } from '@/modules/vaults/processing-tx/assets/assets.service';
 import { ClaimStatus } from '@/types/claim.types';
 
 @Processor('cancellationProcessing')
@@ -15,8 +15,8 @@ export class CancellationProcessor extends WorkerHost {
 
   constructor(
     @InjectRepository(Claim)
-    private readonly claimRepository: Repository<Claim>,
-    private readonly claimsService: ClaimsService
+    private readonly claimsService: ClaimsService,
+    private readonly assetsService: AssetsService
   ) {
     super();
   }
@@ -36,7 +36,7 @@ export class CancellationProcessor extends WorkerHost {
   private async processCancellationClaim(job: Job<{ claimId: string }>): Promise<{
     success: boolean;
     claimId: string;
-    txHash: any;
+    txHash: string;
     processedAt: string;
   }> {
     const { claimId } = job.data;
@@ -61,13 +61,8 @@ export class CancellationProcessor extends WorkerHost {
 
         // Update job progress to complete
         await job.updateProgress(100);
-
-        await this.claimRepository.update(
-          { id: claimId },
-          {
-            status: ClaimStatus.CLAIMED,
-          }
-        );
+        await this.claimsService.updateClaimStatus(claimId, ClaimStatus.CLAIMED);
+        await this.assetsService.releaseAssetByClaimId(claimId);
 
         return {
           success: true,
@@ -81,19 +76,12 @@ export class CancellationProcessor extends WorkerHost {
     } catch (error) {
       // Mark claim as failed after multiple attempts
       if (job.attemptsMade >= job.opts.attempts) {
-        const claim = await this.claimRepository.findOne({ where: { id: claimId } });
-        if (claim) {
-          claim.status = ClaimStatus.FAILED;
-          claim.metadata = {
-            ...claim.metadata,
-            failureReason: error.message,
-            lastAttempt: new Date().toISOString(),
-            totalAttempts: job.attemptsMade,
-          };
-          await this.claimRepository.save(claim);
-
-          this.logger.error(`Marked claim ${claimId} as failed after ${job.attemptsMade} attempts`);
-        }
+        await this.claimsService.updateClaimStatus(claimId, ClaimStatus.FAILED, {
+          failureReason: error.message,
+          lastAttempt: new Date().toISOString(),
+          totalAttempts: job.attemptsMade,
+        });
+        this.logger.error(`Marked claim ${claimId} as failed after ${job.attemptsMade} attempts`);
       }
 
       throw error;
