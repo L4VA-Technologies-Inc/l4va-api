@@ -10,7 +10,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
-import { Brackets, In, Not, Repository } from 'typeorm';
+import { Brackets, In, Not, Repository, UpdateResult } from 'typeorm';
 
 import { AwsService } from '../aws_bucket/aws.service';
 import { TaptoolsService } from '../taptools/taptools.service';
@@ -1338,7 +1338,6 @@ export class VaultsService {
   ): Promise<{
     txId: string;
     presignedTx: string;
-    contractAddress: string;
   }> {
     const vault = await this.vaultsRepository.findOne({
       where: {
@@ -1419,7 +1418,7 @@ export class VaultsService {
     }
   }
 
-  async incrementViewCount(vaultId: string) {
+  async incrementViewCount(vaultId: string): Promise<UpdateResult> {
     return await this.vaultsRepository.increment({ id: vaultId }, 'count_view', 1);
   }
 }

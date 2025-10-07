@@ -196,10 +196,8 @@ export class VaultsController {
   ): Promise<{
     txId: string;
     presignedTx: string;
-    contractAddress: string;
   }> {
-    const userId = req.user.sub;
-    return await this.vaultsService.buildBurnTransaction(id, userId);
+    return await this.vaultsService.buildBurnTransaction(id, req.user.sub);
   }
 
   @ApiDoc({
