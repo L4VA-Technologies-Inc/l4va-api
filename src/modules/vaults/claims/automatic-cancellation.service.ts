@@ -34,20 +34,21 @@ export class AutomaticCancellationService {
       this.logger.log(`Found ${pendingClaims.length} pending cancellation claims to process`);
     }
 
-    for (const claim of pendingClaims) {
+    for (let i = 0; i < pendingClaims.length; i++) {
+      const claim = pendingClaims[i];
       await this.cancellationQueue.add(
         'process-cancellation',
         { claimId: claim.id },
         {
-          delay: 1000 + Math.random() * 1000, // Random delay to avoid congestion
+          delay: i * 10000, // 10-second delay between each transaction (0s, 10s, 20s, 30s...)
           attempts: 2,
           backoff: {
             type: 'exponential',
-            delay: 5000,
+            delay: 10000,
             jitter: 0.3,
           },
-          removeOnComplete: 5,
-          removeOnFail: 5,
+          removeOnComplete: 4,
+          removeOnFail: 4,
         }
       );
     }
