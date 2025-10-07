@@ -8,7 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { plainToInstance } from 'class-transformer';
 import { In, Repository } from 'typeorm';
 
-import { ClaimResponseDto } from './dto/claim-response.dto';
+import { ClaimResponseDto, ClaimResponseItemsDto } from './dto/claim-response.dto';
 import { GetClaimsDto } from './dto/get-claims.dto';
 
 import { Asset } from '@/database/asset.entity';
@@ -58,7 +58,7 @@ export class ClaimsService {
    * @param query - Optional query parameters for filtering claims
    * @returns Promise with an array of Claim entities
    */
-  async getUserClaims(userId: string, query?: GetClaimsDto): Promise<ClaimResponseDto[]> {
+  async getUserClaims(userId: string, query: GetClaimsDto): Promise<ClaimResponseDto> {
     const whereConditions: {
       user: { id: string };
       status?: ClaimStatus | ReturnType<typeof In>;
@@ -74,7 +74,11 @@ export class ClaimsService {
       whereConditions.status = In([ClaimStatus.AVAILABLE, ClaimStatus.PENDING]);
     }
 
-    const claims = await this.claimRepository.find({
+    const page = parseInt(query?.page as string) || 1;
+    const limit = parseInt(query?.limit as string) || 10;
+    const skip = (page - 1) * limit;
+
+    const [claims, total] = await this.claimRepository.findAndCount({
       where: whereConditions,
       order: { created_at: 'DESC' },
       relations: ['vault', 'vault.vault_image'],
@@ -96,9 +100,11 @@ export class ClaimsService {
           ft_token_decimals: true,
         },
       },
+      skip,
+      take: limit,
     });
 
-    return claims.map(claim => {
+    const items = claims.map(claim => {
       const cleanClaim = {
         ...claim,
         amount: claim.amount / 10 ** (claim.vault?.ft_token_decimals || 0),
@@ -108,10 +114,12 @@ export class ClaimsService {
         },
       };
 
-      return plainToInstance(ClaimResponseDto, cleanClaim, {
+      return plainToInstance(ClaimResponseItemsDto, cleanClaim, {
         excludeExtraneousValues: true,
       });
     });
+
+    return { items, total, page, limit };
   }
 
   /**
@@ -630,7 +638,12 @@ export class ClaimsService {
 
   async submitSignedTransaction(
     transactionId: string,
-    signedTx: { transaction: string; signatures: string | string[]; txId: string; claimId: string }
+    signedTx: {
+      transaction: string;
+      signatures: string | string[];
+      txId: string;
+      claimId: string;
+    }
   ): Promise<{
     success: boolean;
     transactionId: string;
@@ -1025,7 +1038,10 @@ export class ClaimsService {
                 type: 'json',
                 value: {
                   __variant: 'CollectVaultToken',
-                  __data: { vault_token_output_index: 0, change_output_index: 1 },
+                  __data: {
+                    vault_token_output_index: 0,
+                    change_output_index: 1,
+                  },
                 },
               },
             },
@@ -1038,7 +1054,12 @@ export class ClaimsService {
           mint,
           outputs: [ownerOutput, changeOutput],
           requiredSigners: [this.adminHash],
-          referenceInputs: [{ txHash: vault.last_update_tx_hash, index: vault.last_update_tx_index }],
+          referenceInputs: [
+            {
+              txHash: vault.last_update_tx_hash,
+              index: vault.last_update_tx_index,
+            },
+          ],
           validityInterval: { start: true, end: true },
           network: 'preprod',
         };

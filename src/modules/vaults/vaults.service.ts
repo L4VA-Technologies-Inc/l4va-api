@@ -152,6 +152,7 @@ export class VaultsService {
       return this.confirmAndProcessTransaction(txHash, vault, attempt + 1);
     }
   }
+
   /**
    * Parses a CSV file from AWS S3 and extracts valid Cardano addresses.
    * @param file_key - S3 file key
@@ -365,21 +366,15 @@ export class VaultsService {
       // Handle assets whitelist
       // TODO: Add lovelace support
       let maxCountOf = 0;
-      const uniquePolicyIds = new Set();
 
-      // First, validate for duplicate policy IDs
-      for (const assetItem of data.assetsWhitelist) {
-        if (assetItem.policyId) {
-          if (uniquePolicyIds.has(assetItem.policyId)) {
-            this.logger.warn(`Remove duplicate policy ID in assets whitelist: ${assetItem.policyId}`);
-          }
-          uniquePolicyIds.add(assetItem.policyId);
-        }
-      }
 
       // Then process them
+      const uniquePolicyIds = Array.from(
+        new Map(data.assetsWhitelist.map(obj => [obj.policyId, obj])).values()
+      );
+      
       await Promise.all(
-        data.assetsWhitelist.map(async assetItem => {
+        uniquePolicyIds.map(async assetItem => {
           if (assetItem.policyId) {
             const exists = await this.assetsWhitelistRepository.findOne({
               where: { vault: newVault, policy_id: assetItem.policyId },
@@ -482,8 +477,8 @@ export class VaultsService {
         throw new BadRequestException('Failed to retrieve created vault');
       }
 
-      const policyWhitelist = finalVault?.assets_whitelist.map(item => item.policy_id);
-      const contributorWhitelist = finalVault?.contributor_whitelist.map(item => item.wallet_address);
+      const policyWhitelist = [...new Set(finalVault?.assets_whitelist.map(item => item.policy_id))];
+      const contributorWhitelist = [...new Set(finalVault?.contributor_whitelist.map(item => item.wallet_address))];
 
       const privacy = vault_sc_privacy[finalVault.privacy as VaultPrivacy];
       const valueMethod = valuation_sc_type[finalVault.value_method as ValueMethod];
@@ -1016,6 +1011,7 @@ export class VaultsService {
     tvlCurrency?: TVLCurrency;
     contributionWindow?: DateRangeDto;
     acquireWindow?: DateRangeDto;
+    ownerId?: string;
   }): Promise<PaginatedResponseDto<VaultShortResponse>> {
     const {
       userId,
@@ -1092,8 +1088,11 @@ export class VaultsService {
           })
         );
       }
-    } else {
+    } else if (data.ownerId) {
       // only show public vaults
+      queryBuilder.andWhere('vault.owner_id = :ownerId', { ownerId: data.ownerId });
+      queryBuilder.andWhere('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public });
+    } else {
       queryBuilder.andWhere('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public });
     }
 
@@ -1128,6 +1127,22 @@ export class VaultsService {
           break;
         case VaultFilter.published:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.published });
+          break;
+        case VaultFilter.all:
+          const statuses = [
+            VaultStatus.published,
+            VaultStatus.contribution,
+            VaultStatus.acquire,
+            VaultStatus.locked,
+            VaultStatus.burned,
+          ];
+
+          if (myVaults) {
+            statuses.push(VaultStatus.draft);
+          }
+
+          queryBuilder.andWhere('vault.vault_status IN (:...statuses)', { statuses });
+          break;
       }
     }
 

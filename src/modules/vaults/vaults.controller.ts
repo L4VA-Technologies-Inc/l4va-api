@@ -93,6 +93,13 @@ export class VaultsController {
   getVaults(@Body() filters: GetVaultsDto, @Request() req: any): Promise<PaginatedResponseDto<VaultShortResponse>> {
     const userId = req.user?.sub;
 
+    if (filters.ownerId) {
+      return this.vaultsService.getVaults({
+        ...filters,
+        isPublicOnly: true,
+      });
+    }
+
     // If no user is authenticated, only show public vaults
     if (!userId) {
       return this.vaultsService.getVaults({

@@ -23,7 +23,7 @@ export class ClaimsController {
   @UseGuards(AuthGuard)
   @Get('my')
   @ApiResponse({ type: [ClaimResponseDto] })
-  async getMyClaims(@Request() req: AuthRequest, @Query() query: GetClaimsDto): Promise<ClaimResponseDto[]> {
+  async getMyClaims(@Request() req: AuthRequest, @Query() query: GetClaimsDto): Promise<ClaimResponseDto> {
     const userId = req.user.sub;
     return this.claimsService.getUserClaims(userId, query);
   }

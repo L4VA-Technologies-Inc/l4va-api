@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsEnum, IsOptional, IsString, IsInt, Min } from 'class-validator';
+import { Type, Transform, Expose } from 'class-transformer';
 
 import { ClaimStatus } from '@/types/claim.types';
 
@@ -10,6 +11,7 @@ export class GetClaimsDto {
   })
   @IsOptional()
   @IsEnum(ClaimStatus)
+  @Expose()
   status?: ClaimStatus;
 
   @ApiPropertyOptional({
@@ -19,5 +21,12 @@ export class GetClaimsDto {
   })
   @IsOptional()
   @IsString()
+  @Expose()
   claimState?: 'claimed' | 'unclaimed';
+
+  @IsOptional()
+  page?: string;
+  
+  @IsOptional()
+  limit?: string;
 }
