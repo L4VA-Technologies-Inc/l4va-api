@@ -44,34 +44,36 @@ export class UsersService {
     });
   }
 
-  async getPublicProfile(userId: string): Promise<any> {
+  async getPublicProfile(userId: string): Promise<PublicProfileRes> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
       relations: ['profile_image', 'banner_image', 'social_links'],
     });
-    this.logger.log('USER', user);
 
     if (!user) {
       throw new BadRequestException('User not found');
     }
 
-    // Calculate total_vaults from the vaults relation
-    user.total_vaults = user.vaults?.length || 0;
+    const ownedVaultsCount = await this.vaultRepository.count({
+      where: {
+        owner: { id: userId },
+        deleted: false,
+      },
+    });
 
-    const userSource = {
-      ...user,
-      banner_image: user.banner_image.file_url,
-      profile_image: user.profile_image.file_url,
-    };
+    user.total_vaults = ownedVaultsCount || 0;
 
-    // Transform to plain object and remove sensitive data
-    const plainUser = classToPlain(userSource);
-    delete plainUser.address;
+    const plainUser = instanceToPlain(user);
+
+    plainUser.banner_image = user.banner_image?.file_url || null;
+    plainUser.profile_image = user.profile_image?.file_url || null;
+
     delete plainUser.gains;
     delete plainUser.vaults;
 
-    return plainUser;
+    return plainToInstance(PublicProfileRes, plainUser, { excludeExtraneousValues: true });
   }
+
 
   async create(userData: Partial<User>): Promise<User> {
     const user = this.usersRepository.create(userData);

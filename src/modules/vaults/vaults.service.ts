@@ -1011,6 +1011,7 @@ export class VaultsService {
     tvlCurrency?: TVLCurrency;
     contributionWindow?: DateRangeDto;
     acquireWindow?: DateRangeDto;
+    ownerId?: string;
   }): Promise<PaginatedResponseDto<VaultShortResponse>> {
     const {
       userId,
@@ -1087,8 +1088,11 @@ export class VaultsService {
           })
         );
       }
-    } else {
+    } else if (data.ownerId) {
       // only show public vaults
+      queryBuilder.andWhere('vault.owner_id = :ownerId', { ownerId: data.ownerId });
+      queryBuilder.andWhere('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public });
+    } else {
       queryBuilder.andWhere('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public });
     }
 
