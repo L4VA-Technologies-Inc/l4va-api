@@ -18,7 +18,10 @@ export class AssetsController {
     status: 200,
   })
   @Post('contributed/:vaultId')
-  getContributedAssets(@Param('vaultId') vaultId: string, @Body() body: {search: string, page: number, limit: number}) {
+  getContributedAssets(
+    @Param('vaultId') vaultId: string,
+    @Body() body: { search: string; page: number; limit: number }
+  ) {
     return this.assetsService.getVaultAssets(vaultId, body.page, body.limit, body.search);
   }
 

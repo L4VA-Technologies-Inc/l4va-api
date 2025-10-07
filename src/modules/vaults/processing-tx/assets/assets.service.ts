@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain } from 'class-transformer';
-import { Like, Repository, Raw } from 'typeorm';
+import { Repository } from 'typeorm';
 
 import { CreateAssetDto } from './dto/create-asset.dto';
 
@@ -163,43 +163,13 @@ export class AssetsService {
     };
   }
 
-  async lockAsset(userId: string, assetId: string): Promise<Record<string, unknown>> {
+  async releaseAsset(assetId: string): Promise<Record<string, unknown>> {
     const asset = await this.assetsRepository.findOne({
       where: { id: assetId },
-      relations: ['vault', 'vault.owner'],
     });
 
-    if (!asset || asset.vault.owner.id !== userId) {
-      throw new BadRequestException('Asset not found or access denied');
-    }
-
-    if (asset.vault.vault_status !== VaultStatus.contribution) {
-      throw new BadRequestException('Assets can only be locked during the contribution phase');
-    }
-
-    if (asset.status !== AssetStatus.PENDING) {
-      throw new BadRequestException('Only pending assets can be locked');
-    }
-
-    asset.status = AssetStatus.LOCKED;
-    asset.locked_at = new Date();
-
-    await this.assetsRepository.save(asset);
-    return instanceToPlain(asset);
-  }
-
-  async releaseAsset(userId: string, assetId: string): Promise<Record<string, unknown>> {
-    const asset = await this.assetsRepository.findOne({
-      where: { id: assetId },
-      relations: ['vault', 'vault.owner'],
-    });
-
-    if (!asset || asset.vault.owner.id !== userId) {
-      throw new BadRequestException('Asset not found or access denied');
-    }
-
-    if (asset.vault.vault_status !== VaultStatus.contribution) {
-      throw new BadRequestException('Assets can only be released during the contribution phase');
+    if (!asset) {
+      throw new BadRequestException('Asset not found');
     }
 
     if (asset.status !== AssetStatus.LOCKED) {
