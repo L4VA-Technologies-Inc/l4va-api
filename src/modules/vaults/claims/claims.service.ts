@@ -514,7 +514,7 @@ export class ClaimsService {
       network: string;
     } = {
       changeAddress: this.adminAddress,
-      message: 'Cancel asset contribution - return assets to contributor',
+      message: `Cancel ${transaction.type === TransactionType.contribute ? 'asset' : 'ADA'} contribution - return assets to contributor`,
       scriptInteractions: [
         {
           purpose: 'spend',
@@ -526,7 +526,7 @@ export class ClaimsService {
           redeemer: {
             type: 'json',
             value: {
-              __variant: 'CancelAsset', // Check for ADA
+              __variant: 'CancelAsset',
               __data: {
                 cancel_output_index: 0,
               },
