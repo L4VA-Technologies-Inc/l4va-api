@@ -130,24 +130,27 @@ export class GovernanceService {
         select: ['id', 'asset_vault_name', 'policy_id'],
       });
 
-      this.logger.log(`Found ${lockedVaults.length} locked vaults for snapshots`);
-
-      for (const vault of lockedVaults) {
-        try {
-          if (!vault.asset_vault_name || !vault.policy_id) {
-            this.logger.warn(`Vault ${vault.id} missing asset info, skipping snapshot`);
-            continue;
-          }
-
-          await this.createAutomaticSnapshot(vault.id, `${vault.policy_id}${vault.asset_vault_name}`);
-          await new Promise(resolve => setTimeout(resolve, 5000)); // Add some delay between requests to not overwhelm the BlockFrost API
-        } catch (error) {
-          this.logger.error(`Error creating snapshot for vault ${vault.id}: ${error.message}`, error.stack);
-          // Continue with the next vault even if one fails
-        }
+      if (lockedVaults.length === 0) {
+        this.logger.log('No eligible vaults found for snapshot creation');
+        return;
       }
 
-      this.logger.log('Daily snapshot creation completed');
+      this.logger.log(`Found ${lockedVaults.length} locked vaults for snapshots`);
+
+      const results = await Promise.allSettled(
+        lockedVaults.map(async (vault, index) => {
+          if (index > 0) {
+            await new Promise(resolve => setTimeout(resolve, 5000)); //  Add delay between requests to avoid overwhelming BlockFrost
+          }
+          const snapshot = await this.createAutomaticSnapshot(vault.id, `${vault.policy_id}${vault.asset_vault_name}`);
+          return snapshot;
+        })
+      );
+
+      const successful = results.filter(r => r.status === 'fulfilled').length;
+      const failed = results.filter(r => r.status === 'rejected').length;
+
+      this.logger.log(`Daily snapshot creation completed: ${successful} successful, ${failed} failed`);
     } catch (error) {
       this.logger.error(`Failed to create daily snapshots: ${error.message}`, error.stack);
     }
