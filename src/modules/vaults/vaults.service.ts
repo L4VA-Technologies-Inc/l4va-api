@@ -1012,6 +1012,7 @@ export class VaultsService {
     contributionWindow?: DateRangeDto;
     acquireWindow?: DateRangeDto;
     ownerId?: string;
+    vaultStage?: string;
   }): Promise<PaginatedResponseDto<VaultShortResponse>> {
     const {
       userId,
@@ -1030,6 +1031,8 @@ export class VaultsService {
       page = 1,
       limit = 10,
       sortOrder = SortOrder.DESC,
+      vaultStage,
+      reserveMet
     } = data;
 
     // Create base query for all vaults
@@ -1145,6 +1148,35 @@ export class VaultsService {
           break;
       }
     }
+    if (vaultStage) {
+      switch (vaultStage) {
+        case 'created':
+          queryBuilder.andWhere('vault.vault_status = :status', { status: 'created' });
+          break;
+        case 'contribution':
+          queryBuilder.andWhere('vault.vault_status = :status', { status: 'contribution' });
+          break;
+        case 'acquire':
+          queryBuilder.andWhere('vault.vault_status = :status', { status: 'acquire' });
+          break;
+        case 'locked':
+          queryBuilder.andWhere('vault.vault_status = :status', { status: 'locked' });
+          break;
+        case 'terminated':
+          queryBuilder.andWhere('vault.vault_status = :status', { status: 'terminated' });
+          break;
+      }
+    }
+
+    if (reserveMet !== undefined) {
+      if (reserveMet) {
+        queryBuilder.andWhere('vault.total_acquired_value_ada >= vault.require_reserved_cost_ada');
+      } else {
+        queryBuilder.andWhere('vault.total_acquired_value_ada < vault.require_reserved_cost_ada');
+      }
+    }
+    
+
 
     if (tags && tags.length > 0) {
       const normalizedTags = tags.map(tag => tag.toLowerCase());

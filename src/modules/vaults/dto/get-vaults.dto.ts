@@ -286,4 +286,13 @@ export class GetVaultsDto extends PaginationDto {
   @Expose()
   @IsOptional()
   ownerId?: string;
+
+  @ApiProperty({
+    type: String,
+    description: 'Vault stage',
+    example: 'created',
+  })
+  @Expose()
+  @IsOptional()
+  vaultStage?: string;
 }
