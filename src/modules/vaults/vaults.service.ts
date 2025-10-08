@@ -1163,7 +1163,7 @@ export class VaultsService {
           queryBuilder.andWhere('vault.vault_status = :status', { status: 'locked' });
           break;
         case 'terminated':
-          queryBuilder.andWhere('vault.vault_status = :status', { status: 'terminated' });
+          queryBuilder.andWhere('vault.vault_status = :status', { status: 'burned' });
           break;
       }
     }
