@@ -8,6 +8,7 @@ import {
   TransactionSubmitResponseDto,
 } from './dto/transaction.dto';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
+import { LucidTransactionBuilderService } from './lucid-transaction-builder.service';
 import { VaultInsertingService } from './vault-inserting.service';
 import { WebhookVerificationService } from './webhook-verification.service';
 
@@ -18,6 +19,7 @@ import { AuthGuard } from '@/modules/auth/auth.guard';
 export class BlockchainController {
   constructor(
     private readonly transactionService: VaultInsertingService,
+    private readonly lucidTransactionBuilderService: LucidTransactionBuilderService,
     private readonly webhookVerificationService: WebhookVerificationService
   ) {}
 
@@ -32,7 +34,7 @@ export class BlockchainController {
   async buildTransaction(@Body() params: BuildTransactionDto): Promise<{
     presignedTx: string;
   }> {
-    return this.transactionService.buildTransaction(params);
+    return this.lucidTransactionBuilderService.buildAdaContribution(params);
   }
 
   @Post('transaction/submit')

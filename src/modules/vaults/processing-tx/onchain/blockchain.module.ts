@@ -9,6 +9,7 @@ import { AnvilApiService } from './anvil-api.service';
 import { BlockchainScannerService } from './blockchain-scanner.service';
 import { BlockchainController } from './blockchain.controller';
 import { BlockchainService } from './blockchain.service';
+import { LucidTransactionBuilderService } from './lucid-transaction-builder.service';
 import { MetadataRegistryApiService } from './metadata-register.service';
 import { VaultInsertingService } from './vault-inserting.service';
 import { VaultManagingService } from './vault-managing.service';
@@ -37,14 +38,16 @@ import { Vault } from '@/database/vault.entity';
     BlockchainScannerService,
     WebhookVerificationService,
     VaultManagingService,
+    LucidTransactionBuilderService,
   ],
   exports: [
+    MetadataRegistryApiService,
     BlockchainService,
     VaultInsertingService,
     BlockchainScannerService,
     WebhookVerificationService,
     VaultManagingService,
-    MetadataRegistryApiService,
+    LucidTransactionBuilderService,
   ],
 })
 export class BlockchainModule {}
