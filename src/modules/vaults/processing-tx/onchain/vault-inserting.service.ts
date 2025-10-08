@@ -1,14 +1,7 @@
 import { Buffer } from 'node:buffer';
 
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import {
-  EnterpriseAddress,
-  ScriptHash,
-  Credential,
-  FixedTransaction,
-  PrivateKey,
-  Address,
-} from '@emurgo/cardano-serialization-lib-nodejs';
+import { FixedTransaction, PrivateKey, Address } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
