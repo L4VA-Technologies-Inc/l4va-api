@@ -282,14 +282,24 @@ export class GovernanceService {
 
     await this.getVotingPower(vaultId, userId, 'create_proposal');
 
-    // Determine start date - use the provided one or now if not provided
-    let startDate: Date;
-    if (createProposalReq.startDate) {
-      startDate = new Date(createProposalReq.startDate);
-    } else if (createProposalReq.proposalStart) {
-      startDate = new Date(createProposalReq.proposalStart);
+    const startDate = new Date(createProposalReq.startDate ?? createProposalReq.proposalStart ?? Date.now());
+
+    let endDate: Date;
+
+    if (createProposalReq.duration) {
+      const durationDate = new Date(createProposalReq.duration);
+      const durationMs = durationDate.getTime();
+
+      const days = Math.floor(durationMs / (24 * 60 * 60 * 1000));
+      const hours = Math.floor((durationMs % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+      const minutes = Math.floor((durationMs % (60 * 60 * 1000)) / (60 * 1000));
+
+      endDate = new Date(startDate);
+      endDate.setDate(endDate.getDate() + days);
+      endDate.setHours(endDate.getHours() + hours);
+      endDate.setMinutes(endDate.getMinutes() + minutes);
     } else {
-      startDate = new Date();
+      endDate = new Date(startDate.getTime() + SEVEN_DAYS);
     }
 
     // Create the proposal with the appropriate fields based on type
@@ -302,7 +312,7 @@ export class GovernanceService {
       startDate: startDate.toISOString(),
       snapshotId: latestSnapshot.id,
       status: ProposalStatus.ACTIVE,
-      endDate: new Date(startDate.getTime() + SEVEN_DAYS), // SEVEN
+      endDate: endDate,
     });
 
     // Set type-specific fields based on proposal type
