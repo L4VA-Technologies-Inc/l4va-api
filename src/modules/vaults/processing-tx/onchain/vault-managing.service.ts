@@ -437,11 +437,11 @@ export class VaultManagingService {
     transactionId,
     acquireMultiplier,
     adaPairMultiplier,
-    vaultStatus,
+    vaultSCStatus,
   }: {
     vault: Vault;
     transactionId: string;
-    vaultStatus: SmartContractVaultStatus;
+    vaultSCStatus: SmartContractVaultStatus;
     acquireMultiplier?: [string, string | null, number][];
     adaPairMultiplier?: number;
   }): Promise<{
@@ -499,7 +499,7 @@ export class VaultManagingService {
           datum: {
             type: 'inline',
             value: {
-              vault_status: vaultStatus, // Added vault_status field
+              vault_status: vaultSCStatus, // Added vault_status field
               contract_type: contract_type,
               asset_whitelist: allowedPolicies,
               // contributor_whitelist: vaultConfig.allowedContributors || [],
@@ -525,9 +525,22 @@ export class VaultManagingService {
               },
               valuation_type: vault.value_method === 'fixed' ? 0 : 1,
               custom_metadata: [],
+              // fractionalization: {
+              //   percentage: 1,
+              //   token_supply: 1,
+              //   token_decimals: 1,
+              //   token_policy: "",
+              // },
+              // termination: {
+              //   termination_type: 1,
+              //   fdp: 1,
+              // },
+              // acquire: {
+              //   reserve: 1,
+              //   liquidityPool: 1,
+              // },
               admin: this.adminHash,
               minting_key: this.adminHash,
-              // New fields from update_vault.ts
               acquire_multiplier: acquireMultiplier,
               ada_pair_multiplier: adaPairMultiplier,
             },

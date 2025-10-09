@@ -645,7 +645,7 @@ export class LifecycleService {
           transactionId: transaction.id,
           acquireMultiplier,
           adaPairMultiplier,
-          vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
+          vaultSCStatus: SmartContractVaultStatus.SUCCESSFUL,
         });
 
         await this.executePhaseTransition({
@@ -704,7 +704,7 @@ export class LifecycleService {
         const data = await this.vaultManagingService.updateVaultMetadataTx({
           vault,
           transactionId: transaction.id,
-          vaultStatus: SmartContractVaultStatus.CANCELLED,
+          vaultSCStatus: SmartContractVaultStatus.CANCELLED,
         });
 
         await this.claimsService.createCancellationClaims(vault, 'threshold_not_met');
@@ -865,7 +865,7 @@ export class LifecycleService {
           const data = await this.vaultManagingService.updateVaultMetadataTx({
             vault,
             transactionId: transaction.id,
-            vaultStatus: SmartContractVaultStatus.CANCELLED,
+            vaultSCStatus: SmartContractVaultStatus.CANCELLED,
           });
 
           await this.claimsService.createCancellationClaims(vault, 'threshold_violation');
