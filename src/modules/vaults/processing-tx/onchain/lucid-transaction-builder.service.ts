@@ -1,6 +1,15 @@
 // lucid-transaction-builder.service.ts
 import { Address } from '@emurgo/cardano-serialization-lib-nodejs';
-import { Blockfrost, Constr, Data, fromHex, Lucid, LucidEvolution, MintingPolicy } from '@lucid-evolution/lucid';
+import {
+  Blockfrost,
+  Constr,
+  Data,
+  fromHex,
+  fromText,
+  Lucid,
+  LucidEvolution,
+  MintingPolicy,
+} from '@lucid-evolution/lucid';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -72,35 +81,12 @@ export class LucidTransactionBuilderService {
       }
 
       // Find a UTxO containing a reference script
-      const allUTxOs = await this.lucid.utxosByOutRef([{ txHash: vault.publication_hash, outputIndex: 0 }]);
+      const allUTxOs = await this.lucid.utxosByOutRef([{ txHash: vault.publication_hash, outputIndex: 1 }]); // Vault on 0 index
       const refScriptUTxO = allUTxOs.filter(utxo => utxo.scriptRef)[0];
-
-      console.log(allUTxOs);
-      console.log(refScriptUTxO);
 
       if (!refScriptUTxO) {
         throw new Error('No reference script UTxO found for the vault');
       }
-      // For redeemer: { output_index: 0, contribution: "Lovelace" }
-      // const mintingRedeemer: RedeemerBuilder = {
-      //   kind: 'self',
-      //   makeRedeemer: (inputIndex: bigint) => {
-      //     // Create redeemer based on the input index
-      //     return Data.to(
-      //       new Constr(0, [
-      //         inputIndex, // Use the actual input index from transaction
-      //         'Lovelace',
-      //       ])
-      //     );
-      //   },
-      // };
-
-      // const mintingRedeemer2 = Data.to(
-      //   new Constr(0, [
-      //     0n, // output_index as BigInt
-      //     'Lovelace', // contribution as string
-      //   ])
-      // );
 
       const addressHex = Buffer.from(Address.from_bech32(params.changeAddress).to_bytes()).toString('hex');
 
@@ -118,13 +104,23 @@ export class LucidTransactionBuilderService {
         script: vault.script_hash, // CBOR hex of compiled Plutus script
       };
 
-      // Build the transaction
+      // For redeemer: { output_index: 0, contribution: "Lovelace" }
+      const mintingRedeemer = Data.to(
+        new Constr(0, [
+          0n, // output_index
+          fromText('Lovelace'),
+        ])
+      );
+
       const tx = await this.lucid
         .newTx()
         // Mint receipt token
-        .mintAssets({
-          [POLICY_ID + fromHex('72656365697074')]: 1n,
-        })
+        .mintAssets(
+          {
+            [POLICY_ID + fromText('receipt')]: 1n,
+          },
+          mintingRedeemer
+        )
         .pay.ToContract(
           vault.contract_address,
           {
@@ -133,7 +129,7 @@ export class LucidTransactionBuilderService {
           },
           {
             lovelace: BigInt(quantity),
-            [POLICY_ID + fromHex('72656365697074')]: 1n, // receipt
+            [POLICY_ID + fromText('receipt')]: 1n,
           }
         )
         // Attach minting policy
@@ -151,8 +147,6 @@ export class LucidTransactionBuilderService {
       const adminSignedTx = await tx.partialSign.withWallet();
 
       this.logger.debug(adminSignedTx);
-
-      throw new Error(`Test: ${adminSignedTx}`);
 
       return {
         presignedTx: adminSignedTx, // Should return hex
