@@ -1,6 +1,6 @@
 // lucid-transaction-builder.service.ts
 import { Address } from '@emurgo/cardano-serialization-lib-nodejs';
-import { Blockfrost, Constr, Data, fromHex, Lucid, LucidEvolution } from '@lucid-evolution/lucid';
+import { Blockfrost, Constr, Data, fromHex, Lucid, LucidEvolution, MintingPolicy } from '@lucid-evolution/lucid';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -75,6 +75,12 @@ export class LucidTransactionBuilderService {
       const allUTxOs = await this.lucid.utxosByOutRef([{ txHash: vault.publication_hash, outputIndex: 0 }]);
       const refScriptUTxO = allUTxOs.filter(utxo => utxo.scriptRef)[0];
 
+      console.log(allUTxOs);
+      console.log(refScriptUTxO);
+
+      if (!refScriptUTxO) {
+        throw new Error('No reference script UTxO found for the vault');
+      }
       // For redeemer: { output_index: 0, contribution: "Lovelace" }
       // const mintingRedeemer: RedeemerBuilder = {
       //   kind: 'self',
@@ -95,19 +101,8 @@ export class LucidTransactionBuilderService {
       //     'Lovelace', // contribution as string
       //   ])
       // );
-      const addressObj = Address.from_bech32(params.changeAddress);
-      const addressBytes = addressObj.to_bytes();
-      const addressHex = Buffer.from(addressBytes).toString('hex');
 
-      /*
-      Example of hex for address  
-      "addresses": {
-        "11678afada248a5fd87b0949a623200ff989ed43c58d3aea0cf58c55": {
-          "hex": "7011678afada248a5fd87b0949a623200ff989ed43c58d3aea0cf58c55",
-          "bech32": "addr_test1wqgk0zh6mgjg5h7c0vy5nf3ryq8lnz0dg0zc6wh2pn6cc4g68t4x7"
-        }
-      }
-      */
+      const addressHex = Buffer.from(Address.from_bech32(params.changeAddress).to_bytes()).toString('hex');
 
       // For datum: { policy_id, asset_name, owner }
       const contributionDatum = Data.to(
@@ -117,6 +112,11 @@ export class LucidTransactionBuilderService {
           addressHex,
         ])
       );
+
+      const mintingPolicy: MintingPolicy = {
+        type: 'PlutusV3',
+        script: vault.script_hash, // CBOR hex of compiled Plutus script
+      };
 
       // Build the transaction
       const tx = await this.lucid
@@ -137,10 +137,7 @@ export class LucidTransactionBuilderService {
           }
         )
         // Attach minting policy
-        .attach.MintingPolicy({
-          type: 'PlutusV3',
-          script: await this.getContributionScript(POLICY_ID),
-        })
+        .attach.MintingPolicy(mintingPolicy)
         // Add reference input
         .readFrom([refScriptUTxO])
         // Add required signers
@@ -164,17 +161,5 @@ export class LucidTransactionBuilderService {
       this.logger.error(`Failed to build ADA contribution transaction: ${error.message}`, error);
       throw error;
     }
-  }
-
-  // Check this, idk if itworks
-  private async getContributionScript(policyId: string): Promise<string> {
-    // Load your compiled Plutus script
-    const scriptCbor = this.configService.get<string>(`CONTRIBUTION_SCRIPT_${policyId}`);
-
-    if (!scriptCbor) {
-      throw new Error(`Contribution script not found for policy ID: ${policyId}`);
-    }
-
-    return scriptCbor;
   }
 }
