@@ -282,15 +282,9 @@ export class GovernanceService {
 
     await this.getVotingPower(vaultId, userId, 'create_proposal');
 
-    // Determine start date - use the provided one or now if not provided
-    let startDate: Date;
-    if (createProposalReq.startDate) {
-      startDate = new Date(createProposalReq.startDate);
-    } else if (createProposalReq.proposalStart) {
-      startDate = new Date(createProposalReq.proposalStart);
-    } else {
-      startDate = new Date();
-    }
+    const startDate = new Date(createProposalReq.startDate ?? createProposalReq.proposalStart);
+
+    const endDate = new Date(startDate.getTime() + createProposalReq.duration);
 
     // Create the proposal with the appropriate fields based on type
     const proposal = this.proposalRepository.create({
@@ -302,7 +296,7 @@ export class GovernanceService {
       startDate: startDate.toISOString(),
       snapshotId: latestSnapshot.id,
       status: ProposalStatus.ACTIVE,
-      endDate: new Date(startDate.getTime() + SEVEN_DAYS), // SEVEN
+      endDate,
     });
 
     // Set type-specific fields based on proposal type
