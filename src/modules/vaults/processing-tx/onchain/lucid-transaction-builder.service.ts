@@ -48,8 +48,6 @@ export class LucidTransactionBuilderService {
       ),
       'Preprod'
     );
-
-    this.lucid.selectWallet.fromPrivateKey(this.adminSKey);
   }
 
   async buildAdaContribution(params: BuildTransactionParams): Promise<{ presignedTx: string }> {
@@ -74,6 +72,8 @@ export class LucidTransactionBuilderService {
     const quantity = params.outputs[0].assets[0].quantity * 1000000; // Convert to lovelace
 
     try {
+      this.lucid.selectWallet.fromAddress(params.changeAddress, []);
+
       // Get user's UTXOs
       const userUtxos = await this.lucid.utxosAt(params.changeAddress);
       if (userUtxos.length === 0) {
@@ -132,11 +132,10 @@ export class LucidTransactionBuilderService {
             [POLICY_ID + fromText('receipt')]: 1n,
           }
         )
-        // Attach minting policy
+        // Attach minting policy, Idk should I do this if I have reference input?
         .attach.MintingPolicy(mintingPolicy)
         // Add reference input
         .readFrom([refScriptUTxO])
-        // Add required signers
         .addSigner(params.changeAddress)
         .addSigner(this.adminAddress)
         // Set validity interval
@@ -144,12 +143,11 @@ export class LucidTransactionBuilderService {
         .validTo(Date.now() + 3600000)
         .complete();
 
-      const adminSignedTx = await tx.partialSign.withWallet();
-
-      this.logger.debug(adminSignedTx);
+      await tx.sign.withWallet().partialSign.withPrivateKey(this.adminSKey);
+      // this.logger.debug(adminSignedTx);
 
       return {
-        presignedTx: adminSignedTx, // Should return hex
+        presignedTx: tx.toHash(), // Should return hex
       };
     } catch (error) {
       this.logger.error(`Failed to build ADA contribution transaction: ${error.message}`, error);
