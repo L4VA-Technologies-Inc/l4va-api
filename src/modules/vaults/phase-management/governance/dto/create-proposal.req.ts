@@ -116,18 +116,6 @@ export class CreateProposalReq {
   duration: number;
 
   @ApiProperty({
-    description: 'Voting duration.',
-    example: '2025-08-05T10:00:00.000Z',
-    type: 'string',
-    format: 'date-time',
-    required: false,
-  })
-  @IsOptional()
-  @IsDateString()
-  @Expose()
-  duration?: string;
-
-  @ApiProperty({
     description: 'Fungible tokens for staking proposal',
     type: [FungibleTokenDto],
     required: false,
