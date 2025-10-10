@@ -488,7 +488,7 @@ export class VaultManagingService {
       ],
       outputs: [
         {
-          address: vault.contract_address,
+          address: this.scAddress,
           assets: [
             {
               assetName: vault.asset_vault_name,
