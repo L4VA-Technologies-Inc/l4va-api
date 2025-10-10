@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { GovernanceController } from './governance.controller';
 import { GovernanceService } from './governance.service';
+import { GovernanceExecutionService } from './governance-execution.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
@@ -15,7 +16,7 @@ import { Vote } from '@/database/vote.entity';
 @Module({
   imports: [TypeOrmModule.forFeature([Vault, Asset, Snapshot, Proposal, Vote, Claim, User])],
   controllers: [GovernanceController],
-  providers: [GovernanceService],
-  exports: [GovernanceService],
+  providers: [GovernanceService, GovernanceExecutionService],
+  exports: [GovernanceService, GovernanceExecutionService],
 })
 export class GovernanceModule {}
