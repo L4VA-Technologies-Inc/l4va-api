@@ -1,10 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan } from 'typeorm';
 
 import { Proposal } from '@/database/proposal.entity';
-import { Snapshot } from '@/database/snapshot.entity';
 import { Vault } from '@/database/vault.entity';
 import { Vote } from '@/database/vote.entity';
 import { ProposalStatus } from '@/types/proposal.types';
@@ -20,12 +19,10 @@ export class GovernanceExecutionService {
     @InjectRepository(Vote)
     private readonly voteRepository: Repository<Vote>,
     @InjectRepository(Vault)
-    private readonly vaultRepository: Repository<Vault>,
-    @InjectRepository(Snapshot)
-    private readonly snapshotRepository: Repository<Snapshot>
+    private readonly vaultRepository: Repository<Vault>
   ) {}
 
-  @Cron('*/10 * * * *')
+  @Cron(CronExpression.EVERY_10_MINUTES)
   async processExpiredProposals(): Promise<void> {
     try {
       const expiredProposals = await this.proposalRepository.find({
