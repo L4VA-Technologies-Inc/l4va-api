@@ -46,17 +46,18 @@ export class AutomaticCancellationService {
       for (let i = 0; i < pendingClaims.length; i++) {
         const claim = pendingClaims[i];
 
-        const existingJob = await this.cancellationQueue.getJob(`cancellation-${claim.id}`);
-        if (existingJob && !['completed', 'failed'].includes(existingJob.finishedOn ? 'completed' : 'active')) {
-          this.logger.log(`Job for claim ${claim.id} already exists, skipping...`);
-          continue;
-        }
+        // TODO: This logic breaks the flow
+        // const existingJob = await this.cancellationQueue.getJob(`cancellation-${claim.id}`);
+        // if (existingJob && !['completed', 'failed'].includes(existingJob.finishedOn ? 'completed' : 'active')) {
+        //   this.logger.log(`Job for claim ${claim.id} already exists, skipping...`);
+        //   continue;
+        // }
 
         await this.cancellationQueue.add(
           'process-cancellation',
           { claimId: claim.id },
           {
-            jobId: `cancellation-${claim.id}`,
+            // jobId: `cancellation-${claim.id}`,
             delay: i * 10000,
             attempts: 2,
             backoff: {

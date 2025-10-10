@@ -1,11 +1,9 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
 import { Job } from 'bullmq';
 
 import { ClaimsService } from './claims.service';
 
-import { Claim } from '@/database/claim.entity';
 import { AssetsService } from '@/modules/vaults/processing-tx/assets/assets.service';
 import { ClaimStatus } from '@/types/claim.types';
 
@@ -14,7 +12,6 @@ export class CancellationProcessor extends WorkerHost {
   private readonly logger = new Logger(CancellationProcessor.name);
 
   constructor(
-    @InjectRepository(Claim)
     private readonly claimsService: ClaimsService,
     private readonly assetsService: AssetsService
   ) {
@@ -42,8 +39,6 @@ export class CancellationProcessor extends WorkerHost {
     const { claimId } = job.data;
 
     try {
-      this.logger.log(`Processing automatic cancellation for claim ${claimId}`);
-
       const result = await this.claimsService.buildAndSubmitCancellationTransaction(claimId);
 
       if (!result.success) {
