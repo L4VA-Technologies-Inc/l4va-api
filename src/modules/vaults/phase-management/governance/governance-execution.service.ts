@@ -4,9 +4,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan } from 'typeorm';
 
 import { Proposal } from '@/database/proposal.entity';
-import { Vote } from '@/database/vote.entity';
-import { Vault } from '@/database/vault.entity';
 import { Snapshot } from '@/database/snapshot.entity';
+import { Vault } from '@/database/vault.entity';
+import { Vote } from '@/database/vote.entity';
 import { ProposalStatus } from '@/types/proposal.types';
 import { VoteType } from '@/types/vote.types';
 
@@ -43,53 +43,37 @@ export class GovernanceExecutionService {
           select: ['execution_threshold'],
         });
 
-        const executionThreshold = vault?.execution_threshold || 50;
+        const executionThreshold = vault.execution_threshold; // 50%
 
         let yesVotes = BigInt(0);
         let noVotes = BigInt(0);
-        
+
         votes.forEach(vote => {
           const weight = BigInt(vote.voteWeight);
           if (vote.vote === VoteType.YES) yesVotes += weight;
           if (vote.vote === VoteType.NO) noVotes += weight;
         });
 
-        const totalVotes = yesVotes + noVotes;
-        
-        const snapshot = await this.snapshotRepository.findOne({
-          where: { id: proposal.snapshotId },
-        });
+        const totalVotes = yesVotes + noVotes; // 100%
 
-        const totalVotingPower = snapshot 
-          ? Object.values(snapshot.addressBalances).reduce((sum, balance) => BigInt(sum) + BigInt(balance), BigInt(0))
-          : BigInt(0);
-
-        const participationPercentage = totalVotingPower > 0 
-          ? Number((totalVotes * BigInt(10000)) / totalVotingPower) / 100
-          : 0;
-
-        const thresholdReached = participationPercentage >= executionThreshold;
-        const yesWins = yesVotes > noVotes;
-        
-        const newStatus = (thresholdReached && yesWins) 
-          ? ProposalStatus.EXECUTED 
-          : ProposalStatus.REJECTED;
+        const yesVotePercent = totalVotes > 0 ? (Number(yesVotes) / Number(totalVotes)) * 100 : 0;
+        const isSuccessful = yesVotePercent >= executionThreshold;
+        const newStatus = isSuccessful ? ProposalStatus.EXECUTED : ProposalStatus.REJECTED;
 
         await this.proposalRepository.update(
           { id: proposal.id },
-          { 
+          {
             status: newStatus,
-            executionDate: newStatus === ProposalStatus.EXECUTED ? new Date() : undefined
+            executionDate: newStatus === ProposalStatus.EXECUTED ? new Date() : undefined,
           }
         );
 
         this.logger.log(
-          `Proposal ${proposal.id}: ${newStatus} (${participationPercentage.toFixed(2)}% participation, threshold ${executionThreshold}%)`
+          `Proposal ${proposal.id}: ${newStatus} (${yesVotePercent.toFixed(2)}% participation, threshold ${executionThreshold}%)`
         );
       }
     } catch (error) {
       this.logger.error(`Cron error: ${error.message}`);
     }
   }
-
 }
