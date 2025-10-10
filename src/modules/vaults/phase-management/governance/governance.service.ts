@@ -282,25 +282,9 @@ export class GovernanceService {
 
     await this.getVotingPower(vaultId, userId, 'create_proposal');
 
-    const startDate = new Date(createProposalReq.startDate ?? createProposalReq.proposalStart ?? Date.now());
+    const startDate = new Date(createProposalReq.startDate ?? createProposalReq.proposalStart);
 
-    let endDate: Date;
-
-    if (createProposalReq.duration) {
-      const durationDate = new Date(createProposalReq.duration);
-      const durationMs = durationDate.getTime();
-
-      const days = Math.floor(durationMs / (24 * 60 * 60 * 1000));
-      const hours = Math.floor((durationMs % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
-      const minutes = Math.floor((durationMs % (60 * 60 * 1000)) / (60 * 1000));
-
-      endDate = new Date(startDate);
-      endDate.setDate(endDate.getDate() + days);
-      endDate.setHours(endDate.getHours() + hours);
-      endDate.setMinutes(endDate.getMinutes() + minutes);
-    } else {
-      endDate = new Date(startDate.getTime() + SEVEN_DAYS);
-    }
+    const endDate = new Date(startDate.getTime() + createProposalReq.duration);
 
     // Create the proposal with the appropriate fields based on type
     const proposal = this.proposalRepository.create({

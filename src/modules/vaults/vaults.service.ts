@@ -48,6 +48,7 @@ import {
   VaultPrivacy,
   VaultStatus,
 } from '@/types/vault.types';
+import { ProposalStatus } from "@/types/proposal.types";
 
 /**
  * VaultsService
@@ -1115,6 +1116,18 @@ export class VaultsService {
           break;
         case VaultFilter.locked:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.locked });
+          break;
+        case VaultFilter.govern:
+          queryBuilder
+            .andWhere('vault.vault_status = :status', { status: VaultFilter.locked })
+            .andWhere(`
+              EXISTS (
+                SELECT 1
+                FROM proposal
+                WHERE proposal.vault_id = vault.id
+                AND proposal.status = :activeStatus
+              )
+            `, { activeStatus: ProposalStatus.ACTIVE });
           break;
         case VaultFilter.failed:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.failed });
