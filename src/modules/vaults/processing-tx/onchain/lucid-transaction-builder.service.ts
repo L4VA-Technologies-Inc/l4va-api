@@ -94,13 +94,7 @@ export class LucidTransactionBuilderService {
       const addressHex = Buffer.from(Address.from_bech32(params.changeAddress).to_bytes()).toString('hex');
 
       // For datum: { policy_id, asset_name, owner }
-      const contributionDatum = Data.to(
-        new Constr(0, [
-          POLICY_ID, // policy_id as hex string
-          VAULT_ID, // asset_name as hex string
-          addressHex,
-        ])
-      );
+      const contributionDatum = Data.to(new Constr(0, [POLICY_ID, VAULT_ID, addressHex]));
 
       const contributionScript = blueprint.validators.find(v => v.title === 'contribute.contribute');
       if (!contributionScript) {
@@ -118,11 +112,11 @@ export class LucidTransactionBuilderService {
       const mintingRedeemer = Data.to(
         new Constr(0, [
           0n, // output_index
-          fromText('Lovelace'),
+          new Constr(0, []), // Lovelace as constructor 0, NOT fromText!
         ])
       );
 
-      const tx = await this.lucid
+      const unsignedTx = await this.lucid
         .newTx()
         // Mint receipt token
         .mintAssets(
@@ -131,6 +125,7 @@ export class LucidTransactionBuilderService {
           },
           mintingRedeemer
         )
+        .attach.MintingPolicy(mintingPolicy)
         .pay.ToContract(
           vault.contract_address,
           {
@@ -142,7 +137,6 @@ export class LucidTransactionBuilderService {
             [POLICY_ID + fromText('receipt')]: 1n,
           }
         )
-        .attach.MintingPolicy(mintingPolicy)
         .readFrom([refScriptUTxO])
         .addSigner(params.changeAddress)
         .addSigner(this.adminAddress)
@@ -150,11 +144,14 @@ export class LucidTransactionBuilderService {
         .validTo(Date.now() + 3600000)
         .complete();
 
-      await tx.sign.withWallet().partialSign.withPrivateKey(this.adminSKey);
-      // this.logger.debug(adminSignedTx);
+      this.logger.debug('Unsigned transaction CBOR generated', unsignedTx.toCBOR());
+
+      const adminPartialSignature = await unsignedTx.partialSign.withPrivateKey(this.adminSKey);
+      const adminSignedTx = unsignedTx.assemble([adminPartialSignature]);
+      const adminSignedCBOR = adminSignedTx.toCBOR();
 
       return {
-        presignedTx: tx.toHash(), // Should return hex
+        presignedTx: adminSignedCBOR,
       };
     } catch (error) {
       this.logger.error(`Failed to build ADA contribution transaction: ${error.message}`, error);
