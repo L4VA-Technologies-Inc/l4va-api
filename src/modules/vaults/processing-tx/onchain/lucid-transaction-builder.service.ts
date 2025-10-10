@@ -5,7 +5,6 @@ import {
   Blockfrost,
   Constr,
   Data,
-  fromHex,
   fromText,
   Lucid,
   LucidEvolution,
@@ -28,6 +27,7 @@ export class LucidTransactionBuilderService {
   private readonly logger = new Logger(LucidTransactionBuilderService.name);
   private readonly adminSKey: string;
   private readonly adminAddress: string;
+  private readonly scPolicyId: string;
   private lucid: LucidEvolution;
 
   constructor(
@@ -38,6 +38,7 @@ export class LucidTransactionBuilderService {
   ) {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
+    this.scPolicyId = this.configService.get<string>('SC_POLICY_ID');
 
     this.initializeLucid();
   }
@@ -106,10 +107,7 @@ export class LucidTransactionBuilderService {
         throw new Error('Conribution script not found in blueprint');
       }
 
-      const scriptWithParams = applyParamsToScript(contributionScript.compiledCode, [
-        '2de3551bbd703dd03d57bb4d16027a73b0501977dc830885523bb1e6',
-        VAULT_ID,
-      ]);
+      const scriptWithParams = applyParamsToScript(contributionScript.compiledCode, [this.scPolicyId, VAULT_ID]);
 
       const mintingPolicy: MintingPolicy = {
         type: 'PlutusV3',
