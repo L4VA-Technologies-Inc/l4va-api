@@ -467,6 +467,9 @@ export class VaultManagingService {
         ? assetsWhitelist.map(policy => policy.policy_id)
         : [];
     const contract_type = vault.privacy === VaultPrivacy.private ? 0 : vault.privacy === VaultPrivacy.public ? 1 : 2;
+    this.scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
+      .to_address()
+      .to_bech32();
 
     const vaultUtxo = await getVaultUtxo(this.scPolicyId, vault.asset_vault_name, this.blockfrost);
     const input = {
@@ -488,7 +491,7 @@ export class VaultManagingService {
       ],
       outputs: [
         {
-          address: vault.contract_address,
+          address: this.scAddress,
           assets: [
             {
               assetName: vault.asset_vault_name,
