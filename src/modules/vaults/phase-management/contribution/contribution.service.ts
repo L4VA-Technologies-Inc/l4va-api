@@ -219,108 +219,156 @@ export class ContributionService {
     vaultId: string;
     txId: string;
   }> {
-    const vault = await this.vaultRepository.findOne({
-      where: { id: vaultId },
-      relations: ['contributor_whitelist', 'owner', 'assets_whitelist'],
-    });
+    const assetsByPolicy = contributeReq.assets.reduce(
+      (acc, asset) => {
+        if (!acc[asset.policyId]) {
+          acc[asset.policyId] = [];
+        }
+        acc[asset.policyId].push(asset);
+        return acc;
+      },
+      {} as Record<string, any[]>
+    );
+
+    const requestedPolicyIds = Object.keys(assetsByPolicy);
+
+    const vaultQuery = this.vaultRepository
+      .createQueryBuilder('vault')
+      .leftJoinAndSelect('vault.owner', 'owner')
+      .leftJoinAndSelect('vault.assets_whitelist', 'assets_whitelist')
+      .where('vault.id = :vaultId', { vaultId })
+      .select([
+        'vault.id',
+        'vault.vault_status',
+        'vault.max_contribute_assets',
+        'owner.id',
+        'assets_whitelist.id',
+        'assets_whitelist.policy_id',
+        'assets_whitelist.asset_count_cap_max',
+      ]);
+
+    const vaultData = await vaultQuery.getOne();
+
+    if (!vaultData) {
+      throw new NotFoundException('Vault not found');
+    }
+
+    let currentAssetCount = 0;
+    let policyCountMap = new Map<string, number>();
+
+    if (requestedPolicyIds.length > 0) {
+      const assetCountResults = await this.assetRepository
+        .createQueryBuilder('asset')
+        .select('COUNT(DISTINCT asset.id)', 'totalCount')
+        .addSelect('asset.policy_id', 'policyId')
+        .addSelect('COALESCE(SUM(asset.quantity), 0)', 'totalQuantity')
+        .where('asset.vault_id = :vaultId', { vaultId })
+        .andWhere('asset.status IN (:...statuses)', {
+          statuses: [AssetStatus.LOCKED, AssetStatus.PENDING],
+        })
+        .andWhere('asset.origin_type = :originType', {
+          originType: AssetOriginType.CONTRIBUTED,
+        })
+        .groupBy('asset.policy_id')
+        .getRawMany();
+
+      currentAssetCount = assetCountResults.reduce((total, row) => {
+        return total + Number(row.totalQuantity || 0);
+      }, 0);
+
+      const filteredPolicyResults = assetCountResults.filter(row => requestedPolicyIds.includes(row.policyId));
+
+      policyCountMap = new Map(filteredPolicyResults.map(row => [row.policyId, Number(row.totalQuantity || 0)]));
+    }
+
     const user = await this.usersRepository.findOne({
       where: { id: userId },
+      select: ['id', 'address'],
     });
 
     if (!user) {
       throw new NotFoundException('User not found');
     }
 
-    if (!vault) {
-      throw new NotFoundException('Vault not found');
-    }
-
-    if (vault.vault_status !== VaultStatus.contribution) {
+    if (vaultData.vault_status !== VaultStatus.contribution) {
       throw new BadRequestException('Vault is not in contribution phase');
     }
 
-    // Check if adding these assets would exceed the vault's maximum capacity
-    const currentAssetCountResult = await this.assetRepository
-      .createQueryBuilder('asset')
-      .select('SUM(asset.quantity)', 'totalQuantity')
-      .where('asset.vault_id = :vaultId', { vaultId })
-      .andWhere('asset.status IN (:...statuses)', { statuses: [AssetStatus.LOCKED, AssetStatus.PENDING] })
-      .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
-      .getRawOne();
-
-    const currentAssetCount = Number(currentAssetCountResult?.totalQuantity || 0);
-
-    if (currentAssetCount + contributeReq.assets.length > vault.max_contribute_assets) {
+    if (currentAssetCount + contributeReq.assets.length > vaultData.max_contribute_assets) {
       throw new BadRequestException(
-        `Adding ${contributeReq.assets.length} assets would exceed the vault's maximum capacity of ${vault.max_contribute_assets}. ` +
+        `Adding ${contributeReq.assets.length} assets would exceed the vault's maximum capacity of ${vaultData.max_contribute_assets}. ` +
           `The vault currently has ${currentAssetCount} assets.`
       );
     }
 
     if (contributeReq.assets.length > 0) {
-      // Group assets by policy ID to check against whitelist caps
-      const assetsByPolicy = contributeReq.assets.reduce((acc, asset) => {
-        if (!acc[asset.policyId]) {
-          acc[asset.policyId] = [];
-        }
-        acc[asset.policyId].push(asset);
-        return acc;
-      }, {});
+      const invalidAssets: string[] = [];
+      const policyExceedsLimit: Array<{
+        policyId: string;
+        existing: number;
+        adding: number;
+        max: number;
+      }> = [];
 
-      // Check if any policy is not in the whitelist
-      const invalidAssets = [];
-
-      for (const policyId of Object.keys(assetsByPolicy)) {
-        const whitelistedAsset = vault.assets_whitelist?.find(wa => wa.policy_id === policyId);
+      for (const policyId of requestedPolicyIds) {
+        const whitelistedAsset = vaultData.assets_whitelist?.find(wa => wa.policy_id === policyId);
 
         if (!whitelistedAsset) {
           invalidAssets.push(policyId);
           continue;
         }
 
-        const existingPolicyCountResult = await this.assetRepository
-          .createQueryBuilder('asset')
-          .select('SUM(asset.quantity)', 'totalQuantity')
-          .where('asset.vault_id = :vaultId', { vaultId })
-          .andWhere('asset.policy_id = :policyId', { policyId })
-          .andWhere('asset.status IN (:...statuses)', { statuses: [AssetStatus.LOCKED, AssetStatus.PENDING] })
-          .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
-          .getRawOne();
-
-        const existingPolicyCount = Number(existingPolicyCountResult?.totalQuantity || 0);
+        const existingPolicyCount = policyCountMap.get(policyId) || 0;
         const policyAssetsQuantity = assetsByPolicy[policyId].reduce(
           (total, asset) => total + (Number(asset.quantity) || 1),
           0
         );
 
-        // Check if adding these assets would exceed the maximum for this policy
         if (
           whitelistedAsset.asset_count_cap_max !== null &&
           whitelistedAsset.asset_count_cap_max > 0 &&
           existingPolicyCount + policyAssetsQuantity > whitelistedAsset.asset_count_cap_max
         ) {
-          throw new BadRequestException(
-            `The vault already has ${existingPolicyCount} quantity for policy ${policyId}. ` +
-              `Adding ${policyAssetsQuantity} more would exceed the maximum of ${whitelistedAsset.asset_count_cap_max}.`
-          );
+          policyExceedsLimit.push({
+            policyId,
+            existing: existingPolicyCount,
+            adding: policyAssetsQuantity,
+            max: whitelistedAsset.asset_count_cap_max,
+          });
         }
       }
 
       if (invalidAssets.length > 0) {
         throw new BadRequestException(`Some assets are not in the vault's whitelist: ${invalidAssets.join(', ')}`);
       }
+
+      if (policyExceedsLimit.length > 0) {
+        const errorMessages = policyExceedsLimit.map(
+          policy =>
+            `Policy ${policy.policyId}: has ${policy.existing}, adding ${policy.adding} would exceed max ${policy.max}`
+        );
+        throw new BadRequestException(`Policy limits exceeded: ${errorMessages.join('; ')}`);
+      }
     }
 
-    // Allow vault owner to bypass whitelist check
-    if (vault.owner.id !== userId) {
-      // Check whitelist only for non-owners
-      if (vault.contributor_whitelist?.length > 0) {
-        const isWhitelisted = vault.contributor_whitelist.some(entry => entry.wallet_address === user.address);
+    // Check contributor whitelist
+    if (vaultData.owner.id !== userId) {
+      const vaultWithWhitelist = await this.vaultRepository
+        .createQueryBuilder('vault')
+        .leftJoinAndSelect('vault.contributor_whitelist', 'whitelist')
+        .where('vault.id = :vaultId', { vaultId })
+        .getOne();
+
+      if (vaultWithWhitelist?.contributor_whitelist?.length > 0) {
+        const isWhitelisted = vaultWithWhitelist.contributor_whitelist.some(
+          entry => entry.wallet_address === user.address
+        );
         if (!isWhitelisted) {
           throw new BadRequestException('User is not in contributor whitelist');
         }
       }
     }
+
     const transaction = await this.transactionsService.createTransaction({
       vault_id: vaultId,
       type: TransactionType.contribute,
