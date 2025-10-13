@@ -238,6 +238,7 @@ export class TransactionsService {
         pendingAssets.map(async assetItem => {
           const asset = this.assetRepository.create({
             transaction,
+            vault: { id: transaction.vault_id },
             type: AssetType.ADA, // Using ADA type for acquire
             policy_id: assetItem.policyId || '',
             asset_id: assetItem.assetName,
@@ -256,6 +257,7 @@ export class TransactionsService {
         pendingAssets.map(async assetItem => {
           const asset = this.assetRepository.create({
             transaction,
+            vault: { id: transaction.vault_id },
             type: assetItem.type,
             policy_id: assetItem.policyId || '',
             asset_id: assetItem.assetName,
