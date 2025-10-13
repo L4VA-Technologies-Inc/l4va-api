@@ -60,16 +60,6 @@ export class BlockchainService {
       const buildResponse = await contractDeployed.json();
 
       if (!buildResponse.complete) {
-        // Check for vault script evaluation errors first
-        if (
-          buildResponse.message?.includes('Failed to evaluate tx') &&
-          (buildResponse.message?.includes('Some scripts of the transactions terminated with error') ||
-            buildResponse.message?.includes('Some of the scripts failed to evaluate to a positive outcome'))
-        ) {
-          this.logger.warn(`Vault validation error during transaction building`);
-          throw new VaultValidationException();
-        }
-
         if (
           buildResponse.message?.includes('UTxO Balance Insufficient') ||
           buildResponse.message?.includes('Balance Insufficient')
@@ -94,6 +84,15 @@ export class BlockchainService {
             this.logger.warn(`Missing UTxO reference (unspecified): ${buildResponse.message}`);
             throw new MissingUtxoException();
           }
+        }
+
+        if (
+          buildResponse.message?.includes('Failed to evaluate tx') &&
+          (buildResponse.message?.includes('Some scripts of the transactions terminated with error') ||
+            buildResponse.message?.includes('Some of the scripts failed to evaluate to a positive outcome'))
+        ) {
+          this.logger.warn(`Vault validation error during transaction building`);
+          throw new VaultValidationException();
         }
 
         throw new Error('Failed to build complete transaction' + JSON.stringify(buildResponse));
