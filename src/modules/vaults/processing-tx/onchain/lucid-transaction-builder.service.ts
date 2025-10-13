@@ -1,15 +1,6 @@
 // lucid-transaction-builder.service.ts
 import { Address } from '@emurgo/cardano-serialization-lib-nodejs';
-import {
-  applyParamsToScript,
-  Blockfrost,
-  Constr,
-  Data,
-  fromText,
-  Lucid,
-  LucidEvolution,
-  MintingPolicy,
-} from '@lucid-evolution/lucid';
+import { Blockfrost, Constr, Data, fromText, Lucid, LucidEvolution } from '@lucid-evolution/lucid';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -87,6 +78,8 @@ export class LucidTransactionBuilderService {
       const allUTxOs = await this.lucid.utxosByOutRef([{ txHash: vault.publication_hash, outputIndex: 1 }]); // Vault on 0 index
       const refScriptUTxO = allUTxOs.filter(utxo => utxo.scriptRef)[0];
 
+      this.logger.debug(refScriptUTxO);
+
       if (!refScriptUTxO) {
         throw new Error('No reference script UTxO found for the vault');
       }
@@ -101,31 +94,22 @@ export class LucidTransactionBuilderService {
         throw new Error('Conribution script not found in blueprint');
       }
 
-      const scriptWithParams = applyParamsToScript(contributionScript.compiledCode, [this.scPolicyId, VAULT_ID]);
-
-      const mintingPolicy: MintingPolicy = {
-        type: 'PlutusV3',
-        script: scriptWithParams,
-      };
-
       // For redeemer: { output_index: 0, contribution: "Lovelace" }
       const mintingRedeemer = Data.to(
         new Constr(0, [
           0n, // output_index
-          new Constr(0, []), // Lovelace as constructor 0, NOT fromText!
+          new Constr(0, []),
         ])
       );
 
       const unsignedTx = await this.lucid
         .newTx()
-        // Mint receipt token
         .mintAssets(
           {
             [POLICY_ID + fromText('receipt')]: 1n,
           },
           mintingRedeemer
         )
-        .attach.MintingPolicy(mintingPolicy)
         .pay.ToContract(
           vault.contract_address,
           {
@@ -145,7 +129,6 @@ export class LucidTransactionBuilderService {
         .complete();
 
       const cboredTx = unsignedTx.toCBOR();
-      this.logger.debug('Unsigned transaction CBOR generated');
 
       this.lucid.selectWallet.fromPrivateKey(this.adminSKey);
       const adminWitnessSet = await this.lucid.fromTx(cboredTx).partialSign.withWallet(); // Try to use withPrivateKey() instead of withWallet()
