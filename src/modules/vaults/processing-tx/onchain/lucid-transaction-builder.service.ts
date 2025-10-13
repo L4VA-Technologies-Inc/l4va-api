@@ -144,18 +144,22 @@ export class LucidTransactionBuilderService {
         .validTo(Date.now() + 3600000)
         .complete();
 
-      this.logger.debug('Unsigned transaction CBOR generated', unsignedTx.toCBOR());
+      const cboredTx = unsignedTx.toCBOR();
+      this.logger.debug('Unsigned transaction CBOR generated');
 
-      const adminPartialSignature = await unsignedTx.partialSign.withPrivateKey(this.adminSKey);
-      const adminSignedTx = unsignedTx.assemble([adminPartialSignature]);
-      const adminSignedCBOR = adminSignedTx.toCBOR();
+      this.lucid.selectWallet.fromPrivateKey(this.adminSKey);
+      const adminWitnessSet = await this.lucid.fromTx(cboredTx).partialSign.withWallet(); // Try to use withPrivateKey() instead of withWallet()
+
+      const txWithAdminSignature = await this.lucid.fromTx(cboredTx).assemble([adminWitnessSet]).complete(); // Attach admin witness to the transaction
 
       return {
-        presignedTx: adminSignedCBOR,
+        presignedTx: txWithAdminSignature.toCBOR(),
       };
     } catch (error) {
       this.logger.error(`Failed to build ADA contribution transaction: ${error.message}`, error);
       throw error;
+    } finally {
+      this.lucid.selectWallet.fromPrivateKey(this.adminSKey);
     }
   }
 }
