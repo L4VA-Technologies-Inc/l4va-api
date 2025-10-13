@@ -33,7 +33,6 @@ import { VaultStatus } from '@/types/vault.types';
 import { VoteType } from '@/types/vote.types';
 
 const TWO_HOURS = 2 * 60 * 60 * 1000;
-const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
 
 /*
         .-""""-.
@@ -164,9 +163,11 @@ export class GovernanceService {
         startDate: LessThanOrEqual(new Date()),
       },
     });
-    await Promise.all(proposals.map(async (proposal) => {
-      await this.proposalRepository.update(proposal.id, { status: ProposalStatus.ACTIVE });
-    }));
+    await Promise.all(
+      proposals.map(async proposal => {
+        await this.proposalRepository.update(proposal.id, { status: ProposalStatus.ACTIVE });
+      })
+    );
   }
 
   /**

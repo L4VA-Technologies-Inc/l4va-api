@@ -4,6 +4,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan } from 'typeorm';
 
 import { Proposal } from '@/database/proposal.entity';
+import { Vote } from '@/database/vote.entity';
+import { Vault } from '@/database/vault.entity';
+import { Snapshot } from '@/database/snapshot.entity';
 import { ProposalStatus } from '@/types/proposal.types';
 import { VoteType } from '@/types/vote.types';
 
@@ -13,7 +16,13 @@ export class GovernanceExecutionService {
 
   constructor(
     @InjectRepository(Proposal)
-    private readonly proposalRepository: Repository<Proposal>
+    private readonly proposalRepository: Repository<Proposal>,
+    @InjectRepository(Vote)
+    private readonly voteRepository: Repository<Vote>,
+    @InjectRepository(Vault)
+    private readonly vaultRepository: Repository<Vault>,
+    @InjectRepository(Snapshot)
+    private readonly snapshotRepository: Repository<Snapshot>
   ) {}
 
   @Cron(CronExpression.EVERY_10_MINUTES)
@@ -39,12 +48,22 @@ export class GovernanceExecutionService {
       });
 
       for (const proposal of expiredProposals) {
-        const executionThreshold = proposal.vault.execution_threshold; // 50%
+        const votes = await this.voteRepository.find({
+          where: { proposalId: proposal.id },
+          select: ['voteWeight', 'vote'],
+        });
+
+        const vault = await this.vaultRepository.findOne({
+          where: { id: proposal.vaultId },
+          select: ['execution_threshold'],
+        });
+
+        const executionThreshold = vault?.execution_threshold || 50;
 
         let yesVotes = BigInt(0);
         let noVotes = BigInt(0);
-
-        proposal.votes.forEach(vote => {
+        
+        votes.forEach(vote => {
           const weight = BigInt(vote.voteWeight);
           if (vote.vote === VoteType.YES) yesVotes += weight;
           if (vote.vote === VoteType.NO) noVotes += weight;
