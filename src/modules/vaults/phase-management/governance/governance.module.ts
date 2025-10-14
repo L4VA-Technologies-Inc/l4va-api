@@ -1,9 +1,9 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { GovernanceExecutionService } from './governance-execution.service';
 import { GovernanceController } from './governance.controller';
 import { GovernanceService } from './governance.service';
-import { GovernanceExecutionService } from './governance-execution.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
