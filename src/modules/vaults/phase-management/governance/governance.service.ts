@@ -283,19 +283,17 @@ export class GovernanceService {
 
     const startDate = new Date(createProposalReq.startDate ?? createProposalReq.proposalStart);
 
-    const endDate = new Date(startDate.getTime() + createProposalReq.duration);
-
     // Create the proposal with the appropriate fields based on type
     const proposal = this.proposalRepository.create({
       vaultId,
       title: createProposalReq.title,
       description: createProposalReq.description,
-      creatorId: userId,
       proposalType: createProposalReq.type,
-      startDate: startDate.toISOString(),
-      snapshotId: latestSnapshot.id,
       status: startDate <= new Date() ? ProposalStatus.ACTIVE : ProposalStatus.UPCOMING,
-      endDate,
+      startDate,
+      endDate: new Date(startDate.getTime() + createProposalReq.duration),
+      creatorId: userId,
+      snapshotId: latestSnapshot.id,
     });
 
     // Set type-specific fields based on proposal type
