@@ -340,7 +340,7 @@ export class GovernanceExecutionService {
   }
 
   // Fallback cron job to catch any missed proposals (runs less frequently)
-  @Cron(CronExpression.EVERY_2_HOURS)
+  @Cron(CronExpression.EVERY_6_HOURS)
   async fallbackProcessProposals(): Promise<void> {
     try {
       // Handle overdue activations
@@ -390,7 +390,7 @@ export class GovernanceExecutionService {
     }
   }
 
-  @Cron(CronExpression.EVERY_5_MINUTES)
+  @Cron(CronExpression.EVERY_30_MINUTES)
   async monitorJobHealth(): Promise<void> {
     try {
       const upcomingProposals = await this.proposalRepository.count({
