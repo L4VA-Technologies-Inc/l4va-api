@@ -12,7 +12,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
-import { In, IsNull, LessThanOrEqual, Not, Repository } from 'typeorm';
+import { In, IsNull, Not, Repository } from 'typeorm';
 
 import { CreateProposalReq } from './dto/create-proposal.req';
 import { AssetBuySellDto } from './dto/get-assets.dto';
@@ -153,21 +153,6 @@ export class GovernanceService {
     } catch (error) {
       this.logger.error(`Failed to create daily snapshots: ${error.message}`, error.stack);
     }
-  }
-
-  @Cron('*/10 * * * *')
-  async updateProposalStatus(): Promise<void> {
-    const proposals = await this.proposalRepository.find({
-      where: {
-        status: ProposalStatus.UPCOMING,
-        startDate: LessThanOrEqual(new Date()),
-      },
-    });
-    await Promise.all(
-      proposals.map(async proposal => {
-        await this.proposalRepository.update(proposal.id, { status: ProposalStatus.ACTIVE });
-      })
-    );
   }
 
   /**
@@ -358,6 +343,13 @@ export class GovernanceService {
     }
 
     await this.proposalRepository.save(proposal);
+
+    this.eventEmitter.emit('proposal.created', {
+      proposalId: proposal.id,
+      startDate: proposal.startDate,
+      endDate: proposal.endDate,
+      status: proposal.status,
+    });
 
     return {
       success: true,
