@@ -168,8 +168,6 @@ export class VaultManagingService {
 
     const applyParamsResult = await applyParamsResponse.json();
 
-    this.logger.error(applyParamsResult);
-
     if (!applyParamsResult.preloadedScript) {
       throw new Error('Failed to apply parameters to blueprint');
     }
@@ -578,7 +576,9 @@ export class VaultManagingService {
         transaction: signedTx.transaction,
         signatures,
       });
+
       const { txHash } = result;
+      this.logger.debug('Transaction of vault hash:', txHash);
 
       if (txHash) {
         const scriptInput = {
@@ -594,6 +594,8 @@ export class VaultManagingService {
             },
           ],
         };
+
+        this.logger.debug(scriptInput);
 
         const buildResponse = await this.blockchainService.buildTransaction(scriptInput);
         const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
@@ -622,6 +624,8 @@ export class VaultManagingService {
 
       const { txHash: scriptTxHash } = scriptSubmitted;
 
+      this.logger.debug('Script transaction hash:', scriptTxHash);
+
       // Step 4: Update blueprint with the script transaction reference
       const blueprintUpdatePayload = {
         blueprint: {
@@ -644,7 +648,7 @@ export class VaultManagingService {
         },
       };
 
-      await fetch(`${this.anvilApi}/blueprints`, {
+      const blueprintUpdate = await fetch(`${this.anvilApi}/blueprints`, {
         method: 'POST',
         headers: {
           'x-api-key': this.anvilApiKey,
@@ -652,6 +656,9 @@ export class VaultManagingService {
         },
         body: JSON.stringify(blueprintUpdatePayload),
       });
+
+      const blueprintUpdateResult = await blueprintUpdate.json();
+      console.log('Blueprint update result:', JSON.stringify(blueprintUpdateResult, null, 2));
 
       this.logger.log('✅ Complete workflow finished: vault created, script uploaded, and blueprint updated!');
     } catch (error) {

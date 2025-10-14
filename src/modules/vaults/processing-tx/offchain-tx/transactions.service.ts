@@ -29,6 +29,7 @@ export class TransactionsService {
     assets: Asset[];
     amount?: number;
     userId?: string;
+    metadata?: any;
   }): Promise<Transaction> {
     return this.transactionRepository.save({
       vault_id: data.vault_id,
@@ -37,6 +38,7 @@ export class TransactionsService {
       assets: data.assets,
       amount: data.amount,
       user_id: data.userId,
+      metadata: data.metadata,
     });
   }
 
