@@ -23,7 +23,7 @@ import { TransactionsModule } from './modules/vaults/processing-tx/offchain-tx/t
 import { BlockchainModule } from './modules/vaults/processing-tx/onchain/blockchain.module';
 import { VaultsModule } from './modules/vaults/vaults.module';
 import { VyfiModule } from './modules/vyfi/vyfi.module';
-
+import { ChatModule } from './modules/chat/chat.module';
 import { NotificationModule } from '@/modules/notification/notification.module';
 
 @Module({
@@ -66,6 +66,7 @@ import { NotificationModule } from '@/modules/notification/notification.module';
     VyfiModule,
     GovernanceModule,
     NotificationModule,
+    ChatModule,
     EventEmitterModule.forRoot(),
   ],
   controllers: [AppController],
