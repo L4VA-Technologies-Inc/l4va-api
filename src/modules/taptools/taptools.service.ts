@@ -1,6 +1,6 @@
 import { Injectable, HttpException, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import axios from 'axios';
+import axios, { AxiosError, AxiosInstance } from 'axios';
 import NodeCache from 'node-cache';
 import { Repository } from 'typeorm';
 
@@ -16,11 +16,14 @@ import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 @Injectable()
 export class TaptoolsService {
   private readonly logger = new Logger(TaptoolsService.name);
-
   private readonly baseUrl = 'https://openapi.taptools.io/api/v1';
   private readonly blockfrostTestnetUrl = 'https://cardano-preprod.blockfrost.io/api/v0/';
-  private cache = new NodeCache({ stdTTL: 540 }); // cache for 540 seconds to reduce API calls for ADA price (9 minutes)
   private readonly taptoolsApiKey: string;
+  private cache = new NodeCache({ stdTTL: 540 }); // cache for 540 seconds to reduce API calls for ADA price (9 minutes)
+
+  private readonly blockfrostClient: AxiosInstance;
+
+  private assetDetailsCache = new NodeCache({ stdTTL: 3600, checkperiod: 300 });
 
   constructor(
     @InjectRepository(Vault)
@@ -28,6 +31,78 @@ export class TaptoolsService {
     private readonly assetsService: AssetsService
   ) {
     this.taptoolsApiKey = process.env.TAPTOOLS_API_KEY || '';
+
+    // Configure Blockfrost client with proper configuration
+    this.blockfrostClient = axios.create({
+      baseURL: this.blockfrostTestnetUrl,
+      timeout: 10000,
+      headers: {
+        project_id: process.env.BLOCKFROST_TESTNET_API_KEY,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    // Add request interceptor for rate limiting
+    let lastRequestTime = 0;
+    const minRequestInterval = 150; // 150ms between requests (~6-7 req/sec)
+
+    this.blockfrostClient.interceptors.request.use(async config => {
+      const now = Date.now();
+      const timeSinceLastRequest = now - lastRequestTime;
+
+      if (timeSinceLastRequest < minRequestInterval) {
+        const delay = minRequestInterval - timeSinceLastRequest;
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+
+      lastRequestTime = Date.now();
+      return config;
+    });
+
+    // Add response interceptor for error handling
+    this.blockfrostClient.interceptors.response.use(
+      response => response,
+      async (error: AxiosError) => {
+        const config = error.config;
+
+        // Retry logic for rate limits and server errors
+        if (config && this.shouldRetry(error)) {
+          const retryCount = (config as any).__retryCount || 0;
+
+          if (retryCount < 3) {
+            (config as any).__retryCount = retryCount + 1;
+
+            // Exponential backoff
+            const delay = Math.pow(2, retryCount) * 1000;
+            await new Promise(resolve => setTimeout(resolve, delay));
+
+            return this.blockfrostClient.request(config);
+          }
+        }
+
+        // Handle 403 errors gracefully
+        if (error.response?.status === 403) {
+          this.logger.warn(`Blockfrost API access forbidden: ${config?.url}`);
+          return Promise.resolve({
+            data: null,
+            error: 'API_FORBIDDEN',
+            status: 403,
+          } as any);
+        }
+
+        return Promise.reject(error);
+      }
+    );
+  }
+
+  private shouldRetry(error: AxiosError): boolean {
+    return !!(
+      error.response?.status === 429 || // Rate limited
+      error.response?.status === 503 || // Service unavailable
+      (error.response?.status && error.response.status >= 500) || // Server errors
+      error.code === 'ECONNRESET' ||
+      error.code === 'ETIMEDOUT'
+    );
   }
 
   private isTestnetAddress(address: string): boolean {
@@ -157,7 +232,7 @@ export class TaptoolsService {
     };
   }
 
-  private async getAssetDetails(assetId: string): Promise<any> {
+  async getAssetDetails(assetId: string) {
     try {
       const response = await axios.get(`${this.blockfrostTestnetUrl}/assets/${assetId}`, {
         headers: {
@@ -173,148 +248,65 @@ export class TaptoolsService {
 
   private async getTestnetWalletSummary(walletAddress: string, adaPriceUsd: number): Promise<WalletSummaryDto> {
     try {
-      await axios.get(`${this.blockfrostTestnetUrl}addresses/${walletAddress}`, {
-        headers: {
-          project_id: process.env.BLOCKFROST_TESTNET_API_KEY,
-        },
-      });
+      // Validate address first using the configured client
+      const addressCheck = await this.blockfrostClient.get(`/addresses/${walletAddress}`);
+      if ((addressCheck as any).error) {
+        return this.getEmptyWalletSummary();
+      }
     } catch (err) {
-      this.logger.log('Error ', err);
-      return {
-        wallet: '',
-        assets: [],
-        totalValueAda: 0,
-        totalValueUsd: 0,
-        lastUpdated: '',
-        summary: {
-          totalAssets: 0,
-          nfts: 0,
-          tokens: 0,
-          ada: 0,
-        },
-      };
+      this.logger.log('Error validating address:', err.message);
+      return this.getEmptyWalletSummary();
     }
+
     try {
       // Get all assets in the wallet
-      const assetsResponse = await axios.get(`${this.blockfrostTestnetUrl}addresses/${walletAddress}/total`, {
-        headers: {
-          project_id: process.env.BLOCKFROST_TESTNET_API_KEY,
-        },
-      });
+      const assetsResponse = await this.blockfrostClient.get(`/addresses/${walletAddress}/total`);
+
+      if ((assetsResponse as any).error) {
+        throw new Error('Failed to fetch wallet assets');
+      }
 
       const processedAssets: AssetValueDto[] = [];
 
       // Calculate actual balances from received_sum and sent_sum
-      const balances = new Map<string, number>();
-
-      // Process received amounts
-      assetsResponse.data.received_sum.forEach(asset => {
-        balances.set(asset.unit, Number(asset.quantity));
-      });
-
-      // Subtract sent amounts
-      assetsResponse.data.sent_sum.forEach(asset => {
-        const currentBalance = balances.get(asset.unit) || 0;
-        balances.set(asset.unit, currentBalance - Number(asset.quantity));
-      });
+      const balances = this.calculateBalances(assetsResponse.data);
 
       // Process ADA amount
       const totalAda = (balances.get('lovelace') || 0) / 1000000; // Convert lovelace to ADA
       const totalUsd = totalAda * adaPriceUsd;
 
-      // Get detailed asset list for non-zero balances
+      // Get non-ADA assets with positive balances
       const nonAdaAssets = Array.from(balances.entries())
         .filter(([unit, balance]) => unit !== 'lovelace' && balance > 0)
         .map(([unit, balance]) => ({ unit, quantity: balance }));
 
-      // Get asset details in batches to avoid rate limits
-      const batchSize = 10;
-      for (let i = 0; i < nonAdaAssets.length; i += batchSize) {
-        const batch = nonAdaAssets.slice(i, i + batchSize);
-        const batchPromises = batch.map(async asset => {
-          try {
-            // Get asset details
-            const assetDetails = await axios.get(`${this.blockfrostTestnetUrl}assets/${asset.unit}`, {
-              headers: {
-                project_id: process.env.BLOCKFROST_TESTNET_API_KEY,
-              },
-            });
+      this.logger.log(`Processing ${nonAdaAssets.length} assets for wallet ${walletAddress}`);
 
-            return {
-              asset,
-              details: assetDetails.data,
-            };
-          } catch (error) {
-            console.error(`Error fetching details for asset ${asset.unit}:`, error.message);
-            return null;
-          }
-        });
+      // **SOLUTION: Limit processing to prevent API spam**
+      const maxAssetsToProcess = 100; // Reduced significantly
+      const assetsToProcess = nonAdaAssets.slice(0, maxAssetsToProcess);
 
-        const batchResults = await Promise.all(batchPromises);
+      if (nonAdaAssets.length > maxAssetsToProcess) {
+        this.logger.warn(`Wallet has ${nonAdaAssets.length} assets, processing only first ${maxAssetsToProcess}`);
+      }
 
-        // Process batch results
-        for (const result of batchResults) {
-          if (!result) continue;
-          const { asset, details } = result;
-          const isNft = Number(asset.quantity) === 1;
-          const metadata = details.onchain_metadata || details.metadata || {};
+      // Process assets in small batches with delays
+      const results = await this.processAssetsInBatches(assetsToProcess);
 
-          let assetName = asset.unit;
-          try {
-            if (details.asset_name) {
-              assetName = Buffer.from(details.asset_name, 'hex').toString('utf8');
-            }
-          } catch (error) {
-            console.warn(`Could not decode asset name for ${asset.unit}`);
-          }
+      // Process successful results
+      for (const result of results) {
+        if (!result || result.error) continue;
 
-          processedAssets.push({
-            tokenId: asset.unit,
-            name: assetName,
-            displayName: metadata.name || undefined,
-            ticker: details.ticker || undefined,
-            quantity: Number(asset.quantity),
-            isNft,
-            isFungibleToken: !isNft,
-            priceAda: 0,
-            priceUsd: 0,
-            valueAda: 0,
-            valueUsd: 0,
-            metadata: {
-              policyId: details.policy_id,
-              fingerprint: details.fingerprint,
-              decimals: details.decimals || 0,
-              description: metadata.description,
-              image: metadata.image,
-              mediaType: metadata.mediaType,
-              files: details.onchain_metadata?.files || [],
-              attributes: metadata.attributes || {},
-              assetName: details.asset_name,
-              mintTx: details.initial_mint_tx_hash,
-              mintQuantity: details.quantity,
-              onchainMetadata: details.onchain_metadata || {},
-            },
-          });
+        const processedAsset = this.createAssetDto(result);
+        if (processedAsset) {
+          processedAssets.push(processedAsset);
         }
       }
 
-      const summary: WalletSummaryDto = {
-        wallet: walletAddress,
-        assets: processedAssets,
-        totalValueAda: +totalAda.toFixed(4),
-        totalValueUsd: +totalUsd.toFixed(4),
-        lastUpdated: new Date().toISOString(),
-        summary: {
-          totalAssets: processedAssets.length,
-          nfts: processedAssets.filter(a => a.isNft).length,
-          tokens: processedAssets.filter(a => a.isFungibleToken).length,
-          ada: totalAda,
-        },
-      };
-
-      return summary;
+      return this.createWalletSummary(walletAddress, processedAssets, totalAda, totalUsd);
     } catch (err) {
-      console.error('Error fetching testnet wallet summary:', err.message);
+      this.logger.error('Error fetching testnet wallet summary:', err.message);
+
       if (axios.isAxiosError(err)) {
         throw new HttpException(
           err.response?.data?.message || 'Failed to fetch testnet wallet assets',
@@ -322,6 +314,184 @@ export class TaptoolsService {
         );
       }
       throw new HttpException('Failed to fetch or process testnet wallet assets', 500);
+    }
+  }
+
+  private calculateBalances(data: any): Map<string, number> {
+    const balances = new Map<string, number>();
+
+    // Process received amounts
+    data.received_sum?.forEach(asset => {
+      balances.set(asset.unit, Number(asset.quantity));
+    });
+
+    // Subtract sent amounts
+    data.sent_sum?.forEach(asset => {
+      const currentBalance = balances.get(asset.unit) || 0;
+      balances.set(asset.unit, currentBalance - Number(asset.quantity));
+    });
+
+    return balances;
+  }
+
+  private async processAssetsInBatches(assets: any[]): Promise<any[]> {
+    const results: any[] = [];
+    const batchSize = 5; // Very small batches
+    const delayBetweenBatches = 1500; // 1.5 seconds between batches
+
+    for (let i = 0; i < assets.length; i += batchSize) {
+      const batch = assets.slice(i, i + batchSize);
+
+      // Process batch with Promise.allSettled for graceful failure handling
+      const batchPromises = batch.map(asset => this.getAssetDetailsWithFallback(asset));
+      const settledResults = await Promise.allSettled(batchPromises);
+
+      // Extract successful results
+      const batchResults = settledResults.map(result => (result.status === 'fulfilled' ? result.value : null));
+
+      results.push(...batchResults);
+
+      // Delay between batches
+      if (i + batchSize < assets.length) {
+        this.logger.debug(`Processed batch ${Math.floor(i / batchSize) + 1}, waiting ${delayBetweenBatches}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delayBetweenBatches));
+      }
+    }
+
+    return results;
+  }
+
+  private async getAssetDetailsWithFallback(asset: any): Promise<any> {
+    // Check cache first
+    const cacheKey = `asset_details_${asset.unit}`;
+    const cached = this.assetDetailsCache.get(cacheKey);
+    if (cached) {
+      return { asset, details: cached, cached: true };
+    }
+
+    try {
+      // Use the configured Blockfrost client (includes retry and rate limiting)
+      const response = await this.blockfrostClient.get(`/assets/${asset.unit}`);
+
+      if ((response as any).error) {
+        // API returned structured error (from our interceptor)
+        return this.createFallbackResult(asset, (response as any).error);
+      }
+
+      // Cache successful response
+      this.assetDetailsCache.set(cacheKey, response.data);
+
+      return { asset, details: response.data };
+    } catch (error) {
+      this.logger.debug(`Failed to fetch details for asset ${asset.unit}: ${error.message}`);
+      return this.createFallbackResult(asset, error.message);
+    }
+  }
+
+  private createFallbackResult(asset: any, errorMessage: string): any {
+    const policyId = asset.unit.substring(0, 56);
+    const assetName = asset.unit.substring(56);
+
+    return {
+      asset,
+      details: {
+        policy_id: policyId,
+        asset_name: assetName,
+        fingerprint: `asset_${asset.unit.substring(0, 10)}`,
+        quantity: '1',
+        initial_mint_tx_hash: 'unknown',
+        decimals: 0,
+        onchain_metadata: {
+          name: this.decodeAssetName(assetName),
+          description: 'Asset details unavailable due to API limits',
+        },
+        metadata: {},
+      },
+      error: errorMessage,
+      fallback: true,
+    };
+  }
+
+  private createAssetDto(result: any): AssetValueDto | null {
+    if (!result) return null;
+
+    const { asset, details } = result;
+    const isNft = Number(asset.quantity) === 1;
+    const metadata = details.onchain_metadata || details.metadata || {};
+    const assetName = this.decodeAssetName(details.asset_name || asset.unit.substring(56));
+
+    return {
+      tokenId: asset.unit,
+      name: assetName,
+      displayName: metadata.name || assetName,
+      ticker: details.ticker,
+      quantity: Number(asset.quantity),
+      isNft,
+      isFungibleToken: !isNft,
+      priceAda: 0,
+      priceUsd: 0,
+      valueAda: 0,
+      valueUsd: 0,
+      metadata: {
+        policyId: details.policy_id,
+        fingerprint: details.fingerprint,
+        decimals: details.decimals || 0,
+        description: metadata.description,
+        image: metadata.image,
+        mediaType: metadata.mediaType,
+        files: details.onchain_metadata?.files || [],
+        attributes: metadata.attributes || {},
+        assetName: details.asset_name,
+        mintTx: details.initial_mint_tx_hash,
+        mintQuantity: details.quantity,
+        onchainMetadata: details.onchain_metadata || {},
+      },
+    };
+  }
+
+  private createWalletSummary(
+    walletAddress: string,
+    assets: AssetValueDto[],
+    totalAda: number,
+    totalUsd: number
+  ): WalletSummaryDto {
+    return {
+      wallet: walletAddress,
+      assets,
+      totalValueAda: +totalAda.toFixed(4),
+      totalValueUsd: +totalUsd.toFixed(4),
+      lastUpdated: new Date().toISOString(),
+      summary: {
+        totalAssets: assets.length,
+        nfts: assets.filter(a => a.isNft).length,
+        tokens: assets.filter(a => a.isFungibleToken).length,
+        ada: totalAda,
+      },
+    };
+  }
+
+  private getEmptyWalletSummary(): WalletSummaryDto {
+    return {
+      wallet: '',
+      assets: [],
+      totalValueAda: 0,
+      totalValueUsd: 0,
+      lastUpdated: '',
+      summary: {
+        totalAssets: 0,
+        nfts: 0,
+        tokens: 0,
+        ada: 0,
+      },
+    };
+  }
+
+  private decodeAssetName(hexName: string): string {
+    try {
+      if (!hexName) return 'Unknown Asset';
+      return Buffer.from(hexName, 'hex').toString('utf8');
+    } catch (error) {
+      return hexName || 'Unknown Asset';
     }
   }
 
