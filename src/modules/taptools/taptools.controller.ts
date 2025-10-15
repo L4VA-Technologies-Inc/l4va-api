@@ -4,7 +4,6 @@ import { ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { ApiDoc } from '../../decorators/api-doc.decorator';
 import { AuthGuard } from '../auth/auth.guard';
 
-import { AssetDetailsDto } from './dto/asset-details.dto';
 import { PaginationQueryDto } from './dto/pagination.dto';
 import { PaginatedWalletSummaryDto } from './dto/wallet-summary.dto';
 import { TaptoolsService } from './taptools.service';
@@ -40,13 +39,13 @@ export class TaptoolsController {
 
   @Get('assets/:id')
   @ApiDoc({
-    summary: 'Get detailed info about a specific asset by its ID',
-    description: 'Returns detailed information about the specified asset.',
+    summary: 'Get asset quantity in wallet',
+    description: 'Returns number of specified asset on wallet',
     status: 200,
   })
-  @ApiResponse({ status: 200, type: AssetDetailsDto })
+  @ApiQuery({ name: 'address', type: String, description: 'Wallet address' })
   @ApiResponse({ status: 404, description: 'Asset not found' })
-  async getAssetDetails(@Param('id') assetId: string): Promise<AssetDetailsDto | null> {
-    return this.taptoolsService.getAssetDetails(assetId);
+  async getAssetDetails(@Param('id') assetId: string, @Query('address') walletAddress: string): Promise<number> {
+    return this.taptoolsService.getWalletAssetsQuantity(walletAddress, assetId);
   }
 }

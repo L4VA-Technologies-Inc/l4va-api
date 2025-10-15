@@ -22,7 +22,7 @@ export class GovernanceExecutionService {
     private readonly vaultRepository: Repository<Vault>
   ) {}
 
-  @Cron(CronExpression.EVERY_10_MINUTES)
+  // @Cron(CronExpression.EVERY_10_MINUTES)
   async processExpiredProposals(): Promise<void> {
     try {
       const expiredProposals = await this.proposalRepository.find({

@@ -1,17 +1,17 @@
 import { Injectable, HttpException, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import axios, { AxiosError, AxiosInstance } from 'axios';
+import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { Repository } from 'typeorm';
 
 import { AssetsService } from '../vaults/processing-tx/assets/assets.service';
 import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
 
-import { AssetDetailsDto } from './dto/asset-details.dto';
 import { AssetValueDto, BlockfrostAssetResponseDto } from './dto/asset-value.dto';
-import { BlockfrostAddressDto, BlockfrostAddressTotalDto } from './dto/blockfrost-address.dto';
-import { PaginationMetaDto, PaginationQueryDto } from './dto/pagination.dto';
-import { PaginatedWalletSummaryDto, WalletOverviewDto } from './dto/wallet-summary.dto';
+import { BlockfrostAddressTotalDto, BlockfrostAddressDto } from './dto/blockfrost-address.dto';
+import { PaginationQueryDto, PaginationMetaDto } from './dto/pagination.dto';
+import { WalletOverviewDto, PaginatedWalletSummaryDto } from './dto/wallet-summary.dto';
 
 import { Vault } from '@/database/vault.entity';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
@@ -25,7 +25,6 @@ export class TaptoolsService {
   private cache = new NodeCache({ stdTTL: 540 }); // cache for 540 seconds to reduce API calls for ADA price (9 minutes)
 
   private readonly blockfrostClient: AxiosInstance;
-
   private assetDetailsCache = new NodeCache({ stdTTL: 3600, checkperiod: 300 });
 
   constructor(
@@ -47,7 +46,7 @@ export class TaptoolsService {
 
     // Add request interceptor for rate limiting
     let lastRequestTime = 0;
-    const minRequestInterval = 15; // 15ms between requests (~60-67 req/sec)
+    const minRequestInterval = 150; // 150ms between requests (~6-7 req/sec)
 
     this.blockfrostClient.interceptors.request.use(async config => {
       const now = Date.now();
@@ -81,16 +80,6 @@ export class TaptoolsService {
 
             return this.blockfrostClient.request(config);
           }
-        }
-
-        // Handle 403 errors gracefully
-        if (error.response?.status === 403) {
-          this.logger.warn(`Blockfrost API access forbidden: ${config?.url}`);
-          return Promise.resolve({
-            data: null,
-            error: 'API_FORBIDDEN',
-            status: 403,
-          } as any);
         }
 
         return Promise.reject(error);
@@ -138,77 +127,24 @@ export class TaptoolsService {
     }
   }
 
-  async getAssetDetails(assetId: string): Promise<AssetDetailsDto | null> {
+  async getWalletAssetsQuantity(walletAddress: string, assetId: string): Promise<number> {
     try {
-      // Check cache first
-      const cacheKey = `asset_details_${assetId}`;
-      const cached = this.assetDetailsCache.get<BlockfrostAssetResponseDto>(cacheKey);
+      // Use the more efficient /total endpoint
+      const response = await this.blockfrostClient.get<BlockfrostAddressTotalDto>(`/addresses/${walletAddress}/total`);
 
-      if (cached) {
-        return this.transformToAssetDetailsDto(cached, true);
+      if (response.status === 200) {
+        const balances = this.calculateBalances(response.data);
+        return balances.get(assetId) || 0;
       }
 
-      const response = await this.blockfrostClient.get<BlockfrostAssetResponseDto>(`/assets/${assetId}`);
-
-      if ((response as any).error) {
-        this.logger.warn(`Asset ${assetId} not found or API forbidden`);
-        return this.createFallbackAssetDetails(assetId);
-      }
-
-      // Cache successful response
-      this.assetDetailsCache.set(cacheKey, response.data);
-
-      return this.transformToAssetDetailsDto(response.data, false);
+      return 0;
     } catch (err) {
-      this.logger.error(`Error fetching asset details for ${assetId}:`, err.message);
-      return this.createFallbackAssetDetails(assetId);
+      this.logger.error(`Error fetching asset quantity for ${assetId}:`, err.message);
+      if (err.response?.status === 404) {
+        throw new HttpException('Wallet address not found', 404);
+      }
+      throw new HttpException('Failed to fetch asset quantity', 500);
     }
-  }
-
-  private transformToAssetDetailsDto(
-    blockfrostData: BlockfrostAssetResponseDto,
-    cached: boolean = false
-  ): AssetDetailsDto {
-    const quantity = parseInt(blockfrostData.quantity, 10);
-    const isNft = quantity === 1;
-    const decodedName = this.decodeAssetName(blockfrostData.asset_name || '');
-
-    return {
-      ...blockfrostData,
-      decodedName,
-      isNft,
-      isFungibleToken: !isNft,
-      cached,
-      fallback: false,
-    };
-  }
-
-  private createFallbackAssetDetails(assetId: string): AssetDetailsDto {
-    const policyId = assetId.substring(0, 56);
-    const assetName = assetId.substring(56);
-    const decodedName = this.decodeAssetName(assetName);
-
-    return {
-      asset: assetId,
-      policy_id: policyId,
-      asset_name: assetName,
-      fingerprint: `asset_${assetId.substring(0, 10)}`,
-      quantity: '1',
-      initial_mint_tx_hash: 'unknown',
-      mint_or_burn_count: 0,
-      onchain_metadata: {
-        name: decodedName,
-        description: 'Asset details unavailable due to API limits',
-      },
-      onchain_metadata_standard: null,
-      onchain_metadata_extra: null,
-      metadata: null,
-      decodedName,
-      isNft: true,
-      isFungibleToken: false,
-      cached: false,
-      fallback: true,
-    };
   }
 
   private calculateBalances(data: BlockfrostAddressTotalDto): Map<string, number> {
@@ -228,98 +164,35 @@ export class TaptoolsService {
     return balances;
   }
 
-  private async getAssetDetailsWithFallback(asset: { unit: string; quantity: number }): Promise<{
-    asset: { unit: string; quantity: number };
+  private async fetchAssetDetailsFromApi(assetId: string): Promise<{
     details: BlockfrostAssetResponseDto;
     cached?: boolean;
-    error?: string;
-    fallback?: boolean;
   } | null> {
     // Check cache first
-    const cacheKey = `asset_details_${asset.unit}`;
-    const cached = this.assetDetailsCache.get(cacheKey);
+    const cacheKey = `asset_details_${assetId}`;
+    const cached = this.assetDetailsCache.get<BlockfrostAssetResponseDto>(cacheKey);
+
     if (cached) {
-      return { asset, details: cached as BlockfrostAssetResponseDto, cached: true };
+      return { details: cached, cached: true };
     }
 
     try {
       // Use the configured Blockfrost client (includes retry and rate limiting)
-      const response = await this.blockfrostClient.get(`/assets/${asset.unit}`);
+      const response = await this.blockfrostClient.get<BlockfrostAssetResponseDto>(`/assets/${assetId}`);
 
-      if ((response as any).error) {
-        // API returned structured error (from our interceptor)
-        return this.createFallbackResult(asset, (response as any).error);
+      if (response.status !== 200) {
+        this.logger.warn(`Asset ${assetId} not found or API forbidden`);
+        return null;
       }
 
       // Cache successful response
       this.assetDetailsCache.set(cacheKey, response.data);
 
-      return { asset, details: response.data };
+      return { details: response.data, cached: false };
     } catch (error) {
-      this.logger.debug(`Failed to fetch details for asset ${asset.unit}: ${error.message}`);
-      return this.createFallbackResult(asset, error.message);
+      this.logger.debug(`Failed to fetch details for asset ${assetId}: ${error.message}`);
+      return null;
     }
-  }
-
-  private createFallbackResult(asset: any, errorMessage: string): any {
-    const policyId = asset.unit.substring(0, 56);
-    const assetName = asset.unit.substring(56);
-
-    return {
-      asset,
-      details: {
-        policy_id: policyId,
-        asset_name: assetName,
-        fingerprint: `asset_${asset.unit.substring(0, 10)}`,
-        quantity: '1',
-        initial_mint_tx_hash: 'unknown',
-        decimals: 0,
-        onchain_metadata: {
-          name: this.decodeAssetName(assetName),
-          description: 'Asset details unavailable due to API limits',
-        },
-        metadata: {},
-      },
-      error: errorMessage,
-      fallback: true,
-    };
-  }
-
-  private createAssetDto(result: any): AssetValueDto | null {
-    if (!result) return null;
-
-    const { asset, details } = result;
-    const isNft = Number(asset.quantity) === 1;
-    const metadata = details.onchain_metadata || details.metadata || {};
-    const assetName = this.decodeAssetName(details.asset_name || asset.unit.substring(56));
-
-    return {
-      tokenId: asset.unit,
-      name: assetName,
-      displayName: metadata.name || assetName,
-      ticker: details.ticker,
-      quantity: Number(asset.quantity),
-      isNft,
-      isFungibleToken: !isNft,
-      priceAda: 0,
-      priceUsd: 0,
-      valueAda: 0,
-      valueUsd: 0,
-      metadata: {
-        policyId: details.policy_id,
-        fingerprint: details.fingerprint,
-        decimals: details.decimals || 0,
-        description: metadata.description,
-        image: metadata.image,
-        mediaType: metadata.mediaType,
-        files: details.onchain_metadata?.files || [],
-        attributes: metadata.attributes || {},
-        assetName: details.asset_name,
-        mintTx: details.initial_mint_tx_hash,
-        mintQuantity: details.quantity,
-        onchainMetadata: details.onchain_metadata || {},
-      },
-    };
   }
 
   private decodeAssetName(hexName: string): string {
@@ -431,7 +304,7 @@ export class TaptoolsService {
         assetId: string;
         quantity: number;
         isNft: boolean;
-        metadata?: Record<string, any>;
+        metadata?: Record<string, unknown>;
       }
     >();
 
@@ -576,13 +449,31 @@ export class TaptoolsService {
       const adaPriceUsd = await this.getAdaPrice();
 
       if (this.isTestnetAddress(walletAddress)) {
-        return await this.getTestnetWalletSummaryPaginated(walletAddress, adaPriceUsd, page, limit, filter);
+        // Get overview (cached)
+        const overview = await this.getWalletOverview(walletAddress, adaPriceUsd);
+
+        // Get paginated assets
+        const { assets, pagination } = await this.getPaginatedAssets(walletAddress, page, limit, filter);
+
+        const result = {
+          overview,
+          assets,
+          pagination,
+        };
+
+        return plainToInstance(PaginatedWalletSummaryDto, result, {
+          excludeExtraneousValues: true,
+        });
       } else {
-        return await this.getMainnetWalletSummaryPaginated(walletAddress, adaPriceUsd, page, limit, filter);
+        throw new HttpException('Only testnet addresses are supported', 400);
       }
     } catch (err) {
-      console.error('Error fetching paginated wallet summary:', err.message);
+      this.logger.error('Error fetching paginated wallet summary:', err.message);
+
       if (axios.isAxiosError(err)) {
+        if (err.response?.status === 404) {
+          throw new HttpException('Wallet address not found', 404);
+        }
         throw new HttpException(
           err.response?.data?.message || 'Failed to fetch wallet assets',
           err.response?.status || 500
@@ -592,298 +483,201 @@ export class TaptoolsService {
     }
   }
 
-  private async getTestnetWalletSummaryPaginated(
-    walletAddress: string,
-    adaPriceUsd: number,
-    page: number,
-    limit: number,
-    filter: 'all' | 'nfts' | 'tokens'
-  ): Promise<PaginatedWalletSummaryDto> {
-    // First, get or create overview (cached)
+  private async getWalletOverview(walletAddress: string, adaPriceUsd: number): Promise<WalletOverviewDto> {
     const overviewCacheKey = `wallet_overview_${walletAddress}`;
-    let overview = this.cache.get<WalletOverviewDto>(overviewCacheKey);
+    const cached = this.cache.get<WalletOverviewDto>(overviewCacheKey);
 
-    if (!overview) {
-      // Create overview by getting basic wallet info
-      try {
-        const addressCheck = await this.blockfrostClient.get<BlockfrostAddressDto>(`/addresses/${walletAddress}`);
-        if (addressCheck.status !== 200) {
-          return this.getEmptyPaginatedWalletSummary(walletAddress, page, limit);
-        }
-      } catch (err) {
-        this.logger.log('Error validating address:', err.message);
-        return this.getEmptyPaginatedWalletSummary(walletAddress, page, limit);
+    if (cached) {
+      return cached;
+    }
+
+    try {
+      // Validate address
+      const addressCheck = await this.blockfrostClient.get<BlockfrostAddressDto>(`/addresses/${walletAddress}`);
+      if (addressCheck.status !== 200) {
+        throw new HttpException('Invalid wallet address', 400);
       }
 
-      try {
-        // Get all assets to calculate totals
-        const assetsResponse = await this.blockfrostClient.get<BlockfrostAddressTotalDto>(
-          `/addresses/${walletAddress}/total`
-        );
+      // Get totals
+      const assetsResponse = await this.blockfrostClient.get<BlockfrostAddressTotalDto>(
+        `/addresses/${walletAddress}/total`
+      );
 
-        if ((assetsResponse as any).error) {
-          throw new Error('Failed to fetch wallet assets');
-        }
-
-        // Calculate balances and totals for overview
-        const balances = this.calculateBalances(assetsResponse.data);
-        const totalAda = (balances.get('lovelace') || 0) / 1000000;
-        const totalUsd = totalAda * adaPriceUsd;
-
-        const nonAdaAssets = Array.from(balances.entries()).filter(
-          ([unit, balance]) => unit !== 'lovelace' && balance > 0
-        );
-
-        // Count NFTs vs Tokens by checking quantity
-        let nftCount = 0;
-        let tokenCount = 0;
-
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        for (const [_unit, quantity] of nonAdaAssets) {
-          if (quantity === 1) {
-            nftCount++;
-          } else {
-            tokenCount++;
-          }
-        }
-
-        overview = {
-          wallet: walletAddress,
-          totalValueAda: +totalAda.toFixed(4),
-          totalValueUsd: +totalUsd.toFixed(4),
-          lastUpdated: new Date().toISOString(),
-          summary: {
-            totalAssets: nonAdaAssets.length,
-            nfts: nftCount,
-            tokens: tokenCount,
-            ada: totalAda,
-          },
-        };
-
-        // Cache overview for 5 minutes
-        this.cache.set(overviewCacheKey, overview, 300);
-      } catch (err) {
-        this.logger.error('Error creating wallet overview:', err.message);
-        return this.getEmptyPaginatedWalletSummary(walletAddress, page, limit);
-      }
-    }
-
-    // Now get paginated assets
-    const assetsCacheKey = `wallet_assets_${walletAddress}`;
-    let allAssetUnits = this.cache.get<Array<{ unit: string; quantity: number }>>(assetsCacheKey);
-
-    if (!allAssetUnits) {
-      try {
-        const assetsResponse = await this.blockfrostClient.get<BlockfrostAddressTotalDto>(
-          `/addresses/${walletAddress}/total`
-        );
-        const balances = this.calculateBalances(assetsResponse.data);
-
-        allAssetUnits = Array.from(balances.entries())
-          .filter(([unit, balance]) => unit !== 'lovelace' && balance > 0)
-          .map(([unit, quantity]) => ({ unit, quantity }));
-
-        // Cache all asset units for 2 minutes
-        this.cache.set(assetsCacheKey, allAssetUnits, 120);
-      } catch (err) {
-        this.logger.error('Error fetching wallet assets for pagination:', err.message);
-        return this.getEmptyPaginatedWalletSummary(walletAddress, page, limit);
-      }
-    }
-
-    // Filter assets based on filter parameter
-    let filteredAssets = allAssetUnits;
-    if (filter === 'nfts') {
-      filteredAssets = allAssetUnits.filter(asset => asset.quantity === 1);
-    } else if (filter === 'tokens') {
-      filteredAssets = allAssetUnits.filter(asset => asset.quantity > 1);
-    }
-
-    // Calculate pagination
-    const total = filteredAssets.length;
-    const totalPages = Math.ceil(total / limit);
-    const offset = (page - 1) * limit;
-
-    // Get assets for current page
-    const pageAssets = filteredAssets.slice(offset, offset + limit);
-
-    // Process current page assets with details
-    const processedAssets: AssetValueDto[] = [];
-
-    // Process in smaller batches to respect rate limits
-    const batchSize = 3;
-    const delayBetweenBatches = 500; // 0.5 seconds between batches
-
-    for (let i = 0; i < pageAssets.length; i += batchSize) {
-      const batch = pageAssets.slice(i, i + batchSize);
-
-      const batchPromises = batch.map(asset => this.getAssetDetailsWithFallback(asset));
-      const settledResults = await Promise.allSettled(batchPromises);
-
-      const batchResults = settledResults.map(result => (result.status === 'fulfilled' ? result.value : null));
-
-      for (const result of batchResults) {
-        if (!result || result.error) continue;
-
-        const processedAsset = this.createAssetDto(result);
-        if (processedAsset) {
-          processedAssets.push(processedAsset);
-        }
+      if (assetsResponse.status !== 200) {
+        throw new HttpException('Failed to fetch wallet totals', 500);
       }
 
-      // Small delay between batches
-      if (i + batchSize < pageAssets.length) {
-        await new Promise(resolve => setTimeout(resolve, delayBetweenBatches));
-      }
-    }
+      const balances = this.calculateBalances(assetsResponse.data);
+      const totalAda = (balances.get('lovelace') || 0) / 1000000;
+      const nonAdaAssets = Array.from(balances.entries()).filter(
+        ([unit, balance]) => unit !== 'lovelace' && balance > 0
+      );
 
-    const paginationMeta: PaginationMetaDto = {
-      page,
-      limit,
-      total,
-      totalPages,
-      hasNextPage: page < totalPages,
-      hasPrevPage: page > 1,
-    };
-
-    return {
-      overview,
-      assets: processedAssets,
-      pagination: paginationMeta,
-    };
-  }
-
-  private async getMainnetWalletSummaryPaginated(
-    walletAddress: string,
-    adaPriceUsd: number,
-    page: number,
-    limit: number,
-    filter: 'all' | 'nfts' | 'tokens'
-  ): Promise<PaginatedWalletSummaryDto> {
-    // Use TapTools API for mainnet
-    const res = await axios.get(`${this.baseUrl}/wallet/portfolio/positions?address=${walletAddress}`, {
-      headers: {
-        'x-api-key': process.env.TAPTOOLS_API_KEY,
-      },
-      timeout: 15000,
-    });
-
-    if (!res.data) {
-      throw new HttpException('Invalid response format from API', 400);
-    }
-
-    const totalAda = res.data.adaValue || 0;
-    const totalUsd = totalAda * adaPriceUsd;
-
-    // Process all assets first
-    const allAssets: AssetValueDto[] = [];
-
-    // Process fungible tokens
-    if (res.data.positionsFt) {
-      for (const ft of res.data.positionsFt) {
-        allAssets.push({
-          tokenId: ft.unit,
-          name: ft.ticker,
-          displayName: ft.ticker,
-          quantity: ft.balance,
-          isNft: false,
-          isFungibleToken: true,
-          priceAda: ft.price,
-          priceUsd: ft.price * adaPriceUsd,
-          valueAda: ft.adaValue,
-          valueUsd: ft.adaValue * adaPriceUsd,
-        });
-      }
-    }
-
-    // Process NFTs
-    if (res.data.positionsNft) {
-      for (const nft of res.data.positionsNft) {
-        allAssets.push({
-          tokenId: nft.policy,
-          name: nft.name,
-          displayName: nft.name,
-          quantity: nft.balance,
-          isNft: true,
-          isFungibleToken: false,
-          priceAda: nft.floorPrice,
-          priceUsd: nft.floorPrice * adaPriceUsd,
-          valueAda: nft.adaValue,
-          valueUsd: nft.adaValue * adaPriceUsd,
-        });
-      }
-    }
-
-    // Apply filters
-    let filteredAssets = allAssets;
-    if (filter === 'nfts') {
-      filteredAssets = allAssets.filter(asset => asset.isNft);
-    } else if (filter === 'tokens') {
-      filteredAssets = allAssets.filter(asset => asset.isFungibleToken);
-    }
-
-    // Pagination
-    const total = filteredAssets.length;
-    const totalPages = Math.ceil(total / limit);
-    const offset = (page - 1) * limit;
-    const pageAssets = filteredAssets.slice(offset, offset + limit);
-
-    const overview: WalletOverviewDto = {
-      wallet: walletAddress,
-      totalValueAda: +totalAda.toFixed(4),
-      totalValueUsd: +totalUsd.toFixed(4),
-      lastUpdated: new Date().toISOString(),
-      summary: {
-        totalAssets: allAssets.length,
-        nfts: allAssets.filter(a => a.isNft).length,
-        tokens: allAssets.filter(a => a.isFungibleToken).length,
-        ada: totalAda,
-      },
-    };
-
-    const paginationMeta: PaginationMetaDto = {
-      page,
-      limit,
-      total,
-      totalPages,
-      hasNextPage: page < totalPages,
-      hasPrevPage: page > 1,
-    };
-
-    return {
-      overview,
-      assets: pageAssets,
-      pagination: paginationMeta,
-    };
-  }
-
-  private getEmptyPaginatedWalletSummary(
-    walletAddress: string,
-    page: number,
-    limit: number
-  ): PaginatedWalletSummaryDto {
-    return {
-      overview: {
+      const overviewData = {
         wallet: walletAddress,
-        totalValueAda: 0,
-        totalValueUsd: 0,
+        totalValueAda: +totalAda.toFixed(4),
+        totalValueUsd: +(totalAda * adaPriceUsd).toFixed(4),
         lastUpdated: new Date().toISOString(),
         summary: {
-          totalAssets: 0,
-          nfts: 0,
-          tokens: 0,
-          ada: 0,
+          totalAssets: nonAdaAssets.length,
+          nfts: nonAdaAssets.filter(([, quantity]) => quantity === 1).length,
+          tokens: nonAdaAssets.filter(([, quantity]) => quantity > 1).length,
+          ada: totalAda,
         },
-      },
-      assets: [],
-      pagination: {
+      };
+
+      // Transform to DTO using plainToInstance
+      const overview = plainToInstance(WalletOverviewDto, overviewData, {
+        excludeExtraneousValues: true,
+      });
+
+      // Cache for 5 minutes
+      this.cache.set(overviewCacheKey, overview, 300);
+      return overview;
+    } catch (err) {
+      this.logger.error('Error creating wallet overview:', err.message);
+      if (err.response?.status === 404) {
+        throw new HttpException('Wallet address not found', 404);
+      }
+      throw new HttpException('Failed to fetch wallet overview', 500);
+    }
+  }
+
+  private async getPaginatedAssets(
+    walletAddress: string,
+    page: number,
+    limit: number,
+    filter: 'all' | 'nfts' | 'tokens'
+  ): Promise<{ assets: AssetValueDto[]; pagination: PaginationMetaDto }> {
+    try {
+      // Get all asset units (cached)
+      const allAssetUnits = await this.getAllAssetUnits(walletAddress);
+
+      // Filter based on type
+      const filteredAssets = this.filterAssetsByType(allAssetUnits, filter);
+
+      // Calculate pagination
+      const total = filteredAssets.length;
+      const totalPages = Math.ceil(total / limit);
+      const offset = (page - 1) * limit;
+      const pageAssets = filteredAssets.slice(offset, offset + limit);
+
+      // Process assets for current page - NO BATCHING, direct processing
+      const processedAssets = await this.processAssetsPage(pageAssets);
+
+      const paginationData = {
         page,
         limit,
-        total: 0,
-        totalPages: 0,
-        hasNextPage: false,
-        hasPrevPage: false,
-      },
-    };
+        total,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1,
+      };
+
+      const pagination = plainToInstance(PaginationMetaDto, paginationData, {
+        excludeExtraneousValues: true,
+      });
+
+      return { assets: processedAssets, pagination };
+    } catch (err) {
+      this.logger.error('Error getting paginated assets:', err.message);
+      throw new HttpException('Failed to fetch paginated assets', 500);
+    }
+  }
+
+  private async getAllAssetUnits(walletAddress: string): Promise<Array<{ unit: string; quantity: number }>> {
+    const cacheKey = `wallet_assets_${walletAddress}`;
+    const cached = this.cache.get<Array<{ unit: string; quantity: number }>>(cacheKey);
+
+    if (cached) {
+      return cached;
+    }
+
+    try {
+      const assetsResponse = await this.blockfrostClient.get<BlockfrostAddressTotalDto>(
+        `/addresses/${walletAddress}/total`
+      );
+
+      if (assetsResponse.status !== 200) {
+        throw new HttpException('Failed to fetch wallet assets', 500);
+      }
+
+      const balances = this.calculateBalances(assetsResponse.data);
+      const assetUnits = Array.from(balances.entries())
+        .filter(([unit, balance]) => unit !== 'lovelace' && balance > 0)
+        .map(([unit, quantity]) => ({ unit, quantity }));
+
+      // Cache for 2 minutes
+      this.cache.set(cacheKey, assetUnits, 120);
+      return assetUnits;
+    } catch (err) {
+      this.logger.error('Error fetching all asset units:', err.message);
+      throw new HttpException('Failed to fetch asset units', 500);
+    }
+  }
+
+  private filterAssetsByType(
+    assets: Array<{ unit: string; quantity: number }>,
+    filter: 'all' | 'nfts' | 'tokens'
+  ): Array<{ unit: string; quantity: number }> {
+    if (filter === 'nfts') {
+      return assets.filter(asset => asset.quantity === 1);
+    }
+    if (filter === 'tokens') {
+      return assets.filter(asset => asset.quantity > 1);
+    }
+    return assets; // 'all'
+  }
+
+  private async processAssetsPage(pageAssets: Array<{ unit: string; quantity: number }>): Promise<AssetValueDto[]> {
+    const processedAssets: AssetValueDto[] = [];
+
+    // Process assets directly without batching - pagination already limits the number
+    for (const asset of pageAssets) {
+      const assetDetailsResult = await this.fetchAssetDetailsFromApi(asset.unit);
+
+      if (!assetDetailsResult) {
+        throw new HttpException(`Failed to fetch asset details for ${asset.unit}`, 500);
+      }
+
+      const details = assetDetailsResult.details;
+      const metadata = details.onchain_metadata || details.metadata || {};
+      const assetName = this.decodeAssetName(details.asset_name || asset.unit.substring(56));
+
+      const assetData = {
+        tokenId: asset.unit,
+        name: assetName,
+        displayName: (metadata as Record<string, unknown>)?.name || assetName,
+        ticker: details.metadata?.ticker,
+        quantity: asset.quantity,
+        priceAda: 0,
+        priceUsd: 0,
+        valueAda: 0,
+        valueUsd: 0,
+        metadata: {
+          policyId: details.policy_id,
+          fingerprint: details.fingerprint,
+          decimals: details.metadata?.decimals || 0,
+          description: (metadata as Record<string, unknown>)?.description,
+          image: (metadata as Record<string, unknown>)?.image,
+          mediaType: (metadata as Record<string, unknown>)?.mediaType,
+          files: details.onchain_metadata?.files || [],
+          attributes: (metadata as Record<string, unknown>)?.attributes || {},
+          assetName: details.asset_name,
+          mintTx: details.initial_mint_tx_hash,
+          mintQuantity: details.quantity,
+          onchainMetadata: details.onchain_metadata || {},
+          fallback: false,
+        },
+      };
+
+      const assetDto = plainToInstance(AssetValueDto, assetData, {
+        excludeExtraneousValues: true,
+      });
+
+      processedAssets.push(assetDto);
+    }
+
+    return processedAssets;
   }
 }
