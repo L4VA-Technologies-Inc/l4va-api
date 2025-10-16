@@ -115,7 +115,7 @@ export class GovernanceService {
     // });
   }
 
-  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  // @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
   async createDailySnapshots(): Promise<void> {
     this.logger.log('Starting daily snapshot creation');
 
