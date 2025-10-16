@@ -409,7 +409,7 @@ export class GovernanceExecutionService {
         this.logger.warn(
           `Job health warning: ${upcomingProposals} upcoming proposals but only ${activationJobs} activation jobs`
         );
-        await this.scheduleExistingProposals();
+        await this.scheduleUpcomingProposalsForActivation();
       }
 
       if (activeProposals > executionJobs) {
