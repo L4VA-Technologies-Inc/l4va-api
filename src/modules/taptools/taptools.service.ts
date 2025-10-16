@@ -439,11 +439,9 @@ export class TaptoolsService {
     return summary;
   }
 
-  async getWalletSummaryPaginated(
-    walletAddress: string,
-    paginationQuery: PaginationQueryDto
-  ): Promise<PaginatedWalletSummaryDto> {
-    const { page = 1, limit = 20, filter = 'all' } = paginationQuery;
+  async getWalletSummaryPaginated(paginationQuery: PaginationQueryDto): Promise<PaginatedWalletSummaryDto> {
+    const { address: walletAddress, page, limit, filter, whitelistedPolicies } = paginationQuery;
+    this.logger.debug('Testing');
 
     try {
       const adaPriceUsd = await this.getAdaPrice();
@@ -453,7 +451,13 @@ export class TaptoolsService {
         const overview = await this.getWalletOverview(walletAddress, adaPriceUsd);
 
         // Get paginated assets
-        const { assets, pagination } = await this.getPaginatedAssets(walletAddress, page, limit, filter);
+        const { assets, pagination } = await this.getPaginatedAssets(
+          walletAddress,
+          page,
+          limit,
+          filter,
+          whitelistedPolicies
+        );
 
         const result = {
           overview,
@@ -547,14 +551,23 @@ export class TaptoolsService {
     walletAddress: string,
     page: number,
     limit: number,
-    filter: 'all' | 'nfts' | 'tokens'
+    filter: 'all' | 'nfts' | 'tokens',
+    whitelistedPolicies: string[]
   ): Promise<{ assets: AssetValueDto[]; pagination: PaginationMetaDto }> {
     try {
       // Get all asset units (cached)
       const allAssetUnits = await this.getAllAssetUnits(walletAddress);
 
       // Filter based on type
-      const filteredAssets = this.filterAssetsByType(allAssetUnits, filter);
+      let filteredAssets = this.filterAssetsByType(allAssetUnits, filter);
+
+      if (whitelistedPolicies.length > 0) {
+        filteredAssets = filteredAssets.filter(asset => {
+          // Extract policy ID from unit (first 56 characters)
+          const policyId = asset.unit.substring(0, 56);
+          return whitelistedPolicies.includes(policyId);
+        });
+      }
 
       // Calculate pagination
       const total = filteredAssets.length;
@@ -562,7 +575,6 @@ export class TaptoolsService {
       const offset = (page - 1) * limit;
       const pageAssets = filteredAssets.slice(offset, offset + limit);
 
-      // Process assets for current page - NO BATCHING, direct processing
       const processedAssets = await this.processAssetsPage(pageAssets);
 
       const paginationData = {

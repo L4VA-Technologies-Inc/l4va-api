@@ -1,32 +1,22 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Expose, Transform } from 'class-transformer';
-import { IsOptional, IsPositive, Min, Max } from 'class-validator';
+import { Expose } from 'class-transformer';
+import { IsString, IsNotEmpty, IsOptional, IsInt, Min, Max, IsEnum, IsArray } from 'class-validator';
 
 export class PaginationQueryDto {
-  @ApiProperty({
-    description: 'Page number (1-based)',
-    minimum: 1,
-    default: 1,
-    required: false,
-  })
-  @Expose()
+  @ApiProperty({ description: 'Wallet address' })
+  @IsString()
+  @IsNotEmpty()
+  address: string;
+
+  @ApiProperty({ description: 'Page number', default: 1, required: false })
   @IsOptional()
-  @Transform(({ value }) => parseInt(value))
-  @IsPositive()
+  @IsInt()
   @Min(1)
   page?: number = 1;
 
-  @ApiProperty({
-    description: 'Number of items per page',
-    minimum: 1,
-    maximum: 100,
-    default: 20,
-    required: false,
-  })
-  @Expose()
+  @ApiProperty({ description: 'Items per page', default: 20, required: false })
   @IsOptional()
-  @Transform(({ value }) => parseInt(value))
-  @IsPositive()
+  @IsInt()
   @Min(1)
   @Max(100)
   limit?: number = 20;
@@ -37,9 +27,19 @@ export class PaginationQueryDto {
     default: 'all',
     required: false,
   })
-  @Expose()
   @IsOptional()
+  @IsEnum(['all', 'nfts', 'tokens'])
   filter?: 'all' | 'nfts' | 'tokens' = 'all';
+
+  @ApiProperty({
+    description: 'Array of whitelisted policy IDs',
+    type: [String],
+    required: false,
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  whitelistedPolicies?: string[] = [];
 }
 
 export class PaginationMetaDto {
@@ -47,7 +47,7 @@ export class PaginationMetaDto {
   @Expose()
   page: number;
 
-  @ApiProperty({ description: 'Number of items per page' })
+  @ApiProperty({ description: 'Items per page' })
   @Expose()
   limit: number;
 
@@ -59,7 +59,7 @@ export class PaginationMetaDto {
   @Expose()
   totalPages: number;
 
-  @ApiProperty({ description: 'Whether there are more pages' })
+  @ApiProperty({ description: 'Whether there is a next page' })
   @Expose()
   hasNextPage: boolean;
 
