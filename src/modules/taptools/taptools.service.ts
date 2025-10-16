@@ -441,7 +441,6 @@ export class TaptoolsService {
 
   async getWalletSummaryPaginated(paginationQuery: PaginationQueryDto): Promise<PaginatedWalletSummaryDto> {
     const { address: walletAddress, page, limit, filter, whitelistedPolicies } = paginationQuery;
-    this.logger.debug('Testing');
 
     try {
       const adaPriceUsd = await this.getAdaPrice();
