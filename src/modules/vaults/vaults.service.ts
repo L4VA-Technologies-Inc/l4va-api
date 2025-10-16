@@ -1014,6 +1014,7 @@ export class VaultsService {
     acquireWindow?: DateRangeDto;
     ownerId?: string;
     vaultStage?: string;
+    search?: string;
   }): Promise<PaginatedResponseDto<VaultShortResponse>> {
     const {
       userId,
@@ -1033,7 +1034,8 @@ export class VaultsService {
       limit = 10,
       sortOrder = SortOrder.DESC,
       vaultStage,
-      reserveMet
+      reserveMet,
+      search
     } = data;
 
     // Create base query for all vaults
@@ -1098,6 +1100,15 @@ export class VaultsService {
       queryBuilder.andWhere('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public });
     } else {
       queryBuilder.andWhere('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public });
+    }
+
+    if (search) {
+      queryBuilder.andWhere(
+        new Brackets(qb => {
+          qb.where('vault.name ILIKE :search', { search: `%${search}%` })
+            .orWhere('vault.policy_id ILIKE :search', { search: `%${search}%` });
+        }),
+      );
     }
 
     // Apply status filter and corresponding whitelist check
