@@ -655,12 +655,14 @@ export class TaptoolsService {
       const metadata = details.onchain_metadata || details.metadata || {};
       const assetName = this.decodeAssetName(details.asset_name || asset.unit.substring(56));
 
-      const assetData = {
+      const assetData: AssetValueDto = {
         tokenId: asset.unit,
         name: assetName,
-        displayName: (metadata as Record<string, unknown>)?.name || assetName,
-        ticker: details.metadata?.ticker,
+        displayName: String((metadata as Record<string, unknown>)?.name || assetName),
+        ticker: String(details.metadata?.ticker || ''),
         quantity: asset.quantity,
+        isNft: asset.quantity === 1,
+        isFungibleToken: asset.quantity > 1,
         priceAda: 0,
         priceUsd: 0,
         valueAda: 0,
@@ -669,11 +671,11 @@ export class TaptoolsService {
           policyId: details.policy_id,
           fingerprint: details.fingerprint,
           decimals: details.metadata?.decimals || 0,
-          description: (metadata as Record<string, unknown>)?.description,
-          image: (metadata as Record<string, unknown>)?.image,
-          mediaType: (metadata as Record<string, unknown>)?.mediaType,
-          files: details.onchain_metadata?.files || [],
-          attributes: (metadata as Record<string, unknown>)?.attributes || {},
+          description: String((metadata as Record<string, unknown>)?.description || ''),
+          image: String((metadata as Record<string, unknown>)?.image || ''),
+          mediaType: String((metadata as Record<string, unknown>)?.mediaType || ''),
+          files: Array.isArray(details.onchain_metadata?.files) ? details.onchain_metadata.files : [],
+          attributes: ((metadata as Record<string, unknown>)?.attributes as Record<string, any>) || {},
           assetName: details.asset_name,
           mintTx: details.initial_mint_tx_hash,
           mintQuantity: details.quantity,
