@@ -222,16 +222,49 @@ export class GovernanceExecutionService {
 
   private async scheduleExistingProposals(): Promise<void> {
     try {
-      const activeProposals = await this.proposalRepository.find({
-        where: { status: ProposalStatus.ACTIVE },
-        select: ['id', 'endDate'],
+      // Single query to get both upcoming and active proposals
+      const proposals = await this.proposalRepository.find({
+        where: [{ status: ProposalStatus.UPCOMING }, { status: ProposalStatus.ACTIVE }],
+        select: ['id', 'status', 'startDate', 'endDate'],
       });
 
-      for (const proposal of activeProposals) {
-        this.scheduleProposalExecution(proposal.id, proposal.endDate);
+      let upcomingCount = 0;
+      let activeCount = 0;
+
+      for (const proposal of proposals) {
+        if (proposal.status === ProposalStatus.UPCOMING) {
+          upcomingCount++;
+
+          // Only schedule if start date hasn't passed
+          if (proposal.startDate > new Date()) {
+            this.scheduleProposalActivation(proposal.id, proposal.startDate, proposal.endDate);
+          } else {
+            // Activate immediately if overdue
+            this.logger.warn(`Found overdue upcoming proposal ${proposal.id}, activating immediately`);
+            setTimeout(async () => {
+              await this.activateProposal(proposal.id);
+              // Schedule execution if not already ended
+              if (proposal.endDate > new Date()) {
+                this.scheduleProposalExecution(proposal.id, proposal.endDate);
+              } else {
+                await this.processProposal(proposal.id);
+              }
+            }, 1000);
+          }
+        } else if (proposal.status === ProposalStatus.ACTIVE) {
+          activeCount++;
+
+          // Only schedule if end date hasn't passed
+          if (proposal.endDate > new Date()) {
+            this.scheduleProposalExecution(proposal.id, proposal.endDate);
+          } else {
+            this.logger.warn(`Found overdue active proposal ${proposal.id}, processing immediately`);
+            setTimeout(() => this.processProposal(proposal.id), 1000);
+          }
+        }
       }
 
-      this.logger.log(`Scheduled ${activeProposals.length} existing active proposals`);
+      this.logger.log(`Scheduled ${upcomingCount} upcoming proposals and ${activeCount} active proposals`);
     } catch (error) {
       this.logger.error(`Error scheduling existing proposals: ${error.message}`, error.stack);
     }
