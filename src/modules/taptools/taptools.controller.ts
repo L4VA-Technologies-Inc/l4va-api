@@ -48,12 +48,15 @@ export class TaptoolsController {
   @ApiQuery({ name: 'address', type: String, description: 'Wallet address' })
   @ApiResponse({ status: 200, type: Array })
   @UseGuards(AuthGuard)
-  async getWalletPolicyIds(@Query('address') address: string): Promise<
+  async getWalletPolicyIds(
+    @Query('address') address: string,
+    @Query('excludeFTs') excludeFTs: boolean = false
+  ): Promise<
     {
       policyId: string;
       name: string;
     }[]
   > {
-    return this.taptoolsService.getWalletPolicyIds(address);
+    return this.taptoolsService.getWalletPolicyIds(address, excludeFTs);
   }
 }

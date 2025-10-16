@@ -694,9 +694,16 @@ export class TaptoolsService {
     return processedAssets;
   }
 
-  async getWalletPolicyIds(walletAddress: string): Promise<Array<{ policyId: string; name: string }>> {
+  /**
+   * Get unique policy IDs from wallet
+   *
+   * (Implement better logic to exclude FTs)
+   */
+  async getWalletPolicyIds(
+    walletAddress: string,
+    excludeFTs: boolean
+  ): Promise<Array<{ policyId: string; name: string }>> {
     try {
-      // Get wallet assets using Blockfrost
       const response = await this.blockfrostClient.get<BlockfrostAddressDto>(`/addresses/${walletAddress}`);
 
       if (response.status !== 200) {
@@ -705,9 +712,8 @@ export class TaptoolsService {
 
       const uniquePolicies = new Map<string, string>();
 
-      // Process each asset in the wallet
       for (const asset of response.data.amount) {
-        if (asset.unit === 'lovelace') {
+        if (asset.unit === 'lovelace' || (excludeFTs && +asset.quantity > 1)) {
           continue;
         }
 
@@ -719,31 +725,16 @@ export class TaptoolsService {
           continue;
         }
 
-        try {
-          // Get asset details to fetch the policy name
-          const assetResponse = await this.blockfrostClient.get(`/assets/${asset.unit}`);
+        // Extract asset name from unit (after policy ID)
+        const assetNameHex = asset.unit.substring(56);
+        const assetName = this.decodeAssetName(assetNameHex);
 
-          if (assetResponse.status === 200) {
-            const assetDetails = assetResponse.data;
-            const metadata = assetDetails.onchain_metadata || assetDetails.metadata || {};
+        // Use a simple policy name based on the first asset found for this policy
+        const policyName = assetName || `Policy ${policyId.substring(0, 8)}...`;
 
-            // Try to get a meaningful name for the policy
-            const policyName =
-              metadata.name ||
-              assetDetails.metadata?.name ||
-              this.decodeAssetName(assetDetails.asset_name) ||
-              `Policy ${policyId.substring(0, 8)}...`;
-
-            uniquePolicies.set(policyId, policyName);
-          }
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        } catch (error) {
-          // If we can't get asset details, use a fallback name
-          uniquePolicies.set(policyId, `Policy ${policyId.substring(0, 8)}...`);
-        }
+        uniquePolicies.set(policyId, policyName);
       }
 
-      // Convert map to array format
       return Array.from(uniquePolicies.entries()).map(([policyId, name]) => ({
         policyId,
         name,
