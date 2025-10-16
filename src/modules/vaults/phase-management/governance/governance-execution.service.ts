@@ -438,16 +438,11 @@ export class GovernanceExecutionService {
       const activationJobs = Array.from(jobs.keys()).filter(key => key.startsWith('proposal-activation-')).length;
       const executionJobs = Array.from(jobs.keys()).filter(key => key.startsWith('proposal-execution-')).length;
 
-      if (upcomingProposals > activationJobs) {
+      if (upcomingProposals > activationJobs || activeProposals > executionJobs) {
         this.logger.warn(
-          `Job health warning: ${upcomingProposals} upcoming proposals but only ${activationJobs} activation jobs`
-        );
-        await this.scheduleUpcomingProposalsForActivation();
-      }
-
-      if (activeProposals > executionJobs) {
-        this.logger.warn(
-          `Job health warning: ${activeProposals} active proposals but only ${executionJobs} execution jobs`
+          `Job health warning: ${upcomingProposals} upcoming proposals but only ${activationJobs} activation jobs.
+          ${activeProposals} active proposals but only ${executionJobs} execution jobs. Rescheduling...
+          `
         );
         await this.scheduleExistingProposals();
       }
