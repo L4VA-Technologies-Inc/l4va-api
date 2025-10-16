@@ -20,7 +20,7 @@ export class AutomaticCancellationService {
     private readonly cancellationQueue: Queue
   ) {}
 
-  // @Cron(CronExpression.EVERY_10_MINUTES)
+  @Cron(CronExpression.EVERY_10_MINUTES)
   async processPendingCancellations(): Promise<void> {
     if (this.isProcessing) {
       this.logger.log('Cancellation processing already in progress, skipping...');
