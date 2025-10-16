@@ -12,7 +12,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
-import { In, IsNull, LessThanOrEqual, Not, Repository } from 'typeorm';
+import { In, IsNull, Not, Repository } from 'typeorm';
 
 import { CreateProposalReq } from './dto/create-proposal.req';
 import { AssetBuySellDto } from './dto/get-assets.dto';
@@ -115,7 +115,7 @@ export class GovernanceService {
     // });
   }
 
-  // @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
   async createDailySnapshots(): Promise<void> {
     this.logger.log('Starting daily snapshot creation');
 
@@ -153,21 +153,6 @@ export class GovernanceService {
     } catch (error) {
       this.logger.error(`Failed to create daily snapshots: ${error.message}`, error.stack);
     }
-  }
-
-  @Cron('*/10 * * * *')
-  async updateProposalStatus(): Promise<void> {
-    const proposals = await this.proposalRepository.find({
-      where: {
-        status: ProposalStatus.UPCOMING,
-        startDate: LessThanOrEqual(new Date()),
-      },
-    });
-    await Promise.all(
-      proposals.map(async proposal => {
-        await this.proposalRepository.update(proposal.id, { status: ProposalStatus.ACTIVE });
-      })
-    );
   }
 
   /**
@@ -298,19 +283,17 @@ export class GovernanceService {
 
     const startDate = new Date(createProposalReq.startDate ?? createProposalReq.proposalStart);
 
-    const endDate = new Date(startDate.getTime() + createProposalReq.duration);
-
     // Create the proposal with the appropriate fields based on type
     const proposal = this.proposalRepository.create({
       vaultId,
       title: createProposalReq.title,
       description: createProposalReq.description,
-      creatorId: userId,
       proposalType: createProposalReq.type,
-      startDate: startDate.toISOString(),
-      snapshotId: latestSnapshot.id,
       status: startDate <= new Date() ? ProposalStatus.ACTIVE : ProposalStatus.UPCOMING,
-      endDate,
+      startDate,
+      endDate: new Date(startDate.getTime() + createProposalReq.duration),
+      creatorId: userId,
+      snapshotId: latestSnapshot.id,
     });
 
     // Set type-specific fields based on proposal type
@@ -358,6 +341,13 @@ export class GovernanceService {
     }
 
     await this.proposalRepository.save(proposal);
+
+    this.eventEmitter.emit('proposal.created', {
+      proposalId: proposal.id,
+      startDate: proposal.startDate,
+      endDate: proposal.endDate,
+      status: proposal.status,
+    });
 
     return {
       success: true,

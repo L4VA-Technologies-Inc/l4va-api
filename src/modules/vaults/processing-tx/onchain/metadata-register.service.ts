@@ -76,7 +76,7 @@ export class MetadataRegistryApiService {
     this.repoName = this.configService.get<string>('METADATA_REGISTRY_TESTNET_REPO');
   }
 
-  // @Cron(CronExpression.EVERY_5_HOURS)
+  @Cron(CronExpression.EVERY_5_HOURS)
   async checkPendingPRs(): Promise<void> {
     this.logger.log('Checking pending token registry PRs');
 

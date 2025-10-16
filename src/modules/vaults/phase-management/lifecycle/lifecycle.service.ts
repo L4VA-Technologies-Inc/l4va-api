@@ -57,7 +57,7 @@ export class LifecycleService {
     private readonly eventEmitter: EventEmitter2
   ) {}
 
-  // @Cron(CronExpression.EVERY_MINUTE)
+  @Cron(CronExpression.EVERY_MINUTE)
   async handleVaultLifecycleTransitions(): Promise<void> {
     await this.handlePublishedToContribution(); // Handle created vault -> contribution transitin
     await this.handleContributionToAcquire(); // Handle contribution -> acquire transitions
