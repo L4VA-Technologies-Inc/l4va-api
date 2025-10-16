@@ -45,7 +45,26 @@ export class TaptoolsController {
   })
   @ApiQuery({ name: 'address', type: String, description: 'Wallet address' })
   @ApiResponse({ status: 404, description: 'Asset not found' })
+  @UseGuards(AuthGuard)
   async getAssetDetails(@Param('id') assetId: string, @Query('address') walletAddress: string): Promise<number> {
     return this.taptoolsService.getWalletAssetsQuantity(walletAddress, assetId);
+  }
+
+  @Get('wallet-policies')
+  @ApiDoc({
+    summary: 'Get unique policy IDs from wallet',
+    description: 'Returns all unique policy IDs and their names from a wallet address',
+    status: 200,
+  })
+  @ApiQuery({ name: 'address', type: String, description: 'Wallet address' })
+  @ApiResponse({ status: 200, type: Array })
+  @UseGuards(AuthGuard)
+  async getWalletPolicyIds(@Query('address') address: string): Promise<
+    {
+      policyId: string;
+      name: string;
+    }[]
+  > {
+    return this.taptoolsService.getWalletPolicyIds(address);
   }
 }

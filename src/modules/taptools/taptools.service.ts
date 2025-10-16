@@ -46,7 +46,7 @@ export class TaptoolsService {
 
     // Add request interceptor for rate limiting
     let lastRequestTime = 0;
-    const minRequestInterval = 150; // 150ms between requests (~6-7 req/sec)
+    const minRequestInterval = 15; // 15ms between requests (~60-67 req/sec)
 
     this.blockfrostClient.interceptors.request.use(async config => {
       const now = Date.now();
@@ -679,5 +679,70 @@ export class TaptoolsService {
     }
 
     return processedAssets;
+  }
+
+  async getWalletPolicyIds(walletAddress: string): Promise<Array<{ policyId: string; name: string }>> {
+    try {
+      // Get wallet assets using Blockfrost
+      const response = await this.blockfrostClient.get<BlockfrostAddressDto>(`/addresses/${walletAddress}`);
+
+      if (response.status !== 200) {
+        throw new HttpException('Wallet address not found', 404);
+      }
+
+      const uniquePolicies = new Map<string, string>();
+
+      // Process each asset in the wallet
+      for (const asset of response.data.amount) {
+        if (asset.unit === 'lovelace') {
+          continue;
+        }
+
+        // Extract policy ID (first 56 characters of the unit)
+        const policyId = asset.unit.substring(0, 56);
+
+        // Skip if we already have this policy ID
+        if (uniquePolicies.has(policyId)) {
+          continue;
+        }
+
+        try {
+          // Get asset details to fetch the policy name
+          const assetResponse = await this.blockfrostClient.get(`/assets/${asset.unit}`);
+
+          if (assetResponse.status === 200) {
+            const assetDetails = assetResponse.data;
+            const metadata = assetDetails.onchain_metadata || assetDetails.metadata || {};
+
+            // Try to get a meaningful name for the policy
+            const policyName =
+              metadata.name ||
+              assetDetails.metadata?.name ||
+              this.decodeAssetName(assetDetails.asset_name) ||
+              `Policy ${policyId.substring(0, 8)}...`;
+
+            uniquePolicies.set(policyId, policyName);
+          }
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        } catch (error) {
+          // If we can't get asset details, use a fallback name
+          uniquePolicies.set(policyId, `Policy ${policyId.substring(0, 8)}...`);
+        }
+      }
+
+      // Convert map to array format
+      return Array.from(uniquePolicies.entries()).map(([policyId, name]) => ({
+        policyId,
+        name,
+      }));
+    } catch (error) {
+      this.logger.error(`Error fetching wallet policy IDs for ${walletAddress}:`, error.message);
+
+      if (error.response?.status === 404) {
+        throw new HttpException('Wallet address not found', 404);
+      }
+
+      throw new HttpException('Failed to fetch wallet policy IDs', 500);
+    }
   }
 }
