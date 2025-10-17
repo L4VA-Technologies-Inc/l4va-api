@@ -23,7 +23,7 @@ import { Repository } from 'typeorm';
 
 import { BlockchainService } from './blockchain.service';
 import { Datum1 } from './types/type';
-import { generate_tag_from_txhash_index, getUtxos, getVaultUtxo, toHex } from './utils/lib';
+import { generate_tag_from_txhash_index, getUtxos, getVaultUtxo } from './utils/lib';
 import { VaultInsertingService } from './vault-inserting.service';
 
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
@@ -84,12 +84,8 @@ export class VaultManagingService {
   private readonly adminSKey: string;
   private readonly adminAddress: string;
   private readonly blockfrost: BlockFrostAPI;
-  private readonly anvilApi: string;
   private readonly vaultScriptAddress: string;
   private readonly unparametizedScriptHash: string;
-  private readonly anvilHeaders: {
-    [key: string]: string;
-  };
 
   constructor(
     @InjectRepository(Transaction)
@@ -107,12 +103,6 @@ export class VaultManagingService {
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.vaultScriptAddress = this.configService.get<string>('VAULT_SCRIPT_ADDRESS');
     this.unparametizedScriptHash = this.configService.get<string>('CONTRIBUTION_SCRIPT_HASH');
-    this.anvilApi = this.configService.get<string>('ANVIL_API_URL') + '/services';
-    this.anvilHeaders = {
-      'x-api-key': this.configService.get<string>('ANVIL_API_KEY'),
-      'Content-Type': 'application/json',
-    };
-
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
     });
@@ -147,7 +137,7 @@ export class VaultManagingService {
     );
 
     // Apply parameters to the blueprint before building the transaction
-    const applyParamsPayload = {
+    const applyParamsResult = await this.blockchainService.applyBlueprintParameters({
       params: {
         [this.unparametizedScriptHash]: [
           this.scPolicyId, // policy id of the vault
@@ -158,42 +148,23 @@ export class VaultManagingService {
         title: 'l4va/vault-with-dispatch',
         version: '0.1.1',
       },
-    };
-
-    const applyParamsResponse = await fetch(`${this.anvilApi}/blueprints/apply-params`, {
-      method: 'POST',
-      headers: this.anvilHeaders,
-      body: JSON.stringify(applyParamsPayload),
     });
 
-    const applyParamsResult = await applyParamsResponse.json();
-
-    if (!applyParamsResult.preloadedScript) {
-      console.error(applyParamsResponse.statusText);
-      throw new Error('Failed to apply parameters to blueprint');
-    }
-
-    // Step 2: Upload the parameterized script to /blueprints
-    const uploadScriptResponse = await fetch(`${this.anvilApi}/blueprints`, {
-      method: 'POST',
-      headers: this.anvilHeaders,
-      body: JSON.stringify({
-        blueprint: {
-          ...applyParamsResult.preloadedScript.blueprint,
-          preamble: {
-            ...applyParamsResult.preloadedScript.blueprint.preamble,
-            id: undefined,
-            title: 'l4va/vault/' + assetName,
-            version: '0.0.1',
-          },
-          validators: applyParamsResult.preloadedScript.blueprint.validators.filter(
-            (v: any) => v.title.includes('contribute') && v.hash !== this.unparametizedScriptHash
-          ),
+    // Upload the parameterized script
+    await this.blockchainService.uploadBlueprint({
+      blueprint: {
+        ...applyParamsResult.preloadedScript.blueprint,
+        preamble: {
+          ...applyParamsResult.preloadedScript.blueprint.preamble,
+          id: undefined,
+          title: 'l4va/vault/' + assetName,
+          version: '0.0.1',
         },
-      }),
+        validators: applyParamsResult.preloadedScript.blueprint.validators.filter(
+          (v: any) => v.title.includes('contribute') && v.hash !== this.unparametizedScriptHash
+        ),
+      },
     });
-
-    await uploadScriptResponse.json();
 
     const scriptHash =
       applyParamsResult.preloadedScript.blueprint.validators.find(
@@ -287,31 +258,10 @@ export class VaultManagingService {
                   },
                 },
                 valuation_type: vaultConfig.valueMethod, // Enum 0: 'FIXED' 1: 'LBE'
-                // fractionalization: {
-                //   percentage: 1,
-                //   token_supply: 1,
-                //   token_decimals: 1,
-                //   token_policy: "",
-                // },
-                custom_metadata: [
-                  // <Data,Data>
-                  // [
-                  //   PlutusData.new_bytes(Buffer.from("foo")).to_hex(),
-                  //   PlutusData.new_bytes(Buffer.from("bar")).to_hex(),
-                  // ],
-                  [toHex('foo'), toHex('bar')],
-                  [toHex('bar'), toHex('foo')],
-                  [toHex('vaultId'), toHex(vaultConfig.vaultId)],
-                ], // like a tuple
-
-                // termination: {
-                //   termination_type: 1,
-                //   fdp: 1,
-                // },
-                // acquire: {
-                //   reserve: 1,
-                //   liquidityPool: 1,
-                // },
+                // fractionalization: {},
+                custom_metadata: [], // like a tuple
+                // termination: {},
+                // acquire: {},
                 admin: this.adminHash,
                 minting_key: this.adminHash,
               },
@@ -590,7 +540,7 @@ export class VaultManagingService {
 
       if (txHash) {
         // Step 4: Update blueprint with the script transaction reference
-        const blueprintUpdatePayload = {
+        await this.blockchainService.uploadBlueprint({
           blueprint: {
             ...applyParamsResult.preloadedScript.blueprint,
             preamble: {
@@ -609,15 +559,9 @@ export class VaultManagingService {
               index: 1, // Script output is at index 1 (vault is at index 0)
             },
           },
-        };
-
-        await fetch(`${this.anvilApi}/blueprints`, {
-          method: 'POST',
-          headers: this.anvilHeaders,
-          body: JSON.stringify(blueprintUpdatePayload),
         });
       } else {
-        console.error('Failed to create vault and upload script');
+        throw new Error(`Failed to create vault and upload script`);
       }
 
       return { txHash: result.txHash };

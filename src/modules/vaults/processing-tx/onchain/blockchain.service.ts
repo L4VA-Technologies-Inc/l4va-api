@@ -24,11 +24,42 @@ export interface TransactionSubmitResponse {
   txHash: string;
 }
 
+export interface ApplyParamsPayload {
+  params: Record<string, any[]>;
+  blueprint: {
+    title: string;
+    version: string;
+  };
+}
+
+export interface ApplyParamsResponse {
+  preloadedScript: {
+    blueprint: {
+      preamble: any;
+      validators: Array<{
+        title: string;
+        hash: string;
+      }>;
+    };
+  };
+}
+
+export interface UploadBlueprintPayload {
+  blueprint: {
+    preamble: any;
+    validators: any[];
+  };
+  refs?: Record<string, { txHash: string; index: number }>;
+}
+
 @Injectable()
 export class BlockchainService {
   private readonly logger = new Logger(BlockchainService.name);
   private readonly anvilApi: string;
   private readonly anvilApiKey: string;
+  private readonly anvilHeaders: {
+    [key: string]: string;
+  };
 
   constructor(
     private readonly configService: ConfigService,
@@ -36,6 +67,10 @@ export class BlockchainService {
   ) {
     this.anvilApi = this.configService.get<string>('ANVIL_API_URL') + '/services';
     this.anvilApiKey = this.configService.get<string>('ANVIL_API_KEY');
+    this.anvilHeaders = {
+      'x-api-key': this.configService.get<string>('ANVIL_API_KEY'),
+      'Content-Type': 'application/json',
+    };
   }
 
   /**
@@ -45,15 +80,9 @@ export class BlockchainService {
    */
   async buildTransaction(txData: any): Promise<TransactionBuildResponse> {
     try {
-      const headers = {
-        'x-api-key': this.anvilApiKey,
-        'Content-Type': 'application/json',
-      };
-
-      // Build the transaction
       const contractDeployed = await fetch(`${this.anvilApi}/transactions/build`, {
         method: 'POST',
-        headers,
+        headers: this.anvilHeaders,
         body: JSON.stringify(txData),
       });
 
@@ -131,10 +160,7 @@ export class BlockchainService {
             signatures: signedTx.signatures || [],
           },
           {
-            headers: {
-              'x-api-key': this.anvilApiKey,
-              'Content-Type': 'application/json',
-            },
+            headers: this.anvilHeaders,
           }
         )
       );
@@ -170,6 +196,96 @@ export class BlockchainService {
       this.logger.error('Error submitting transaction', error.message);
       throw new Error(`Failed to submit transaction: ${error.message}`);
     }
+  }
+
+  /**
+   * Apply parameters to a blueprint script
+   * @param payload Parameters to apply to the script
+   * @returns Applied parameters result
+   */
+  async applyBlueprintParameters(payload: ApplyParamsPayload): Promise<ApplyParamsResponse> {
+    try {
+      const response = await fetch(`${this.anvilApi}/blueprints/apply-params`, {
+        method: 'POST',
+        headers: this.anvilHeaders,
+        body: JSON.stringify(payload),
+      });
+
+      const result = await response.json();
+
+      if (!result.preloadedScript) {
+        this.logger.error(`Failed to apply parameters: ${response.statusText}`);
+        throw new Error('Failed to apply parameters to blueprint');
+      }
+
+      this.logger.log('Blueprint parameters applied successfully');
+      return result;
+    } catch (error) {
+      this.logger.error('Error applying blueprint parameters', error);
+      throw new Error(`Failed to apply blueprint parameters: ${error.message}`);
+    }
+  }
+
+  /**
+   * Upload a blueprint to the service
+   * @param payload Blueprint data to upload
+   * @returns Upload response
+   */
+  async uploadBlueprint(payload: UploadBlueprintPayload): Promise<any> {
+    try {
+      const response = await fetch(`${this.anvilApi}/blueprints`, {
+        method: 'POST',
+        headers: this.anvilHeaders,
+        body: JSON.stringify(payload),
+      });
+
+      const result = await response.json();
+      this.logger.log('Blueprint uploaded successfully');
+      return result;
+    } catch (error) {
+      this.logger.error('Error uploading blueprint', error);
+      throw new Error(`Failed to upload blueprint: ${error.message}`);
+    }
+  }
+
+  /**
+   * Helper method to apply parameters and get specific script hash
+   * @param scriptHash Unparameterized script hash
+   * @param params Parameters to apply
+   * @param scriptTitle Title of the script to find
+   * @param blueprintInfo Blueprint title and version
+   * @returns Parameterized script hash and full response
+   */
+  async applyParametersAndGetScriptHash(
+    scriptHash: string,
+    params: any[],
+    scriptTitle: string,
+    blueprintInfo: { title: string; version: string }
+  ): Promise<{ parameterizedHash: string; fullResponse: ApplyParamsResponse }> {
+    const applyParamsPayload: ApplyParamsPayload = {
+      params: {
+        [scriptHash]: params,
+      },
+      blueprint: blueprintInfo,
+    };
+
+    const applyParamsResult = await this.applyBlueprintParameters(applyParamsPayload);
+
+    // Find the parameterized script hash
+    const parameterizedScript = applyParamsResult.preloadedScript.blueprint.validators.find(
+      (v: any) => v.title === scriptTitle && v.hash !== scriptHash
+    );
+
+    if (!parameterizedScript) {
+      throw new Error(`Failed to find parameterized script hash for ${scriptTitle}`);
+    }
+
+    this.logger.log(`Parameterized script hash for ${scriptTitle}: ${parameterizedScript.hash}`);
+
+    return {
+      parameterizedHash: parameterizedScript.hash,
+      fullResponse: applyParamsResult,
+    };
   }
 
   private parseValidityIntervalError(errorMessage: string): {
