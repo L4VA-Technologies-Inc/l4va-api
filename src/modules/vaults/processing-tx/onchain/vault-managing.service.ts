@@ -85,8 +85,11 @@ export class VaultManagingService {
   private readonly adminAddress: string;
   private readonly blockfrost: BlockFrostAPI;
   private readonly anvilApi: string;
-  private readonly anvilApiKey: string;
   private readonly vaultScriptAddress: string;
+  private readonly unparametizedScriptHash: string;
+  private readonly anvilHeaders: {
+    [key: string]: string;
+  };
 
   constructor(
     @InjectRepository(Transaction)
@@ -103,11 +106,16 @@ export class VaultManagingService {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.vaultScriptAddress = this.configService.get<string>('VAULT_SCRIPT_ADDRESS');
+    this.unparametizedScriptHash = this.configService.get<string>('CONTRIBUTION_SCRIPT_HASH');
+    this.anvilApi = this.configService.get<string>('ANVIL_API_URL') + '/services';
+    this.anvilHeaders = {
+      'x-api-key': this.configService.get<string>('ANVIL_API_KEY'),
+      'Content-Type': 'application/json',
+    };
+
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
     });
-    this.anvilApi = this.configService.get<string>('ANVIL_API_URL') + '/services';
-    this.anvilApiKey = this.configService.get<string>('ANVIL_API_KEY');
   }
 
   /**
@@ -138,44 +146,37 @@ export class VaultManagingService {
       selectedUtxo.input().index()
     );
 
-    const headers = {
-      'x-api-key': this.anvilApiKey,
-      'Content-Type': 'application/json',
-    };
-    //9a9b0bc93c26a40952aaff525ac72a992a77ebfa29012c9cb4a72eb2 contribution script hash
-    //0f9d90277089b2f442bef581dcc1d333a92c3fedf688700c4e39ab89 contribution script hash with verbous
-    const unparametizedScriptHash = '9a9b0bc93c26a40952aaff525ac72a992a77ebfa29012c9cb4a72eb2';
-
     // Apply parameters to the blueprint before building the transaction
     const applyParamsPayload = {
       params: {
-        [unparametizedScriptHash]: [
+        [this.unparametizedScriptHash]: [
           this.scPolicyId, // policy id of the vault
           assetName, // newly created vault id from generate_tag_from_txhash_index
         ],
       },
       blueprint: {
-        title: 'l4va/vault',
-        version: '0.0.7',
+        title: 'l4va/vault-with-dispatch',
+        version: '0.1.1',
       },
     };
 
     const applyParamsResponse = await fetch(`${this.anvilApi}/blueprints/apply-params`, {
       method: 'POST',
-      headers,
+      headers: this.anvilHeaders,
       body: JSON.stringify(applyParamsPayload),
     });
 
     const applyParamsResult = await applyParamsResponse.json();
 
     if (!applyParamsResult.preloadedScript) {
+      console.error(applyParamsResponse.statusText);
       throw new Error('Failed to apply parameters to blueprint');
     }
 
     // Step 2: Upload the parameterized script to /blueprints
     const uploadScriptResponse = await fetch(`${this.anvilApi}/blueprints`, {
       method: 'POST',
-      headers,
+      headers: this.anvilHeaders,
       body: JSON.stringify({
         blueprint: {
           ...applyParamsResult.preloadedScript.blueprint,
@@ -186,7 +187,7 @@ export class VaultManagingService {
             version: '0.0.1',
           },
           validators: applyParamsResult.preloadedScript.blueprint.validators.filter(
-            (v: any) => v.title.includes('contribute') && v.hash !== unparametizedScriptHash
+            (v: any) => v.title.includes('contribute') && v.hash !== this.unparametizedScriptHash
           ),
         },
       }),
@@ -196,7 +197,7 @@ export class VaultManagingService {
 
     const scriptHash =
       applyParamsResult.preloadedScript.blueprint.validators.find(
-        (v: any) => v.title === 'contribute.contribute.mint' && v.hash !== unparametizedScriptHash
+        (v: any) => v.title === 'contribute.contribute.mint' && v.hash !== this.unparametizedScriptHash
       )?.hash || '';
     if (!scriptHash) {
       throw new Error('Failed to find script hash');
@@ -588,11 +589,6 @@ export class VaultManagingService {
       const { txHash } = result;
 
       if (txHash) {
-        const headers = {
-          'x-api-key': this.anvilApiKey,
-          'Content-Type': 'application/json',
-        };
-
         // Step 4: Update blueprint with the script transaction reference
         const blueprintUpdatePayload = {
           blueprint: {
@@ -617,7 +613,7 @@ export class VaultManagingService {
 
         await fetch(`${this.anvilApi}/blueprints`, {
           method: 'POST',
-          headers,
+          headers: this.anvilHeaders,
           body: JSON.stringify(blueprintUpdatePayload),
         });
       } else {
