@@ -467,6 +467,31 @@ export class Vault {
   })
   last_update_tx_index?: number;
 
+  @Expose({ name: 'dispatchUtxoTxHash' })
+  @Column({
+    name: 'dispatch_utxo_tx_hash',
+    type: 'varchar',
+    nullable: true,
+  })
+  dispatch_utxo_tx_hash?: string;
+
+  @Expose({ name: 'dispatchUtxoTxIndex' })
+  @Column({
+    name: 'dispatch_utxo_tx_index',
+    type: 'integer',
+    nullable: true,
+    default: 0,
+  })
+  dispatch_utxo_tx_index?: number;
+
+  @Exclude()
+  @Column({
+    name: 'dispatch_script_hash',
+    type: 'varchar',
+    nullable: true,
+  })
+  dispatch_script_hash?: string;
+
   @Expose({ name: 'vaultPolicyId' })
   @Column({
     name: 'vault_policy_id',
