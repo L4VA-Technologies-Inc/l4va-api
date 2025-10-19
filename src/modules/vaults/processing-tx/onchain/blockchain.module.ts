@@ -5,7 +5,6 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { TransactionsModule } from '../offchain-tx/transactions.module';
 
-import { AnvilApiService } from './anvil-api.service';
 import { BlockchainScannerService } from './blockchain-scanner.service';
 import { BlockchainController } from './blockchain.controller';
 import { BlockchainService } from './blockchain.service';
@@ -30,7 +29,6 @@ import { Vault } from '@/database/vault.entity';
   ],
   controllers: [BlockchainController],
   providers: [
-    AnvilApiService,
     MetadataRegistryApiService,
     BlockchainService,
     VaultInsertingService,

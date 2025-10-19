@@ -345,8 +345,6 @@ export class VaultInsertingService {
     await this.transactionsService.updateTransactionStatus(tx.hash, txIndex, internalStatus);
   }
 
-  // return this.anvilApiService.submitTransaction(params);
-
   async handleBlockchainEvent(event: BlockchainWebhookDto): Promise<void> {
     // Only handle transaction events
     if (event.type !== 'transaction') {
