@@ -142,9 +142,7 @@ export class VaultManagingService {
       'x-api-key': this.anvilApiKey,
       'Content-Type': 'application/json',
     };
-    //9a9b0bc93c26a40952aaff525ac72a992a77ebfa29012c9cb4a72eb2 contribution script hash
-    //0f9d90277089b2f442bef581dcc1d333a92c3fedf688700c4e39ab89 contribution script hash with verbous
-    const unparametizedScriptHash = '0f9d90277089b2f442bef581dcc1d333a92c3fedf688700c4e39ab89';
+    const unparametizedScriptHash = 'b61a6fe07a9f75bdeadd7e9d6ba0028c615fe90402eec336b1637f5b';
 
     // Apply parameters to the blueprint before building the transaction
     const applyParamsPayload = {
@@ -155,8 +153,8 @@ export class VaultManagingService {
         ],
       },
       blueprint: {
-        title: 'l4va/vault-verbose',
-        version: '0.0.8',
+        title: 'l4va/vault-with-dispatch',
+        version: '0.1.1',
       },
     };
 
@@ -281,28 +279,7 @@ export class VaultManagingService {
                   },
                 },
                 valuation_type: vaultConfig.valueMethod, // Enum 0: 'FIXED' 1: 'LBE'
-                // fractionalization: {
-                //   percentage: 1,
-                //   token_supply: 1,
-                //   token_decimals: 1,
-                //   token_policy: "",
-                // },
-                custom_metadata: [
-                  // <Data,Data>
-                  // [
-                  //   PlutusData.new_bytes(Buffer.from("foo")).to_hex(),
-                  //   PlutusData.new_bytes(Buffer.from("bar")).to_hex(),
-                  // ],
-                ], // like a tuple
-
-                // termination: {
-                //   termination_type: 1,
-                //   fdp: 1,
-                // },
-                // acquire: {
-                //   reserve: 1,
-                //   liquidityPool: 1,
-                // },
+                custom_metadata: [],
                 admin: this.adminHash,
                 minting_key: this.adminHash,
               },
@@ -320,8 +297,6 @@ export class VaultManagingService {
 
       // Build the transaction using BlockchainService
       const buildResponse = await this.blockchainService.buildTransaction(input);
-
-      console.log('Vault transaction result:', JSON.stringify(buildResponse));
 
       // Sign the transaction
       const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
