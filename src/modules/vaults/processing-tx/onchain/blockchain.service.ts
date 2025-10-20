@@ -319,4 +319,51 @@ export class BlockchainService {
 
     return {};
   }
+
+  /**
+   * Apply parameters to the dispatch script
+   * @param vault_policy - PolicyId of the vault
+   * @param vault_id - ByteArray vault identifier
+   * @param contribution_script_hash - ByteArray contribution script hash
+   * @param unparametizedDispatchHash - Unparameterized dispatch script hash
+   * @returns The parameterized script hash and full response
+   */
+  async applyDispatchParameters(params: {
+    vault_policy: string;
+    vault_id: string;
+    contribution_script_hash: string;
+    unparametizedDispatchHash: string;
+  }): Promise<{
+    parameterizedHash: string;
+    fullResponse: ApplyParamsResponse;
+  }> {
+    try {
+      const applyParamsResult = await this.applyBlueprintParameters({
+        params: {
+          [params.unparametizedDispatchHash]: [params.vault_policy, params.vault_id, params.contribution_script_hash],
+        },
+        blueprint: {
+          title: 'l4va/vault-with-dispatch',
+          version: '0.1.1',
+        },
+      });
+
+      // Find the parameterized dispatch script hash
+      const parameterizedScript = applyParamsResult.preloadedScript.blueprint.validators.find(
+        (v: any) => v.title === 'dispatch.dispatch.spend' && v.hash !== params.unparametizedDispatchHash
+      );
+
+      if (!parameterizedScript) {
+        throw new Error('Failed to find parameterized dispatch script hash');
+      }
+
+      return {
+        parameterizedHash: parameterizedScript.hash,
+        fullResponse: applyParamsResult,
+      };
+    } catch (error) {
+      this.logger.error('Error applying dispatch parameters', error);
+      throw new Error(`Failed to apply dispatch parameters: ${error.message}`);
+    }
+  }
 }
