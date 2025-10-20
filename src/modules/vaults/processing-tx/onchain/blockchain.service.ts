@@ -57,6 +57,7 @@ export class BlockchainService {
   private readonly logger = new Logger(BlockchainService.name);
   private readonly anvilApi: string;
   private readonly unparametizedDispatchHash: string;
+  private readonly blueprintTitle: string;
   private readonly anvilHeaders: {
     [key: string]: string;
   };
@@ -71,6 +72,7 @@ export class BlockchainService {
       'Content-Type': 'application/json',
     };
     this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
+    this.blueprintTitle = this.configService.get<string>('BLUEPRINT_TITLE');
   }
 
   /**
@@ -302,7 +304,7 @@ export class BlockchainService {
           [this.unparametizedDispatchHash]: [params.vault_policy, params.vault_id, params.contribution_script_hash],
         },
         blueprint: {
-          title: 'l4va/vault-with-dispatch-no-verbose',
+          title: this.blueprintTitle,
           version: '0.1.1',
         },
       });

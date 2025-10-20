@@ -85,9 +85,10 @@ export class VaultManagingService {
   private readonly adminHash: string;
   private readonly adminSKey: string;
   private readonly adminAddress: string;
-  private readonly blockfrost: BlockFrostAPI;
   private readonly vaultScriptAddress: string;
   private readonly unparametizedScriptHash: string;
+  private readonly blueprintTitle: string;
+  private readonly blockfrost: BlockFrostAPI;
 
   constructor(
     @InjectRepository(Transaction)
@@ -100,6 +101,7 @@ export class VaultManagingService {
     private readonly vaultInsertingService: VaultInsertingService,
     private readonly transactionsService: TransactionsService
   ) {
+    this.blueprintTitle = this.configService.get<string>('VAULT_BLUEPRINT_TITLE');
     this.scPolicyId = this.configService.get<string>('SC_POLICY_ID');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
@@ -148,7 +150,7 @@ export class VaultManagingService {
         ],
       },
       blueprint: {
-        title: 'l4va/vault-with-dispatch-no-verbose',
+        title: this.blueprintTitle,
         version: '0.1.1',
       },
     });
