@@ -56,7 +56,7 @@ export interface UploadBlueprintPayload {
 export class BlockchainService {
   private readonly logger = new Logger(BlockchainService.name);
   private readonly anvilApi: string;
-  private readonly anvilApiKey: string;
+  private readonly unparametizedDispatchHash: string;
   private readonly anvilHeaders: {
     [key: string]: string;
   };
@@ -66,11 +66,11 @@ export class BlockchainService {
     private readonly httpService: HttpService
   ) {
     this.anvilApi = this.configService.get<string>('ANVIL_API_URL') + '/services';
-    this.anvilApiKey = this.configService.get<string>('ANVIL_API_KEY');
     this.anvilHeaders = {
       'x-api-key': this.configService.get<string>('ANVIL_API_KEY'),
       'Content-Type': 'application/json',
     };
+    this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
   }
 
   /**
@@ -332,7 +332,6 @@ export class BlockchainService {
     vault_policy: string;
     vault_id: string;
     contribution_script_hash: string;
-    unparametizedDispatchHash: string;
   }): Promise<{
     parameterizedHash: string;
     fullResponse: ApplyParamsResponse;
@@ -340,7 +339,7 @@ export class BlockchainService {
     try {
       const applyParamsResult = await this.applyBlueprintParameters({
         params: {
-          [params.unparametizedDispatchHash]: [params.vault_policy, params.vault_id, params.contribution_script_hash],
+          [this.unparametizedDispatchHash]: [params.vault_policy, params.vault_id, params.contribution_script_hash],
         },
         blueprint: {
           title: 'l4va/vault-with-dispatch',
@@ -350,7 +349,7 @@ export class BlockchainService {
 
       // Find the parameterized dispatch script hash
       const parameterizedScript = applyParamsResult.preloadedScript.blueprint.validators.find(
-        (v: any) => v.title === 'dispatch.dispatch.spend' && v.hash !== params.unparametizedDispatchHash
+        (v: any) => v.title === 'dispatch.dispatch.spend' && v.hash !== this.unparametizedDispatchHash
       );
 
       if (!parameterizedScript) {
