@@ -152,9 +152,9 @@ export class VaultInsertingService {
         scriptInteractions: object[];
         outputs: {
           address: string;
-          assets: object[];
+          assets?: object[];
           lovelace?: number; // Required if Contribution in ADA
-          datum: { type: 'inline'; value: Datum; shape: object };
+          datum?: { type: 'inline'; value: Datum; shape: object };
         }[];
         requiredSigners: string[];
         referenceInputs: { txHash: string; index: number }[];
@@ -166,13 +166,14 @@ export class VaultInsertingService {
       } = {
         changeAddress: params.changeAddress,
         message: 'Asset(s) contributed to vault',
+        // utxos: utxos,
         mint: [
           {
             version: 'cip25',
             assetName: { name: 'receipt', format: 'utf8' },
             policyId: CONTRIBUTION_SCRIPT_HASH,
             type: 'plutus',
-            quantity: 1, // Mint 1 VT token
+            quantity: 2, // Mint 1 VT token
             metadata: {},
           },
         ],
@@ -222,6 +223,29 @@ export class VaultInsertingService {
               },
             },
           },
+          {
+            address: vault.contract_address,
+            lovelace: 10_000_000,
+            assets: [
+              {
+                assetName: { name: 'receipt', format: 'utf8' },
+                policyId: CONTRIBUTION_SCRIPT_HASH,
+                quantity: 1,
+              },
+            ],
+            datum: {
+              type: 'inline',
+              value: {
+                policy_id: CONTRIBUTION_SCRIPT_HASH,
+                asset_name: VAULT_ID,
+                owner: params.changeAddress,
+              },
+              shape: {
+                validatorHash: CONTRIBUTION_SCRIPT_HASH,
+                purpose: 'spend',
+              },
+            },
+          },
         ],
         requiredSigners: [this.adminHash],
         referenceInputs: [
@@ -236,6 +260,8 @@ export class VaultInsertingService {
         },
         network: 'preprod',
       };
+
+      this.logger.debug(JSON.stringify(input));
 
       // Build the transaction using BlockchainService
       const buildResponse = await this.blockchainService.buildTransaction(input);
@@ -278,8 +304,6 @@ export class VaultInsertingService {
         transaction: signedTx.transaction,
         signatures: signedTx.signatures || [],
       });
-
-      this.logger.log(`Updating transaction ${signedTx.txId} with hash ${result.txHash}`);
 
       try {
         // Update the transaction hash in our database

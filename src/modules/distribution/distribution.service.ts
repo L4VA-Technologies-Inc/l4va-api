@@ -16,29 +16,6 @@ export class DistributionService {
 
   constructor() {}
 
-  calculateContributorTokens(params: {
-    valueContributed: number;
-    totalTvl: number;
-    lpVtAmount: number;
-    lpAdaAmount: number;
-    vtPrice: number;
-    vtSupply: number;
-    ASSETS_OFFERED_PERCENT: number;
-    LP_PERCENT: number;
-  }): number {
-    const { vtSupply, ASSETS_OFFERED_PERCENT, valueContributed, totalTvl, lpVtAmount } = params;
-
-    const contributorShare = valueContributed / totalTvl;
-    const vtRetained = this.round15((vtSupply - lpVtAmount) * (1 - ASSETS_OFFERED_PERCENT) * contributorShare);
-
-    // const lpVtRetained = this.round15(lpVtAmount * LP_PERCENT);
-    // const lpAdaRetained = this.round15(lpAdaAmount * LP_PERCENT);
-    // const vtAdaValue = this.round15(vtRetained * vtPrice);
-    // const totalRetainedValue = this.round15(this.calculateTotalValueRetained(0, vtAdaValue, lpAdaRetained, 0));
-
-    return Math.round(vtRetained);
-  }
-
   calculateAcquirerTokens(params: {
     adaSent: number;
     totalAcquiredValueAda: number;
@@ -47,36 +24,74 @@ export class DistributionService {
     vtSupply: number;
     ASSETS_OFFERED_PERCENT: number;
     vtPrice: number;
-  }): number {
+  }): {
+    vtReceived: number;
+    multiplier: number;
+  } {
     const { adaSent, vtSupply, ASSETS_OFFERED_PERCENT, totalAcquiredValueAda, lpVtAmount } = params;
 
     // ((ADA sent to the vault / total acquire ADA) * Assets Offered Percent) * (VT Supply - LP VT)
     const percentOfTotalAcquireAdaSent = this.round15(adaSent / totalAcquiredValueAda);
     const vtReceived = this.round15(percentOfTotalAcquireAdaSent * ASSETS_OFFERED_PERCENT * (vtSupply - lpVtAmount));
+    const multiplier = Math.floor(vtReceived / adaSent / 1_000_000);
+    const adjustedVtAmount = multiplier * adaSent * 1_000_000;
+    return {
+      vtReceived: adjustedVtAmount,
+      multiplier,
+    };
+  }
 
-    // const vtValueInAda = this.round15(vtReceived * vtPrice);
-    // const lpAdaInitialShare = this.round15(percentOfTotalAcquireAdaSent * lpAdaAmount);
-    // const lpVtInitialShare = this.round15(percentOfTotalAcquireAdaSent * lpVtAmount);
-    // const lpVtAdaValue = this.round15(lpVtInitialShare * vtPrice);
-    // const totalValueInAdaRetained = this.round15(adaSent + vtValueInAda + lpAdaInitialShare + lpVtAdaValue);
-    // const valueInAdaRetainedNetOfFees = this.round15(totalValueInAdaRetained - l4vaFee - trxnReserveFee);
-    return Math.round(vtReceived);
+  calculateContributorTokens(params: {
+    txContributedValue: number;
+    userTotalValue: number;
+    totalTvl: number;
+    lpVtAmount: number;
+    lpAdaAmount: number;
+    vtPrice: number;
+    vtSupply: number;
+    ASSETS_OFFERED_PERCENT: number;
+  }): {
+    vtAmount: number;
+    adaAmount: number;
+    proportionOfUserTotal: number;
+    userTotalVtTokens: number;
+  } {
+    const { txContributedValue, userTotalValue, totalTvl, lpVtAmount, vtPrice, vtSupply, ASSETS_OFFERED_PERCENT } =
+      params;
+
+    // Calculate proportion of this transaction within user's total contribution
+    const proportionOfUserTotal = userTotalValue > 0 ? txContributedValue / userTotalValue : 0;
+
+    // Calculate total VT tokens for the user
+    const contributorShare = userTotalValue / totalTvl;
+    const userTotalVtTokens = this.round15((vtSupply - lpVtAmount) * (1 - ASSETS_OFFERED_PERCENT) * contributorShare);
+
+    // Calculate VT tokens for this specific transaction
+    const vtAmount = userTotalVtTokens * proportionOfUserTotal;
+    const adaAmount = this.round15(vtAmount * vtPrice);
+
+    return {
+      vtAmount: Math.floor(vtAmount),
+      adaAmount: Math.floor(adaAmount * 1_000_000), // Convert to lovelace
+      proportionOfUserTotal,
+      userTotalVtTokens: Math.round(userTotalVtTokens),
+    };
   }
 
   /**
    * Calculate liquidity pool tokens and values
    */
-  async calculateLpTokens(params: {
+  calculateLpTokens(params: {
     totalAcquiredAda: number;
     vtSupply: number;
     assetsOfferedPercent: number;
     lpPercent: number;
-  }): Promise<{
+  }): {
     lpAdaAmount: number;
     lpVtAmount: number;
     vtPrice: number;
     fdv: number;
-  }> {
+  } {
     const { totalAcquiredAda, vtSupply, assetsOfferedPercent, lpPercent } = params;
 
     // Calculate VT price (this part is correct in your current code)
@@ -102,29 +117,42 @@ export class DistributionService {
     };
   }
 
-  calculateAcquireMultipliers(params: {
-    contributorsClaims: Claim[];
-    acquirerClaims: Claim[];
-  }): [string, string, number][] {
+  calculateAcquireMultipliers(params: { contributorsClaims: Claim[]; acquirerClaims: Claim[] }): {
+    acquireMultiplier: [string, string, number][];
+    adaDistribution: [string, string, number][];
+  } {
     const { contributorsClaims, acquirerClaims } = params;
-    const multipliers = [];
+    const acquireMultiplier = [];
+    const adaDistribution = [];
 
     for (const claim of contributorsClaims) {
-      // Creates eaqual share between all NFTs in same tx, used reminder to always have sum of multipliers eqaul to claim.amount
-      const baseShare = Math.floor(claim.amount / claim.transaction.assets.length);
-      const remainder = claim.amount - baseShare * claim.transaction.assets.length;
+      const contributorAdaAmount = claim.metadata?.adaAmount || 0;
+
+      // VT token distribution (existing logic)
+      const baseVtShare = Math.floor(claim.amount / claim.transaction.assets.length);
+      const vtRemainder = claim.amount - baseVtShare * claim.transaction.assets.length;
+
+      // ADA distribution among assets
+      const baseAdaShare = Math.floor(contributorAdaAmount / claim.transaction.assets.length);
+      const adaRemainder = contributorAdaAmount - baseAdaShare * claim.transaction.assets.length;
+
       claim.transaction.assets.forEach((asset, index) => {
-        const share = baseShare + (index < remainder ? 1 : 0);
-        multipliers.push([asset.policy_id, asset.asset_id, share]);
+        const vtShare = baseVtShare + (index < vtRemainder ? 1 : 0);
+        acquireMultiplier.push([asset.policy_id, asset.asset_id, vtShare]);
+        const adaShare = baseAdaShare + (index < adaRemainder ? 1 : 0);
+        adaDistribution.push([asset.policy_id, asset.asset_id, adaShare]);
       });
     }
 
     for (const claim of acquirerClaims) {
       const multiplier = claim.metadata?.multiplier || Math.floor(claim.amount / claim.transaction.amount / 1_000_000);
-      multipliers.push(['', '', multiplier]);
+      acquireMultiplier.push(['', '', multiplier]);
     }
 
-    return multipliers;
+    return {
+      acquireMultiplier,
+      adaDistribution,
+    };
   }
 
   /**
@@ -136,27 +164,13 @@ export class DistributionService {
     lpAdaAmount: number
   ): {
     adaPairMultiplier: number;
-    precisionLoss: number;
   } {
     const lpLovelaceAmount = lpAdaAmount * 1_000_000;
     // Calculate the multiplier (VT per ADA)
     const multiplier = Math.floor(lpVtAmount / lpLovelaceAmount);
 
-    // Validate precision loss
-    const reconstructedVT = multiplier * lpLovelaceAmount;
-    const difference = Math.abs(reconstructedVT - lpVtAmount);
-    const precisionLoss = (difference / lpVtAmount) * 100;
-
-    // Check if precision loss is significant
-    const hasHighPrecisionLoss = precisionLoss > 1;
-
-    if (hasHighPrecisionLoss) {
-      this.logger.warn(`High precision loss in LP multiplier: ${precisionLoss.toFixed(2)}% error`);
-    }
-
     return {
       adaPairMultiplier: multiplier,
-      precisionLoss,
     };
   }
 
@@ -166,9 +180,5 @@ export class DistributionService {
 
   protected round2(amount: number): number {
     return Math.round(amount * 1e2) / 1e2;
-  }
-
-  private calculateTotalValueRetained(netAda: number, vtAda: number, lpAda: number, lpVtAda: number): number {
-    return this.round15(netAda + vtAda + lpAda + lpVtAda);
   }
 }

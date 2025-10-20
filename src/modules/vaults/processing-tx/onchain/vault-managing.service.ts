@@ -21,15 +21,17 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
+import { TransactionsService } from '../offchain-tx/transactions.service';
+
 import { BlockchainService } from './blockchain.service';
-import { Datum1 } from './types/type';
+import { Datum1, Redeemer, Redeemer1 } from './types/type';
 import { generate_tag_from_txhash_index, getUtxos, getVaultUtxo } from './utils/lib';
 import { VaultInsertingService } from './vault-inserting.service';
 
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
-import { TransactionType } from '@/types/transaction.types';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { SmartContractVaultStatus, VaultPrivacy } from '@/types/vault.types';
 
 export interface VaultConfig {
@@ -95,7 +97,8 @@ export class VaultManagingService {
     private readonly configService: ConfigService,
     @Inject(BlockchainService)
     private readonly blockchainService: BlockchainService,
-    private readonly vaultInsertingService: VaultInsertingService
+    private readonly vaultInsertingService: VaultInsertingService,
+    private readonly transactionsService: TransactionsService
   ) {
     this.scPolicyId = this.configService.get<string>('SC_POLICY_ID');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
@@ -145,7 +148,7 @@ export class VaultManagingService {
         ],
       },
       blueprint: {
-        title: 'l4va/vault-with-dispatch',
+        title: 'l4va/vault-with-dispatch-no-verbose',
         version: '0.1.1',
       },
     });
@@ -382,19 +385,20 @@ export class VaultManagingService {
     }
   }
 
-  // Create a transaction to update the vault's metadata
   async updateVaultMetadataTx({
     vault,
     transactionId,
     acquireMultiplier,
     adaPairMultiplier,
     vaultStatus,
+    adaDistribution,
   }: {
     vault: Vault;
     transactionId: string;
     vaultStatus: SmartContractVaultStatus;
     acquireMultiplier?: [string, string | null, number][];
     adaPairMultiplier?: number;
+    adaDistribution?: [string, string, number][];
   }): Promise<{
     success: boolean;
     txHash: string;
@@ -481,10 +485,10 @@ export class VaultManagingService {
               custom_metadata: [],
               admin: this.adminHash,
               minting_key: this.adminHash,
-              // New fields from update_vault.ts
               acquire_multiplier: acquireMultiplier,
-              ada_pair_multiplier: adaPairMultiplier,
-            },
+              ada_distribution: adaDistribution,
+              ada_pair_multipler: adaPairMultiplier,
+            } satisfies Datum1,
             shape: {
               validatorHash: this.scPolicyId,
               purpose: 'spend',
@@ -493,6 +497,131 @@ export class VaultManagingService {
         },
       ],
       requiredSigners: [this.adminHash],
+    };
+
+    this.logger.debug('Vault update transaction input:', JSON.stringify(input));
+
+    try {
+      // Build the transaction using BlockchainService
+      const buildResponse = await this.blockchainService.buildTransaction(input);
+
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+      const response = await this.vaultInsertingService.submitTransaction({
+        transaction: txToSubmitOnChain.to_hex(),
+        vaultId: vault.id,
+        txId: transaction.id,
+      });
+
+      return { success: true, txHash: response.txHash, message: 'Transaction submitted successfully' };
+    } catch (error) {
+      this.logger.error('Failed to build vault update tx:', error);
+      throw error;
+    }
+  }
+
+  async extractVaultAdaToDispatchScript(vault: Vault): Promise<{
+    success: boolean;
+    txHash: string;
+    message: string;
+  }> {
+    const transaction = await this.transactionsService.createTransaction({
+      vault_id: vault.id,
+      type: TransactionType.extract,
+      assets: [], // No assets needed for this transaction as it's metadata update
+    });
+
+    const transactions = await this.transactionRepository.find({
+      where: { vault_id: vault.id, type: TransactionType.acquire, status: TransactionStatus.confirmed },
+    });
+
+    const tx_hash = transactions[0]?.tx_hash;
+    const index = transactions[0]?.tx_index;
+
+    if (!tx_hash) {
+      throw new NotFoundException(`Transaction not found ${transactions[0]}`);
+    }
+
+    const dispatchResult = await this.blockchainService.applyDispatchParameters({
+      vault_policy: this.vaultScriptAddress,
+      vault_id: vault.asset_vault_name,
+      contribution_script_hash: vault.script_hash,
+    });
+
+    const PARAMETERIZED_DISPATCH_HASH = dispatchResult.parameterizedHash;
+    const DISPATCH_ADDRESS = EnterpriseAddress.new(
+      0, // preprod network
+      Credential.from_scripthash(ScriptHash.from_hex(PARAMETERIZED_DISPATCH_HASH))
+    )
+      .to_address()
+      .to_bech32();
+    const input: {
+      changeAddress: string;
+      message: string;
+      mint?: Array<object>;
+      scriptInteractions: object[];
+      outputs: {
+        address: string;
+        assets?: object[];
+        lovelace?: number;
+        datum?: { type: 'inline'; value: any; shape?: object };
+      }[];
+      requiredSigners: string[];
+      referenceInputs: { txHash: string; index: number }[];
+      validityInterval: {
+        start: boolean;
+        end: boolean;
+      };
+      network: string;
+    } = {
+      changeAddress: this.adminAddress,
+      message: 'Admin extract ADA and send to dispatch script',
+      scriptInteractions: [
+        {
+          purpose: 'spend',
+          hash: vault.script_hash,
+          outputRef: {
+            txHash: tx_hash, // transactions to collect
+            index: index,
+          },
+          redeemer: {
+            type: 'json',
+            value: {
+              __variant: 'ExtractAda',
+              __data: {
+                vault_token_output_index: 0,
+              },
+            } satisfies Redeemer1,
+          },
+        },
+        {
+          purpose: 'mint',
+          hash: vault.script_hash,
+          redeemer: {
+            type: 'json',
+            value: 'MintVaultToken' satisfies Redeemer,
+          },
+        },
+      ],
+      outputs: [
+        {
+          address: DISPATCH_ADDRESS,
+          lovelace: 10000000, // Send extracted ADA to dispatch script
+        },
+      ],
+      requiredSigners: [this.adminHash],
+      referenceInputs: [
+        {
+          txHash: vault.last_update_tx_hash,
+          index: 0,
+        },
+      ],
+      validityInterval: {
+        start: true,
+        end: true,
+      },
+      network: 'preprod',
     };
 
     try {

@@ -248,46 +248,6 @@ export class BlockchainService {
     }
   }
 
-  /**
-   * Helper method to apply parameters and get specific script hash
-   * @param scriptHash Unparameterized script hash
-   * @param params Parameters to apply
-   * @param scriptTitle Title of the script to find
-   * @param blueprintInfo Blueprint title and version
-   * @returns Parameterized script hash and full response
-   */
-  async applyParametersAndGetScriptHash(
-    scriptHash: string,
-    params: any[],
-    scriptTitle: string,
-    blueprintInfo: { title: string; version: string }
-  ): Promise<{ parameterizedHash: string; fullResponse: ApplyParamsResponse }> {
-    const applyParamsPayload: ApplyParamsPayload = {
-      params: {
-        [scriptHash]: params,
-      },
-      blueprint: blueprintInfo,
-    };
-
-    const applyParamsResult = await this.applyBlueprintParameters(applyParamsPayload);
-
-    // Find the parameterized script hash
-    const parameterizedScript = applyParamsResult.preloadedScript.blueprint.validators.find(
-      (v: any) => v.title === scriptTitle && v.hash !== scriptHash
-    );
-
-    if (!parameterizedScript) {
-      throw new Error(`Failed to find parameterized script hash for ${scriptTitle}`);
-    }
-
-    this.logger.log(`Parameterized script hash for ${scriptTitle}: ${parameterizedScript.hash}`);
-
-    return {
-      parameterizedHash: parameterizedScript.hash,
-      fullResponse: applyParamsResult,
-    };
-  }
-
   private parseValidityIntervalError(errorMessage: string): {
     invalidBefore?: number;
     invalidHereafter?: number;
@@ -342,7 +302,7 @@ export class BlockchainService {
           [this.unparametizedDispatchHash]: [params.vault_policy, params.vault_id, params.contribution_script_hash],
         },
         blueprint: {
-          title: 'l4va/vault-with-dispatch',
+          title: 'l4va/vault-with-dispatch-no-verbose',
           version: '0.1.1',
         },
       });

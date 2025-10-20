@@ -158,15 +158,15 @@ export class ContributionService {
           await this.vaultRepository.save(vault);
           try {
             this.logger.log(`Create PR to update Vault Metadata`);
-            await this.metadataRegistryApiService.submitTokenMetadata({
-              vaultId: vault.id,
-              subject: `${vault.script_hash}${vault.asset_vault_name}`,
-              name: vault.name,
-              description: vault.description,
-              ticker: vault.vault_token_ticker,
-              logo: vault.ft_token_img?.file_url || '',
-              decimals: vault.ft_token_decimals || 6,
-            });
+            // await this.metadataRegistryApiService.submitTokenMetadata({
+            //   vaultId: vault.id,
+            //   subject: `${vault.script_hash}${vault.asset_vault_name}`,
+            //   name: vault.name,
+            //   description: vault.description,
+            //   ticker: vault.vault_token_ticker,
+            //   logo: vault.ft_token_img?.file_url || '',
+            //   decimals: vault.ft_token_decimals || 6,
+            // });
           } catch (error) {
             this.logger.error('Error updating vault metadata:', error);
           }

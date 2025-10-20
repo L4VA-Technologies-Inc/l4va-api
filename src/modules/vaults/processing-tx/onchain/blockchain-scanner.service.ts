@@ -46,9 +46,11 @@ export class BlockchainScannerService {
 
   private async makePostRequest<T>(
     endpoint: string,
-    payload: {
-      address: string;
-    }
+    payload:
+      | {
+          address: string;
+        }
+      | Record<string, any>
   ): Promise<T> {
     try {
       const response = await axios.post(
@@ -70,12 +72,11 @@ export class BlockchainScannerService {
   }
 
   async registerTrackingAddress(vaultAddress: string = '', vaultName: string) {
-    const payload = {
+    return this.makePostRequest(`/monitoring/addresses`, {
       address: vaultAddress,
       name: vaultName,
       description: 'Monitoring vault address',
-    };
-    return this.makePostRequest(`/monitoring/addresses`, payload);
+    });
   }
 
   private async withRetry<T>(

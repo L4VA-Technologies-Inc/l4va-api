@@ -7,7 +7,6 @@ import { AutomaticCancellationService } from './automatic-cancellation.service';
 import { CancellationProcessor } from './cancellation.processor';
 import { ClaimsController } from './claims.controller';
 import { ClaimsService } from './claims.service';
-import { ExtractionService } from './extraction.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
@@ -32,7 +31,7 @@ import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockch
     AssetsModule,
   ],
   controllers: [ClaimsController],
-  providers: [ClaimsService, ExtractionService, AutomaticCancellationService, CancellationProcessor],
+  providers: [ClaimsService, AutomaticCancellationService, CancellationProcessor],
   exports: [ClaimsService],
 })
 export class ClaimsModule {}
