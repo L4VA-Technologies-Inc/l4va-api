@@ -484,14 +484,6 @@ export class Vault {
   })
   dispatch_utxo_tx_index?: number;
 
-  @Exclude()
-  @Column({
-    name: 'dispatch_script_hash',
-    type: 'varchar',
-    nullable: true,
-  })
-  dispatch_script_hash?: string;
-
   @Expose({ name: 'vaultPolicyId' })
   @Column({
     name: 'vault_policy_id',
