@@ -21,7 +21,7 @@ export class OptionalAuthGuard implements CanActivate {
         secret: this.configService.get<string>('JWT_SECRET'),
       });
     } catch {
-      throw new UnauthorizedException();
+      return true;
     }
     return true;
   }
