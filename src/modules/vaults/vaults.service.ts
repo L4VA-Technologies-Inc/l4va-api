@@ -3,7 +3,7 @@ import {
   BadRequestException,
   Injectable,
   InternalServerErrorException,
-  Logger,
+  Logger, NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -40,7 +40,7 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { transformToSnakeCase } from '@/helpers';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
-import { TransactionType } from '@/types/transaction.types';
+import {TransactionStatus, TransactionType} from '@/types/transaction.types';
 import {
   ContributionWindowType,
   InvestmentWindowType,
@@ -49,6 +49,8 @@ import {
   VaultStatus,
 } from '@/types/vault.types';
 import { ProposalStatus } from "@/types/proposal.types";
+import { Transaction } from "@/database/transaction.entity";
+import { Snapshot } from "@/database/snapshot.entity";
 
 /**
  * VaultsService
@@ -98,7 +100,6 @@ export class VaultsService {
     private readonly governanceService: GovernanceService,
     private readonly taptoolsService: TaptoolsService,
     private readonly transactionsService: TransactionsService,
-    private readonly eventEmitter: EventEmitter2
   ) {}
 
   /**
@@ -939,6 +940,15 @@ export class VaultsService {
     };
 
     let canCreateProposal = false;
+    let isChatVisible = false;
+
+    if (userId) {
+      try {
+        isChatVisible = await this.checkChat(userId, vaultId);
+      } catch (error) {
+        isChatVisible = false;
+      }
+    }
 
     if (userId && vault.vault_status === VaultStatus.locked) {
       try {
@@ -971,6 +981,7 @@ export class VaultsService {
     additionalData['isWhitelistedContributor'] = isWhitelistedContributor;
     additionalData['isWhitelistedAcquirer'] = isWhitelistedAcquirer;
     additionalData['canCreateProposal'] = canCreateProposal;
+    additionalData['isChatVisible'] = isChatVisible;
     additionalData['valuationAmount'] =
       vault.total_acquired_value_ada && vault.tokens_for_acquires
         ? parseFloat((vault.total_acquired_value_ada / (vault.tokens_for_acquires * 0.01)).toFixed(2))
@@ -987,6 +998,51 @@ export class VaultsService {
     };
 
     return plainToInstance(VaultFullResponse, result, { excludeExtraneousValues: true });
+  }
+
+
+  async checkChat(userId: string, vaultId: string): Promise<boolean> {
+    const user = await this.usersRepository.findOne({
+      where: { id: userId },
+      select: ['id', 'address'],
+    });
+
+    if (!user) {
+      return false;
+    }
+
+    const result = await this.vaultsRepository
+      .createQueryBuilder('vault')
+      .leftJoin('vault.snapshots', 'snapshot')
+      .leftJoin('transactions', 'transaction',
+        'transaction.vault_id = vault.id AND transaction.user_id = :userId AND transaction.status = :confirmedStatus'
+      )
+      .select('vault.id')
+      .addSelect('vault.owner_id')
+      .addSelect('snapshot.address_balances')
+      .addSelect('transaction.id', 'has_transaction')
+      .where('vault.id = :vaultId', { vaultId })
+      .andWhere('vault.deleted = false')
+      .orderBy('snapshot.created_at', 'DESC')
+      .setParameters({
+        userId,
+        confirmedStatus: TransactionStatus.confirmed
+      })
+      .getRawOne();
+
+    if (!result) {
+      return false;
+    }
+
+    if (result.owner_id === userId) {
+      return true;
+    }
+
+    if (result.address_balances?.[user.address]) {
+      return true;
+    }
+
+    return !!result.has_transaction;
   }
 
   /**
