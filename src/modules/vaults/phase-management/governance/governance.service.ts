@@ -631,7 +631,18 @@ export class GovernanceService {
     }
 
     const totalVotingPower = Object.values(snapshot.addressBalances)
-      .reduce((sum, balance) => BigInt(sum) + BigInt(balance), BigInt(0))
+      .reduce((sum, balance) => {
+        try {
+          const balanceBigInt = BigInt(balance || '0');
+          if (balanceBigInt < 0) {
+            throw new InternalServerErrorException(`Invalid negative balance: ${balance}`);
+          }
+          return sum + balanceBigInt;
+        } catch (error) {
+          this.logger.error(`Invalid balance format: ${balance}`, error);
+          throw new InternalServerErrorException('Invalid balance format in snapshot');
+        }
+      }, BigInt(0))
       .toString();
 
     // Calculate vote totals
@@ -644,12 +655,23 @@ export class GovernanceService {
     };
 
     votes.forEach(vote => {
-      if (vote.vote === VoteType.YES) {
-        totals.yes = (BigInt(totals.yes) + BigInt(vote.voteWeight)).toString();
-      } else if (vote.vote === VoteType.NO) {
-        totals.no = (BigInt(totals.no) + BigInt(vote.voteWeight)).toString();
-      } else if (vote.vote === VoteType.ABSTAIN) {
-        totals.abstain = (BigInt(totals.abstain) + BigInt(vote.voteWeight)).toString();
+      try {
+        const voteWeightBigInt = BigInt(vote.voteWeight || '0');
+        
+        if (voteWeightBigInt < 0) {
+          throw new InternalServerErrorException(`Invalid negative vote weight: ${vote.voteWeight}`);
+        }
+        
+        if (vote.vote === VoteType.YES) {
+          totals.yes = (BigInt(totals.yes) + voteWeightBigInt).toString();
+        } else if (vote.vote === VoteType.NO) {
+          totals.no = (BigInt(totals.no) + voteWeightBigInt).toString();
+        } else if (vote.vote === VoteType.ABSTAIN) {
+          totals.abstain = (BigInt(totals.abstain) + voteWeightBigInt).toString();
+        }
+      } catch (error) {
+        this.logger.error(`Invalid vote weight: ${vote.voteWeight} for vote ${vote.id}`, error);
+        throw new InternalServerErrorException('Invalid vote weight format');
       }
     });
 
@@ -903,8 +925,20 @@ export class GovernanceService {
       }
 
       const totalVotingPower = Object.values(snapshot.addressBalances)
-        .reduce((sum, balance) => BigInt(sum) + BigInt(balance), BigInt(0))
+        .reduce((sum, balance) => {
+          try {
+            const balanceBigInt = BigInt(balance || '0');
+            if (balanceBigInt < 0) {
+              throw new InternalServerErrorException(`Invalid negative balance: ${balance}`);
+            }
+            return sum + balanceBigInt;
+          } catch (error) {
+            this.logger.error(`Invalid balance format: ${balance}`, error);
+            throw new InternalServerErrorException('Invalid balance format in snapshot');
+          }
+        }, BigInt(0))
         .toString();
+
       const voteWeightPercentFromAll = (BigInt(voteWeight) * BigInt(100)) / BigInt(totalVotingPower);
 
       if (voteWeightPercentFromAll < vault.creation_threshold && action === 'create_proposal') {
