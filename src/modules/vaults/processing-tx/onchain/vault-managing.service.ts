@@ -101,7 +101,7 @@ export class VaultManagingService {
     private readonly vaultInsertingService: VaultInsertingService,
     private readonly transactionsService: TransactionsService
   ) {
-    this.blueprintTitle = this.configService.get<string>('VAULT_BLUEPRINT_TITLE');
+    this.blueprintTitle = this.configService.get<string>('BLUEPRINT_TITLE');
     this.scPolicyId = this.configService.get<string>('SC_POLICY_ID');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
