@@ -173,7 +173,7 @@ export class VaultInsertingService {
             assetName: { name: 'receipt', format: 'utf8' },
             policyId: CONTRIBUTION_SCRIPT_HASH,
             type: 'plutus',
-            quantity: 2, // Mint 1 VT token
+            quantity: 1, // Mint 1 VT token
             metadata: {},
           },
         ],
@@ -210,29 +210,6 @@ export class VaultInsertingService {
                   },
                   ...assetsList,
                 ],
-            datum: {
-              type: 'inline',
-              value: {
-                policy_id: CONTRIBUTION_SCRIPT_HASH,
-                asset_name: VAULT_ID,
-                owner: params.changeAddress,
-              },
-              shape: {
-                validatorHash: CONTRIBUTION_SCRIPT_HASH,
-                purpose: 'spend',
-              },
-            },
-          },
-          {
-            address: vault.contract_address,
-            lovelace: 10_000_000,
-            assets: [
-              {
-                assetName: { name: 'receipt', format: 'utf8' },
-                policyId: CONTRIBUTION_SCRIPT_HASH,
-                quantity: 1,
-              },
-            ],
             datum: {
               type: 'inline',
               value: {
