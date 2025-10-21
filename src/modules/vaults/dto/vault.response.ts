@@ -249,6 +249,17 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   isWhitelistedContributor: boolean;
 
+  @ApiProperty({
+    description: 'Indicates whether the user can see a chat',
+    type: Boolean,
+    default: false,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  isChatVisible: boolean;
+
   @ApiProperty({ description: 'Valuation type', enum: ValueMethod, required: false })
   @DtoRepresent({
     transform: false,
