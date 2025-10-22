@@ -442,6 +442,24 @@ export class Vault {
   })
   ada_pair_multiplier?: number;
 
+  @Expose({ name: 'distributionInProgress' })
+  @Column({
+    name: 'distribution_in_progress',
+    type: 'boolean',
+    nullable: false,
+    default: false,
+  })
+  distribution_in_progress: boolean;
+
+  @Expose({ name: 'distributionProcessed' })
+  @Column({
+    name: 'distribution_processed',
+    type: 'boolean',
+    nullable: false,
+    default: false,
+  })
+  distribution_processed: boolean;
+
   @Exclude()
   @Column({
     name: 'script_hash',

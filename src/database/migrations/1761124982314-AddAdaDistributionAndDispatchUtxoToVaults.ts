@@ -1,12 +1,14 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddAdaDistributionAndDispatchUtxoToVaults1761122847664 implements MigrationInterface {
-  name = 'AddAdaDistributionAndDispatchUtxoToVaults1761122847664';
+export class AddAdaDistributionAndDispatchUtxoToVaults1761124982314 implements MigrationInterface {
+  name = 'AddAdaDistributionAndDispatchUtxoToVaults1761124982314';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`ALTER TABLE "vault_tags" DROP CONSTRAINT "FK_adf9f0b047319be1ec67ac1d1eb"`);
     await queryRunner.query(`ALTER TABLE "vault_tags" DROP CONSTRAINT "FK_2b3fd4667b2be7a2d7a329083cc"`);
     await queryRunner.query(`ALTER TABLE "vaults" ADD "ada_distribution" jsonb DEFAULT null`);
+    await queryRunner.query(`ALTER TABLE "vaults" ADD "distribution_in_progress" boolean NOT NULL DEFAULT false`);
+    await queryRunner.query(`ALTER TABLE "vaults" ADD "distribution_processed" boolean NOT NULL DEFAULT false`);
     await queryRunner.query(`ALTER TABLE "vaults" ADD "dispatch_utxo_tx_hash" character varying`);
     await queryRunner.query(`ALTER TYPE "public"."vaults_vault_status_enum" RENAME TO "vaults_vault_status_enum_old"`);
     await queryRunner.query(
@@ -40,6 +42,8 @@ export class AddAdaDistributionAndDispatchUtxoToVaults1761122847664 implements M
     await queryRunner.query(`DROP TYPE "public"."vaults_vault_status_enum"`);
     await queryRunner.query(`ALTER TYPE "public"."vaults_vault_status_enum_old" RENAME TO "vaults_vault_status_enum"`);
     await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN "dispatch_utxo_tx_hash"`);
+    await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN "distribution_processed"`);
+    await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN "distribution_in_progress"`);
     await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN "ada_distribution"`);
     await queryRunner.query(
       `ALTER TABLE "vault_tags" ADD CONSTRAINT "FK_2b3fd4667b2be7a2d7a329083cc" FOREIGN KEY ("tag_id") REFERENCES "tags"("id") ON DELETE CASCADE ON UPDATE CASCADE`
