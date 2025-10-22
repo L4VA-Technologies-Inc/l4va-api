@@ -88,7 +88,7 @@ export class AutomatedDistributionService {
     private readonly configService: ConfigService,
     private readonly blockchainService: BlockchainService
   ) {
-    this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
+    this.unparametizedDispatchHash = '5df4cb8efb36a7febe20fb95a7b409d9081fe887b32989718edc44a9';
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.vaultScriptAddress = this.configService.get<string>('VAULT_SCRIPT_ADDRESS');
@@ -361,6 +361,7 @@ export class AutomatedDistributionService {
           // Get vault details
           const vault = await this.vaultRepository.findOne({
             where: { id: vaultId },
+            select: ['id', 'script_hash', 'asset_vault_name', 'stake_registered'],
           });
 
           if (vault) {
@@ -376,33 +377,24 @@ export class AutomatedDistributionService {
                 contribution_script_hash: vault.script_hash,
               });
 
-              try {
-                const stakeRegistered = await this.blockchainService.registerScriptStake(
-                  dispatchResult.parameterizedHash
-                );
+              const stakeResult = await this.blockchainService.registerScriptStake(dispatchResult.parameterizedHash);
 
-                if (stakeRegistered) {
-                  // Update the flag in database
-                  await this.vaultRepository.update({ id: vaultId }, { stake_registered: true });
+              if (stakeResult.success) {
+                // Update the flag in database
+                await this.vaultRepository.update({ id: vaultId }, { stake_registered: true });
 
+                // Only wait if we just registered (not if it was already registered)
+                if (!stakeResult.alreadyRegistered) {
                   await new Promise(resolve => setTimeout(resolve, 50000)); // 50 seconds
-                  this.logger.debug(`Queueing payment transactions for vault ${vaultId}`);
-                  await this.queuePaymentTransactions(vaultId);
-                } else {
-                  this.logger.error(`Failed to register stake credential for vault ${vaultId}`);
                 }
-              } catch (error) {
-                // If stake registration fails with a specific error message about already registered
-                if (error.message && error.message.includes('StakeKeyRegisteredDELEG')) {
-                  this.logger.warn(`Stake already registered according to error message, marking as registered`);
 
-                  // Mark as registered in database
-                  await this.vaultRepository.update({ id: vaultId }, { stake_registered: true });
-
-                  await this.queuePaymentTransactions(vaultId);
-                } else {
-                  this.logger.error(`Error registering stake: ${error.message}`);
-                }
+                this.logger.debug(
+                  `Stake credential ${stakeResult.alreadyRegistered ? 'was already' : 'has been'} registered for vault ${vaultId}`
+                );
+                this.logger.debug(`Queueing payment transactions for vault ${vaultId}`);
+                await this.queuePaymentTransactions(vaultId);
+              } else {
+                this.logger.error(`Failed to register stake credential for vault ${vaultId}`);
               }
             }
           }
@@ -461,9 +453,6 @@ export class AutomatedDistributionService {
             adaAmount,
           },
         });
-
-        // Update claim with payment transaction
-        await this.claimRepository.update({ id: claim.id }, { transaction_id: transaction.id });
 
         const PARAMETERIZED_DISPATCH_HASH = dispatchResult.parameterizedHash;
         const DISPATCH_ADDRESS = this.getDispatchAddress(PARAMETERIZED_DISPATCH_HASH);
