@@ -1,3 +1,4 @@
+import { FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -24,18 +25,59 @@ export interface TransactionSubmitResponse {
   txHash: string;
 }
 
+export interface ApplyParamsPayload {
+  params: Record<string, any[]>;
+  blueprint: {
+    title: string;
+    version: string;
+  };
+}
+
+export interface ApplyParamsResponse {
+  preloadedScript: {
+    blueprint: {
+      preamble: any;
+      validators: Array<{
+        title: string;
+        hash: string;
+      }>;
+    };
+  };
+}
+
+export interface UploadBlueprintPayload {
+  blueprint: {
+    preamble: any;
+    validators: any[];
+  };
+  refs?: Record<string, { txHash: string; index: number }>;
+}
+
 @Injectable()
 export class BlockchainService {
   private readonly logger = new Logger(BlockchainService.name);
   private readonly anvilApi: string;
-  private readonly anvilApiKey: string;
+  private readonly unparametizedDispatchHash: string;
+  private readonly blueprintTitle: string;
+  private readonly adminSKey: string;
+  private readonly adminAddress: string;
+  private readonly anvilHeaders: {
+    [key: string]: string;
+  };
 
   constructor(
     private readonly configService: ConfigService,
     private readonly httpService: HttpService
   ) {
+    this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
+    this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.anvilApi = this.configService.get<string>('ANVIL_API_URL') + '/services';
-    this.anvilApiKey = this.configService.get<string>('ANVIL_API_KEY');
+    this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
+    this.blueprintTitle = this.configService.get<string>('BLUEPRINT_TITLE');
+    this.anvilHeaders = {
+      'x-api-key': this.configService.get<string>('ANVIL_API_KEY'),
+      'Content-Type': 'application/json',
+    };
   }
 
   /**
@@ -45,15 +87,9 @@ export class BlockchainService {
    */
   async buildTransaction(txData: any): Promise<TransactionBuildResponse> {
     try {
-      const headers = {
-        'x-api-key': this.anvilApiKey,
-        'Content-Type': 'application/json',
-      };
-
-      // Build the transaction
       const contractDeployed = await fetch(`${this.anvilApi}/transactions/build`, {
         method: 'POST',
-        headers,
+        headers: this.anvilHeaders,
         body: JSON.stringify(txData),
       });
 
@@ -131,10 +167,7 @@ export class BlockchainService {
             signatures: signedTx.signatures || [],
           },
           {
-            headers: {
-              'x-api-key': this.anvilApiKey,
-              'Content-Type': 'application/json',
-            },
+            headers: this.anvilHeaders,
           }
         )
       );
@@ -166,9 +199,165 @@ export class BlockchainService {
       }
 
       // Log the full error for debugging
-      console.error('Full submission error:', error);
+      this.logger.error('Full submission error:', error);
       this.logger.error('Error submitting transaction', error.message);
-      throw new Error(`Failed to submit transaction: ${error.message}`);
+      throw new Error(`Failed to submit transaction ${error.message}`);
+    }
+  }
+
+  // Improved registerScriptStake method in BlockchainService
+
+  /**
+   * Register Stake on Dispatch Script to be able Contributors claim ADA
+   * Handles cases where stake is already registered
+   *
+   * @param parameterizedDispatchHash
+   * @returns {Promise<{success: boolean, alreadyRegistered: boolean}>}
+   */
+  async registerScriptStake(
+    parameterizedDispatchHash: string
+  ): Promise<{ success: boolean; alreadyRegistered: boolean }> {
+    try {
+      // First check if stake is already registered
+      const isAlreadyRegistered = await this.checkStakeRegistration(parameterizedDispatchHash);
+
+      if (isAlreadyRegistered) {
+        this.logger.log(`Stake credential ${parameterizedDispatchHash} already registered`);
+        return { success: true, alreadyRegistered: true };
+      }
+
+      const input = {
+        changeAddress: this.adminAddress,
+        deposits: [
+          {
+            hash: parameterizedDispatchHash,
+            type: 'script',
+            deposit: 'stake',
+          },
+        ],
+      };
+
+      const buildResponse = await fetch(`${this.anvilApi}/transactions/build`, {
+        method: 'POST',
+        headers: this.anvilHeaders,
+        body: JSON.stringify(input),
+      });
+
+      if (!buildResponse.ok) {
+        const errorText = await buildResponse.text();
+        // Check if error is because stake is already registered
+        if (errorText.includes('StakeKeyRegisteredDELEG')) {
+          this.logger.log(`Stake credential ${parameterizedDispatchHash} already registered according to error`);
+          return { success: true, alreadyRegistered: true };
+        }
+        throw new Error(`Build failed: ${buildResponse.status} - ${errorText}`);
+      }
+
+      const transaction = await buildResponse.json();
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(transaction.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+      const submitResponse = await fetch(`${this.anvilApi}/transactions/submit`, {
+        method: 'POST',
+        headers: this.anvilHeaders,
+        body: JSON.stringify({
+          signatures: [],
+          transaction: txToSubmitOnChain.to_hex(),
+        }),
+      });
+
+      if (!submitResponse.ok) {
+        const errorText = await submitResponse.text();
+        // Again check if error is because stake is already registered
+        if (errorText.includes('StakeKeyRegisteredDELEG')) {
+          this.logger.log(`Stake credential ${parameterizedDispatchHash} already registered according to error`);
+          return { success: true, alreadyRegistered: true };
+        }
+        throw new Error(`Submit failed: ${submitResponse.status} - ${errorText}`);
+      }
+
+      this.logger.debug('Script stake registered successfully');
+      return { success: true, alreadyRegistered: false };
+    } catch (error) {
+      this.logger.error('Error on registerScriptStake', error);
+      return { success: false, alreadyRegistered: false };
+    }
+  }
+
+  /**
+   * Check if a stake credential is already registered
+   * @param scriptHash The script hash to check
+   * @returns true if registered, false otherwise
+   */
+  private async checkStakeRegistration(scriptHash: string): Promise<boolean> {
+    try {
+      // Convert script hash to stake address format
+      // For Blockfrost, we need to check the address directly
+      // Note: This is a simplified approach - adjust based on actual Blockfrost API structure
+      const response = await fetch(
+        `${this.configService.get<string>('BLOCKFROST_API_URL')}/accounts/stake_test1${scriptHash}`,
+        {
+          headers: {
+            project_id: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
+          },
+        }
+      );
+
+      // If we get a 200, the stake address exists (is registered)
+      return response.status === 200;
+    } catch (error) {
+      // Most likely a 404 meaning not registered
+      return false;
+    }
+  }
+
+  /**
+   * Apply parameters to a blueprint script
+   * @param payload Parameters to apply to the script
+   * @returns Applied parameters result
+   */
+  async applyBlueprintParameters(payload: ApplyParamsPayload): Promise<ApplyParamsResponse> {
+    try {
+      const response = await fetch(`${this.anvilApi}/blueprints/apply-params`, {
+        method: 'POST',
+        headers: this.anvilHeaders,
+        body: JSON.stringify(payload),
+      });
+
+      const result = await response.json();
+
+      if (!result.preloadedScript) {
+        this.logger.error(`Failed to apply parameters: ${response.statusText}`);
+        throw new Error('Failed to apply parameters to blueprint');
+      }
+
+      this.logger.log('Blueprint parameters applied successfully');
+      return result;
+    } catch (error) {
+      this.logger.error('Error applying blueprint parameters', error);
+      throw new Error(`Failed to apply blueprint parameters: ${error.message}`);
+    }
+  }
+
+  /**
+   * Upload a blueprint to the service
+   * @param payload Blueprint data to upload
+   * @returns Upload response
+   */
+  async uploadBlueprint(payload: UploadBlueprintPayload): Promise<any> {
+    try {
+      const response = await fetch(`${this.anvilApi}/blueprints`, {
+        method: 'POST',
+        headers: this.anvilHeaders,
+        body: JSON.stringify(payload),
+      });
+
+      const result = await response.json();
+      this.logger.log('Blueprint uploaded successfully');
+      return result;
+    } catch (error) {
+      this.logger.error('Error uploading blueprint', error);
+      throw new Error(`Failed to upload blueprint: ${error.message}`);
     }
   }
 
@@ -202,5 +391,51 @@ export class BlockchainService {
     }
 
     return {};
+  }
+
+  /**
+   * Apply parameters to the dispatch script
+   * @param vault_policy - PolicyId of the vault
+   * @param vault_id - ByteArray vault identifier
+   * @param contribution_script_hash - ByteArray contribution script hash
+   * @param unparametizedDispatchHash - Unparameterized dispatch script hash
+   * @returns The parameterized script hash and full response
+   */
+  async applyDispatchParameters(params: {
+    vault_policy: string;
+    vault_id: string;
+    contribution_script_hash: string;
+  }): Promise<{
+    parameterizedHash: string;
+    fullResponse: ApplyParamsResponse;
+  }> {
+    try {
+      const applyParamsResult = await this.applyBlueprintParameters({
+        params: {
+          [this.unparametizedDispatchHash]: [params.vault_policy, params.vault_id, params.contribution_script_hash],
+        },
+        blueprint: {
+          title: this.blueprintTitle,
+          version: '0.1.1',
+        },
+      });
+
+      // Find the parameterized dispatch script hash
+      const parameterizedScript = applyParamsResult.preloadedScript.blueprint.validators.find(
+        (v: any) => v.title === 'dispatch.dispatch.spend' && v.hash !== this.unparametizedDispatchHash
+      );
+
+      if (!parameterizedScript) {
+        throw new Error('Failed to find parameterized dispatch script hash');
+      }
+
+      return {
+        parameterizedHash: parameterizedScript.hash,
+        fullResponse: applyParamsResult,
+      };
+    } catch (error) {
+      this.logger.error('Error applying dispatch parameters', error);
+      throw new Error(`Failed to apply dispatch parameters: ${error.message}`);
+    }
   }
 }

@@ -15,6 +15,7 @@ import { VaultStatus } from '@/types/vault.types';
 @Injectable()
 export class AcquireService {
   private readonly logger = new Logger(AcquireService.name);
+  private readonly PROTOCOL_ACQUIRERS_FEE = 2_000_000; // should be 4 ADA
 
   constructor(
     @InjectRepository(Vault)
@@ -80,6 +81,7 @@ export class AcquireService {
       amount: acquireReq.assets.reduce((sum, asset) => sum + (asset.quantity || 0), 0),
       assets: [],
       userId,
+      fee: this.PROTOCOL_ACQUIRERS_FEE,
       metadata: acquireReq.assets,
     });
 

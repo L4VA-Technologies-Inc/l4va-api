@@ -21,15 +21,17 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
+import { TransactionsService } from '../offchain-tx/transactions.service';
+
 import { BlockchainService } from './blockchain.service';
-import { Datum1 } from './types/type';
-import { generate_tag_from_txhash_index, getUtxos, getVaultUtxo, toHex } from './utils/lib';
+import { Datum1, Redeemer, Redeemer1 } from './types/type';
+import { generate_tag_from_txhash_index, getUtxos, getVaultUtxo } from './utils/lib';
 import { VaultInsertingService } from './vault-inserting.service';
 
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
-import { TransactionType } from '@/types/transaction.types';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { SmartContractVaultStatus, VaultPrivacy } from '@/types/vault.types';
 
 export interface VaultConfig {
@@ -83,10 +85,10 @@ export class VaultManagingService {
   private readonly adminHash: string;
   private readonly adminSKey: string;
   private readonly adminAddress: string;
-  private readonly blockfrost: BlockFrostAPI;
-  private readonly anvilApi: string;
-  private readonly anvilApiKey: string;
   private readonly vaultScriptAddress: string;
+  private readonly unparametizedScriptHash: string;
+  private readonly blueprintTitle: string;
+  private readonly blockfrost: BlockFrostAPI;
 
   constructor(
     @InjectRepository(Transaction)
@@ -96,18 +98,19 @@ export class VaultManagingService {
     private readonly configService: ConfigService,
     @Inject(BlockchainService)
     private readonly blockchainService: BlockchainService,
-    private readonly vaultInsertingService: VaultInsertingService
+    private readonly vaultInsertingService: VaultInsertingService,
+    private readonly transactionsService: TransactionsService
   ) {
+    this.blueprintTitle = this.configService.get<string>('BLUEPRINT_TITLE');
     this.scPolicyId = this.configService.get<string>('SC_POLICY_ID');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.vaultScriptAddress = this.configService.get<string>('VAULT_SCRIPT_ADDRESS');
+    this.unparametizedScriptHash = this.configService.get<string>('CONTRIBUTION_SCRIPT_HASH');
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
     });
-    this.anvilApi = this.configService.get<string>('ANVIL_API_URL') + '/services';
-    this.anvilApiKey = this.configService.get<string>('ANVIL_API_KEY');
   }
 
   /**
@@ -138,65 +141,39 @@ export class VaultManagingService {
       selectedUtxo.input().index()
     );
 
-    const headers = {
-      'x-api-key': this.anvilApiKey,
-      'Content-Type': 'application/json',
-    };
-    //9a9b0bc93c26a40952aaff525ac72a992a77ebfa29012c9cb4a72eb2 contribution script hash
-    //0f9d90277089b2f442bef581dcc1d333a92c3fedf688700c4e39ab89 contribution script hash with verbous
-    const unparametizedScriptHash = '9a9b0bc93c26a40952aaff525ac72a992a77ebfa29012c9cb4a72eb2';
-
     // Apply parameters to the blueprint before building the transaction
-    const applyParamsPayload = {
+    const applyParamsResult = await this.blockchainService.applyBlueprintParameters({
       params: {
-        [unparametizedScriptHash]: [
+        [this.unparametizedScriptHash]: [
           this.scPolicyId, // policy id of the vault
           assetName, // newly created vault id from generate_tag_from_txhash_index
         ],
       },
       blueprint: {
-        title: 'l4va/vault',
-        version: '0.0.7',
+        title: this.blueprintTitle,
+        version: '0.1.1',
       },
-    };
-
-    const applyParamsResponse = await fetch(`${this.anvilApi}/blueprints/apply-params`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(applyParamsPayload),
     });
 
-    const applyParamsResult = await applyParamsResponse.json();
-
-    if (!applyParamsResult.preloadedScript) {
-      throw new Error('Failed to apply parameters to blueprint');
-    }
-
-    // Step 2: Upload the parameterized script to /blueprints
-    const uploadScriptResponse = await fetch(`${this.anvilApi}/blueprints`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        blueprint: {
-          ...applyParamsResult.preloadedScript.blueprint,
-          preamble: {
-            ...applyParamsResult.preloadedScript.blueprint.preamble,
-            id: undefined,
-            title: 'l4va/vault/' + assetName,
-            version: '0.0.1',
-          },
-          validators: applyParamsResult.preloadedScript.blueprint.validators.filter(
-            (v: any) => v.title.includes('contribute') && v.hash !== unparametizedScriptHash
-          ),
+    // Upload the parameterized script
+    await this.blockchainService.uploadBlueprint({
+      blueprint: {
+        ...applyParamsResult.preloadedScript.blueprint,
+        preamble: {
+          ...applyParamsResult.preloadedScript.blueprint.preamble,
+          id: undefined,
+          title: 'l4va/vault/' + assetName,
+          version: '0.0.1',
         },
-      }),
+        validators: applyParamsResult.preloadedScript.blueprint.validators.filter(
+          (v: any) => v.title.includes('contribute') && v.hash !== this.unparametizedScriptHash
+        ),
+      },
     });
-
-    await uploadScriptResponse.json();
 
     const scriptHash =
       applyParamsResult.preloadedScript.blueprint.validators.find(
-        (v: any) => v.title === 'contribute.contribute.mint' && v.hash !== unparametizedScriptHash
+        (v: any) => v.title === 'contribute.contribute.mint' && v.hash !== this.unparametizedScriptHash
       )?.hash || '';
     if (!scriptHash) {
       throw new Error('Failed to find script hash');
@@ -286,31 +263,10 @@ export class VaultManagingService {
                   },
                 },
                 valuation_type: vaultConfig.valueMethod, // Enum 0: 'FIXED' 1: 'LBE'
-                // fractionalization: {
-                //   percentage: 1,
-                //   token_supply: 1,
-                //   token_decimals: 1,
-                //   token_policy: "",
-                // },
-                custom_metadata: [
-                  // <Data,Data>
-                  // [
-                  //   PlutusData.new_bytes(Buffer.from("foo")).to_hex(),
-                  //   PlutusData.new_bytes(Buffer.from("bar")).to_hex(),
-                  // ],
-                  [toHex('foo'), toHex('bar')],
-                  [toHex('bar'), toHex('foo')],
-                  [toHex('vaultId'), toHex(vaultConfig.vaultId)],
-                ], // like a tuple
-
-                // termination: {
-                //   termination_type: 1,
-                //   fdp: 1,
-                // },
-                // acquire: {
-                //   reserve: 1,
-                //   liquidityPool: 1,
-                // },
+                // fractionalization: {},
+                custom_metadata: [], // like a tuple
+                // termination: {},
+                // acquire: {},
                 admin: this.adminHash,
                 minting_key: this.adminHash,
               },
@@ -431,19 +387,20 @@ export class VaultManagingService {
     }
   }
 
-  // Create a transaction to update the vault's metadata
   async updateVaultMetadataTx({
     vault,
     transactionId,
     acquireMultiplier,
     adaPairMultiplier,
     vaultStatus,
+    adaDistribution,
   }: {
     vault: Vault;
     transactionId: string;
     vaultStatus: SmartContractVaultStatus;
     acquireMultiplier?: [string, string | null, number][];
     adaPairMultiplier?: number;
+    adaDistribution?: [string, string, number][];
   }): Promise<{
     success: boolean;
     txHash: string;
@@ -530,10 +487,10 @@ export class VaultManagingService {
               custom_metadata: [],
               admin: this.adminHash,
               minting_key: this.adminHash,
-              // New fields from update_vault.ts
               acquire_multiplier: acquireMultiplier,
-              ada_pair_multiplier: adaPairMultiplier,
-            },
+              ada_distribution: adaDistribution,
+              ada_pair_multipler: adaPairMultiplier,
+            } satisfies Datum1,
             shape: {
               validatorHash: this.scPolicyId,
               purpose: 'spend',
@@ -542,6 +499,133 @@ export class VaultManagingService {
         },
       ],
       requiredSigners: [this.adminHash],
+    };
+
+    this.logger.debug('Vault update transaction input:', JSON.stringify(input));
+
+    try {
+      // Build the transaction using BlockchainService
+      const buildResponse = await this.blockchainService.buildTransaction(input);
+
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+      const response = await this.vaultInsertingService.submitTransaction({
+        transaction: txToSubmitOnChain.to_hex(),
+        vaultId: vault.id,
+        txId: transaction.id,
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 20000)); // 20 seconds
+
+      return { success: true, txHash: response.txHash, message: 'Transaction submitted successfully' };
+    } catch (error) {
+      this.logger.error('Failed to build vault update tx:', error);
+      throw error;
+    }
+  }
+
+  async extractVaultAdaToDispatchScript(vault: Vault): Promise<{
+    success: boolean;
+    txHash: string;
+    message: string;
+  }> {
+    const transaction = await this.transactionsService.createTransaction({
+      vault_id: vault.id,
+      type: TransactionType.extract,
+      assets: [], // No assets needed for this transaction as it's metadata update
+    });
+
+    const transactions = await this.transactionRepository.find({
+      where: { vault_id: vault.id, type: TransactionType.acquire, status: TransactionStatus.confirmed },
+    });
+
+    const tx_hash = transactions[0]?.tx_hash;
+    const index = transactions[0]?.tx_index;
+
+    if (!tx_hash) {
+      throw new NotFoundException(`Transaction not found ${transactions[0]}`);
+    }
+
+    const dispatchResult = await this.blockchainService.applyDispatchParameters({
+      vault_policy: this.vaultScriptAddress,
+      vault_id: vault.asset_vault_name,
+      contribution_script_hash: vault.script_hash,
+    });
+
+    const PARAMETERIZED_DISPATCH_HASH = dispatchResult.parameterizedHash;
+    const DISPATCH_ADDRESS = EnterpriseAddress.new(
+      0, // preprod network
+      Credential.from_scripthash(ScriptHash.from_hex(PARAMETERIZED_DISPATCH_HASH))
+    )
+      .to_address()
+      .to_bech32();
+    const input: {
+      changeAddress: string;
+      message: string;
+      mint?: Array<object>;
+      scriptInteractions: object[];
+      outputs: {
+        address: string;
+        assets?: object[];
+        lovelace?: number;
+        datum?: { type: 'inline'; value: any; shape?: object };
+      }[];
+      requiredSigners: string[];
+      referenceInputs: { txHash: string; index: number }[];
+      validityInterval: {
+        start: boolean;
+        end: boolean;
+      };
+      network: string;
+    } = {
+      changeAddress: this.adminAddress,
+      message: 'Admin extract ADA and send to dispatch script',
+      scriptInteractions: [
+        {
+          purpose: 'spend',
+          hash: vault.script_hash,
+          outputRef: {
+            txHash: tx_hash, // transactions to collect
+            index: index,
+          },
+          redeemer: {
+            type: 'json',
+            value: {
+              __variant: 'ExtractAda',
+              __data: {
+                vault_token_output_index: 0,
+              },
+            } satisfies Redeemer1,
+          },
+        },
+        {
+          purpose: 'mint',
+          hash: vault.script_hash,
+          redeemer: {
+            type: 'json',
+            value: 'MintVaultToken' satisfies Redeemer,
+          },
+        },
+      ],
+      outputs: [
+        {
+          address: DISPATCH_ADDRESS,
+          lovelace: 10000000, // Send extracted ADA to dispatch script
+        },
+      ],
+      requiredSigners: [this.adminHash],
+      referenceInputs: [
+        {
+          txHash: vault.last_update_tx_hash,
+          index: 0,
+        },
+      ],
+      validityInterval: {
+        start: true,
+        end: true,
+      },
+      network: 'preprod',
     };
 
     try {
@@ -588,13 +672,8 @@ export class VaultManagingService {
       const { txHash } = result;
 
       if (txHash) {
-        const headers = {
-          'x-api-key': this.anvilApiKey,
-          'Content-Type': 'application/json',
-        };
-
         // Step 4: Update blueprint with the script transaction reference
-        const blueprintUpdatePayload = {
+        await this.blockchainService.uploadBlueprint({
           blueprint: {
             ...applyParamsResult.preloadedScript.blueprint,
             preamble: {
@@ -613,15 +692,9 @@ export class VaultManagingService {
               index: 1, // Script output is at index 1 (vault is at index 0)
             },
           },
-        };
-
-        await fetch(`${this.anvilApi}/blueprints`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(blueprintUpdatePayload),
         });
       } else {
-        console.error('Failed to create vault and upload script');
+        throw new Error(`Failed to create vault and upload script: 'Unknown error'`);
       }
 
       return { txHash: result.txHash };

@@ -10,6 +10,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './modules/auth/auth.module';
 import { AwsModule } from './modules/aws_bucket/aws.module';
+import { ChatModule } from './modules/chat/chat.module';
 import { DistributionModule } from './modules/distribution/distribution.module';
 import { JwtGlobalModule } from './modules/globals/jwt_global_module/jwt_global.module';
 import { UsersModule } from './modules/users/users.module';
@@ -23,7 +24,7 @@ import { TransactionsModule } from './modules/vaults/processing-tx/offchain-tx/t
 import { BlockchainModule } from './modules/vaults/processing-tx/onchain/blockchain.module';
 import { VaultsModule } from './modules/vaults/vaults.module';
 import { VyfiModule } from './modules/vyfi/vyfi.module';
-import { ChatModule } from './modules/chat/chat.module';
+
 import { NotificationModule } from '@/modules/notification/notification.module';
 import { ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
 import { APP_GUARD } from "@nestjs/core";

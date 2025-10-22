@@ -423,6 +423,15 @@ export class Vault {
   })
   acquire_multiplier?: Array<[string, string | null, number]>; // [policyId, assetName?, multiplier]
 
+  @Expose({ name: 'adaDistribution' })
+  @Column({
+    name: 'ada_distribution',
+    type: 'jsonb',
+    nullable: true,
+    default: () => 'null',
+  })
+  ada_distribution?: Array<[string, string, number]>; // [policyId, assetName, ada]
+
   @Expose({ name: 'adaPairMultiplier' })
   @Transform(({ value }) => (value ? Number(value) : null))
   @Column({
@@ -432,6 +441,33 @@ export class Vault {
     default: 1,
   })
   ada_pair_multiplier?: number;
+
+  @Expose({ name: 'distributionInProgress' })
+  @Column({
+    name: 'distribution_in_progress',
+    type: 'boolean',
+    nullable: false,
+    default: false,
+  })
+  distribution_in_progress: boolean;
+
+  @Expose({ name: 'stakeRegistered' })
+  @Column({
+    name: 'stake_registered',
+    type: 'boolean',
+    nullable: false,
+    default: false,
+  })
+  stake_registered: boolean;
+
+  @Expose({ name: 'distributionProcessed' })
+  @Column({
+    name: 'distribution_processed',
+    type: 'boolean',
+    nullable: false,
+    default: false,
+  })
+  distribution_processed: boolean;
 
   @Exclude()
   @Column({
@@ -466,6 +502,14 @@ export class Vault {
     default: 0,
   })
   last_update_tx_index?: number;
+
+  @Expose({ name: 'dispatchUtxoTxHash' })
+  @Column({
+    name: 'dispatch_utxo_tx_hash',
+    type: 'varchar',
+    nullable: true,
+  })
+  dispatch_utxo_tx_hash?: string;
 
   @Expose({ name: 'vaultPolicyId' })
   @Column({

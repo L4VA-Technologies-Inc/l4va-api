@@ -1,14 +1,7 @@
 import { Buffer } from 'node:buffer';
 
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import {
-  EnterpriseAddress,
-  ScriptHash,
-  Credential,
-  FixedTransaction,
-  PrivateKey,
-  Address,
-} from '@emurgo/cardano-serialization-lib-nodejs';
+import { FixedTransaction, PrivateKey, Address } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -68,6 +61,8 @@ export interface TransactionSubmitResponse {
 @Injectable()
 export class VaultInsertingService {
   private readonly logger = new Logger(VaultInsertingService.name);
+  private readonly FLAT_FEE = 2_000_000; // Flat fee in lovelace
+  private readonly adminAddress: string;
   private readonly adminHash: string;
   private readonly adminSKey: string;
   private blockfrost: BlockFrostAPI;
@@ -80,6 +75,7 @@ export class VaultInsertingService {
     @Inject(BlockchainService)
     private readonly blockchainService: BlockchainService
   ) {
+    this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
 
@@ -152,9 +148,9 @@ export class VaultInsertingService {
         scriptInteractions: object[];
         outputs: {
           address: string;
-          assets: object[];
+          assets?: object[];
           lovelace?: number; // Required if Contribution in ADA
-          datum: { type: 'inline'; value: Datum; shape: object };
+          datum?: { type: 'inline'; value: Datum; shape: object };
         }[];
         requiredSigners: string[];
         referenceInputs: { txHash: string; index: number }[];
@@ -166,6 +162,7 @@ export class VaultInsertingService {
       } = {
         changeAddress: params.changeAddress,
         message: 'Asset(s) contributed to vault',
+        // utxos: utxos,
         mint: [
           {
             version: 'cip25',
@@ -221,6 +218,10 @@ export class VaultInsertingService {
                 purpose: 'spend',
               },
             },
+          },
+          {
+            address: this.adminAddress,
+            lovelace: this.FLAT_FEE,
           },
         ],
         requiredSigners: [this.adminHash],
@@ -278,8 +279,6 @@ export class VaultInsertingService {
         transaction: signedTx.transaction,
         signatures: signedTx.signatures || [],
       });
-
-      this.logger.log(`Updating transaction ${signedTx.txId} with hash ${result.txHash}`);
 
       try {
         // Update the transaction hash in our database
@@ -344,8 +343,6 @@ export class VaultInsertingService {
     const txIndex = typeof tx.index !== 'undefined' ? tx.index : 0;
     await this.transactionsService.updateTransactionStatus(tx.hash, txIndex, internalStatus);
   }
-
-  // return this.anvilApiService.submitTransaction(params);
 
   async handleBlockchainEvent(event: BlockchainWebhookDto): Promise<void> {
     // Only handle transaction events

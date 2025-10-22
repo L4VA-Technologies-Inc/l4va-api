@@ -798,7 +798,6 @@ export class GovernanceService {
 
   /**
    *  Distribute: Should not allow to distribute NFTs.
-   * WH
    */
   async getAssetsToDistribute(vaultId: string): Promise<Asset[]> {
     try {

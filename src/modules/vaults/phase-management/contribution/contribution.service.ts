@@ -19,7 +19,7 @@ import { VaultStatus } from '@/types/vault.types';
 @Injectable()
 export class ContributionService {
   private readonly logger = new Logger(ContributionService.name);
-
+  private readonly PROTOCOL_CONTRIBUTORS_FEE = 2_000_000; // Should be 4 ADA contributeReq.assets.length * this.PROTOCOL_CONTRIBUTORS_FEE
   constructor(
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
@@ -374,6 +374,7 @@ export class ContributionService {
       type: TransactionType.contribute,
       assets: [],
       userId,
+      fee: this.PROTOCOL_CONTRIBUTORS_FEE,
       metadata: contributeReq.assets,
     });
 

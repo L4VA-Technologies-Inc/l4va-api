@@ -369,12 +369,9 @@ export class VaultsService {
       // TODO: Add lovelace support
       let maxCountOf = 0;
 
-
       // Then process them
-      const uniquePolicyIds = Array.from(
-        new Map(data.assetsWhitelist.map(obj => [obj.policyId, obj])).values()
-      );
-      
+      const uniquePolicyIds = Array.from(new Map(data.assetsWhitelist.map(obj => [obj.policyId, obj])).values());
+
       await Promise.all(
         uniquePolicyIds.map(async assetItem => {
           if (assetItem.policyId) {
@@ -1091,7 +1088,7 @@ export class VaultsService {
       sortOrder = SortOrder.DESC,
       vaultStage,
       reserveMet,
-      search
+      search,
     } = data;
 
     // Create base query for all vaults
@@ -1161,9 +1158,10 @@ export class VaultsService {
     if (search) {
       queryBuilder.andWhere(
         new Brackets(qb => {
-          qb.where('vault.name ILIKE :search', { search: `%${search}%` })
-            .orWhere('vault.policy_id ILIKE :search', { search: `%${search}%` });
-        }),
+          qb.where('vault.name ILIKE :search', { search: `%${search}%` }).orWhere('vault.policy_id ILIKE :search', {
+            search: `%${search}%`,
+          });
+        })
       );
     }
 
@@ -1185,16 +1183,17 @@ export class VaultsService {
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.locked });
           break;
         case VaultFilter.govern:
-          queryBuilder
-            .andWhere('vault.vault_status = :status', { status: VaultFilter.locked })
-            .andWhere(`
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.locked }).andWhere(
+            `
               EXISTS (
                 SELECT 1
                 FROM proposal
                 WHERE proposal.vault_id = vault.id
                 AND proposal.status = :activeStatus
               )
-            `, { activeStatus: ProposalStatus.ACTIVE });
+            `,
+            { activeStatus: ProposalStatus.ACTIVE }
+          );
           break;
         case VaultFilter.failed:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.failed });
@@ -1211,7 +1210,7 @@ export class VaultsService {
         case VaultFilter.published:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.published });
           break;
-        case VaultFilter.all:
+        case VaultFilter.all: {
           const statuses = [
             VaultStatus.published,
             VaultStatus.contribution,
@@ -1226,6 +1225,7 @@ export class VaultsService {
 
           queryBuilder.andWhere('vault.vault_status IN (:...statuses)', { statuses });
           break;
+        }
       }
     }
     if (vaultStage) {
@@ -1255,8 +1255,6 @@ export class VaultsService {
         queryBuilder.andWhere('vault.total_acquired_value_ada < vault.require_reserved_cost_ada');
       }
     }
-    
-
 
     if (tags && tags.length > 0) {
       const normalizedTags = tags.map(tag => tag.toLowerCase());
