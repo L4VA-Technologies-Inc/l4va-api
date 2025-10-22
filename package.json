@@ -39,6 +39,7 @@
     "@nestjs/platform-express": "^10.4.15",
     "@nestjs/schedule": "^5.0.1",
     "@nestjs/swagger": "^8.1.0",
+    "@nestjs/throttler": "^6.4.0",
     "@nestjs/typeorm": "^10.0.2",
     "@novu/api": "^1.6.0",
     "@octokit/rest": "^22.0.0",
