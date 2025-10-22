@@ -34,6 +34,13 @@ export class PublicProfileRes {
   })
   address: string;
 
+  @ApiProperty()
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  email: string;
+
   @ApiProperty({ required: false })
   @DtoRepresent({
     transform: ({ value }) => (value ? value.url : null),

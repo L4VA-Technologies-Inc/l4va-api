@@ -100,6 +100,7 @@ export class AuthService {
           gains: user.gains,
           profileImage: profileImage,
           bannerImage: bannerImage,
+          email: user.email,
         },
       };
     } catch (error) {
