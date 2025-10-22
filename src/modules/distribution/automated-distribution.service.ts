@@ -371,16 +371,24 @@ export class AutomatedDistributionService {
               contribution_script_hash: vault.script_hash,
             });
 
-            const stakeRegistered = await this.blockchainService.registerScriptStake(dispatchResult.parameterizedHash);
-
-            if (stakeRegistered) {
-              this.logger.debug(`HERE! Stake credential registered successfully for vault ${vaultId}`);
-              await new Promise(resolve => setTimeout(resolve, 50000)); // 50 seconds
-              this.logger.debug(`HERE! Queueing payment transactions for vault ${vaultId}`);
+            const isStakeAlreadyRegistered = await this.checkStakeRegistration(dispatchResult.parameterizedHash);
+            if (isStakeAlreadyRegistered) {
+              this.logger.log(`Stake credential already registered for vault ${vaultId}, skipping registration`);
+              // Skip registration and proceed to queuing payments
+              this.logger.debug(`Queueing payment transactions for vault ${vaultId}`);
               await this.queuePaymentTransactions(vaultId);
             } else {
-              this.logger.error(`Failed to register stake credential for vault ${vaultId}`);
-              // Consider adding retry logic or manual intervention notification
+              const stakeRegistered = await this.blockchainService.registerScriptStake(
+                dispatchResult.parameterizedHash
+              );
+              if (stakeRegistered) {
+                await new Promise(resolve => setTimeout(resolve, 50000)); // 50 seconds
+                this.logger.debug(`HERE! Queueing payment transactions for vault ${vaultId}`);
+                await this.queuePaymentTransactions(vaultId);
+              } else {
+                this.logger.error(`Failed to register stake credential for vault ${vaultId}`);
+                // Consider adding retry logic or manual intervention notification
+              }
             }
           }
         }
@@ -739,5 +747,25 @@ export class AutomatedDistributionService {
       lovelace,
       assets,
     };
+  }
+
+  private async checkStakeRegistration(scriptHash: string): Promise<boolean> {
+    try {
+      // Convert script hash to stake address
+      const stakeCredential = Credential.from_scripthash(ScriptHash.from_hex(scriptHash));
+      const stakeAddress = `stake_test1${stakeCredential.to_keyhash().to_hex()}`;
+
+      // Check if the stake address has rewards or is registered
+      const stakeInfo = await this.blockfrost.accountsAddresses(stakeAddress);
+      return true; // If we get here, the address exists
+    } catch (error) {
+      // If we get a 404, the stake address isn't registered
+      if (error.status_code === 404) {
+        return false;
+      }
+      // For other errors, assume it's not registered
+      this.logger.error(`Error checking stake registration: ${error.message}`);
+      return false;
+    }
   }
 }
