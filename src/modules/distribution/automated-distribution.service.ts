@@ -13,7 +13,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, Not, IsNull, LessThanOrEqual } from 'typeorm';
+import { Repository, In, Not, IsNull, MoreThan } from 'typeorm';
 
 import { BlockchainService } from '../vaults/processing-tx/onchain/blockchain.service';
 import { generate_tag_from_txhash_index, getUtxos } from '../vaults/processing-tx/onchain/utils/lib';
@@ -118,7 +118,7 @@ export class AutomatedDistributionService {
         vault_sc_status: SmartContractVaultStatus.SUCCESSFUL,
         last_update_tx_hash: Not(IsNull()),
         distribution_processed: false,
-        created_at: LessThanOrEqual(new Date('2025-10-22').toISOString()),
+        created_at: MoreThan(new Date('2025-10-22').toISOString()),
       },
       select: ['id'],
     });
@@ -144,7 +144,7 @@ export class AutomatedDistributionService {
         vault: { id: vaultId },
         type: ClaimType.ACQUIRER,
         status: ClaimStatus.AVAILABLE,
-        created_at: LessThanOrEqual(new Date('2025-10-22').toISOString()),
+        created_at: MoreThan(new Date('2025-10-22').toISOString()),
       },
       relations: ['transaction', 'user'],
     });
