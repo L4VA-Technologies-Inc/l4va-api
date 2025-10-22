@@ -18,7 +18,6 @@ import { Repository, In, Not } from 'typeorm';
 import { BlockchainService } from '../vaults/processing-tx/onchain/blockchain.service';
 import { generate_tag_from_txhash_index, getUtxos } from '../vaults/processing-tx/onchain/utils/lib';
 
-import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
@@ -84,8 +83,6 @@ export class AutomatedDistributionService {
     private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
-    @InjectRepository(Asset)
-    private readonly assetRepository: Repository<Asset>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly configService: ConfigService,
@@ -147,8 +144,11 @@ export class AutomatedDistributionService {
       },
       relations: ['transaction', 'user'],
     });
+    
     this.logger.log(`Found ${claims.length} acquirer claims to extract for vault ${vaultId}`);
 
+    for (const claim of claims) {
+      const { transaction, user } = claim;
     this.logger.log(`Extracting lovelace for claim ${claim.id}, transaction ${claim.transaction_id}`);
 
     const vault = await this.vaultRepository.findOne({
@@ -265,14 +265,14 @@ export class AutomatedDistributionService {
       await this.transactionRepository.update({ id: transaction.id }, { status: TransactionStatus.failed });
     }
   }
+  }
 
   private async processExtractionTransactions(): Promise<void> {
     // Find confirmed extraction transactions
     const confirmedExtractions = await this.transactionRepository.find({
       where: {
         type: TransactionType.extract,
-        status: TransactionStatus.confirmed,
-        processed: false,
+        status: TransactionStatus.pending,
       },
       relations: ['vault'],
     });
@@ -439,7 +439,12 @@ export class AutomatedDistributionService {
 
     const userAddress = claim.user?.address || (await this.getUserAddress(claim.user_id));
     const datumTag = generate_tag_from_txhash_index(originalTx.tx_hash, +originalTx.tx_index || 0);
-    const assetDetails = await this.getAssetDetails(claim.transaction_id);
+    const contribTxUtxos = await this.blockfrost.txsUtxos(originalTx.tx_hash);
+    const contribOutput = contribTxUtxos.outputs[originalTx.tx_index || 0];
+    if (!contribOutput) {
+      throw new Error('No contribution output found');
+    }
+    const assetDetails = this.extractAssetDetailsFromUtxo(contribOutput);
 
     const input: PayAdaContribution = {
       changeAddress: this.adminAddress,
@@ -651,51 +656,51 @@ export class AutomatedDistributionService {
     return user.address;
   }
 
-  private async getAssetDetails(
-    transactionId: string,
-    contribOutput: {
-      address: string;
-      amount: {
-        unit: string;
-        quantity: string;
-      }[];
-      output_index: number;
-      data_hash: string | null;
-      inline_datum: string | null;
-      collateral: boolean;
-      reference_script_hash: string | null;
-      consumed_by_tx?: string | null | undefined;
-    }
-  ): Promise<{
-    lovelace: number;
-    assets: {
-      assetName: {
-        name: string;
-        format: string;
+private extractAssetDetailsFromUtxo(contribOutput: {
+  address: string;
+  amount: {
+    unit: string;
+    quantity: string;
+  }[];
+  output_index: number;
+  data_hash: string | null;
+  inline_datum: string | null;
+  collateral: boolean;
+  reference_script_hash: string | null;
+  consumed_by_tx?: string | null;
+}): {
+  lovelace: number;
+  assets: {
+    assetName: {
+      name: string;
+      format: string;
+    };
+    policyId: string;
+    quantity: number;
+  }[];
+} {
+  const lovelace = Number(contribOutput.amount.find(u => u.unit === 'lovelace')?.quantity || 0);
+  
+  // Extract assets
+  const assets = contribOutput.amount
+    .filter(asset => asset.unit !== 'lovelace')
+    .map(asset => {
+      // Split the hex asset into policy ID (56 chars) and asset name (remaining)
+      const policyId = asset.unit.slice(0, 56);
+      const assetNameHex = asset.unit.slice(56);
+      
+      return {
+        assetName: {
+          name: assetNameHex,
+          format: 'hex',
+        },
+        policyId,
+        quantity: Number(asset.quantity),
       };
-      policyId: string;
-      quantity: number;
-    }[];
-  }> {
-    const assets = await this.assetRepository.find({
-      where: { transaction: { id: transactionId } },
-      select: ['asset_id', 'policy_id', 'quantity'],
     });
 
-    const assetOutputs = assets.map(asset => ({
-      assetName: {
-        name: asset.asset_id,
-        format: 'hex',
-      },
-      policyId: asset.policy_id,
-      quantity: asset.quantity || 1,
-    }));
-
-    const lovelace = Number(contribOutput.amount.find(u => u.unit === 'lovelace')?.quantity);
-
-    return {
-      lovelace,
-      assets: assetOutputs,
-    };
-  }
+  return {
+    lovelace,
+    assets,
+  };
 }
