@@ -122,14 +122,14 @@ export class BlockchainService {
           }
         }
 
-        // if (
-        //   buildResponse.message?.includes('Failed to evaluate tx') &&
-        //   (buildResponse.message?.includes('Some scripts of the transactions terminated with error') ||
-        //     buildResponse.message?.includes('Some of the scripts failed to evaluate to a positive outcome'))
-        // ) {
-        //   this.logger.warn(`Vault validation error during transaction building`);
-        //   throw new VaultValidationException();
-        // }
+        if (
+          buildResponse.message?.includes('Failed to evaluate tx') &&
+          (buildResponse.message?.includes('Some scripts of the transactions terminated with error') ||
+            buildResponse.message?.includes('Some of the scripts failed to evaluate to a positive outcome'))
+        ) {
+          this.logger.warn(`Vault validation error during transaction building`);
+          throw new VaultValidationException();
+        }
 
         throw new Error('Failed to build complete transaction' + JSON.stringify(buildResponse));
       }
