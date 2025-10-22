@@ -13,7 +13,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, Not } from 'typeorm';
+import { Repository, In, Not, IsNull } from 'typeorm';
 
 import { BlockchainService } from '../vaults/processing-tx/onchain/blockchain.service';
 import { generate_tag_from_txhash_index, getUtxos } from '../vaults/processing-tx/onchain/utils/lib';
@@ -115,6 +115,7 @@ export class AutomatedDistributionService {
       where: {
         vault_status: VaultStatus.locked,
         vault_sc_status: SmartContractVaultStatus.SUCCESSFUL,
+        last_update_tx_hash: Not(IsNull()),
         distribution_processed: false,
       },
       select: ['id'],
