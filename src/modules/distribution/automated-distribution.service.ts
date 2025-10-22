@@ -88,7 +88,7 @@ export class AutomatedDistributionService {
     private readonly configService: ConfigService,
     private readonly blockchainService: BlockchainService
   ) {
-    this.unparametizedDispatchHash = '5df4cb8efb36a7febe20fb95a7b409d9081fe887b32989718edc44a9';
+    this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.vaultScriptAddress = this.configService.get<string>('VAULT_SCRIPT_ADDRESS');
@@ -261,6 +261,16 @@ export class AutomatedDistributionService {
                 purpose: 'spend',
               },
             },
+          },
+          {
+            address: vault.contract_address, // VAULT address
+            assets: [
+              {
+                assetName: { name: vault.asset_vault_name, format: 'hex' },
+                policyId: vault.script_hash,
+                quantity: adaPairMultiplier * originalAmount * 1_000_000,
+              },
+            ],
           },
           {
             address: DISPATCH_ADDRESS,
@@ -463,47 +473,55 @@ export class AutomatedDistributionService {
           throw new Error(`Original transaction not found for claim ${claim.id}`);
         }
 
-        // Find a suitable UTXO at dispatch address with enough ADA
-        const dispatchUtxos = await getUtxos(Address.from_bech32(DISPATCH_ADDRESS), 0, this.blockfrost);
-        if (dispatchUtxos.len() === 0) {
-          throw new Error('No UTXOs found.');
-        }
-
-        const allUtxos = dispatchUtxos;
-        const minRequired = adaAmount + 2_000_000; // Payment + minimum ADA
-
-        // Find suitable UTXO with enough ADA
-        let suitableUtxo: {
-          tx_hash: string;
-          output_index: number;
-          amount: string;
-        } | null = null;
-        for (let i = 0; i < allUtxos.len(); i++) {
-          const utxo = allUtxos.get(i);
-          const lovelace = this.getLovelaceAmount(utxo);
-
-          if (lovelace >= minRequired) {
-            suitableUtxo = {
-              tx_hash: utxo.input().transaction_id().to_hex(),
-              output_index: utxo.input().index(),
-              amount: utxo.output().amount().coin().to_str(),
-            };
-            break;
-          }
-        }
-
-        if (!suitableUtxo) {
-          throw new Error(`No suitable UTXO found at dispatch address with enough ADA (need ${minRequired})`);
-        }
-
-        const userAddress = claim.user?.address || (await this.getUserAddress(claim.user_id));
-        const datumTag = generate_tag_from_txhash_index(originalTx.tx_hash, +originalTx.tx_index || 0);
         const contribTxUtxos = await this.blockfrost.txsUtxos(originalTx.tx_hash);
         const contribOutput = contribTxUtxos.outputs[originalTx.tx_index || 0];
         if (!contribOutput) {
           throw new Error('No contribution output found');
         }
         const assetDetails = this.extractAssetDetailsFromUtxo(contribOutput);
+
+        // Find a suitable UTXO at dispatch address with enough ADA
+        const dispatchUtxos = await this.blockfrost.addressesUtxos(DISPATCH_ADDRESS);
+
+        if (!dispatchUtxos || dispatchUtxos.length === 0) {
+          throw new Error('No UTXOs found at dispatch address');
+        }
+
+        // Calculate total lovelace available in dispatch address
+        const minRequired = adaAmount + 3_000_000; // Payment + minimum ADA
+        let suitableUtxo = null;
+
+        for (const utxo of dispatchUtxos) {
+          const utxoLovelace = parseInt(utxo.amount.find(a => a.unit === 'lovelace')?.quantity || '0');
+
+          if (utxoLovelace >= minRequired) {
+            suitableUtxo = {
+              tx_hash: utxo.tx_hash,
+              output_index: utxo.output_index,
+              amount: utxoLovelace.toString(),
+            };
+            break;
+          }
+        }
+
+        if (!suitableUtxo) {
+          throw new Error(
+            `No dispatch UTXO found with sufficient ADA. Need at least ${minRequired} lovelace in a single UTxO`
+          );
+        }
+
+        const actualRemainingDispatchLovelace = parseInt(suitableUtxo.amount) - adaAmount;
+
+        // Validate the balance equation
+        const balanceValid = parseInt(suitableUtxo.amount) >= actualRemainingDispatchLovelace + adaAmount;
+        if (!balanceValid) {
+          throw new Error(
+            `Balance equation invalid: ${suitableUtxo.amount} < ${actualRemainingDispatchLovelace} + ${adaAmount}`
+          );
+        }
+
+        const userAddress = claim.user?.address || (await this.getUserAddress(claim.user_id));
+        const datumTag = generate_tag_from_txhash_index(originalTx.tx_hash, +originalTx.tx_index || 0);
 
         const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(vault.script_hash)))
           .to_address()
@@ -607,7 +625,7 @@ export class AutomatedDistributionService {
             },
             {
               address: SC_ADDRESS,
-              lovelace: assetDetails.lovelace,
+              lovelace: Number(contribOutput.amount.find((u: any) => u.unit === 'lovelace')?.quantity),
               assets: assetDetails.assets,
               datum: {
                 type: 'inline',
@@ -623,10 +641,14 @@ export class AutomatedDistributionService {
                 },
               },
             },
-            {
-              address: DISPATCH_ADDRESS,
-              lovelace: actualRemainingDispatchLovelace,
-            },
+            ...(actualRemainingDispatchLovelace > 1_000_000
+              ? [
+                  {
+                    address: DISPATCH_ADDRESS,
+                    lovelace: actualRemainingDispatchLovelace,
+                  },
+                ]
+              : []),
           ],
           requiredSigners: [this.adminHash],
           referenceInputs: [
@@ -642,7 +664,9 @@ export class AutomatedDistributionService {
           network: 'preprod',
         };
 
-        this.logger.debug(JSON.stringify(input));
+        const trimmedInput = { ...input };
+        delete trimmedInput.preloadedScripts;
+        console.log(JSON.stringify(trimmedInput));
 
         try {
           const buildResponse = await this.blockchainService.buildTransaction(input);
