@@ -254,7 +254,7 @@ export class BlockchainService {
         const errorText = await submitResponse.text();
         throw new Error(`Submit failed: ${submitResponse.status} - ${errorText}`);
       }
-
+      this.logger.debug('Script stake registered successfully');
       return true;
     } catch (error) {
       this.logger.error('Error on registerScriptStake', error);
