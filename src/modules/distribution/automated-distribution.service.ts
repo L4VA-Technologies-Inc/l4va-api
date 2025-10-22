@@ -111,8 +111,7 @@ export class AutomatedDistributionService {
     await this.processExtractionTransactions();
 
     // 3. Process payments for contributor claims
-    // Firstly let`s test Extraction and registerScriptStake
-    // await this.processPaymentTransactions();
+    await this.processPaymentTransactions();
   }
 
   private async processReadyVaults(): Promise<void> {
@@ -155,16 +154,11 @@ export class AutomatedDistributionService {
 
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
+      select: ['id', 'script_hash', 'asset_vault_name', 'ada_pair_multiplier', 'last_update_tx_hash'],
     });
     if (!vault) {
       throw new Error(`Vault ${vaultId} not found`);
     }
-
-    const extractionTx = await this.transactionRepository.save({
-      vault_id: vaultId,
-      type: TransactionType.extract,
-      status: TransactionStatus.created,
-    });
 
     this.logger.log(`Found ${claims.length} acquirer claims to extract for vault ${vaultId}`);
 
@@ -176,6 +170,14 @@ export class AutomatedDistributionService {
 
     for (const claim of claims) {
       const { user } = claim;
+
+      const extractionTx = await this.transactionRepository.save({
+        vault_id: vaultId,
+        user_id: claim.user_id,
+        type: TransactionType.extract,
+        status: TransactionStatus.created,
+      });
+
       this.logger.debug(`Extracting lovelace for claim ${claim.id}, transaction ${claim.transaction_id}`);
 
       const PARAMETERIZED_DISPATCH_HASH = dispatchResult.parameterizedHash;
@@ -297,8 +299,11 @@ export class AutomatedDistributionService {
         await this.claimRepository.update({ id: claim.id }, { status: ClaimStatus.CLAIMED });
 
         // Update Extraction transaction with hash
-        await this.transactionRepository.update({ id: extractionTx.id }, { tx_hash: response.txHash });
-        await new Promise(resolve => setTimeout(resolve, 90000));
+        await this.transactionRepository.update(
+          { id: extractionTx.id },
+          { tx_hash: response.txHash, status: TransactionStatus.submitted }
+        );
+        await new Promise(resolve => setTimeout(resolve, 30000));
 
         this.logger.debug(`Extraction transaction ${response.txHash} submitted for claim ${claim.id}`);
       } catch (error) {
@@ -306,7 +311,7 @@ export class AutomatedDistributionService {
 
         // Mark transaction as failed
         await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
-        await new Promise(resolve => setTimeout(resolve, 90000));
+        await new Promise(resolve => setTimeout(resolve, 30000));
       }
     }
   }
@@ -399,6 +404,22 @@ export class AutomatedDistributionService {
 
     this.logger.log(`Found ${claims.length} contributor claims for payment in vault ${vaultId}`);
 
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: ['id', 'script_hash', 'asset_vault_name', 'ada_pair_multiplier', 'last_update_tx_hash'],
+    });
+
+    if (!vault) {
+      throw new Error(`Vault ${vaultId} not found`);
+    }
+
+    // Apply parameters to dispatch script
+    const dispatchResult = await this.blockchainService.applyDispatchParameters({
+      vault_policy: this.vaultScriptAddress,
+      vault_id: vault.asset_vault_name,
+      contribution_script_hash: vault.script_hash,
+    });
+
     for (const claim of claims) {
       try {
         // Get ADA amount from metadata
@@ -423,8 +444,212 @@ export class AutomatedDistributionService {
         // Update claim with payment transaction
         await this.claimRepository.update({ id: claim.id }, { transaction_id: transaction.id });
 
-        // Process payment (similar to pay_ada_contribution.ts)
-        await this.payAdaContribution(transaction, claim);
+        const PARAMETERIZED_DISPATCH_HASH = dispatchResult.parameterizedHash;
+        const DISPATCH_ADDRESS = this.getDispatchAddress(PARAMETERIZED_DISPATCH_HASH);
+
+        // Get original contribution transaction
+        const originalTx = claim.transaction;
+        if (!originalTx || !originalTx.tx_hash) {
+          throw new Error(`Original transaction not found for claim ${claim.id}`);
+        }
+
+        // Find a suitable UTXO at dispatch address with enough ADA
+        const dispatchUtxos = await getUtxos(Address.from_bech32(DISPATCH_ADDRESS), 0, this.blockfrost);
+        if (dispatchUtxos.len() === 0) {
+          throw new Error('No UTXOs found.');
+        }
+
+        const allUtxos = dispatchUtxos;
+        const minRequired = adaAmount + 2_000_000; // Payment + minimum ADA
+
+        // Find suitable UTXO with enough ADA
+        let suitableUtxo: {
+          tx_hash: string;
+          output_index: number;
+          amount: string;
+        } | null = null;
+        for (let i = 0; i < allUtxos.len(); i++) {
+          const utxo = allUtxos.get(i);
+          const lovelace = this.getLovelaceAmount(utxo);
+
+          if (lovelace >= minRequired) {
+            suitableUtxo = {
+              tx_hash: utxo.input().transaction_id().to_hex(),
+              output_index: utxo.input().index(),
+              amount: utxo.output().amount().coin().to_str(),
+            };
+            break;
+          }
+        }
+
+        if (!suitableUtxo) {
+          throw new Error(`No suitable UTXO found at dispatch address with enough ADA (need ${minRequired})`);
+        }
+
+        const userAddress = claim.user?.address || (await this.getUserAddress(claim.user_id));
+        const datumTag = generate_tag_from_txhash_index(originalTx.tx_hash, +originalTx.tx_index || 0);
+        const contribTxUtxos = await this.blockfrost.txsUtxos(originalTx.tx_hash);
+        const contribOutput = contribTxUtxos.outputs[originalTx.tx_index || 0];
+        if (!contribOutput) {
+          throw new Error('No contribution output found');
+        }
+        const assetDetails = this.extractAssetDetailsFromUtxo(contribOutput);
+
+        const input: PayAdaContribution = {
+          changeAddress: this.adminAddress,
+          message: `Pay ADA to contributor for claim ${claim.id}`,
+          scriptInteractions: [
+            {
+              purpose: 'spend',
+              hash: PARAMETERIZED_DISPATCH_HASH,
+              outputRef: {
+                txHash: suitableUtxo.tx_hash,
+                index: suitableUtxo.output_index,
+              },
+              redeemer: {
+                type: 'json',
+                value: null,
+              },
+            },
+            {
+              purpose: 'withdraw',
+              hash: PARAMETERIZED_DISPATCH_HASH,
+              redeemer: {
+                type: 'json',
+                value: null,
+              },
+            },
+            {
+              purpose: 'mint',
+              hash: vault.script_hash,
+              redeemer: {
+                type: 'json',
+                value: 'MintVaultToken',
+              },
+            },
+            {
+              purpose: 'spend',
+              hash: vault.script_hash,
+              outputRef: {
+                txHash: originalTx.tx_hash,
+                index: originalTx.tx_index || 0,
+              },
+              redeemer: {
+                type: 'json',
+                value: {
+                  __variant: 'CollectVaultToken',
+                  __data: {
+                    vault_token_output_index: 0,
+                    change_output_index: 1,
+                  },
+                },
+              },
+            },
+          ],
+          mint: [
+            {
+              version: 'cip25',
+              assetName: { name: vault.asset_vault_name, format: 'hex' },
+              policyId: vault.script_hash,
+              type: 'plutus',
+              quantity: claim.amount,
+              metadata: {},
+            },
+            {
+              version: 'cip25',
+              assetName: { name: 'receipt', format: 'utf8' },
+              policyId: vault.script_hash,
+              type: 'plutus',
+              quantity: -1,
+              metadata: {},
+            },
+          ],
+          outputs: [
+            {
+              address: userAddress,
+              assets: [
+                {
+                  assetName: { name: vault.asset_vault_name, format: 'hex' },
+                  policyId: vault.script_hash,
+                  quantity: claim.amount,
+                },
+              ],
+              lovelace: adaAmount,
+              datum: {
+                type: 'inline',
+                value: {
+                  datum_tag: datumTag,
+                  ada_paid: adaAmount,
+                  policy_id: vault.script_hash,
+                  asset_name: vault.asset_vault_name,
+                  owner: userAddress,
+                },
+                shape: {
+                  validatorHash: PARAMETERIZED_DISPATCH_HASH,
+                  purpose: 'spend',
+                },
+              },
+            },
+            {
+              address: vault.contract_address,
+              lovelace: assetDetails.lovelace,
+              assets: assetDetails.assets,
+              datum: {
+                type: 'inline',
+                value: {
+                  policy_id: vault.script_hash,
+                  asset_name: vault.asset_vault_name,
+                  owner: userAddress,
+                  datum_tag: datumTag,
+                },
+                shape: {
+                  validatorHash: vault.script_hash,
+                  purpose: 'spend',
+                },
+              },
+            },
+            {
+              address: DISPATCH_ADDRESS,
+              lovelace: this.getLovelaceAmount(suitableUtxo) - adaAmount,
+            },
+          ],
+          requiredSigners: [this.adminHash],
+          referenceInputs: [
+            {
+              txHash: vault.last_update_tx_hash,
+              index: 0,
+            },
+          ],
+          validityInterval: {
+            start: true,
+            end: true,
+          },
+          network: 'preprod',
+        };
+
+        try {
+          const buildResponse = await this.blockchainService.buildTransaction(input);
+
+          const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+          txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+          const response = await this.blockchainService.submitTransaction({
+            transaction: txToSubmitOnChain.to_hex(),
+            signatures: [],
+          });
+
+          await this.transactionRepository.update(
+            { id: transaction.id },
+            { tx_hash: response.txHash, status: TransactionStatus.submitted }
+          );
+
+          this.logger.log(`Payment transaction ${response.txHash} submitted for claim ${claim.id}`);
+          await new Promise(resolve => setTimeout(resolve, 30000));
+        } catch (error) {
+          this.logger.error(`Failed to submit payment transaction:`, error);
+          await this.transactionRepository.update({ id: transaction.id }, { status: TransactionStatus.failed }); // Mark transaction as failed
+          await new Promise(resolve => setTimeout(resolve, 30000));
+        }
 
         this.logger.log(`Payment transaction created for claim ${claim.id}`);
       } catch (error) {
@@ -440,230 +665,6 @@ export class AutomatedDistributionService {
         distribution_processed: true,
       }
     );
-  }
-
-  private async payAdaContribution(transaction: Transaction, claim: Claim): Promise<void> {
-    this.logger.log(`Processing ADA payment for claim ${claim.id}`);
-
-    const vault = await this.vaultRepository.findOne({
-      where: { id: transaction.vault_id },
-    });
-
-    if (!vault) {
-      throw new Error(`Vault ${transaction.vault_id} not found`);
-    }
-
-    // Apply parameters to dispatch script
-    const dispatchResult = await this.blockchainService.applyDispatchParameters({
-      vault_policy: this.vaultScriptAddress,
-      vault_id: vault.asset_vault_name,
-      contribution_script_hash: vault.script_hash,
-    });
-
-    const PARAMETERIZED_DISPATCH_HASH = dispatchResult.parameterizedHash;
-    const DISPATCH_ADDRESS = this.getDispatchAddress(PARAMETERIZED_DISPATCH_HASH);
-
-    // Get original contribution transaction
-    const originalTx = claim.transaction;
-    if (!originalTx || !originalTx.tx_hash) {
-      throw new Error(`Original transaction not found for claim ${claim.id}`);
-    }
-
-    // Find a suitable UTXO at dispatch address with enough ADA
-    const dispatchUtxos = await getUtxos(Address.from_bech32(DISPATCH_ADDRESS), 0, this.blockfrost);
-    if (dispatchUtxos.len() === 0) {
-      throw new Error('No UTXOs found.');
-    }
-
-    const allUtxos = dispatchUtxos;
-    const adaAmount = claim.metadata?.adaAmount || 0;
-    const minRequired = adaAmount + 2_000_000; // Payment + minimum ADA
-
-    // Find suitable UTXO with enough ADA
-    let suitableUtxo: {
-      tx_hash: string;
-      output_index: number;
-      amount: string;
-    } | null = null;
-    for (let i = 0; i < allUtxos.len(); i++) {
-      const utxo = allUtxos.get(i);
-      const lovelace = this.getLovelaceAmount(utxo);
-
-      if (lovelace >= minRequired) {
-        suitableUtxo = {
-          tx_hash: utxo.input().transaction_id().to_hex(),
-          output_index: utxo.input().index(),
-          amount: utxo.output().amount().coin().to_str(),
-        };
-        break;
-      }
-    }
-
-    if (!suitableUtxo) {
-      throw new Error(`No suitable UTXO found at dispatch address with enough ADA (need ${minRequired})`);
-    }
-
-    const userAddress = claim.user?.address || (await this.getUserAddress(claim.user_id));
-    const datumTag = generate_tag_from_txhash_index(originalTx.tx_hash, +originalTx.tx_index || 0);
-    const contribTxUtxos = await this.blockfrost.txsUtxos(originalTx.tx_hash);
-    const contribOutput = contribTxUtxos.outputs[originalTx.tx_index || 0];
-    if (!contribOutput) {
-      throw new Error('No contribution output found');
-    }
-    const assetDetails = this.extractAssetDetailsFromUtxo(contribOutput);
-
-    const input: PayAdaContribution = {
-      changeAddress: this.adminAddress,
-      message: `Pay ADA to contributor for claim ${claim.id}`,
-      scriptInteractions: [
-        {
-          purpose: 'spend',
-          hash: PARAMETERIZED_DISPATCH_HASH,
-          outputRef: {
-            txHash: suitableUtxo.tx_hash,
-            index: suitableUtxo.output_index,
-          },
-          redeemer: {
-            type: 'json',
-            value: null,
-          },
-        },
-        {
-          purpose: 'withdraw',
-          hash: PARAMETERIZED_DISPATCH_HASH,
-          redeemer: {
-            type: 'json',
-            value: null,
-          },
-        },
-        {
-          purpose: 'mint',
-          hash: vault.script_hash,
-          redeemer: {
-            type: 'json',
-            value: 'MintVaultToken',
-          },
-        },
-        {
-          purpose: 'spend',
-          hash: vault.script_hash,
-          outputRef: {
-            txHash: originalTx.tx_hash,
-            index: originalTx.tx_index || 0,
-          },
-          redeemer: {
-            type: 'json',
-            value: {
-              __variant: 'CollectVaultToken',
-              __data: {
-                vault_token_output_index: 0,
-                change_output_index: 1,
-              },
-            },
-          },
-        },
-      ],
-      mint: [
-        {
-          version: 'cip25',
-          assetName: { name: vault.asset_vault_name, format: 'hex' },
-          policyId: vault.script_hash,
-          type: 'plutus',
-          quantity: claim.amount,
-          metadata: {},
-        },
-        {
-          version: 'cip25',
-          assetName: { name: 'receipt', format: 'utf8' },
-          policyId: vault.script_hash,
-          type: 'plutus',
-          quantity: -1,
-          metadata: {},
-        },
-      ],
-      outputs: [
-        {
-          address: userAddress,
-          assets: [
-            {
-              assetName: { name: vault.asset_vault_name, format: 'hex' },
-              policyId: vault.script_hash,
-              quantity: claim.amount,
-            },
-          ],
-          lovelace: adaAmount,
-          datum: {
-            type: 'inline',
-            value: {
-              datum_tag: datumTag,
-              ada_paid: adaAmount,
-              policy_id: vault.script_hash,
-              asset_name: vault.asset_vault_name,
-              owner: userAddress,
-            },
-            shape: {
-              validatorHash: PARAMETERIZED_DISPATCH_HASH,
-              purpose: 'spend',
-            },
-          },
-        },
-        {
-          address: vault.contract_address,
-          lovelace: assetDetails.lovelace,
-          assets: assetDetails.assets,
-          datum: {
-            type: 'inline',
-            value: {
-              policy_id: vault.script_hash,
-              asset_name: vault.asset_vault_name,
-              owner: userAddress,
-              datum_tag: datumTag,
-            },
-            shape: {
-              validatorHash: vault.script_hash,
-              purpose: 'spend',
-            },
-          },
-        },
-        {
-          address: DISPATCH_ADDRESS,
-          lovelace: this.getLovelaceAmount(suitableUtxo) - adaAmount,
-        },
-      ],
-      requiredSigners: [this.adminHash],
-      referenceInputs: [
-        {
-          txHash: vault.last_update_tx_hash,
-          index: 0,
-        },
-      ],
-      validityInterval: {
-        start: true,
-        end: true,
-      },
-      network: 'preprod',
-    };
-
-    try {
-      const buildResponse = await this.blockchainService.buildTransaction(input);
-
-      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
-
-      const response = await this.blockchainService.submitTransaction({
-        transaction: txToSubmitOnChain.to_hex(),
-        signatures: [],
-      });
-
-      await this.transactionRepository.update({ id: transaction.id }, { tx_hash: response.txHash });
-
-      this.logger.log(`Payment transaction ${response.txHash} submitted for claim ${claim.id}`);
-    } catch (error) {
-      this.logger.error(`Failed to submit payment transaction:`, error);
-
-      // Mark transaction as failed
-      await this.transactionRepository.update({ id: transaction.id }, { status: TransactionStatus.failed });
-    }
   }
 
   private async processPaymentTransactions(): Promise<void> {
