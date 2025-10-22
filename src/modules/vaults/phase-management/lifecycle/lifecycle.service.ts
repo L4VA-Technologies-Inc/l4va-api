@@ -574,7 +574,7 @@ export class LifecycleService {
               vault: { id: vault.id },
               type: ClaimType.CONTRIBUTOR,
               amount: contributorResult.vtAmount,
-              status: ClaimStatus.AVAILABLE,
+              status: ClaimStatus.PENDING, // Move to active after succseful Extraction
               transaction: { id: tx.id },
               metadata: {
                 adaAmount: contributorResult.adaAmount,
