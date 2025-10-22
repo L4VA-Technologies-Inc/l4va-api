@@ -94,9 +94,9 @@ export class AutomatedDistributionService {
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
   }
 
-  @Cron(CronExpression.EVERY_5_MINUTES)
+  @Cron(CronExpression.EVERY_MINUTE)
   async processDistributionQueue(): Promise<void> {
-    this.logger.log('Processing distribution queue...');
+    this.logger.debug('Processing distribution queue...');
 
     // 1. Find vaults ready for extraction
     await this.processReadyVaults();
@@ -113,6 +113,7 @@ export class AutomatedDistributionService {
   private async processReadyVaults(): Promise<void> {
     const readyVaults = await this.vaultRepository.find({
       where: {
+        id: 'a56c845a-e3d3-4927-bbd0-c6d3f4a12cb4',
         vault_status: VaultStatus.locked,
         vault_sc_status: SmartContractVaultStatus.SUCCESSFUL,
         last_update_tx_hash: Not(IsNull()),
@@ -146,11 +147,17 @@ export class AutomatedDistributionService {
       relations: ['transaction', 'user'],
     });
 
+    const extractionTx = await this.transactionRepository.save({
+      vault_id: vaultId,
+      type: TransactionType.extract,
+      status: TransactionStatus.created,
+    });
+
     this.logger.log(`Found ${claims.length} acquirer claims to extract for vault ${vaultId}`);
 
     for (const claim of claims) {
-      const { transaction } = claim;
-      this.logger.log(`Extracting lovelace for claim ${claim.id}, transaction ${claim.transaction_id}`);
+      const { transaction, user } = claim;
+      this.logger.debug(`Extracting lovelace for claim ${claim.id}, transaction ${claim.transaction_id}`);
 
       const vault = await this.vaultRepository.findOne({
         where: { id: transaction.vault_id },
@@ -226,6 +233,16 @@ export class AutomatedDistributionService {
         ],
         outputs: [
           {
+            address: user.address,
+            assets: [
+              {
+                assetName: { name: vault.asset_vault_name, format: 'hex' },
+                policyId: vault.script_hash,
+                quantity: claim.amount,
+              },
+            ],
+          },
+          {
             address: DISPATCH_ADDRESS,
             lovelace: originalTx.amount || 0,
           },
@@ -244,6 +261,8 @@ export class AutomatedDistributionService {
         network: 'preprod',
       };
 
+      this.logger.debug(JSON.stringify(input));
+
       try {
         const buildResponse = await this.blockchainService.buildTransaction(input);
 
@@ -255,15 +274,16 @@ export class AutomatedDistributionService {
           signatures: [],
         });
 
-        // Update transaction with hash
-        await this.transactionRepository.update({ id: transaction.id }, { tx_hash: response.txHash });
+        // Update Extraction transaction with hash
+        await this.transactionRepository.update({ id: extractionTx.id }, { tx_hash: response.txHash });
+        await new Promise(resolve => setTimeout(resolve, 90000));
 
-        this.logger.log(`Extraction transaction ${response.txHash} submitted for claim ${claim.id}`);
+        this.logger.debug(`Extraction transaction ${response.txHash} submitted for claim ${claim.id}`);
       } catch (error) {
         this.logger.error(`Failed to submit extraction transaction:`, error);
 
         // Mark transaction as failed
-        await this.transactionRepository.update({ id: transaction.id }, { status: TransactionStatus.failed });
+        await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
       }
     }
   }
