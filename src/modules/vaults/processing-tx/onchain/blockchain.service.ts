@@ -1,3 +1,4 @@
+import { FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -58,6 +59,8 @@ export class BlockchainService {
   private readonly anvilApi: string;
   private readonly unparametizedDispatchHash: string;
   private readonly blueprintTitle: string;
+  private readonly adminSKey: string;
+  private readonly adminAddress: string;
   private readonly anvilHeaders: {
     [key: string]: string;
   };
@@ -66,13 +69,15 @@ export class BlockchainService {
     private readonly configService: ConfigService,
     private readonly httpService: HttpService
   ) {
+    this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
+    this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.anvilApi = this.configService.get<string>('ANVIL_API_URL') + '/services';
+    this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
+    this.blueprintTitle = this.configService.get<string>('BLUEPRINT_TITLE');
     this.anvilHeaders = {
       'x-api-key': this.configService.get<string>('ANVIL_API_KEY'),
       'Content-Type': 'application/json',
     };
-    this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
-    this.blueprintTitle = this.configService.get<string>('BLUEPRINT_TITLE');
   }
 
   /**
@@ -196,7 +201,64 @@ export class BlockchainService {
       // Log the full error for debugging
       console.error('Full submission error:', error);
       this.logger.error('Error submitting transaction', error.message);
-      throw new Error(`Failed to submit transaction: ${error.message}`);
+      throw new Error(`Failed to submit transacti ${error.message}`);
+    }
+  }
+
+  /**
+   * Register Stake on Dispatch Script to be able Contributors claim ADA
+   *
+   * Should Register after Extraction Action
+   *
+   * @param parameterizedDispatchHash
+   * @returns
+   */
+  async registerScriptStake(parameterizedDispatchHash: string): Promise<boolean> {
+    try {
+      const input = {
+        changeAddress: this.adminAddress,
+        deposits: [
+          {
+            hash: parameterizedDispatchHash,
+            type: 'script',
+            deposit: 'stake',
+          },
+        ],
+      };
+
+      const buildResponse = await fetch(`${this.anvilApi}/transactions/build`, {
+        method: 'POST',
+        headers: this.anvilHeaders,
+        body: JSON.stringify(input),
+      });
+
+      if (!buildResponse.ok) {
+        const errorText = await buildResponse.text();
+        throw new Error(`Build failed: ${buildResponse.status} - ${errorText}`);
+      }
+
+      const transaction = await buildResponse.json();
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(transaction.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+      const submitResponse = await fetch(`${this.anvilApi}/transactions/submit`, {
+        method: 'POST',
+        headers: this.anvilHeaders,
+        body: JSON.stringify({
+          signatures: [],
+          transaction: txToSubmitOnChain.to_hex(),
+        }),
+      });
+
+      if (!submitResponse.ok) {
+        const errorText = await submitResponse.text();
+        throw new Error(`Submit failed: ${submitResponse.status} - ${errorText}`);
+      }
+
+      return true;
+    } catch (error) {
+      this.logger.error('Error on registerScriptStake', error);
+      return false;
     }
   }
 
