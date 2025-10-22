@@ -451,6 +451,15 @@ export class Vault {
   })
   distribution_in_progress: boolean;
 
+  @Expose({ name: 'stakeRegistered' })
+  @Column({
+    name: 'stake_registered',
+    type: 'boolean',
+    nullable: false,
+    default: false,
+  })
+  stake_registered: boolean;
+
   @Expose({ name: 'distributionProcessed' })
   @Column({
     name: 'distribution_processed',
