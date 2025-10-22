@@ -170,7 +170,7 @@ export class DistributionService {
     const multiplier = Math.floor(lpVtAmount / lpLovelaceAmount);
 
     return {
-      adaPairMultiplier: multiplier,
+      adaPairMultiplier: 2, // for now
     };
   }
 
