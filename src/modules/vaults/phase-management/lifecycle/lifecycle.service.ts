@@ -722,6 +722,9 @@ export class LifecycleService {
             vaultName: vault.name,
             contributorIds: [...new Set(contributionTransactions.map(tx => tx.user_id).filter(Boolean))],
           });
+          this.eventEmitter.emit('vault.failed.email', {
+            vault
+          });
         } catch (error) {
           this.logger.error(`Error emitting vault.failed event for vault ${vault.id}:`, error);
         }

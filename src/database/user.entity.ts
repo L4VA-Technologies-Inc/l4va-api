@@ -33,6 +33,10 @@ export class User {
   @Column()
   name: string;
 
+  @Expose({ name: 'email' })
+  @Column({ nullable: true })
+  email: string;
+
   @Expose({ name: 'address' })
   @Column({ unique: true })
   address: string;

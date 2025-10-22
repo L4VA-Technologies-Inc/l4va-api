@@ -90,4 +90,13 @@ export class UpdateProfileDto {
   @IsObject({ each: true })
   @Expose()
   socialLinks: SocialLink[];
+
+  @ApiProperty({
+    description: 'User email for notification',
+    required: false,
+  })
+  @IsString()
+  @IsOptional()
+  @Expose()
+  email: string;
 }

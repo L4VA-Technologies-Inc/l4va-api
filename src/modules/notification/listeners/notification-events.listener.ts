@@ -2,12 +2,20 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 
 import { NotificationService } from '@/modules/notification/notification.service';
+import { InjectRepository } from '@nestjs/typeorm';
+import { User } from '@/database/user.entity';
+import { Repository } from 'typeorm';
 
 @Injectable()
 export class NotificationEventsListener {
   private readonly logger = new Logger(NotificationService.name);
 
-  constructor(private notificationService: NotificationService) {}
+  constructor(
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
+
+    private notificationService: NotificationService
+  ) {}
 
   @OnEvent('vault.launched')
   async handleVaultLaunched(event: {
@@ -75,6 +83,24 @@ export class NotificationEventsListener {
         vaultName: event.vaultName,
       },
       event.contributorIds
+    );
+  }
+  
+  @OnEvent('vault.failed.email')
+  async handleVaultFailedEmail(event: { vault: any }) {
+    const user = await this.userRepository.findOne({ where: { id: event.vault.owner.id } });
+
+    await this.notificationService.sendFailedEmailNotification(
+      {
+        email: user.email,
+        firstName: user.name,
+        status: event.vault.vaultStatus,
+        vaultTokenTicker: event.vault.vaultTokenTicker,
+        vaultUrl: `https://testnet.l4va.com/vaults/${event.vault.id}`,
+        failed_at: new Date(),
+        vaultName: event.vault.name,
+        address: user.address,
+      },
     );
   }
 

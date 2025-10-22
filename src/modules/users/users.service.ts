@@ -138,6 +138,10 @@ export class UsersService {
       user.name = updateData.name;
     }
 
+    if (updateData.email !== undefined) {
+      user.email = updateData.email;
+    }
+
     if (updateData.description !== undefined) {
       user.description = updateData.description;
     }
