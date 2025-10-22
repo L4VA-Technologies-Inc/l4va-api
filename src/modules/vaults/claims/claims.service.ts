@@ -424,6 +424,8 @@ export class ClaimsService {
     transactionId: string;
     presignedTx: string;
   }> {
+    throw new Error('Doesnt work');
+
     const claim = await this.claimRepository.findOne({
       where: { id: claimId },
       relations: ['user', 'vault', 'transaction'],
@@ -443,7 +445,7 @@ export class ClaimsService {
     if (!vault || !user) {
       throw new Error('Vault or user not found for claim');
     }
-    return await this.claimAcquirer(claim, user, vault);
+    // return await this.claimAcquirer(claim, user, vault);
   }
 
   async submitSignedTransaction(
@@ -546,220 +548,219 @@ export class ClaimsService {
     }
   }
 
-  private async claimAcquirer(
-    claim: Claim,
-    user: User,
-    vault: Vault
-  ): Promise<{
-    success: boolean;
-    transactionId: string;
-    presignedTx: string;
-  }> {
-    try {
-      const utxos = await getUtxosExctract(Address.from_bech32(user.address), 0, this.blockfrost); // Any UTXO works.
+  // private async claimAcquirer(
+  //   claim: Claim,
+  //   user: User,
+  //   vault: Vault
+  // ): Promise<{
+  //   success: boolean;
+  //   transactionId: string;
+  //   presignedTx: string;
+  // }> {
+  //   try {
+  //     const utxos = await getUtxosExctract(Address.from_bech32(user.address), 0, this.blockfrost); // Any UTXO works.
 
-      if (utxos.length === 0) {
-        throw new Error('No UTXOs found.');
-      }
+  //     if (utxos.length === 0) {
+  //       throw new Error('No UTXOs found.');
+  //     }
 
-      const POLICY_ID = vault.script_hash;
-      const DISPATCH_UTXO_TX_HASH = vault.dispatch_utxo_tx_hash;
-      const DISPATCH_UTXO_INDEX = vault.dispatch_utxo_tx_index;
+  //     const POLICY_ID = vault.script_hash;
+  //     const DISPATCH_UTXO_TX_HASH = vault.dispatch_utxo_tx_hash;
 
-      const hasAssets = claim.type === ClaimType.CONTRIBUTOR;
-      const lpsUnit = vault.script_hash + '72656365697074';
-      const txUtxos = await this.blockfrost.txsUtxos(claim.transaction.tx_hash);
-      const output = txUtxos.outputs[0];
-      if (!output) {
-        throw new Error('No output found');
-      }
-      const lovelaceChange = Number(output.amount.find(a => a.unit === 'lovelace')?.quantity ?? '0');
-      const amountOfLpsToClaim = output.amount.find(a => a.unit === lpsUnit);
-      const datumTag = generate_tag_from_txhash_index(claim.transaction.tx_hash, Number(0));
+  //     const hasAssets = claim.type === ClaimType.CONTRIBUTOR;
+  //     const lpsUnit = vault.script_hash + '72656365697074';
+  //     const txUtxos = await this.blockfrost.txsUtxos(claim.transaction.tx_hash);
+  //     const output = txUtxos.outputs[0];
+  //     if (!output) {
+  //       throw new Error('No output found');
+  //     }
+  //     const lovelaceChange = Number(output.amount.find(a => a.unit === 'lovelace')?.quantity ?? '0');
+  //     const amountOfLpsToClaim = output.amount.find(a => a.unit === lpsUnit);
+  //     const datumTag = generate_tag_from_txhash_index(claim.transaction.tx_hash, Number(0));
 
-      if (!amountOfLpsToClaim) {
-        throw new Error('No lps to claim.');
-      }
+  //     if (!amountOfLpsToClaim) {
+  //       throw new Error('No lps to claim.');
+  //     }
 
-      const input: {
-        changeAddress: string;
-        message: string;
-        mint?: Array<object>;
-        scriptInteractions: object[];
-        outputs: {
-          address: string;
-          assets?: object[];
-          lovelace?: number;
-          datum?: { type: 'inline'; value: string | Datum | { datum_tag: string; ada_paid: number }; shape?: object };
-        }[];
-        requiredSigners: string[];
-        referenceInputs: { txHash: string; index: number }[];
-        validityInterval: {
-          start: boolean;
-          end: boolean;
-        };
-        network: string;
-      } = {
-        changeAddress: user.address,
-        message: hasAssets
-          ? 'Claim VTs from asset contribution  and collect ADA from dispatch'
-          : 'Claim VTs from ADA contribution',
-        scriptInteractions: [
-          {
-            purpose: 'spend',
-            hash: POLICY_ID,
-            outputRef: {
-              txHash: claim.transaction.tx_hash,
-              index: 0,
-            },
-            redeemer: {
-              type: 'json',
-              // Removed in new sc
-              // value: {
-              //   __variant: 'CollectVaultToken',
-              //   __data: {
-              //     vault_token_output_index: 0,
-              //     change_output_index: 1,
-              //   },
-              // },
-              value: {
-                vault_token_output_index: 0,
-                change_output_index: hasAssets ? 2 : 1, // Account for dispatch output
-              },
-            },
-          },
-          {
-            purpose: 'mint',
-            hash: POLICY_ID,
-            redeemer: {
-              type: 'json',
-              value: 'MintVaultToken' satisfies Redeemer,
-            },
-          },
-          ...(hasAssets
-            ? [
-                {
-                  purpose: 'spend',
-                  hash: this.unparametizedDispatchHash,
-                  outputRef: {
-                    txHash: DISPATCH_UTXO_TX_HASH,
-                    index: DISPATCH_UTXO_INDEX,
-                  },
-                  redeemer: {
-                    type: 'json',
-                    value: null, // Dispatch spend redeemer
-                  },
-                },
-                {
-                  purpose: 'withdraw',
-                  hash: this.unparametizedDispatchHash,
-                  redeemer: {
-                    type: 'json',
-                    value: null, // Dispatch withdraw redeemer
-                  },
-                },
-              ]
-            : []),
-        ],
-        mint: [
-          {
-            version: 'cip25',
-            assetName: { name: vault.asset_vault_name, format: 'hex' },
-            policyId: POLICY_ID,
-            type: 'plutus',
-            quantity: claim.amount, // Use the amount from the claim
-            metadata: {},
-          },
-          {
-            version: 'cip25',
-            assetName: { name: 'receipt', format: 'utf8' },
-            policyId: POLICY_ID,
-            type: 'plutus',
-            quantity: -1,
-            metadata: {},
-          },
-        ],
-        outputs: [
-          {
-            address: user.address,
-            assets: [
-              {
-                assetName: { name: vault.asset_vault_name, format: 'hex' },
-                policyId: vault.script_hash,
-                quantity: claim.amount,
-              },
-            ],
-            lovelace: hasAssets ? 5000000 : undefined,
-            datum: {
-              type: 'inline',
-              value: {
-                datum_tag: PlutusData.new_bytes(Buffer.from(datumTag, 'hex')).to_hex(),
-                ada_paid: 5000000, // Should use calculated value here
-              },
-              shape: {
-                validatorHash: POLICY_ID,
-                purpose: 'spend',
-              },
-            },
-          },
-          {
-            address: vault.contract_address,
-            lovelace: lovelaceChange,
-            datum: {
-              type: 'inline',
-              value: {
-                policy_id: POLICY_ID,
-                asset_name: vault.asset_vault_name,
-                owner: user.address,
-                datum_tag: datumTag,
-              },
-              shape: { validatorHash: POLICY_ID, purpose: 'spend' },
-            },
-          },
-        ],
-        requiredSigners: [this.adminHash],
-        referenceInputs: [
-          {
-            txHash: vault.last_update_tx_hash,
-            index: vault.last_update_tx_index,
-          },
-        ],
-        validityInterval: {
-          start: true,
-          end: true,
-        },
-        network: 'preprod',
-      };
+  //     const input: {
+  //       changeAddress: string;
+  //       message: string;
+  //       mint?: Array<object>;
+  //       scriptInteractions: object[];
+  //       outputs: {
+  //         address: string;
+  //         assets?: object[];
+  //         lovelace?: number;
+  //         datum?: { type: 'inline'; value: string | Datum | { datum_tag: string; ada_paid: number }; shape?: object };
+  //       }[];
+  //       requiredSigners: string[];
+  //       referenceInputs: { txHash: string; index: number }[];
+  //       validityInterval: {
+  //         start: boolean;
+  //         end: boolean;
+  //       };
+  //       network: string;
+  //     } = {
+  //       changeAddress: user.address,
+  //       message: hasAssets
+  //         ? 'Claim VTs from asset contribution  and collect ADA from dispatch'
+  //         : 'Claim VTs from ADA contribution',
+  //       scriptInteractions: [
+  //         {
+  //           purpose: 'spend',
+  //           hash: POLICY_ID,
+  //           outputRef: {
+  //             txHash: claim.transaction.tx_hash,
+  //             index: 0,
+  //           },
+  //           redeemer: {
+  //             type: 'json',
+  //             // Removed in new sc
+  //             // value: {
+  //             //   __variant: 'CollectVaultToken',
+  //             //   __data: {
+  //             //     vault_token_output_index: 0,
+  //             //     change_output_index: 1,
+  //             //   },
+  //             // },
+  //             value: {
+  //               vault_token_output_index: 0,
+  //               change_output_index: hasAssets ? 2 : 1, // Account for dispatch output
+  //             },
+  //           },
+  //         },
+  //         {
+  //           purpose: 'mint',
+  //           hash: POLICY_ID,
+  //           redeemer: {
+  //             type: 'json',
+  //             value: 'MintVaultToken' satisfies Redeemer,
+  //           },
+  //         },
+  //         ...(hasAssets
+  //           ? [
+  //               {
+  //                 purpose: 'spend',
+  //                 hash: this.unparametizedDispatchHash,
+  //                 outputRef: {
+  //                   txHash: DISPATCH_UTXO_TX_HASH,
+  //                   index: DISPATCH_UTXO_INDEX,
+  //                 },
+  //                 redeemer: {
+  //                   type: 'json',
+  //                   value: null, // Dispatch spend redeemer
+  //                 },
+  //               },
+  //               {
+  //                 purpose: 'withdraw',
+  //                 hash: this.unparametizedDispatchHash,
+  //                 redeemer: {
+  //                   type: 'json',
+  //                   value: null, // Dispatch withdraw redeemer
+  //                 },
+  //               },
+  //             ]
+  //           : []),
+  //       ],
+  //       mint: [
+  //         {
+  //           version: 'cip25',
+  //           assetName: { name: vault.asset_vault_name, format: 'hex' },
+  //           policyId: POLICY_ID,
+  //           type: 'plutus',
+  //           quantity: claim.amount, // Use the amount from the claim
+  //           metadata: {},
+  //         },
+  //         {
+  //           version: 'cip25',
+  //           assetName: { name: 'receipt', format: 'utf8' },
+  //           policyId: POLICY_ID,
+  //           type: 'plutus',
+  //           quantity: -1,
+  //           metadata: {},
+  //         },
+  //       ],
+  //       outputs: [
+  //         {
+  //           address: user.address,
+  //           assets: [
+  //             {
+  //               assetName: { name: vault.asset_vault_name, format: 'hex' },
+  //               policyId: vault.script_hash,
+  //               quantity: claim.amount,
+  //             },
+  //           ],
+  //           lovelace: hasAssets ? 5000000 : undefined,
+  //           datum: {
+  //             type: 'inline',
+  //             value: {
+  //               datum_tag: PlutusData.new_bytes(Buffer.from(datumTag, 'hex')).to_hex(),
+  //               ada_paid: 5000000, // Should use calculated value here
+  //             },
+  //             shape: {
+  //               validatorHash: POLICY_ID,
+  //               purpose: 'spend',
+  //             },
+  //           },
+  //         },
+  //         {
+  //           address: vault.contract_address,
+  //           lovelace: lovelaceChange,
+  //           datum: {
+  //             type: 'inline',
+  //             value: {
+  //               policy_id: POLICY_ID,
+  //               asset_name: vault.asset_vault_name,
+  //               owner: user.address,
+  //               datum_tag: datumTag,
+  //             },
+  //             shape: { validatorHash: POLICY_ID, purpose: 'spend' },
+  //           },
+  //         },
+  //       ],
+  //       requiredSigners: [this.adminHash],
+  //       referenceInputs: [
+  //         {
+  //           txHash: vault.last_update_tx_hash,
+  //           index: vault.last_update_tx_index,
+  //         },
+  //       ],
+  //       validityInterval: {
+  //         start: true,
+  //         end: true,
+  //       },
+  //       network: 'preprod',
+  //     };
 
-      // Build the transaction
-      const buildResponse = await this.blockchainService.buildTransaction(input);
-      this.logger.log('Transaction built successfully');
+  //     // Build the transaction
+  //     const buildResponse = await this.blockchainService.buildTransaction(input);
+  //     this.logger.log('Transaction built successfully');
 
-      // Sign the transaction with admin key
-      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+  //     // Sign the transaction with admin key
+  //     const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+  //     txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
-      // Create internal transaction
-      const internalTx = await this.transactionRepository.save({
-        user_id: user.id,
-        vault_id: vault.id,
-        // amount: claim.amount,
-        type: TransactionType.claim,
-        status: TransactionStatus.created,
-      });
+  //     // Create internal transaction
+  //     const internalTx = await this.transactionRepository.save({
+  //       user_id: user.id,
+  //       vault_id: vault.id,
+  //       // amount: claim.amount,
+  //       type: TransactionType.claim,
+  //       status: TransactionStatus.created,
+  //     });
 
-      await this.transactionRepository.save(internalTx);
+  //     await this.transactionRepository.save(internalTx);
 
-      return {
-        success: true,
-        transactionId: internalTx.id,
-        presignedTx: txToSubmitOnChain.to_hex(),
-      };
-    } catch (error) {
-      // Reset claim status on error
-      claim.status = ClaimStatus.AVAILABLE;
-      await this.claimRepository.save(claim);
-      throw error;
-    }
-  }
+  //     return {
+  //       success: true,
+  //       transactionId: internalTx.id,
+  //       presignedTx: txToSubmitOnChain.to_hex(),
+  //     };
+  //   } catch (error) {
+  //     // Reset claim status on error
+  //     claim.status = ClaimStatus.AVAILABLE;
+  //     await this.claimRepository.save(claim);
+  //     throw error;
+  //   }
+  // }
 }
