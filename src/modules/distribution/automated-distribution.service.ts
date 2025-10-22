@@ -98,7 +98,7 @@ export class AutomatedDistributionService {
     });
   }
 
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Cron(CronExpression.EVERY_10_MINUTES)
   async processDistributionQueue(): Promise<void> {
     this.logger.debug('Processing distribution queue...');
 
@@ -424,6 +424,8 @@ export class AutomatedDistributionService {
       },
       relations: ['transaction', 'user'],
     });
+
+    if (claims.length === 0) return;
 
     this.logger.log(`Found ${claims.length} contributor claims for payment in vault ${vaultId}`);
 
