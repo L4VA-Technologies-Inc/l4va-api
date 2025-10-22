@@ -694,7 +694,7 @@ export class VaultManagingService {
           },
         });
       } else {
-        throw new Error(`Failed to create vault and upload script`);
+        throw new Error(`Failed to create vault and upload script: 'Unknown error'`);
       }
 
       return { txHash: result.txHash };

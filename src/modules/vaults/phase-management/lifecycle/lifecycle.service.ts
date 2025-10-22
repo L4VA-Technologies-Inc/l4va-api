@@ -574,7 +574,7 @@ export class LifecycleService {
               vault: { id: vault.id },
               type: ClaimType.CONTRIBUTOR,
               amount: contributorResult.vtAmount,
-              status: ClaimStatus.PENDING, // Move to active after succseful Extraction
+              status: ClaimStatus.PENDING, // Move to active after successful Extraction
               transaction: { id: tx.id },
               metadata: {
                 adaAmount: contributorResult.adaAmount,
@@ -651,8 +651,6 @@ export class LifecycleService {
           fdv,
           fdvTvl: +(fdv / totalContributedValueAda).toFixed(2) || 0,
         });
-
-        // this.vaultManagingService.extractVaultAdaToDispatchScript(vault);
 
         try {
           this.eventEmitter.emit('distribution.claim_available', {

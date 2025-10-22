@@ -424,7 +424,7 @@ export class ClaimsService {
     transactionId: string;
     presignedTx: string;
   }> {
-    throw new Error('Doesnt work');
+    throw new Error("Claim transaction building is currently disabled. Please use cancellation claims or contact support for alternatives.");
 
     const claim = await this.claimRepository.findOne({
       where: { id: claimId },

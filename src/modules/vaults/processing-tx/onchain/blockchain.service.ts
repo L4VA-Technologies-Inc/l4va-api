@@ -199,9 +199,9 @@ export class BlockchainService {
       }
 
       // Log the full error for debugging
-      console.error('Full submission error:', error);
+      this.logger.error('Full submission error:', error);
       this.logger.error('Error submitting transaction', error.message);
-      throw new Error(`Failed to submit transacti ${error.message}`);
+      throw new Error(`Failed to submit transaction ${error.message}`);
     }
   }
 

@@ -664,10 +664,6 @@ export class AutomatedDistributionService {
           network: 'preprod',
         };
 
-        const trimmedInput = { ...input };
-        delete trimmedInput.preloadedScripts;
-        console.log(JSON.stringify(trimmedInput));
-
         try {
           const buildResponse = await this.blockchainService.buildTransaction(input);
 
