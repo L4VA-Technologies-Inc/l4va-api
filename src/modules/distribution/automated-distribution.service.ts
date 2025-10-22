@@ -13,7 +13,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, Not, IsNull } from 'typeorm';
+import { Repository, In, Not, IsNull, LessThanOrEqual } from 'typeorm';
 
 import { BlockchainService } from '../vaults/processing-tx/onchain/blockchain.service';
 import { generate_tag_from_txhash_index, getUtxos } from '../vaults/processing-tx/onchain/utils/lib';
@@ -99,7 +99,7 @@ export class AutomatedDistributionService {
     });
   }
 
-  @Cron(CronExpression.EVERY_10_MINUTES)
+  @Cron(CronExpression.EVERY_MINUTE)
   async processDistributionQueue(): Promise<void> {
     this.logger.debug('Processing distribution queue...');
 
@@ -109,20 +109,16 @@ export class AutomatedDistributionService {
     // 2.1 Process extractions for acquirer claims
     //2.2 Register Script Stake
     await this.processExtractionTransactions();
-
-    // 3. Process payments for contributor claims
-    await this.processPaymentTransactions();
   }
 
   private async processReadyVaults(): Promise<void> {
     const readyVaults = await this.vaultRepository.find({
       where: {
-        id: 'a56c845a-e3d3-4927-bbd0-c6d3f4a12cb4',
         vault_status: VaultStatus.locked,
         vault_sc_status: SmartContractVaultStatus.SUCCESSFUL,
         last_update_tx_hash: Not(IsNull()),
-        distribution_in_progress: false,
         distribution_processed: false,
+        created_at: LessThanOrEqual(new Date('2025-10-22').toISOString()),
       },
       select: ['id'],
     });
@@ -148,6 +144,7 @@ export class AutomatedDistributionService {
         vault: { id: vaultId },
         type: ClaimType.ACQUIRER,
         status: ClaimStatus.AVAILABLE,
+        created_at: LessThanOrEqual(new Date('2025-10-22').toISOString()),
       },
       relations: ['transaction', 'user'],
     });
@@ -174,7 +171,7 @@ export class AutomatedDistributionService {
       const extractionTx = await this.transactionRepository.save({
         vault_id: vaultId,
         user_id: claim.user_id,
-        type: TransactionType.extract,
+        type: TransactionType.extractDispatch,
         status: TransactionStatus.created,
       });
 
@@ -301,7 +298,7 @@ export class AutomatedDistributionService {
         // Update Extraction transaction with hash
         await this.transactionRepository.update(
           { id: extractionTx.id },
-          { tx_hash: response.txHash, status: TransactionStatus.submitted }
+          { tx_hash: response.txHash, status: TransactionStatus.confirmed }
         );
         await new Promise(resolve => setTimeout(resolve, 30000));
 
@@ -318,10 +315,11 @@ export class AutomatedDistributionService {
 
   private async processExtractionTransactions(): Promise<void> {
     // Find confirmed extraction transactions
+    this.logger.debug('processExtractionTransactions');
     const confirmedExtractions = await this.transactionRepository.find({
       where: {
-        type: TransactionType.extract,
-        status: TransactionStatus.pending,
+        type: TransactionType.extractDispatch,
+        status: TransactionStatus.confirmed,
       },
       relations: ['vault'],
     });
@@ -353,7 +351,7 @@ export class AutomatedDistributionService {
         const pendingExtractions = await this.transactionRepository.count({
           where: {
             vault_id: vaultId,
-            type: TransactionType.extract,
+            type: TransactionType.extractDispatch,
             status: Not(TransactionStatus.confirmed),
           },
         });
@@ -376,9 +374,9 @@ export class AutomatedDistributionService {
             const stakeRegistered = await this.blockchainService.registerScriptStake(dispatchResult.parameterizedHash);
 
             if (stakeRegistered) {
-              this.logger.log(`Stake credential registered successfully for vault ${vaultId}`);
+              this.logger.debug(`HERE! Stake credential registered successfully for vault ${vaultId}`);
               await new Promise(resolve => setTimeout(resolve, 50000)); // 50 seconds
-              this.logger.log(`Queueing payment transactions for vault ${vaultId}`);
+              this.logger.debug(`HERE! Queueing payment transactions for vault ${vaultId}`);
               await this.queuePaymentTransactions(vaultId);
             } else {
               this.logger.error(`Failed to register stake credential for vault ${vaultId}`);
@@ -627,6 +625,8 @@ export class AutomatedDistributionService {
           network: 'preprod',
         };
 
+        this.logger.debug(JSON.stringify(input));
+
         try {
           const buildResponse = await this.blockchainService.buildTransaction(input);
 
@@ -665,38 +665,6 @@ export class AutomatedDistributionService {
         distribution_processed: true,
       }
     );
-  }
-
-  private async processPaymentTransactions(): Promise<void> {
-    // Find confirmed payment transactions
-    const confirmedPayments = await this.transactionRepository.find({
-      where: {
-        type: TransactionType.claim,
-        status: TransactionStatus.confirmed,
-      },
-    });
-
-    if (confirmedPayments.length === 0) {
-      return;
-    }
-
-    this.logger.log(`Processing ${confirmedPayments.length} confirmed payment transactions`);
-
-    for (const payment of confirmedPayments) {
-      try {
-        const claimId = payment.metadata?.claimId;
-        if (claimId) {
-          // Update claim status to distributed
-          await this.claimRepository.update({ id: claimId }, { status: ClaimStatus.CLAIMED });
-
-          this.logger.log(`Claim ${claimId} marked as distributed`);
-        }
-
-        await this.transactionRepository.update({ id: payment.id }, { status: TransactionStatus.confirmed });
-      } catch (error) {
-        this.logger.error(`Error processing payment ${payment.id}:`, error);
-      }
-    }
   }
 
   // Helper methods
