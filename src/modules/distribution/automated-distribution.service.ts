@@ -310,10 +310,32 @@ export class AutomatedDistributionService {
         });
 
         if (pendingExtractions === 0) {
-          this.logger.log(`All extractions complete for vault ${vaultId}, queueing payment transactions`);
+          this.logger.log(`All extractions complete for vault ${vaultId}`);
 
-          // Queue payment transactions for contributor claims
-          await this.queuePaymentTransactions(vaultId);
+          // Get vault details
+          const vault = await this.vaultRepository.findOne({
+            where: { id: vaultId },
+          });
+
+          if (vault) {
+            const dispatchResult = await this.blockchainService.applyDispatchParameters({
+              vault_policy: this.vaultScriptAddress,
+              vault_id: vault.asset_vault_name,
+              contribution_script_hash: vault.script_hash,
+            });
+
+            const stakeRegistered = await this.blockchainService.registerScriptStake(dispatchResult.parameterizedHash);
+
+            if (stakeRegistered) {
+              this.logger.log(`Stake credential registered successfully for vault ${vaultId}`);
+              await new Promise(resolve => setTimeout(resolve, 50000)); // 50 seconds
+              this.logger.log(`Queueing payment transactions for vault ${vaultId}`);
+              await this.queuePaymentTransactions(vaultId);
+            } else {
+              this.logger.error(`Failed to register stake credential for vault ${vaultId}`);
+              // Consider adding retry logic or manual intervention notification
+            }
+          }
         }
       } catch (error) {
         this.logger.error(`Error processing extractions for vault ${vaultId}:`, error);
