@@ -7,7 +7,6 @@ import {
   Credential,
   FixedTransaction,
   PrivateKey,
-  Address,
 } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -16,7 +15,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, Not, IsNull, MoreThan } from 'typeorm';
 
 import { BlockchainService } from '../vaults/processing-tx/onchain/blockchain.service';
-import { generate_tag_from_txhash_index, getUtxos } from '../vaults/processing-tx/onchain/utils/lib';
+import { generate_tag_from_txhash_index } from '../vaults/processing-tx/onchain/utils/lib';
 
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
@@ -365,29 +364,45 @@ export class AutomatedDistributionService {
           });
 
           if (vault) {
-            const dispatchResult = await this.blockchainService.applyDispatchParameters({
-              vault_policy: this.vaultScriptAddress,
-              vault_id: vault.asset_vault_name,
-              contribution_script_hash: vault.script_hash,
-            });
-
-            const isStakeAlreadyRegistered = await this.checkStakeRegistration(dispatchResult.parameterizedHash);
-            if (isStakeAlreadyRegistered) {
-              this.logger.log(`Stake credential already registered for vault ${vaultId}, skipping registration`);
-              // Skip registration and proceed to queuing payments
+            // Check if stake is already registered based on database flag
+            if (vault.stake_registered) {
+              this.logger.log(`Stake credential already marked as registered for vault ${vaultId}`);
               this.logger.debug(`Queueing payment transactions for vault ${vaultId}`);
               await this.queuePaymentTransactions(vaultId);
             } else {
-              const stakeRegistered = await this.blockchainService.registerScriptStake(
-                dispatchResult.parameterizedHash
-              );
-              if (stakeRegistered) {
-                await new Promise(resolve => setTimeout(resolve, 50000)); // 50 seconds
-                this.logger.debug(`HERE! Queueing payment transactions for vault ${vaultId}`);
-                await this.queuePaymentTransactions(vaultId);
-              } else {
-                this.logger.error(`Failed to register stake credential for vault ${vaultId}`);
-                // Consider adding retry logic or manual intervention notification
+              const dispatchResult = await this.blockchainService.applyDispatchParameters({
+                vault_policy: this.vaultScriptAddress,
+                vault_id: vault.asset_vault_name,
+                contribution_script_hash: vault.script_hash,
+              });
+
+              try {
+                const stakeRegistered = await this.blockchainService.registerScriptStake(
+                  dispatchResult.parameterizedHash
+                );
+
+                if (stakeRegistered) {
+                  // Update the flag in database
+                  await this.vaultRepository.update({ id: vaultId }, { stake_registered: true });
+
+                  await new Promise(resolve => setTimeout(resolve, 50000)); // 50 seconds
+                  this.logger.debug(`Queueing payment transactions for vault ${vaultId}`);
+                  await this.queuePaymentTransactions(vaultId);
+                } else {
+                  this.logger.error(`Failed to register stake credential for vault ${vaultId}`);
+                }
+              } catch (error) {
+                // If stake registration fails with a specific error message about already registered
+                if (error.message && error.message.includes('StakeKeyRegisteredDELEG')) {
+                  this.logger.warn(`Stake already registered according to error message, marking as registered`);
+
+                  // Mark as registered in database
+                  await this.vaultRepository.update({ id: vaultId }, { stake_registered: true });
+
+                  await this.queuePaymentTransactions(vaultId);
+                } else {
+                  this.logger.error(`Error registering stake: ${error.message}`);
+                }
               }
             }
           }
@@ -747,25 +762,5 @@ export class AutomatedDistributionService {
       lovelace,
       assets,
     };
-  }
-
-  private async checkStakeRegistration(scriptHash: string): Promise<boolean> {
-    try {
-      // Convert script hash to stake address
-      const stakeCredential = Credential.from_scripthash(ScriptHash.from_hex(scriptHash));
-      const stakeAddress = `stake_test1${stakeCredential.to_keyhash().to_hex()}`;
-
-      // Check if the stake address has rewards or is registered
-      const stakeInfo = await this.blockfrost.accountsAddresses(stakeAddress);
-      return true; // If we get here, the address exists
-    } catch (error) {
-      // If we get a 404, the stake address isn't registered
-      if (error.status_code === 404) {
-        return false;
-      }
-      // For other errors, assume it's not registered
-      this.logger.error(`Error checking stake registration: ${error.message}`);
-      return false;
-    }
   }
 }
