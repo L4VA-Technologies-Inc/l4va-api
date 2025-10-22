@@ -101,13 +101,13 @@ export class AutomatedDistributionService {
     // 1. Find vaults ready for extraction
     await this.processReadyVaults();
 
-    // 2. Process extractions for acquirer claims
+    // 2.1 Process extractions for acquirer claims
+    //2.2 Register Script Stake
     await this.processExtractionTransactions();
 
-    //3. Register Script Stake
-
-    // 4. Process payments for contributor claims
-    await this.processPaymentTransactions();
+    // 3. Process payments for contributor claims
+    // Firstly let`s test Extraction and registerScriptStake
+    // await this.processPaymentTransactions();
   }
 
   private async processReadyVaults(): Promise<void> {
@@ -144,127 +144,127 @@ export class AutomatedDistributionService {
       },
       relations: ['transaction', 'user'],
     });
-    
+
     this.logger.log(`Found ${claims.length} acquirer claims to extract for vault ${vaultId}`);
 
     for (const claim of claims) {
-      const { transaction, user } = claim;
-    this.logger.log(`Extracting lovelace for claim ${claim.id}, transaction ${claim.transaction_id}`);
+      const { transaction } = claim;
+      this.logger.log(`Extracting lovelace for claim ${claim.id}, transaction ${claim.transaction_id}`);
 
-    const vault = await this.vaultRepository.findOne({
-      where: { id: transaction.vault_id },
-    });
+      const vault = await this.vaultRepository.findOne({
+        where: { id: transaction.vault_id },
+      });
 
-    if (!vault) {
-      throw new Error(`Vault ${transaction.vault_id} not found`);
-    }
+      if (!vault) {
+        throw new Error(`Vault ${transaction.vault_id} not found`);
+      }
 
-    // Apply parameters to dispatch script
-    const dispatchResult = await this.blockchainService.applyDispatchParameters({
-      vault_policy: this.vaultScriptAddress,
-      vault_id: vault.asset_vault_name,
-      contribution_script_hash: vault.script_hash,
-    });
+      // Apply parameters to dispatch script
+      const dispatchResult = await this.blockchainService.applyDispatchParameters({
+        vault_policy: this.vaultScriptAddress,
+        vault_id: vault.asset_vault_name,
+        contribution_script_hash: vault.script_hash,
+      });
 
-    const PARAMETERIZED_DISPATCH_HASH = dispatchResult.parameterizedHash;
-    const DISPATCH_ADDRESS = this.getDispatchAddress(PARAMETERIZED_DISPATCH_HASH);
+      const PARAMETERIZED_DISPATCH_HASH = dispatchResult.parameterizedHash;
+      const DISPATCH_ADDRESS = this.getDispatchAddress(PARAMETERIZED_DISPATCH_HASH);
 
-    // Get the original acquire transaction
-    const originalTx = claim.transaction;
-    if (!originalTx || !originalTx.tx_hash) {
-      throw new Error(`Original transaction not found for claim`);
-    }
+      // Get the original acquire transaction
+      const originalTx = claim.transaction;
+      if (!originalTx || !originalTx.tx_hash) {
+        throw new Error(`Original transaction not found for claim`);
+      }
 
-    const input: ExtractInput = {
-      changeAddress: this.adminAddress,
-      message: `Extract ADA for claims`,
-      scriptInteractions: [
-        {
-          purpose: 'spend',
-          hash: vault.script_hash,
-          outputRef: {
-            txHash: originalTx.tx_hash,
-            index: originalTx.tx_index || 0,
-          },
-          redeemer: {
-            type: 'json',
-            value: {
-              __variant: 'ExtractAda',
-              __data: {
-                vault_token_output_index: 0,
+      const input: ExtractInput = {
+        changeAddress: this.adminAddress,
+        message: `Extract ADA for claims`,
+        scriptInteractions: [
+          {
+            purpose: 'spend',
+            hash: vault.script_hash,
+            outputRef: {
+              txHash: originalTx.tx_hash,
+              index: originalTx.tx_index || 0,
+            },
+            redeemer: {
+              type: 'json',
+              value: {
+                __variant: 'ExtractAda',
+                __data: {
+                  vault_token_output_index: 0,
+                },
               },
             },
           },
-        },
-        {
-          purpose: 'mint',
-          hash: vault.script_hash,
-          redeemer: {
-            type: 'json',
-            value: 'MintVaultToken',
+          {
+            purpose: 'mint',
+            hash: vault.script_hash,
+            redeemer: {
+              type: 'json',
+              value: 'MintVaultToken',
+            },
           },
+        ],
+        mint: [
+          {
+            version: 'cip25',
+            assetName: { name: vault.asset_vault_name, format: 'hex' },
+            policyId: vault.script_hash,
+            type: 'plutus',
+            quantity: claim.amount,
+            metadata: {},
+          },
+          {
+            version: 'cip25',
+            assetName: { name: 'receipt', format: 'utf8' },
+            policyId: vault.script_hash,
+            type: 'plutus',
+            quantity: -1,
+            metadata: {},
+          },
+        ],
+        outputs: [
+          {
+            address: DISPATCH_ADDRESS,
+            lovelace: originalTx.amount || 0,
+          },
+        ],
+        requiredSigners: [this.adminHash],
+        referenceInputs: [
+          {
+            txHash: vault.last_update_tx_hash,
+            index: 0,
+          },
+        ],
+        validityInterval: {
+          start: true,
+          end: true,
         },
-      ],
-      mint: [
-        {
-          version: 'cip25',
-          assetName: { name: vault.asset_vault_name, format: 'hex' },
-          policyId: vault.script_hash,
-          type: 'plutus',
-          quantity: claim.amount,
-          metadata: {},
-        },
-        {
-          version: 'cip25',
-          assetName: { name: 'receipt', format: 'utf8' },
-          policyId: vault.script_hash,
-          type: 'plutus',
-          quantity: -1,
-          metadata: {},
-        },
-      ],
-      outputs: [
-        {
-          address: DISPATCH_ADDRESS,
-          lovelace: originalTx.amount || 0,
-        },
-      ],
-      requiredSigners: [this.adminHash],
-      referenceInputs: [
-        {
-          txHash: vault.last_update_tx_hash,
-          index: 0,
-        },
-      ],
-      validityInterval: {
-        start: true,
-        end: true,
-      },
-      network: 'preprod',
-    };
+        network: 'preprod',
+      };
 
-    try {
-      const buildResponse = await this.blockchainService.buildTransaction(input);
+      try {
+        const buildResponse = await this.blockchainService.buildTransaction(input);
 
-      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+        const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+        txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
-      const response = await this.blockchainService.submitTransaction({
-        transaction: txToSubmitOnChain.to_hex(),
-        signatures: [],
-      });
+        const response = await this.blockchainService.submitTransaction({
+          transaction: txToSubmitOnChain.to_hex(),
+          signatures: [],
+        });
 
-      // Update transaction with hash
-      await this.transactionRepository.update({ id: transaction.id }, { tx_hash: response.txHash });
+        // Update transaction with hash
+        await this.transactionRepository.update({ id: transaction.id }, { tx_hash: response.txHash });
 
-      this.logger.log(`Extraction transaction ${response.txHash} submitted for claim ${claim.id}`);
-    } catch (error) {
-      this.logger.error(`Failed to submit extraction transaction:`, error);
+        this.logger.log(`Extraction transaction ${response.txHash} submitted for claim ${claim.id}`);
+      } catch (error) {
+        this.logger.error(`Failed to submit extraction transaction:`, error);
 
-      // Mark transaction as failed
-      await this.transactionRepository.update({ id: transaction.id }, { status: TransactionStatus.failed });
+        // Mark transaction as failed
+        await this.transactionRepository.update({ id: transaction.id }, { status: TransactionStatus.failed });
+      }
     }
-  }
   }
 
   private async processExtractionTransactions(): Promise<void> {
@@ -281,8 +281,6 @@ export class AutomatedDistributionService {
       return;
     }
 
-    this.logger.log(`Processing ${confirmedExtractions.length} confirmed extraction transactions`);
-
     // Group by vault for efficiency
     const vaultGroups = confirmedExtractions.reduce(
       (acc, tx) => {
@@ -297,7 +295,10 @@ export class AutomatedDistributionService {
     for (const [vaultId, transactions] of Object.entries(vaultGroups)) {
       try {
         // Mark transactions as processed
-        await this.transactionRepository.update({ id: In(transactions.map(tx => tx.id)) }, { processed: true });
+        await this.transactionRepository.update(
+          { id: In(transactions.map(tx => tx.id)) },
+          { status: TransactionStatus.confirmed }
+        );
 
         // Check if all extractions for this vault are complete
         const pendingExtractions = await this.transactionRepository.count({
@@ -321,7 +322,6 @@ export class AutomatedDistributionService {
   }
 
   private async queuePaymentTransactions(vaultId: string): Promise<void> {
-    // Get all contributor claims needing payment
     const claims = await this.claimRepository.find({
       where: {
         vault: { id: vaultId },
@@ -605,6 +605,7 @@ export class AutomatedDistributionService {
     const confirmedPayments = await this.transactionRepository.find({
       where: {
         type: TransactionType.claim,
+        status: TransactionStatus.confirmed,
       },
     });
 
@@ -656,51 +657,52 @@ export class AutomatedDistributionService {
     return user.address;
   }
 
-private extractAssetDetailsFromUtxo(contribOutput: {
-  address: string;
-  amount: {
-    unit: string;
-    quantity: string;
-  }[];
-  output_index: number;
-  data_hash: string | null;
-  inline_datum: string | null;
-  collateral: boolean;
-  reference_script_hash: string | null;
-  consumed_by_tx?: string | null;
-}): {
-  lovelace: number;
-  assets: {
-    assetName: {
-      name: string;
-      format: string;
-    };
-    policyId: string;
-    quantity: number;
-  }[];
-} {
-  const lovelace = Number(contribOutput.amount.find(u => u.unit === 'lovelace')?.quantity || 0);
-  
-  // Extract assets
-  const assets = contribOutput.amount
-    .filter(asset => asset.unit !== 'lovelace')
-    .map(asset => {
-      // Split the hex asset into policy ID (56 chars) and asset name (remaining)
-      const policyId = asset.unit.slice(0, 56);
-      const assetNameHex = asset.unit.slice(56);
-      
-      return {
-        assetName: {
-          name: assetNameHex,
-          format: 'hex',
-        },
-        policyId,
-        quantity: Number(asset.quantity),
+  private extractAssetDetailsFromUtxo(contribOutput: {
+    address: string;
+    amount: {
+      unit: string;
+      quantity: string;
+    }[];
+    output_index: number;
+    data_hash: string | null;
+    inline_datum: string | null;
+    collateral: boolean;
+    reference_script_hash: string | null;
+    consumed_by_tx?: string | null;
+  }): {
+    lovelace: number;
+    assets: {
+      assetName: {
+        name: string;
+        format: string;
       };
-    });
+      policyId: string;
+      quantity: number;
+    }[];
+  } {
+    const lovelace = Number(contribOutput.amount.find(u => u.unit === 'lovelace')?.quantity || 0);
 
-  return {
-    lovelace,
-    assets,
-  };
+    // Extract assets
+    const assets = contribOutput.amount
+      .filter(asset => asset.unit !== 'lovelace')
+      .map(asset => {
+        // Split the hex asset into policy ID (56 chars) and asset name (remaining)
+        const policyId = asset.unit.slice(0, 56);
+        const assetNameHex = asset.unit.slice(56);
+
+        return {
+          assetName: {
+            name: assetNameHex,
+            format: 'hex',
+          },
+          policyId,
+          quantity: Number(asset.quantity),
+        };
+      });
+
+    return {
+      lovelace,
+      assets,
+    };
+  }
 }
