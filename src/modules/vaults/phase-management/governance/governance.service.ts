@@ -454,9 +454,18 @@ export class GovernanceService {
     };
     canVote: boolean;
     selectedVote: VoteType | null;
+    proposer: {
+      id: string;
+      address: string;
+    };
   }> {
     const proposal = await this.proposalRepository.findOne({
       where: { id: proposalId },
+    });
+
+    const proposer = await this.userRepository.findOne({
+      where: { id: proposal.creatorId },
+      select: ['id', 'address'],
     });
 
     if (!proposal) {
@@ -506,12 +515,47 @@ export class GovernanceService {
       );
     }
 
+    let burnAssetsWithNames = [];
+    if (proposal.burnAssets && proposal.burnAssets.length > 0) {
+      const burnAssets = await this.assetRepository.find({
+        where: { id: In(proposal.burnAssets) },
+        select: ['metadata'],
+      });
+      burnAssetsWithNames = burnAssets.map(asset => {
+        let name = asset.metadata?.name;
+        if (!name) name = 'Unknown Asset';
+        return {
+          name: name || 'Unknown Asset',
+        };
+      });
+    }
+
+    let distributionAssetsWithNames = [];
+    if (proposal.distributionAssets && proposal.distributionAssets.length > 0) {
+      const distributionAssets = await this.assetRepository.find({
+        where: { id: In(proposal.distributionAssets) },
+        select: ['metadata'],
+      });
+      distributionAssetsWithNames = distributionAssets.map(asset => {
+        let name = asset.metadata?.name;
+        if (!name) name = 'Unknown Asset';
+        return {
+          name: name || 'Unknown Asset',
+        };
+      });
+    }
+
     return {
-      proposal,
+      proposal: {
+        ...proposal,
+        burnAssets: burnAssetsWithNames,
+        distributionAssets: distributionAssetsWithNames,
+      },
       votes,
       totals,
       canVote,
       selectedVote,
+      proposer,
     };
   }
 

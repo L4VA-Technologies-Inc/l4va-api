@@ -26,6 +26,8 @@ import { VaultsModule } from './modules/vaults/vaults.module';
 import { VyfiModule } from './modules/vyfi/vyfi.module';
 
 import { NotificationModule } from '@/modules/notification/notification.module';
+import { ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
+import { APP_GUARD } from "@nestjs/core";
 
 @Module({
   imports: [
@@ -51,6 +53,14 @@ import { NotificationModule } from '@/modules/notification/notification.module';
       autoLoadEntities: true,
       namingStrategy: new SnakeNamingStrategy(),
     }),
+    ThrottlerModule.forRoot({
+      throttlers: [
+        {
+          ttl: 60000,
+          limit: 50,
+        },
+      ],
+    }),
     JwtGlobalModule,
     AuthModule,
     AssetsModule,
@@ -71,6 +81,12 @@ import { NotificationModule } from '@/modules/notification/notification.module';
     EventEmitterModule.forRoot(),
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+  ],
 })
 export class AppModule {}

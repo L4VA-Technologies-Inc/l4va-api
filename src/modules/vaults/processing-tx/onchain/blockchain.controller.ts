@@ -117,10 +117,8 @@ export class BlockchainController {
     const isValid = this.webhookVerificationService.verifySignature(rawBody, signature);
     if (!isValid) {
       console.error('Webhook signature verification failed:', {
-        signature,
         eventId: event.id,
         webhookId: event.webhook_id,
-        rawBodyPreview: rawBody.substring(0, 100) + '...',
       });
       throw new UnauthorizedException('Invalid webhook signature');
     }
