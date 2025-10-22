@@ -505,9 +505,14 @@ export class AutomatedDistributionService {
         }
         const assetDetails = this.extractAssetDetailsFromUtxo(contribOutput);
 
+        const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(vault.script_hash)))
+          .to_address()
+          .to_bech32();
+
         const input: PayAdaContribution = {
           changeAddress: this.adminAddress,
           message: `Pay ADA to contributor for claim ${claim.id}`,
+          preloadedScripts: [dispatchResult.fullResponse.preloadedScript],
           scriptInteractions: [
             {
               purpose: 'spend',
@@ -595,13 +600,13 @@ export class AutomatedDistributionService {
                   owner: userAddress,
                 },
                 shape: {
-                  validatorHash: PARAMETERIZED_DISPATCH_HASH,
+                  validatorHash: this.unparametizedDispatchHash,
                   purpose: 'spend',
                 },
               },
             },
             {
-              address: vault.contract_address,
+              address: SC_ADDRESS,
               lovelace: assetDetails.lovelace,
               assets: assetDetails.assets,
               datum: {
@@ -620,7 +625,7 @@ export class AutomatedDistributionService {
             },
             {
               address: DISPATCH_ADDRESS,
-              lovelace: this.getLovelaceAmount(suitableUtxo) - adaAmount,
+              lovelace: actualRemainingDispatchLovelace,
             },
           ],
           requiredSigners: [this.adminHash],
