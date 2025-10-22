@@ -147,6 +147,13 @@ export class AutomatedDistributionService {
       relations: ['transaction', 'user'],
     });
 
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+    });
+    if (!vault) {
+      throw new Error(`Vault ${vaultId} not found`);
+    }
+
     const extractionTx = await this.transactionRepository.save({
       vault_id: vaultId,
       type: TransactionType.extract,
@@ -155,24 +162,15 @@ export class AutomatedDistributionService {
 
     this.logger.log(`Found ${claims.length} acquirer claims to extract for vault ${vaultId}`);
 
+    const dispatchResult = await this.blockchainService.applyDispatchParameters({
+      vault_policy: this.vaultScriptAddress,
+      vault_id: vault.asset_vault_name,
+      contribution_script_hash: vault.script_hash,
+    });
+
     for (const claim of claims) {
-      const { transaction, user } = claim;
+      const { user } = claim;
       this.logger.debug(`Extracting lovelace for claim ${claim.id}, transaction ${claim.transaction_id}`);
-
-      const vault = await this.vaultRepository.findOne({
-        where: { id: transaction.vault_id },
-      });
-
-      if (!vault) {
-        throw new Error(`Vault ${transaction.vault_id} not found`);
-      }
-
-      // Apply parameters to dispatch script
-      const dispatchResult = await this.blockchainService.applyDispatchParameters({
-        vault_policy: this.vaultScriptAddress,
-        vault_id: vault.asset_vault_name,
-        contribution_script_hash: vault.script_hash,
-      });
 
       const PARAMETERIZED_DISPATCH_HASH = dispatchResult.parameterizedHash;
       const DISPATCH_ADDRESS = this.getDispatchAddress(PARAMETERIZED_DISPATCH_HASH);
@@ -192,7 +190,7 @@ export class AutomatedDistributionService {
             hash: vault.script_hash,
             outputRef: {
               txHash: originalTx.tx_hash,
-              index: originalTx.tx_index || 0,
+              index: 0, //originalTx.tx_index
             },
             redeemer: {
               type: 'json',
@@ -219,7 +217,7 @@ export class AutomatedDistributionService {
             assetName: { name: vault.asset_vault_name, format: 'hex' },
             policyId: vault.script_hash,
             type: 'plutus',
-            quantity: (vault.ada_pair_multiplier + claim.metadata.multiplier) * (originalTx.amount || 0), //For single extraction, here is amount to mint ( vault.ada_pair_multiplier + claim.metadata.multiplier ('multiplier from tx I extract')) * LOVELACE Amount
+            quantity: (vault.ada_pair_multiplier + claim.metadata.multiplier) * (originalTx.amount * 1_000_000 || 0), //For single extraction, here is amount to mint ( vault.ada_pair_multiplier + claim.metadata.multiplier ('multiplier from tx I extract')) * LOVELACE Amount
             metadata: {},
           },
           {
@@ -238,13 +236,23 @@ export class AutomatedDistributionService {
               {
                 assetName: { name: vault.asset_vault_name, format: 'hex' },
                 policyId: vault.script_hash,
-                quantity: claim.amount,
+                quantity: claim.metadata.multiplier * (originalTx.amount * 1_000_000),
+              },
+            ],
+          },
+          {
+            address: this.adminAddress,
+            assets: [
+              {
+                assetName: { name: vault.asset_vault_name, format: 'hex' },
+                policyId: vault.script_hash,
+                quantity: vault.ada_pair_multiplier * (originalTx.amount * 1_000_000),
               },
             ],
           },
           {
             address: DISPATCH_ADDRESS,
-            lovelace: originalTx.amount || 0,
+            lovelace: originalTx.amount * 1_000_000,
           },
         ],
         requiredSigners: [this.adminHash],
@@ -284,6 +292,7 @@ export class AutomatedDistributionService {
 
         // Mark transaction as failed
         await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
+        await new Promise(resolve => setTimeout(resolve, 90000));
       }
     }
   }
