@@ -74,6 +74,7 @@ export class AutomatedDistributionService {
   private readonly vaultScriptAddress: string;
   private readonly adminSKey: string;
   private readonly adminAddress: string;
+  private readonly unparametizedDispatchHash: string;
   private readonly blockfrost: BlockFrostAPI;
 
   constructor(
@@ -88,13 +89,17 @@ export class AutomatedDistributionService {
     private readonly configService: ConfigService,
     private readonly blockchainService: BlockchainService
   ) {
+    this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.vaultScriptAddress = this.configService.get<string>('VAULT_SCRIPT_ADDRESS');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
+    this.blockfrost = new BlockFrostAPI({
+      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
+    });
   }
 
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Cron(CronExpression.EVERY_10_MINUTES)
   async processDistributionQueue(): Promise<void> {
     this.logger.debug('Processing distribution queue...');
 
@@ -117,6 +122,7 @@ export class AutomatedDistributionService {
         vault_status: VaultStatus.locked,
         vault_sc_status: SmartContractVaultStatus.SUCCESSFUL,
         last_update_tx_hash: Not(IsNull()),
+        distribution_in_progress: false,
         distribution_processed: false,
       },
       select: ['id'],
@@ -181,6 +187,13 @@ export class AutomatedDistributionService {
         throw new Error(`Original transaction not found for claim`);
       }
 
+      const datumTag = generate_tag_from_txhash_index(originalTx.tx_hash, Number(0));
+      const adaPairMultiplier = Number(vault.ada_pair_multiplier);
+      const claimMultiplier = Number(claim.metadata.multiplier);
+      const originalAmount = Number(originalTx.amount);
+      const totalMultiplier = adaPairMultiplier + claimMultiplier;
+      const mintQuantity = totalMultiplier * (originalAmount * 1_000_000 || 0);
+
       const input: ExtractInput = {
         changeAddress: this.adminAddress,
         message: `Extract ADA for claims`,
@@ -190,7 +203,7 @@ export class AutomatedDistributionService {
             hash: vault.script_hash,
             outputRef: {
               txHash: originalTx.tx_hash,
-              index: 0, //originalTx.tx_index
+              index: 0,
             },
             redeemer: {
               type: 'json',
@@ -217,7 +230,7 @@ export class AutomatedDistributionService {
             assetName: { name: vault.asset_vault_name, format: 'hex' },
             policyId: vault.script_hash,
             type: 'plutus',
-            quantity: (vault.ada_pair_multiplier + claim.metadata.multiplier) * (originalTx.amount * 1_000_000 || 0), //For single extraction, here is amount to mint ( vault.ada_pair_multiplier + claim.metadata.multiplier ('multiplier from tx I extract')) * LOVELACE Amount
+            quantity: mintQuantity, //For single extraction, here is amount to mint ( vault.ada_pair_multiplier + claim.metadata.multiplier ('multiplier from tx I extract')) * LOVELACE Amount
             metadata: {},
           },
           {
@@ -236,23 +249,24 @@ export class AutomatedDistributionService {
               {
                 assetName: { name: vault.asset_vault_name, format: 'hex' },
                 policyId: vault.script_hash,
-                quantity: claim.metadata.multiplier * (originalTx.amount * 1_000_000),
+                quantity: claimMultiplier * (originalAmount * 1_000_000),
               },
             ],
-          },
-          {
-            address: this.adminAddress,
-            assets: [
-              {
-                assetName: { name: vault.asset_vault_name, format: 'hex' },
-                policyId: vault.script_hash,
-                quantity: vault.ada_pair_multiplier * (originalTx.amount * 1_000_000),
+            datum: {
+              type: 'inline',
+              value: {
+                datum_tag: datumTag,
+                ada_paid: undefined,
               },
-            ],
+              shape: {
+                validatorHash: this.unparametizedDispatchHash,
+                purpose: 'spend',
+              },
+            },
           },
           {
             address: DISPATCH_ADDRESS,
-            lovelace: originalTx.amount * 1_000_000,
+            lovelace: Number(originalTx.amount) * 1_000_000,
           },
         ],
         requiredSigners: [this.adminHash],
@@ -269,8 +283,6 @@ export class AutomatedDistributionService {
         network: 'preprod',
       };
 
-      this.logger.debug(JSON.stringify(input));
-
       try {
         const buildResponse = await this.blockchainService.buildTransaction(input);
 
@@ -281,6 +293,8 @@ export class AutomatedDistributionService {
           transaction: txToSubmitOnChain.to_hex(),
           signatures: [],
         });
+
+        await this.claimRepository.update({ id: claim.id }, { status: ClaimStatus.CLAIMED });
 
         // Update Extraction transaction with hash
         await this.transactionRepository.update({ id: extractionTx.id }, { tx_hash: response.txHash });
