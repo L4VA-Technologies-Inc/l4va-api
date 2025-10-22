@@ -127,8 +127,8 @@ export class AutomatedDistributionService {
         await this.vaultRepository.update({ id: vault.id }, { distribution_in_progress: true }); // Mark as processing to prevent duplicate processing
 
         await this.extractLovelaceForClaims(vault.id); // Queue extraction transactions for acquirer claims
-
         this.logger.log(`Extraction transactions queued for vault ${vault.id}`);
+        await new Promise(resolve => setTimeout(resolve, 5000));
       } catch (error) {
         this.logger.error(`Error processing vault ${vault.id}:`, error);
       }
@@ -211,7 +211,7 @@ export class AutomatedDistributionService {
             assetName: { name: vault.asset_vault_name, format: 'hex' },
             policyId: vault.script_hash,
             type: 'plutus',
-            quantity: claim.amount,
+            quantity: (vault.ada_pair_multiplier + claim.metadata.multiplier) * (originalTx.amount || 0), //For single extraction, here is amount to mint ( vault.ada_pair_multiplier + claim.metadata.multiplier ('multiplier from tx I extract')) * LOVELACE Amount
             metadata: {},
           },
           {
