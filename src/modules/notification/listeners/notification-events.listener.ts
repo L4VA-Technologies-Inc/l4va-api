@@ -89,6 +89,7 @@ export class NotificationEventsListener {
   @OnEvent('vault.failed.email')
   async handleVaultFailedEmail(event: { vault: any }) {
     const user = await this.userRepository.findOne({ where: { id: event.vault.owner.id } });
+    if (!user.email) return;
 
     await this.notificationService.sendFailedEmailNotification(
       {
