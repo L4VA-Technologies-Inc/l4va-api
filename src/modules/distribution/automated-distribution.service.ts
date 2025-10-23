@@ -324,7 +324,6 @@ export class AutomatedDistributionService {
 
   private async processExtractionTransactions(): Promise<void> {
     // Find confirmed extraction transactions
-    this.logger.debug('processExtractionTransactions');
     const confirmedExtractions = await this.transactionRepository.find({
       where: {
         type: TransactionType.extractDispatch,
