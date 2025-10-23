@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -14,7 +14,6 @@ import { VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class AcquireService {
-  private readonly logger = new Logger(AcquireService.name);
   private readonly PROTOCOL_ACQUIRERS_FEE = 2_000_000; // should be 4 ADA
 
   constructor(

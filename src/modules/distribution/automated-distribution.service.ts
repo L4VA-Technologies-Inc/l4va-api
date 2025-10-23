@@ -14,6 +14,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, Not, IsNull, MoreThan } from 'typeorm';
 
+import { AssetsService } from '../vaults/processing-tx/assets/assets.service';
 import { BlockchainService } from '../vaults/processing-tx/onchain/blockchain.service';
 import { generate_tag_from_txhash_index } from '../vaults/processing-tx/onchain/utils/lib';
 
@@ -86,7 +87,8 @@ export class AutomatedDistributionService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly configService: ConfigService,
-    private readonly blockchainService: BlockchainService
+    private readonly blockchainService: BlockchainService,
+    private readonly assetService: AssetsService
   ) {
     this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
@@ -142,7 +144,7 @@ export class AutomatedDistributionService {
       where: {
         vault: { id: vaultId },
         type: ClaimType.ACQUIRER,
-        status: ClaimStatus.AVAILABLE,
+        status: ClaimStatus.PENDING,
         created_at: MoreThan(new Date('2025-10-22').toISOString()),
       },
       relations: ['transaction', 'user'],
@@ -303,6 +305,7 @@ export class AutomatedDistributionService {
         });
 
         await this.claimRepository.update({ id: claim.id }, { status: ClaimStatus.CLAIMED });
+        await this.assetService.distributeAssetByTransactionId(claim.transaction.id);
 
         // Update Extraction transaction with hash
         await this.transactionRepository.update(

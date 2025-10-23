@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain } from 'class-transformer';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 
 import { CreateAssetDto } from './dto/create-asset.dto';
 
@@ -102,8 +102,8 @@ export class AssetsService {
       .createQueryBuilder('asset')
       .where('asset.vault_id = :vaultId', { vaultId })
       .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
-      .andWhere('asset.status = :status', {
-        status: AssetStatus.LOCKED,
+      .andWhere('asset.status IN (:...statuses)', {
+        statuses: [AssetStatus.LOCKED, AssetStatus.RELEASED],
       });
 
     if (search) {
@@ -152,7 +152,7 @@ export class AssetsService {
           id: vaultId,
         },
         origin_type: AssetOriginType.ACQUIRED,
-        status: AssetStatus.LOCKED,
+        status: In([AssetStatus.LOCKED, AssetStatus.RELEASED, AssetStatus.DISTRIBUTED]),
       },
       skip: (page - 1) * limit,
       take: limit,
@@ -220,6 +220,34 @@ export class AssetsService {
         released_at: now,
         updated_at: now,
       }
+    );
+  }
+
+  async distributeAssetByTransactionId(transactionId: string): Promise<void> {
+    const assets = await this.assetsRepository.find({
+      where: {
+        transaction: { id: transactionId },
+        deleted: false,
+      },
+    });
+
+    if (!assets.length) {
+      throw new BadRequestException('No assets found for the given transaction');
+    }
+
+    const now = new Date();
+    await Promise.all(
+      assets.map(async asset => {
+        if (asset.status !== AssetStatus.LOCKED) {
+          throw new BadRequestException(
+            `Asset with ID ${asset.id} cannot be distributed. Current status: ${asset.status}. Only locked assets can be distributed.`
+          );
+        }
+
+        asset.status = AssetStatus.DISTRIBUTED;
+        asset.updated_at = now;
+        return this.assetsRepository.save(asset);
+      })
     );
   }
 
