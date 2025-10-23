@@ -194,6 +194,10 @@ export class AutomatedDistributionService {
       const totalMultiplier = adaPairMultiplier + claimMultiplier;
       const mintQuantity = totalMultiplier * (originalAmount * 1_000_000 || 0);
 
+      const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(vault.script_hash)))
+        .to_address()
+        .to_bech32();
+
       const input: ExtractInput = {
         changeAddress: this.adminAddress,
         message: `Extract ADA for claims`,
@@ -265,7 +269,7 @@ export class AutomatedDistributionService {
             },
           },
           {
-            address: vault.contract_address, // VAULT address
+            address: SC_ADDRESS, // VAULT address
             assets: [
               {
                 assetName: { name: vault.asset_vault_name, format: 'hex' },
@@ -292,6 +296,8 @@ export class AutomatedDistributionService {
         },
         network: 'preprod',
       };
+
+      this.logger.debug(JSON.stringify(input));
 
       try {
         const buildResponse = await this.blockchainService.buildTransaction(input);
@@ -667,6 +673,9 @@ export class AutomatedDistributionService {
           },
           network: 'preprod',
         };
+        const trimmedInput = { ...input };
+        delete trimmedInput.preloadedScripts;
+        this.logger.debug(JSON.stringify(trimmedInput));
 
         try {
           const buildResponse = await this.blockchainService.buildTransaction(input);
