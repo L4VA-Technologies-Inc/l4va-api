@@ -71,81 +71,48 @@ export class BlockchainScannerService {
     }
   }
 
-  async registerTrackingAddress(vaultAddress: string = '', vaultName: string) {
-    return this.makePostRequest(`/monitoring/addresses`, {
-      address: vaultAddress,
-      name: vaultName,
-      description: 'Monitoring vault address',
-    });
-  }
+  async registerTrackingAddress(vaultAddress: string = '', vaultName: string): Promise<any> {
+    let retries = 0;
+    const maxRetries = 5;
+    const retryDelay = 15000;
 
-  private async withRetry<T>(
-    operation: () => Promise<T>,
-    options: {
-      maxRetries?: number;
-      initialDelayMs?: number;
-      maxDelayMs?: number;
-      shouldRetry?: (error: Error) => boolean;
-    } = {}
-  ): Promise<T> {
-    const {
-      maxRetries = DEFAULT_MAX_RETRIES,
-      initialDelayMs = DEFAULT_INITIAL_DELAY_MS,
-      maxDelayMs = DEFAULT_MAX_DELAY_MS,
-      shouldRetry = () => true,
-    } = options;
-
-    let lastError: Error | null = null;
-
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    while (retries < maxRetries) {
       try {
-        return await operation();
+        return await this.makePostRequest(`/monitoring/addresses`, {
+          address: vaultAddress,
+          name: vaultName,
+          description: 'Monitoring vault address',
+        });
       } catch (error) {
-        lastError = error as Error;
+        retries++;
+        this.logger.warn(
+          `Failed to register tracking address ${vaultAddress}. Attempt ${retries}/${maxRetries}. Retrying in 15 seconds...`
+        );
 
-        if (attempt === maxRetries || !shouldRetry(error as Error)) {
-          throw lastError;
+        if (retries >= maxRetries) {
+          this.logger.error(`Max retries reached for registering address ${vaultAddress}`);
+          throw error;
         }
 
-        // Calculate delay with exponential backoff and jitter
-        const baseDelay = Math.min(initialDelayMs * Math.pow(2, attempt), maxDelayMs);
-        const jitter = Math.random() * baseDelay * 0.3; // Add up to 30% jitter
-        const delay = Math.min(baseDelay + jitter, maxDelayMs);
-
-        this.logger.warn(`Attempt ${attempt + 1}/${maxRetries} failed. Retrying in ${Math.round(delay)}ms...`, {
-          error: error.message,
-        });
-
-        await setTimeout(delay);
+        await setTimeout(retryDelay);
       }
     }
-
-    // This should never be reached due to the throw in the catch block,
-    // but TypeScript needs this to be here
-    throw lastError || new Error('Unknown error in withRetry');
-  }
-
-  private isRetryableError(error: Error): boolean {
-    // Retry on network errors or 5xx server errors
-    if (axios.isAxiosError(error)) {
-      const status = error.response?.status;
-      return !status || status >= 500;
-    }
-    return true; // Retry on other errors by default
   }
 
   async checkMonitoringAddress(vaultAddress: string = '', vaultName: string = ''): Promise<boolean> {
     try {
       // First, check if the address is already being monitored
-      const response: {
-        id: string;
-        address: string;
-        name: string;
-        description: string;
-        last_checked_at: string;
-        created_at: string;
-        is_active: boolean;
-      }[] = await this.makeRequest(`/monitoring/addresses`);
+      const response = await this.makeRequest<
+        {
+          id: string;
+          address: string;
+          name: string;
+          description: string;
+          last_checked_at: string;
+          created_at: string;
+          is_active: boolean;
+        }[]
+      >(`/monitoring/addresses`);
       if (response && response.some((addr: any) => addr.address === vaultAddress)) {
         this.logger.log(`Address ${vaultAddress} is already being monitored`);
         return true;
@@ -154,26 +121,8 @@ export class BlockchainScannerService {
         await this.registerTrackingAddress(vaultAddress, vaultName);
       }
     } catch (error) {
-      if (!vaultName) {
-        return false;
-      }
-
-      this.logger.log(`Address ${vaultAddress} is not registered, attempting to register...`);
-
-      try {
-        await this.withRetry(() => this.registerTrackingAddress(vaultAddress, vaultName), {
-          shouldRetry: err => {
-            // Only retry on network or server errors
-            return this.isRetryableError(err);
-          },
-          initialDelayMs: Math.floor(1000 + Math.random() * 5000), // Random between 1-5 seconds
-        });
-        this.logger.log(`Successfully registered address ${vaultAddress} for monitoring`);
-        return true;
-      } catch (error) {
-        this.logger.error(`Failed to register address ${vaultAddress} for monitoring after retries`, error);
-        return false;
-      }
+      this.logger.error(`Address ${vaultAddress} is not registered`);
+      return false;
     }
   }
 
