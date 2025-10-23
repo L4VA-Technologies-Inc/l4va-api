@@ -303,6 +303,24 @@ export class ContributionService {
       );
     }
 
+    // Check contributor whitelist
+    if (vaultData.owner.id !== userId) {
+      const vaultWithWhitelist = await this.vaultRepository
+        .createQueryBuilder('vault')
+        .leftJoinAndSelect('vault.contributor_whitelist', 'whitelist')
+        .where('vault.id = :vaultId', { vaultId })
+        .getOne();
+
+      if (vaultWithWhitelist?.contributor_whitelist?.length > 0) {
+        const isWhitelisted = vaultWithWhitelist.contributor_whitelist.some(
+          entry => entry.wallet_address === user.address
+        );
+        if (!isWhitelisted) {
+          throw new BadRequestException('User is not in contributor whitelist');
+        }
+      }
+    }
+
     if (contributeReq.assets.length > 0) {
       const invalidAssets: string[] = [];
       const policyExceedsLimit: Array<{
@@ -350,24 +368,6 @@ export class ContributionService {
             `Policy ${policy.policyId}: has ${policy.existing}, adding ${policy.adding} would exceed max ${policy.max}`
         );
         throw new BadRequestException(`Policy limits exceeded: ${errorMessages.join('; ')}`);
-      }
-    }
-
-    // Check contributor whitelist
-    if (vaultData.owner.id !== userId) {
-      const vaultWithWhitelist = await this.vaultRepository
-        .createQueryBuilder('vault')
-        .leftJoinAndSelect('vault.contributor_whitelist', 'whitelist')
-        .where('vault.id = :vaultId', { vaultId })
-        .getOne();
-
-      if (vaultWithWhitelist?.contributor_whitelist?.length > 0) {
-        const isWhitelisted = vaultWithWhitelist.contributor_whitelist.some(
-          entry => entry.wallet_address === user.address
-        );
-        if (!isWhitelisted) {
-          throw new BadRequestException('User is not in contributor whitelist');
-        }
       }
     }
 
