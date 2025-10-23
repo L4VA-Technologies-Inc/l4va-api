@@ -293,8 +293,6 @@ export class MetadataRegistryApiService {
 
   private async convertImgToBytes(imgUrl: string): Promise<string> {
     try {
-      this.logger.log(`Converting image to byte string: ${imgUrl}`);
-
       const response = await firstValueFrom(
         this.httpService.get(imgUrl, {
           responseType: 'arraybuffer',
