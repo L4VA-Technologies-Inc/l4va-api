@@ -30,7 +30,7 @@ import { VaultStatus, SmartContractVaultStatus } from '@/types/vault.types';
 interface ExtractInput {
   changeAddress: string;
   message: string;
-  mint?: Array<object>;
+  mint?: object[];
   scriptInteractions: object[];
   outputs: {
     address: string;
@@ -163,176 +163,226 @@ export class AutomatedDistributionService {
 
     this.logger.log(`Found ${claims.length} acquirer claims to extract for vault ${vaultId}`);
 
+    const batchSize = 5; // TODO: TEST AMOUNT
+    for (let i = 0; i < claims.length; i += batchSize) {
+      const batchClaims = claims.slice(i, i + batchSize);
+      await this.processBatchExtraction(vault, batchClaims, vaultId);
+
+      // Add delay between batches
+      if (i + batchSize < claims.length) {
+        await new Promise(resolve => setTimeout(resolve, 30000));
+      }
+    }
+  }
+
+  private async processBatchExtraction(vault: Vault, claims: Claim[], vaultId: string): Promise<void> {
     const dispatchResult = await this.blockchainService.applyDispatchParameters({
       vault_policy: this.SC_POLICY_ID,
       vault_id: vault.asset_vault_name,
       contribution_script_hash: vault.script_hash,
     });
 
+    // Create a single extraction transaction record for the batch
+    const extractionTx = await this.transactionRepository.save({
+      vault_id: vaultId,
+      user_id: null, // Batch transaction - no single user
+      type: TransactionType.extractDispatch,
+      status: TransactionStatus.created,
+      metadata: {
+        batchSize: claims.length,
+        claimIds: claims.map(c => c.id),
+      },
+    });
+
+    this.logger.debug(`Processing batch extraction for ${claims.length} claims, transaction ${extractionTx.id}`);
+
+    const DISPATCH_ADDRESS = this.getDispatchAddress(dispatchResult.parameterizedHash);
+    const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(vault.script_hash)))
+      .to_address()
+      .to_bech32();
+
+    // Build script interactions for all claims in the batch
+    const scriptInteractions: object[] = [];
+    const mintAssets: object[] = [];
+    const outputs: {
+      address: string;
+      assets?: object[];
+      lovelace?: number;
+      datum?: { type: 'inline'; value: any; shape?: object };
+    }[] = [];
+
+    let totalMintQuantity = 0;
+    let totalDispatchLovelace = 0;
+
     for (const claim of claims) {
       const { user } = claim;
-
-      const extractionTx = await this.transactionRepository.save({
-        vault_id: vaultId,
-        user_id: claim.user_id,
-        type: TransactionType.extractDispatch,
-        status: TransactionStatus.created,
-      });
-
-      this.logger.debug(`Extracting lovelace for claim ${claim.id}, transaction ${claim.transaction_id}`);
-
-      const PARAMETERIZED_DISPATCH_HASH = dispatchResult.parameterizedHash;
-      const DISPATCH_ADDRESS = this.getDispatchAddress(PARAMETERIZED_DISPATCH_HASH);
-
-      this.logger.debug(DISPATCH_ADDRESS);
-
-      // Get the original acquire transaction
       const originalTx = claim.transaction;
+
       if (!originalTx || !originalTx.tx_hash) {
-        throw new Error(`Original transaction not found for claim`);
+        throw new Error(`Original transaction not found for claim ${claim.id}`);
       }
 
-      const datumTag = generate_tag_from_txhash_index(originalTx.tx_hash, Number(0));
+      const datumTag = generate_tag_from_txhash_index(originalTx.tx_hash, 0);
       const adaPairMultiplier = Number(vault.ada_pair_multiplier);
       const claimMultiplier = Number(claim.metadata.multiplier);
       const originalAmount = Number(originalTx.amount);
-      const totalMultiplier = adaPairMultiplier + claimMultiplier;
-      const mintQuantity = totalMultiplier * (originalAmount * 1_000_000 || 0);
+      const claimMintQuantity = claimMultiplier * (originalAmount * 1_000_000);
+      const vaultMintQuantity = adaPairMultiplier * originalAmount * 1_000_000;
 
-      const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(vault.script_hash)))
-        .to_address()
-        .to_bech32();
+      totalMintQuantity += (adaPairMultiplier + claimMultiplier) * (originalAmount * 1_000_000);
+      totalDispatchLovelace += Number(originalTx.amount) * 1_000_000;
 
-      const input: ExtractInput = {
-        changeAddress: this.adminAddress,
-        message: `Extract ADA for claims`,
-        scriptInteractions: [
-          {
-            purpose: 'spend',
-            hash: vault.script_hash,
-            outputRef: {
-              txHash: originalTx.tx_hash,
-              index: 0,
-            },
-            redeemer: {
-              type: 'json',
-              value: {
-                __variant: 'ExtractAda',
-                __data: {
-                  vault_token_output_index: 0,
-                },
-              },
+      // Add script interaction for this claim's contribution UTXO
+      scriptInteractions.push({
+        purpose: 'spend',
+        hash: vault.script_hash,
+        outputRef: {
+          txHash: originalTx.tx_hash,
+          index: 0,
+        },
+        redeemer: {
+          type: 'json',
+          value: {
+            __variant: 'ExtractAda',
+            __data: {
+              vault_token_output_index: outputs.length, // Dynamic index based on current output count
             },
           },
+        },
+      });
+
+      // Add user output
+      outputs.push({
+        address: user.address,
+        assets: [
           {
-            purpose: 'mint',
-            hash: vault.script_hash,
-            redeemer: {
-              type: 'json',
-              value: 'MintVaultToken',
-            },
-          },
-        ],
-        mint: [
-          {
-            version: 'cip25',
             assetName: { name: vault.asset_vault_name, format: 'hex' },
             policyId: vault.script_hash,
-            type: 'plutus',
-            quantity: mintQuantity, //For single extraction, here is amount to mint ( vault.ada_pair_multiplier + claim.metadata.multiplier ('multiplier from tx I extract')) * LOVELACE Amount
-            metadata: {},
-          },
-          {
-            version: 'cip25',
-            assetName: { name: 'receipt', format: 'utf8' },
-            policyId: vault.script_hash,
-            type: 'plutus',
-            quantity: -1,
-            metadata: {},
+            quantity: claimMintQuantity,
           },
         ],
-        outputs: [
-          {
-            address: user.address,
-            assets: [
-              {
-                assetName: { name: vault.asset_vault_name, format: 'hex' },
-                policyId: vault.script_hash,
-                quantity: claimMultiplier * (originalAmount * 1_000_000),
-              },
-            ],
-            datum: {
-              type: 'inline',
-              value: {
-                datum_tag: datumTag,
-                ada_paid: undefined,
-              },
-              shape: {
-                validatorHash: this.unparametizedDispatchHash,
-                purpose: 'spend',
-              },
-            },
+        datum: {
+          type: 'inline',
+          value: {
+            datum_tag: datumTag,
+            ada_paid: undefined,
           },
-          {
-            address: SC_ADDRESS, // VAULT address
-            assets: [
-              {
-                assetName: { name: vault.asset_vault_name, format: 'hex' },
-                policyId: vault.script_hash,
-                quantity: adaPairMultiplier * originalAmount * 1_000_000,
-              },
-            ],
+          shape: {
+            validatorHash: this.unparametizedDispatchHash,
+            purpose: 'spend',
           },
-          {
-            address: DISPATCH_ADDRESS,
-            lovelace: Number(originalTx.amount) * 1_000_000,
-          },
-        ],
-        requiredSigners: [this.adminHash],
-        referenceInputs: [
-          {
-            txHash: vault.last_update_tx_hash,
-            index: 0,
-          },
-        ],
-        validityInterval: {
-          start: true,
-          end: true,
         },
-        network: 'preprod',
-      };
+      });
 
-      this.logger.debug(JSON.stringify(input));
+      // Add vault output for this claim
+      outputs.push({
+        address: SC_ADDRESS,
+        assets: [
+          {
+            assetName: { name: vault.asset_vault_name, format: 'hex' },
+            policyId: vault.script_hash,
+            quantity: vaultMintQuantity,
+          },
+        ],
+      });
+    }
 
-      try {
-        const buildResponse = await this.blockchainService.buildTransaction(input);
+    // Add single mint script interaction
+    scriptInteractions.push({
+      purpose: 'mint',
+      hash: vault.script_hash,
+      redeemer: {
+        type: 'json',
+        value: 'MintVaultToken',
+      },
+    });
 
-        const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-        txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+    // Add single dispatch output with total lovelace
+    outputs.push({
+      address: DISPATCH_ADDRESS,
+      lovelace: totalDispatchLovelace,
+    });
 
-        const response = await this.blockchainService.submitTransaction({
-          transaction: txToSubmitOnChain.to_hex(),
-          signatures: [],
-        });
-
-        await this.claimRepository.update({ id: claim.id }, { status: ClaimStatus.CLAIMED });
-        await this.assetService.distributeAssetByTransactionId(claim.transaction.id);
-
-        // Update Extraction transaction with hash
-        await this.transactionRepository.update(
-          { id: extractionTx.id },
-          { tx_hash: response.txHash, status: TransactionStatus.confirmed }
-        );
-        await new Promise(resolve => setTimeout(resolve, 30000));
-
-        this.logger.debug(`Extraction transaction ${response.txHash} submitted for claim ${claim.id}`);
-      } catch (error) {
-        this.logger.error(`Failed to submit extraction transaction:`, error);
-
-        // Mark transaction as failed
-        await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
-        await new Promise(resolve => setTimeout(resolve, 30000));
+    // Build mint array
+    mintAssets.push(
+      {
+        version: 'cip25',
+        assetName: { name: vault.asset_vault_name, format: 'hex' },
+        policyId: vault.script_hash,
+        type: 'plutus',
+        quantity: totalMintQuantity,
+        metadata: {},
+      },
+      {
+        version: 'cip25',
+        assetName: { name: 'receipt', format: 'utf8' },
+        policyId: vault.script_hash,
+        type: 'plutus',
+        quantity: -claims.length, // Burn one receipt per claim
+        metadata: {},
       }
+    );
+
+    const input: ExtractInput = {
+      changeAddress: this.adminAddress,
+      message: `Extract ADA for ${claims.length} claims (batch)`,
+      scriptInteractions,
+      mint: mintAssets,
+      outputs,
+      requiredSigners: [this.adminHash],
+      referenceInputs: [
+        {
+          txHash: vault.last_update_tx_hash,
+          index: 0,
+        },
+      ],
+      validityInterval: {
+        start: true,
+        end: true,
+      },
+      network: 'preprod',
+    };
+
+    this.logger.debug(`Batch extraction transaction for ${claims.length} claims:`);
+    this.logger.debug(JSON.stringify(input));
+
+    try {
+      const buildResponse = await this.blockchainService.buildTransaction(input);
+
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+      const response = await this.blockchainService.submitTransaction({
+        transaction: txToSubmitOnChain.to_hex(),
+        signatures: [],
+      });
+
+      // Update all claims in the batch to claimed status
+      await this.claimRepository.update({ id: In(claims.map(c => c.id)) }, { status: ClaimStatus.CLAIMED });
+
+      // Distribute assets for all claims in the batch
+      for (const claim of claims) {
+        await this.assetService.distributeAssetByTransactionId(claim.transaction.id);
+      }
+
+      // Update extraction transaction with hash
+      await this.transactionRepository.update(
+        { id: extractionTx.id },
+        { tx_hash: response.txHash, status: TransactionStatus.confirmed }
+      );
+
+      this.logger.log(`Batch extraction transaction ${response.txHash} submitted for ${claims.length} claims`);
+
+      // Add delay after successful batch
+      await new Promise(resolve => setTimeout(resolve, 30000));
+    } catch (error) {
+      this.logger.error(`Failed to submit batch extraction transaction:`, error);
+
+      // Mark transaction as failed
+      await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
+
+      // Optionally mark individual claims as failed or leave them for retry
+      await new Promise(resolve => setTimeout(resolve, 30000));
     }
   }
 
@@ -482,8 +532,6 @@ export class AutomatedDistributionService {
         const PARAMETERIZED_DISPATCH_HASH = dispatchResult.parameterizedHash;
         const DISPATCH_ADDRESS = this.getDispatchAddress(PARAMETERIZED_DISPATCH_HASH);
 
-        this.logger.debug(DISPATCH_ADDRESS);
-
         // Get original contribution transaction
         const originalTx = claim.transaction;
         if (!originalTx || !originalTx.tx_hash) {
@@ -516,7 +564,6 @@ export class AutomatedDistributionService {
         }
 
         const contribTxUtxos = await this.blockfrost.txsUtxos(originalTx.tx_hash);
-        this.logger.debug(JSON.stringify(contribTxUtxos));
         const contribOutput = contribTxUtxos.outputs[0];
         if (!contribOutput) {
           throw new Error('No contribution output found');
@@ -698,9 +745,6 @@ export class AutomatedDistributionService {
           },
           network: 'preprod',
         };
-        const trimmedInput = { ...input };
-        delete trimmedInput.preloadedScripts;
-        this.logger.debug(JSON.stringify(trimmedInput));
 
         try {
           const buildResponse = await this.blockchainService.buildTransaction(input);
