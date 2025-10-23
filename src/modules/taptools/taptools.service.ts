@@ -22,7 +22,7 @@ export class TaptoolsService {
   private readonly baseUrl = 'https://openapi.taptools.io/api/v1';
   private readonly blockfrostTestnetUrl = 'https://cardano-preprod.blockfrost.io/api/v0/';
   private readonly taptoolsApiKey: string;
-  private cache = new NodeCache({ stdTTL: 540 }); // cache for 540 seconds to reduce API calls for ADA price (9 minutes)
+  private cache = new NodeCache({ stdTTL: 600 }); // cache for 10 minutes to reduce API calls for ADA price
 
   private readonly blockfrostClient: AxiosInstance;
   private assetDetailsCache = new NodeCache({ stdTTL: 3600, checkperiod: 300 });
@@ -119,26 +119,82 @@ export class TaptoolsService {
   async getAdaPrice(): Promise<number> {
     const cacheKey = 'ada_price_usd';
     const cachedPrice = this.cache.get<number>(cacheKey);
-    if (cachedPrice !== undefined) return cachedPrice;
+
+    if (cachedPrice !== undefined) {
+      this.logger.debug(`Using cached ADA price: ${cachedPrice}`);
+      return cachedPrice;
+    }
+
+    const fallbackPrice = 0.64;
 
     try {
+      const now = Date.now();
+      const lastCallKey = 'last_price_api_call';
+      const lastCall = this.cache.get<number>(lastCallKey) || 0;
+
+      // Respect rate limits - wait at least 10 seconds between calls
+      if (now - lastCall < 10000) {
+        this.logger.debug('Rate limiting ourselves for CoinGecko API');
+        const lastKnownGoodPrice = this.cache.get<number>('last_known_good_ada_price');
+        return lastKnownGoodPrice || fallbackPrice;
+      }
+
+      // Track this API call time
+      this.cache.set(lastCallKey, now);
+
       const response = await axios.get('https://api.coingecko.com/api/v3/simple/price', {
         params: {
           ids: 'cardano',
           vs_currencies: 'usd',
         },
+        timeout: 3000, // Short timeout to fail fast
       });
 
       if (!response.data?.cardano?.usd) {
-        throw new HttpException('Invalid price data from API', 400);
+        throw new Error('Invalid price data from API');
       }
 
       const adaPrice = Number(response.data.cardano.usd);
-      this.cache.set(cacheKey, adaPrice);
+
+      // Cache price for longer (15 minutes)
+      this.cache.set(cacheKey, adaPrice, 900);
+
+      // Also store as last known good price (with 24 hour TTL)
+      this.cache.set('last_known_good_ada_price', adaPrice, 86400);
+
       return adaPrice;
     } catch (err) {
-      console.error('Error fetching ADA price:', err.message);
-      throw new HttpException('Failed to fetch ADA price', 500);
+      this.logger.warn(`Error fetching ADA price: ${err.message}`);
+
+      try {
+        const altResponse = await axios.get('https://min-api.cryptocompare.com/data/price', {
+          params: {
+            fsym: 'ADA',
+            tsyms: 'USD',
+          },
+          timeout: 3000,
+        });
+
+        if (altResponse.data && altResponse.data.USD) {
+          const altPrice = Number(altResponse.data.USD);
+          this.cache.set(cacheKey, altPrice, 900);
+          this.cache.set('last_known_good_ada_price', altPrice, 86400);
+          return altPrice;
+        }
+      } catch (altErr) {
+        this.logger.warn(`Alternate price API also failed: ${altErr.message}`);
+      }
+
+      // If we have a last known good price, use that
+      const lastKnownGoodPrice = this.cache.get<number>('last_known_good_ada_price');
+      if (lastKnownGoodPrice !== undefined) {
+        this.logger.debug(`Using last known good ADA price: ${lastKnownGoodPrice}`);
+        return lastKnownGoodPrice;
+      }
+
+      // Use fallback price instead of throwing error
+      this.logger.warn(`Using fallback ADA price: ${fallbackPrice}`);
+      return fallbackPrice;
     }
   }
 
