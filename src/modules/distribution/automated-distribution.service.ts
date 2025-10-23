@@ -103,7 +103,7 @@ export class AutomatedDistributionService {
     });
   }
 
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Cron(CronExpression.EVERY_10_MINUTES)
   async processDistributionQueue(): Promise<void> {
     this.logger.debug('Processing distribution queue...');
 
