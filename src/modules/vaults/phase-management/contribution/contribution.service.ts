@@ -38,6 +38,8 @@ export class ContributionService {
    * Syncs contribution transactions for a vault by comparing on-chain transactions
    * with the transactions stored in the database
    *
+   * Make PR to update VT metadata
+   *
    * BUG: script_hash and policy_id are the same
    *
    * TODO: Handle where pr fails to submit, maybe retry later
