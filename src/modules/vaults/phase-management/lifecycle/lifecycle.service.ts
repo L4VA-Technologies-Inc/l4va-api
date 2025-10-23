@@ -713,9 +713,7 @@ export class LifecycleService {
             vaultName: vault.name,
             contributorIds: [...new Set(contributionTransactions.map(tx => tx.user_id).filter(Boolean))],
           });
-          this.eventEmitter.emit('vault.failed.email', {
-            vault
-          });
+          this.eventEmitter.emit('vault.failed.email', { vault });
         } catch (error) {
           this.logger.error(`Error emitting vault.failed event for vault ${vault.id}:`, error);
         }
@@ -731,9 +729,6 @@ export class LifecycleService {
       .createQueryBuilder('vault')
       .where('vault.vault_status = :status', { status: VaultStatus.published })
       .andWhere('vault.contract_address IS NOT NULL')
-      .andWhere('vault.contract_address != :testAddress', {
-        testAddress: 'addr_test1wqk7x4gmh4crm5pa27a569sz0femq5qewlwgxzy92gamres6cj45h',
-      }) // TODO: This is temporary solution
       .andWhere('vault.contribution_open_window_type = :type', { type: ContributionWindowType.uponVaultLaunch })
       .getMany();
 
@@ -753,9 +748,6 @@ export class LifecycleService {
       .andWhere('vault.contribution_open_window_type = :type', { type: ContributionWindowType.custom })
       .andWhere('vault.contribution_open_window_time IS NOT NULL')
       .andWhere('vault.contract_address IS NOT NULL')
-      .andWhere('vault.contract_address != :testAddress', {
-        testAddress: 'addr_test1wqk7x4gmh4crm5pa27a569sz0femq5qewlwgxzy92gamres6cj45h',
-      })
       .getMany();
 
     for (const vault of customStartVaults) {
