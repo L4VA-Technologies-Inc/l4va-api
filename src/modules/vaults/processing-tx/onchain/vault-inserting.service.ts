@@ -219,10 +219,10 @@ export class VaultInsertingService {
               },
             },
           },
-          {
-            address: this.adminAddress,
-            lovelace: this.FLAT_FEE,
-          },
+          // {
+          //   address: this.adminAddress,
+          //   lovelace: this.FLAT_FEE,
+          // },
         ],
         requiredSigners: [this.adminHash],
         referenceInputs: [

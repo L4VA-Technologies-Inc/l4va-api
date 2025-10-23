@@ -30,11 +30,26 @@ export class DistributionService {
   } {
     const { adaSent, vtSupply, ASSETS_OFFERED_PERCENT, totalAcquiredValueAda, lpVtAmount } = params;
 
-    // ((ADA sent to the vault / total acquire ADA) * Assets Offered Percent) * (VT Supply - LP VT)
-    const percentOfTotalAcquireAdaSent = this.round15(adaSent / totalAcquiredValueAda);
-    const vtReceived = this.round15(percentOfTotalAcquireAdaSent * ASSETS_OFFERED_PERCENT * (vtSupply - lpVtAmount));
-    const multiplier = Math.floor(vtReceived / adaSent / 1_000_000);
+    // Safety check for division by zero
+    if (!totalAcquiredValueAda || totalAcquiredValueAda <= 0) {
+      this.logger.warn(`Invalid totalAcquiredValueAda: ${totalAcquiredValueAda}. Using default values.`);
+      return { vtReceived: 0, multiplier: 0 };
+    }
+
+    // Calculate with full precision without rounding
+    const percentOfTotalAcquireAdaSent = adaSent / totalAcquiredValueAda;
+    const vtReceived = percentOfTotalAcquireAdaSent * ASSETS_OFFERED_PERCENT * (vtSupply - lpVtAmount);
+
+    // Safety check for invalid values
+    if (!Number.isFinite(vtReceived)) {
+      this.logger.warn(`Invalid vtReceived calculated: ${vtReceived}. Using default values.`);
+      return { vtReceived: 0, multiplier: 0 };
+    }
+
+    // Calculate multiplier with safe division
+    const multiplier = adaSent > 0 ? Math.floor(vtReceived / adaSent / 1_000_000) : 0;
     const adjustedVtAmount = multiplier * adaSent * 1_000_000;
+
     return {
       vtReceived: adjustedVtAmount,
       multiplier,
@@ -59,16 +74,28 @@ export class DistributionService {
     const { txContributedValue, userTotalValue, totalTvl, lpVtAmount, vtPrice, vtSupply, ASSETS_OFFERED_PERCENT } =
       params;
 
-    // Calculate proportion of this transaction within user's total contribution
+    // Safety checks
+    if (totalTvl <= 0) {
+      this.logger.warn(`Invalid totalTvl: ${totalTvl}. Using default values.`);
+      return { vtAmount: 0, adaAmount: 0, proportionOfUserTotal: 0, userTotalVtTokens: 0 };
+    }
+
+    // Calculate proportion with safety check
     const proportionOfUserTotal = userTotalValue > 0 ? txContributedValue / userTotalValue : 0;
 
-    // Calculate total VT tokens for the user
+    // Calculate with full precision
     const contributorShare = userTotalValue / totalTvl;
-    const userTotalVtTokens = this.round15((vtSupply - lpVtAmount) * (1 - ASSETS_OFFERED_PERCENT) * contributorShare);
+    const userTotalVtTokens = (vtSupply - lpVtAmount) * (1 - ASSETS_OFFERED_PERCENT) * contributorShare;
 
-    // Calculate VT tokens for this specific transaction
+    // Calculate tokens for this transaction
     const vtAmount = userTotalVtTokens * proportionOfUserTotal;
-    const adaAmount = this.round15(vtAmount * vtPrice);
+    const adaAmount = vtAmount * vtPrice;
+
+    // Check for valid numbers
+    if (!Number.isFinite(vtAmount) || !Number.isFinite(adaAmount)) {
+      this.logger.warn(`Invalid calculation result: vtAmount=${vtAmount}, adaAmount=${adaAmount}`);
+      return { vtAmount: 0, adaAmount: 0, proportionOfUserTotal: 0, userTotalVtTokens: 0 };
+    }
 
     return {
       vtAmount: Math.floor(vtAmount),
@@ -79,7 +106,7 @@ export class DistributionService {
   }
 
   /**
-   * Calculate liquidity pool tokens and values
+   * Calculate liquidity pool tokens and values with full precision
    */
   calculateLpTokens(params: {
     totalAcquiredAda: number;
@@ -94,24 +121,28 @@ export class DistributionService {
   } {
     const { totalAcquiredAda, vtSupply, assetsOfferedPercent, lpPercent } = params;
 
-    // Calculate VT price (this part is correct in your current code)
-    const vtPrice = this.round15(totalAcquiredAda / assetsOfferedPercent / vtSupply);
+    if (vtSupply <= 0 || assetsOfferedPercent <= 0) {
+      this.logger.warn(`Invalid inputs: vtSupply=${vtSupply}, assetsOfferedPercent=${assetsOfferedPercent}`);
+      return { lpAdaAmount: 0, lpVtAmount: 0, vtPrice: 0, fdv: 0 };
+    }
 
-    const fdv = this.round2(totalAcquiredAda / assetsOfferedPercent);
+    const vtPrice = totalAcquiredAda / assetsOfferedPercent / vtSupply;
 
-    // LP gets lpPercent of the total vault value
-    const lpTotalValue = this.round15(fdv * lpPercent);
+    if (!Number.isFinite(vtPrice)) {
+      this.logger.warn(`Invalid vtPrice calculated: ${vtPrice}`);
+      return { lpAdaAmount: 0, lpVtAmount: 0, vtPrice: 0, fdv: 0 };
+    }
 
-    // Divide equally between ADA and VT
-    const lpAdaAmount = this.round15(lpTotalValue / 2);
-    const lpVtValue = this.round15(lpTotalValue / 2);
+    const fdv = totalAcquiredAda / assetsOfferedPercent;
+    const lpTotalValue = fdv * lpPercent;
+    const lpAdaAmount = lpTotalValue / 2;
+    const lpVtValue = lpTotalValue / 2;
 
-    // Convert VT value to tokens
-    const lpVtAmount = Math.round(lpVtValue / vtPrice);
+    const lpVtAmount = vtPrice > 0 ? Math.round(lpVtValue / vtPrice) : 0;
 
     return {
-      lpAdaAmount,
-      lpVtAmount,
+      lpAdaAmount: Number.isFinite(lpAdaAmount) ? lpAdaAmount : 0,
+      lpVtAmount: Number.isFinite(lpVtAmount) ? lpVtAmount : 0,
       vtPrice,
       fdv,
     };
@@ -128,7 +159,7 @@ export class DistributionService {
     for (const claim of contributorsClaims) {
       const contributorAdaAmount = claim.metadata?.adaAmount || 0;
 
-      // VT token distribution (existing logic)
+      // VT token distribution
       const baseVtShare = Math.floor(claim.amount / claim.transaction.assets.length);
       const vtRemainder = claim.amount - baseVtShare * claim.transaction.assets.length;
 
@@ -172,13 +203,5 @@ export class DistributionService {
     return {
       adaPairMultiplier: 2, // for now
     };
-  }
-
-  private round15(amount: number): number {
-    return Math.round(amount * 1e15) / 1e15;
-  }
-
-  protected round2(amount: number): number {
-    return Math.round(amount * 1e2) / 1e2;
   }
 }

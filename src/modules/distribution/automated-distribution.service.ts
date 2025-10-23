@@ -18,6 +18,7 @@ import { AssetsService } from '../vaults/processing-tx/assets/assets.service';
 import { BlockchainService } from '../vaults/processing-tx/onchain/blockchain.service';
 import { generate_tag_from_txhash_index } from '../vaults/processing-tx/onchain/utils/lib';
 
+import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
@@ -46,7 +47,7 @@ interface ExtractInput {
   network: string;
 }
 
-interface PayAdaContribution {
+interface PayAdaContributionInput {
   changeAddress: string;
   message: string;
   scriptInteractions: object[];
@@ -71,7 +72,7 @@ interface PayAdaContribution {
 export class AutomatedDistributionService {
   private readonly logger = new Logger(AutomatedDistributionService.name);
   private readonly adminHash: string;
-  private readonly vaultScriptAddress: string;
+  private readonly SC_POLICY_ID: string;
   private readonly adminSKey: string;
   private readonly adminAddress: string;
   private readonly unparametizedDispatchHash: string;
@@ -86,6 +87,8 @@ export class AutomatedDistributionService {
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(Asset)
+    private readonly assetRepository: Repository<Asset>,
     private readonly configService: ConfigService,
     private readonly blockchainService: BlockchainService,
     private readonly assetService: AssetsService
@@ -93,14 +96,14 @@ export class AutomatedDistributionService {
     this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
-    this.vaultScriptAddress = this.configService.get<string>('VAULT_SCRIPT_ADDRESS');
+    this.SC_POLICY_ID = this.configService.get<string>('SC_POLICY_ID');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
     });
   }
 
-  @Cron(CronExpression.EVERY_10_MINUTES)
+  @Cron(CronExpression.EVERY_MINUTE)
   async processDistributionQueue(): Promise<void> {
     this.logger.debug('Processing distribution queue...');
 
@@ -161,7 +164,7 @@ export class AutomatedDistributionService {
     this.logger.log(`Found ${claims.length} acquirer claims to extract for vault ${vaultId}`);
 
     const dispatchResult = await this.blockchainService.applyDispatchParameters({
-      vault_policy: this.vaultScriptAddress,
+      vault_policy: this.SC_POLICY_ID,
       vault_id: vault.asset_vault_name,
       contribution_script_hash: vault.script_hash,
     });
@@ -180,6 +183,8 @@ export class AutomatedDistributionService {
 
       const PARAMETERIZED_DISPATCH_HASH = dispatchResult.parameterizedHash;
       const DISPATCH_ADDRESS = this.getDispatchAddress(PARAMETERIZED_DISPATCH_HASH);
+
+      this.logger.debug(DISPATCH_ADDRESS);
 
       // Get the original acquire transaction
       const originalTx = claim.transaction;
@@ -390,7 +395,7 @@ export class AutomatedDistributionService {
               await this.queuePaymentTransactions(vaultId);
             } else {
               const dispatchResult = await this.blockchainService.applyDispatchParameters({
-                vault_policy: this.vaultScriptAddress,
+                vault_policy: this.SC_POLICY_ID,
                 vault_id: vault.asset_vault_name,
                 contribution_script_hash: vault.script_hash,
               });
@@ -448,7 +453,7 @@ export class AutomatedDistributionService {
 
     // Apply parameters to dispatch script
     const dispatchResult = await this.blockchainService.applyDispatchParameters({
-      vault_policy: this.vaultScriptAddress,
+      vault_policy: this.SC_POLICY_ID,
       vault_id: vault.asset_vault_name,
       contribution_script_hash: vault.script_hash,
     });
@@ -477,18 +482,45 @@ export class AutomatedDistributionService {
         const PARAMETERIZED_DISPATCH_HASH = dispatchResult.parameterizedHash;
         const DISPATCH_ADDRESS = this.getDispatchAddress(PARAMETERIZED_DISPATCH_HASH);
 
+        this.logger.debug(DISPATCH_ADDRESS);
+
         // Get original contribution transaction
         const originalTx = claim.transaction;
         if (!originalTx || !originalTx.tx_hash) {
           throw new Error(`Original transaction not found for claim ${claim.id}`);
         }
 
+        const contributedAssets = await this.assetRepository.find({
+          where: { transaction: { id: originalTx.id } },
+        });
+
+        // Format assets for the transaction output
+        const contributionAssets: {
+          assetName: { name: string; format: string };
+          policyId: string;
+          quantity: number;
+        }[] = [];
+
+        // Process each asset
+        if (contributedAssets.length > 0) {
+          for (const asset of contributedAssets) {
+            contributionAssets.push({
+              assetName: {
+                name: asset.asset_id,
+                format: 'hex', // Always use 'hex' format
+              },
+              policyId: asset.policy_id,
+              quantity: Number(asset.quantity),
+            });
+          }
+        }
+
         const contribTxUtxos = await this.blockfrost.txsUtxos(originalTx.tx_hash);
-        const contribOutput = contribTxUtxos.outputs[originalTx.tx_index || 0];
+        this.logger.debug(JSON.stringify(contribTxUtxos));
+        const contribOutput = contribTxUtxos.outputs[0];
         if (!contribOutput) {
           throw new Error('No contribution output found');
         }
-        const assetDetails = this.extractAssetDetailsFromUtxo(contribOutput);
 
         // Find a suitable UTXO at dispatch address with enough ADA
         const dispatchUtxos = await this.blockfrost.addressesUtxos(DISPATCH_ADDRESS);
@@ -531,13 +563,13 @@ export class AutomatedDistributionService {
         }
 
         const userAddress = claim.user?.address || (await this.getUserAddress(claim.user_id));
-        const datumTag = generate_tag_from_txhash_index(originalTx.tx_hash, +originalTx.tx_index || 0);
+        const datumTag = generate_tag_from_txhash_index(originalTx.tx_hash, 0);
 
         const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(vault.script_hash)))
           .to_address()
           .to_bech32();
 
-        const input: PayAdaContribution = {
+        const input: PayAdaContributionInput = {
           changeAddress: this.adminAddress,
           message: `Pay ADA to contributor for claim ${claim.id}`,
           preloadedScripts: [dispatchResult.fullResponse.preloadedScript],
@@ -575,7 +607,7 @@ export class AutomatedDistributionService {
               hash: vault.script_hash,
               outputRef: {
                 txHash: originalTx.tx_hash,
-                index: originalTx.tx_index || 0,
+                index: 0,
               },
               redeemer: {
                 type: 'json',
@@ -595,7 +627,7 @@ export class AutomatedDistributionService {
               assetName: { name: vault.asset_vault_name, format: 'hex' },
               policyId: vault.script_hash,
               type: 'plutus',
-              quantity: claim.amount,
+              quantity: Number(claim.amount),
               metadata: {},
             },
             {
@@ -614,7 +646,7 @@ export class AutomatedDistributionService {
                 {
                   assetName: { name: vault.asset_vault_name, format: 'hex' },
                   policyId: vault.script_hash,
-                  quantity: claim.amount,
+                  quantity: Number(claim.amount),
                 },
               ],
               lovelace: adaAmount,
@@ -623,9 +655,6 @@ export class AutomatedDistributionService {
                 value: {
                   datum_tag: datumTag,
                   ada_paid: adaAmount,
-                  policy_id: vault.script_hash,
-                  asset_name: vault.asset_vault_name,
-                  owner: userAddress,
                 },
                 shape: {
                   validatorHash: this.unparametizedDispatchHash,
@@ -636,7 +665,7 @@ export class AutomatedDistributionService {
             {
               address: SC_ADDRESS,
               lovelace: Number(contribOutput.amount.find((u: any) => u.unit === 'lovelace')?.quantity),
-              assets: assetDetails.assets,
+              assets: contributionAssets, // Here should be assets that user contributed to Vault
               datum: {
                 type: 'inline',
                 value: {
@@ -651,14 +680,10 @@ export class AutomatedDistributionService {
                 },
               },
             },
-            ...(actualRemainingDispatchLovelace > 1_000_000
-              ? [
-                  {
-                    address: DISPATCH_ADDRESS,
-                    lovelace: actualRemainingDispatchLovelace,
-                  },
-                ]
-              : []),
+            {
+              address: DISPATCH_ADDRESS,
+              lovelace: actualRemainingDispatchLovelace,
+            },
           ],
           requiredSigners: [this.adminHash],
           referenceInputs: [
@@ -694,11 +719,11 @@ export class AutomatedDistributionService {
           );
 
           this.logger.log(`Payment transaction ${response.txHash} submitted for claim ${claim.id}`);
-          await new Promise(resolve => setTimeout(resolve, 30000));
+          await new Promise(resolve => setTimeout(resolve, 60000));
         } catch (error) {
           this.logger.error(`Failed to submit payment transaction:`, error);
           await this.transactionRepository.update({ id: transaction.id }, { status: TransactionStatus.failed }); // Mark transaction as failed
-          await new Promise(resolve => setTimeout(resolve, 30000));
+          await new Promise(resolve => setTimeout(resolve, 60000));
         }
 
         this.logger.log(`Payment transaction created for claim ${claim.id}`);
@@ -725,10 +750,6 @@ export class AutomatedDistributionService {
       .to_bech32();
   }
 
-  private getLovelaceAmount(utxo: any): number {
-    return parseInt(utxo.amount.find((a: any) => a.unit === 'lovelace')?.quantity || '0');
-  }
-
   private async getUserAddress(userId: string): Promise<string> {
     const user = await this.userRepository.findOne({
       where: { id: userId },
@@ -740,54 +761,5 @@ export class AutomatedDistributionService {
     }
 
     return user.address;
-  }
-
-  private extractAssetDetailsFromUtxo(contribOutput: {
-    address: string;
-    amount: {
-      unit: string;
-      quantity: string;
-    }[];
-    output_index: number;
-    data_hash: string | null;
-    inline_datum: string | null;
-    collateral: boolean;
-    reference_script_hash: string | null;
-    consumed_by_tx?: string | null;
-  }): {
-    lovelace: number;
-    assets: {
-      assetName: {
-        name: string;
-        format: string;
-      };
-      policyId: string;
-      quantity: number;
-    }[];
-  } {
-    const lovelace = Number(contribOutput.amount.find(u => u.unit === 'lovelace')?.quantity || 0);
-
-    // Extract assets
-    const assets = contribOutput.amount
-      .filter(asset => asset.unit !== 'lovelace')
-      .map(asset => {
-        // Split the hex asset into policy ID (56 chars) and asset name (remaining)
-        const policyId = asset.unit.slice(0, 56);
-        const assetNameHex = asset.unit.slice(56);
-
-        return {
-          assetName: {
-            name: assetNameHex,
-            format: 'hex',
-          },
-          policyId,
-          quantity: Number(asset.quantity),
-        };
-      });
-
-    return {
-      lovelace,
-      assets,
-    };
   }
 }

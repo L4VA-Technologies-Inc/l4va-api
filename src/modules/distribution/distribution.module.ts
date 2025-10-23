@@ -8,6 +8,7 @@ import { BlockchainModule } from '../vaults/processing-tx/onchain/blockchain.mod
 import { AutomatedDistributionService } from './automated-distribution.service';
 import { DistributionService } from './distribution.service';
 
+import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
@@ -15,7 +16,7 @@ import { Vault } from '@/database/vault.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Vault, Claim, User, Transaction]),
+    TypeOrmModule.forFeature([Vault, Claim, User, Transaction, Asset]),
     ConfigModule.forRoot({
       isGlobal: true,
     }),
