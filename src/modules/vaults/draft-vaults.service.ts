@@ -217,9 +217,15 @@ export class DraftVaultsService {
       if (data.ftTokenSupply) vaultData.ft_token_supply = data.ftTokenSupply;
       if (data.terminationType) vaultData.termination_type = data.terminationType;
       if (data.vaultTokenTicker) vaultData.vault_token_ticker = data.vaultTokenTicker;
-      if (data.tokensForAcquires) vaultData.tokens_for_acquires = data.tokensForAcquires;
-      if (data.acquireReserve) vaultData.acquire_reserve = data.acquireReserve;
-      if (data.liquidityPoolContribution) vaultData.liquidity_pool_contribution = data.liquidityPoolContribution;
+      if (data.tokensForAcquires !== undefined && data.tokensForAcquires !== null) {
+        vaultData.tokens_for_acquires = data.tokensForAcquires;
+      }
+      if (data.acquireReserve !== undefined && data.acquireReserve !== null) {
+        vaultData.acquire_reserve = data.acquireReserve;
+      }
+      if (data.liquidityPoolContribution !== undefined && data.liquidityPoolContribution !== null) {
+        vaultData.liquidity_pool_contribution = data.liquidityPoolContribution;
+      }
       if (data.creationThreshold) vaultData.creation_threshold = data.creationThreshold;
       if (data.startThreshold) vaultData.start_threshold = data.startThreshold;
       if (data.voteThreshold) vaultData.vote_threshold = data.voteThreshold;
