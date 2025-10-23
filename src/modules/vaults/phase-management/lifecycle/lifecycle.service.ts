@@ -509,7 +509,7 @@ export class LifecycleService {
               vault: { id: vault.id },
               type: ClaimType.ACQUIRER,
               amount: vtReceived,
-              status: ClaimStatus.AVAILABLE,
+              status: ClaimStatus.PENDING,
               transaction: { id: tx.id },
               metadata: {
                 multiplier: multiplier,
