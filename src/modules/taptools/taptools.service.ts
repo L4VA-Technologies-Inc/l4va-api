@@ -121,7 +121,6 @@ export class TaptoolsService {
     const cachedPrice = this.cache.get<number>(cacheKey);
 
     if (cachedPrice !== undefined) {
-      this.logger.debug(`Using cached ADA price: ${cachedPrice}`);
       return cachedPrice;
     }
 
@@ -132,14 +131,11 @@ export class TaptoolsService {
       const lastCallKey = 'last_price_api_call';
       const lastCall = this.cache.get<number>(lastCallKey) || 0;
 
-      // Respect rate limits - wait at least 10 seconds between calls
       if (now - lastCall < 10000) {
-        this.logger.debug('Rate limiting ourselves for CoinGecko API');
         const lastKnownGoodPrice = this.cache.get<number>('last_known_good_ada_price');
         return lastKnownGoodPrice || fallbackPrice;
       }
 
-      // Track this API call time
       this.cache.set(lastCallKey, now);
 
       const response = await axios.get('https://api.coingecko.com/api/v3/simple/price', {
@@ -158,8 +154,6 @@ export class TaptoolsService {
 
       // Cache price for longer (15 minutes)
       this.cache.set(cacheKey, adaPrice, 900);
-
-      // Also store as last known good price (with 24 hour TTL)
       this.cache.set('last_known_good_ada_price', adaPrice, 86400);
 
       return adaPrice;
@@ -188,7 +182,6 @@ export class TaptoolsService {
       // If we have a last known good price, use that
       const lastKnownGoodPrice = this.cache.get<number>('last_known_good_ada_price');
       if (lastKnownGoodPrice !== undefined) {
-        this.logger.debug(`Using last known good ADA price: ${lastKnownGoodPrice}`);
         return lastKnownGoodPrice;
       }
 
@@ -831,7 +824,7 @@ export class TaptoolsService {
       const now = Date.now();
 
       if (now - lastAlert < this.SLACK_ALERT_COOLDOWN) {
-        this.logger.debug(`Slack alert for ${alertType} is in cooldown period`);
+        this.logger.error(`Slack alert for ${alertType} is in cooldown period`);
         return;
       }
 
