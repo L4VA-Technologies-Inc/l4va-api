@@ -276,6 +276,27 @@ export class AutomatedDistributionService {
 
     this.logger.debug(`Processing batch extraction for ${claims.length} claims, transaction ${extractionTx.id}`);
 
+    try {
+      // Try batch processing first
+      await this.processBatchExtraction(vault, claims, dispatchResult, extractionTx);
+    } catch (error) {
+      this.logger.warn(`Batch extraction failed for ${claims.length} claims: ${error.message}`);
+      this.logger.log(`Falling back to individual claim processing for vault ${vaultId}`);
+
+      // Mark the batch transaction as failed
+      await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
+
+      // Process each claim individually
+      await this.processClaimsIndividually(vault, claims, vaultId, dispatchResult);
+    }
+  }
+
+  private async processBatchExtraction(
+    vault: Vault,
+    claims: Claim[],
+    dispatchResult: any,
+    extractionTx: Transaction
+  ): Promise<void> {
     const DISPATCH_ADDRESS = this.getDispatchAddress(dispatchResult.parameterizedHash);
     const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(vault.script_hash)))
       .to_address()
@@ -423,108 +444,227 @@ export class AutomatedDistributionService {
       network: 'preprod',
     };
 
-    try {
-      const buildResponse = await this.blockchainService.buildTransaction(input);
+    const buildResponse = await this.blockchainService.buildTransaction(input);
 
-      // Get official transaction size using Cardano serialization lib
-      const actualTxSize = this.getTransactionSize(buildResponse.complete);
+    // Get official transaction size using Cardano serialization lib
+    const actualTxSize = this.getTransactionSize(buildResponse.complete);
+    this.logger.debug(`Official transaction size: ${actualTxSize} bytes (${(actualTxSize / 1024).toFixed(2)} KB)`);
 
-      this.logger.debug(`Official transaction size: ${actualTxSize} bytes (${(actualTxSize / 1024).toFixed(2)} KB)`);
+    if (actualTxSize > this.MAX_TX_SIZE) {
+      throw new Error(`Transaction size ${actualTxSize} bytes exceeds Cardano limit of ${this.MAX_TX_SIZE} bytes`);
+    }
 
-      if (actualTxSize > this.MAX_TX_SIZE) {
-        this.logger.warn(`Transaction size ${actualTxSize} bytes exceeds Cardano limit of ${this.MAX_TX_SIZE} bytes`);
+    const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+    txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
-        // If batch has only 1 claim and still too large, mark as failed
-        if (claims.length === 1) {
-          this.logger.error(`Single claim ${claims[0].id} creates oversized transaction. Marking as failed.`);
-          await this.claimRepository.update({ id: claims[0].id }, { status: ClaimStatus.FAILED });
-          await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
-          return;
+    const response = await this.blockchainService.submitTransaction({
+      transaction: txToSubmitOnChain.to_hex(),
+      signatures: [],
+    });
+
+    // Update all claims in the batch to claimed status
+    await this.claimRepository.update({ id: In(claims.map(c => c.id)) }, { status: ClaimStatus.CLAIMED });
+
+    // Distribute assets for all claims in the batch
+    for (const claim of claims) {
+      await this.assetService.distributeAssetByTransactionId(claim.transaction.id);
+    }
+
+    // Update extraction transaction with hash
+    await this.transactionRepository.update(
+      { id: extractionTx.id },
+      { tx_hash: response.txHash, status: TransactionStatus.confirmed }
+    );
+
+    this.logger.log(`Batch extraction transaction ${response.txHash} submitted for ${claims.length} claims`);
+  }
+
+  private async processClaimsIndividually(
+    vault: Vault,
+    claims: Claim[],
+    vaultId: string,
+    dispatchResult: any
+  ): Promise<void> {
+    const DISPATCH_ADDRESS = this.getDispatchAddress(dispatchResult.parameterizedHash);
+    const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(vault.script_hash)))
+      .to_address()
+      .to_bech32();
+
+    for (const claim of claims) {
+      try {
+        // Create individual transaction record
+        const extractionTx = await this.transactionRepository.save({
+          vault_id: vaultId,
+          user_id: claim.user.id,
+          type: TransactionType.extractDispatch,
+          status: TransactionStatus.created,
+          metadata: {
+            claimId: claim.id,
+            individualProcessing: true,
+          },
+        });
+
+        this.logger.debug(`Processing individual extraction for claim ${claim.id}, transaction ${extractionTx.id}`);
+
+        const { user } = claim;
+        const originalTx = claim.transaction;
+
+        if (!originalTx || !originalTx.tx_hash) {
+          throw new Error(`Original transaction not found for claim ${claim.id}`);
         }
 
-        // Split batch and retry with smaller batches
-        const midpoint = Math.floor(claims.length / 2);
-        const firstHalf = claims.slice(0, midpoint);
-        const secondHalf = claims.slice(midpoint);
+        const datumTag = generate_tag_from_txhash_index(originalTx.tx_hash, 0);
+        const adaPairMultiplier = Number(vault.ada_pair_multiplier);
+        const claimMultiplier = Number(claim.metadata.multiplier);
+        const originalAmount = Number(originalTx.amount);
+        const claimMintQuantity = claimMultiplier * (originalAmount * 1_000_000);
+        const vaultMintQuantity = adaPairMultiplier * originalAmount * 1_000_000;
+        const totalMintQuantity = (adaPairMultiplier + claimMultiplier) * (originalAmount * 1_000_000);
+        const dispatchLovelace = Number(originalTx.amount) * 1_000_000;
 
-        this.logger.log(
-          `Splitting batch of ${claims.length} into batches of ${firstHalf.length} and ${secondHalf.length}`
+        const input: ExtractInput = {
+          changeAddress: this.adminAddress,
+          message: `Extract ADA for claim ${claim.id} (individual)`,
+          scriptInteractions: [
+            {
+              purpose: 'spend',
+              hash: vault.script_hash,
+              outputRef: {
+                txHash: originalTx.tx_hash,
+                index: 0,
+              },
+              redeemer: {
+                type: 'json',
+                value: {
+                  __variant: 'ExtractAda',
+                  __data: {
+                    vault_token_output_index: 0, // Single output for individual processing
+                  },
+                },
+              },
+            },
+            {
+              purpose: 'mint',
+              hash: vault.script_hash,
+              redeemer: {
+                type: 'json',
+                value: 'MintVaultToken',
+              },
+            },
+          ],
+          mint: [
+            {
+              version: 'cip25',
+              assetName: { name: vault.asset_vault_name, format: 'hex' },
+              policyId: vault.script_hash,
+              type: 'plutus',
+              quantity: totalMintQuantity,
+              metadata: {},
+            },
+            {
+              version: 'cip25',
+              assetName: { name: 'receipt', format: 'utf8' },
+              policyId: vault.script_hash,
+              type: 'plutus',
+              quantity: -1, // Burn one receipt
+              metadata: {},
+            },
+          ],
+          outputs: [
+            {
+              address: user.address,
+              assets: [
+                {
+                  assetName: { name: vault.asset_vault_name, format: 'hex' },
+                  policyId: vault.script_hash,
+                  quantity: claimMintQuantity,
+                },
+              ],
+              datum: {
+                type: 'inline',
+                value: {
+                  datum_tag: datumTag,
+                  ada_paid: undefined,
+                },
+                shape: {
+                  validatorHash: this.unparametizedDispatchHash,
+                  purpose: 'spend',
+                },
+              },
+            },
+            {
+              address: SC_ADDRESS,
+              assets: [
+                {
+                  assetName: { name: vault.asset_vault_name, format: 'hex' },
+                  policyId: vault.script_hash,
+                  quantity: vaultMintQuantity,
+                },
+              ],
+            },
+            {
+              address: DISPATCH_ADDRESS,
+              lovelace: dispatchLovelace,
+            },
+          ],
+          requiredSigners: [this.adminHash],
+          referenceInputs: [
+            {
+              txHash: vault.last_update_tx_hash,
+              index: 0,
+            },
+          ],
+          validityInterval: {
+            start: true,
+            end: true,
+          },
+          network: 'preprod',
+        };
+
+        const buildResponse = await this.blockchainService.buildTransaction(input);
+        const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+        txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+        const response = await this.blockchainService.submitTransaction({
+          transaction: txToSubmitOnChain.to_hex(),
+          signatures: [],
+        });
+
+        // Update claim status
+        await this.claimRepository.update({ id: claim.id }, { status: ClaimStatus.CLAIMED });
+
+        // Distribute assets
+        await this.assetService.distributeAssetByTransactionId(claim.transaction.id);
+
+        // Update extraction transaction with hash
+        await this.transactionRepository.update(
+          { id: extractionTx.id },
+          { tx_hash: response.txHash, status: TransactionStatus.confirmed }
         );
 
-        await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed }); // Mark current transaction as failed since we're splitting
+        this.logger.log(`Individual extraction transaction ${response.txHash} submitted for claim ${claim.id}`);
 
-        if (firstHalf.length > 0) {
-          await this.processAcquirerBatch(vault, firstHalf, vaultId);
-        }
-        if (secondHalf.length > 0) {
-          await new Promise(resolve => setTimeout(resolve, 30000));
-          await this.processAcquirerBatch(vault, secondHalf, vaultId);
-        }
+        // Add delay between individual transactions
+        await new Promise(resolve => setTimeout(resolve, 30000));
+      } catch (error) {
+        this.logger.error(`Failed to process individual extraction for claim ${claim.id}:`, error);
 
-        return;
-      }
-
-      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
-
-      const response = await this.blockchainService.submitTransaction({
-        transaction: txToSubmitOnChain.to_hex(),
-        signatures: [],
-      });
-
-      // Update all claims in the batch to claimed status
-      await this.claimRepository.update({ id: In(claims.map(c => c.id)) }, { status: ClaimStatus.CLAIMED });
-
-      // Distribute assets for all claims in the batch
-      for (const claim of claims) {
-        await this.assetService.distributeAssetByTransactionId(claim.transaction.id);
-      }
-
-      // Update extraction transaction with hash
-      await this.transactionRepository.update(
-        { id: extractionTx.id },
-        { tx_hash: response.txHash, status: TransactionStatus.confirmed }
-      );
-
-      this.logger.log(`Batch extraction transaction ${response.txHash} submitted for ${claims.length} claims`);
-
-      // Add delay after successful batch
-      await new Promise(resolve => setTimeout(resolve, 30000));
-    } catch (error) {
-      this.logger.warn(JSON.stringify(input));
-      this.logger.error(`Failed to submit batch extraction transaction:`, error);
-
-      // Check if error is related to transaction size
-      if (
-        error.message?.toLowerCase().includes('too large') ||
-        error.message?.toLowerCase().includes('size') ||
-        error.message?.toLowerCase().includes('exceeded')
-      ) {
-        this.logger.warn(`Size-related error detected. Splitting batch of ${claims.length} claims.`);
-
-        if (claims.length === 1) {
-          await this.claimRepository.update({ id: claims[0].id }, { status: ClaimStatus.FAILED });
-        } else {
-          const midpoint = Math.floor(claims.length / 2);
-          const firstHalf = claims.slice(0, midpoint);
-          const secondHalf = claims.slice(midpoint);
-
-          await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
-
-          if (firstHalf.length > 0) {
-            await this.processAcquirerBatch(vault, firstHalf, vaultId);
+        // Mark claim as failed if individual processing also fails
+        await this.claimRepository.update(
+          { id: claim.id },
+          {
+            status: ClaimStatus.FAILED,
+            metadata: {
+              ...claim.metadata,
+              failureReason: error.message,
+              failedAt: new Date().toISOString(),
+            } as any,
           }
-          if (secondHalf.length > 0) {
-            await new Promise(resolve => setTimeout(resolve, 30000));
-            await this.processAcquirerBatch(vault, secondHalf, vaultId);
-          }
-          return;
-        }
-      }
+        );
 
-      // Mark transaction as failed for non-size related errors
-      await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
-      await new Promise(resolve => setTimeout(resolve, 30000));
+        // Continue with next claim
+        continue;
+      }
     }
   }
 
@@ -583,7 +723,6 @@ export class AutomatedDistributionService {
             // Check if stake is already registered based on database flag
             if (vault.stake_registered) {
               this.logger.log(`Stake credential already marked as registered for vault ${vaultId}`);
-              this.logger.debug(`Queueing payment transactions for vault ${vaultId}`);
               await this.processContributorPayments(vaultId);
             } else {
               const dispatchResult = await this.blockchainService.applyDispatchParameters({
@@ -606,7 +745,6 @@ export class AutomatedDistributionService {
                 this.logger.debug(
                   `Stake credential ${stakeResult.alreadyRegistered ? 'was already' : 'has been'} registered for vault ${vaultId}`
                 );
-                this.logger.debug(`Queueing payment transactions for vault ${vaultId}`);
                 await this.processContributorPayments(vaultId);
               } else {
                 this.logger.error(`Failed to register stake credential for vault ${vaultId}`);
