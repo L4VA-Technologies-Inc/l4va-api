@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { Address, FixedTransaction, PlutusData, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
+import { FixedTransaction, PlutusData, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable, NotFoundException, Logger, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -14,12 +14,11 @@ import { GetClaimsDto } from './dto/get-claims.dto';
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
-import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetsService } from '@/modules/vaults/processing-tx/assets/assets.service';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { Datum, Redeemer, Redeemer1 } from '@/modules/vaults/processing-tx/onchain/types/type';
-import { generate_tag_from_txhash_index, getUtxosExctract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import { generate_tag_from_txhash_index } from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { AssetOriginType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -255,8 +254,6 @@ export class ClaimsService {
     txHash: string;
     success: boolean;
   }> {
-    this.logger.debug(`Building cancellation transaction for claim ${claimId}`);
-
     const claim = await this.claimRepository.findOne({
       where: { id: claimId, type: ClaimType.CANCELLATION },
       relations: ['user', 'vault', 'transaction'],
@@ -291,7 +288,7 @@ export class ClaimsService {
 
     const datumTag = generate_tag_from_txhash_index(transaction.tx_hash, 0);
 
-    const refundAssets: any[] = [];
+    const refundAssets = [];
     let refundLovelace = 0;
 
     // Process ALL amounts from the original UTXO to build exact refund
@@ -411,11 +408,13 @@ export class ClaimsService {
         { id: internalTx.id },
         { tx_hash: response.txHash, status: TransactionStatus.confirmed }
       );
+      await new Promise(resolve => setTimeout(resolve, 90000));
       return {
         success: true,
         txHash: response.txHash,
       };
     }
+    await new Promise(resolve => setTimeout(resolve, 90000));
     throw new Error('Failed to submit cancellation transaction');
   }
 
@@ -424,7 +423,9 @@ export class ClaimsService {
     transactionId: string;
     presignedTx: string;
   }> {
-    throw new Error("Claim transaction building is currently disabled. Please use cancellation claims or contact support for alternatives.");
+    throw new Error(
+      'Claim transaction building is currently disabled. Please use cancellation claims or contact support for alternatives.'
+    );
 
     const claim = await this.claimRepository.findOne({
       where: { id: claimId },

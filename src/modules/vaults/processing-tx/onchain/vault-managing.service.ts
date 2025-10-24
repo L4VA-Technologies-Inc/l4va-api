@@ -513,7 +513,7 @@ export class VaultManagingService {
         txId: transaction.id,
       });
 
-      await new Promise(resolve => setTimeout(resolve, 20000)); // 20 seconds
+      await new Promise(resolve => setTimeout(resolve, 90000)); // 90 seconds
 
       return { success: true, txHash: response.txHash, message: 'Transaction submitted successfully' };
     } catch (error) {
