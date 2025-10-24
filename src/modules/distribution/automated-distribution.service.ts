@@ -121,18 +121,16 @@ export class AutomatedDistributionService {
   }
 
   @Cron(CronExpression.EVERY_10_MINUTES)
-  async processDistributionQueue(): Promise<void> {
-    this.logger.debug('Processing distribution queue...');
-
+  async processVaultDistributions(): Promise<void> {
     // 1. Find vaults ready for extraction
-    await this.processReadyVaults();
+    await this.processLockedVaultsForDistribution();
 
     // 2.1 Process extractions for acquirer claims
     //2.2 Register Script Stake
-    await this.processExtractionTransactions();
+    await this.checkExtractionsAndTriggerPayments();
   }
 
-  private async processReadyVaults(): Promise<void> {
+  private async processLockedVaultsForDistribution(): Promise<void> {
     const readyVaults = await this.vaultRepository.find({
       where: {
         vault_status: VaultStatus.locked,
@@ -150,7 +148,7 @@ export class AutomatedDistributionService {
 
         await this.vaultRepository.update({ id: vault.id }, { distribution_in_progress: true }); // Mark as processing to prevent duplicate processing
 
-        await this.extractLovelaceForClaims(vault.id); // Queue extraction transactions for acquirer claims
+        await this.processAcquirerExtractions(vault.id); // Queue extraction transactions for acquirer claims
         this.logger.log(`Extraction transactions queued for vault ${vault.id}`);
         await new Promise(resolve => setTimeout(resolve, 5000));
       } catch (error) {
@@ -159,7 +157,7 @@ export class AutomatedDistributionService {
     }
   }
 
-  private async extractLovelaceForClaims(vaultId: string): Promise<void> {
+  private async processAcquirerExtractions(vaultId: string): Promise<void> {
     const claims = await this.claimRepository.find({
       where: {
         vault: { id: vaultId },
@@ -218,7 +216,7 @@ export class AutomatedDistributionService {
         // Check if stake is already registered
         if (vaultWithStake.stake_registered) {
           this.logger.log(`Stake credential already registered for vault ${vaultId}. Proceeding to payments.`);
-          await this.queuePaymentTransactions(vaultId);
+          await this.processContributorPayments(vaultId);
         } else {
           const dispatchResult = await this.blockchainService.applyDispatchParameters({
             vault_policy: this.SC_POLICY_ID,
@@ -236,7 +234,7 @@ export class AutomatedDistributionService {
             }
 
             this.logger.log(`Stake credential registered for vault ${vaultId}. Proceeding to payments.`);
-            await this.queuePaymentTransactions(vaultId);
+            await this.processContributorPayments(vaultId);
           } else {
             this.logger.error(`Failed to register stake credential for vault ${vaultId}`);
           }
@@ -249,7 +247,7 @@ export class AutomatedDistributionService {
     const batchSize = 6;
     for (let i = 0; i < claims.length; i += batchSize) {
       const batchClaims = claims.slice(i, i + batchSize);
-      await this.processBatchExtraction(vault, batchClaims, vaultId);
+      await this.processAcquirerBatch(vault, batchClaims, vaultId);
 
       if (i + batchSize < claims.length) {
         await new Promise(resolve => setTimeout(resolve, 30000));
@@ -257,7 +255,7 @@ export class AutomatedDistributionService {
     }
   }
 
-  private async processBatchExtraction(vault: Vault, claims: Claim[], vaultId: string): Promise<void> {
+  private async processAcquirerBatch(vault: Vault, claims: Claim[], vaultId: string): Promise<void> {
     const dispatchResult = await this.blockchainService.applyDispatchParameters({
       vault_policy: this.SC_POLICY_ID,
       vault_id: vault.asset_vault_name,
@@ -456,11 +454,11 @@ export class AutomatedDistributionService {
         await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed }); // Mark current transaction as failed since we're splitting
 
         if (firstHalf.length > 0) {
-          await this.processBatchExtraction(vault, firstHalf, vaultId);
+          await this.processAcquirerBatch(vault, firstHalf, vaultId);
         }
         if (secondHalf.length > 0) {
           await new Promise(resolve => setTimeout(resolve, 30000));
-          await this.processBatchExtraction(vault, secondHalf, vaultId);
+          await this.processAcquirerBatch(vault, secondHalf, vaultId);
         }
 
         return;
@@ -514,11 +512,11 @@ export class AutomatedDistributionService {
           await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
 
           if (firstHalf.length > 0) {
-            await this.processBatchExtraction(vault, firstHalf, vaultId);
+            await this.processAcquirerBatch(vault, firstHalf, vaultId);
           }
           if (secondHalf.length > 0) {
             await new Promise(resolve => setTimeout(resolve, 30000));
-            await this.processBatchExtraction(vault, secondHalf, vaultId);
+            await this.processAcquirerBatch(vault, secondHalf, vaultId);
           }
           return;
         }
@@ -530,7 +528,7 @@ export class AutomatedDistributionService {
     }
   }
 
-  private async processExtractionTransactions(): Promise<void> {
+  private async checkExtractionsAndTriggerPayments(): Promise<void> {
     // Find confirmed extraction transactions
     const confirmedExtractions = await this.transactionRepository.find({
       where: {
@@ -586,7 +584,7 @@ export class AutomatedDistributionService {
             if (vault.stake_registered) {
               this.logger.log(`Stake credential already marked as registered for vault ${vaultId}`);
               this.logger.debug(`Queueing payment transactions for vault ${vaultId}`);
-              await this.queuePaymentTransactions(vaultId);
+              await this.processContributorPayments(vaultId);
             } else {
               const dispatchResult = await this.blockchainService.applyDispatchParameters({
                 vault_policy: this.SC_POLICY_ID,
@@ -609,7 +607,7 @@ export class AutomatedDistributionService {
                   `Stake credential ${stakeResult.alreadyRegistered ? 'was already' : 'has been'} registered for vault ${vaultId}`
                 );
                 this.logger.debug(`Queueing payment transactions for vault ${vaultId}`);
-                await this.queuePaymentTransactions(vaultId);
+                await this.processContributorPayments(vaultId);
               } else {
                 this.logger.error(`Failed to register stake credential for vault ${vaultId}`);
               }
@@ -622,7 +620,7 @@ export class AutomatedDistributionService {
     }
   }
 
-  private async queuePaymentTransactions(vaultId: string): Promise<void> {
+  private async processContributorPayments(vaultId: string): Promise<void> {
     const claims = await this.claimRepository.find({
       where: {
         vault: { id: vaultId },
