@@ -18,15 +18,72 @@ export class CancellationProcessor extends WorkerHost {
     super();
   }
 
-  async process(job: Job<{ claimId: string }, any, string>): Promise<any> {
+  async process(job: Job<{ claimId?: string; claimIds?: string[] }, any, string>): Promise<any> {
     switch (job.name) {
       case 'process-cancellation': {
-        return await this.processCancellationClaim(job);
+        return await this.processCancellationClaim(job as Job<{ claimId: string }>);
+      }
+      case 'process-batch-cancellation': {
+        return await this.processBatchCancellationClaims(job as Job<{ claimIds: string[] }>);
       }
       default: {
         this.logger.warn(`Unknown job name: ${job.name}`);
         throw new Error(`Unknown job name: ${job.name}`);
       }
+    }
+  }
+
+  private async processBatchCancellationClaims(job: Job<{ claimIds: string[] }>): Promise<{
+    success: boolean;
+    claimIds: string[];
+    txHash: string;
+    processedAt: string;
+  }> {
+    const { claimIds } = job.data;
+
+    try {
+      const result = await this.claimsService.buildAndSubmitBatchCancellationTransaction(claimIds);
+
+      if (!result.success) {
+        throw new Error('Failed to build batch cancellation transaction');
+      }
+
+      await job.updateProgress(90);
+
+      if (result.success) {
+        // Update all claims status
+        await Promise.all(claimIds.map(claimId => this.claimsService.updateClaimStatus(claimId, ClaimStatus.CLAIMED)));
+
+        // Release assets for all claims
+        await Promise.all(claimIds.map(claimId => this.assetsService.releaseAssetByClaimId(claimId)));
+
+        await job.updateProgress(100);
+
+        return {
+          success: true,
+          claimIds,
+          txHash: result.txHash,
+          processedAt: new Date().toISOString(),
+        };
+      } else {
+        throw new Error('Failed to submit batch cancellation transaction');
+      }
+    } catch (error) {
+      // Mark all claims as failed after multiple attempts
+      if (job.attemptsMade >= job.opts.attempts) {
+        await Promise.all(
+          claimIds.map(claimId =>
+            this.claimsService.updateClaimStatus(claimId, ClaimStatus.FAILED, {
+              failureReason: error.message,
+              lastAttempt: new Date().toISOString(),
+              totalAttempts: job.attemptsMade,
+            })
+          )
+        );
+        this.logger.error(`Marked claims ${claimIds.join(', ')} as failed after ${job.attemptsMade} attempts`);
+      }
+
+      throw error;
     }
   }
 

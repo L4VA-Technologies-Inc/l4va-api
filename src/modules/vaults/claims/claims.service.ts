@@ -251,132 +251,144 @@ export class ClaimsService {
     }
   }
 
-  async buildAndSubmitCancellationTransaction(claimId: string): Promise<{
+  async buildAndSubmitBatchCancellationTransaction(claimIds: string[]): Promise<{
     txHash: string;
     success: boolean;
+    processedClaims: string[];
   }> {
-    this.logger.debug(`Building cancellation transaction for claim ${claimId}`);
+    if (claimIds.length === 0 || claimIds.length > 3) {
+      throw new BadRequestException('Must provide 1-3 claim IDs for batch processing');
+    }
 
-    const claim = await this.claimRepository.findOne({
-      where: { id: claimId, type: ClaimType.CANCELLATION },
+    this.logger.debug(`Building batch cancellation transaction for claims: ${claimIds.join(', ')}`);
+
+    // Fetch all claims with relations
+    const claims = await this.claimRepository.find({
+      where: {
+        id: In(claimIds),
+        type: ClaimType.CANCELLATION,
+        status: ClaimStatus.AVAILABLE,
+      },
       relations: ['user', 'vault', 'transaction'],
     });
 
-    if (!claim) {
-      throw new NotFoundException('Cancellation claim not found');
+    if (claims.length !== claimIds.length) {
+      throw new NotFoundException('One or more cancellation claims not found or not available');
     }
 
-    if (claim.status !== ClaimStatus.AVAILABLE) {
-      throw new BadRequestException('Cancellation claim is not available');
+    // Validate all claims belong to the same vault
+    const vaultId = claims[0].vault.id;
+    if (!claims.every(claim => claim.vault.id === vaultId)) {
+      throw new BadRequestException('All claims must belong to the same vault');
     }
 
-    const { vault, user, transaction } = claim;
-
-    if (transaction.type !== TransactionType.contribute && transaction.type !== TransactionType.acquire) {
-      throw new BadRequestException('Transaction is not a contribution or acquisition');
-    }
-
+    const vault = claims[0].vault;
     const POLICY_ID = vault.script_hash;
     const lpsUnit = vault.script_hash + '72656365697074';
-    const txUtxos = await this.blockfrost.txsUtxos(transaction.tx_hash);
-    const output = txUtxos.outputs[0];
-    if (!output) {
-      throw new Error('No output found');
-    }
-    const amountOfLpsToClaim = output.amount.find((a: { unit: string; quantity: string }) => a.unit === lpsUnit);
 
-    if (!amountOfLpsToClaim) {
-      throw new Error('No lps to claim.');
-    }
+    const scriptInteractions: any[] = [];
+    const outputs: any[] = [];
+    const mintAssets: any[] = [];
+    let totalReceiptsToburn = 0;
 
-    const datumTag = generate_tag_from_txhash_index(transaction.tx_hash, 0);
+    // Process each claim
+    for (let i = 0; i < claims.length; i++) {
+      const claim = claims[i];
+      const { user, transaction } = claim;
 
-    const refundAssets: any[] = [];
-    let refundLovelace = 0;
-
-    // Process ALL amounts from the original UTXO to build exact refund
-    for (const amount of output.amount) {
-      if (amount.unit === 'lovelace') {
-        refundLovelace = parseInt(amount.quantity);
-      } else if (amount.unit !== lpsUnit) {
-        refundAssets.push({
-          assetName: { name: amount.unit.slice(56), format: 'hex' },
-          policyId: amount.unit.slice(0, 56),
-          quantity: parseInt(amount.quantity),
-        });
+      if (transaction.type !== TransactionType.contribute && transaction.type !== TransactionType.acquire) {
+        throw new BadRequestException(`Transaction ${transaction.id} is not a contribution or acquisition`);
       }
-      // Skip receipt token as it gets burned
+
+      // Get UTXO data for this transaction
+      const txUtxos = await this.blockfrost.txsUtxos(transaction.tx_hash);
+      const output = txUtxos.outputs[0];
+      if (!output) {
+        throw new Error(`No output found for transaction ${transaction.tx_hash}`);
+      }
+
+      const amountOfLpsToClaim = output.amount.find((a: { unit: string; quantity: string }) => a.unit === lpsUnit);
+      if (!amountOfLpsToClaim) {
+        throw new Error(`No LPs to claim for transaction ${transaction.tx_hash}`);
+      }
+
+      // Build refund assets and lovelace for this claim
+      const refundAssets: any[] = [];
+      let refundLovelace = 0;
+
+      for (const amount of output.amount) {
+        if (amount.unit === 'lovelace') {
+          refundLovelace = parseInt(amount.quantity);
+        } else if (amount.unit !== lpsUnit) {
+          refundAssets.push({
+            assetName: { name: amount.unit.slice(56), format: 'hex' },
+            policyId: amount.unit.slice(0, 56),
+            quantity: parseInt(amount.quantity),
+          });
+        }
+      }
+
+      const datumTag = generate_tag_from_txhash_index(transaction.tx_hash, 0);
+
+      // Add script interaction for spending this UTXO
+      scriptInteractions.push({
+        purpose: 'spend',
+        hash: POLICY_ID,
+        outputRef: {
+          txHash: transaction.tx_hash,
+          index: 0,
+        },
+        redeemer: {
+          type: 'json',
+          value: {
+            __variant: 'CancelAsset',
+            __data: {
+              cancel_output_index: i, // Use claim index as output index
+            },
+          } satisfies Redeemer1,
+        },
+      });
+
+      // Add output for this claim's refund
+      outputs.push({
+        address: user.address,
+        assets: refundAssets.length > 0 ? refundAssets : undefined,
+        lovelace: refundLovelace,
+        datum: {
+          type: 'inline',
+          value: PlutusData.new_bytes(Buffer.from(datumTag, 'hex')).to_hex(),
+        },
+      });
+
+      totalReceiptsToburn++;
     }
 
-    const input: {
-      changeAddress: string;
-      message: string;
-      mint?: Array<object>;
-      scriptInteractions: object[];
-      outputs: {
-        address: string;
-        assets?: object[];
-        lovelace?: number;
-        datum?: { type: 'inline'; value: string | Datum; shape?: object };
-      }[];
-      requiredSigners: string[];
-      referenceInputs: { txHash: string; index: number }[];
-      validityInterval: {
-        start: boolean;
-        end: boolean;
-      };
-      network: string;
-    } = {
+    // Add mint script interaction (single one for all burns)
+    scriptInteractions.push({
+      purpose: 'mint',
+      hash: POLICY_ID,
+      redeemer: {
+        type: 'json',
+        value: 'CancelContribution' satisfies Redeemer,
+      },
+    });
+
+    // Add mint instruction to burn all receipts
+    mintAssets.push({
+      version: 'cip25',
+      assetName: { name: 'receipt', format: 'utf8' },
+      policyId: POLICY_ID,
+      type: 'plutus',
+      quantity: -totalReceiptsToburn, // Burn all receipts in one go
+      metadata: {},
+    });
+
+    const input = {
       changeAddress: this.adminAddress,
-      message: `Cancel ${transaction.type === TransactionType.contribute ? 'asset' : 'ADA'} contribution - return assets to contributor`,
-      scriptInteractions: [
-        {
-          purpose: 'spend',
-          hash: POLICY_ID,
-          outputRef: {
-            txHash: transaction.tx_hash,
-            index: 0,
-          },
-          redeemer: {
-            type: 'json',
-            value: {
-              __variant: 'CancelAsset',
-              __data: {
-                cancel_output_index: 0,
-              },
-            } satisfies Redeemer1,
-          },
-        },
-        {
-          purpose: 'mint',
-          hash: POLICY_ID,
-          redeemer: {
-            type: 'json',
-            value: 'CancelContribution' satisfies Redeemer,
-          },
-        },
-      ],
-      mint: [
-        {
-          version: 'cip25',
-          assetName: { name: 'receipt', format: 'utf8' },
-          policyId: POLICY_ID,
-          type: 'plutus',
-          quantity: -1, // Burn the receipt
-          metadata: {},
-        },
-      ],
-      outputs: [
-        {
-          address: user.address,
-          assets: refundAssets.length > 0 ? refundAssets : undefined,
-          lovelace: refundLovelace,
-          datum: {
-            type: 'inline',
-            value: PlutusData.new_bytes(Buffer.from(datumTag, 'hex')).to_hex(),
-          },
-        },
-      ],
+      message: `Batch cancel ${claims.length} claims - return assets to contributors`,
+      scriptInteractions,
+      mint: mintAssets,
+      outputs,
       requiredSigners: [this.adminHash],
       referenceInputs: [
         {
@@ -395,28 +407,52 @@ export class ClaimsService {
     const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
     txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
-    const internalTx = await this.transactionRepository.save({
-      user_id: user.id,
-      vault_id: vault.id,
-      type: TransactionType.cancel,
-      status: TransactionStatus.created,
-    });
+    // Create internal transaction records for each claim
+    const internalTxs = await Promise.all(
+      claims.map(claim =>
+        this.transactionRepository.save({
+          user_id: claim.user.id,
+          vault_id: vault.id,
+          type: TransactionType.cancel,
+          status: TransactionStatus.created,
+        })
+      )
+    );
 
     const response = await this.blockchainService.submitTransaction({
       transaction: txToSubmitOnChain.to_hex(),
     });
 
     if (response.txHash) {
-      await this.transactionRepository.update(
-        { id: internalTx.id },
-        { tx_hash: response.txHash, status: TransactionStatus.confirmed }
+      // Update all internal transactions
+      await Promise.all(
+        internalTxs.map(internalTx =>
+          this.transactionRepository.update(
+            { id: internalTx.id },
+            { tx_hash: response.txHash, status: TransactionStatus.confirmed }
+          )
+        )
       );
+
       return {
         success: true,
         txHash: response.txHash,
+        processedClaims: claimIds,
       };
     }
-    throw new Error('Failed to submit cancellation transaction');
+    throw new Error('Failed to submit batch cancellation transaction');
+  }
+
+  // Keep the original method for backward compatibility and single claim processing
+  async buildAndSubmitCancellationTransaction(claimId: string): Promise<{
+    txHash: string;
+    success: boolean;
+  }> {
+    const result = await this.buildAndSubmitBatchCancellationTransaction([claimId]);
+    return {
+      txHash: result.txHash,
+      success: result.success,
+    };
   }
 
   async buildClaimTransaction(claimId: string): Promise<{
@@ -424,7 +460,9 @@ export class ClaimsService {
     transactionId: string;
     presignedTx: string;
   }> {
-    throw new Error("Claim transaction building is currently disabled. Please use cancellation claims or contact support for alternatives.");
+    throw new Error(
+      'Claim transaction building is currently disabled. Please use cancellation claims or contact support for alternatives.'
+    );
 
     const claim = await this.claimRepository.findOne({
       where: { id: claimId },

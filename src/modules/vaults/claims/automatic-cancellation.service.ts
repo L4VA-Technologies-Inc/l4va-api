@@ -30,44 +30,57 @@ export class AutomaticCancellationService {
 
     try {
       const pendingClaims = await this.claimRepository.find({
-        select: ['id'],
+        select: ['id', 'vault'],
         where: {
           type: ClaimType.CANCELLATION,
           status: ClaimStatus.AVAILABLE,
         },
-        take: 5, // Process in batches
+        relations: ['vault'],
+        take: 12,
       });
 
       if (pendingClaims.length > 0) {
         this.logger.log(`Found ${pendingClaims.length} pending cancellation claims to process`);
       }
 
-      for (let i = 0; i < pendingClaims.length; i++) {
-        const claim = pendingClaims[i];
-
-        // TODO: This logic breaks the flow
-        // const existingJob = await this.cancellationQueue.getJob(`cancellation-${claim.id}`);
-        // if (existingJob && !['completed', 'failed'].includes(existingJob.finishedOn ? 'completed' : 'active')) {
-        //   this.logger.log(`Job for claim ${claim.id} already exists, skipping...`);
-        //   continue;
-        // }
-
-        await this.cancellationQueue.add(
-          'process-cancellation',
-          { claimId: claim.id },
-          {
-            // jobId: `cancellation-${claim.id}`,
-            delay: i * 10000,
-            attempts: 2,
-            backoff: {
-              type: 'exponential',
-              delay: 10000,
-              jitter: 0.3,
-            },
-            removeOnComplete: 4,
-            removeOnFail: 4,
+      // Group claims by vault
+      const claimsByVault = pendingClaims.reduce(
+        (groups, claim) => {
+          const vaultId = claim.vault.id;
+          if (!groups[vaultId]) {
+            groups[vaultId] = [];
           }
-        );
+          groups[vaultId].push(claim);
+          return groups;
+        },
+        {} as Record<string, typeof pendingClaims>
+      );
+
+      let jobIndex = 0;
+      for (const [_vaultId, vaultClaims] of Object.entries(claimsByVault)) {
+        // Process in batches of up to 3 claims per vault
+        for (let i = 0; i < vaultClaims.length; i += 3) {
+          const batch = vaultClaims.slice(i, i + 3);
+          const claimIds = batch.map(claim => claim.id);
+
+          await this.cancellationQueue.add(
+            'process-batch-cancellation',
+            { claimIds },
+            {
+              delay: jobIndex * 15000, // Increased delay for batch processing
+              attempts: 2,
+              backoff: {
+                type: 'exponential',
+                delay: 15000,
+                jitter: 0.3,
+              },
+              removeOnComplete: 4,
+              removeOnFail: 4,
+            }
+          );
+
+          jobIndex++;
+        }
       }
     } finally {
       this.isProcessing = false;
