@@ -58,7 +58,7 @@ import { NotificationModule } from '@/modules/notification/notification.module';
       throttlers: [
         {
           ttl: 60000,
-          limit: 50,
+          limit: 150,
         },
       ],
     }),
