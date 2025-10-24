@@ -61,7 +61,7 @@ export interface TransactionSubmitResponse {
 @Injectable()
 export class VaultInsertingService {
   private readonly logger = new Logger(VaultInsertingService.name);
-  private readonly FLAT_FEE = 2_000_000; // Flat fee in lovelace
+  private readonly FLAT_FEE = 4_000_000; // Flat fee in lovelace
   private readonly adminAddress: string;
   private readonly adminHash: string;
   private readonly adminSKey: string;
