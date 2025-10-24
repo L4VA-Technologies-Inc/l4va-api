@@ -233,8 +233,8 @@ export class NotificationEventsListener {
   }): Promise<void> {
     await this.notificationService.sendBulkNotification(
       {
-        title: 'Distribution Claim Available',
-        description: `You have a new token distribution claim available from vault ${event.vaultName}. Claim your tokens now!`,
+        title: 'Token Distribution in Progress',
+        description: `Your tokens from vault ${event.vaultName} will be credited automatically to the wallet used for the transaction.`,
         vaultId: event.vaultId,
         vaultName: event.vaultName,
       },
