@@ -15,6 +15,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, Not, IsNull, MoreThan } from 'typeorm';
 
+import { GovernanceService } from '../vaults/phase-management/governance/governance.service';
 import { AssetsService } from '../vaults/processing-tx/assets/assets.service';
 import { BlockchainService } from '../vaults/processing-tx/onchain/blockchain.service';
 import { generate_tag_from_txhash_index } from '../vaults/processing-tx/onchain/utils/lib';
@@ -621,6 +622,8 @@ export class AutomatedDistributionService {
           network: 'preprod',
         };
 
+        this.logger.debug(input);
+
         const buildResponse = await this.blockchainService.buildTransaction(input);
         const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
         txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
@@ -667,7 +670,6 @@ export class AutomatedDistributionService {
       }
     }
   }
-
   private async checkExtractionsAndTriggerPayments(): Promise<void> {
     // Find confirmed extraction transactions
     const confirmedExtractions = await this.transactionRepository.find({
@@ -695,7 +697,7 @@ export class AutomatedDistributionService {
     // Process each vault's extractions
     for (const [vaultId, transactions] of Object.entries(vaultGroups)) {
       try {
-        // Mark transactions as processed
+        // Mark transactions as processed (they're already confirmed, this is just for tracking)
         await this.transactionRepository.update(
           { id: In(transactions.map(tx => tx.id)) },
           { status: TransactionStatus.confirmed }
@@ -706,11 +708,20 @@ export class AutomatedDistributionService {
           where: {
             vault_id: vaultId,
             type: TransactionType.extractDispatch,
-            status: Not(TransactionStatus.confirmed),
+            status: Not(In([TransactionStatus.confirmed, TransactionStatus.failed])),
           },
         });
 
-        if (pendingExtractions === 0) {
+        // Also check if there are any remaining claims that need processing
+        const remainingClaims = await this.claimRepository.count({
+          where: {
+            vault: { id: vaultId },
+            type: ClaimType.ACQUIRER,
+            status: ClaimStatus.PENDING,
+          },
+        });
+
+        if (pendingExtractions === 0 && remainingClaims === 0) {
           this.logger.log(`All extractions complete for vault ${vaultId}`);
 
           // Get vault details
@@ -751,6 +762,10 @@ export class AutomatedDistributionService {
               }
             }
           }
+        } else {
+          this.logger.debug(
+            `Vault ${vaultId} still has ${pendingExtractions} pending extractions and ${remainingClaims} remaining claims`
+          );
         }
       } catch (error) {
         this.logger.error(`Error processing extractions for vault ${vaultId}:`, error);
@@ -769,6 +784,31 @@ export class AutomatedDistributionService {
     });
 
     if (claims.length === 0) {
+      // Before marking as processed, double-check that there are no failed acquirer claims
+      const failedAcquirerClaims = await this.claimRepository.count({
+        where: {
+          vault: { id: vaultId },
+          type: ClaimType.ACQUIRER,
+          status: ClaimStatus.FAILED,
+        },
+      });
+
+      if (failedAcquirerClaims > 0) {
+        this.logger.warn(
+          `Vault ${vaultId} has ${failedAcquirerClaims} failed acquirer claims. NOT marking as processed.`
+        );
+
+        // Reset distribution flags so it can be retried
+        await this.vaultRepository.update(
+          { id: vaultId },
+          {
+            distribution_in_progress: false,
+            distribution_processed: false,
+          }
+        );
+        return;
+      }
+
       this.logger.log(`No contributor claims for payment in vault ${vaultId}. Marking vault as processed.`);
       await this.vaultRepository.update(
         { id: vaultId },
@@ -1093,13 +1133,34 @@ export class AutomatedDistributionService {
     }
 
     // Mark vault as processed after all payments are queued
-    await this.vaultRepository.update(
-      { id: vaultId },
-      {
-        distribution_in_progress: false,
-        distribution_processed: true,
-      }
-    );
+    const allFailedClaims = await this.claimRepository.count({
+      where: {
+        vault: { id: vaultId },
+        status: ClaimStatus.FAILED,
+      },
+    });
+
+    if (allFailedClaims > 0) {
+      this.logger.warn(`Vault ${vaultId} has ${allFailedClaims} failed claims total. NOT marking as fully processed.`);
+
+      // Only mark extraction as done, but not fully processed
+      await this.vaultRepository.update(
+        { id: vaultId },
+        {
+          distribution_in_progress: false,
+          // Don't set distribution_processed to true if there are failed claims
+        }
+      );
+    } else {
+      // Mark vault as processed after all payments are queued
+      await this.vaultRepository.update(
+        { id: vaultId },
+        {
+          distribution_in_progress: false,
+          distribution_processed: true,
+        }
+      );
+    }
   }
 
   // Helper methods
