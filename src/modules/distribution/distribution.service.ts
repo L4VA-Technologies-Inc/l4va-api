@@ -41,24 +41,30 @@ export class DistributionService {
     };
   }
 
-  calculateContributorTokens(params: {
+  calculateContributorTokens({
+    txContributedValue,
+    userTotalValue,
+    totalTvl,
+    lpVtAmount,
+    totalAcquiredAda,
+    lpAdaAmount,
+    vtSupply,
+    ASSETS_OFFERED_PERCENT,
+  }: {
     txContributedValue: number;
     userTotalValue: number;
     totalTvl: number;
     lpVtAmount: number;
     lpAdaAmount: number;
-    vtPrice: number;
     vtSupply: number;
     ASSETS_OFFERED_PERCENT: number;
+    totalAcquiredAda: number;
   }): {
     vtAmount: number;
     adaAmount: number;
     proportionOfUserTotal: number;
     userTotalVtTokens: number;
   } {
-    const { txContributedValue, userTotalValue, totalTvl, lpVtAmount, vtPrice, vtSupply, ASSETS_OFFERED_PERCENT } =
-      params;
-
     // Calculate proportion of this transaction within user's total contribution
     const proportionOfUserTotal = userTotalValue > 0 ? txContributedValue / userTotalValue : 0;
 
@@ -68,7 +74,10 @@ export class DistributionService {
 
     // Calculate VT tokens for this specific transaction
     const vtAmount = userTotalVtTokens * proportionOfUserTotal;
-    const adaAmount = this.round15(vtAmount * vtPrice);
+
+    const adaForContributors = totalAcquiredAda - lpAdaAmount;
+    const userAdaShare = contributorShare * adaForContributors;
+    const adaAmount = userAdaShare * proportionOfUserTotal;
 
     return {
       vtAmount: Math.floor(vtAmount),

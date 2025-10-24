@@ -560,10 +560,10 @@ export class LifecycleService {
             const contributorResult = this.distributionService.calculateContributorTokens({
               txContributedValue: txValueAda,
               userTotalValue,
+              totalAcquiredAda,
               totalTvl: totalContributedValueAda,
               lpAdaAmount,
               lpVtAmount,
-              vtPrice,
               vtSupply,
               ASSETS_OFFERED_PERCENT,
             });
