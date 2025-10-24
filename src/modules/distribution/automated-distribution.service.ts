@@ -180,12 +180,77 @@ export class AutomatedDistributionService {
 
     this.logger.log(`Found ${claims.length} acquirer claims to extract for vault ${vaultId}`);
 
-    const batchSize = 6; // TODO: TEST BATCH SIZE
+    // If no acquirer claims, check for contributor claims
+    if (claims.length === 0) {
+      const contributorClaims = await this.claimRepository.count({
+        where: {
+          vault: { id: vaultId },
+          type: ClaimType.CONTRIBUTOR,
+          status: ClaimStatus.PENDING,
+        },
+      });
+
+      // If no pending claims at all, mark vault as processed
+      if (contributorClaims === 0) {
+        this.logger.log(`No pending claims found for vault ${vaultId}. Marking as processed.`);
+        await this.vaultRepository.update(
+          { id: vaultId },
+          {
+            distribution_in_progress: false,
+            distribution_processed: true,
+          }
+        );
+        return;
+      }
+
+      // If there are contributor claims but no acquirer claims, proceed to payment phase
+      this.logger.log(
+        `No acquirer claims for vault ${vaultId}, but ${contributorClaims} contributor claims pending. Proceeding to payment phase.`
+      );
+
+      // Get vault details for stake registration check
+      const vaultWithStake = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        select: ['id', 'script_hash', 'asset_vault_name', 'stake_registered'],
+      });
+
+      if (vaultWithStake) {
+        // Check if stake is already registered
+        if (vaultWithStake.stake_registered) {
+          this.logger.log(`Stake credential already registered for vault ${vaultId}. Proceeding to payments.`);
+          await this.queuePaymentTransactions(vaultId);
+        } else {
+          const dispatchResult = await this.blockchainService.applyDispatchParameters({
+            vault_policy: this.SC_POLICY_ID,
+            vault_id: vaultWithStake.asset_vault_name,
+            contribution_script_hash: vaultWithStake.script_hash,
+          });
+
+          const stakeResult = await this.blockchainService.registerScriptStake(dispatchResult.parameterizedHash);
+
+          if (stakeResult.success) {
+            await this.vaultRepository.update({ id: vaultId }, { stake_registered: true });
+
+            if (!stakeResult.alreadyRegistered) {
+              await new Promise(resolve => setTimeout(resolve, 50000));
+            }
+
+            this.logger.log(`Stake credential registered for vault ${vaultId}. Proceeding to payments.`);
+            await this.queuePaymentTransactions(vaultId);
+          } else {
+            this.logger.error(`Failed to register stake credential for vault ${vaultId}`);
+          }
+        }
+      }
+      return;
+    }
+
+    // Process acquirer claims as usual
+    const batchSize = 6;
     for (let i = 0; i < claims.length; i += batchSize) {
       const batchClaims = claims.slice(i, i + batchSize);
       await this.processBatchExtraction(vault, batchClaims, vaultId);
 
-      // Add delay between batches
       if (i + batchSize < claims.length) {
         await new Promise(resolve => setTimeout(resolve, 30000));
       }
@@ -567,7 +632,17 @@ export class AutomatedDistributionService {
       relations: ['transaction', 'user'],
     });
 
-    if (claims.length === 0) return;
+    if (claims.length === 0) {
+      this.logger.log(`No contributor claims for payment in vault ${vaultId}. Marking vault as processed.`);
+      await this.vaultRepository.update(
+        { id: vaultId },
+        {
+          distribution_in_progress: false,
+          distribution_processed: true,
+        }
+      );
+      return;
+    }
 
     this.logger.log(`Found ${claims.length} contributor claims for payment in vault ${vaultId}`);
 
