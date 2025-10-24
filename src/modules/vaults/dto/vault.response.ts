@@ -209,6 +209,13 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   maxContributeAssets: number;
 
+  @ApiProperty({ description: 'Fdv in ADA value' })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'fdvAda' },
+  })
+  fdvAda: number;
+
   @ApiProperty({ description: 'Required values cost for success acquire phase in usd' })
   @DtoRepresent({
     transform: false,

@@ -926,6 +926,8 @@ export class VaultsService {
     const lockedAssetsCount = lockedNFTCount + lockedFTsCount;
     const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(vaultId);
 
+    const adaPrice = await this.taptoolsService.getAdaPrice();
+
     const additionalData = {
       maxContributeAssets: Number(vault.max_contribute_assets),
       requireReservedCostUsd:
@@ -934,6 +936,7 @@ export class VaultsService {
         assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01),
       assetsCount: lockedAssetsCount,
       assetsPrices,
+      fdvAda: vault.fdv * adaPrice,
     };
 
     let canCreateProposal = false;
