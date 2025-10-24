@@ -165,7 +165,7 @@ export class AutomatedDistributionService {
 
     this.logger.log(`Found ${claims.length} acquirer claims to extract for vault ${vaultId}`);
 
-    const batchSize = 10; // TODO: TEST BATCH SIZE
+    const batchSize = 6; // TODO: TEST BATCH SIZE
     for (let i = 0; i < claims.length; i += batchSize) {
       const batchClaims = claims.slice(i, i + batchSize);
       await this.processBatchExtraction(vault, batchClaims, vaultId);
