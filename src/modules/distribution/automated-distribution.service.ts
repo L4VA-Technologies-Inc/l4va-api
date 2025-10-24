@@ -7,6 +7,7 @@ import {
   Credential,
   FixedTransaction,
   PrivateKey,
+  Transaction as CardanoTransaction,
 } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -74,6 +75,7 @@ export class AutomatedDistributionService {
   private readonly adminHash: string;
   private readonly SC_POLICY_ID: string;
   private readonly adminSKey: string;
+  private readonly MAX_TX_SIZE = 15800;
   private readonly adminAddress: string;
   private readonly unparametizedDispatchHash: string;
   private readonly blockfrost: BlockFrostAPI;
@@ -163,7 +165,7 @@ export class AutomatedDistributionService {
 
     this.logger.log(`Found ${claims.length} acquirer claims to extract for vault ${vaultId}`);
 
-    const batchSize = 5; // TODO: TEST AMOUNT
+    const batchSize = 10; // TODO: TEST BATCH SIZE
     for (let i = 0; i < claims.length; i += batchSize) {
       const batchClaims = claims.slice(i, i + batchSize);
       await this.processBatchExtraction(vault, batchClaims, vaultId);
@@ -343,11 +345,46 @@ export class AutomatedDistributionService {
       network: 'preprod',
     };
 
-    this.logger.debug(`Batch extraction transaction for ${claims.length} claims:`);
-    this.logger.debug(JSON.stringify(input));
-
     try {
       const buildResponse = await this.blockchainService.buildTransaction(input);
+
+      // Get official transaction size using Cardano serialization lib
+      const actualTxSize = this.getTransactionSize(buildResponse.complete);
+
+      this.logger.debug(`Official transaction size: ${actualTxSize} bytes (${(actualTxSize / 1024).toFixed(2)} KB)`);
+
+      if (actualTxSize > this.MAX_TX_SIZE) {
+        this.logger.warn(`Transaction size ${actualTxSize} bytes exceeds Cardano limit of ${this.MAX_TX_SIZE} bytes`);
+
+        // If batch has only 1 claim and still too large, mark as failed
+        if (claims.length === 1) {
+          this.logger.error(`Single claim ${claims[0].id} creates oversized transaction. Marking as failed.`);
+          await this.claimRepository.update({ id: claims[0].id }, { status: ClaimStatus.FAILED });
+          await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
+          return;
+        }
+
+        // Split batch and retry with smaller batches
+        const midpoint = Math.floor(claims.length / 2);
+        const firstHalf = claims.slice(0, midpoint);
+        const secondHalf = claims.slice(midpoint);
+
+        this.logger.log(
+          `Splitting batch of ${claims.length} into batches of ${firstHalf.length} and ${secondHalf.length}`
+        );
+
+        await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed }); // Mark current transaction as failed since we're splitting
+
+        if (firstHalf.length > 0) {
+          await this.processBatchExtraction(vault, firstHalf, vaultId);
+        }
+        if (secondHalf.length > 0) {
+          await new Promise(resolve => setTimeout(resolve, 30000));
+          await this.processBatchExtraction(vault, secondHalf, vaultId);
+        }
+
+        return;
+      }
 
       const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
       txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
@@ -378,10 +415,36 @@ export class AutomatedDistributionService {
     } catch (error) {
       this.logger.error(`Failed to submit batch extraction transaction:`, error);
 
-      // Mark transaction as failed
-      await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
+      // Check if error is related to transaction size
+      if (
+        error.message?.toLowerCase().includes('too large') ||
+        error.message?.toLowerCase().includes('size') ||
+        error.message?.toLowerCase().includes('exceeded')
+      ) {
+        this.logger.warn(`Size-related error detected. Splitting batch of ${claims.length} claims.`);
 
-      // Optionally mark individual claims as failed or leave them for retry
+        if (claims.length === 1) {
+          await this.claimRepository.update({ id: claims[0].id }, { status: ClaimStatus.FAILED });
+        } else {
+          const midpoint = Math.floor(claims.length / 2);
+          const firstHalf = claims.slice(0, midpoint);
+          const secondHalf = claims.slice(midpoint);
+
+          await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
+
+          if (firstHalf.length > 0) {
+            await this.processBatchExtraction(vault, firstHalf, vaultId);
+          }
+          if (secondHalf.length > 0) {
+            await new Promise(resolve => setTimeout(resolve, 30000));
+            await this.processBatchExtraction(vault, secondHalf, vaultId);
+          }
+          return;
+        }
+      }
+
+      // Mark transaction as failed for non-size related errors
+      await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
       await new Promise(resolve => setTimeout(resolve, 30000));
     }
   }
@@ -805,5 +868,10 @@ export class AutomatedDistributionService {
     }
 
     return user.address;
+  }
+
+  private getTransactionSize(txHex: string): number {
+    const tx = CardanoTransaction.from_bytes(Buffer.from(txHex, 'hex'));
+    return tx.to_bytes().length;
   }
 }
