@@ -13,10 +13,6 @@ import {
   BlockchainTransactionListItem,
 } from '../../../../types/blockchain.types';
 
-const DEFAULT_MAX_RETRIES = 5;
-const DEFAULT_INITIAL_DELAY_MS = 2000; // 2 seconds
-const DEFAULT_MAX_DELAY_MS = 30000; // 30 seconds
-
 @Injectable()
 export class BlockchainScannerService {
   private readonly logger = new Logger(BlockchainScannerService.name);
@@ -73,7 +69,7 @@ export class BlockchainScannerService {
 
   async registerTrackingAddress(vaultAddress: string = '', vaultName: string): Promise<any> {
     let retries = 0;
-    const maxRetries = 5;
+    const maxRetries = 4;
     const retryDelay = 15000;
 
     while (retries < maxRetries) {

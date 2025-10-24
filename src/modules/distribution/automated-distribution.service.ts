@@ -69,6 +69,21 @@ interface PayAdaContributionInput {
   preloadedScripts?: any;
 }
 
+interface AddressesUtxo {
+  address: string;
+  tx_hash: string;
+  tx_index: number;
+  output_index: number;
+  amount: {
+    unit: string;
+    quantity: string;
+  }[];
+  block: string;
+  data_hash: string;
+  inline_datum: string;
+  reference_script_hash: string;
+}
+
 @Injectable()
 export class AutomatedDistributionService {
   private readonly logger = new Logger(AutomatedDistributionService.name);
@@ -413,6 +428,7 @@ export class AutomatedDistributionService {
       // Add delay after successful batch
       await new Promise(resolve => setTimeout(resolve, 30000));
     } catch (error) {
+      this.logger.warn(JSON.stringify(input));
       this.logger.error(`Failed to submit batch extraction transaction:`, error);
 
       // Check if error is related to transaction size
@@ -632,43 +648,66 @@ export class AutomatedDistributionService {
           throw new Error('No contribution output found');
         }
 
+        // Check if this output has been consumed
+        if (contribOutput.consumed_by_tx) {
+          this.logger.warn(
+            `Contribution UTXO ${originalTx.tx_hash}#0 already consumed by transaction ${contribOutput.consumed_by_tx}. Marking claim ${claim.id} as failed.`
+          );
+
+          // Mark claim as failed
+          await this.claimRepository.update(
+            { id: claim.id },
+            {
+              status: ClaimStatus.FAILED,
+              metadata: {
+                ...claim.metadata,
+                failureReason: 'UTXO_ALREADY_SPENT',
+                consumedByTx: contribOutput.consumed_by_tx,
+                failedAt: new Date().toISOString(),
+              } as any,
+            }
+          );
+
+          // Mark transaction as failed
+          await this.transactionRepository.update(
+            { id: transaction.id },
+            {
+              status: TransactionStatus.failed,
+              metadata: {
+                ...transaction.metadata,
+                failureReason: 'UTXO_ALREADY_SPENT',
+                consumedByTx: contribOutput.consumed_by_tx,
+              } as any,
+            }
+          );
+
+          this.logger.log(`Claim ${claim.id} marked as failed due to spent UTXO`);
+          continue; // Skip to next claim
+        }
+
         // Find a suitable UTXO at dispatch address with enough ADA
         const dispatchUtxos = await this.blockfrost.addressesUtxos(DISPATCH_ADDRESS);
-
         if (!dispatchUtxos || dispatchUtxos.length === 0) {
           throw new Error('No UTXOs found at dispatch address');
         }
 
         // Calculate total lovelace available in dispatch address
-        const minRequired = adaAmount + 3_000_000; // Payment + minimum ADA
-        let suitableUtxo = null;
+        const minRequired = adaAmount + 1_000_000; // Payment + minimum ADA
+        const { selectedUtxos, totalAmount } = this.selectDispatchUtxos(dispatchUtxos, minRequired);
 
-        for (const utxo of dispatchUtxos) {
-          const utxoLovelace = parseInt(utxo.amount.find(a => a.unit === 'lovelace')?.quantity || '0');
-
-          if (utxoLovelace >= minRequired) {
-            suitableUtxo = {
-              tx_hash: utxo.tx_hash,
-              output_index: utxo.output_index,
-              amount: utxoLovelace.toString(),
-            };
-            break;
-          }
-        }
-
-        if (!suitableUtxo) {
+        if (selectedUtxos.length === 0 || totalAmount < minRequired) {
           throw new Error(
-            `No dispatch UTXO found with sufficient ADA. Need at least ${minRequired} lovelace in a single UTxO`
+            `Insufficient ADA at dispatch address. Need ${minRequired} lovelace, but only ${totalAmount} available across all UTXOs`
           );
         }
 
-        const actualRemainingDispatchLovelace = parseInt(suitableUtxo.amount) - adaAmount;
+        const actualRemainingDispatchLovelace = totalAmount - adaAmount;
 
         // Validate the balance equation
-        const balanceValid = parseInt(suitableUtxo.amount) >= actualRemainingDispatchLovelace + adaAmount;
+        const balanceValid = totalAmount >= actualRemainingDispatchLovelace + adaAmount;
         if (!balanceValid) {
           throw new Error(
-            `Balance equation invalid: ${suitableUtxo.amount} < ${actualRemainingDispatchLovelace} + ${adaAmount}`
+            `Balance equation invalid: ${totalAmount} < ${actualRemainingDispatchLovelace} + ${adaAmount}`
           );
         }
 
@@ -684,18 +723,18 @@ export class AutomatedDistributionService {
           message: `Pay ADA to contributor for claim ${claim.id}`,
           preloadedScripts: [dispatchResult.fullResponse.preloadedScript],
           scriptInteractions: [
-            {
+            ...selectedUtxos.map(utxo => ({
               purpose: 'spend',
               hash: PARAMETERIZED_DISPATCH_HASH,
               outputRef: {
-                txHash: suitableUtxo.tx_hash,
-                index: suitableUtxo.output_index,
+                txHash: utxo.tx_hash,
+                index: utxo.output_index,
               },
               redeemer: {
                 type: 'json',
                 value: null,
               },
-            },
+            })),
             {
               purpose: 'withdraw',
               hash: PARAMETERIZED_DISPATCH_HASH,
@@ -828,6 +867,9 @@ export class AutomatedDistributionService {
           this.logger.log(`Payment transaction ${response.txHash} submitted for claim ${claim.id}`);
           await new Promise(resolve => setTimeout(resolve, 60000));
         } catch (error) {
+          const trimmedInput = { ...input };
+          delete trimmedInput.preloadedScripts;
+          this.logger.warn(JSON.stringify(trimmedInput));
           this.logger.error(`Failed to submit payment transaction:`, error);
           await this.transactionRepository.update({ id: transaction.id }, { status: TransactionStatus.failed }); // Mark transaction as failed
           await new Promise(resolve => setTimeout(resolve, 60000));
@@ -850,6 +892,35 @@ export class AutomatedDistributionService {
   }
 
   // Helper methods
+  private selectDispatchUtxos(
+    dispatchUtxos: AddressesUtxo[],
+    requiredAmount: number
+  ): {
+    selectedUtxos: AddressesUtxo[];
+    totalAmount: number;
+  } {
+    // Sort UTXOs by amount (largest first for efficiency)
+    const sortedUtxos = dispatchUtxos.sort((a, b) => {
+      const amountA = parseInt(a.amount.find(u => u.unit === 'lovelace')?.quantity || '0');
+      const amountB = parseInt(b.amount.find(u => u.unit === 'lovelace')?.quantity || '0');
+      return amountB - amountA;
+    });
+
+    const selectedUtxos = [];
+    let totalAmount = 0;
+
+    for (const utxo of sortedUtxos) {
+      const utxoAmount = parseInt(utxo.amount.find(u => u.unit === 'lovelace')?.quantity || '0');
+      selectedUtxos.push(utxo);
+      totalAmount += utxoAmount;
+
+      if (totalAmount >= requiredAmount) {
+        break;
+      }
+    }
+
+    return { selectedUtxos, totalAmount };
+  }
 
   private getDispatchAddress(scriptHash: string): string {
     return EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(scriptHash)))
