@@ -374,23 +374,21 @@ export class VaultsService {
 
       await Promise.all(
         uniquePolicyIds.map(async assetItem => {
-          if (assetItem.policyId) {
-            const exists = await this.assetsWhitelistRepository.findOne({
-              where: { vault: newVault, policy_id: assetItem.policyId },
-            });
-            if (!exists) {
-              // Sum up the countCapMax values
-              if (assetItem.countCapMax) {
-                maxCountOf += assetItem.countCapMax;
-              }
-
-              return this.assetsWhitelistRepository.save({
-                vault: newVault,
-                policy_id: assetItem.policyId,
-                asset_count_cap_min: assetItem.countCapMin,
-                asset_count_cap_max: assetItem.countCapMax,
-              });
-            }
+          if (!assetItem.policyId) return;
+      
+          const result = await this.assetsWhitelistRepository.createQueryBuilder()
+            .insert()
+            .values({
+              vault: newVault,
+              policy_id: assetItem.policyId,
+              asset_count_cap_min: assetItem.countCapMin,
+              asset_count_cap_max: assetItem.countCapMax,
+            })
+            .orIgnore()
+            .execute();
+      
+          if (result.identifiers.length > 0 && assetItem.countCapMax) {
+            maxCountOf += assetItem.countCapMax;
           }
         })
       );
