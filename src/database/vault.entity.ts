@@ -503,13 +503,22 @@ export class Vault {
   })
   last_update_tx_index?: number;
 
-  @Expose({ name: 'dispatchUtxoTxHash' })
+  @Expose({ name: 'dispatchParametizedHash' })
   @Column({
-    name: 'dispatch_utxo_tx_hash',
+    name: 'dispatch_parametized_hash',
     type: 'varchar',
     nullable: true,
   })
-  dispatch_utxo_tx_hash?: string;
+  dispatch_parametized_hash?: string;
+
+  @Exclude()
+  @Column({
+    name: 'dispatch_preloaded_script',
+    type: 'jsonb',
+    nullable: true,
+    default: () => 'null',
+  })
+  dispatch_preloaded_script?: ApplyParamsResult;
 
   @Expose({ name: 'vaultPolicyId' })
   @Column({

@@ -1,10 +1,8 @@
-import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Queue } from 'bullmq';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 
 import { ClaimsService } from '../../claims/claims.service';
 
@@ -33,10 +31,9 @@ import {
 @Injectable()
 export class LifecycleService {
   private readonly logger = new Logger(LifecycleService.name);
+  private readonly processingVaults = new Set<string>(); // Track vaults currently being processed
 
   constructor(
-    @InjectQueue('phaseTransition')
-    private readonly phaseTransitionQueue: Queue,
     @InjectRepository(Asset)
     private readonly assetsRepository: Repository<Asset>,
     @InjectRepository(Transaction)
@@ -310,6 +307,17 @@ export class LifecycleService {
 
   private async executeAcquireToGovernanceTransition(vault: Vault): Promise<void> {
     try {
+      // Double-check vault status to prevent race conditions
+      const currentVault = await this.vaultRepository.findOne({
+        where: { id: vault.id },
+        select: ['id', 'vault_status'],
+      });
+
+      if (!currentVault || currentVault.vault_status !== VaultStatus.acquire) {
+        this.logger.log(`Vault ${vault.id} is no longer in acquire status, skipping transition`);
+        return;
+      }
+
       // Sync transactions one more time
       await this.contributionService.syncContributionTransactions(vault.id);
 
@@ -652,6 +660,8 @@ export class LifecycleService {
           fdvTvl: +(fdv / totalContributedValueAda).toFixed(2) || 0,
         });
 
+        await new Promise(resolve => setTimeout(resolve, 20000)); // Wait until tx confirms
+
         try {
           this.eventEmitter.emit('distribution.claim_available', {
             vaultId: vault.id,
@@ -706,6 +716,8 @@ export class LifecycleService {
           newScStatus: SmartContractVaultStatus.CANCELLED,
           txHash: data.txHash,
         });
+
+        await new Promise(resolve => setTimeout(resolve, 20000)); // Wait until tx confirms
 
         try {
           this.eventEmitter.emit('vault.failed', {
@@ -898,6 +910,12 @@ export class LifecycleService {
     const now = new Date();
 
     for (const vault of acquireVaults) {
+      // Skip if vault is already being processed
+      if (this.processingVaults.has(vault.id)) {
+        this.logger.log(`Vault ${vault.id} is already being processed, skipping...`);
+        continue;
+      }
+
       const acquireStart = new Date(vault.acquire_phase_start);
       const acquireDurationMs = Number(vault.acquire_window_duration);
       const acquireEnd = new Date(acquireStart.getTime() + acquireDurationMs);
@@ -909,8 +927,16 @@ export class LifecycleService {
       }
 
       if (now >= acquireEnd) {
-        // Execute the transition immediately since the time has passed
-        await this.executeAcquireToGovernanceTransition(vault);
+        // Mark vault as being processed
+        this.processingVaults.add(vault.id);
+
+        try {
+          // Execute the transition immediately since the time has passed
+          await this.executeAcquireToGovernanceTransition(vault);
+        } finally {
+          // Always remove from processing set, even if there's an error
+          this.processingVaults.delete(vault.id);
+        }
       }
     }
   }

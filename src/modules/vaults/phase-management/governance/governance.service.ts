@@ -32,8 +32,6 @@ import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { VaultStatus } from '@/types/vault.types';
 import { VoteType } from '@/types/vote.types';
 
-const TWO_HOURS = 2 * 60 * 60 * 1000;
-
 /*
         .-""""-.
        / -   -  \
@@ -141,7 +139,10 @@ export class GovernanceService {
           if (index > 0) {
             await new Promise(resolve => setTimeout(resolve, 5000)); //  Add delay between requests to avoid overwhelming BlockFrost
           }
-          const snapshot = await this.createAutomaticSnapshot(vault.id, `${vault.policy_id}${vault.asset_vault_name}`);
+          const snapshot = await this.createAutomaticSnapshot(
+            vault.id,
+            `${vault.script_hash}${vault.asset_vault_name}`
+          );
           return snapshot;
         })
       );
@@ -161,7 +162,7 @@ export class GovernanceService {
    * @param assetId - Concatenation of the policy ID and hex-encoded asset name
    * @returns - List of a addresses containing a specific asset.
    */
-  private async createAutomaticSnapshot(vaultId: string, assetId: string): Promise<Snapshot> {
+  async createAutomaticSnapshot(vaultId: string, assetId: string): Promise<Snapshot> {
     this.logger.log(`Creating automatic snapshot for vault ${vaultId} with asset ${assetId}`);
 
     try {
@@ -270,14 +271,10 @@ export class GovernanceService {
       throw new BadRequestException('Governance is only available for locked vaults');
     }
 
-    let latestSnapshot = await this.snapshotRepository.findOne({
+    const latestSnapshot = await this.snapshotRepository.findOne({
       where: { vaultId },
       order: { createdAt: 'DESC' },
     });
-
-    if (!latestSnapshot || new Date().getTime() - new Date(latestSnapshot.createdAt).getTime() > TWO_HOURS) {
-      latestSnapshot = await this.createAutomaticSnapshot(vaultId, `${vault.policy_id}${vault.asset_vault_name}`);
-    }
 
     await this.getVotingPower(vaultId, userId, 'create_proposal');
 

@@ -17,7 +17,7 @@ import { Repository, In, Not, IsNull, MoreThan } from 'typeorm';
 
 import { GovernanceService } from '../vaults/phase-management/governance/governance.service';
 import { AssetsService } from '../vaults/processing-tx/assets/assets.service';
-import { BlockchainService } from '../vaults/processing-tx/onchain/blockchain.service';
+import { ApplyParamsResponse, BlockchainService } from '../vaults/processing-tx/onchain/blockchain.service';
 import { generate_tag_from_txhash_index } from '../vaults/processing-tx/onchain/utils/lib';
 
 import { Asset } from '@/database/asset.entity';
@@ -91,7 +91,7 @@ export class AutomatedDistributionService {
   private readonly adminHash: string;
   private readonly SC_POLICY_ID: string;
   private readonly adminSKey: string;
-  private readonly MAX_TX_SIZE = 15800;
+  private readonly MAX_TX_SIZE = 15900;
   private readonly adminAddress: string;
   private readonly unparametizedDispatchHash: string;
   private readonly blockfrost: BlockFrostAPI;
@@ -109,7 +109,8 @@ export class AutomatedDistributionService {
     private readonly assetRepository: Repository<Asset>,
     private readonly configService: ConfigService,
     private readonly blockchainService: BlockchainService,
-    private readonly assetService: AssetsService
+    private readonly assetService: AssetsService,
+    private readonly governanceService: GovernanceService
   ) {
     this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
@@ -121,7 +122,7 @@ export class AutomatedDistributionService {
     });
   }
 
-  @Cron(CronExpression.EVERY_10_MINUTES)
+  @Cron('0 */15 * * * *')
   async processVaultDistributions(): Promise<void> {
     // 1. Find vaults ready for extraction
     await this.processLockedVaultsForDistribution();
@@ -138,6 +139,7 @@ export class AutomatedDistributionService {
         vault_sc_status: SmartContractVaultStatus.SUCCESSFUL,
         last_update_tx_hash: Not(IsNull()),
         distribution_processed: false,
+        // distribution_in_progress: false,
         created_at: MoreThan(new Date('2025-10-22').toISOString()),
       },
       select: ['id'],
@@ -151,7 +153,7 @@ export class AutomatedDistributionService {
 
         await this.processAcquirerExtractions(vault.id); // Queue extraction transactions for acquirer claims
         this.logger.log(`Extraction transactions queued for vault ${vault.id}`);
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        await new Promise(resolve => setTimeout(resolve, 30000));
       } catch (error) {
         this.logger.error(`Error processing vault ${vault.id}:`, error);
       }
@@ -251,17 +253,38 @@ export class AutomatedDistributionService {
       await this.processAcquirerBatch(vault, batchClaims, vaultId);
 
       if (i + batchSize < claims.length) {
-        await new Promise(resolve => setTimeout(resolve, 30000));
+        await new Promise(resolve => setTimeout(resolve, 180000));
       }
     }
   }
 
   private async processAcquirerBatch(vault: Vault, claims: Claim[], vaultId: string): Promise<void> {
-    const dispatchResult = await this.blockchainService.applyDispatchParameters({
-      vault_policy: this.SC_POLICY_ID,
-      vault_id: vault.asset_vault_name,
-      contribution_script_hash: vault.script_hash,
-    });
+    let dispatchResult: {
+      parameterizedHash: string;
+      fullResponse: ApplyParamsResponse;
+    };
+
+    if (!vault.dispatch_parametized_hash) {
+      dispatchResult = await this.blockchainService.applyDispatchParameters({
+        vault_policy: this.SC_POLICY_ID,
+        vault_id: vault.asset_vault_name,
+        contribution_script_hash: vault.script_hash,
+      });
+
+      await this.vaultRepository.update(
+        { id: vaultId },
+        {
+          dispatch_parametized_hash: dispatchResult.parameterizedHash,
+          dispatch_preloaded_script: dispatchResult.fullResponse,
+          stake_registered: true,
+        }
+      );
+    } else {
+      dispatchResult = {
+        parameterizedHash: vault.dispatch_parametized_hash,
+        fullResponse: vault.dispatch_preloaded_script,
+      };
+    }
 
     // Create a single extraction transaction record for the batch
     const extractionTx = await this.transactionRepository.save({
@@ -279,7 +302,7 @@ export class AutomatedDistributionService {
 
     try {
       // Try batch processing first
-      await this.processBatchExtraction(vault, claims, dispatchResult, extractionTx);
+      await this.processBatchExtraction(vault, claims, extractionTx, dispatchResult.parameterizedHash);
     } catch (error) {
       this.logger.warn(`Batch extraction failed for ${claims.length} claims: ${error.message}`);
       this.logger.log(`Falling back to individual claim processing for vault ${vaultId}`);
@@ -288,17 +311,17 @@ export class AutomatedDistributionService {
       await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
 
       // Process each claim individually
-      await this.processClaimsIndividually(vault, claims, vaultId, dispatchResult);
+      await this.processClaimsIndividually(vault, claims, vaultId, dispatchResult.parameterizedHash);
     }
   }
 
   private async processBatchExtraction(
     vault: Vault,
     claims: Claim[],
-    dispatchResult: any,
-    extractionTx: Transaction
+    extractionTx: Transaction,
+    dispatchParametizedHash: string
   ): Promise<void> {
-    const DISPATCH_ADDRESS = this.getDispatchAddress(dispatchResult.parameterizedHash);
+    const DISPATCH_ADDRESS = this.getDispatchAddress(dispatchParametizedHash);
     const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(vault.script_hash)))
       .to_address()
       .to_bech32();
@@ -427,7 +450,7 @@ export class AutomatedDistributionService {
 
     const input: ExtractInput = {
       changeAddress: this.adminAddress,
-      message: `Extract ADA for ${claims.length} claims (batch)`,
+      message: `Extract ADA for ${claims.length} claims`,
       scriptInteractions,
       mint: mintAssets,
       outputs,
@@ -447,9 +470,8 @@ export class AutomatedDistributionService {
 
     const buildResponse = await this.blockchainService.buildTransaction(input);
 
-    // Get official transaction size using Cardano serialization lib
     const actualTxSize = this.getTransactionSize(buildResponse.complete);
-    this.logger.debug(`Official transaction size: ${actualTxSize} bytes (${(actualTxSize / 1024).toFixed(2)} KB)`);
+    this.logger.debug(`Transaction size: ${actualTxSize} bytes (${(actualTxSize / 1024).toFixed(2)} KB)`);
 
     if (actualTxSize > this.MAX_TX_SIZE) {
       throw new Error(`Transaction size ${actualTxSize} bytes exceeds Cardano limit of ${this.MAX_TX_SIZE} bytes`);
@@ -484,15 +506,18 @@ export class AutomatedDistributionService {
     vault: Vault,
     claims: Claim[],
     vaultId: string,
-    dispatchResult: any
+    dispatchParametizedHash: string
   ): Promise<void> {
-    const DISPATCH_ADDRESS = this.getDispatchAddress(dispatchResult.parameterizedHash);
+    const DISPATCH_ADDRESS = this.getDispatchAddress(dispatchParametizedHash);
     const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(vault.script_hash)))
       .to_address()
       .to_bech32();
 
     for (const claim of claims) {
       try {
+        if (claims.indexOf(claim) > 0) {
+          await new Promise(resolve => setTimeout(resolve, 120000)); // 2 minutes between transactions
+        }
         // Create individual transaction record
         const extractionTx = await this.transactionRepository.save({
           vault_id: vaultId,
@@ -648,7 +673,7 @@ export class AutomatedDistributionService {
         this.logger.log(`Individual extraction transaction ${response.txHash} submitted for claim ${claim.id}`);
 
         // Add delay between individual transactions
-        await new Promise(resolve => setTimeout(resolve, 30000));
+        await new Promise(resolve => setTimeout(resolve, 90000));
       } catch (error) {
         this.logger.error(`Failed to process individual extraction for claim ${claim.id}:`, error);
 
@@ -671,14 +696,15 @@ export class AutomatedDistributionService {
     }
   }
   private async checkExtractionsAndTriggerPayments(): Promise<void> {
-    // Find confirmed extraction transactions
-    const confirmedExtractions = await this.transactionRepository.find({
-      where: {
-        type: TransactionType.extractDispatch,
-        status: TransactionStatus.confirmed,
-      },
-      relations: ['vault'],
-    });
+    const confirmedExtractions = await this.transactionRepository
+      .createQueryBuilder('tx')
+      .leftJoinAndSelect('tx.vault', 'vault')
+      .where('tx.type = :type', { type: TransactionType.extractDispatch })
+      .andWhere('tx.status = :status', { status: TransactionStatus.confirmed })
+      .andWhere('vault.distribution_in_progress = true') // ONLY from vaults currently being processed
+      .andWhere('vault.distribution_processed = false')
+      .andWhere('vault.created_at > :date', { date: new Date('2025-10-22').toISOString() }) // Same filter as processLockedVaultsForDistribution
+      .getMany();
 
     if (confirmedExtractions.length === 0) {
       return;
@@ -695,14 +721,8 @@ export class AutomatedDistributionService {
     );
 
     // Process each vault's extractions
-    for (const [vaultId, transactions] of Object.entries(vaultGroups)) {
+    for (const [vaultId] of Object.entries(vaultGroups)) {
       try {
-        // Mark transactions as processed (they're already confirmed, this is just for tracking)
-        await this.transactionRepository.update(
-          { id: In(transactions.map(tx => tx.id)) },
-          { status: TransactionStatus.confirmed }
-        );
-
         // Check if all extractions for this vault are complete
         const pendingExtractions = await this.transactionRepository.count({
           where: {
@@ -727,7 +747,7 @@ export class AutomatedDistributionService {
           // Get vault details
           const vault = await this.vaultRepository.findOne({
             where: { id: vaultId },
-            select: ['id', 'script_hash', 'asset_vault_name', 'stake_registered'],
+            select: ['id', 'script_hash', 'asset_vault_name', 'stake_registered', 'dispatch_parametized_hash'],
           });
 
           if (vault) {
@@ -736,13 +756,7 @@ export class AutomatedDistributionService {
               this.logger.log(`Stake credential already marked as registered for vault ${vaultId}`);
               await this.processContributorPayments(vaultId);
             } else {
-              const dispatchResult = await this.blockchainService.applyDispatchParameters({
-                vault_policy: this.SC_POLICY_ID,
-                vault_id: vault.asset_vault_name,
-                contribution_script_hash: vault.script_hash,
-              });
-
-              const stakeResult = await this.blockchainService.registerScriptStake(dispatchResult.parameterizedHash);
+              const stakeResult = await this.blockchainService.registerScriptStake(vault.dispatch_parametized_hash);
 
               if (stakeResult.success) {
                 // Update the flag in database
@@ -750,7 +764,7 @@ export class AutomatedDistributionService {
 
                 // Only wait if we just registered (not if it was already registered)
                 if (!stakeResult.alreadyRegistered) {
-                  await new Promise(resolve => setTimeout(resolve, 50000)); // 50 seconds
+                  await new Promise(resolve => setTimeout(resolve, 90000)); // 90 seconds
                 }
 
                 this.logger.debug(
@@ -783,32 +797,24 @@ export class AutomatedDistributionService {
       relations: ['transaction', 'user'],
     });
 
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: [
+        'id',
+        'script_hash',
+        'asset_vault_name',
+        'ada_pair_multiplier',
+        'last_update_tx_hash',
+        'dispatch_parametized_hash',
+        'dispatch_preloaded_script',
+      ],
+    });
+
+    if (!vault) {
+      throw new Error(`Vault ${vaultId} not found`);
+    }
+
     if (claims.length === 0) {
-      // Before marking as processed, double-check that there are no failed acquirer claims
-      const failedAcquirerClaims = await this.claimRepository.count({
-        where: {
-          vault: { id: vaultId },
-          type: ClaimType.ACQUIRER,
-          status: ClaimStatus.FAILED,
-        },
-      });
-
-      if (failedAcquirerClaims > 0) {
-        this.logger.warn(
-          `Vault ${vaultId} has ${failedAcquirerClaims} failed acquirer claims. NOT marking as processed.`
-        );
-
-        // Reset distribution flags so it can be retried
-        await this.vaultRepository.update(
-          { id: vaultId },
-          {
-            distribution_in_progress: false,
-            distribution_processed: false,
-          }
-        );
-        return;
-      }
-
       this.logger.log(`No contributor claims for payment in vault ${vaultId}. Marking vault as processed.`);
       await this.vaultRepository.update(
         { id: vaultId },
@@ -817,29 +823,18 @@ export class AutomatedDistributionService {
           distribution_processed: true,
         }
       );
+
+      await new Promise(resolve => setTimeout(resolve, 20000));
+      this.governanceService.createAutomaticSnapshot(vaultId, `${vault.script_hash}${vault.asset_vault_name}`);
       return;
     }
 
-    this.logger.log(`Found ${claims.length} contributor claims for payment in vault ${vaultId}`);
-
-    const vault = await this.vaultRepository.findOne({
-      where: { id: vaultId },
-      select: ['id', 'script_hash', 'asset_vault_name', 'ada_pair_multiplier', 'last_update_tx_hash'],
-    });
-
-    if (!vault) {
-      throw new Error(`Vault ${vaultId} not found`);
-    }
-
-    // Apply parameters to dispatch script
-    const dispatchResult = await this.blockchainService.applyDispatchParameters({
-      vault_policy: this.SC_POLICY_ID,
-      vault_id: vault.asset_vault_name,
-      contribution_script_hash: vault.script_hash,
-    });
-
     for (const claim of claims) {
       try {
+        if (claims.indexOf(claim) > 0) {
+          await new Promise(resolve => setTimeout(resolve, 120000)); // 2 minutes between transactions
+        }
+
         // Get ADA amount from metadata
         const adaAmount = claim.metadata?.adaAmount;
         if (!adaAmount) {
@@ -859,7 +854,7 @@ export class AutomatedDistributionService {
           },
         });
 
-        const PARAMETERIZED_DISPATCH_HASH = dispatchResult.parameterizedHash;
+        const PARAMETERIZED_DISPATCH_HASH = vault.dispatch_parametized_hash;
         const DISPATCH_ADDRESS = this.getDispatchAddress(PARAMETERIZED_DISPATCH_HASH);
 
         // Get original contribution transaction
@@ -972,7 +967,7 @@ export class AutomatedDistributionService {
         const input: PayAdaContributionInput = {
           changeAddress: this.adminAddress,
           message: `Pay ADA to contributor for claim ${claim.id}`,
-          preloadedScripts: [dispatchResult.fullResponse.preloadedScript],
+          preloadedScripts: [vault.dispatch_preloaded_script.preloadedScript],
           scriptInteractions: [
             ...selectedUtxos.map(utxo => ({
               purpose: 'spend',
@@ -1115,15 +1110,18 @@ export class AutomatedDistributionService {
             { tx_hash: response.txHash, status: TransactionStatus.submitted }
           );
 
+          await this.claimRepository.update({ id: claim.id }, { status: ClaimStatus.CLAIMED });
+
           this.logger.log(`Payment transaction ${response.txHash} submitted for claim ${claim.id}`);
-          await new Promise(resolve => setTimeout(resolve, 60000));
+          await new Promise(resolve => setTimeout(resolve, 100000));
         } catch (error) {
           const trimmedInput = { ...input };
           delete trimmedInput.preloadedScripts;
           this.logger.warn(JSON.stringify(trimmedInput));
           this.logger.error(`Failed to submit payment transaction:`, error);
           await this.transactionRepository.update({ id: transaction.id }, { status: TransactionStatus.failed }); // Mark transaction as failed
-          await new Promise(resolve => setTimeout(resolve, 60000));
+          await this.claimRepository.update({ id: claim.id }, { status: ClaimStatus.FAILED });
+          await new Promise(resolve => setTimeout(resolve, 100000));
         }
 
         this.logger.log(`Payment transaction created for claim ${claim.id}`);
@@ -1160,6 +1158,8 @@ export class AutomatedDistributionService {
           distribution_processed: true,
         }
       );
+      await new Promise(resolve => setTimeout(resolve, 20000));
+      this.governanceService.createAutomaticSnapshot(vaultId, `${vault.script_hash}${vault.asset_vault_name}`);
     }
   }
 
