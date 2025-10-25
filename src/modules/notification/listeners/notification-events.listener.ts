@@ -97,7 +97,7 @@ export class NotificationEventsListener {
         firstName: user.name,
         status: event.vault.vault_status,
         vaultTokenTicker: event.vault.vault_token_ticker,
-        vaultUrl: `https://testnet.l4va.com/vaults/${event.vault.id}`,
+        vaultUrl: `https://testnet.l4va.org/vaults/${event.vault.id}`,
         failed_at: new Date(),
         vaultName: event.vault.name,
         address: user.address,
