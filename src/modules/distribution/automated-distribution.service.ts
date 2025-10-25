@@ -11,7 +11,7 @@ import {
 } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, Not, IsNull, MoreThan } from 'typeorm';
 
@@ -94,6 +94,7 @@ export class AutomatedDistributionService {
   private readonly MAX_TX_SIZE = 15900;
   private readonly adminAddress: string;
   private readonly unparametizedDispatchHash: string;
+  private isRunning = false;
   private readonly blockfrost: BlockFrostAPI;
 
   constructor(
@@ -124,13 +125,59 @@ export class AutomatedDistributionService {
 
   @Cron('0 */15 * * * *')
   async processVaultDistributions(): Promise<void> {
-    // 1. Find vaults ready for extraction
-    await this.processLockedVaultsForDistribution();
+    if (this.isRunning) {
+      this.logger.warn('Distribution process already running, skipping this execution');
+      return;
+    }
 
-    // 2.1 Process extractions for acquirer claims
-    //2.2 Register Script Stake
-    await this.checkExtractionsAndTriggerPayments();
+    this.isRunning = true;
+
+    try {
+      // 1. Reset stuck vaults first (older than 30 minutes) Haven`t tested this
+      // await this.resetStuckVaults();
+
+      // 1. Find vaults ready for extraction
+      await this.processLockedVaultsForDistribution();
+
+      // 2. Process extractions for acquirer claims and register stake
+      await this.checkExtractionsAndTriggerPayments();
+    } catch (error) {
+      this.logger.error('Error in vault distribution process:', error);
+    } finally {
+      this.isRunning = false;
+    }
   }
+
+  //Haven`t tested this
+  // private async resetStuckVaults(): Promise<void> {
+  //   const thirtyMinutesAgo = new Date();
+  //   thirtyMinutesAgo.setMinutes(thirtyMinutesAgo.getMinutes() - 30);
+
+  //   const stuckVaults = await this.vaultRepository.find({
+  //     where: {
+  //       distribution_in_progress: true,
+  //       distribution_processed: false,
+  //       updated_at: LessThan(thirtyMinutesAgo.toISOString()), // Stuck for more than 30 minutes
+  //     },
+  //     select: ['id', 'updated_at'],
+  //   });
+
+  //   if (stuckVaults.length > 0) {
+  //     this.logger.warn(`Found ${stuckVaults.length} stuck vaults, resetting them`);
+
+  //     await this.vaultRepository.update(
+  //       { id: In(stuckVaults.map(v => v.id)) },
+  //       {
+  //         distribution_in_progress: false,
+  //         // Don't reset distribution_processed - if it was being processed, it might have partially completed
+  //       }
+  //     );
+
+  //     for (const vault of stuckVaults) {
+  //       this.logger.log(`Reset stuck vault ${vault.id} (stuck since ${vault.updated_at})`);
+  //     }
+  //   }
+  // }
 
   private async processLockedVaultsForDistribution(): Promise<void> {
     const readyVaults = await this.vaultRepository.find({
