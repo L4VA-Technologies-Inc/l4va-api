@@ -535,7 +535,7 @@ export class VaultsService {
       finalVault.asset_vault_name = vaultAssetName;
       finalVault.script_hash = scriptHash;
       finalVault.apply_params_result = applyParamsResult;
-      finalVault.ft_token_decimals = 6; // Hardcoded to 6 for now as per requirements
+      finalVault.ft_token_decimals = 3; // Hardcoded to 3 for now as hotfix
 
       await this.vaultsRepository.save(finalVault);
 
