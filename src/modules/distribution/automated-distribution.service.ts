@@ -323,7 +323,6 @@ export class AutomatedDistributionService {
         {
           dispatch_parametized_hash: dispatchResult.parameterizedHash,
           dispatch_preloaded_script: dispatchResult.fullResponse,
-          stake_registered: true,
         }
       );
     } else {
