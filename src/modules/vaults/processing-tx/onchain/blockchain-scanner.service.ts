@@ -69,7 +69,7 @@ export class BlockchainScannerService {
 
   async registerTrackingAddress(vaultAddress: string = '', vaultName: string): Promise<any> {
     let retries = 0;
-    const maxRetries = 4;
+    const maxRetries = 5;
     const retryDelay = 15000;
 
     while (retries < maxRetries) {
