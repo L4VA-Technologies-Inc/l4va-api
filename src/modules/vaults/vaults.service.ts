@@ -1123,7 +1123,7 @@ export class VaultsService {
                   SELECT 1 FROM assets
                   WHERE assets.vault_id = vault.id 
                   AND assets.added_by = :userId
-                  AND assets.status = 'locked'
+                  AND assets.status IN ('locked', 'distributed')
                 )`,
                 { userId }
               );
