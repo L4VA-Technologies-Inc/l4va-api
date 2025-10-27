@@ -724,17 +724,17 @@ export class AutomatedDistributionService {
         this.logger.error(`Failed to process individual extraction for claim ${claim.id}:`, error);
 
         // Mark claim as failed if individual processing also fails
-        await this.claimRepository.update(
-          { id: claim.id },
-          {
-            status: ClaimStatus.FAILED,
-            metadata: {
-              ...claim.metadata,
-              failureReason: error.message,
-              failedAt: new Date().toISOString(),
-            } as any,
-          }
-        );
+        // await this.claimRepository.update(
+        //   { id: claim.id },
+        //   {
+        //     status: ClaimStatus.FAILED,
+        //     metadata: {
+        //       ...claim.metadata,
+        //       failureReason: error.message,
+        //       failedAt: new Date().toISOString(),
+        //     } as any,
+        //   }
+        // );
 
         // Continue with next claim
         continue;
