@@ -154,7 +154,7 @@ export class GovernanceExecutionService {
 
           // Retry after 2 minutes on error
           const retryJobName = `proposal-retry-${proposalId}`;
-          const retryTime = new Date(Date.now() + 120000); // 2 minutes from now
+          const retryTime = new Date(Date.now() + 180000); // 2 minutes from now
           const retryPattern = this.createCronPattern(retryTime);
 
           const retryJob = new CronJob(retryPattern, async () => {

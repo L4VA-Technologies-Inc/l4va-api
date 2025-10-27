@@ -562,7 +562,7 @@ export class AutomatedDistributionService {
     for (const claim of claims) {
       try {
         if (claims.indexOf(claim) > 0) {
-          await new Promise(resolve => setTimeout(resolve, 120000)); // 2 minutes between transactions
+          await new Promise(resolve => setTimeout(resolve, 180000)); // 2 minutes between transactions
         }
         // Create individual transaction record
         const extractionTx = await this.transactionRepository.save({
@@ -878,7 +878,7 @@ export class AutomatedDistributionService {
     for (const claim of claims) {
       try {
         if (claims.indexOf(claim) > 0) {
-          await new Promise(resolve => setTimeout(resolve, 120000)); // 2 minutes between transactions
+          await new Promise(resolve => setTimeout(resolve, 180000)); // 2 minutes between transactions
         }
 
         // Get ADA amount from metadata
