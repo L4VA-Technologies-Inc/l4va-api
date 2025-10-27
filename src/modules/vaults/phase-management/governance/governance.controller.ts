@@ -24,6 +24,14 @@ export class GovernanceController {
   async createProposal(@Req() req, @Param('vaultId') vaultId: string, @Body() data: CreateProposalReq) {
     return this.governanceService.createProposal(vaultId, data, req.user.sub);
   }
+  
+  @Post('snapshot/:vaultId/:assetId')
+  @UseGuards(OptionalAuthGuard)
+  @ApiOperation({ summary: 'Create a snapshot for a vault' })
+  @ApiResponse({ status: 201, description: 'Snapshot created successfully' })
+  async createAutomaticSnapshot(@Param('vaultId') vaultId: string, @Param('assetId') assetId: string) {
+    return this.governanceService.createAutomaticSnapshot(vaultId, assetId);
+  }
 
   @Get('vaults/:vaultId/proposals')
   @UseGuards(OptionalAuthGuard)
