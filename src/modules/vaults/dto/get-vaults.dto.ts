@@ -290,15 +290,6 @@ export class GetVaultsDto extends PaginationDto {
 
   @ApiProperty({
     type: String,
-    description: 'Vault stage',
-    example: 'created',
-  })
-  @Expose()
-  @IsOptional()
-  vaultStage?: string;
-
-  @ApiProperty({
-    type: String,
     description: 'Search vaults by policy id or name',
     example: 'VaultName or 32f03826f2816cdaae08714f3bddb447eaf48598700754f2ca1e8803',
   })
