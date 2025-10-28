@@ -1232,7 +1232,6 @@ export class VaultsService {
           break;
         case VaultFilter.all: {
           const statuses = [
-            VaultStatus.created,
             VaultStatus.published,
             VaultStatus.contribution,
             VaultStatus.acquire,
@@ -1244,21 +1243,32 @@ export class VaultsService {
             statuses.push(VaultStatus.draft);
           }
 
-          queryBuilder.andWhere(`
-            (
-              vault.vault_status != :createdStatus
-              AND vault.vault_status IN (:...statuses)
-            )
-            OR (
-              vault.vault_status = :createdStatus
-              AND vault.contribution_open_window_type = :windowType
-              AND vault.contribution_open_window_time IS NOT NULL
-            )
-          `, {
-            statuses,
-            createdStatus: VaultStatus.created,
-            windowType: 'custom',
-          });
+          queryBuilder.andWhere(
+            new Brackets(qb => {
+              qb.where('vault.vault_status != :createdStatus AND vault.vault_status IN (:...statuses)', {
+                statuses,
+                createdStatus: VaultStatus.created,
+              });
+
+              qb.orWhere(
+                new Brackets(qb2 => {
+                  qb2.where(
+                    'vault.vault_status = :createdStatus AND vault.contribution_open_window_type = :windowType AND vault.contribution_open_window_time IS NOT NULL',
+                    {
+                      createdStatus: VaultStatus.created,
+                      windowType: 'custom',
+                    }
+                  );
+
+                  if (myVaults && userId) {
+                    qb2.andWhere('vault.owner_id = :userId', { userId });
+                  } else {
+                    qb2.andWhere('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public });
+                  }
+                })
+              );
+            })
+          );
           break;
         }
       }
