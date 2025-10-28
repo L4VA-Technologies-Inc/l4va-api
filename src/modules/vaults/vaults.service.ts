@@ -1104,7 +1104,6 @@ export class VaultsService {
       .leftJoinAndSelect('vault.contributor_whitelist', 'contributor_whitelist')
       .leftJoinAndSelect('vault.acquirer_whitelist', 'acquirer_whitelist')
       .andWhere('vault.deleted != :deleted', { deleted: true })
-      .andWhere('vault.vault_status != :createdStatus', { createdStatus: VaultStatus.created });
 
     // If userId is provided, retrieve user information and apply personalized filters
     let userWalletAddress: string | null = null;
@@ -1166,8 +1165,28 @@ export class VaultsService {
       );
     }
 
-    // Apply status filter and corresponding whitelist check
-    if (filter) {
+    if (vaultStage) {
+      switch (vaultStage) {
+        case 'created':
+          queryBuilder
+            .andWhere('vault.vault_status = :status', { status: 'created' })
+            .andWhere('vault.contribution_open_window_type = :windowType', { windowType: 'custom' })
+            .andWhere('vault.contribution_open_window_time IS NOT NULL');
+          break;
+        case 'contribution':
+          queryBuilder.andWhere('vault.vault_status = :status', { status: 'contribution' });
+          break;
+        case 'acquire':
+          queryBuilder.andWhere('vault.vault_status = :status', { status: 'acquire' });
+          break;
+        case 'locked':
+          queryBuilder.andWhere('vault.vault_status = :status', { status: 'locked' });
+          break;
+        case 'terminated':
+          queryBuilder.andWhere('vault.vault_status = :status', { status: 'burned' });
+          break;
+      }
+    } else if (filter) { // Apply status filter and corresponding whitelist check
       switch (filter) {
         case VaultFilter.open:
           queryBuilder.andWhere('vault.vault_status IN (:...statuses)', {
@@ -1213,6 +1232,7 @@ export class VaultsService {
           break;
         case VaultFilter.all: {
           const statuses = [
+            VaultStatus.created,
             VaultStatus.published,
             VaultStatus.contribution,
             VaultStatus.acquire,
@@ -1224,28 +1244,23 @@ export class VaultsService {
             statuses.push(VaultStatus.draft);
           }
 
-          queryBuilder.andWhere('vault.vault_status IN (:...statuses)', { statuses });
+          queryBuilder.andWhere(`
+            (
+              vault.vault_status != :createdStatus
+              AND vault.vault_status IN (:...statuses)
+            )
+            OR (
+              vault.vault_status = :createdStatus
+              AND vault.contribution_open_window_type = :windowType
+              AND vault.contribution_open_window_time IS NOT NULL
+            )
+          `, {
+            statuses,
+            createdStatus: VaultStatus.created,
+            windowType: 'custom',
+          });
           break;
         }
-      }
-    }
-    if (vaultStage) {
-      switch (vaultStage) {
-        case 'created':
-          queryBuilder.andWhere('vault.vault_status = :status', { status: 'created' });
-          break;
-        case 'contribution':
-          queryBuilder.andWhere('vault.vault_status = :status', { status: 'contribution' });
-          break;
-        case 'acquire':
-          queryBuilder.andWhere('vault.vault_status = :status', { status: 'acquire' });
-          break;
-        case 'locked':
-          queryBuilder.andWhere('vault.vault_status = :status', { status: 'locked' });
-          break;
-        case 'terminated':
-          queryBuilder.andWhere('vault.vault_status = :status', { status: 'burned' });
-          break;
       }
     }
 
