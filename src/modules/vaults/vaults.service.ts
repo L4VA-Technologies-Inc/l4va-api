@@ -1228,14 +1228,6 @@ export class VaultsService {
       }
     }
 
-    if (reserveMet !== undefined) {
-      if (reserveMet) {
-        queryBuilder.andWhere('vault.total_acquired_value_ada >= vault.require_reserved_cost_ada');
-      } else {
-        queryBuilder.andWhere('vault.total_acquired_value_ada < vault.require_reserved_cost_ada');
-      }
-    }
-
     if (tags && tags.length > 0) {
       const normalizedTags = tags.map(tag => tag.toLowerCase());
       // OR logic: Returns vaults that have ANY of the specified tags
@@ -1331,6 +1323,15 @@ export class VaultsService {
 
         const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
 
+        if (reserveMet !== undefined) {
+          const totalAcquiredAda = assetsPrices.totalAcquiredAda;
+          const requireReservedCostAda = vault.require_reserved_cost_ada;
+          const reserveMetCalculated = totalAcquiredAda >= requireReservedCostAda;
+
+          if (reserveMet && !reserveMetCalculated) return null;
+          if (!reserveMet && reserveMetCalculated) return null;
+        }
+
         // Merge calculated values with plain object
         const enrichedVault = {
           ...plainVault,
@@ -1351,9 +1352,11 @@ export class VaultsService {
       })
     );
 
+    const filteredItems = transformedItems.filter(vault => vault !== null);
+
     return {
-      items: transformedItems,
-      total,
+      items: filteredItems,
+      total: filteredItems.length,
       page,
       limit,
       totalPages: Math.ceil(total / limit),
