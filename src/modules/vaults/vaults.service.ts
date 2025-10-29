@@ -1329,11 +1329,13 @@ export class VaultsService {
         const endTime = phaseEndTime ? new Date(phaseEndTime) : null;
         const timeRemaining = endTime ? Math.max(0, endTime.getTime() - now.getTime()) : null;
 
+        const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
+
         // Merge calculated values with plain object
         const enrichedVault = {
           ...plainVault,
-          totalValueUsd: vault.total_assets_cost_usd,
-          totalValueAda: vault.total_assets_cost_ada,
+          totalValueUsd: assetsPrices.totalValueUsd,
+          totalValueAda: assetsPrices.totalValueAda,
           baseAllocation: null,
           total: null,
           invested: vault.total_acquired_value_ada,
