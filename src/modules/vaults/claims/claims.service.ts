@@ -1,27 +1,27 @@
-import { Buffer } from 'node:buffer';
+import {Buffer} from 'node:buffer';
 
-import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { FixedTransaction, PlutusData, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
-import { Injectable, NotFoundException, Logger, BadRequestException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { InjectRepository } from '@nestjs/typeorm';
-import { plainToInstance } from 'class-transformer';
-import { In, Repository } from 'typeorm';
+import {BlockFrostAPI} from '@blockfrost/blockfrost-js';
+import {FixedTransaction, PlutusData, PrivateKey} from '@emurgo/cardano-serialization-lib-nodejs';
+import {BadRequestException, Injectable, Logger, NotFoundException} from '@nestjs/common';
+import {ConfigService} from '@nestjs/config';
+import {InjectRepository} from '@nestjs/typeorm';
+import {plainToInstance} from 'class-transformer';
+import {In, Repository} from 'typeorm';
 
-import { ClaimResponseDto, ClaimResponseItemsDto } from './dto/claim-response.dto';
-import { GetClaimsDto } from './dto/get-claims.dto';
+import {ClaimResponseDto, ClaimResponseItemsDto} from './dto/claim-response.dto';
+import {GetClaimsDto} from './dto/get-claims.dto';
 
-import { Asset } from '@/database/asset.entity';
-import { Claim } from '@/database/claim.entity';
-import { Transaction } from '@/database/transaction.entity';
-import { Vault } from '@/database/vault.entity';
-import { AssetsService } from '@/modules/vaults/processing-tx/assets/assets.service';
-import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
-import { Datum, Redeemer, Redeemer1 } from '@/modules/vaults/processing-tx/onchain/types/type';
-import { generate_tag_from_txhash_index } from '@/modules/vaults/processing-tx/onchain/utils/lib';
-import { AssetOriginType } from '@/types/asset.types';
-import { ClaimStatus, ClaimType } from '@/types/claim.types';
-import { TransactionStatus, TransactionType } from '@/types/transaction.types';
+import {Asset} from '@/database/asset.entity';
+import {Claim} from '@/database/claim.entity';
+import {Transaction} from '@/database/transaction.entity';
+import {Vault} from '@/database/vault.entity';
+import {AssetsService} from '@/modules/vaults/processing-tx/assets/assets.service';
+import {BlockchainService} from '@/modules/vaults/processing-tx/onchain/blockchain.service';
+import {Datum, Redeemer, Redeemer1} from '@/modules/vaults/processing-tx/onchain/types/type';
+import {generate_tag_from_txhash_index} from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import {AssetOriginType} from '@/types/asset.types';
+import {ClaimStatus, ClaimType} from '@/types/claim.types';
+import {TransactionStatus, TransactionType} from '@/types/transaction.types';
 
 @Injectable()
 export class ClaimsService {
@@ -63,10 +63,19 @@ export class ClaimsService {
     const whereConditions: {
       user: { id: string };
       status?: ClaimStatus | ReturnType<typeof In>;
+      type?: ClaimType | ReturnType<typeof In>;
     } = { user: { id: userId } };
 
     if (query?.status) {
       whereConditions.status = query.status;
+    }
+
+    if (query?.type) {
+      if (query.type === ClaimType.DISTRIBUTION) {
+        whereConditions.type = In([ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER]);
+      } else {
+        whereConditions.type = query.type as ClaimType;
+      }
     }
 
     if (query?.claimState === 'claimed') {

@@ -12,4 +12,5 @@ export enum ClaimType {
   L4VA = 'l4va',
   FINAL_DISTRIBUTION = 'final_distribution',
   CANCELLATION = 'cancellation',
+  DISTRIBUTION = 'distribution',
 }
