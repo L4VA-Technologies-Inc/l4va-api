@@ -1,8 +1,8 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsOptional, IsString, IsInt, Min } from 'class-validator';
-import { Type, Transform, Expose } from 'class-transformer';
+import { IsEnum, IsOptional, IsString } from 'class-validator';
+import { Expose } from 'class-transformer';
 
-import { ClaimStatus } from '@/types/claim.types';
+import { ClaimStatus, ClaimType } from '@/types/claim.types';
 
 export class GetClaimsDto {
   @ApiPropertyOptional({
@@ -13,6 +13,15 @@ export class GetClaimsDto {
   @IsEnum(ClaimStatus)
   @Expose()
   status?: ClaimStatus;
+
+  @ApiPropertyOptional({
+    enum: ClaimType,
+    description: 'Filter by specific type',
+  })
+  @IsOptional()
+  @IsEnum(ClaimType)
+  @Expose()
+  type?: ClaimType;
 
   @ApiPropertyOptional({
     enum: ['claimed', 'unclaimed'],

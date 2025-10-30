@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer';
 
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { FixedTransaction, PlutusData, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
-import { Injectable, NotFoundException, Logger, BadRequestException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { plainToInstance } from 'class-transformer';
@@ -63,10 +63,19 @@ export class ClaimsService {
     const whereConditions: {
       user: { id: string };
       status?: ClaimStatus | ReturnType<typeof In>;
+      type?: ClaimType | ReturnType<typeof In>;
     } = { user: { id: userId } };
 
     if (query?.status) {
       whereConditions.status = query.status;
+    }
+
+    if (query?.type) {
+      if (query.type === ClaimType.DISTRIBUTION) {
+        whereConditions.type = In([ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER]);
+      } else {
+        whereConditions.type = query.type as ClaimType;
+      }
     }
 
     if (query?.claimState === 'claimed') {
