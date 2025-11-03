@@ -1,12 +1,16 @@
 import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { SnakeNamingStrategy } from 'typeorm-naming-strategies';
+import { SentryModule, SentryGlobalFilter } from '@sentry/nestjs/setup';
+
+import { SentryMonitoringService } from './common/services/sentry-monitoring.service';
+import { SentryInterceptor } from './common/interceptors/sentry.interceptor';
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -31,6 +35,7 @@ import { NotificationModule } from '@/modules/notification/notification.module';
 // Hello World!
 @Module({
   imports: [
+    SentryModule.forRoot(),
     ScheduleModule.forRoot(),
     ConfigModule.forRoot({
       isGlobal: true,
@@ -84,9 +89,18 @@ import { NotificationModule } from '@/modules/notification/notification.module';
   controllers: [AppController],
   providers: [
     AppService,
+    SentryMonitoringService,
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: SentryInterceptor,
+    },
+    {
+      provide: APP_FILTER,
+      useClass: SentryGlobalFilter,
     },
   ],
 })
