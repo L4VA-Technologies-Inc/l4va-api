@@ -1,3 +1,4 @@
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger } from '@nestjs/common';
@@ -61,6 +62,7 @@ export class BlockchainService {
   private readonly blueprintTitle: string;
   private readonly adminSKey: string;
   private readonly adminAddress: string;
+  private readonly blockfrost: BlockFrostAPI;
   private readonly anvilHeaders: {
     [key: string]: string;
   };
@@ -74,6 +76,9 @@ export class BlockchainService {
     this.anvilApi = this.configService.get<string>('ANVIL_API_URL') + '/services';
     this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
     this.blueprintTitle = this.configService.get<string>('BLUEPRINT_TITLE');
+    this.blockfrost = new BlockFrostAPI({
+      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
+    });
     this.anvilHeaders = {
       'x-api-key': this.configService.get<string>('ANVIL_API_KEY'),
       'Content-Type': 'application/json',
@@ -205,18 +210,16 @@ export class BlockchainService {
     }
   }
 
-  // Improved registerScriptStake method in BlockchainService
-
   /**
    * Register Stake on Dispatch Script to be able Contributors claim ADA
-   * Handles cases where stake is already registered
+   * Handles cases where stake is already registered and waits for confirmation
    *
    * @param parameterizedDispatchHash
-   * @returns {Promise<{success: boolean, alreadyRegistered: boolean}>}
+   * @returns {Promise<{success: boolean, alreadyRegistered: boolean, txHash?: string}>}
    */
   async registerScriptStake(
     parameterizedDispatchHash: string
-  ): Promise<{ success: boolean; alreadyRegistered: boolean }> {
+  ): Promise<{ success: boolean; alreadyRegistered: boolean; txHash?: string }> {
     try {
       // First check if stake is already registered
       const isAlreadyRegistered = await this.checkStakeRegistration(parameterizedDispatchHash);
@@ -226,7 +229,7 @@ export class BlockchainService {
         return { success: true, alreadyRegistered: true };
       }
 
-      const input = {
+      const stakeRegisterInput = {
         changeAddress: this.adminAddress,
         deposits: [
           {
@@ -237,47 +240,61 @@ export class BlockchainService {
         ],
       };
 
-      const buildResponse = await fetch(`${this.anvilApi}/transactions/build`, {
-        method: 'POST',
-        headers: this.anvilHeaders,
-        body: JSON.stringify(input),
-      });
+      let buildResult: TransactionBuildResponse;
 
-      if (!buildResponse.ok) {
-        const errorText = await buildResponse.text();
-        // Check if error is because stake is already registered
-        if (errorText.includes('StakeKeyRegisteredDELEG')) {
-          this.logger.log(`Stake credential ${parameterizedDispatchHash} already registered according to error`);
+      try {
+        buildResult = await this.buildTransaction(stakeRegisterInput);
+      } catch (error) {
+        // Check if error is because stake is already registered during build
+        if (error.message && error.message.includes('StakeKeyRegisteredDELEG')) {
+          this.logger.log(`Stake credential ${parameterizedDispatchHash} already registered according to build error`);
           return { success: true, alreadyRegistered: true };
         }
-        throw new Error(`Build failed: ${buildResponse.status} - ${errorText}`);
+        throw error;
       }
 
-      const transaction = await buildResponse.json();
-      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(transaction.complete, 'hex'));
+      // Sign the transaction
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResult.complete, 'hex'));
       txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
-      const submitResponse = await fetch(`${this.anvilApi}/transactions/submit`, {
-        method: 'POST',
-        headers: this.anvilHeaders,
-        body: JSON.stringify({
-          signatures: [],
-          transaction: txToSubmitOnChain.to_hex(),
-        }),
-      });
+      // Submit transaction using existing method
+      let submitResult: TransactionSubmitResponse;
 
-      if (!submitResponse.ok) {
-        const errorText = await submitResponse.text();
-        // Again check if error is because stake is already registered
-        if (errorText.includes('StakeKeyRegisteredDELEG')) {
-          this.logger.log(`Stake credential ${parameterizedDispatchHash} already registered according to error`);
+      try {
+        submitResult = await this.submitTransaction({
+          transaction: txToSubmitOnChain.to_hex(),
+          signatures: [],
+        });
+      } catch (error) {
+        // Check if error is because stake is already registered during submit
+        if (error.message && error.message.includes('StakeKeyRegisteredDELEG')) {
+          this.logger.log(`Stake credential ${parameterizedDispatchHash} already registered according to submit error`);
           return { success: true, alreadyRegistered: true };
         }
-        throw new Error(`Submit failed: ${submitResponse.status} - ${errorText}`);
+        throw error;
       }
 
-      this.logger.debug('Script stake registered successfully');
-      return { success: true, alreadyRegistered: false };
+      this.logger.log(`Stake registration transaction submitted: ${submitResult.txHash}`);
+
+      // Wait for transaction confirmation using existing method
+      const confirmed = await this.waitForTransactionConfirmation(submitResult.txHash, 300000);
+
+      if (confirmed) {
+        this.logger.log(`Stake credential ${parameterizedDispatchHash} registered and confirmed successfully`);
+        return {
+          success: true,
+          alreadyRegistered: false,
+          txHash: submitResult.txHash,
+        };
+      } else {
+        this.logger.warn(`Stake registration transaction ${submitResult.txHash} submitted but confirmation timeout`);
+        // Still return success as transaction was submitted, just didn't get confirmation within timeout
+        return {
+          success: true,
+          alreadyRegistered: false,
+          txHash: submitResult.txHash,
+        };
+      }
     } catch (error) {
       this.logger.error('Error on registerScriptStake', error);
       return { success: false, alreadyRegistered: false };
@@ -291,22 +308,25 @@ export class BlockchainService {
    */
   private async checkStakeRegistration(scriptHash: string): Promise<boolean> {
     try {
-      // Convert script hash to stake address format
-      // For Blockfrost, we need to check the address directly
-      // Note: This is a simplified approach - adjust based on actual Blockfrost API structure
-      const response = await fetch(
-        `${this.configService.get<string>('BLOCKFROST_API_URL')}/accounts/stake_test1${scriptHash}`,
-        {
-          headers: {
-            project_id: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
-          },
-        }
-      );
+      // For testnet, we need to construct the stake address properly
+      // This is a simplified approach - you may need to adjust based on your exact needs
+      const stakeAddress = `stake_test1${scriptHash}`;
 
-      // If we get a 200, the stake address exists (is registered)
-      return response.status === 200;
+      try {
+        const accountInfo = await this.blockfrost.accounts(stakeAddress);
+        // If we get account info without error, the stake address is registered
+        return accountInfo.active === true;
+      } catch (blockfrostError: any) {
+        if (blockfrostError.status_code === 404) {
+          // 404 means stake address is not registered
+          return false;
+        }
+        // Other errors might indicate network issues, so we'll assume not registered
+        this.logger.warn(`Error checking stake registration for ${scriptHash}: ${blockfrostError.message}`);
+        return false;
+      }
     } catch (error) {
-      // Most likely a 404 meaning not registered
+      this.logger.warn(`Error in checkStakeRegistration for ${scriptHash}:`, error);
       return false;
     }
   }
@@ -437,5 +457,44 @@ export class BlockchainService {
       this.logger.error('Error applying dispatch parameters', error);
       throw new Error(`Failed to apply dispatch parameters: ${error.message}`);
     }
+  }
+
+  /**
+   * Waits for a transaction to be confirmed on the blockchain
+   * @param txHash Transaction hash to monitor
+   * @param maxWaitTime Maximum time to wait in milliseconds (default: 10 minutes)
+   * @param checkInterval Interval between checks in milliseconds (default: 20 seconds)
+   * @returns Promise<boolean> - true if confirmed, false if timeout
+   */
+  async waitForTransactionConfirmation(
+    txHash: string,
+    maxWaitTime: number = 600000, // 10 minutes default
+    checkInterval: number = 20000 // 20 seconds default
+  ): Promise<boolean> {
+    const startTime = Date.now();
+    this.logger.log(`Starting confirmation watch for transaction ${txHash}`);
+
+    while (Date.now() - startTime < maxWaitTime) {
+      try {
+        try {
+          const txDetails = await this.blockfrost.txs(txHash);
+          if (txDetails && txDetails.block_height) {
+            return true;
+          }
+        } catch (blockfrostError) {
+          // Only log as debug since this is expected while transaction is pending
+          this.logger.debug(`Blockfrost check failed for tx ${txHash}: ${blockfrostError.message}`);
+        }
+
+        // Wait before next check
+        await new Promise(resolve => setTimeout(resolve, checkInterval));
+      } catch (error) {
+        this.logger.warn(`Error checking transaction ${txHash}:`, error.message);
+        await new Promise(resolve => setTimeout(resolve, checkInterval));
+      }
+    }
+
+    this.logger.warn(`Transaction ${txHash} confirmation timeout after ${maxWaitTime / 1000} seconds`);
+    return false;
   }
 }
