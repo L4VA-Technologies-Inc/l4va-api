@@ -223,7 +223,7 @@ export class AssetsService {
     );
   }
 
-  async distributeAssetByTransactionId(transactionId: string): Promise<void> {
+  async markAssetsAsDistributedByTransaction(transactionId: string): Promise<void> {
     const assets = await this.assetsRepository.find({
       where: {
         transaction: { id: transactionId },
@@ -251,43 +251,11 @@ export class AssetsService {
     );
   }
 
-  async updateAssetValuation(
-    userId: string,
-    assetId: string,
-    floorPrice?: number,
-    dexPrice?: number
-  ): Promise<Record<string, unknown>> {
-    const asset = await this.assetsRepository.findOne({
-      where: { id: assetId },
-      relations: ['vault', 'vault.owner'],
-    });
-
-    if (!asset || asset.vault.owner.id !== userId) {
-      throw new BadRequestException('Asset not found or access denied');
-    }
-
-    if (asset.vault.vault_status !== VaultStatus.contribution) {
-      throw new BadRequestException('Asset valuations can only be updated during the contribution phase');
-    }
-
-    if (asset.type === AssetType.NFT && floorPrice !== undefined) {
-      asset.floor_price = floorPrice;
-    }
-
-    if (asset.type === AssetType.FT && dexPrice !== undefined) {
-      asset.dex_price = dexPrice;
-    }
-
-    asset.last_valuation = new Date();
-    await this.assetsRepository.save(asset);
-    return instanceToPlain(asset);
-  }
-
   /**
    * Updates asset prices and last valuation timestamp after calculation
    * @param assets List of assets with updated price information
    */
-  async updateAssetValuations(
+  async updateBulkAssetValuations(
     assets: Array<{
       policyId: string;
       isNft: boolean;
@@ -314,7 +282,7 @@ export class AssetsService {
     }
   }
 
-  async updateTransactionAssets(transactionId: string, vaultId: string): Promise<void> {
+  async lockTransactionAssetsToVault(transactionId: string, vaultId: string): Promise<void> {
     const assets = await this.assetsRepository.find({
       where: {
         transaction: { id: transactionId },
@@ -344,7 +312,7 @@ export class AssetsService {
     );
   }
 
-  async cancelAsset(assetId: string, userId: string): Promise<void> {
+  async softDeleteAsset(assetId: string, userId: string): Promise<void> {
     const asset = await this.assetsRepository.findOne({
       where: { id: assetId, added_by: { id: userId }, deleted: false },
     });

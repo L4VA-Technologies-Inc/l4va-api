@@ -502,9 +502,7 @@ export class ClaimsService {
           if (claim.type === ClaimType.FINAL_DISTRIBUTION && claim.metadata.isContribution && claim.metadata.assetIds) {
             for (const assetId of claim.metadata.assetIds) {
               try {
-                // Update asset status in database
-                await this.assetService.cancelAsset(assetId, claim.user_id);
-                this.logger.log(`Asset ${assetId} marked as deleted after cancellation`);
+                await this.assetService.softDeleteAsset(assetId, claim.user_id);
               } catch (assetError) {
                 this.logger.error(`Failed to mark asset ${assetId} as deleted:`, assetError);
               }
