@@ -23,18 +23,15 @@ export interface IEmailNotificationBody {
   status: string;
   vaultTokenTicker: string;
   vaultUrl: string;
-  failed_at: Date;
+  failed_at: any;
   vaultName: string;
 }
 
 @Injectable()
 export class NotificationService {
-
   private readonly novu: Novu;
 
-  constructor(
-    private readonly eventEmitter: EventEmitter2
-  ) {
+  constructor(private readonly eventEmitter: EventEmitter2) {
     this.novu = new Novu({
       secretKey: process.env['NOVU_API_KEY'],
     });
@@ -71,10 +68,10 @@ export class NotificationService {
       const res = await this.novu.trigger({
         workflowId: 'failed',
         to: {
-          subscriberId: body.address, 
+          subscriberId: body.address,
           email: body.email,
         },
-        payload: { 
+        payload: {
           email: body.email,
           firstName: body.firstName,
           status: body.status,
@@ -82,6 +79,50 @@ export class NotificationService {
           vaultUrl: body.vaultUrl,
           failed_at: body.failed_at || new Date(),
           vaultName: body.vaultName,
+        },
+      });
+      return res;
+    } catch (err) {
+      return err;
+    }
+  }
+
+  async sendPhaseEmailNotification(body: any) {
+    try {
+      const res = await this.novu.trigger({
+        workflowId: 'phase',
+        to: {
+          subscriberId: body.address,
+          email: body.email,
+        },
+        payload: {
+          firstName: body.firstName,
+          vaultUrl: body.vaultUrl,
+          vaultName: body.vaultName,
+          phase: body.phase,
+          phaseStatus: body.phaseStatus,
+          timeAt: body.timeAt,
+        },
+      });
+      return res;
+    } catch (err) {
+      return err;
+    }
+  }
+
+  async sendLaunchEmailNotification(body: any) {
+    try {
+      const res = await this.novu.trigger({
+        workflowId: 'created',
+        to: {
+          subscriberId: body.address,
+          email: body.email,
+        },
+        payload: {
+          firstName: body.firstName,
+          vaultUrl: body.vaultUrl,
+          vaultName: body.vaultName,
+          timeAt: body.timeAt,
         },
       });
       return res;
