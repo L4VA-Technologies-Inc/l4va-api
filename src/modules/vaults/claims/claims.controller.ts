@@ -28,32 +28,14 @@ export class ClaimsController {
     return this.claimsService.getUserClaims(userId, query);
   }
 
-  @UseGuards(AuthGuard)
-  @Post(':claimId/build')
-  @ApiOperation({ summary: 'Process claim and build transaction' })
-  async processClaim(@Param('claimId') claimId: string): Promise<{
-    success: boolean;
-    transactionId: string;
-    presignedTx: string;
-  }> {
-    return this.claimsService.buildClaimTransaction(claimId);
-  }
-
-  @ApiDoc({
-    summary: 'Submit signed claim transaction',
-    description: 'Submits a signed claim transaction to the blockchain',
-    status: 200,
-  })
-  @Post(':transactionId/submit')
-  @UseGuards(AuthGuard)
-  async submitSignedClaimTransaction(
-    @Param('transactionId') transactionId: string,
-    @Body() body: { transaction: string; signatures: string | string[]; txId: string; claimId: string }
-  ): Promise<{
-    success: boolean;
-    transactionId: string;
-    blockchainTxHash: string;
-  }> {
-    return this.claimsService.submitSignedTransaction(transactionId, body);
-  }
+  // @UseGuards(AuthGuard)
+  // @Post(':claimId/build')
+  // @ApiOperation({ summary: 'Process claim and build transaction' })
+  // async processClaim(@Param('claimId') claimId: string): Promise<{
+  //   success: boolean;
+  //   transactionId: string;
+  //   presignedTx: string;
+  // }> {
+  //   return this.claimsService.buildClaimTransaction(claimId);
+  // }
 }
