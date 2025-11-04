@@ -1,10 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { OnEvent } from '@nestjs/event-emitter';
+import { Injectable, Logger } from "@nestjs/common";
+import { OnEvent } from "@nestjs/event-emitter";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository } from "typeorm";
 
-import { NotificationService } from '@/modules/notification/notification.service';
-import { InjectRepository } from '@nestjs/typeorm';
-import { User } from '@/database/user.entity';
-import { Repository } from 'typeorm';
+import { User } from "@/database/user.entity";
+import { NotificationService } from "@/modules/notification/notification.service";
 
 @Injectable()
 export class NotificationEventsListener {
@@ -14,10 +14,10 @@ export class NotificationEventsListener {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
 
-    private notificationService: NotificationService
+    private notificationService: NotificationService,
   ) {}
 
-  @OnEvent('vault.launched')
+  @OnEvent("vault.launched")
   async handleVaultLaunched(event: {
     vaultId: string;
     address: string;
@@ -34,7 +34,59 @@ export class NotificationEventsListener {
     });
   }
 
-  @OnEvent('vault.contribution_complete')
+  @OnEvent("vault.phase.email")
+  async handleVaultPhaseEmail(event: { vault: any; phaseStatus: string }) {
+    const user = await this.userRepository.findOne({
+      where: { id: event.vault.owner.id },
+    });
+    if (!user.email) return;
+
+    await this.notificationService.sendPhaseEmailNotification({
+      address: user.address,
+      email: user.email,
+      firstName: user.name,
+      vaultUrl: `https://testnet.l4va.org/vaults/${event.vault.id}`,
+      vaultName: event.vault.name,
+      phase: event.vault.vault_status,
+      phaseStatus: event.phaseStatus,
+      timeAt: new Date()
+        .toLocaleString('en-GB', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+        .replace(/\//g, '.'),
+    });
+  }
+
+  @OnEvent("vault.launched.email")
+  async handleVaultLaunchedPhaseEmail(event: { vault: any }) {
+    const user = await this.userRepository.findOne({
+      where: { id: event.vault.owner.id },
+    });
+    if (!user.email) return;
+
+    await this.notificationService.sendLaunchEmailNotification({
+      address: user.address,
+      email: user.email,
+      firstName: user.name,
+      vaultUrl: `https://testnet.l4va.org/vaults/${event.vault.id}`,
+      vaultName: event.vault.name,
+      timeAt: new Date()
+        .toLocaleString('en-GB', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+        .replace(/\//g, '.'),
+    });
+  }
+
+  @OnEvent("vault.contribution_complete")
   async handleContributionComplete(event: {
     vaultId: string;
     vaultName: string;
@@ -48,11 +100,11 @@ export class NotificationEventsListener {
         vaultId: event.vaultId,
         vaultName: event.vaultName,
       },
-      event.contributorIds
+      event.contributorIds,
     );
   }
 
-  @OnEvent('vault.success')
+  @OnEvent("vault.success")
   async handleVaultSuccess(event: {
     vaultId: string;
     vaultName: string;
@@ -69,12 +121,16 @@ export class NotificationEventsListener {
         vaultId: event.vaultId,
         vaultName: event.vaultName,
       },
-      event.tokenHoldersIds
+      event.tokenHoldersIds,
     );
   }
 
-  @OnEvent('vault.failed')
-  async handleVaultFailed(event: { vaultId: string; vaultName: string; contributorIds: string[] }) {
+  @OnEvent("vault.failed")
+  async handleVaultFailed(event: {
+    vaultId: string;
+    vaultName: string;
+    contributorIds: string[];
+  }) {
     await this.notificationService.sendBulkNotification(
       {
         title: `${event.vaultName} vault failed`,
@@ -82,31 +138,43 @@ export class NotificationEventsListener {
         vaultId: event.vaultId,
         vaultName: event.vaultName,
       },
-      event.contributorIds
+      event.contributorIds,
     );
   }
-  
-  @OnEvent('vault.failed.email')
+
+  @OnEvent("vault.failed.email")
   async handleVaultFailedEmail(event: { vault: any }) {
-    const user = await this.userRepository.findOne({ where: { id: event.vault.owner.id } });
+    const user = await this.userRepository.findOne({
+      where: { id: event.vault.owner.id },
+    });
     if (!user.email) return;
 
-    await this.notificationService.sendFailedEmailNotification(
-      {
-        email: user.email,
-        firstName: user.name,
-        status: event.vault.vault_status,
-        vaultTokenTicker: event.vault.vault_token_ticker,
-        vaultUrl: `https://testnet.l4va.org/vaults/${event.vault.id}`,
-        failed_at: new Date(),
-        vaultName: event.vault.name,
-        address: user.address,
-      },
-    );
+    await this.notificationService.sendFailedEmailNotification({
+      email: user.email,
+      firstName: user.name,
+      status: event.vault.vault_status,
+      vaultTokenTicker: event.vault.vault_token_ticker,
+      vaultUrl: `https://testnet.l4va.org/vaults/${event.vault.id}`,
+      failed_at: new Date()
+        .toLocaleString('en-GB', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+        .replace(/\//g, '.'),
+      vaultName: event.vault.name,
+      address: user.address,
+    });
   }
 
-  @OnEvent('vault.favorite_launched') // Haven`t added
-  async handleFavoriteVaultLaunched(event: { vaultId: string; address: string; vaultName: string }) {
+  @OnEvent("vault.favorite_launched") // Haven`t added
+  async handleFavoriteVaultLaunched(event: {
+    vaultId: string;
+    address: string;
+    vaultName: string;
+  }) {
     await this.notificationService.sendNotification({
       title: `Favorite vault ${event.vaultName} has launched`,
       description: `Your favorite vault ${event.vaultName} has launched and is now available for contribution!`,
@@ -116,8 +184,12 @@ export class NotificationEventsListener {
     });
   }
 
-  @OnEvent('vault.whitelist_added') // Haven`t added
-  async handleWhitelistAdded(event: { vaultId: string; userIds: string[]; vaultName: string }) {
+  @OnEvent("vault.whitelist_added") // Haven`t added
+  async handleWhitelistAdded(event: {
+    vaultId: string;
+    userIds: string[];
+    vaultName: string;
+  }) {
     await this.notificationService.sendBulkNotification(
       {
         title: `You've been whitelisted for Vault ${event.vaultName}`,
@@ -125,12 +197,17 @@ export class NotificationEventsListener {
         vaultId: event.vaultId,
         vaultName: event.vaultName,
       },
-      event.userIds
+      event.userIds,
     );
   }
 
-  @OnEvent('vault.reserve_met') // Haven`t added
-  async handleReserveMet(event: { vaultId: string; vaultName: string; address: string; subscriberIds: string[] }) {
+  @OnEvent("vault.reserve_met") // Haven`t added
+  async handleReserveMet(event: {
+    vaultId: string;
+    vaultName: string;
+    address: string;
+    subscriberIds: string[];
+  }) {
     await this.notificationService.sendBulkNotification(
       {
         title: `Reserve has been met on Vault ${event.vaultName}`,
@@ -138,15 +215,15 @@ export class NotificationEventsListener {
         vaultId: event.vaultId,
         vaultName: event.vaultName,
       },
-      event.subscriberIds
+      event.subscriberIds,
     );
   }
 
-  @OnEvent('vault.time_running_out') // Haven`t added
+  @OnEvent("vault.time_running_out") // Haven`t added
   async handleTimeRunningOut(event: {
     vaultId: string;
     vaultName: string;
-    phase: 'contribution' | 'acquire';
+    phase: "contribution" | "acquire";
     subscriberIds: string[];
   }) {
     await this.notificationService.sendBulkNotification(
@@ -156,11 +233,11 @@ export class NotificationEventsListener {
         vaultId: event.vaultId,
         vaultName: event.vaultName,
       },
-      event.subscriberIds
+      event.subscriberIds,
     );
   }
 
-  @OnEvent('governance.proposal_created') // haven`t added
+  @OnEvent("governance.proposal_created") // haven`t added
   async handleProposalCreated(event: {
     address: string;
     vaultId: string;
@@ -170,26 +247,28 @@ export class NotificationEventsListener {
     tokenHolderIds: string[];
   }) {
     await this.notificationService.sendNotification({
-      title: 'Governance Proposal Created',
+      title: "Governance Proposal Created",
       description: `Your "${event.proposalName}" Governance Proposal for vault ${event.vaultName} has been created!`,
       vaultId: event.vaultId,
       vaultName: event.vaultName,
       address: event.address,
     });
 
-    const otherHolders = event.tokenHolderIds.filter(id => id !== event.creatorId);
+    const otherHolders = event.tokenHolderIds.filter(
+      (id) => id !== event.creatorId,
+    );
     await this.notificationService.sendBulkNotification(
       {
-        title: 'Governance Proposal Created',
+        title: "Governance Proposal Created",
         description: `Your "${event.proposalName}" Governance Proposal for vault ${event.vaultName} has been created!`,
         vaultId: event.vaultId,
         vaultName: event.vaultName,
       },
-      otherHolders
+      otherHolders,
     );
   }
 
-  @OnEvent('governance.vote_complete') // Haven`t added
+  @OnEvent("governance.vote_complete") // Haven`t added
   async handleVoteComplete(event: {
     vaultId: string;
     vaultName: string;
@@ -198,16 +277,16 @@ export class NotificationEventsListener {
   }) {
     await this.notificationService.sendBulkNotification(
       {
-        title: 'Governance Vote Complete',
+        title: "Governance Vote Complete",
         description: `Voting has ended for "${event.proposalName}" proposal for ${event.vaultName} vault. Check the results now!`,
         vaultId: event.vaultId,
         vaultName: event.vaultName,
       },
-      event.tokenHolderIds
+      event.tokenHolderIds,
     );
   }
 
-  @OnEvent('governance.vote_time_running_out') // Haven`t added
+  @OnEvent("governance.vote_time_running_out") // Haven`t added
   async handleVoteTimeRunningOut(event: {
     vaultId: string;
     vaultName: string;
@@ -221,11 +300,11 @@ export class NotificationEventsListener {
         vaultId: event.vaultId,
         vaultName: event.vaultName,
       },
-      event.nonVoterIds
+      event.nonVoterIds,
     );
   }
 
-  @OnEvent('distribution.claim_available')
+  @OnEvent("distribution.claim_available")
   async handleDistributionClaim(event: {
     vaultId: string;
     vaultName: string;
@@ -233,16 +312,16 @@ export class NotificationEventsListener {
   }): Promise<void> {
     await this.notificationService.sendBulkNotification(
       {
-        title: 'Token Distribution in Progress',
+        title: "Token Distribution in Progress",
         description: `Your tokens from vault ${event.vaultName} will be credited automatically to the wallet used for the transaction.`,
         vaultId: event.vaultId,
         vaultName: event.vaultName,
       },
-      event.tokenHolderIds
+      event.tokenHolderIds,
     );
   }
 
-  @OnEvent('vault.termination') // Haven`t added
+  @OnEvent("vault.termination") // Haven`t added
   async handleVaultTermination(event: {
     vaultId: string;
     vaultName: string;
@@ -252,18 +331,18 @@ export class NotificationEventsListener {
   }) {
     await this.notificationService.sendBulkNotification(
       {
-        title: 'Vault Termination',
+        title: "Vault Termination",
         description: `Vault ${event.vaultName} has been terminated. Claim your final token distribution and burn your ${event.vaultTokenTicker} tokens now!`,
         address: event.address,
         vaultId: event.vaultId,
         vaultName: event.vaultName,
       },
-      event.tokenHolderIds
+      event.tokenHolderIds,
     );
   }
 
   // MILESTONE NOTIFICATIONS
-  @OnEvent('milestone.tvl_reached') // Haven`t added
+  @OnEvent("milestone.tvl_reached") // Haven`t added
   async handleTVLMilestone(event: {
     vaultId: string;
     vaultName: string;
@@ -278,11 +357,11 @@ export class NotificationEventsListener {
         vaultId: event.vaultId,
         vaultName: event.vaultName,
       },
-      event.subscriberIds
+      event.subscriberIds,
     );
   }
 
-  @OnEvent('milestone.market_cap_reached') // Haven`t added
+  @OnEvent("milestone.market_cap_reached") // Haven`t added
   async handleMarketCapMilestone(event: {
     tokenTicker: string;
     milestoneAda: number;
@@ -294,7 +373,7 @@ export class NotificationEventsListener {
         title: `Market Cap milestone hit on ${event.tokenTicker}`,
         description: `Market Cap milestone ${event.milestoneAda.toLocaleString()} ADA / ${event.milestoneUsd.toLocaleString()} USD hit on ${event.tokenTicker}. Let's go!`,
       },
-      event.tokenHolderIds
+      event.tokenHolderIds,
     );
   }
 }
