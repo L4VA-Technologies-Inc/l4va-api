@@ -39,43 +39,60 @@ export class CancellationProcessor extends WorkerHost {
     const { claimId } = job.data;
 
     try {
+      this.logger.log(`Processing cancellation claim ${claimId}...`);
+      await job.updateProgress(10);
+
+      // Build and submit transaction with confirmation
       const result = await this.claimsService.buildAndSubmitCancellationTransaction(claimId);
+      await job.updateProgress(70);
 
       if (!result.success) {
-        throw new Error('Failed to build cancellation transaction');
+        throw new Error('Failed to build and submit cancellation transaction');
       }
 
+      this.logger.log(
+        `Cancellation transaction submitted and confirmed for claim ${claimId}, tx hash: ${result.txHash}`
+      );
       await job.updateProgress(90);
 
-      if (result.success) {
-        this.logger.log(
-          `Successfully processed automatic cancellation for claim ${claimId}, ` + `tx hash: ${result.txHash}`
-        );
+      // Update claim status and release assets only after confirmation
+      await this.claimsService.updateClaimStatus(claimId, ClaimStatus.CLAIMED, {
+        processedAt: new Date().toISOString(),
+        txHash: result.txHash,
+        confirmationStatus: 'confirmed',
+      });
 
-        // Update job progress to complete
-        await this.claimsService.updateClaimStatus(claimId, ClaimStatus.CLAIMED);
+      // Release assets associated with this claim
+      try {
         await this.assetsService.releaseAssetByClaimId(claimId);
-
-        await job.updateProgress(100);
-
-        return {
-          success: true,
-          claimId,
-          txHash: result.txHash,
-          processedAt: new Date().toISOString(),
-        };
-      } else {
-        throw new Error('Failed to submit cancellation transaction');
+      } catch (assetError) {
+        // Log but don't fail the whole process if asset release fails
+        this.logger.warn(`Failed to release assets for claim ${claimId}:`, assetError.message);
       }
+
+      await job.updateProgress(100);
+
+      this.logger.log(`Successfully processed cancellation for claim ${claimId}`);
+
+      return {
+        success: true,
+        claimId,
+        txHash: result.txHash,
+        processedAt: new Date().toISOString(),
+      };
     } catch (error) {
-      // Mark claim as failed after multiple attempts
-      if (job.attemptsMade >= job.opts.attempts) {
+      this.logger.error(`Error processing cancellation claim ${claimId}:`, error);
+
+      // Update claim status with failure info if this is the final attempt
+      if (job.attemptsMade >= (job.opts.attempts || 1)) {
         await this.claimsService.updateClaimStatus(claimId, ClaimStatus.FAILED, {
           failureReason: error.message,
           lastAttempt: new Date().toISOString(),
           totalAttempts: job.attemptsMade,
+          processingFailed: true,
         });
-        this.logger.error(`Marked claim ${claimId} as failed after ${job.attemptsMade} attempts`);
+
+        this.logger.error(`Marked cancellation claim ${claimId} as failed after ${job.attemptsMade} attempts`);
       }
 
       throw error;

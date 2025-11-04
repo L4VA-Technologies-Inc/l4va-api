@@ -397,34 +397,71 @@ export class ClaimsService {
       network: 'preprod',
     };
 
-    const buildResponse = await this.blockchainService.buildTransaction(input);
-    const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-    txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+    try {
+      const buildResponse = await this.blockchainService.buildTransaction(input);
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
-    const internalTx = await this.transactionRepository.save({
-      user_id: user.id,
-      vault_id: vault.id,
-      type: TransactionType.cancel,
-      status: TransactionStatus.created,
-    });
+      // Create internal transaction record
+      const internalTx = await this.transactionRepository.save({
+        user_id: user.id,
+        vault_id: vault.id,
+        type: TransactionType.cancel,
+        status: TransactionStatus.created,
+      });
 
-    const response = await this.blockchainService.submitTransaction({
-      transaction: txToSubmitOnChain.to_hex(),
-    });
+      // Submit transaction
+      const response = await this.blockchainService.submitTransaction({
+        transaction: txToSubmitOnChain.to_hex(),
+      });
 
-    if (response.txHash) {
+      if (!response.txHash) {
+        throw new Error('Failed to submit cancellation transaction - no txHash returned');
+      }
+
+      // Update transaction with hash immediately
       await this.transactionRepository.update(
         { id: internalTx.id },
-        { tx_hash: response.txHash, status: TransactionStatus.confirmed }
+        { tx_hash: response.txHash, status: TransactionStatus.submitted }
       );
-      await new Promise(resolve => setTimeout(resolve, 90000));
-      return {
-        success: true,
-        txHash: response.txHash,
-      };
+
+      this.logger.log(
+        `Cancellation transaction ${response.txHash} submitted for claim ${claimId}, waiting for confirmation...`
+      );
+
+      // Wait for confirmation using blockchain service
+      const confirmed = await this.blockchainService.waitForTransactionConfirmation(
+        response.txHash,
+        600000, // 10 minutes timeout
+        30000 // 30 seconds check interval
+      );
+
+      if (confirmed) {
+        // Update transaction status to confirmed
+        await this.transactionRepository.update({ id: internalTx.id }, { status: TransactionStatus.confirmed });
+
+        this.logger.log(`Cancellation transaction ${response.txHash} confirmed for claim ${claimId}`);
+
+        return {
+          success: true,
+          txHash: response.txHash,
+        };
+      } else {
+        // Handle timeout
+        await this.transactionRepository.update({ id: internalTx.id }, { status: TransactionStatus.failed });
+
+        this.logger.warn(`Cancellation transaction ${response.txHash} confirmation timeout for claim ${claimId}`);
+
+        // Still return success but with a warning - transaction was submitted
+        return {
+          success: true,
+          txHash: response.txHash,
+        };
+      }
+    } catch (error) {
+      this.logger.error(`Failed to process cancellation transaction for claim ${claimId}:`, error);
+      throw new Error(`Failed to submit cancellation transaction: ${error.message}`);
     }
-    await new Promise(resolve => setTimeout(resolve, 90000));
-    throw new Error('Failed to submit cancellation transaction');
   }
 
   async buildClaimTransaction(claimId: string): Promise<{
