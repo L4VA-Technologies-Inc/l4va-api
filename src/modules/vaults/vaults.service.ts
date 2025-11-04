@@ -981,8 +981,8 @@ export class VaultsService {
     additionalData['canCreateProposal'] = canCreateProposal;
     additionalData['isChatVisible'] = isChatVisible;
     additionalData['valuationAmount'] =
-      vault.total_acquired_value_ada && vault.tokens_for_acquires
-        ? parseFloat((vault.total_acquired_value_ada / (vault.tokens_for_acquires * 0.01)).toFixed(2))
+      assetsPrices.totalAcquiredAda && vault.tokens_for_acquires
+        ? parseFloat((assetsPrices.totalAcquiredAda / (vault.tokens_for_acquires * 0.01)).toFixed(2))
         : 0;
 
     // First transform the vault to plain object with class-transformer
