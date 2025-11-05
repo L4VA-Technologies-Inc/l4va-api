@@ -173,6 +173,25 @@ export class LifecycleService {
           contributionStartDate: new Date(vault.contribution_phase_start).toLocaleDateString(),
           contributionStartTime: new Date(vault.contribution_phase_start).toLocaleTimeString(),
         });
+
+        this.eventEmitter.emit('vault.launched.email', {
+          vault,
+        });
+
+        this.eventEmitter.emit('vault.phase.email', {
+          vault,
+          phaseStatus: 'launched',
+        });
+      } else if (data.newStatus === VaultStatus.acquire) {
+        this.eventEmitter.emit('vault.phase.email', {
+          vault,
+          phaseStatus: 'launched',
+        });
+      } else if (data.newStatus === VaultStatus.locked) {
+        this.eventEmitter.emit('vault.phase.email', {
+          vault,
+          phaseStatus: 'launched',
+        });
       }
 
       if (data.newScStatus === SmartContractVaultStatus.SUCCESSFUL) {
