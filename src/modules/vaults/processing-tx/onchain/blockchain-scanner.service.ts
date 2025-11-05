@@ -70,7 +70,7 @@ export class BlockchainScannerService {
   async registerTrackingAddress(vaultAddress: string = '', vaultName: string): Promise<any> {
     let retries = 0;
     const maxRetries = 5;
-    const retryDelay = 15000;
+    const retryDelay = 20000;
 
     while (retries < maxRetries) {
       try {
@@ -82,7 +82,7 @@ export class BlockchainScannerService {
       } catch (error) {
         retries++;
         this.logger.warn(
-          `Failed to register tracking address ${vaultAddress}. Attempt ${retries}/${maxRetries}. Retrying in 15 seconds...`
+          `Failed to register tracking address ${vaultAddress}. Attempt ${retries}/${maxRetries}. Retrying in 20 seconds...`
         );
 
         if (retries >= maxRetries) {

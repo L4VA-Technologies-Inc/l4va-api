@@ -3,10 +3,9 @@ import {
   BadRequestException,
   Injectable,
   InternalServerErrorException,
-  Logger, NotFoundException,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
@@ -40,7 +39,8 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { transformToSnakeCase } from '@/helpers';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
-import {TransactionStatus, TransactionType} from '@/types/transaction.types';
+import { ProposalStatus } from '@/types/proposal.types';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import {
   ContributionWindowType,
   InvestmentWindowType,
@@ -48,9 +48,6 @@ import {
   VaultPrivacy,
   VaultStatus,
 } from '@/types/vault.types';
-import { ProposalStatus } from "@/types/proposal.types";
-import { Transaction } from "@/database/transaction.entity";
-import { Snapshot } from "@/database/snapshot.entity";
 
 /**
  * VaultsService
@@ -99,7 +96,7 @@ export class VaultsService {
     private readonly blockchainService: BlockchainService,
     private readonly governanceService: GovernanceService,
     private readonly taptoolsService: TaptoolsService,
-    private readonly transactionsService: TransactionsService,
+    private readonly transactionsService: TransactionsService
   ) {}
 
   /**
@@ -375,8 +372,9 @@ export class VaultsService {
       await Promise.all(
         uniquePolicyIds.map(async assetItem => {
           if (!assetItem.policyId) return;
-      
-          const result = await this.assetsWhitelistRepository.createQueryBuilder()
+
+          const result = await this.assetsWhitelistRepository
+            .createQueryBuilder()
             .insert()
             .values({
               vault: newVault,
@@ -386,7 +384,7 @@ export class VaultsService {
             })
             .orIgnore()
             .execute();
-      
+
           if (result.identifiers.length > 0 && assetItem.countCapMax) {
             maxCountOf += assetItem.countCapMax;
           }
@@ -535,7 +533,7 @@ export class VaultsService {
       finalVault.asset_vault_name = vaultAssetName;
       finalVault.script_hash = scriptHash;
       finalVault.apply_params_result = applyParamsResult;
-      finalVault.ft_token_decimals = 3; // Hardcoded to 3 for now as hotfix
+      finalVault.ft_token_decimals = this.calculateOptimalDecimals(finalVault.ft_token_supply || 1_000_000);
 
       await this.vaultsRepository.save(finalVault);
 
@@ -998,7 +996,6 @@ export class VaultsService {
     return plainToInstance(VaultFullResponse, result, { excludeExtraneousValues: true });
   }
 
-
   async checkChat(userId: string, vaultId: string): Promise<boolean> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
@@ -1012,7 +1009,9 @@ export class VaultsService {
     const result = await this.vaultsRepository
       .createQueryBuilder('vault')
       .leftJoin('vault.snapshots', 'snapshot')
-      .leftJoin('transactions', 'transaction',
+      .leftJoin(
+        'transactions',
+        'transaction',
         'transaction.vault_id = vault.id AND transaction.user_id = :userId AND transaction.status = :confirmedStatus'
       )
       .select('vault.id')
@@ -1024,7 +1023,7 @@ export class VaultsService {
       .orderBy('snapshot.created_at', 'DESC')
       .setParameters({
         userId,
-        confirmedStatus: TransactionStatus.confirmed
+        confirmedStatus: TransactionStatus.confirmed,
       })
       .getRawOne();
 
@@ -1530,5 +1529,38 @@ export class VaultsService {
 
   async incrementViewCount(vaultId: string): Promise<UpdateResult> {
     return await this.vaultsRepository.increment({ id: vaultId }, 'count_view', 1);
+  }
+
+  private calculateOptimalDecimals(tokenSupply: number): number {
+    const maxSafeDecimals = Math.floor(Math.log10(Number.MAX_SAFE_INTEGER / tokenSupply));
+
+    let targetDecimals: number;
+    if (tokenSupply >= 900_000_000_000) {
+      targetDecimals = 3;
+    } else if (tokenSupply >= 90_000_000_000) {
+      targetDecimals = 4;
+    } else if (tokenSupply >= 9_000_000_000) {
+      targetDecimals = 5;
+    } else if (tokenSupply >= 900_000_000) {
+      targetDecimals = 6;
+    } else if (tokenSupply >= 90_000_000) {
+      targetDecimals = 7;
+    } else if (tokenSupply >= 9_000_000) {
+      targetDecimals = 8;
+    } else if (tokenSupply >= 1_000_000) {
+      targetDecimals = 9;
+    } else {
+      targetDecimals = 9;
+    }
+
+    const safeDecimals = Math.min(targetDecimals, maxSafeDecimals);
+
+    if (safeDecimals < targetDecimals) {
+      this.logger.warn(
+        `Token supply ${tokenSupply}: target decimals ${targetDecimals} reduced to ${safeDecimals} for safety`
+      );
+    }
+
+    return Math.max(safeDecimals, 0);
   }
 }

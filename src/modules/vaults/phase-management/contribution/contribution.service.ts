@@ -167,7 +167,7 @@ export class ContributionService {
               description: vault.description,
               ticker: vault.vault_token_ticker,
               logo: vault.ft_token_img?.file_url || '',
-              decimals: vault.ft_token_decimals || 3,
+              decimals: vault.ft_token_decimals || 9,
             });
           } catch (error) {
             this.logger.error('Error updating vault metadata:', error);
