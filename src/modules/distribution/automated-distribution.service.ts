@@ -364,9 +364,6 @@ export class AutomatedDistributionService {
     dispatchParametizedHash: string
   ): Promise<void> {
     const DISPATCH_ADDRESS = this.getDispatchAddress(dispatchParametizedHash);
-    const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(vault.script_hash)))
-      .to_address()
-      .to_bech32();
 
     // Build script interactions for all claims in the batch
     const scriptInteractions: object[] = [];
@@ -443,7 +440,7 @@ export class AutomatedDistributionService {
 
       // Add vault output for this claim
       outputs.push({
-        address: SC_ADDRESS,
+        address: this.adminAddress,
         assets: [
           {
             assetName: { name: vault.asset_vault_name, format: 'hex' },
@@ -561,9 +558,6 @@ export class AutomatedDistributionService {
     dispatchParametizedHash: string
   ): Promise<void> {
     const DISPATCH_ADDRESS = this.getDispatchAddress(dispatchParametizedHash);
-    const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(vault.script_hash)))
-      .to_address()
-      .to_bech32();
 
     for (const claim of claims) {
       try {
@@ -668,7 +662,7 @@ export class AutomatedDistributionService {
               },
             },
             {
-              address: SC_ADDRESS,
+              address: this.adminAddress,
               assets: [
                 {
                   assetName: { name: vault.asset_vault_name, format: 'hex' },
@@ -731,6 +725,7 @@ export class AutomatedDistributionService {
       }
     }
   }
+
   private async checkExtractionsAndTriggerPayments(): Promise<void> {
     const confirmedExtractions = await this.transactionRepository
       .createQueryBuilder('tx')
