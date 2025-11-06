@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { FixedTransaction, PlutusData, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
+import { Address, FixedTransaction, PlutusData, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -17,7 +17,7 @@ import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { Datum, Redeemer, Redeemer1 } from '@/modules/vaults/processing-tx/onchain/types/type';
-import { generate_tag_from_txhash_index } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import { generate_tag_from_txhash_index, getUtxosExctract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { AssetOriginType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -291,6 +291,7 @@ export class ClaimsService {
       throw new Error('No lps to claim.');
     }
 
+    const adminUtxos = await getUtxosExctract(Address.from_bech32(this.adminAddress), 0, this.blockfrost);
     const datumTag = generate_tag_from_txhash_index(transaction.tx_hash, 0);
 
     const refundAssets = [];
@@ -313,6 +314,7 @@ export class ClaimsService {
     const input: {
       changeAddress: string;
       message: string;
+      utxos: string[];
       mint?: Array<object>;
       scriptInteractions: object[];
       outputs: {
@@ -331,6 +333,7 @@ export class ClaimsService {
     } = {
       changeAddress: this.adminAddress,
       message: `Cancel ${transaction.type === TransactionType.contribute ? 'asset' : 'ADA'} contribution - return assets to contributor`,
+      utxos: adminUtxos,
       scriptInteractions: [
         {
           purpose: 'spend',
