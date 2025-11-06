@@ -368,7 +368,9 @@ export class AutomatedDistributionService {
   ): Promise<void> {
     const DISPATCH_ADDRESS = this.getDispatchAddress(dispatchParametizedHash);
     const adminUtxos = await getUtxosExctract(Address.from_bech32(this.adminAddress), 0, this.blockfrost);
-
+    if (adminUtxos.length === 0) {
+      throw new Error('No UTXOs on admin wallet was found.');
+    }
     // Build script interactions for all claims in the batch
     const scriptInteractions: object[] = [];
     const mintAssets: object[] = [];
@@ -588,6 +590,9 @@ export class AutomatedDistributionService {
         }
 
         const adminUtxos = await getUtxosExctract(Address.from_bech32(this.adminAddress), 0, this.blockfrost);
+        if (adminUtxos.length === 0) {
+          throw new Error('No UTXOs on admin wallet was found.');
+        }
         const datumTag = generate_tag_from_txhash_index(originalTx.tx_hash, 0);
 
         const adaPairMultiplier = Number(vault.ada_pair_multiplier);
@@ -993,7 +998,9 @@ export class AutomatedDistributionService {
           .to_bech32();
 
         const adminUtxos = await getUtxosExctract(Address.from_bech32(this.adminAddress), 0, this.blockfrost);
-
+        if (adminUtxos.length === 0) {
+          throw new Error('No UTXOs on admin wallet was found.');
+        }
         const input: PayAdaContributionInput = {
           changeAddress: this.adminAddress,
           message: `Pay ADA to contributor for claim ${claim.id}`,
