@@ -35,6 +35,7 @@ export class AutomaticCancellationService {
           type: ClaimType.CANCELLATION,
           status: ClaimStatus.AVAILABLE,
         },
+        order: { created_at: 'ASC' },
         take: 5, // Process in batches
       });
 
@@ -49,8 +50,8 @@ export class AutomaticCancellationService {
           'process-cancellation',
           { claimId: claim.id },
           {
-            delay: i * 90000,
-            attempts: 2,
+            delay: i * 20000,
+            attempts: 3,
             backoff: {
               type: 'exponential',
               delay: 10000,
@@ -61,6 +62,8 @@ export class AutomaticCancellationService {
           }
         );
       }
+    } catch (error) {
+      this.logger.error('Error in processPendingCancellations:', error);
     } finally {
       this.isProcessing = false;
     }

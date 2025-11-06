@@ -466,7 +466,7 @@ export class TaptoolsService {
     }
 
     if (updatePrices && assetsWithValues.length > 0) {
-      await this.assetsService.updateAssetValuations(
+      await this.assetsService.updateBulkAssetValuations(
         assetsWithValues.map(asset => ({
           policyId: asset.policyId,
           assetId: asset.assetId,

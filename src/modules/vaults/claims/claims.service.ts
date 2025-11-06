@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { FixedTransaction, PlutusData, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
+import { Address, FixedTransaction, PlutusData, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -15,10 +15,9 @@ import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
-import { AssetsService } from '@/modules/vaults/processing-tx/assets/assets.service';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { Datum, Redeemer, Redeemer1 } from '@/modules/vaults/processing-tx/onchain/types/type';
-import { generate_tag_from_txhash_index } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import { generate_tag_from_txhash_index, getUtxosExctract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { AssetOriginType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -29,7 +28,6 @@ export class ClaimsService {
   private readonly adminSKey: string;
   private readonly adminAddress: string;
   private readonly adminHash: string;
-  private readonly unparametizedDispatchHash: string;
   private blockfrost: BlockFrostAPI;
 
   constructor(
@@ -40,12 +38,10 @@ export class ClaimsService {
     @InjectRepository(Claim)
     private claimRepository: Repository<Claim>,
     private readonly configService: ConfigService,
-    private readonly assetService: AssetsService,
     private readonly blockchainService: BlockchainService
   ) {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
-    this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
@@ -289,12 +285,28 @@ export class ClaimsService {
     if (!output) {
       throw new Error('No output found');
     }
+
+    if (output.consumed_by_tx) {
+      this.logger.warn(
+        `Contribution UTXO ${transaction.tx_hash}#0 already consumed by transaction ${output.consumed_by_tx}. Marking claim ${claim.id} as claimed.`
+      );
+
+      await this.updateClaimStatus(claim.id, ClaimStatus.CLAIMED, {
+        claimReason: 'UTXO_ALREADY_SPENT',
+      });
+      return;
+    }
+
     const amountOfLpsToClaim = output.amount.find((a: { unit: string; quantity: string }) => a.unit === lpsUnit);
 
     if (!amountOfLpsToClaim) {
       throw new Error('No lps to claim.');
     }
 
+    const adminUtxos = await getUtxosExctract(Address.from_bech32(this.adminAddress), 0, this.blockfrost);
+    if (adminUtxos.length === 0) {
+      throw new Error('No UTXOs found.');
+    }
     const datumTag = generate_tag_from_txhash_index(transaction.tx_hash, 0);
 
     const refundAssets = [];
@@ -317,6 +329,7 @@ export class ClaimsService {
     const input: {
       changeAddress: string;
       message: string;
+      utxos: string[];
       mint?: Array<object>;
       scriptInteractions: object[];
       outputs: {
@@ -335,6 +348,7 @@ export class ClaimsService {
     } = {
       changeAddress: this.adminAddress,
       message: `Cancel ${transaction.type === TransactionType.contribute ? 'asset' : 'ADA'} contribution - return assets to contributor`,
+      utxos: adminUtxos,
       scriptInteractions: [
         {
           purpose: 'spend',
@@ -397,132 +411,65 @@ export class ClaimsService {
       network: 'preprod',
     };
 
-    const buildResponse = await this.blockchainService.buildTransaction(input);
-    const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-    txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
-
-    const internalTx = await this.transactionRepository.save({
-      user_id: user.id,
-      vault_id: vault.id,
-      type: TransactionType.cancel,
-      status: TransactionStatus.created,
-    });
-
-    const response = await this.blockchainService.submitTransaction({
-      transaction: txToSubmitOnChain.to_hex(),
-    });
-
-    if (response.txHash) {
-      await this.transactionRepository.update(
-        { id: internalTx.id },
-        { tx_hash: response.txHash, status: TransactionStatus.confirmed }
-      );
-      await new Promise(resolve => setTimeout(resolve, 90000));
-      return {
-        success: true,
-        txHash: response.txHash,
-      };
-    }
-    await new Promise(resolve => setTimeout(resolve, 90000));
-    throw new Error('Failed to submit cancellation transaction');
-  }
-
-  async buildClaimTransaction(claimId: string): Promise<{
-    success: boolean;
-    transactionId: string;
-    presignedTx: string;
-  }> {
-    throw new Error(
-      'Claim transaction building is currently disabled. Please use cancellation claims or contact support for alternatives.'
-    );
-
-    const claim = await this.claimRepository.findOne({
-      where: { id: claimId },
-      relations: ['user', 'vault', 'transaction'],
-    });
-
-    const vault = claim.vault;
-    const user = claim.user;
-
-    if (!claim) {
-      throw new NotFoundException('Claim not found');
-    }
-
-    if (claim.status !== ClaimStatus.AVAILABLE && claim.status !== ClaimStatus.PENDING) {
-      throw new Error('Claim is not available for extraction');
-    }
-
-    if (!vault || !user) {
-      throw new Error('Vault or user not found for claim');
-    }
-    // return await this.claimAcquirer(claim, user, vault);
-  }
-
-  async submitSignedTransaction(
-    transactionId: string,
-    signedTx: {
-      transaction: string;
-      signatures: string | string[];
-      txId: string;
-      claimId: string;
-    }
-  ): Promise<{
-    success: boolean;
-    transactionId: string;
-    blockchainTxHash: string;
-  }> {
-    // Find the internal transaction
-    const internalTx = await this.transactionRepository.findOne({
-      where: { id: transactionId },
-    });
-
-    if (!internalTx) {
-      throw new NotFoundException('Transaction not found');
-    }
-
     try {
-      const signatures = Array.isArray(signedTx.signatures) ? signedTx.signatures : [signedTx.signatures];
+      const buildResponse = await this.blockchainService.buildTransaction(input);
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
-      const result = await this.blockchainService.submitTransaction({
-        transaction: signedTx.transaction,
-        signatures,
+      // Create internal transaction record
+      const internalTx = await this.transactionRepository.save({
+        user_id: user.id,
+        vault_id: vault.id,
+        type: TransactionType.cancel,
+        status: TransactionStatus.created,
       });
 
-      internalTx.tx_hash = result.txHash;
-      internalTx.status = TransactionStatus.submitted;
-      await this.transactionRepository.save(internalTx);
+      // Submit transaction
+      const response = await this.blockchainService.submitTransaction({
+        transaction: txToSubmitOnChain.to_hex(),
+      });
 
-      if (internalTx.type === TransactionType.cancel) {
-        const claim = await this.claimRepository.findOne({
-          where: { id: signedTx.claimId },
-          select: ['id', 'metadata', 'type'],
-        });
-
-        if (claim && claim.metadata) {
-          if (claim.type === ClaimType.FINAL_DISTRIBUTION && claim.metadata.isContribution && claim.metadata.assetIds) {
-            for (const assetId of claim.metadata.assetIds) {
-              try {
-                // Update asset status in database
-                await this.assetService.cancelAsset(assetId, claim.user_id);
-                this.logger.log(`Asset ${assetId} marked as deleted after cancellation`);
-              } catch (assetError) {
-                this.logger.error(`Failed to mark asset ${assetId} as deleted:`, assetError);
-              }
-            }
-          }
-        }
+      if (!response.txHash) {
+        throw new Error('Failed to submit cancellation transaction - no txHash returned');
       }
 
-      await this.updateClaimStatus(signedTx.claimId, ClaimStatus.CLAIMED);
+      // Update transaction with hash immediately
+      await this.transactionRepository.update(
+        { id: internalTx.id },
+        { tx_hash: response.txHash, status: TransactionStatus.submitted }
+      );
 
-      return {
-        success: true,
-        transactionId: internalTx.id,
-        blockchainTxHash: result.txHash,
-      };
+      this.logger.log(
+        `Cancellation transaction ${response.txHash} submitted for claim ${claimId}, waiting for confirmation...`
+      );
+
+      // Wait for confirmation using blockchain service
+      const confirmed = await this.blockchainService.waitForTransactionConfirmation(response.txHash);
+
+      if (confirmed) {
+        // Update transaction status to confirmed
+        await this.transactionRepository.update({ id: internalTx.id }, { status: TransactionStatus.confirmed });
+
+        this.logger.log(`Cancellation transaction ${response.txHash} confirmed for claim ${claimId}`);
+
+        return {
+          success: true,
+          txHash: response.txHash,
+        };
+      } else {
+        // Handle timeout
+        await this.transactionRepository.update({ id: internalTx.id }, { status: TransactionStatus.failed });
+
+        this.logger.warn(`Cancellation transaction ${response.txHash} confirmation timeout for claim ${claimId}`);
+
+        // Still return success but with a warning - transaction was submitted
+        return {
+          success: true,
+          txHash: response.txHash,
+        };
+      }
     } catch (error) {
-      await this.transactionRepository.save(internalTx);
-      throw error;
+      throw new Error(`Failed to submit cancellation transaction: ${error.message}`);
     }
   }
 
@@ -558,219 +505,30 @@ export class ClaimsService {
     }
   }
 
-  // private async claimAcquirer(
-  //   claim: Claim,
-  //   user: User,
-  //   vault: Vault
-  // ): Promise<{
+  // async buildClaimTransaction(claimId: string): Promise<{
   //   success: boolean;
   //   transactionId: string;
   //   presignedTx: string;
   // }> {
-  //   try {
-  //     const utxos = await getUtxosExctract(Address.from_bech32(user.address), 0, this.blockfrost); // Any UTXO works.
+  //   const claim = await this.claimRepository.findOne({
+  //     where: { id: claimId },
+  //     relations: ['user', 'vault', 'transaction'],
+  //   });
 
-  //     if (utxos.length === 0) {
-  //       throw new Error('No UTXOs found.');
-  //     }
+  //   const vault = claim.vault;
+  //   const user = claim.user;
 
-  //     const POLICY_ID = vault.script_hash;
-  //     const DISPATCH_UTXO_TX_HASH = vault.dispatch_utxo_tx_hash;
-
-  //     const hasAssets = claim.type === ClaimType.CONTRIBUTOR;
-  //     const lpsUnit = vault.script_hash + '72656365697074';
-  //     const txUtxos = await this.blockfrost.txsUtxos(claim.transaction.tx_hash);
-  //     const output = txUtxos.outputs[0];
-  //     if (!output) {
-  //       throw new Error('No output found');
-  //     }
-  //     const lovelaceChange = Number(output.amount.find(a => a.unit === 'lovelace')?.quantity ?? '0');
-  //     const amountOfLpsToClaim = output.amount.find(a => a.unit === lpsUnit);
-  //     const datumTag = generate_tag_from_txhash_index(claim.transaction.tx_hash, Number(0));
-
-  //     if (!amountOfLpsToClaim) {
-  //       throw new Error('No lps to claim.');
-  //     }
-
-  //     const input: {
-  //       changeAddress: string;
-  //       message: string;
-  //       mint?: Array<object>;
-  //       scriptInteractions: object[];
-  //       outputs: {
-  //         address: string;
-  //         assets?: object[];
-  //         lovelace?: number;
-  //         datum?: { type: 'inline'; value: string | Datum | { datum_tag: string; ada_paid: number }; shape?: object };
-  //       }[];
-  //       requiredSigners: string[];
-  //       referenceInputs: { txHash: string; index: number }[];
-  //       validityInterval: {
-  //         start: boolean;
-  //         end: boolean;
-  //       };
-  //       network: string;
-  //     } = {
-  //       changeAddress: user.address,
-  //       message: hasAssets
-  //         ? 'Claim VTs from asset contribution  and collect ADA from dispatch'
-  //         : 'Claim VTs from ADA contribution',
-  //       scriptInteractions: [
-  //         {
-  //           purpose: 'spend',
-  //           hash: POLICY_ID,
-  //           outputRef: {
-  //             txHash: claim.transaction.tx_hash,
-  //             index: 0,
-  //           },
-  //           redeemer: {
-  //             type: 'json',
-  //             // Removed in new sc
-  //             // value: {
-  //             //   __variant: 'CollectVaultToken',
-  //             //   __data: {
-  //             //     vault_token_output_index: 0,
-  //             //     change_output_index: 1,
-  //             //   },
-  //             // },
-  //             value: {
-  //               vault_token_output_index: 0,
-  //               change_output_index: hasAssets ? 2 : 1, // Account for dispatch output
-  //             },
-  //           },
-  //         },
-  //         {
-  //           purpose: 'mint',
-  //           hash: POLICY_ID,
-  //           redeemer: {
-  //             type: 'json',
-  //             value: 'MintVaultToken' satisfies Redeemer,
-  //           },
-  //         },
-  //         ...(hasAssets
-  //           ? [
-  //               {
-  //                 purpose: 'spend',
-  //                 hash: this.unparametizedDispatchHash,
-  //                 outputRef: {
-  //                   txHash: DISPATCH_UTXO_TX_HASH,
-  //                   index: DISPATCH_UTXO_INDEX,
-  //                 },
-  //                 redeemer: {
-  //                   type: 'json',
-  //                   value: null, // Dispatch spend redeemer
-  //                 },
-  //               },
-  //               {
-  //                 purpose: 'withdraw',
-  //                 hash: this.unparametizedDispatchHash,
-  //                 redeemer: {
-  //                   type: 'json',
-  //                   value: null, // Dispatch withdraw redeemer
-  //                 },
-  //               },
-  //             ]
-  //           : []),
-  //       ],
-  //       mint: [
-  //         {
-  //           version: 'cip25',
-  //           assetName: { name: vault.asset_vault_name, format: 'hex' },
-  //           policyId: POLICY_ID,
-  //           type: 'plutus',
-  //           quantity: claim.amount, // Use the amount from the claim
-  //           metadata: {},
-  //         },
-  //         {
-  //           version: 'cip25',
-  //           assetName: { name: 'receipt', format: 'utf8' },
-  //           policyId: POLICY_ID,
-  //           type: 'plutus',
-  //           quantity: -1,
-  //           metadata: {},
-  //         },
-  //       ],
-  //       outputs: [
-  //         {
-  //           address: user.address,
-  //           assets: [
-  //             {
-  //               assetName: { name: vault.asset_vault_name, format: 'hex' },
-  //               policyId: vault.script_hash,
-  //               quantity: claim.amount,
-  //             },
-  //           ],
-  //           lovelace: hasAssets ? 5000000 : undefined,
-  //           datum: {
-  //             type: 'inline',
-  //             value: {
-  //               datum_tag: PlutusData.new_bytes(Buffer.from(datumTag, 'hex')).to_hex(),
-  //               ada_paid: 5000000, // Should use calculated value here
-  //             },
-  //             shape: {
-  //               validatorHash: POLICY_ID,
-  //               purpose: 'spend',
-  //             },
-  //           },
-  //         },
-  //         {
-  //           address: vault.contract_address,
-  //           lovelace: lovelaceChange,
-  //           datum: {
-  //             type: 'inline',
-  //             value: {
-  //               policy_id: POLICY_ID,
-  //               asset_name: vault.asset_vault_name,
-  //               owner: user.address,
-  //               datum_tag: datumTag,
-  //             },
-  //             shape: { validatorHash: POLICY_ID, purpose: 'spend' },
-  //           },
-  //         },
-  //       ],
-  //       requiredSigners: [this.adminHash],
-  //       referenceInputs: [
-  //         {
-  //           txHash: vault.last_update_tx_hash,
-  //           index: vault.last_update_tx_index,
-  //         },
-  //       ],
-  //       validityInterval: {
-  //         start: true,
-  //         end: true,
-  //       },
-  //       network: 'preprod',
-  //     };
-
-  //     // Build the transaction
-  //     const buildResponse = await this.blockchainService.buildTransaction(input);
-  //     this.logger.log('Transaction built successfully');
-
-  //     // Sign the transaction with admin key
-  //     const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-  //     txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
-
-  //     // Create internal transaction
-  //     const internalTx = await this.transactionRepository.save({
-  //       user_id: user.id,
-  //       vault_id: vault.id,
-  //       // amount: claim.amount,
-  //       type: TransactionType.claim,
-  //       status: TransactionStatus.created,
-  //     });
-
-  //     await this.transactionRepository.save(internalTx);
-
-  //     return {
-  //       success: true,
-  //       transactionId: internalTx.id,
-  //       presignedTx: txToSubmitOnChain.to_hex(),
-  //     };
-  //   } catch (error) {
-  //     // Reset claim status on error
-  //     claim.status = ClaimStatus.AVAILABLE;
-  //     await this.claimRepository.save(claim);
-  //     throw error;
+  //   if (!claim) {
+  //     throw new NotFoundException('Claim not found');
   //   }
+
+  //   if (claim.status !== ClaimStatus.AVAILABLE && claim.status !== ClaimStatus.PENDING) {
+  //     throw new Error('Claim is not available for extraction');
+  //   }
+
+  //   if (!vault || !user) {
+  //     throw new Error('Vault or user not found for claim');
+  //   }
+  //   // return await this.claimAcquirer(claim, user, vault);
   // }
 }

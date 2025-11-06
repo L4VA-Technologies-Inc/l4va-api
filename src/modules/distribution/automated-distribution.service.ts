@@ -8,6 +8,7 @@ import {
   FixedTransaction,
   PrivateKey,
   Transaction as CardanoTransaction,
+  Address,
 } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -15,10 +16,11 @@ import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, Not, IsNull, MoreThan } from 'typeorm';
 
+import { ClaimsService } from '../vaults/claims/claims.service';
 import { GovernanceService } from '../vaults/phase-management/governance/governance.service';
 import { AssetsService } from '../vaults/processing-tx/assets/assets.service';
 import { ApplyParamsResponse, BlockchainService } from '../vaults/processing-tx/onchain/blockchain.service';
-import { generate_tag_from_txhash_index } from '../vaults/processing-tx/onchain/utils/lib';
+import { generate_tag_from_txhash_index, getUtxosExctract } from '../vaults/processing-tx/onchain/utils/lib';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
@@ -32,6 +34,7 @@ import { VaultStatus, SmartContractVaultStatus } from '@/types/vault.types';
 interface ExtractInput {
   changeAddress: string;
   message: string;
+  utxos: string[];
   mint?: object[];
   scriptInteractions: object[];
   outputs: {
@@ -52,6 +55,7 @@ interface ExtractInput {
 interface PayAdaContributionInput {
   changeAddress: string;
   message: string;
+  utxos: string[];
   scriptInteractions: object[];
   mint?: Array<object>;
   outputs: {
@@ -111,6 +115,7 @@ export class AutomatedDistributionService {
     private readonly configService: ConfigService,
     private readonly blockchainService: BlockchainService,
     private readonly assetService: AssetsService,
+    private readonly claimsService: ClaimsService,
     private readonly governanceService: GovernanceService
   ) {
     this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
@@ -278,12 +283,6 @@ export class AutomatedDistributionService {
 
           if (stakeResult.success) {
             await this.vaultRepository.update({ id: vaultId }, { stake_registered: true });
-
-            if (!stakeResult.alreadyRegistered) {
-              await new Promise(resolve => setTimeout(resolve, 50000));
-            }
-
-            this.logger.log(`Stake credential registered for vault ${vaultId}. Proceeding to payments.`);
             await this.processContributorPayments(vaultId);
           } else {
             this.logger.error(`Failed to register stake credential for vault ${vaultId}`);
@@ -368,7 +367,10 @@ export class AutomatedDistributionService {
     dispatchParametizedHash: string
   ): Promise<void> {
     const DISPATCH_ADDRESS = this.getDispatchAddress(dispatchParametizedHash);
-
+    const adminUtxos = await getUtxosExctract(Address.from_bech32(this.adminAddress), 0, this.blockfrost);
+    if (adminUtxos.length === 0) {
+      throw new Error('No UTXOs on admin wallet was found.');
+    }
     // Build script interactions for all claims in the batch
     const scriptInteractions: object[] = [];
     const mintAssets: object[] = [];
@@ -494,6 +496,7 @@ export class AutomatedDistributionService {
     const input: ExtractInput = {
       changeAddress: this.adminAddress,
       message: `Extract ADA for ${claims.length} claims`,
+      utxos: adminUtxos,
       scriptInteractions,
       mint: mintAssets,
       outputs,
@@ -528,21 +531,31 @@ export class AutomatedDistributionService {
       signatures: [],
     });
 
-    // Update all claims in the batch to claimed status
-    await this.claimRepository.update({ id: In(claims.map(c => c.id)) }, { status: ClaimStatus.CLAIMED });
-
-    // Distribute assets for all claims in the batch
-    for (const claim of claims) {
-      await this.assetService.distributeAssetByTransactionId(claim.transaction.id);
-    }
-
-    // Update extraction transaction with hash
     await this.transactionRepository.update(
       { id: extractionTx.id },
-      { tx_hash: response.txHash, status: TransactionStatus.confirmed }
+      { tx_hash: response.txHash, status: TransactionStatus.submitted }
     );
 
-    this.logger.log(`Batch extraction transaction ${response.txHash} submitted for ${claims.length} claims`);
+    this.logger.log(`Batch extraction transaction ${response.txHash} submitted, waiting for confirmation...`);
+
+    const confirmed = await this.blockchainService.waitForTransactionConfirmation(response.txHash);
+
+    if (confirmed) {
+      // Update all claims and assets only after confirmation
+      await this.claimRepository.update({ id: In(claims.map(c => c.id)) }, { status: ClaimStatus.CLAIMED });
+
+      for (const claim of claims) {
+        await this.assetService.markAssetsAsDistributedByTransaction(claim.transaction.id);
+      }
+
+      await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.confirmed });
+
+      this.logger.log(`Batch extraction transaction ${response.txHash} confirmed and processed`);
+    } else {
+      // Handle timeout/failure
+      await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
+      throw new Error(`Transaction ${response.txHash} failed to confirm within timeout period`);
+    }
   }
 
   private async processClaimsIndividually(
@@ -555,9 +568,8 @@ export class AutomatedDistributionService {
 
     for (const claim of claims) {
       try {
-        if (claims.indexOf(claim) > 0) {
-          await new Promise(resolve => setTimeout(resolve, 180000)); // 2 minutes between transactions
-        }
+        await new Promise(resolve => setTimeout(resolve, 30000));
+
         // Create individual transaction record
         const extractionTx = await this.transactionRepository.save({
           vault_id: vaultId,
@@ -570,8 +582,6 @@ export class AutomatedDistributionService {
           },
         });
 
-        this.logger.debug(`Processing individual extraction for claim ${claim.id}, transaction ${extractionTx.id}`);
-
         const { user } = claim;
         const originalTx = claim.transaction;
 
@@ -579,7 +589,12 @@ export class AutomatedDistributionService {
           throw new Error(`Original transaction not found for claim ${claim.id}`);
         }
 
+        const adminUtxos = await getUtxosExctract(Address.from_bech32(this.adminAddress), 0, this.blockfrost);
+        if (adminUtxos.length === 0) {
+          throw new Error('No UTXOs on admin wallet was found.');
+        }
         const datumTag = generate_tag_from_txhash_index(originalTx.tx_hash, 0);
+
         const adaPairMultiplier = Number(vault.ada_pair_multiplier);
         const claimMultiplier = Number(claim.metadata.multiplier);
         const originalAmount = Number(originalTx.amount);
@@ -590,7 +605,8 @@ export class AutomatedDistributionService {
 
         const input: ExtractInput = {
           changeAddress: this.adminAddress,
-          message: `Extract ADA for claim ${claim.id} (individual)`,
+          message: `Extract ADA for claim ${claim.id}`,
+          utxos: adminUtxos,
           scriptInteractions: [
             {
               purpose: 'spend',
@@ -687,8 +703,6 @@ export class AutomatedDistributionService {
           network: 'preprod',
         };
 
-        this.logger.debug(input);
-
         const buildResponse = await this.blockchainService.buildTransaction(input);
         const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
         txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
@@ -698,39 +712,28 @@ export class AutomatedDistributionService {
           signatures: [],
         });
 
-        // Update claim status
-        await this.claimRepository.update({ id: claim.id }, { status: ClaimStatus.CLAIMED });
-
-        // Distribute assets
-        await this.assetService.distributeAssetByTransactionId(claim.transaction.id);
-
-        // Update extraction transaction with hash
+        // Update transaction hash immediately
         await this.transactionRepository.update(
           { id: extractionTx.id },
-          { tx_hash: response.txHash, status: TransactionStatus.confirmed }
+          { tx_hash: response.txHash, status: TransactionStatus.submitted }
         );
 
-        this.logger.log(`Individual extraction transaction ${response.txHash} submitted for claim ${claim.id}`);
+        this.logger.log(`Individual extraction transaction ${response.txHash} submitted, waiting for confirmation...`);
+        const confirmed = await this.blockchainService.waitForTransactionConfirmation(response.txHash);
 
-        // Add delay between individual transactions
-        await new Promise(resolve => setTimeout(resolve, 90000));
+        if (confirmed) {
+          await this.claimsService.updateClaimStatus(claim.id, ClaimStatus.CLAIMED);
+          await this.assetService.markAssetsAsDistributedByTransaction(claim.transaction.id);
+
+          await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.confirmed });
+
+          this.logger.log(`Individual extraction transaction ${response.txHash} confirmed for claim ${claim.id}`);
+        } else {
+          this.logger.warn(`Individual extraction transaction ${response.txHash} timeout for claim ${claim.id}`);
+          await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
+        }
       } catch (error) {
         this.logger.error(`Failed to process individual extraction for claim ${claim.id}:`, error);
-
-        // Mark claim as failed if individual processing also fails
-        // await this.claimRepository.update(
-        //   { id: claim.id },
-        //   {
-        //     status: ClaimStatus.FAILED,
-        //     metadata: {
-        //       ...claim.metadata,
-        //       failureReason: error.message,
-        //       failedAt: new Date().toISOString(),
-        //     } as any,
-        //   }
-        // );
-
-        // Continue with next claim
         continue;
       }
     }
@@ -872,9 +875,7 @@ export class AutomatedDistributionService {
 
     for (const claim of claims) {
       try {
-        if (claims.indexOf(claim) > 0) {
-          await new Promise(resolve => setTimeout(resolve, 180000)); // 2 minutes between transactions
-        }
+        await new Promise(resolve => setTimeout(resolve, 20000)); // 20 seconds between transactions
 
         // Get ADA amount from metadata
         const adaAmount = claim.metadata?.adaAmount;
@@ -941,21 +942,12 @@ export class AutomatedDistributionService {
             `Contribution UTXO ${originalTx.tx_hash}#0 already consumed by transaction ${contribOutput.consumed_by_tx}. Marking claim ${claim.id} as failed.`
           );
 
-          // Mark claim as failed
-          await this.claimRepository.update(
-            { id: claim.id },
-            {
-              status: ClaimStatus.FAILED,
-              metadata: {
-                ...claim.metadata,
-                failureReason: 'UTXO_ALREADY_SPENT',
-                consumedByTx: contribOutput.consumed_by_tx,
-                failedAt: new Date().toISOString(),
-              } as any,
-            }
-          );
+          await this.claimsService.updateClaimStatus(claim.id, ClaimStatus.FAILED, {
+            failureReason: 'UTXO_ALREADY_SPENT',
+            consumedByTx: contribOutput.consumed_by_tx,
+            failedAt: new Date().toISOString(),
+          });
 
-          // Mark transaction as failed
           await this.transactionRepository.update(
             { id: transaction.id },
             {
@@ -1005,9 +997,14 @@ export class AutomatedDistributionService {
           .to_address()
           .to_bech32();
 
+        const adminUtxos = await getUtxosExctract(Address.from_bech32(this.adminAddress), 0, this.blockfrost);
+        if (adminUtxos.length === 0) {
+          throw new Error('No UTXOs on admin wallet was found.');
+        }
         const input: PayAdaContributionInput = {
           changeAddress: this.adminAddress,
           message: `Pay ADA to contributor for claim ${claim.id}`,
+          utxos: adminUtxos,
           preloadedScripts: [vault.dispatch_preloaded_script.preloadedScript],
           scriptInteractions: [
             ...selectedUtxos.map(utxo => ({
@@ -1151,21 +1148,34 @@ export class AutomatedDistributionService {
             { tx_hash: response.txHash, status: TransactionStatus.submitted }
           );
 
-          await this.claimRepository.update({ id: claim.id }, { status: ClaimStatus.CLAIMED });
+          this.logger.log(
+            `Payment transaction ${response.txHash} submitted for claim ${claim.id}, waiting for confirmation...`
+          );
 
-          this.logger.log(`Payment transaction ${response.txHash} submitted for claim ${claim.id}`);
-          await new Promise(resolve => setTimeout(resolve, 100000));
+          // Wait for confirmation
+          const confirmed = await this.blockchainService.waitForTransactionConfirmation(response.txHash);
+
+          if (confirmed) {
+            await this.transactionRepository.update({ id: transaction.id }, { status: TransactionStatus.confirmed });
+            await this.claimsService.updateClaimStatus(claim.id, ClaimStatus.CLAIMED);
+
+            this.logger.log(`Payment transaction ${response.txHash} confirmed for claim ${claim.id}`);
+          } else {
+            this.logger.warn(`Payment transaction ${response.txHash} timeout for claim ${claim.id}`);
+            await this.transactionRepository.update({ id: transaction.id }, { status: TransactionStatus.failed });
+            await this.claimRepository.update({ id: claim.id }, { status: ClaimStatus.FAILED });
+          }
         } catch (error) {
           const trimmedInput = { ...input };
           delete trimmedInput.preloadedScripts;
           this.logger.warn(JSON.stringify(trimmedInput));
           this.logger.error(`Failed to submit payment transaction:`, error);
-          await this.transactionRepository.update({ id: transaction.id }, { status: TransactionStatus.failed }); // Mark transaction as failed
+
+          await this.transactionRepository.update({ id: transaction.id }, { status: TransactionStatus.failed });
           await this.claimRepository.update({ id: claim.id }, { status: ClaimStatus.FAILED });
-          await new Promise(resolve => setTimeout(resolve, 100000));
         }
 
-        this.logger.log(`Payment transaction created for claim ${claim.id}`);
+        this.logger.log(`Payment transaction processed for claim ${claim.id}`);
       } catch (error) {
         this.logger.error(`Failed to process payment for claim ${claim.id}:`, error);
       }

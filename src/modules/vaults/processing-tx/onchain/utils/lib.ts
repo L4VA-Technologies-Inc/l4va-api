@@ -73,20 +73,43 @@ export const getUtxos = async (
   return parsedUtxos;
 };
 
+export const validateUtxoStillExists = async (
+  txHash: string,
+  outputIndex: number,
+  blockfrost: BlockFrostAPI
+): Promise<boolean> => {
+  try {
+    const utxoDetails = await blockfrost.txsUtxos(txHash);
+    const output = utxoDetails.outputs[outputIndex];
+
+    return output && !output.consumed_by_tx; // Check if UTXO exists and is not consumed
+  } catch (error) {
+    return false;
+  }
+};
+
+// Add removing utxo that already spent, by passing it in argument  
 export const getUtxosExctract = async (address: Address, min = 0, blockfrost: BlockFrostAPI): Promise<string[]> => {
   const utxos = await blockfrost.addressesUtxosAll(address.to_bech32());
   const parsedUtxos: string[] = [];
-  utxos.forEach(utxo => {
+
+  for (const utxo of utxos) {
     const { tx_hash, output_index, amount } = utxo;
+
     if (Number(amount[0].quantity) > min) {
-      parsedUtxos.push(
-        TransactionUnspentOutput.new(
-          TransactionInput.new(TransactionHash.from_hex(tx_hash), output_index),
-          TransactionOutput.new(address, assetsToValue(amount))
-        ).to_hex()
-      );
+      const isValid = await validateUtxoStillExists(tx_hash, output_index, blockfrost);
+
+      if (isValid) {
+        parsedUtxos.push(
+          TransactionUnspentOutput.new(
+            TransactionInput.new(TransactionHash.from_hex(tx_hash), output_index),
+            TransactionOutput.new(address, assetsToValue(amount))
+          ).to_hex()
+        );
+      }
     }
-  });
+  }
+
   return parsedUtxos;
 };
 

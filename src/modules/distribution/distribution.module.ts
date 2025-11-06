@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { ClaimsModule } from '../vaults/claims/claims.module';
 import { GovernanceModule } from '../vaults/phase-management/governance/governance.module';
 import { AssetsModule } from '../vaults/processing-tx/assets/assets.module';
 import { BlockchainModule } from '../vaults/processing-tx/onchain/blockchain.module';
@@ -24,6 +25,7 @@ import { Vault } from '@/database/vault.entity';
     BlockchainModule,
     AssetsModule,
     GovernanceModule,
+    ClaimsModule,
   ],
   providers: [DistributionService, AutomatedDistributionService],
   exports: [DistributionService, AutomatedDistributionService],
