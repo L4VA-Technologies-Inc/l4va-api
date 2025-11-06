@@ -285,6 +285,18 @@ export class ClaimsService {
     if (!output) {
       throw new Error('No output found');
     }
+
+    if (output.consumed_by_tx) {
+      this.logger.warn(
+        `Contribution UTXO ${transaction.tx_hash}#0 already consumed by transaction ${output.consumed_by_tx}. Marking claim ${claim.id} as claimed.`
+      );
+
+      await this.updateClaimStatus(claim.id, ClaimStatus.CLAIMED, {
+        claimReason: 'UTXO_ALREADY_SPENT',
+      });
+      return;
+    }
+
     const amountOfLpsToClaim = output.amount.find((a: { unit: string; quantity: string }) => a.unit === lpsUnit);
 
     if (!amountOfLpsToClaim) {
@@ -292,6 +304,9 @@ export class ClaimsService {
     }
 
     const adminUtxos = await getUtxosExctract(Address.from_bech32(this.adminAddress), 0, this.blockfrost);
+    if (adminUtxos.length === 0) {
+      throw new Error('No UTXOs found.');
+    }
     const datumTag = generate_tag_from_txhash_index(transaction.tx_hash, 0);
 
     const refundAssets = [];
@@ -454,7 +469,6 @@ export class ClaimsService {
         };
       }
     } catch (error) {
-      this.logger.error(`Failed to process cancellation transaction for claim ${claimId}:`, error);
       throw new Error(`Failed to submit cancellation transaction: ${error.message}`);
     }
   }
