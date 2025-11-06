@@ -170,17 +170,13 @@ export class DistributionService {
    */
   calculateLpAdaMultiplier(
     lpVtAmount: number,
-    lpAdaAmount: number
+    totalAcquiredAda: number
   ): {
     adaPairMultiplier: number;
   } {
-    const lpLovelaceAmount = lpAdaAmount * 1_000_000;
-    // Calculate the multiplier (VT per ADA)
-    const multiplier = Math.floor(lpVtAmount / lpLovelaceAmount);
+    const multiplier = Math.floor(lpVtAmount / (totalAcquiredAda * 1_000_000));
 
-    return {
-      adaPairMultiplier: 2, // for now
-    };
+    return { adaPairMultiplier: multiplier };
   }
 
   private round15(amount: number): number {
