@@ -812,6 +812,9 @@ export class VaultsService {
     vault.vault_status = VaultStatus.published;
     vault.publication_hash = publishedTx.txHash;
     await this.vaultsRepository.save(vault);
+
+    await this.usersRepository.increment({ id: vault.owner.id }, 'total_vaults', 1);
+
     // Start transaction confirmation process in background
     this.confirmAndProcessTransaction(publishedTx.txHash, vault).catch(error => {
       this.logger.error(`Failed to process transaction ${publishedTx.txHash}:`, error);
