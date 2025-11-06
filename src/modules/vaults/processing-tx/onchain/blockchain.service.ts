@@ -518,6 +518,7 @@ export class BlockchainService {
         try {
           const txDetails = await this.blockfrost.txs(txHash);
           if (txDetails && txDetails.block_height) {
+            await new Promise(resolve => setTimeout(resolve, 80000)); // Wait for 2 blocks before reusing its outputs
             return true;
           }
         } catch (blockfrostError) {}
