@@ -8,6 +8,7 @@ import {
   FixedTransaction,
   PrivateKey,
   Transaction as CardanoTransaction,
+  Address,
 } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -19,7 +20,7 @@ import { ClaimsService } from '../vaults/claims/claims.service';
 import { GovernanceService } from '../vaults/phase-management/governance/governance.service';
 import { AssetsService } from '../vaults/processing-tx/assets/assets.service';
 import { ApplyParamsResponse, BlockchainService } from '../vaults/processing-tx/onchain/blockchain.service';
-import { generate_tag_from_txhash_index } from '../vaults/processing-tx/onchain/utils/lib';
+import { generate_tag_from_txhash_index, getUtxosExctract } from '../vaults/processing-tx/onchain/utils/lib';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
@@ -33,6 +34,7 @@ import { VaultStatus, SmartContractVaultStatus } from '@/types/vault.types';
 interface ExtractInput {
   changeAddress: string;
   message: string;
+  utxos: string[];
   mint?: object[];
   scriptInteractions: object[];
   outputs: {
@@ -53,6 +55,7 @@ interface ExtractInput {
 interface PayAdaContributionInput {
   changeAddress: string;
   message: string;
+  utxos: string[];
   scriptInteractions: object[];
   mint?: Array<object>;
   outputs: {
@@ -364,6 +367,7 @@ export class AutomatedDistributionService {
     dispatchParametizedHash: string
   ): Promise<void> {
     const DISPATCH_ADDRESS = this.getDispatchAddress(dispatchParametizedHash);
+    const adminUtxos = await getUtxosExctract(Address.from_bech32(this.adminAddress), 0, this.blockfrost);
 
     // Build script interactions for all claims in the batch
     const scriptInteractions: object[] = [];
@@ -490,6 +494,7 @@ export class AutomatedDistributionService {
     const input: ExtractInput = {
       changeAddress: this.adminAddress,
       message: `Extract ADA for ${claims.length} claims`,
+      utxos: adminUtxos,
       scriptInteractions,
       mint: mintAssets,
       outputs,
@@ -582,7 +587,9 @@ export class AutomatedDistributionService {
           throw new Error(`Original transaction not found for claim ${claim.id}`);
         }
 
+        const adminUtxos = await getUtxosExctract(Address.from_bech32(this.adminAddress), 0, this.blockfrost);
         const datumTag = generate_tag_from_txhash_index(originalTx.tx_hash, 0);
+
         const adaPairMultiplier = Number(vault.ada_pair_multiplier);
         const claimMultiplier = Number(claim.metadata.multiplier);
         const originalAmount = Number(originalTx.amount);
@@ -593,7 +600,8 @@ export class AutomatedDistributionService {
 
         const input: ExtractInput = {
           changeAddress: this.adminAddress,
-          message: `Extract ADA for claim ${claim.id} (individual)`,
+          message: `Extract ADA for claim ${claim.id}`,
+          utxos: adminUtxos,
           scriptInteractions: [
             {
               purpose: 'spend',
@@ -984,9 +992,12 @@ export class AutomatedDistributionService {
           .to_address()
           .to_bech32();
 
+        const adminUtxos = await getUtxosExctract(Address.from_bech32(this.adminAddress), 0, this.blockfrost);
+
         const input: PayAdaContributionInput = {
           changeAddress: this.adminAddress,
           message: `Pay ADA to contributor for claim ${claim.id}`,
+          utxos: adminUtxos,
           preloadedScripts: [vault.dispatch_preloaded_script.preloadedScript],
           scriptInteractions: [
             ...selectedUtxos.map(utxo => ({
