@@ -213,92 +213,133 @@ export class BlockchainService {
   /**
    * Register Stake on Dispatch Script to be able Contributors claim ADA
    * Handles cases where stake is already registered and waits for confirmation
+   * Includes retry logic for validity interval errors
    *
    * @param parameterizedDispatchHash
    * @returns {Promise<{success: boolean, alreadyRegistered: boolean, txHash?: string}>}
    */
   async registerScriptStake(
-    parameterizedDispatchHash: string
+    parameterizedDispatchHash: string,
+    maxRetries: number = 3
   ): Promise<{ success: boolean; alreadyRegistered: boolean; txHash?: string }> {
-    try {
-      // First check if stake is already registered
-      const isAlreadyRegistered = await this.checkStakeRegistration(parameterizedDispatchHash);
+    let retryCount = 0;
 
-      if (isAlreadyRegistered) {
-        this.logger.log(`Stake credential ${parameterizedDispatchHash} already registered`);
-        return { success: true, alreadyRegistered: true };
-      }
-
-      const stakeRegisterInput = {
-        changeAddress: this.adminAddress,
-        deposits: [
-          {
-            hash: parameterizedDispatchHash,
-            type: 'script',
-            deposit: 'stake',
-          },
-        ],
-      };
-
-      let buildResult: TransactionBuildResponse;
-
+    while (retryCount <= maxRetries) {
       try {
-        buildResult = await this.buildTransaction(stakeRegisterInput);
-      } catch (error) {
-        // Check if error is because stake is already registered during build
-        if (error.message && error.message.includes('StakeKeyRegisteredDELEG')) {
-          this.logger.log(`Stake credential ${parameterizedDispatchHash} already registered according to build error`);
+        // First check if stake is already registered
+        const isAlreadyRegistered = await this.checkStakeRegistration(parameterizedDispatchHash);
+
+        if (isAlreadyRegistered) {
+          this.logger.log(`Stake credential ${parameterizedDispatchHash} already registered`);
           return { success: true, alreadyRegistered: true };
         }
-        throw error;
-      }
 
-      // Sign the transaction
-      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResult.complete, 'hex'));
-      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+        const stakeRegisterInput = {
+          changeAddress: this.adminAddress,
+          deposits: [
+            {
+              hash: parameterizedDispatchHash,
+              type: 'script',
+              deposit: 'stake',
+            },
+          ],
+        };
 
-      // Submit transaction using existing method
-      let submitResult: TransactionSubmitResponse;
+        let buildResult: TransactionBuildResponse;
 
-      try {
-        submitResult = await this.submitTransaction({
-          transaction: txToSubmitOnChain.to_hex(),
-          signatures: [],
-        });
-      } catch (error) {
-        // Check if error is because stake is already registered during submit
-        if (error.message && error.message.includes('StakeKeyRegisteredDELEG')) {
-          this.logger.log(`Stake credential ${parameterizedDispatchHash} already registered according to submit error`);
-          return { success: true, alreadyRegistered: true };
+        try {
+          buildResult = await this.buildTransaction(stakeRegisterInput);
+        } catch (error) {
+          // Check if error is because stake is already registered during build
+          if (error.message && error.message.includes('StakeKeyRegisteredDELEG')) {
+            this.logger.log(
+              `Stake credential ${parameterizedDispatchHash} already registered according to build error`
+            );
+            return { success: true, alreadyRegistered: true };
+          }
+          throw error;
         }
-        throw error;
+
+        // Sign the transaction
+        const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResult.complete, 'hex'));
+        txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+        // Submit transaction using existing method
+        let submitResult: TransactionSubmitResponse;
+
+        try {
+          submitResult = await this.submitTransaction({
+            transaction: txToSubmitOnChain.to_hex(),
+            signatures: [],
+          });
+        } catch (error) {
+          // Check if error is because stake is already registered during submit
+          if (error.message && error.message.includes('StakeKeyRegisteredDELEG')) {
+            this.logger.log(
+              `Stake credential ${parameterizedDispatchHash} already registered according to submit error`
+            );
+            return { success: true, alreadyRegistered: true };
+          }
+
+          // Handle validity interval errors with retry
+          if (error instanceof ValidityIntervalException) {
+            retryCount++;
+            if (retryCount <= maxRetries) {
+              this.logger.warn(
+                `ValidityIntervalException on stake registration attempt ${retryCount}/${maxRetries}. ` +
+                  `Current slot: ${error.currentSlot}, Valid range: ${error.invalidBefore}-${error.invalidHereafter}. ` +
+                  `Retrying in 3 seconds...`
+              );
+
+              // Wait before retry to let the validity window advance
+              await new Promise(resolve => setTimeout(resolve, 3000));
+              continue;
+            } else {
+              this.logger.error(
+                `ValidityIntervalException: Maximum retries (${maxRetries}) exceeded for stake registration. ` +
+                  `Current slot: ${error.currentSlot}, Valid range: ${error.invalidBefore}-${error.invalidHereafter}`
+              );
+              throw error;
+            }
+          }
+
+          throw error;
+        }
+
+        this.logger.log(`Stake registration transaction submitted: ${submitResult.txHash}`);
+
+        // Wait for transaction confirmation using existing method
+        const confirmed = await this.waitForTransactionConfirmation(submitResult.txHash, 300000);
+
+        if (confirmed) {
+          this.logger.log(`Stake credential ${parameterizedDispatchHash} registered and confirmed successfully`);
+          return {
+            success: true,
+            alreadyRegistered: false,
+            txHash: submitResult.txHash,
+          };
+        } else {
+          this.logger.warn(`Stake registration transaction ${submitResult.txHash} submitted but confirmation timeout`);
+          // Still return success as transaction was submitted, just didn't get confirmation within timeout
+          return {
+            success: true,
+            alreadyRegistered: false,
+            txHash: submitResult.txHash,
+          };
+        }
+      } catch (error) {
+        // If it's not a ValidityIntervalException, or we've exceeded retries, break the loop
+        if (!(error instanceof ValidityIntervalException) || retryCount > maxRetries) {
+          this.logger.error('Error on registerScriptStake', error);
+          return { success: false, alreadyRegistered: false };
+        }
+        // ValidityIntervalException will be handled by the continue statement above
       }
-
-      this.logger.log(`Stake registration transaction submitted: ${submitResult.txHash}`);
-
-      // Wait for transaction confirmation using existing method
-      const confirmed = await this.waitForTransactionConfirmation(submitResult.txHash, 300000);
-
-      if (confirmed) {
-        this.logger.log(`Stake credential ${parameterizedDispatchHash} registered and confirmed successfully`);
-        return {
-          success: true,
-          alreadyRegistered: false,
-          txHash: submitResult.txHash,
-        };
-      } else {
-        this.logger.warn(`Stake registration transaction ${submitResult.txHash} submitted but confirmation timeout`);
-        // Still return success as transaction was submitted, just didn't get confirmation within timeout
-        return {
-          success: true,
-          alreadyRegistered: false,
-          txHash: submitResult.txHash,
-        };
-      }
-    } catch (error) {
-      this.logger.error('Error on registerScriptStake', error);
-      return { success: false, alreadyRegistered: false };
     }
+
+    // This should never be reached, but just in case
+    this.logger.error(`Unexpected end of retry loop for stake registration`);
+    return { success: false, alreadyRegistered: false };
   }
 
   /**
@@ -308,8 +349,6 @@ export class BlockchainService {
    */
   private async checkStakeRegistration(scriptHash: string): Promise<boolean> {
     try {
-      // For testnet, we need to construct the stake address properly
-      // This is a simplified approach - you may need to adjust based on your exact needs
       const stakeAddress = `stake_test1${scriptHash}`;
 
       try {
@@ -481,10 +520,7 @@ export class BlockchainService {
           if (txDetails && txDetails.block_height) {
             return true;
           }
-        } catch (blockfrostError) {
-          // Only log as debug since this is expected while transaction is pending
-          this.logger.debug(`Blockfrost check failed for tx ${txHash}: ${blockfrostError.message}`);
-        }
+        } catch (blockfrostError) {}
 
         // Wait before next check
         await new Promise(resolve => setTimeout(resolve, checkInterval));
