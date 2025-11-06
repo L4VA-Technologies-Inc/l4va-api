@@ -1,5 +1,12 @@
 import { BadRequestException } from '@nestjs/common';
 
+/**
+ * What it means: The transaction's validity interval is outside the current blockchain slot range.
+ * This error indicates that the transaction is either expired (current slot > end slot/TTL) or not yet valid (current slot < start slot).
+ *
+ * Cardano or Anvil: Cardano-specific (timing validation).
+ * https://dev.ada-anvil.io/anvil-api/troubleshooting#transaction-validity-interval-error-outsidevalidityintervalutxo
+ */
 export class ValidityIntervalException extends BadRequestException {
   constructor(
     public readonly invalidBefore?: number,
