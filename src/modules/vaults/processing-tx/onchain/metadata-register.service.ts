@@ -176,7 +176,6 @@ export class MetadataRegistryApiService {
       const response = await axios.get(`${this.apiBaseUrl}/${subject}`);
       return response.status === 200;
     } catch (error) {
-      // Якщо отримали 404, токен не знайдено
       if (error.response?.status === 404) {
         return false;
       }
@@ -190,7 +189,15 @@ export class MetadataRegistryApiService {
   async checkPRStatus(pr: TokenRegistry): Promise<TokenRegistry> {
     try {
       const url = `https://api.github.com/repos/${this.repoOwner}/${this.repoName}/pulls/${pr.pr_number}`;
-      const response = await firstValueFrom(this.httpService.get(url));
+
+      const response = await firstValueFrom(
+        this.httpService.get(url, {
+          headers: {
+            Authorization: `Bearer ${this.githubToken}`,
+            Accept: 'application/vnd.github.v3+json',
+          },
+        })
+      );
 
       pr.last_checked = new Date();
 
