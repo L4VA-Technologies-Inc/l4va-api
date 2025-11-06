@@ -6,14 +6,13 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { SnakeNamingStrategy } from 'typeorm-naming-strategies';
 import { SentryModule, SentryGlobalFilter } from '@sentry/nestjs/setup';
-
-import { SentryMonitoringService } from './common/services/sentry-monitoring.service';
-import { SentryInterceptor } from './common/interceptors/sentry.interceptor';
+import { SnakeNamingStrategy } from 'typeorm-naming-strategies';
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { SentryInterceptor } from './common/interceptors/sentry.interceptor';
+import { SentryMonitoringService } from './common/services/sentry-monitoring.service';
 import { AuthModule } from './modules/auth/auth.module';
 import { AwsModule } from './modules/aws_bucket/aws.module';
 import { ChatModule } from './modules/chat/chat.module';
@@ -32,7 +31,6 @@ import { VaultsModule } from './modules/vaults/vaults.module';
 import { VyfiModule } from './modules/vyfi/vyfi.module';
 
 import { NotificationModule } from '@/modules/notification/notification.module';
-// Hello World!
 @Module({
   imports: [
     SentryModule.forRoot(),
