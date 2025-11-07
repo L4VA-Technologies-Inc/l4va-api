@@ -50,6 +50,7 @@ export class TransactionsService {
   async updateTransactionStatus(txHash: string, txIndex: number, status: TransactionStatus): Promise<Transaction> {
     const transaction = await this.transactionRepository.findOne({
       where: { tx_hash: txHash },
+      relations: ['user'],
     });
 
     if (!transaction) {
@@ -92,7 +93,44 @@ export class TransactionsService {
 
     await this.vaultRepository.save(vault);
 
+    if (status === TransactionStatus.confirmed && transaction.user_id) {
+      await this.updateUserStatistics(transaction, assetsPrices);
+    }
+
     return this.transactionRepository.save(transaction);
+  }
+
+  /**
+   * Update user statistics based on confirmed transaction
+   */
+  private async updateUserStatistics(
+    transaction: Transaction,
+    assetsPrices: { totalValueAda: number; totalValueUsd: number }
+  ): Promise<void> {
+    try {
+      const user = await this.usersRepository.findOne({
+        where: { id: transaction.user_id },
+      });
+
+      if (!user) {
+        this.logger.warn(`User ${transaction.user_id} not found for stats update`);
+        return;
+      }
+
+      if (transaction.type === TransactionType.contribute) {
+        const contributedValueAda = assetsPrices.totalValueAda || 0;
+        user.tvl = Number(user.tvl) + contributedValueAda;
+        this.logger.log(`Updated user ${user.id} TVL: +${contributedValueAda} ADA`);
+      } else if (transaction.type === TransactionType.acquire) {
+        const acquiredAmountAda = (transaction.amount || 0) / 1_000_000; // Convert lovelace to ADA
+        user.tvl = Number(user.tvl) + acquiredAmountAda;
+        this.logger.log(`Updated user ${user.id} TVL: +${acquiredAmountAda} ADA`);
+      }
+
+      await this.usersRepository.save(user);
+    } catch (error) {
+      this.logger.error(`Failed to update user statistics: ${error.message}`, error.stack);
+    }
   }
 
   async getTransactionsBySender(address: string): Promise<Transaction[]> {
