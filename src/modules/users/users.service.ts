@@ -1,7 +1,7 @@
-import { Injectable, BadRequestException, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { classToPlain, instanceToPlain, plainToInstance } from 'class-transformer';
-import { Repository } from 'typeorm';
+import { Brackets, Repository } from 'typeorm';
 
 import { transformImageToUrl } from '../../helpers';
 import { AwsService } from '../aws_bucket/aws.service';
@@ -16,6 +16,7 @@ import { LinkEntity } from '@/database/link.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
+import { VaultStatus } from "@/types/vault.types";
 
 @Injectable()
 export class UsersService {
@@ -54,14 +55,26 @@ export class UsersService {
       throw new BadRequestException('User not found');
     }
 
-    const ownedVaultsCount = await this.vaultRepository.count({
-      where: {
-        owner: { id: userId },
-        deleted: false,
-      },
-    });
+    const vaultsCount = await this.vaultRepository
+      .createQueryBuilder('vault')
+      .andWhere('vault.deleted != :deleted', { deleted: true })
+      .andWhere('vault.vault_status != :createdStatus', { createdStatus: VaultStatus.created })
+      .andWhere(
+        new Brackets(qb => {
+          qb.where('vault.owner_id = :userId', { userId }).orWhere(
+            `EXISTS (
+                    SELECT 1 FROM assets
+                    WHERE assets.vault_id = vault.id 
+                    AND assets.added_by = :userId
+                    AND assets.status IN ('locked', 'distributed')
+                  )`,
+            { userId }
+          );
+        })
+      )
+      .getCount();
 
-    user.total_vaults = ownedVaultsCount || 0;
+    user.total_vaults = vaultsCount || 0;
 
     const plainUser = instanceToPlain(user);
 
@@ -91,12 +104,24 @@ export class UsersService {
     }
 
     const adaPrice = await this.taptoolsService.getAdaPrice();
-    const ownedVaultsCount = await this.vaultRepository.count({
-      where: {
-        owner: { id: userId },
-        deleted: false,
-      },
-    });
+    const vaultsCount = await this.vaultRepository
+      .createQueryBuilder('vault')
+      .andWhere('vault.deleted != :deleted', { deleted: true })
+      .andWhere('vault.vault_status != :createdStatus', { createdStatus: VaultStatus.created })
+      .andWhere(
+        new Brackets(qb => {
+          qb.where('vault.owner_id = :userId', { userId }).orWhere(
+            `EXISTS (
+                    SELECT 1 FROM assets
+                    WHERE assets.vault_id = vault.id 
+                    AND assets.added_by = :userId
+                    AND assets.status IN ('locked', 'distributed')
+                  )`,
+            { userId }
+          );
+        })
+      )
+      .getCount();
     const tvlResult = await this.assetRepository
       .createQueryBuilder('asset')
       .select(
@@ -114,7 +139,7 @@ export class UsersService {
       .getRawOne();
 
     const tvl = tvlResult?.tvl ? parseFloat(tvlResult.tvl) : 0;
-    user.total_vaults = ownedVaultsCount || 0;
+    user.total_vaults = vaultsCount || 0;
     user.tvl = tvl;
     const plainedUsers = instanceToPlain(user);
 
