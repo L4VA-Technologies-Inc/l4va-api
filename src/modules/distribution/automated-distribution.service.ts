@@ -1268,4 +1268,258 @@ export class AutomatedDistributionService {
     const tx = CardanoTransaction.from_bytes(Buffer.from(txHex, 'hex'));
     return tx.to_bytes().length;
   }
+
+  // Add this method to your AutomatedDistributionService class
+
+  /**
+   * Withdraw leftover ADA from dispatch script back to admin account
+   * This can be called after all contributor payments are complete
+   */
+  async withdrawDispatchAdaToAdmin(vaultId: string): Promise<{
+    txHash: string;
+    success: boolean;
+    withdrawnAmount: number;
+  }> {
+    try {
+      const vault = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        select: [
+          'id',
+          'script_hash',
+          'asset_vault_name',
+          'last_update_tx_hash',
+          'dispatch_parametized_hash',
+          'dispatch_preloaded_script',
+        ],
+      });
+
+      if (!vault) {
+        throw new Error(`Vault ${vaultId} not found`);
+      }
+
+      if (!vault.dispatch_parametized_hash) {
+        throw new Error(`Vault ${vaultId} does not have dispatch script configured`);
+      }
+
+      const PARAMETERIZED_DISPATCH_HASH = vault.dispatch_parametized_hash;
+      const DISPATCH_ADDRESS = this.getDispatchAddress(PARAMETERIZED_DISPATCH_HASH);
+
+      // Get all UTXOs at dispatch address
+      const dispatchUtxos = await this.blockfrost.addressesUtxos(DISPATCH_ADDRESS);
+      if (!dispatchUtxos || dispatchUtxos.length === 0) {
+        throw new Error('No UTXOs found at dispatch address');
+      }
+
+      // Calculate total ADA available
+      let totalDispatchAda = 0;
+      const validUtxos: AddressesUtxo[] = [];
+
+      for (const utxo of dispatchUtxos) {
+        const adaAmount = parseInt(utxo.amount.find(a => a.unit === 'lovelace')?.quantity || '0');
+        if (adaAmount > 0) {
+          totalDispatchAda += adaAmount;
+          validUtxos.push(utxo);
+        }
+      }
+
+      if (totalDispatchAda < 2_000_000) {
+        throw new Error(`Insufficient ADA to withdraw. Only ${totalDispatchAda} lovelace available`);
+      }
+
+      // Reserve minimum ADA for UTXO
+      const withdrawAmount = totalDispatchAda - 1_500_000; // Leave 1.5 ADA minimum
+      const remainingAda = 1_500_000;
+
+      this.logger.log(
+        `Withdrawing ${withdrawAmount} lovelace from dispatch script to admin. ` +
+          `Total available: ${totalDispatchAda}, Remaining: ${remainingAda}`
+      );
+
+      // Get fresh admin UTXOs for transaction fees
+      const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost);
+      if (adminUtxos.length === 0) {
+        throw new Error('No admin UTXOs available for transaction funding');
+      }
+
+      const input = {
+        changeAddress: this.adminAddress,
+        message: `Withdraw leftover ADA from dispatch script to admin for vault ${vaultId}`,
+        utxos: adminUtxos,
+        preloadedScripts: [vault.dispatch_preloaded_script.preloadedScript],
+        scriptInteractions: [
+          // Spend all dispatch UTXOs
+          ...validUtxos.map(utxo => ({
+            purpose: 'spend',
+            hash: PARAMETERIZED_DISPATCH_HASH,
+            outputRef: {
+              txHash: utxo.tx_hash,
+              index: utxo.output_index,
+            },
+            redeemer: {
+              type: 'json',
+              value: null, // Simple spend redeemer
+            },
+          })),
+          // Withdraw rewards from dispatch script
+          {
+            purpose: 'withdraw',
+            hash: PARAMETERIZED_DISPATCH_HASH,
+            redeemer: {
+              type: 'json',
+              value: null, // Withdraw redeemer
+            },
+          },
+        ],
+        outputs: [
+          // Send withdrawn ADA to admin
+          {
+            address: this.adminAddress,
+            lovelace: withdrawAmount,
+          },
+          // Keep minimum ADA in dispatch script
+          {
+            address: DISPATCH_ADDRESS,
+            lovelace: remainingAda,
+          },
+        ],
+        requiredSigners: [this.adminHash],
+        referenceInputs: [
+          {
+            txHash: vault.last_update_tx_hash,
+            index: 0,
+          },
+        ],
+        validityInterval: {
+          start: true,
+          end: true,
+        },
+        network: 'preprod',
+      };
+
+      // Build and submit transaction
+      const buildResponse = await this.blockchainService.buildTransaction(input);
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+      const response = await this.blockchainService.submitTransaction({
+        transaction: txToSubmitOnChain.to_hex(),
+        signatures: [],
+      });
+
+      this.logger.log(
+        `Dispatch withdrawal transaction ${response.txHash} submitted for vault ${vaultId}, waiting for confirmation...`
+      );
+
+      // Wait for confirmation
+      const confirmed = await this.blockchainService.waitForTransactionConfirmation(response.txHash);
+
+      if (confirmed) {
+        this.logger.log(
+          `Successfully withdrew ${withdrawAmount} lovelace from dispatch script to admin. Tx: ${response.txHash}`
+        );
+
+        return {
+          success: true,
+          txHash: response.txHash,
+          withdrawnAmount: withdrawAmount,
+        };
+      } else {
+        this.logger.warn(`Withdrawal transaction ${response.txHash} confirmation timeout`);
+
+        return {
+          success: true, // Transaction was submitted
+          txHash: response.txHash,
+          withdrawnAmount: withdrawAmount,
+        };
+      }
+    } catch (error) {
+      this.logger.error(`Failed to withdraw ADA from dispatch script for vault ${vaultId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Check if dispatch script has leftover ADA that can be withdrawn
+   */
+  async checkDispatchAdaBalance(vaultId: string): Promise<{
+    totalAda: number;
+    withdrawableAda: number;
+    canWithdraw: boolean;
+  }> {
+    try {
+      const vault = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        select: ['dispatch_parametized_hash'],
+      });
+
+      if (!vault?.dispatch_parametized_hash) {
+        return { totalAda: 0, withdrawableAda: 0, canWithdraw: false };
+      }
+
+      const DISPATCH_ADDRESS = this.getDispatchAddress(vault.dispatch_parametized_hash);
+      const dispatchUtxos = await this.blockfrost.addressesUtxos(DISPATCH_ADDRESS);
+
+      if (!dispatchUtxos || dispatchUtxos.length === 0) {
+        return { totalAda: 0, withdrawableAda: 0, canWithdraw: false };
+      }
+
+      let totalAda = 0;
+      for (const utxo of dispatchUtxos) {
+        const adaAmount = parseInt(utxo.amount.find(a => a.unit === 'lovelace')?.quantity || '0');
+        totalAda += adaAmount;
+      }
+
+      const withdrawableAda = Math.max(0, totalAda - 2_000_000); // Keep 2 ADA minimum
+      const canWithdraw = withdrawableAda > 1_000_000; // Only worth withdrawing if > 1 ADA
+
+      return {
+        totalAda,
+        withdrawableAda,
+        canWithdraw,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to check dispatch ADA balance for vault ${vaultId}:`, error);
+      return { totalAda: 0, withdrawableAda: 0, canWithdraw: false };
+    }
+  }
+
+  /**
+   * Automatically withdraw leftover ADA after distribution is complete
+   */
+  // async autoWithdrawCompletedVaults(): Promise<void> {
+  //   try {
+  //     // Find vaults where distribution is complete and has dispatch script
+  //     const completedVaults = await this.vaultRepository.find({
+  //       where: {
+  //         distribution_processed: true,
+  //         dispatch_parametized_hash: Not(IsNull()),
+  //       },
+  //       select: ['id', 'dispatch_parametized_hash'],
+  //     });
+
+  //     for (const vault of completedVaults) {
+  //       try {
+  //         const balance = await this.checkDispatchAdaBalance(vault.id);
+
+  //         if (balance.canWithdraw) {
+  //           this.logger.log(
+  //             `Found ${balance.withdrawableAda} lovelace to withdraw from vault ${vault.id} dispatch script`
+  //           );
+
+  //           await this.withdrawDispatchAdaToAdmin(vault.id);
+
+  //           // Mark vault as having withdrawn ADA to prevent future attempts
+  //           await this.vaultRepository.update({ id: vault.id }, { dispatch_ada_withdrawn: true });
+
+  //           // Wait between withdrawals to avoid conflicts
+  //           await new Promise(resolve => setTimeout(resolve, 30000));
+  //         }
+  //       } catch (error) {
+  //         this.logger.error(`Failed to withdraw ADA for vault ${vault.id}:`, error);
+  //       }
+  //     }
+  //   } catch (error) {
+  //     this.logger.error('Error in auto-withdraw completed vaults:', error);
+  //   }
+  // }
 }
