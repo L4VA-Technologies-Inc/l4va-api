@@ -799,7 +799,13 @@ export class GovernanceService {
   async getAssetsToDistribute(vaultId: string): Promise<Asset[]> {
     try {
       const assets = await this.assetRepository.find({
-        where: { vault: { id: vaultId }, type: AssetType.FT, status: AssetStatus.LOCKED },
+        where: {
+          vault: { id: vaultId },
+          type: In([AssetType.FT, AssetType.NFT]),
+          status: AssetStatus.LOCKED,
+        },
+        relations: ['vault'],
+        select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'dex_price', 'floor_price', 'metadata'],
       });
       return assets;
     } catch (error) {
