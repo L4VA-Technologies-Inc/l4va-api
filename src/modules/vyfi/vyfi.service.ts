@@ -95,11 +95,6 @@ export class VyfiService {
     }
   }
 
-  private formatMetadataText(tokenA: { policyId?: string; assetName: string }): string {
-    const shortA = tokenA.policyId ? tokenA.policyId.substring(0, 8) : 'lovelace';
-    return `VyFi: LP Factory Create Pool Order Request -- /${VYFI_CONSTANTS.METADATA_LABEL} ${shortA}/lovelace`;
-  }
-
   async createLiquidityPool(claimId: string): Promise<{
     txHash: string;
   }> {
@@ -124,10 +119,13 @@ export class VyfiService {
     }
 
     // Generate metadata
-    const metadataText = this.formatMetadataText({
-      policyId: claim.vault.policy_id,
-      assetName: claim.vault.asset_vault_name,
-    });
+    const metadataText = this.formatMetadataText(
+      {
+        policyId: claim.vault.policy_id,
+        assetName: claim.vault.asset_vault_name,
+      },
+      claim.vault.vault_token_ticker
+    );
 
     // Get UTxOs
     const utxos = await getUtxos(Address.from_bech32(this.adminAddress), 0, this.blockfrost);
@@ -141,7 +139,7 @@ export class VyfiService {
     // Construct transaction input with proper ADA amounts
     const input = {
       changeAddress: this.adminAddress,
-      message: `VyFi: LP Factory Create Pool Order Request -- /${VYFI_CONSTANTS.METADATA_LABEL}`,
+      message: metadataText,
       outputs: [
         {
           address: VYFI_CONSTANTS.POOL_ADDRESS,
@@ -152,11 +150,11 @@ export class VyfiService {
               quantity: claim.amount,
             },
           ],
-          lovelace: VYFI_CONSTANTS.TOTAL_REQUIRED_ADA + Number(claim.metadata?.adaAmount || 0),
+          lovelace: VYFI_CONSTANTS.TOTAL_REQUIRED_ADA + 113462243, //Number(claim.metadata?.adaAmount || 0)
         },
       ],
       metadata: {
-        [VYFI_CONSTANTS.METADATA_LABEL]: metadataText,
+        [674]: metadataText,
       },
       requiredSigners: [this.adminHash],
       requiredInputs: REQUIRED_INPUTS,
@@ -184,5 +182,10 @@ export class VyfiService {
     } catch (error) {
       throw new Error(`Failed to get VyFi pool info: ${error.message}`);
     }
+  }
+
+  private formatMetadataText(tokenA: { policyId?: string; assetName: string }, ticker: string): string {
+    const tokenAUnit = tokenA.policyId ? `${tokenA.policyId}.${tokenA.assetName}` : 'lovelace';
+    return `L4VA: LP Factory Create Pool Order Request -- /${tokenAUnit} --- ADA/${ticker}`;
   }
 }
