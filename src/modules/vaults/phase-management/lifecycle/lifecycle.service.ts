@@ -487,6 +487,9 @@ export class LifecycleService {
               type: ClaimType.LP,
               amount: lpVtAmount,
               status: ClaimStatus.AVAILABLE,
+              metadata: {
+                adaAmount: lpAdaAmount,
+              },
             });
             this.logger.log(`Created LP claim for vault owner: ${lpVtAmount} VT tokens (${lpAdaAmount} ADA)`);
           } else {
