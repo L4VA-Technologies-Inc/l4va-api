@@ -10,7 +10,7 @@ import { firstValueFrom } from 'rxjs';
 import { Repository } from 'typeorm';
 
 import { BlockchainService } from '../vaults/processing-tx/onchain/blockchain.service';
-import { getUtxos } from '../vaults/processing-tx/onchain/utils/lib';
+import { getUtxosExtract } from '../vaults/processing-tx/onchain/utils/lib';
 
 import { Claim } from '@/database/claim.entity';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
@@ -110,7 +110,7 @@ export class VyfiService {
     // First check if pool exists
     const poolCheck = await this.checkPool({
       networkId: 0,
-      tokenAUnit: `${claim.vault.policy_id}${claim.vault.asset_vault_name}`,
+      tokenAUnit: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
       tokenBUnit: 'lovelace',
     });
 
@@ -121,43 +121,49 @@ export class VyfiService {
     // Generate metadata
     const metadataText = this.formatMetadataText(
       {
-        policyId: claim.vault.policy_id,
+        policyId: claim.vault.script_hash,
         assetName: claim.vault.asset_vault_name,
       },
       claim.vault.vault_token_ticker
     );
 
     // Get UTxOs
-    const utxos = await getUtxos(Address.from_bech32(this.adminAddress), 0, this.blockfrost);
-    if (utxos.len() === 0) {
+    const { utxos: adminUtxos, requiredInputs } = await getUtxosExtract(
+      Address.from_bech32(this.adminAddress),
+      this.blockfrost,
+      {
+        targetTokenAmount: +claim.amount,
+        targetToken: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
+      }
+    );
+
+    if (adminUtxos.length === 0) {
       throw new Error('No UTXOs found.');
     }
-
-    const selectedUtxo = utxos.get(0);
-    const REQUIRED_INPUTS = [selectedUtxo.to_hex()];
 
     // Construct transaction input with proper ADA amounts
     const input = {
       changeAddress: this.adminAddress,
       message: metadataText,
+      utxos: adminUtxos,
       outputs: [
         {
           address: VYFI_CONSTANTS.POOL_ADDRESS,
           assets: [
             {
               assetName: { name: claim.vault.asset_vault_name, format: 'hex' },
-              policyId: claim.vault.policy_id,
-              quantity: claim.amount,
+              policyId: claim.vault.script_hash,
+              quantity: +claim.amount,
             },
           ],
-          lovelace: VYFI_CONSTANTS.TOTAL_REQUIRED_ADA + 113462243, //Number(claim.metadata?.adaAmount || 0)
+          lovelace: VYFI_CONSTANTS.TOTAL_REQUIRED_ADA + Number(claim.metadata?.adaAmount || 0),
         },
       ],
       metadata: {
         [674]: metadataText,
       },
       requiredSigners: [this.adminHash],
-      requiredInputs: REQUIRED_INPUTS,
+      requiredInputs,
     };
 
     const buildResponse = await this.blockchainService.buildTransaction(input);

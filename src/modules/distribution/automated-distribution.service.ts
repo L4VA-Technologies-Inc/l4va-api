@@ -20,7 +20,7 @@ import { ClaimsService } from '../vaults/claims/claims.service';
 import { GovernanceService } from '../vaults/phase-management/governance/governance.service';
 import { AssetsService } from '../vaults/processing-tx/assets/assets.service';
 import { ApplyParamsResponse, BlockchainService } from '../vaults/processing-tx/onchain/blockchain.service';
-import { generate_tag_from_txhash_index, getUtxosExctract } from '../vaults/processing-tx/onchain/utils/lib';
+import { generate_tag_from_txhash_index, getUtxosExtract } from '../vaults/processing-tx/onchain/utils/lib';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
@@ -367,7 +367,7 @@ export class AutomatedDistributionService {
     dispatchParametizedHash: string
   ): Promise<void> {
     const DISPATCH_ADDRESS = this.getDispatchAddress(dispatchParametizedHash);
-    const adminUtxos = await getUtxosExctract(Address.from_bech32(this.adminAddress), 0, this.blockfrost);
+    const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost);
     if (adminUtxos.length === 0) {
       throw new Error('No UTXOs on admin wallet was found.');
     }
@@ -589,7 +589,7 @@ export class AutomatedDistributionService {
           throw new Error(`Original transaction not found for claim ${claim.id}`);
         }
 
-        const adminUtxos = await getUtxosExctract(Address.from_bech32(this.adminAddress), 0, this.blockfrost);
+        const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost);
         if (adminUtxos.length === 0) {
           throw new Error('No UTXOs on admin wallet was found.');
         }
@@ -997,7 +997,7 @@ export class AutomatedDistributionService {
           .to_address()
           .to_bech32();
 
-        const adminUtxos = await getUtxosExctract(Address.from_bech32(this.adminAddress), 0, this.blockfrost);
+        const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost);
         if (adminUtxos.length === 0) {
           throw new Error('No UTXOs on admin wallet was found.');
         }

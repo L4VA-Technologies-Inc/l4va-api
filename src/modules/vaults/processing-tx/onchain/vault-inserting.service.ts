@@ -16,7 +16,7 @@ import { BlockchainWebhookDto } from './dto/webhook.dto';
 import { ValidityIntervalException } from './exceptions/validity-interval.exception';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
 import { Datum, Redeemer } from './types/type';
-import { getUtxosExctract } from './utils/lib';
+import { getUtxosExtract } from './utils/lib';
 
 import { Vault } from '@/database/vault.entity';
 import { TransactionStatus } from '@/types/transaction.types';
@@ -56,6 +56,27 @@ export interface TransactionBuildResponse {
 
 export interface TransactionSubmitResponse {
   txHash: string;
+}
+
+interface ContributionInput {
+  changeAddress: string;
+  utxos?: string[]; // Only for Contribution in NFT
+  message: string;
+  mint: object[];
+  scriptInteractions: object[];
+  outputs: {
+    address: string;
+    assets?: object[];
+    lovelace?: number; // Required if Contribution in ADA
+    datum?: { type: 'inline'; value: Datum; shape: object };
+  }[];
+  requiredSigners: string[];
+  referenceInputs: { txHash: string; index: number }[];
+  validityInterval: {
+    start: boolean;
+    end: boolean;
+  };
+  network: string;
 }
 
 @Injectable()
@@ -105,7 +126,7 @@ export class VaultInsertingService {
         throw new Error('Vault script hash is missing - vault may not be properly configured');
       }
 
-      const utxos = await getUtxosExctract(Address.from_bech32(params.changeAddress), 0, this.blockfrost); // Any UTXO works.
+      const { utxos } = await getUtxosExtract(Address.from_bech32(params.changeAddress), this.blockfrost); // Any UTXO works.
 
       if (utxos.length === 0) {
         throw new Error('No UTXOs found.');
@@ -140,26 +161,7 @@ export class VaultInsertingService {
         }));
       }
 
-      const input: {
-        changeAddress: string;
-        utxos?: string[]; // Only for Contribution in NFT
-        message: string;
-        mint: Array<object>;
-        scriptInteractions: object[];
-        outputs: {
-          address: string;
-          assets?: object[];
-          lovelace?: number; // Required if Contribution in ADA
-          datum?: { type: 'inline'; value: Datum; shape: object };
-        }[];
-        requiredSigners: string[];
-        referenceInputs: { txHash: string; index: number }[];
-        validityInterval: {
-          start: boolean;
-          end: boolean;
-        };
-        network: string;
-      } = {
+      const input: ContributionInput = {
         changeAddress: params.changeAddress,
         message: 'Asset(s) contributed to vault',
         // utxos: utxos,
