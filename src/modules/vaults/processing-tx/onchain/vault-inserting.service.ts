@@ -144,7 +144,7 @@ export class VaultInsertingService {
 
         // For ADA contributions, we just need UTXOs with sufficient ADA + minimum for fees
         const { utxos } = await getUtxosExtract(Address.from_bech32(params.changeAddress), this.blockfrost, {
-          minAda: 4000000, // Contribution amount + fees + buffer
+          minAda: 2000000,
         });
 
         if (utxos.length === 0) {
@@ -152,7 +152,6 @@ export class VaultInsertingService {
         }
 
         // For ADA, any UTXO with sufficient balance works
-        requiredInputs = [utxos[0]];
         allUtxos = utxos;
       } else {
         // For NFT/Token contributions, collect all assets in one call

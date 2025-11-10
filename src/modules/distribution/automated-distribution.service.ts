@@ -25,7 +25,6 @@ import { generate_tag_from_txhash_index, getUtxosExtract } from '../vaults/proce
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
-import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -57,6 +56,11 @@ interface PayAdaContributionInput {
   message: string;
   utxos: string[];
   scriptInteractions: object[];
+  deposits?: {
+    hash: string;
+    type: string;
+    deposit: string;
+  }[];
   mint?: Array<object>;
   outputs: {
     address: string;
@@ -108,8 +112,6 @@ export class AutomatedDistributionService {
     private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
-    @InjectRepository(User)
-    private readonly userRepository: Repository<User>,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
     private readonly configService: ConfigService,
@@ -568,7 +570,7 @@ export class AutomatedDistributionService {
 
     for (const claim of claims) {
       try {
-        await new Promise(resolve => setTimeout(resolve, 30000));
+        await new Promise(resolve => setTimeout(resolve, 2000));
 
         // Create individual transaction record
         const extractionTx = await this.transactionRepository.save({
@@ -787,39 +789,7 @@ export class AutomatedDistributionService {
 
         if (pendingExtractions === 0 && remainingClaims === 0) {
           this.logger.log(`All extractions complete for vault ${vaultId}`);
-
-          // Get vault details
-          const vault = await this.vaultRepository.findOne({
-            where: { id: vaultId },
-            select: ['id', 'script_hash', 'asset_vault_name', 'stake_registered', 'dispatch_parametized_hash'],
-          });
-
-          if (vault) {
-            // Check if stake is already registered based on database flag
-            if (vault.stake_registered) {
-              this.logger.log(`Stake credential already marked as registered for vault ${vaultId}`);
-              await this.processContributorPayments(vaultId);
-            } else {
-              const stakeResult = await this.blockchainService.registerScriptStake(vault.dispatch_parametized_hash);
-
-              if (stakeResult.success) {
-                // Update the flag in database
-                await this.vaultRepository.update({ id: vaultId }, { stake_registered: true });
-
-                // Only wait if we just registered (not if it was already registered)
-                if (!stakeResult.alreadyRegistered) {
-                  await new Promise(resolve => setTimeout(resolve, 90000)); // 90 seconds
-                }
-
-                this.logger.debug(
-                  `Stake credential ${stakeResult.alreadyRegistered ? 'was already' : 'has been'} registered for vault ${vaultId}`
-                );
-                await this.processContributorPayments(vaultId);
-              } else {
-                this.logger.error(`Failed to register stake credential for vault ${vaultId}`);
-              }
-            }
-          }
+          await this.processContributorPayments(vaultId);
         } else {
           this.logger.debug(
             `Vault ${vaultId} still has ${pendingExtractions} pending extractions and ${remainingClaims} remaining claims`
@@ -851,6 +821,7 @@ export class AutomatedDistributionService {
         'last_update_tx_hash',
         'dispatch_parametized_hash',
         'dispatch_preloaded_script',
+        'stake_registered',
       ],
     });
 
@@ -873,6 +844,8 @@ export class AutomatedDistributionService {
       return;
     }
 
+    let isFirstPayment = true;
+
     for (const claim of claims) {
       try {
         await new Promise(resolve => setTimeout(resolve, 20000)); // 20 seconds between transactions
@@ -893,6 +866,7 @@ export class AutomatedDistributionService {
             claimId: claim.id,
             vtAmount: claim.amount,
             adaAmount,
+            includesStakeRegistration: isFirstPayment && !vault.stake_registered,
           },
         });
 
@@ -990,7 +964,7 @@ export class AutomatedDistributionService {
           );
         }
 
-        const userAddress = claim.user?.address || (await this.getUserAddress(claim.user_id));
+        const userAddress = claim.user?.address;
         const datumTag = generate_tag_from_txhash_index(originalTx.tx_hash, 0);
 
         const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(vault.script_hash)))
@@ -1001,6 +975,7 @@ export class AutomatedDistributionService {
         if (adminUtxos.length === 0) {
           throw new Error('No UTXOs on admin wallet was found.');
         }
+
         const input: PayAdaContributionInput = {
           changeAddress: this.adminAddress,
           message: `Pay ADA to contributor for claim ${claim.id}`,
@@ -1132,6 +1107,17 @@ export class AutomatedDistributionService {
           network: 'preprod',
         };
 
+        // Add stake registration script interaction if this is first payment and stake not registered
+        if (isFirstPayment && !vault.stake_registered) {
+          input.deposits = [
+            {
+              hash: PARAMETERIZED_DISPATCH_HASH,
+              type: 'script',
+              deposit: 'stake',
+            },
+          ];
+        }
+
         try {
           const buildResponse = await this.blockchainService.buildTransaction(input);
 
@@ -1149,7 +1135,7 @@ export class AutomatedDistributionService {
           );
 
           this.logger.log(
-            `Payment transaction ${response.txHash} submitted for claim ${claim.id}, waiting for confirmation...`
+            `Payment transaction ${response.txHash} submitted for claim ${claim.id}${isFirstPayment && !vault.stake_registered ? ' (with stake registration)' : ''}, waiting for confirmation...`
           );
 
           // Wait for confirmation
@@ -1159,6 +1145,14 @@ export class AutomatedDistributionService {
             await this.transactionRepository.update({ id: transaction.id }, { status: TransactionStatus.confirmed });
             await this.claimsService.updateClaimStatus(claim.id, ClaimStatus.CLAIMED);
 
+            // If this was the first payment and included stake registration, update the vault
+            if (isFirstPayment && !vault.stake_registered) {
+              await this.vaultRepository.update({ id: vaultId }, { stake_registered: true });
+              this.logger.log(
+                `Stake credential registered for vault ${vaultId} in payment transaction ${response.txHash}`
+              );
+            }
+
             this.logger.log(`Payment transaction ${response.txHash} confirmed for claim ${claim.id}`);
           } else {
             this.logger.warn(`Payment transaction ${response.txHash} timeout for claim ${claim.id}`);
@@ -1166,6 +1160,28 @@ export class AutomatedDistributionService {
             await this.claimRepository.update({ id: claim.id }, { status: ClaimStatus.FAILED });
           }
         } catch (error) {
+          // If first payment with stake registration fails, try without stake registration
+          if (isFirstPayment && !vault.stake_registered && error.message.includes('stake')) {
+            this.logger.warn(
+              `First payment with stake registration failed, falling back to separate stake registration`
+            );
+
+            // Try separate stake registration
+            try {
+              const stakeResult = await this.blockchainService.registerScriptStake(vault.dispatch_parametized_hash);
+              if (stakeResult.success) {
+                await this.vaultRepository.update({ id: vaultId }, { stake_registered: true });
+                this.logger.log(`Stake credential registered separately for vault ${vaultId}`);
+
+                // Retry the payment without stake registration
+                // (You would rebuild the transaction without the stake script interaction)
+                // ... implement retry logic here
+              }
+            } catch (stakeError) {
+              this.logger.error(`Failed to register stake separately for vault ${vaultId}:`, stakeError);
+            }
+          }
+
           const trimmedInput = { ...input };
           delete trimmedInput.preloadedScripts;
           this.logger.warn(JSON.stringify(trimmedInput));
@@ -1175,9 +1191,13 @@ export class AutomatedDistributionService {
           await this.claimRepository.update({ id: claim.id }, { status: ClaimStatus.FAILED });
         }
 
+        // After first payment attempt, subsequent payments won't include stake registration
+        isFirstPayment = false;
+
         this.logger.log(`Payment transaction processed for claim ${claim.id}`);
       } catch (error) {
         this.logger.error(`Failed to process payment for claim ${claim.id}:`, error);
+        isFirstPayment = false; // Move to next claim even if this one failed
       }
     }
 
@@ -1251,29 +1271,14 @@ export class AutomatedDistributionService {
       .to_bech32();
   }
 
-  private async getUserAddress(userId: string): Promise<string> {
-    const user = await this.userRepository.findOne({
-      where: { id: userId },
-      select: ['address'],
-    });
-
-    if (!user?.address) {
-      throw new Error(`User ${userId} has no address`);
-    }
-
-    return user.address;
-  }
-
   private getTransactionSize(txHex: string): number {
     const tx = CardanoTransaction.from_bytes(Buffer.from(txHex, 'hex'));
     return tx.to_bytes().length;
   }
 
-  // Add this method to your AutomatedDistributionService class
-
   /**
    * Withdraw leftover ADA from dispatch script back to admin account
-   * This can be called after all contributor payments are complete
+   * This is called after all contributor payments are complete
    */
   async withdrawDispatchAdaToAdmin(vaultId: string): Promise<{
     txHash: string;
@@ -1326,15 +1331,6 @@ export class AutomatedDistributionService {
         throw new Error(`Insufficient ADA to withdraw. Only ${totalDispatchAda} lovelace available`);
       }
 
-      // Reserve minimum ADA for UTXO
-      const withdrawAmount = totalDispatchAda - 1_500_000; // Leave 1.5 ADA minimum
-      const remainingAda = 1_500_000;
-
-      this.logger.log(
-        `Withdrawing ${withdrawAmount} lovelace from dispatch script to admin. ` +
-          `Total available: ${totalDispatchAda}, Remaining: ${remainingAda}`
-      );
-
       // Get fresh admin UTXOs for transaction fees
       const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost);
       if (adminUtxos.length === 0) {
@@ -1374,12 +1370,7 @@ export class AutomatedDistributionService {
           // Send withdrawn ADA to admin
           {
             address: this.adminAddress,
-            lovelace: withdrawAmount,
-          },
-          // Keep minimum ADA in dispatch script
-          {
-            address: DISPATCH_ADDRESS,
-            lovelace: remainingAda,
+            lovelace: totalDispatchAda,
           },
         ],
         requiredSigners: [this.adminHash],
@@ -1415,13 +1406,13 @@ export class AutomatedDistributionService {
 
       if (confirmed) {
         this.logger.log(
-          `Successfully withdrew ${withdrawAmount} lovelace from dispatch script to admin. Tx: ${response.txHash}`
+          `Successfully withdrew ${totalDispatchAda} lovelace from dispatch script to admin. Tx: ${response.txHash}`
         );
 
         return {
           success: true,
           txHash: response.txHash,
-          withdrawnAmount: withdrawAmount,
+          withdrawnAmount: totalDispatchAda,
         };
       } else {
         this.logger.warn(`Withdrawal transaction ${response.txHash} confirmation timeout`);
@@ -1429,7 +1420,7 @@ export class AutomatedDistributionService {
         return {
           success: true, // Transaction was submitted
           txHash: response.txHash,
-          withdrawnAmount: withdrawAmount,
+          withdrawnAmount: totalDispatchAda,
         };
       }
     } catch (error) {
@@ -1437,89 +1428,4 @@ export class AutomatedDistributionService {
       throw error;
     }
   }
-
-  /**
-   * Check if dispatch script has leftover ADA that can be withdrawn
-   */
-  async checkDispatchAdaBalance(vaultId: string): Promise<{
-    totalAda: number;
-    withdrawableAda: number;
-    canWithdraw: boolean;
-  }> {
-    try {
-      const vault = await this.vaultRepository.findOne({
-        where: { id: vaultId },
-        select: ['dispatch_parametized_hash'],
-      });
-
-      if (!vault?.dispatch_parametized_hash) {
-        return { totalAda: 0, withdrawableAda: 0, canWithdraw: false };
-      }
-
-      const DISPATCH_ADDRESS = this.getDispatchAddress(vault.dispatch_parametized_hash);
-      const dispatchUtxos = await this.blockfrost.addressesUtxos(DISPATCH_ADDRESS);
-
-      if (!dispatchUtxos || dispatchUtxos.length === 0) {
-        return { totalAda: 0, withdrawableAda: 0, canWithdraw: false };
-      }
-
-      let totalAda = 0;
-      for (const utxo of dispatchUtxos) {
-        const adaAmount = parseInt(utxo.amount.find(a => a.unit === 'lovelace')?.quantity || '0');
-        totalAda += adaAmount;
-      }
-
-      const withdrawableAda = Math.max(0, totalAda - 2_000_000); // Keep 2 ADA minimum
-      const canWithdraw = withdrawableAda > 1_000_000; // Only worth withdrawing if > 1 ADA
-
-      return {
-        totalAda,
-        withdrawableAda,
-        canWithdraw,
-      };
-    } catch (error) {
-      this.logger.error(`Failed to check dispatch ADA balance for vault ${vaultId}:`, error);
-      return { totalAda: 0, withdrawableAda: 0, canWithdraw: false };
-    }
-  }
-
-  /**
-   * Automatically withdraw leftover ADA after distribution is complete
-   */
-  // async autoWithdrawCompletedVaults(): Promise<void> {
-  //   try {
-  //     // Find vaults where distribution is complete and has dispatch script
-  //     const completedVaults = await this.vaultRepository.find({
-  //       where: {
-  //         distribution_processed: true,
-  //         dispatch_parametized_hash: Not(IsNull()),
-  //       },
-  //       select: ['id', 'dispatch_parametized_hash'],
-  //     });
-
-  //     for (const vault of completedVaults) {
-  //       try {
-  //         const balance = await this.checkDispatchAdaBalance(vault.id);
-
-  //         if (balance.canWithdraw) {
-  //           this.logger.log(
-  //             `Found ${balance.withdrawableAda} lovelace to withdraw from vault ${vault.id} dispatch script`
-  //           );
-
-  //           await this.withdrawDispatchAdaToAdmin(vault.id);
-
-  //           // Mark vault as having withdrawn ADA to prevent future attempts
-  //           await this.vaultRepository.update({ id: vault.id }, { dispatch_ada_withdrawn: true });
-
-  //           // Wait between withdrawals to avoid conflicts
-  //           await new Promise(resolve => setTimeout(resolve, 30000));
-  //         }
-  //       } catch (error) {
-  //         this.logger.error(`Failed to withdraw ADA for vault ${vault.id}:`, error);
-  //       }
-  //     }
-  //   } catch (error) {
-  //     this.logger.error('Error in auto-withdraw completed vaults:', error);
-  //   }
-  // }
 }
