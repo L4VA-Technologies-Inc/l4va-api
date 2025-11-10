@@ -9,6 +9,9 @@ import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
+import { GetTransactionsDto } from "@/modules/vaults/processing-tx/offchain-tx/dto/get-transactions.dto";
+import { plainToInstance } from "class-transformer";
+import { TransactionsResponseDto, TransactionsResponseItemsDto } from './dto/transactions-response.dto';
 
 @Injectable()
 export class TransactionsService {
@@ -133,6 +136,102 @@ export class TransactionsService {
     return this.transactionRepository.findOne({
       where: { id },
     });
+  }
+
+  async getByUserId(id: string, query: GetTransactionsDto): Promise<TransactionsResponseDto> {
+    const {
+      page = '1',
+      limit = '10',
+      filter = TransactionType.all,
+      status,
+      order = 'DESC',
+      period
+    } = query;
+
+    const parsedPage = Number(page);
+    const parsedLimit = Number(limit);
+    const skip = (parsedPage - 1) * parsedLimit;
+
+    const queryBuilder = this.transactionRepository
+      .createQueryBuilder('transaction')
+      .leftJoinAndSelect('transaction.vault', 'vault')
+      .select([
+        'transaction.id',
+        'transaction.type',
+        'transaction.status',
+        'transaction.amount',
+        'transaction.metadata',
+        'transaction.tx_hash',
+        'transaction.updated_at',
+        'transaction.created_at',
+        'transaction.vault_id',
+        'vault.id',
+        'vault.name',
+      ])
+      .where('transaction.user_id = :id', { id })
+      .skip(skip)
+      .take(parsedLimit);
+
+    switch (filter) {
+      case TransactionType.all:
+        queryBuilder.andWhere('transaction.type IN (:...types)', {
+          types: [TransactionType.contribute, TransactionType.burn, TransactionType.acquire,]
+        });
+        break;
+      case TransactionType.contribute:
+        queryBuilder.andWhere('transaction.type = (:type)', {
+          type: TransactionType.contribute
+        });
+        break;
+      case TransactionType.burn:
+        queryBuilder.andWhere('transaction.type = (:type)', {
+          type: TransactionType.burn
+        });
+        break;
+      case TransactionType.acquire:
+        queryBuilder.andWhere('transaction.type = (:type)', {
+          type: TransactionType.acquire
+        });
+        break;
+    }
+
+    if (status) {
+      queryBuilder.andWhere('transaction.status IN (:...statuses)', {
+        statuses: status
+      });
+    }
+
+    if (period?.from && period?.to) {
+      queryBuilder.andWhere(
+        'transaction.created_at BETWEEN :from AND :to',
+        {
+          from: new Date(period.from),
+          to: new Date(period.to),
+        }
+      );
+    } else if (period?.from) {
+      queryBuilder.andWhere(
+        'transaction.created_at >= :from',
+        { from: new Date(period.from) }
+      );
+    } else if (period?.to) {
+      queryBuilder.andWhere(
+        'transaction.created_at <= :to',
+        { to: new Date(period.to) }
+      );
+    }
+
+    if (order) {
+      queryBuilder.orderBy('transaction.created_at', order);
+    }
+
+    const [transactions, total] = await queryBuilder.getManyAndCount();
+
+    const items = plainToInstance(TransactionsResponseItemsDto, transactions, {
+      excludeExtraneousValues: true,
+    });
+
+    return { items, total, page: parsedPage, limit: parsedLimit };
   }
 
   async updateTransactionHash(id: string, txHash: string): Promise<Transaction> {
