@@ -23,4 +23,5 @@ export enum TransactionType {
   extractLp = 'extract-lp',
   distributeLp = 'distribute-lp',
   updateVault = 'update-vault', // Vault metadata update transaction
+  all = 'all'
 }

@@ -113,7 +113,7 @@ export class GovernanceService {
     // });
   }
 
-  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  @Cron(CronExpression.EVERY_10_MINUTES)
   async createDailySnapshots(): Promise<void> {
     this.logger.log('Starting daily snapshot creation');
 
@@ -122,9 +122,9 @@ export class GovernanceService {
         where: {
           vault_status: VaultStatus.locked,
           asset_vault_name: Not(IsNull()),
-          policy_id: Not(IsNull()),
+          script_hash: Not(IsNull()),
         },
-        select: ['id', 'asset_vault_name', 'policy_id'],
+        select: ['id', 'asset_vault_name', 'script_hash'],
       });
 
       if (lockedVaults.length === 0) {
@@ -799,7 +799,13 @@ export class GovernanceService {
   async getAssetsToDistribute(vaultId: string): Promise<Asset[]> {
     try {
       const assets = await this.assetRepository.find({
-        where: { vault: { id: vaultId }, type: AssetType.FT, status: AssetStatus.LOCKED },
+        where: {
+          vault: { id: vaultId },
+          type: In([AssetType.FT, AssetType.NFT]),
+          status: AssetStatus.LOCKED,
+        },
+        relations: ['vault'],
+        select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'dex_price', 'floor_price', 'metadata'],
       });
       return assets;
     } catch (error) {
