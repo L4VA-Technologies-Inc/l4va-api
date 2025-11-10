@@ -8,6 +8,8 @@ import {
   Address,
   FixedTransaction,
   PrivateKey,
+  TransactionUnspentOutputs,
+  TransactionUnspentOutput,
 } from '@emurgo/cardano-serialization-lib-nodejs';
 import {
   BadRequestException,
@@ -23,7 +25,7 @@ import { Repository } from 'typeorm';
 
 import { BlockchainService } from './blockchain.service';
 import { Datum1 } from './types/type';
-import { generate_tag_from_txhash_index, getUtxos, getVaultUtxo } from './utils/lib';
+import { generate_tag_from_txhash_index, getUtxosExtract, getVaultUtxo } from './utils/lib';
 import { VaultInsertingService } from './vault-inserting.service';
 
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
@@ -126,10 +128,25 @@ export class VaultManagingService {
       .to_address()
       .to_bech32();
 
-    const utxos = await getUtxos(Address.from_bech32(vaultConfig.customerAddress), 0, this.blockfrost); // Any UTXO works.
-    if (utxos.len() === 0) {
-      throw new Error('No UTXOs found.');
+    // Use the optimized function with better error handling
+    const { utxos: utxoHexArray } = await getUtxosExtract(
+      Address.from_bech32(vaultConfig.customerAddress),
+      this.blockfrost,
+      { minAda: 4000000 } // 4 ADA minimum
+    );
+
+    if (utxoHexArray.length === 0) {
+      throw new Error('No UTXOs found with at least 4 ADA.');
     }
+
+    // Convert hex array back to TransactionUnspentOutputs for compatibility
+    const utxos = TransactionUnspentOutputs.new();
+    utxoHexArray.forEach(utxoHex => {
+      const utxo = TransactionUnspentOutput.from_hex(utxoHex);
+      utxos.add(utxo);
+    });
+
+    this.logger.debug(`Found ${utxos.len()} suitable UTXOs`);
 
     const selectedUtxo = utxos.get(0);
     const REQUIRED_INPUTS = [selectedUtxo.to_hex()];
@@ -180,6 +197,7 @@ export class VaultManagingService {
       const input: {
         changeAddress: string;
         message: string;
+        utxos: string[];
         mint: Array<object>;
         scriptInteractions: object[];
         outputs: (
@@ -197,6 +215,7 @@ export class VaultManagingService {
       } = {
         changeAddress: vaultConfig.customerAddress,
         message: `${vaultConfig.vaultName} Vault Creation`,
+        utxos: utxoHexArray,
         mint: [
           {
             version: 'cip25',
