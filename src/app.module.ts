@@ -30,7 +30,7 @@ import { BlockchainModule } from './modules/vaults/processing-tx/onchain/blockch
 import { VaultsModule } from './modules/vaults/vaults.module';
 import { VyfiModule } from './modules/vyfi/vyfi.module';
 
-import { NotificationModule } from '@/modules/notification/notification.module';
+import { NotificationModule } from '@/modules/notification/notification.module'; // Hello =)
 @Module({
   imports: [
     SentryModule.forRoot(),
