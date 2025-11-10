@@ -14,6 +14,13 @@ export class TransactionsController {
   constructor(private readonly transactionsService: TransactionsService) {
   }
 
+  @Get('')
+  @ApiOperation({ summary: 'Get user transactions' })
+  async getByUserId(@Request() req: AuthRequest, @Query() query: GetTransactionsDto) {
+    const userId = req.user.sub;
+    return this.transactionsService.getByUserId(userId, query);
+  }
+
   @Get('sent')
   @ApiOperation({ summary: 'Get transactions sent by the authenticated user' })
   async getSentTransactions() {
@@ -32,12 +39,5 @@ export class TransactionsController {
   async getTransaction(@Param('txHash') _txHash: string) {
     //return this.transactionsService.getTransaction(txHash);
     return null;
-  }
-
-  @Get('')
-  @ApiOperation({ summary: 'Get user transactions' })
-  async getByUserId(@Request() req: AuthRequest, @Query() query: GetTransactionsDto) {
-    const userId = req.user.sub;
-    return this.transactionsService.getByUserId(userId, query);
   }
 }
