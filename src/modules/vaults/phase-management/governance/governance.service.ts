@@ -122,9 +122,9 @@ export class GovernanceService {
         where: {
           vault_status: VaultStatus.locked,
           asset_vault_name: Not(IsNull()),
-          policy_id: Not(IsNull()),
+          script_hash: Not(IsNull()),
         },
-        select: ['id', 'asset_vault_name', 'policy_id'],
+        select: ['id', 'asset_vault_name', 'script_hash'],
       });
 
       if (lockedVaults.length === 0) {
