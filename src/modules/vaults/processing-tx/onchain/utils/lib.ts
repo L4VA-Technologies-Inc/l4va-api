@@ -26,20 +26,48 @@ interface Amount {
   quantity: string | number;
 }
 
+interface TargetAsset {
+  /** Token unit (policyId + assetName hex) */
+  token: string;
+  /** Amount of tokens needed */
+  amount: number;
+}
+
+interface AssetCollection {
+  /** Token unit */
+  token: string;
+  /** Amount collected so far */
+  collected: number;
+  /** Amount required */
+  required: number;
+  /** UTXOs containing this token */
+  utxos: string[];
+}
+
 interface GetUtxosOptions {
   /** Minimum ADA amount required for a UTXO to be considered (in lovelace) */
   minAda?: number;
-  /** Token unit (policyId + assetName) to collect for required inputs */
+  /** Filter UTXOs based on ADA amount for specific selection (in lovelace) */
+  filterByAda?: number;
+  /** Single token unit to collect (backward compatibility) */
   targetToken?: string;
-  /** Amount of tokens needed to collect */
+  /** Amount of single token needed (backward compatibility) */
   targetTokenAmount?: number;
+  /** Array of assets to collect */
+  targetAssets?: TargetAsset[];
+  /** Whether to validate UTXO existence on-chain (default: true) */
+  validateUtxos?: boolean;
 }
 
 interface GetUtxosResult {
-  /** All valid UTXOs as hex strings */
+  /** All valid UTXOs as hex strings (filtered by minAda) */
   utxos: string[];
-  /** UTXOs containing the target token (only if targetToken is specified) */
+  /** UTXOs filtered by higher ADA threshold (filterByAda) */
+  filteredUtxos?: string[];
+  /** UTXOs containing target tokens (only if targetToken/targetAssets specified) */
   requiredInputs?: string[];
+  /** Detailed breakdown of asset collection */
+  assetBreakdown?: AssetCollection[];
 }
 
 const assetsToValue = (assets: Amount[]): Value => {
@@ -113,20 +141,31 @@ export const validateUtxoStillExists = async (
  * @param blockfrost - BlockFrost API instance for blockchain queries
  * @param options - Configuration options
  * @param options.minAda - Minimum ADA amount (lovelace) for UTXO inclusion (default: 0)
- * @param options.targetToken - Token unit to collect (policyId + assetName hex)
- * @param options.targetTokenAmount - Amount of target tokens to collect
+ * @param options.targetToken - Single token unit to collect (policyId + assetName hex) - legacy support
+ * @param options.targetTokenAmount - Amount of single target token to collect - legacy support
+ * @param options.targetAssets - Array of assets to collect with their required amounts
  *
- * @returns Promise resolving to UTXOs and optional required inputs
+ * @returns Promise resolving to UTXOs and optional required inputs with asset breakdown
  *
  * @example
  * ```typescript
  * // Get all UTXOs with minimum 2 ADA
  * const { utxos } = await getUtxosExtract(address, blockfrost, { minAda: 2000000 });
  *
- * // Collect specific tokens for transaction
+ * // Collect single token (backward compatibility)
  * const { utxos, requiredInputs } = await getUtxosExtract(address, blockfrost, {
  *   targetToken: '395e9c784ac5360a742b272648456cb41c9b03257a71e3325dfdd5404d4fe154...',
  *   targetTokenAmount: 700000000,
+ *   minAda: 1000000
+ * });
+ *
+ * // Collect multiple assets efficiently
+ * const { utxos, requiredInputs, assetBreakdown } = await getUtxosExtract(address, blockfrost, {
+ *   targetAssets: [
+ *     { token: '395e9c784ac5360a742b272648456cb41c9b03257a71e3325dfdd5404d4fe154...', amount: 1 },
+ *     { token: 'b0d07d45fe9514f80213f4020e5a61241458be626841cde717cb38a7...', amount: 3 },
+ *     { token: 'c43a7db9747b5c6a5acb3e1e6da1e35b9d8b5f4a3b2c1d0e9f8g7h6i...', amount: 2 }
+ *   ],
  *   minAda: 1000000
  * });
  * ```
@@ -136,13 +175,51 @@ export const getUtxosExtract = async (
   blockfrost: BlockFrostAPI,
   options: GetUtxosOptions = {}
 ): Promise<GetUtxosResult> => {
-  const { targetToken, minAda = 0, targetTokenAmount = 0 } = options;
+  const {
+    targetToken,
+    minAda = 0,
+    filterByAda,
+    targetTokenAmount = 0,
+    targetAssets = [],
+    validateUtxos = true,
+  } = options;
+
+  // Handle backward compatibility - convert single token to array format
+  let assetsToCollect: TargetAsset[] = [];
+  if (targetToken && targetTokenAmount > 0) {
+    assetsToCollect = [{ token: targetToken, amount: targetTokenAmount }];
+  } else if (targetAssets.length > 0) {
+    assetsToCollect = [...targetAssets];
+  }
+
+  // Initialize asset collection tracking
+  const assetCollections: Map<string, AssetCollection> = new Map();
+  assetsToCollect.forEach(asset => {
+    assetCollections.set(asset.token, {
+      token: asset.token,
+      collected: 0,
+      required: asset.amount,
+      utxos: [],
+    });
+  });
 
   const utxos = await blockfrost.addressesUtxosAll(address.to_bech32());
   const parsedUtxos: string[] = [];
-  const requiredInputs: string[] = [];
+  const filteredUtxos: string[] = [];
+  const allRequiredInputs: Set<string> = new Set();
 
-  let tokensCollected = 0;
+  if (filterByAda !== undefined) {
+    for (const utxo of utxos) {
+      const adaAmount = Number(utxo.amount[0].quantity);
+      if (adaAmount >= filterByAda) {
+        const utxoHex = TransactionUnspentOutput.new(
+          TransactionInput.new(TransactionHash.from_hex(utxo.tx_hash), utxo.output_index),
+          TransactionOutput.new(address, assetsToValue(utxo.amount))
+        ).to_hex();
+        filteredUtxos.push(utxoHex);
+      }
+    }
+  }
 
   for (const utxo of utxos) {
     const { tx_hash, output_index, amount } = utxo;
@@ -152,8 +229,10 @@ export const getUtxosExtract = async (
     if (adaAmount <= minAda) continue;
 
     // Validate UTXO existence to prevent double-spending
-    const isValid = await validateUtxoStillExists(tx_hash, output_index, blockfrost);
-    if (!isValid) continue;
+    if (validateUtxos) {
+      const isValid = await validateUtxoStillExists(tx_hash, output_index, blockfrost);
+      if (!isValid) continue;
+    }
 
     // Create UTXO hex encoding for transaction building
     const utxoHex = TransactionUnspentOutput.new(
@@ -163,22 +242,66 @@ export const getUtxosExtract = async (
 
     parsedUtxos.push(utxoHex);
 
-    // Skip token collection if not needed or already collected enough
-    if (!targetToken || tokensCollected >= targetTokenAmount) continue;
+    // Check if this UTXO contains any target assets
+    if (assetCollections.size > 0) {
+      for (const [tokenUnit, collection] of assetCollections) {
+        // Skip if we already collected enough of this asset
+        if (collection.collected >= collection.required) continue;
 
-    // Check if this UTXO contains the target token
-    const tokenAmount = amount.find(a => a.unit === targetToken);
-    if (tokenAmount) {
-      const quantity = Number(tokenAmount.quantity);
-      requiredInputs.push(utxoHex);
-      tokensCollected += quantity;
+        // Check if this UTXO contains the target token
+        const tokenAmount = amount.find(a => a.unit === tokenUnit);
+        if (tokenAmount) {
+          const quantity = Number(tokenAmount.quantity);
 
-      // Early exit optimization - stop when we have enough tokens
-      if (tokensCollected >= targetTokenAmount) break;
+          // Update collection tracking
+          collection.collected += quantity;
+          collection.utxos.push(utxoHex);
+          allRequiredInputs.add(utxoHex);
+        }
+      }
+
+      // Early exit optimization - stop if all assets are collected
+      const allAssetsCollected = Array.from(assetCollections.values()).every(
+        collection => collection.collected >= collection.required
+      );
+
+      if (allAssetsCollected) {
+        break;
+      }
     }
   }
 
-  return targetToken ? { utxos: parsedUtxos, requiredInputs } : { utxos: parsedUtxos };
+  // Validate that all required assets were collected
+  if (assetCollections.size > 0) {
+    const missingAssets = Array.from(assetCollections.values()).filter(
+      collection => collection.collected < collection.required
+    );
+
+    if (missingAssets.length > 0) {
+      const missingDetails = missingAssets
+        .map(asset => `${asset.token}: need ${asset.required}, found ${asset.collected}`)
+        .join('; ');
+
+      throw new Error(`Insufficient assets found. Missing: ${missingDetails}`);
+    }
+  }
+
+  // Prepare result
+  const result: GetUtxosResult = {
+    utxos: parsedUtxos,
+  };
+
+  // Add filtered UTXOs if filterByAda was specified
+  if (filterByAda !== undefined) {
+    result.filteredUtxos = filteredUtxos;
+  }
+
+  if (assetCollections.size > 0) {
+    result.requiredInputs = Array.from(allRequiredInputs);
+    result.assetBreakdown = Array.from(assetCollections.values());
+  }
+
+  return result;
 };
 
 export function generate_tag_from_txhash_index(txHash: string, txOutputIdx: number): string {
