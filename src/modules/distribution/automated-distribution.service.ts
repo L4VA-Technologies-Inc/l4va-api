@@ -16,16 +16,16 @@ import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, Not, IsNull, MoreThan } from 'typeorm';
 
-import { ClaimsService } from '../vaults/claims/claims.service';
-import { GovernanceService } from '../vaults/phase-management/governance/governance.service';
-import { ApplyParamsResponse, BlockchainService } from '../vaults/processing-tx/onchain/blockchain.service';
-import { generate_tag_from_txhash_index, getUtxosExtract } from '../vaults/processing-tx/onchain/utils/lib';
-
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
+import { ClaimsService } from '@/modules/vaults/claims/claims.service';
+import { GovernanceService } from '@/modules/vaults/phase-management/governance/governance.service';
+import { ApplyParamsResponse, BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
+import { generate_tag_from_txhash_index, getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import { VyfiService } from '@/modules/vyfi/vyfi.service';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { VaultStatus, SmartContractVaultStatus } from '@/types/vault.types';
@@ -118,7 +118,8 @@ export class AutomatedDistributionService {
     private readonly blockchainService: BlockchainService,
     private readonly assetService: AssetsService,
     private readonly claimsService: ClaimsService,
-    private readonly governanceService: GovernanceService
+    private readonly governanceService: GovernanceService,
+    private readonly vyfiService: VyfiService
   ) {
     this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
@@ -248,13 +249,21 @@ export class AutomatedDistributionService {
       // If no pending claims at all, mark vault as processed
       if (contributorClaims === 0) {
         this.logger.log(`No pending claims found for vault ${vaultId}. Marking as processed.`);
-        await this.vaultRepository.update(
-          { id: vaultId },
-          {
-            distribution_in_progress: false,
-            distribution_processed: true,
-          }
-        );
+        const { txHash } = await this.vyfiService.createLiquidityPool(vaultId);
+
+        if (txHash) {
+          // Mark vault as processed after all payments are queued
+          await this.vaultRepository.update(
+            { id: vaultId },
+            {
+              distribution_in_progress: false,
+              distribution_processed: true,
+            }
+          );
+
+          await new Promise(resolve => setTimeout(resolve, 20000));
+          this.governanceService.createAutomaticSnapshot(vaultId, `${vault.script_hash}${vault.asset_vault_name}`);
+        }
         return;
       }
 
@@ -833,16 +842,21 @@ export class AutomatedDistributionService {
 
     if (claims.length === 0) {
       this.logger.log(`No contributor claims for payment in vault ${vaultId}. Marking vault as processed.`);
-      await this.vaultRepository.update(
-        { id: vaultId },
-        {
-          distribution_in_progress: false,
-          distribution_processed: true,
-        }
-      );
+      const { txHash } = await this.vyfiService.createLiquidityPool(vaultId);
 
-      await new Promise(resolve => setTimeout(resolve, 20000));
-      this.governanceService.createAutomaticSnapshot(vaultId, `${vault.script_hash}${vault.asset_vault_name}`);
+      if (txHash) {
+        // Mark vault as processed after all payments are queued
+        await this.vaultRepository.update(
+          { id: vaultId },
+          {
+            distribution_in_progress: false,
+            distribution_processed: true,
+          }
+        );
+
+        await new Promise(resolve => setTimeout(resolve, 20000));
+        this.governanceService.createAutomaticSnapshot(vaultId, `${vault.script_hash}${vault.asset_vault_name}`);
+      }
       return;
     }
 
@@ -1223,16 +1237,21 @@ export class AutomatedDistributionService {
         }
       );
     } else {
-      // Mark vault as processed after all payments are queued
-      await this.vaultRepository.update(
-        { id: vaultId },
-        {
-          distribution_in_progress: false,
-          distribution_processed: true,
-        }
-      );
-      await new Promise(resolve => setTimeout(resolve, 20000));
-      this.governanceService.createAutomaticSnapshot(vaultId, `${vault.script_hash}${vault.asset_vault_name}`);
+      const { txHash } = await this.vyfiService.createLiquidityPool(vaultId);
+
+      if (txHash) {
+        // Mark vault as processed after all payments are queued
+        await this.vaultRepository.update(
+          { id: vaultId },
+          {
+            distribution_in_progress: false,
+            distribution_processed: true,
+          }
+        );
+
+        await new Promise(resolve => setTimeout(resolve, 20000));
+        this.governanceService.createAutomaticSnapshot(vaultId, `${vault.script_hash}${vault.asset_vault_name}`);
+      }
     }
   }
 

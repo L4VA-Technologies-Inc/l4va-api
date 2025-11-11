@@ -2,10 +2,6 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { ClaimsModule } from '../vaults/claims/claims.module';
-import { GovernanceModule } from '../vaults/phase-management/governance/governance.module';
-import { BlockchainModule } from '../vaults/processing-tx/onchain/blockchain.module';
-
 import { AutomatedDistributionService } from './automated-distribution.service';
 import { DistributionService } from './distribution.service';
 
@@ -15,6 +11,10 @@ import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
+import { ClaimsModule } from '@/modules/vaults/claims/claims.module';
+import { GovernanceModule } from '@/modules/vaults/phase-management/governance/governance.module';
+import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockchain.module';
+import { VyfiModule } from '@/modules/vyfi/vyfi.module';
 
 @Module({
   imports: [
@@ -26,6 +26,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     AssetsModule,
     GovernanceModule,
     ClaimsModule,
+    VyfiModule,
   ],
   providers: [DistributionService, AutomatedDistributionService],
   exports: [DistributionService, AutomatedDistributionService],

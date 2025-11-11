@@ -124,17 +124,17 @@ export class VyfiService {
    * - Outputs: VyFi pool (tokens + ADA) + Admin change
    *
    *
-   * @param claimId - ID of the LP claim to process
+   * @param vaultId - ID of the vault to process
    * @returns Transaction hash of submitted LP creation
    * @throws NotFoundException if claim not found
    * @throws Error if pool already exists or insufficient funds
    *
    */
-  async createLiquidityPool(claimId: string): Promise<{
+  async createLiquidityPool(vaultId: string): Promise<{
     txHash: string;
   }> {
     const claim = await this.claimRepository.findOne({
-      where: { id: claimId, type: ClaimType.LP, status: ClaimStatus.AVAILABLE },
+      where: { vault: { id: vaultId }, type: ClaimType.LP, status: ClaimStatus.AVAILABLE },
       relations: ['vault'],
     });
 
