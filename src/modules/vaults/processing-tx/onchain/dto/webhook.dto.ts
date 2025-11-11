@@ -1,8 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
-import { IsArray, IsEnum, IsNumber, IsObject, IsOptional, IsString, ValidateNested } from 'class-validator';
-
-import { OnchainTransactionStatus } from '../types/transaction-status.enum';
+import { IsArray, IsNumber, IsObject, IsOptional, IsString, ValidateNested } from 'class-validator';
 
 class BlockfrostAmount {
   @ApiProperty({

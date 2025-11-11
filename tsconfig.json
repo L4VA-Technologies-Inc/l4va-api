@@ -19,7 +19,7 @@
     "forceConsistentCasingInFileNames": false,
     "noFallthroughCasesInSwitch": false,
     "resolveJsonModule": true,
-    "types": ["node"],
+    "types": ["node", "multer"],
     "paths": {
       "@/*": ["./src/*"],
     },

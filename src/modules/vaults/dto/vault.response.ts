@@ -17,7 +17,7 @@ import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
-import { User } from "@/database/user.entity";
+import { User } from '@/database/user.entity';
 
 export class VaultShortResponse {
   @ApiProperty({ description: 'Unique identifier of the vault' })

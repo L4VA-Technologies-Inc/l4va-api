@@ -1,6 +1,7 @@
-import { ApiTags, ApiOperation, ApiParam, ApiResponse } from "@nestjs/swagger";
-import { Controller, Get, Post, Param, Body, HttpException, HttpStatus } from "@nestjs/common";
-import { ChatService } from "./chat.service";
+import { Controller, Get, Post, Param, Body, HttpException, HttpStatus } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiParam, ApiResponse } from '@nestjs/swagger';
+
+import { ChatService } from './chat.service';
 
 @ApiTags('chat')
 @Controller('chat')
@@ -16,10 +17,7 @@ export class ChatController {
       const token = this.chatService.generateUserToken(userId);
       return { token };
     } catch (error) {
-      throw new HttpException(
-        'Failed to generate token',
-        HttpStatus.INTERNAL_SERVER_ERROR
-      );
+      throw new HttpException('Failed to generate token', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
@@ -27,25 +25,16 @@ export class ChatController {
   @ApiOperation({ summary: 'Create or get vault chat channel' })
   @ApiParam({ name: 'vaultId', description: 'Vault ID to create channel for' })
   @ApiResponse({ status: 200, description: 'Channel created/retrieved successfully' })
-  async createVaultChannel(
-    @Param('vaultId') vaultId: string,
-    @Body() body?: { createdByUserId?: string }
-  ) {
+  async createVaultChannel(@Param('vaultId') vaultId: string, @Body() body?: { createdByUserId?: string }) {
     try {
-      const channel = await this.chatService.createVaultChatRoom(
-        vaultId, 
-        body?.createdByUserId || 'system'
-      );
+      const channel = await this.chatService.createVaultChatRoom(vaultId, body?.createdByUserId || 'system');
       return {
         channelId: channel.id,
         channelType: channel.type,
-        success: true
+        success: true,
       };
     } catch (error) {
-      throw new HttpException(
-        'Failed to create vault channel',
-        HttpStatus.INTERNAL_SERVER_ERROR
-      );
+      throw new HttpException('Failed to create vault channel', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
@@ -60,28 +49,19 @@ export class ChatController {
       const user = await this.chatService.createOrUpdateUser(userId, userData);
       return { user, success: true };
     } catch (error) {
-      throw new HttpException(
-        'Failed to create user',
-        HttpStatus.INTERNAL_SERVER_ERROR
-      );
+      throw new HttpException('Failed to create user', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
   @Post('vault/:vaultId/members')
   @ApiOperation({ summary: 'Add members to vault chat channel' })
   @ApiParam({ name: 'vaultId', description: 'Vault ID' })
-  async addMembersToVault(
-    @Param('vaultId') vaultId: string,
-    @Body() body: { userIds: string[] }
-  ) {
+  async addMembersToVault(@Param('vaultId') vaultId: string, @Body() body: { userIds: string[] }) {
     try {
       await this.chatService.addMembersToVaultChannel(vaultId, body.userIds);
       return { success: true };
     } catch (error) {
-      throw new HttpException(
-        'Failed to add members to vault channel',
-        HttpStatus.INTERNAL_SERVER_ERROR
-      );
+      throw new HttpException('Failed to add members to vault channel', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 }

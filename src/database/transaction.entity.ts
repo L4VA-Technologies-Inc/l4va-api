@@ -8,7 +8,8 @@ import {
   OneToMany,
   PrimaryGeneratedColumn,
   Index,
-  CreateDateColumn, UpdateDateColumn
+  CreateDateColumn,
+  UpdateDateColumn,
 } from 'typeorm';
 
 import { TransactionStatus, TransactionType } from '../types/transaction.types';

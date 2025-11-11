@@ -3,7 +3,6 @@ import * as Sentry from '@sentry/node';
 
 @Injectable()
 export class SentryMonitoringService {
-
   captureError(error: Error | string, context?: Record<string, any>) {
     if (typeof error === 'string') {
       Sentry.captureMessage(error, {
@@ -37,7 +36,6 @@ export class SentryMonitoringService {
       ...userData,
     });
   }
-
 
   setTag(key: string, value: string) {
     Sentry.setTag(key, value);

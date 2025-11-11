@@ -9,7 +9,6 @@ import { ApiDoc } from './decorators/api-doc.decorator';
 export class AppController {
   constructor(private readonly appService: AppService) {}
 
-
   @ApiDoc({
     summary: 'Get version of API',
     description: 'Version has returned',

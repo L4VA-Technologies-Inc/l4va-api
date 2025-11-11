@@ -16,7 +16,7 @@ import { LinkEntity } from '@/database/link.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
-import { VaultStatus } from "@/types/vault.types";
+import { VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class UsersService {
@@ -86,7 +86,6 @@ export class UsersService {
 
     return plainToInstance(PublicProfileRes, plainUser, { excludeExtraneousValues: true });
   }
-
 
   async create(userData: Partial<User>): Promise<User> {
     const user = this.usersRepository.create(userData);
