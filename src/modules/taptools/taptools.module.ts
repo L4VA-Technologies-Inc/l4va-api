@@ -5,7 +5,7 @@ import { TaptoolsController } from './taptools.controller';
 import { TaptoolsService } from './taptools.service';
 
 import { Vault } from '@/database/vault.entity';
-import { AssetsModule } from '@/modules/vaults/processing-tx/assets/assets.module';
+import { AssetsModule } from '@/modules/vaults/assets/assets.module';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Vault]), AssetsModule],

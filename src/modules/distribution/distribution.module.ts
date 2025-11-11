@@ -4,7 +4,6 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { ClaimsModule } from '../vaults/claims/claims.module';
 import { GovernanceModule } from '../vaults/phase-management/governance/governance.module';
-import { AssetsModule } from '../vaults/processing-tx/assets/assets.module';
 import { BlockchainModule } from '../vaults/processing-tx/onchain/blockchain.module';
 
 import { AutomatedDistributionService } from './automated-distribution.service';
@@ -15,6 +14,7 @@ import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { AssetsModule } from '@/modules/vaults/assets/assets.module';
 
 @Module({
   imports: [

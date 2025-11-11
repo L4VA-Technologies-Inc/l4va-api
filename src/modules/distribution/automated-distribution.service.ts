@@ -18,7 +18,6 @@ import { Repository, In, Not, IsNull, MoreThan } from 'typeorm';
 
 import { ClaimsService } from '../vaults/claims/claims.service';
 import { GovernanceService } from '../vaults/phase-management/governance/governance.service';
-import { AssetsService } from '../vaults/processing-tx/assets/assets.service';
 import { ApplyParamsResponse, BlockchainService } from '../vaults/processing-tx/onchain/blockchain.service';
 import { generate_tag_from_txhash_index, getUtxosExtract } from '../vaults/processing-tx/onchain/utils/lib';
 
@@ -26,6 +25,7 @@ import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { VaultStatus, SmartContractVaultStatus } from '@/types/vault.types';
