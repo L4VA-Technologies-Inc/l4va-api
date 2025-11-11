@@ -1,17 +1,11 @@
-import {
-  Controller,
-  Get,
-  Param,
-  Query,
-  Request,
-  UseGuards,
-} from "@nestjs/common";
-import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
+import { Controller, Get, Param, Query, Request, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 
-import { AuthGuard } from "../../../auth/auth.guard";
-import { TransactionsService } from "@/modules/vaults/processing-tx/offchain-tx/transactions.service";
-import { AuthRequest } from "@/modules/auth/dto/auth-user.interface";
-import { GetTransactionsDto } from "@/modules/vaults/processing-tx/offchain-tx/dto/get-transactions.dto";
+import { AuthGuard } from '../../../auth/auth.guard';
+
+import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
+import { GetTransactionsDto } from '@/modules/vaults/processing-tx/offchain-tx/dto/get-transactions.dto';
+import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 
 @ApiTags('Transactions')
 @Controller('transactions')
@@ -44,7 +38,7 @@ export class TransactionsController {
   }
   @Get(':txHash')
   @ApiOperation({ summary: 'Get transaction details by transaction hash' })
-  async getTransaction(@Param("txHash") _txHash: string) {
+  async getTransaction(@Param('txHash') _txHash: string) {
     //return this.transactionsService.getTransaction(txHash);
     return null;
   }

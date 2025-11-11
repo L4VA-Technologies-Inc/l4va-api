@@ -492,8 +492,6 @@ export class LifecycleService {
               },
             });
             this.logger.log(`Created LP claim for vault owner: ${lpVtAmount} VT tokens (${lpAdaAmount} ADA)`);
-          } else {
-            this.logger.log(`LP claim already exists for vault ${vault.id}, skipping creation.`);
           }
         } catch (error) {
           this.logger.error(`Failed to create LP claim for vault ${vault.id}:`, error);
@@ -520,7 +518,6 @@ export class LifecycleService {
             });
 
             if (claimExists) {
-              this.logger.log(`Claim already exists for acquirer transaction ${tx.id}, skipping.`);
               continue;
             }
 
@@ -580,7 +577,6 @@ export class LifecycleService {
             });
 
             if (claimExists) {
-              this.logger.log(`Claim already exists for contributor transaction ${tx.id}, skipping.`);
               continue;
             }
 
@@ -668,6 +664,11 @@ export class LifecycleService {
           adaPairMultiplier,
           vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
         });
+
+        if (!response.txHash) {
+          this.logger.error(`Failed to get txHash for vault ${vault.id} metadata update transaction`);
+          return;
+        }
 
         await this.executePhaseTransition({
           vaultId: vault.id,

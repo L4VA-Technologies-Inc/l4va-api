@@ -102,6 +102,106 @@ export class VyfiService {
     }
   }
 
+  // async createLiquidityPool(claimId: string): Promise<{
+  //   txHash: string;
+  // }> {
+  //   const claim = await this.claimRepository.findOne({
+  //     where: { id: claimId, type: ClaimType.LP, status: ClaimStatus.AVAILABLE },
+  //     relations: ['vault'],
+  //   });
+
+  //   if (!claim) {
+  //     throw new NotFoundException('Liquidity pool claim not found');
+  //   }
+
+  //   // First check if pool exists
+  //   const poolCheck = await this.checkPool({
+  //     networkId: 0,
+  //     tokenAUnit: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
+  //     tokenBUnit: 'lovelace',
+  //   });
+
+  //   if (poolCheck.exists) {
+  //     throw new Error('Pool already exists');
+  //   }
+
+  //   // Generate metadata
+  //   const metadataText = this.formatMetadataText(
+  //     {
+  //       policyId: claim.vault.script_hash,
+  //       assetName: claim.vault.asset_vault_name,
+  //     },
+  //     claim.vault.vault_token_ticker
+  //   );
+
+  //   // Get UTxOs
+  //   const { utxos: adminUtxos, requiredInputs } = await getUtxosExtract(
+  //     Address.from_bech32(this.adminAddress),
+  //     this.blockfrost,
+  //     {
+  //       targetTokenAmount: +claim.amount,
+  //       targetToken: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
+  //     }
+  //   );
+
+  //   if (adminUtxos.length === 0) {
+  //     throw new Error('No UTXOs found.');
+  //   }
+
+  //   // Construct transaction input with proper ADA amounts
+  //   const input = {
+  //     changeAddress: this.adminAddress,
+  //     message: metadataText,
+  //     utxos: adminUtxos,
+  //     outputs: [
+  //       {
+  //         address: VYFI_CONSTANTS.POOL_ADDRESS,
+  //         assets: [
+  //           {
+  //             assetName: { name: claim.vault.asset_vault_name, format: 'hex' },
+  //             policyId: claim.vault.script_hash,
+  //             quantity: +claim.amount,
+  //           },
+  //         ],
+  //         lovelace: VYFI_CONSTANTS.TOTAL_REQUIRED_ADA + Number(claim.metadata?.adaAmount || 0),
+  //       },
+  //     ],
+  //     metadata: {
+  //       [674]: metadataText,
+  //     },
+  //     requiredSigners: [this.adminHash],
+  //     requiredInputs,
+  //   };
+
+  //   const buildResponse = await this.blockchainService.buildTransaction(input);
+  //   const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+  //   txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+  //   // Submit the transaction
+  //   const submitResponse = await this.blockchainService.submitTransaction({
+  //     transaction: txToSubmitOnChain.to_hex(),
+  //     signatures: [],
+  //   });
+
+  //   return {
+  //     txHash: submitResponse.txHash,
+  //   };
+  // }
+
+  async getPoolInfo(poolId: string): Promise<any> {
+    try {
+      const response = await firstValueFrom(this.httpService.get(`${this.vyfiApiUrl}/pool/${poolId}`));
+      return response.data;
+    } catch (error) {
+      throw new Error(`Failed to get VyFi pool info: ${error.message}`);
+    }
+  }
+
+  private formatMetadataText(tokenA: { policyId?: string; assetName: string }, ticker: string): string {
+    const tokenAUnit = tokenA.policyId ? `${tokenA.policyId}.${tokenA.assetName}` : 'lovelace';
+    return `L4VA: LP Factory Create Pool Order Request -- /${tokenAUnit} --- ADA/${ticker}`;
+  }
+
   async createLiquidityPool(claimId: string): Promise<{
     txHash: string;
   }> {
@@ -125,107 +225,7 @@ export class VyfiService {
       throw new Error('Pool already exists');
     }
 
-    // Generate metadata
-    const metadataText = this.formatMetadataText(
-      {
-        policyId: claim.vault.script_hash,
-        assetName: claim.vault.asset_vault_name,
-      },
-      claim.vault.vault_token_ticker
-    );
-
-    // Get UTxOs
-    const { utxos: adminUtxos, requiredInputs } = await getUtxosExtract(
-      Address.from_bech32(this.adminAddress),
-      this.blockfrost,
-      {
-        targetTokenAmount: +claim.amount,
-        targetToken: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
-      }
-    );
-
-    if (adminUtxos.length === 0) {
-      throw new Error('No UTXOs found.');
-    }
-
-    // Construct transaction input with proper ADA amounts
-    const input = {
-      changeAddress: this.adminAddress,
-      message: metadataText,
-      utxos: adminUtxos,
-      outputs: [
-        {
-          address: VYFI_CONSTANTS.POOL_ADDRESS,
-          assets: [
-            {
-              assetName: { name: claim.vault.asset_vault_name, format: 'hex' },
-              policyId: claim.vault.script_hash,
-              quantity: +claim.amount,
-            },
-          ],
-          lovelace: VYFI_CONSTANTS.TOTAL_REQUIRED_ADA + Number(claim.metadata?.adaAmount || 0),
-        },
-      ],
-      metadata: {
-        [674]: metadataText,
-      },
-      requiredSigners: [this.adminHash],
-      requiredInputs,
-    };
-
-    const buildResponse = await this.blockchainService.buildTransaction(input);
-    const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-    txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
-
-    // Submit the transaction
-    const submitResponse = await this.blockchainService.submitTransaction({
-      transaction: txToSubmitOnChain.to_hex(),
-      signatures: [],
-    });
-
-    return {
-      txHash: submitResponse.txHash,
-    };
-  }
-
-  async getPoolInfo(poolId: string): Promise<any> {
-    try {
-      const response = await firstValueFrom(this.httpService.get(`${this.vyfiApiUrl}/pool/${poolId}`));
-      return response.data;
-    } catch (error) {
-      throw new Error(`Failed to get VyFi pool info: ${error.message}`);
-    }
-  }
-
-  private formatMetadataText(tokenA: { policyId?: string; assetName: string }, ticker: string): string {
-    const tokenAUnit = tokenA.policyId ? `${tokenA.policyId}.${tokenA.assetName}` : 'lovelace';
-    return `L4VA: LP Factory Create Pool Order Request -- /${tokenAUnit} --- ADA/${ticker}`;
-  }
-
-  async createLiquidityPool2(claimId: string): Promise<{
-    txHash: string;
-  }> {
-    const claim = await this.claimRepository.findOne({
-      where: { id: claimId, type: ClaimType.LP, status: ClaimStatus.AVAILABLE },
-      relations: ['vault'],
-    });
-
-    if (!claim) {
-      throw new NotFoundException('Liquidity pool claim not found');
-    }
-
-    // First check if pool exists
-    const poolCheck = await this.checkPool({
-      networkId: 0,
-      tokenAUnit: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
-      tokenBUnit: 'lovelace',
-    });
-
-    if (poolCheck.exists) {
-      throw new Error('Pool already exists');
-    }
-
-    if (claim.vault?.dispatch_parametized_hash) {
+    if (!claim.vault?.dispatch_parametized_hash) {
       throw new Error('Vault does not have dispatch script configured');
     }
 

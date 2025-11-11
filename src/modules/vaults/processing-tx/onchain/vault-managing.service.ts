@@ -435,6 +435,12 @@ export class VaultManagingService {
       throw new NotFoundException('Transaction not found');
     }
 
+    const { utxos: adminUtxos } = await getUtxosExtract(
+      Address.from_bech32(this.adminAddress),
+      this.blockfrost,
+      { minAda: 4000000 } // 4 ADA minimum
+    );
+
     const allowedPolicies: string[] =
       Array.isArray(assetsWhitelist) && assetsWhitelist.length > 0
         ? assetsWhitelist.map(policy => policy.policy_id)
@@ -448,6 +454,7 @@ export class VaultManagingService {
     const input = {
       changeAddress: this.adminAddress,
       message: `Vault ${vault.id} Update`,
+      utxos: adminUtxos,
       scriptInteractions: [
         {
           purpose: 'spend',
@@ -519,24 +526,19 @@ export class VaultManagingService {
 
     this.logger.debug('Vault update transaction input:', JSON.stringify(input));
 
-    try {
-      // Build the transaction using BlockchainService
-      const buildResponse = await this.blockchainService.buildTransaction(input);
+    // Build the transaction using BlockchainService
+    const buildResponse = await this.blockchainService.buildTransaction(input);
 
-      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+    const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+    txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
-      const response = await this.vaultInsertingService.submitTransaction({
-        transaction: txToSubmitOnChain.to_hex(),
-        vaultId: vault.id,
-        txId: transaction.id,
-      });
+    const response = await this.vaultInsertingService.submitTransaction({
+      transaction: txToSubmitOnChain.to_hex(),
+      vaultId: vault.id,
+      txId: transaction.id,
+    });
 
-      return { success: true, txHash: response.txHash, message: 'Transaction submitted successfully' };
-    } catch (error) {
-      this.logger.error('Failed to build vault update tx:', error);
-      throw error;
-    }
+    return { success: true, txHash: response.txHash, message: 'Transaction submitted successfully' };
   }
 
   /**

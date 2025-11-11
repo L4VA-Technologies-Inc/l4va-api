@@ -295,7 +295,7 @@ export class AutomatedDistributionService {
     }
 
     // Process acquirer claims as usual
-    const batchSize = 6;
+    const batchSize = 10;
     for (let i = 0; i < claims.length; i += batchSize) {
       const batchClaims = claims.slice(i, i + batchSize);
       await this.processAcquirerBatch(vault, batchClaims, vaultId);
@@ -369,7 +369,9 @@ export class AutomatedDistributionService {
     dispatchParametizedHash: string
   ): Promise<void> {
     const DISPATCH_ADDRESS = this.getDispatchAddress(dispatchParametizedHash);
-    const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost);
+    const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
+      minAda: 4000000,
+    });
     if (adminUtxos.length === 0) {
       throw new Error('No UTXOs on admin wallet was found.');
     }
