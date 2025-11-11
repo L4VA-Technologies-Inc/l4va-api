@@ -146,8 +146,6 @@ export class VaultManagingService {
       utxos.add(utxo);
     });
 
-    this.logger.debug(`Found ${utxos.len()} suitable UTXOs`);
-
     const selectedUtxo = utxos.get(0);
     const REQUIRED_INPUTS = [selectedUtxo.to_hex()];
     const assetName = generate_tag_from_txhash_index(

@@ -289,7 +289,7 @@ export class VyfiService {
       signatures: [],
     });
 
-    this.logger.log(`Combined dispatch withdrawal + LP creation transaction submitted: ${submitResponse.txHash}`);
+    await this.claimRepository.update({ id: claim.id }, { status: ClaimStatus.CLAIMED });
 
     return {
       txHash: submitResponse.txHash,
