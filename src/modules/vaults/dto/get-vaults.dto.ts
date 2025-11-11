@@ -14,7 +14,7 @@ export enum VaultFilter {
   failed = 'failed',
   terminated = 'terminated',
   all = 'all',
-  govern = 'govern'
+  govern = 'govern',
 }
 
 export enum VaultSortField {

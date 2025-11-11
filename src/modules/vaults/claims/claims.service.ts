@@ -162,7 +162,6 @@ export class ClaimsService {
         });
 
         if (existingClaim) {
-          this.logger.log(`Cancellation claim already exists for transaction ${tx.id}`);
           continue;
         }
 
@@ -218,7 +217,6 @@ export class ClaimsService {
         });
 
         if (existingClaim) {
-          this.logger.log(`Cancellation claim already exists for transaction ${tx.id}`);
           continue;
         }
 

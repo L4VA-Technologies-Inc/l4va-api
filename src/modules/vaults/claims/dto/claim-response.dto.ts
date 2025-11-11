@@ -19,7 +19,6 @@ class SimpleVaultDto {
   ftTokenDecimals: number;
 }
 
-
 export class ClaimResponseDto {
   @Expose()
   page: number;
