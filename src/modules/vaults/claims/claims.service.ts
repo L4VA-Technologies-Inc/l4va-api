@@ -258,16 +258,12 @@ export class ClaimsService {
     success: boolean;
   }> {
     const claim = await this.claimRepository.findOne({
-      where: { id: claimId, type: ClaimType.CANCELLATION },
+      where: { id: claimId, type: ClaimType.CANCELLATION, status: ClaimStatus.AVAILABLE },
       relations: ['user', 'vault', 'transaction'],
     });
 
     if (!claim) {
-      throw new NotFoundException('Cancellation claim not found');
-    }
-
-    if (claim.status !== ClaimStatus.AVAILABLE) {
-      throw new BadRequestException('Cancellation claim is not available');
+      throw new NotFoundException('Cancellation claim not found or not available');
     }
 
     const { vault, user, transaction } = claim;
