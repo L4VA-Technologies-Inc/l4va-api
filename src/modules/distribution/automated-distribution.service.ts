@@ -207,8 +207,6 @@ export class AutomatedDistributionService {
         await this.vaultRepository.update({ id: vault.id }, { distribution_in_progress: true }); // Mark as processing to prevent duplicate processing
 
         await this.processAcquirerExtractions(vault.id); // Queue extraction transactions for acquirer claims
-        this.logger.log(`Extraction transactions queued for vault ${vault.id}`);
-        await new Promise(resolve => setTimeout(resolve, 30000));
       } catch (error) {
         this.logger.error(`Error processing vault ${vault.id}:`, error);
       }
@@ -236,72 +234,8 @@ export class AutomatedDistributionService {
 
     this.logger.log(`Found ${claims.length} acquirer claims to extract for vault ${vaultId}`);
 
-    // If no acquirer claims, check for contributor claims
-    if (claims.length === 0) {
-      const contributorClaims = await this.claimRepository.count({
-        where: {
-          vault: { id: vaultId },
-          type: ClaimType.CONTRIBUTOR,
-          status: ClaimStatus.PENDING,
-        },
-      });
-
-      // If no pending claims at all, mark vault as processed
-      if (contributorClaims === 0) {
-        this.logger.log(`No pending claims found for vault ${vaultId}. Marking as processed.`);
-        const { txHash } = await this.vyfiService.createLiquidityPool(vaultId);
-
-        if (txHash) {
-          // Mark vault as processed after all payments are queued
-          await this.vaultRepository.update(
-            { id: vaultId },
-            {
-              distribution_in_progress: false,
-              distribution_processed: true,
-            }
-          );
-
-          await new Promise(resolve => setTimeout(resolve, 20000));
-          this.governanceService.createAutomaticSnapshot(vaultId, `${vault.script_hash}${vault.asset_vault_name}`);
-        }
-        return;
-      }
-
-      // If there are contributor claims but no acquirer claims, proceed to payment phase
-      this.logger.log(
-        `No acquirer claims for vault ${vaultId}, but ${contributorClaims} contributor claims pending. Proceeding to payment phase.`
-      );
-
-      // Get vault details for stake registration check
-      const vaultWithStake = await this.vaultRepository.findOne({
-        where: { id: vaultId },
-        select: ['id', 'script_hash', 'asset_vault_name', 'stake_registered'],
-      });
-
-      if (vaultWithStake) {
-        // Check if stake is already registered
-        if (vaultWithStake.stake_registered) {
-          this.logger.log(`Stake credential already registered for vault ${vaultId}. Proceeding to payments.`);
-          await this.processContributorPayments(vaultId);
-        } else {
-          const dispatchResult = await this.blockchainService.applyDispatchParameters({
-            vault_policy: this.SC_POLICY_ID,
-            vault_id: vaultWithStake.asset_vault_name,
-            contribution_script_hash: vaultWithStake.script_hash,
-          });
-
-          const stakeResult = await this.blockchainService.registerScriptStake(dispatchResult.parameterizedHash);
-
-          if (stakeResult.success) {
-            await this.vaultRepository.update({ id: vaultId }, { stake_registered: true });
-            await this.processContributorPayments(vaultId);
-          } else {
-            this.logger.error(`Failed to register stake credential for vault ${vaultId}`);
-          }
-        }
-      }
-      return;
-    }
+    // If no acquirer claims, skip processing
+    if (claims.length === 0) return;
 
     // Process acquirer claims as usual
     const batchSize = 10;
@@ -760,7 +694,7 @@ export class AutomatedDistributionService {
       .andWhere('tx.status = :status', { status: TransactionStatus.confirmed })
       .andWhere('vault.distribution_in_progress = true') // ONLY from vaults currently being processed
       .andWhere('vault.distribution_processed = false')
-      .andWhere('vault.created_at > :date', { date: new Date('2025-10-22').toISOString() }) // Same filter as processLockedVaultsForDistribution
+      .andWhere('vault.created_at > :date', { date: new Date('2025-10-22').toISOString() })
       .getMany();
 
     if (confirmedExtractions.length === 0) {
@@ -842,22 +776,7 @@ export class AutomatedDistributionService {
 
     if (claims.length === 0) {
       this.logger.log(`No contributor claims for payment in vault ${vaultId}. Marking vault as processed.`);
-      const { txHash } = await this.vyfiService.createLiquidityPool(vaultId);
-
-      if (txHash) {
-        // Mark vault as processed after all payments are queued
-        await this.vaultRepository.update(
-          { id: vaultId },
-          {
-            distribution_in_progress: false,
-            distribution_processed: true,
-          }
-        );
-
-        await new Promise(resolve => setTimeout(resolve, 20000));
-        this.governanceService.createAutomaticSnapshot(vaultId, `${vault.script_hash}${vault.asset_vault_name}`);
-      }
-      return;
+      await this.finalizeVaultDistribution(vaultId, vault.script_hash, vault.asset_vault_name);
     }
 
     let isFirstPayment = true;
@@ -1137,6 +1056,9 @@ export class AutomatedDistributionService {
         try {
           const buildResponse = await this.blockchainService.buildTransaction(input);
 
+          const actualTxSize = this.getTransactionSize(buildResponse.complete);
+          this.logger.debug(`Transaction size: ${actualTxSize} bytes (${(actualTxSize / 1024).toFixed(2)} KB)`);
+
           const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
           txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
@@ -1237,21 +1159,7 @@ export class AutomatedDistributionService {
         }
       );
     } else {
-      const { txHash } = await this.vyfiService.createLiquidityPool(vaultId);
-
-      if (txHash) {
-        // Mark vault as processed after all payments are queued
-        await this.vaultRepository.update(
-          { id: vaultId },
-          {
-            distribution_in_progress: false,
-            distribution_processed: true,
-          }
-        );
-
-        await new Promise(resolve => setTimeout(resolve, 20000));
-        this.governanceService.createAutomaticSnapshot(vaultId, `${vault.script_hash}${vault.asset_vault_name}`);
-      }
+      await this.finalizeVaultDistribution(vaultId, vault.script_hash, vault.asset_vault_name);
     }
   }
 
@@ -1295,5 +1203,34 @@ export class AutomatedDistributionService {
   private getTransactionSize(txHex: string): number {
     const tx = CardanoTransaction.from_bytes(Buffer.from(txHex, 'hex'));
     return tx.to_bytes().length;
+  }
+
+  private async finalizeVaultDistribution(
+    vaultId: string,
+    script_hash: string,
+    asset_vault_name: string
+  ): Promise<void> {
+    try {
+      // Create liquidity pool
+      const { txHash } = await this.vyfiService.createLiquidityPool(vaultId);
+
+      if (txHash) {
+        // Mark vault as fully processed
+        await this.vaultRepository.update(
+          { id: vaultId },
+          {
+            distribution_in_progress: false,
+            distribution_processed: true,
+          }
+        );
+
+        await this.governanceService.createAutomaticSnapshot(vaultId, `${script_hash}${asset_vault_name}`);
+      }
+    } catch (error) {
+      this.logger.error(`Failed to finalize vault distribution for ${vaultId}:`, error);
+      // Reset the vault state on failure
+      await this.vaultRepository.update({ id: vaultId }, { distribution_in_progress: false });
+      throw error;
+    }
   }
 }
