@@ -4,10 +4,10 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { FileEntity } from '@/database/file.entity';
-
 import { AwsController } from './aws.controller';
 import { AwsService } from './aws.service';
+
+import { FileEntity } from '@/database/file.entity';
 
 @Module({
   imports: [

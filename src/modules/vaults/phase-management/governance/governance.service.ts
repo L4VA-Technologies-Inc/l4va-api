@@ -900,7 +900,7 @@ export class GovernanceService {
       await this.getVotingPower(vaultId, userId, 'create_proposal');
       this.proposalCreationCache.set(cacheKey, true, this.CACHE_TTL.CAN_CREATE_PROPOSAL);
       return true;
-    } catch (error) {
+    } catch {
       this.proposalCreationCache.set(cacheKey, false, this.CACHE_TTL.CAN_CREATE_PROPOSAL);
       return false;
     }

@@ -88,7 +88,7 @@ export const validateUtxoStillExists = async (
   }
 };
 
-// Add removing utxo that already spent, by passing it in argument  
+// Add removing utxo that already spent, by passing it in argument
 export const getUtxosExctract = async (address: Address, min = 0, blockfrost: BlockFrostAPI): Promise<string[]> => {
   const utxos = await blockfrost.addressesUtxosAll(address.to_bech32());
   const parsedUtxos: string[] = [];

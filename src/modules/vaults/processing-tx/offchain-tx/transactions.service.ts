@@ -1,17 +1,18 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { plainToInstance } from 'class-transformer';
 import { AssetOriginType, AssetStatus, AssetType } from 'src/types/asset.types';
 import { TransactionStatus, TransactionType } from 'src/types/transaction.types';
 import { Repository } from 'typeorm';
+
+import { TransactionsResponseDto, TransactionsResponseItemsDto } from './dto/transactions-response.dto';
 
 import { Asset } from '@/database/asset.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
-import { GetTransactionsDto } from "@/modules/vaults/processing-tx/offchain-tx/dto/get-transactions.dto";
-import { plainToInstance } from "class-transformer";
-import { TransactionsResponseDto, TransactionsResponseItemsDto } from './dto/transactions-response.dto';
+import { GetTransactionsDto } from '@/modules/vaults/processing-tx/offchain-tx/dto/get-transactions.dto';
 
 @Injectable()
 export class TransactionsService {
@@ -139,14 +140,7 @@ export class TransactionsService {
   }
 
   async getByUserId(id: string, query: GetTransactionsDto): Promise<TransactionsResponseDto> {
-    const {
-      page = '1',
-      limit = '10',
-      filter = TransactionType.all,
-      status,
-      order = 'DESC',
-      period
-    } = query;
+    const { page = '1', limit = '10', filter = TransactionType.all, status, order = 'DESC', period } = query;
 
     const parsedPage = Number(page);
     const parsedLimit = Number(limit);
@@ -175,50 +169,41 @@ export class TransactionsService {
     switch (filter) {
       case TransactionType.all:
         queryBuilder.andWhere('transaction.type IN (:...types)', {
-          types: [TransactionType.contribute, TransactionType.burn, TransactionType.acquire,]
+          types: [TransactionType.contribute, TransactionType.burn, TransactionType.acquire],
         });
         break;
       case TransactionType.contribute:
         queryBuilder.andWhere('transaction.type = (:type)', {
-          type: TransactionType.contribute
+          type: TransactionType.contribute,
         });
         break;
       case TransactionType.burn:
         queryBuilder.andWhere('transaction.type = (:type)', {
-          type: TransactionType.burn
+          type: TransactionType.burn,
         });
         break;
       case TransactionType.acquire:
         queryBuilder.andWhere('transaction.type = (:type)', {
-          type: TransactionType.acquire
+          type: TransactionType.acquire,
         });
         break;
     }
 
     if (status) {
       queryBuilder.andWhere('transaction.status IN (:...statuses)', {
-        statuses: status
+        statuses: status,
       });
     }
 
     if (period?.from && period?.to) {
-      queryBuilder.andWhere(
-        'transaction.created_at BETWEEN :from AND :to',
-        {
-          from: new Date(period.from),
-          to: new Date(period.to),
-        }
-      );
+      queryBuilder.andWhere('transaction.created_at BETWEEN :from AND :to', {
+        from: new Date(period.from),
+        to: new Date(period.to),
+      });
     } else if (period?.from) {
-      queryBuilder.andWhere(
-        'transaction.created_at >= :from',
-        { from: new Date(period.from) }
-      );
+      queryBuilder.andWhere('transaction.created_at >= :from', { from: new Date(period.from) });
     } else if (period?.to) {
-      queryBuilder.andWhere(
-        'transaction.created_at <= :to',
-        { to: new Date(period.to) }
-      );
+      queryBuilder.andWhere('transaction.created_at <= :to', { to: new Date(period.to) });
     }
 
     if (order) {

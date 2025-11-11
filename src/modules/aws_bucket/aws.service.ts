@@ -60,7 +60,7 @@ export class AwsService {
     });
   }
 
-  async getPreSignedURL(bucketName: string, key: string, contentType: string): Promise<string> {
+  async getPreSignedURL(bucketName: string, key: string): Promise<string> {
     const s3 = this.getS3();
     const params = {
       Bucket: bucketName,
@@ -72,13 +72,13 @@ export class AwsService {
   }
 
   async getImage(bucketKey: string) {
-    const preSignedUrl = await this.getPreSignedURL(this.bucketName, bucketKey, 'image/jpeg');
+    const preSignedUrl = await this.getPreSignedURL(this.bucketName, bucketKey);
     return this.httpService.get(preSignedUrl, { responseType: 'stream' }).toPromise();
   }
 
   // TODO: Remove csv upload to S3
   async getCsv(bucketKey: string) {
-    const preSignedUrl = await this.getPreSignedURL(this.bucketName, bucketKey, 'text/csv');
+    const preSignedUrl = await this.getPreSignedURL(this.bucketName, bucketKey);
     return this.httpService.get(preSignedUrl, { responseType: 'stream' }).toPromise();
   }
 

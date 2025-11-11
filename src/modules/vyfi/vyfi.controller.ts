@@ -1,7 +1,6 @@
 import { Controller, Get, Post, Body, Query } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiQuery, ApiBody } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 
-import { CreatePoolDto } from './dto/create-pool.dto';
 import { VyfiService } from './vyfi.service';
 
 @ApiTags('VyFi')

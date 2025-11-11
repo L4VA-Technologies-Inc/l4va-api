@@ -17,7 +17,6 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags } from '@nestjs/swagger';
 import { Express, Response, Request } from 'express';
-import { Multer } from 'multer';
 
 import { AuthGuard } from '../auth/auth.guard';
 
@@ -54,7 +53,7 @@ export class AwsController {
     file: Express.Multer.File,
     @Req() req: Request
   ) {
-    const { host } = req?.headers;
+    const { host } = req.headers;
     return await this.awsService.uploadImage(file, host);
   }
 
@@ -106,7 +105,7 @@ export class AwsController {
   ) {
     // todo need to validate and parse csv and then return list of asset whitelist id's
     this.logger.log('csv file received', file);
-    const { host } = req?.headers;
+    const { host } = req.headers;
 
     return await this.awsService.uploadCSV(file, host);
   }
