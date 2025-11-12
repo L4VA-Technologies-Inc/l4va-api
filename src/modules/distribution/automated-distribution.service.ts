@@ -214,23 +214,31 @@ export class AutomatedDistributionService {
   }
 
   private async processAcquirerExtractions(vaultId: string): Promise<void> {
-    const claims = await this.claimRepository.find({
-      where: {
-        vault: { id: vaultId },
+    const vault = await this.vaultRepository
+      .createQueryBuilder('vault')
+      .select([
+        'vault.id',
+        'vault.script_hash',
+        'vault.asset_vault_name',
+        'vault.ada_pair_multiplier',
+        'vault.last_update_tx_hash',
+        'vault.dispatch_parametized_hash',
+        'vault.dispatch_preloaded_script',
+      ])
+      .leftJoinAndSelect('vault.claims', 'claim', 'claim.type = :type AND claim.status = :status', {
         type: ClaimType.ACQUIRER,
         status: ClaimStatus.PENDING,
-        created_at: MoreThan(new Date('2025-10-22').toISOString()),
-      },
-      relations: ['transaction', 'user'],
-    });
+      })
+      .leftJoinAndSelect('claim.transaction', 'transaction')
+      .leftJoinAndSelect('claim.user', 'user')
+      .where('vault.id = :vaultId', { vaultId })
+      .getOne();
 
-    const vault = await this.vaultRepository.findOne({
-      where: { id: vaultId },
-      select: ['id', 'script_hash', 'asset_vault_name', 'ada_pair_multiplier', 'last_update_tx_hash'],
-    });
     if (!vault) {
       throw new Error(`Vault ${vaultId} not found`);
     }
+
+    const claims = vault.claims || [];
 
     this.logger.log(`Found ${claims.length} acquirer claims to extract for vault ${vaultId}`);
 
@@ -238,7 +246,7 @@ export class AutomatedDistributionService {
     if (claims.length === 0) return;
 
     // Process acquirer claims as usual
-    const batchSize = 10;
+    const batchSize = 12;
     for (let i = 0; i < claims.length; i += batchSize) {
       const batchClaims = claims.slice(i, i + batchSize);
       await this.processAcquirerBatch(vault, batchClaims, vaultId);
@@ -803,17 +811,6 @@ export class AutomatedDistributionService {
     }
 
     this.logger.log('Completed checking extractions and triggering payments for all vaults');
-  }
-
-  private getDispatchAddress(scriptHash: string): string {
-    return EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(scriptHash)))
-      .to_address()
-      .to_bech32();
-  }
-
-  private getTransactionSize(txHex: string): number {
-    const tx = CardanoTransaction.from_bytes(Buffer.from(txHex, 'hex'));
-    return tx.to_bytes().length;
   }
 
   private async finalizeVaultDistribution(
@@ -1796,5 +1793,16 @@ export class AutomatedDistributionService {
     }
 
     return { selectedUtxos, totalAmount };
+  }
+
+  private getDispatchAddress(scriptHash: string): string {
+    return EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(scriptHash)))
+      .to_address()
+      .to_bech32();
+  }
+
+  private getTransactionSize(txHex: string): number {
+    const tx = CardanoTransaction.from_bytes(Buffer.from(txHex, 'hex'));
+    return tx.to_bytes().length;
   }
 }
