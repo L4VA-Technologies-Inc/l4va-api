@@ -112,7 +112,7 @@ export class DistributionService {
     const lpTotalValue = this.round15(fdv * lpPercent);
 
     // Divide equally between ADA and VT
-    const lpAdaAmount = this.round15(lpTotalValue / 2);
+    const lpAdaAmount = Math.round((lpTotalValue / 2) * 1e6) / 1e6;
     const lpVtValue = this.round15(lpTotalValue / 2);
 
     // Convert VT value to tokens
