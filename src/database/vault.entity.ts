@@ -29,6 +29,7 @@ import {
 import { AcquirerWhitelistEntity } from './acquirerWhitelist.entity';
 import { Asset } from './asset.entity';
 import { AssetsWhitelistEntity } from './assetsWhitelist.entity';
+import { Claim } from './claim.entity';
 import { ContributorWhitelistEntity } from './contributorWhitelist.entity';
 import { FileEntity } from './file.entity';
 import { LinkEntity } from './link.entity';
@@ -404,6 +405,9 @@ export class Vault {
   @Expose({ name: 'assets' })
   @OneToMany(() => Asset, (asset: Asset) => asset.vault)
   assets?: Asset[];
+
+  @OneToMany(() => Claim, claim => claim.vault)
+  claims?: Claim[];
 
   @OneToMany(() => Snapshot, snapshot => snapshot.vault)
   snapshots: Snapshot[];
