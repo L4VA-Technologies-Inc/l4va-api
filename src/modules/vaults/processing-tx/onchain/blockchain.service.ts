@@ -90,7 +90,7 @@ export class BlockchainService {
    * @param txData Transaction data to be built
    * @returns Object containing complete and partial transaction CBOR
    */
-  async buildTransaction(txData: any): Promise<TransactionBuildResponse> {
+  async buildTransaction(txData: object): Promise<TransactionBuildResponse> {
     try {
       const contractDeployed = await fetch(`${this.anvilApi}/transactions/build`, {
         method: 'POST',

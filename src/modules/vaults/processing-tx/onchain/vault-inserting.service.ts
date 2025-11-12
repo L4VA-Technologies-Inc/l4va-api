@@ -148,7 +148,7 @@ export class VaultInsertingService {
         });
 
         if (utxos.length === 0) {
-          throw new Error(`No UTXOs found with at least ${(quantity + 4000000) / 1000000} ADA.`);
+          throw new Error(`No UTXOs found with at least 2 ADA.`);
         }
 
         // For ADA, any UTXO with sufficient balance works
