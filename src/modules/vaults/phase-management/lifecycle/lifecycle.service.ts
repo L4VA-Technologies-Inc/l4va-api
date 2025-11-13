@@ -663,7 +663,7 @@ export class LifecycleService {
         });
 
         // Multiplier for LP
-        const { adaPairMultiplier } = this.distributionService.calculateLpAdaMultiplier(lpVtAmount, lpAdaAmount);
+        const { adaPairMultiplier } = this.distributionService.calculateLpAdaMultiplier(lpVtAmount, totalAcquiredAda);
         const transaction = await this.transactionsService.createTransaction({
           vault_id: vault.id,
           type: TransactionType.updateVault,
