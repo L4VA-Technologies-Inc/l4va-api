@@ -10,7 +10,6 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { BlockchainScannerService } from '@/modules/vaults/processing-tx/onchain/blockchain-scanner.service';
-import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
 import { AssetStatus, AssetOriginType } from '@/types/asset.types';
 import { BlockchainTransactionListItem } from '@/types/blockchain.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -30,8 +29,7 @@ export class ContributionService {
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
     private readonly transactionsService: TransactionsService,
-    private readonly blockchainScanner: BlockchainScannerService,
-    private readonly metadataRegistryApiService: MetadataRegistryApiService
+    private readonly blockchainScanner: BlockchainScannerService
   ) {}
 
   /**
@@ -90,20 +88,6 @@ export class ContributionService {
           processedBlockchainTxs: [],
           databaseTxs: [],
         };
-      }
-
-      try {
-        this.metadataRegistryApiService.submitVaultTokenMetadata({
-          vaultId: vault.id,
-          subject: `${vault.script_hash}${vault.asset_vault_name}`,
-          name: vault.name,
-          description: vault.description,
-          ticker: vault.vault_token_ticker,
-          logo: vault.ft_token_img?.file_url || '',
-          decimals: vault.ft_token_decimals || 9,
-        });
-      } catch (error) {
-        this.logger.error('Error updating vault metadata:', error);
       }
 
       // Get transactions from blockchain and process them
