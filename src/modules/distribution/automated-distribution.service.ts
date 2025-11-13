@@ -727,7 +727,6 @@ export class AutomatedDistributionService {
     const claimCounts = vaultsWithClaims.raw;
 
     if (vaults.length === 0) {
-      this.logger.debug('No vaults currently in distribution');
       return;
     }
 
@@ -953,12 +952,12 @@ export class AutomatedDistributionService {
   private async determineOptimalBatchSize(
     vault: Vault,
     claims: Claim[],
-    dispatchUtxos: any[]
+    dispatchUtxos: AddressesUtxo[]
   ): Promise<{
     optimalBatchSize: number;
     actualClaims: Claim[];
   }> {
-    const MAX_BATCH_SIZE = 6; // Maximum we want to attempt
+    const MAX_BATCH_SIZE = 8; // Maximum we want to attempt
 
     // Start with smallest batch and work up
     let testBatchSize = 2;
@@ -1028,7 +1027,7 @@ export class AutomatedDistributionService {
   /**
    * Process a batch of payments in a single transaction
    */
-  private async processBatchedPayments(vault: Vault, claims: Claim[], dispatchUtxos: any[]): Promise<void> {
+  private async processBatchedPayments(vault: Vault, claims: Claim[], dispatchUtxos: AddressesUtxo[]): Promise<void> {
     const claimIds = claims.map(c => c.id);
 
     this.logger.log(`Building batched payment transaction for ${claims.length} claims `);
@@ -1057,10 +1056,6 @@ export class AutomatedDistributionService {
 
       // Build batched transaction
       const input = await this.buildBatchedPaymentInput(vault, claims, adminUtxos, dispatchUtxos);
-
-      const trimmedInput = { ...input };
-      delete trimmedInput.preloadedScripts;
-      this.logger.debug(JSON.stringify(trimmedInput));
 
       // Build transaction
       const buildResponse = await this.blockchainService.buildTransaction(input);
@@ -1172,7 +1167,7 @@ export class AutomatedDistributionService {
     vault: Vault,
     claims: Claim[],
     adminUtxos: string[],
-    dispatchUtxos: any[]
+    dispatchUtxos: AddressesUtxo[]
   ): Promise<PayAdaContributionInput> {
     const scriptInteractions = [];
     const outputs = [];
