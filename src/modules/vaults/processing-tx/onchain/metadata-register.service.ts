@@ -118,7 +118,7 @@ export class MetadataRegistryApiService {
       // Optional fields
       const ticker = raw.ticker ? this.signItemData(raw.subject, 0, raw.ticker) : undefined;
       const url = raw.url ? this.signItemData(raw.subject, 0, raw.url) : undefined;
-      const policy = raw.policy ? raw.policy : undefined; // The base16-encoded CBOR "policy": "82018201828200581cf950845fdf374bba64605f96a9d5940890cc2bb92c4b5b55139cc00982051a09bde472",
+      // const policy = raw.policy ? raw.policy : undefined; // The base16-encoded CBOR "policy": "82018201828200581cf950845fdf374bba64605f96a9d5940890cc2bb92c4b5b55139cc00982051a09bde472",
       const decimals = raw.decimals ? this.signItemData(raw.subject, 0, raw.decimals) : undefined;
 
       let logoData: ItemData | undefined;
@@ -136,7 +136,7 @@ export class MetadataRegistryApiService {
       // Build full metadata object
       const metadata: TokenMetaData = {
         subject: raw.subject,
-        policy,
+        // policy,
         name,
         description,
         ticker,
