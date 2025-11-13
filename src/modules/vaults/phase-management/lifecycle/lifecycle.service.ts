@@ -337,6 +337,20 @@ export class LifecycleService {
         return;
       }
 
+      try {
+        this.metadataRegistryApiService.submitVaultTokenMetadata({
+          vaultId: vault.id,
+          subject: `${vault.script_hash}${vault.asset_vault_name}`,
+          name: vault.name,
+          description: vault.description,
+          ticker: vault.vault_token_ticker,
+          logo: vault.ft_token_img?.file_url || '',
+          decimals: vault.ft_token_decimals,
+        });
+      } catch (error) {
+        this.logger.error('Error updating vault metadata:', error);
+      }
+
       // Sync transactions one more time
       await this.contributionService.syncContributionTransactions(vault.id);
 
@@ -771,6 +785,20 @@ export class LifecycleService {
       .getMany();
 
     for (const vault of immediateStartVaults) {
+      try {
+        this.metadataRegistryApiService.submitVaultTokenMetadata({
+          vaultId: vault.id,
+          subject: `${vault.script_hash}${vault.asset_vault_name}`,
+          name: vault.name,
+          description: vault.description,
+          ticker: vault.vault_token_ticker,
+          logo: vault.ft_token_img?.file_url || '',
+          decimals: vault.ft_token_decimals,
+        });
+      } catch (error) {
+        this.logger.error('Error updating vault metadata:', error);
+      }
+
       await this.executePhaseTransition({
         vaultId: vault.id,
         newStatus: VaultStatus.contribution,
@@ -830,6 +858,20 @@ export class LifecycleService {
       if (now < contributionEnd) {
         // await this.queueContributionToAcquireTransition(vault, contributionEnd);
         continue;
+      }
+
+      try {
+        this.metadataRegistryApiService.submitVaultTokenMetadata({
+          vaultId: vault.id,
+          subject: `${vault.script_hash}${vault.asset_vault_name}`,
+          name: vault.name,
+          description: vault.description,
+          ticker: vault.vault_token_ticker,
+          logo: vault.ft_token_img?.file_url || '',
+          decimals: vault.ft_token_decimals,
+        });
+      } catch (error) {
+        this.logger.error('Error updating vault metadata:', error);
       }
 
       await this.contributionService.syncContributionTransactions(vault.id);
