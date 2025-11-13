@@ -177,7 +177,7 @@ export class VyfiService {
     }
 
     // Calculate required ADA for LP creation
-    const requiredLpAda = VYFI_CONSTANTS.TOTAL_REQUIRED_ADA + Number(claim.metadata?.adaAmount || 0);
+    const requiredLpAda = Number(claim.metadata?.adaAmount || 0);
 
     if (totalDispatchAda < requiredLpAda) {
       throw new Error(
@@ -249,7 +249,7 @@ export class VyfiService {
               quantity: +claim.amount,
             },
           ],
-          lovelace: requiredLpAda, // Use exact required amount
+          lovelace: VYFI_CONSTANTS.TOTAL_REQUIRED_ADA + requiredLpAda, // Use exact required amount
         },
         // If there's leftover ADA after LP creation, keep it in admin
         ...(totalDispatchAda > requiredLpAda
