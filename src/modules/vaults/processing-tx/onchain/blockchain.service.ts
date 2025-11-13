@@ -361,7 +361,6 @@ export class BlockchainService {
           return false;
         }
         // Other errors might indicate network issues, so we'll assume not registered
-        this.logger.warn(`Error checking stake registration for ${scriptHash}: ${blockfrostError.message}`);
         return false;
       }
     } catch (error) {
