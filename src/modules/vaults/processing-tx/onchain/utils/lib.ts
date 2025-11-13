@@ -7,7 +7,6 @@ import {
   TransactionOutput,
   TransactionHash,
   TransactionUnspentOutput,
-  TransactionUnspentOutputs,
   AssetName,
   Assets,
   BigNum,
