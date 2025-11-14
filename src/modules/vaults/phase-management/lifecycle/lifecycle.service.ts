@@ -328,17 +328,19 @@ export class LifecycleService {
    *  Scenario 5: Vault has no assets, any policy → ALL THRESHOLDS ENFORCED
    */
   private async handleContributionToAcquire(): Promise<void> {
+    const now = new Date();
+
     const contributionVaults = await this.vaultRepository
       .createQueryBuilder('vault')
       .where('vault.vault_status = :status', { status: VaultStatus.contribution })
       .andWhere('vault.contribution_phase_start IS NOT NULL')
       .andWhere('vault.contribution_duration IS NOT NULL')
-      .andWhere(
-        `(vault.contribution_phase_start::timestamp + (vault.contribution_duration || ' milliseconds')::interval) <= :now`,
-        { now: new Date() }
-      )
+      .andWhere(`vault.contribution_phase_start + (vault.contribution_duration * interval '1 millisecond') <= :now`, {
+        now,
+      })
       .leftJoinAndSelect('vault.owner', 'owner')
       .leftJoinAndSelect('vault.assets_whitelist', 'assetsWhitelist')
+      .leftJoinAndSelect('vault.assets', 'assets', 'assets.deleted = :deleted', { deleted: false })
       .getMany();
 
     for (const vault of contributionVaults) {
@@ -358,12 +360,7 @@ export class LifecycleService {
 
       await this.contributionService.syncContributionTransactions(vault.id);
 
-      const assets = await this.assetsRepository.find({
-        where: { vault: { id: vault.id }, deleted: false },
-        select: ['id', 'policy_id', 'quantity'],
-      });
-
-      const policyIdCounts = assets.reduce(
+      const policyIdCounts = vault.assets.reduce(
         (counts, asset) => {
           if (!counts[asset.policy_id]) {
             counts[asset.policy_id] = 0;
@@ -378,7 +375,7 @@ export class LifecycleService {
       const thresholdViolations: Array<{ policyId: string; count: number; min: number; max: number }> = [];
 
       // Check if vault has at least one asset
-      const hasAnyAssets = assets.length > 0;
+      const hasAnyAssets = vault.assets.length > 0;
 
       if (vault.assets_whitelist && vault.assets_whitelist.length > 0) {
         for (const whitelistItem of vault.assets_whitelist) {
@@ -500,15 +497,16 @@ export class LifecycleService {
   // Acquire to Governance Transition
 
   private async handleAcquireToGovernance(): Promise<void> {
+    const now = new Date();
+
     const acquireVaults = await this.vaultRepository
       .createQueryBuilder('vault')
       .where('vault.vault_status = :status', { status: VaultStatus.acquire })
       .andWhere('vault.acquire_phase_start IS NOT NULL')
       .andWhere('vault.acquire_window_duration IS NOT NULL')
-      .andWhere(
-        `(vault.acquire_phase_start::timestamp + (vault.acquire_window_duration || ' milliseconds')::interval) <= :now`,
-        { now: new Date() }
-      )
+      .andWhere(`vault.acquire_phase_start + (vault.acquire_window_duration * interval '1 millisecond') <= :now`, {
+        now,
+      })
       .andWhere('vault.id NOT IN (:...processingIds)', {
         processingIds:
           this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'], // Dummy UUID to avoid empty array
