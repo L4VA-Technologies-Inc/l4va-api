@@ -140,7 +140,7 @@ export class TransactionsService {
   }
 
   async getByUserId(id: string, query: GetTransactionsDto): Promise<TransactionsResponseDto> {
-    const { page = '1', limit = '10', filter = TransactionType.all, status, order = 'DESC', period } = query;
+    const { page, limit, filter = TransactionType.all, status, order = 'DESC', period, isExport = false } = query;
 
     const parsedPage = Number(page);
     const parsedLimit = Number(limit);
@@ -163,8 +163,11 @@ export class TransactionsService {
         'vault.name',
       ])
       .where('transaction.user_id = :id', { id })
-      .skip(skip)
-      .take(parsedLimit);
+      .skip(skip);
+
+    if (!isExport) {
+      queryBuilder.take(parsedLimit);
+    }
 
     switch (filter) {
       case TransactionType.all:

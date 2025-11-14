@@ -23,4 +23,7 @@ export class GetTransactionsDto {
     from?: string;
     to?: string;
   };
+
+  @IsOptional()
+  isExport?: boolean;
 }
