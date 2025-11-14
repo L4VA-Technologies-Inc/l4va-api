@@ -944,7 +944,7 @@ export class VaultsService {
     if (userId) {
       try {
         isChatVisible = await this.checkChat(userId, vaultId);
-      } catch (error) {
+      } catch {
         isChatVisible = false;
       }
     }
@@ -952,7 +952,7 @@ export class VaultsService {
     if (userId && vault.vault_status === VaultStatus.locked) {
       try {
         canCreateProposal = await this.governanceService.canUserCreateProposal(vaultId, userId);
-      } catch (error) {
+      } catch {
         canCreateProposal = false;
       }
     }

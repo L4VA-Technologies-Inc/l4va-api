@@ -24,7 +24,7 @@ export class FileEntity {
 
   @Expose({ name: 'metadata' })
   @Column({ name: 'metadata', type: 'jsonb', nullable: true })
-  metadata: {};
+  metadata: any;
 
   @Expose({ name: 'updatedAt' })
   @Column({ name: 'updated_at', type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })

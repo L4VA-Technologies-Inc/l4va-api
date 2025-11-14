@@ -54,7 +54,7 @@ export class GovernanceExecutionService {
     try {
       this.schedulerRegistry.deleteCronJob(jobName);
       this.logger.debug(`Removed existing activation job: ${jobName}`);
-    } catch (error) {
+    } catch {
       // Job doesn't exist, which is fine
     }
 
@@ -124,7 +124,7 @@ export class GovernanceExecutionService {
     try {
       this.schedulerRegistry.deleteCronJob(jobName);
       this.logger.debug(`Removed existing job: ${jobName}`);
-    } catch (error) {
+    } catch {
       // Job doesn't exist, which is fine
     }
 

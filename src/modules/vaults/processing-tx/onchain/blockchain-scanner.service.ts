@@ -116,7 +116,7 @@ export class BlockchainScannerService {
         this.logger.log(`Address ${vaultAddress} is not being monitored`);
         await this.registerTrackingAddress(vaultAddress, vaultName);
       }
-    } catch (error) {
+    } catch {
       this.logger.error(`Address ${vaultAddress} is not registered`);
       return false;
     }

@@ -118,7 +118,7 @@ export class BlockchainService {
             /Unknown transaction input \(missing from UTxO set\): ([a-f0-9]+)#(\d+)/
           );
           if (match) {
-            const [_, txHash, indexStr] = match;
+            const [txHash, indexStr] = match;
             this.logger.warn(`Missing UTxO reference: ${txHash}#${indexStr}`);
             throw new MissingUtxoException(txHash, parseInt(indexStr));
           } else {
@@ -514,13 +514,11 @@ export class BlockchainService {
 
     while (Date.now() - startTime < maxWaitTime) {
       try {
-        try {
-          const txDetails = await this.blockfrost.txs(txHash);
-          if (txDetails && txDetails.block_height) {
-            await new Promise(resolve => setTimeout(resolve, 80000)); // Wait for 2 blocks before reusing its outputs
-            return true;
-          }
-        } catch (blockfrostError) {}
+        const txDetails = await this.blockfrost.txs(txHash);
+        if (txDetails && txDetails.block_height) {
+          await new Promise(resolve => setTimeout(resolve, 80000)); // Wait for 2 blocks before reusing its outputs
+          return true;
+        }
 
         // Wait before next check
         await new Promise(resolve => setTimeout(resolve, checkInterval));

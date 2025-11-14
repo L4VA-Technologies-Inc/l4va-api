@@ -1,10 +1,11 @@
 import { IsOptional } from 'class-validator';
-import {TransactionStatus, TransactionType} from "@/types/transaction.types";
+
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
 export class GetTransactionsDto {
   @IsOptional()
   page?: string;
-  
+
   @IsOptional()
   limit?: string;
 
@@ -19,7 +20,10 @@ export class GetTransactionsDto {
 
   @IsOptional()
   period?: {
-    from?: string,
-    to?: string
-  }
+    from?: string;
+    to?: string;
+  };
+
+  @IsOptional()
+  isExport?: boolean;
 }

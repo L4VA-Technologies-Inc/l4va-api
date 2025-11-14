@@ -1,5 +1,6 @@
-import { Expose, Type } from "class-transformer";
-import { TransactionStatus } from "@/types/transaction.types";
+import { Expose, Type } from 'class-transformer';
+
+import { TransactionStatus } from '@/types/transaction.types';
 
 export class TransactionsResponseDto {
   @Expose()

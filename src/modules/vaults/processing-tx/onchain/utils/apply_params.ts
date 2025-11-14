@@ -1,10 +1,9 @@
-// @ts-nocheck
 import { Buffer } from 'node:buffer';
 
 import { applyParamsToScript } from '@blaze-cardano/uplc';
 import { PlutusScript, EnterpriseAddress, ScriptHash, Credential } from '@emurgo/cardano-serialization-lib-nodejs';
 
-const blueprint = require('./blueprint.json');
+import blueprint from './blueprint.json';
 
 export function applyContributeParams(input: { vault_policy_id: string; vault_id: string }): {
   validator: any;
@@ -26,10 +25,14 @@ export function applyContributeParams(input: { vault_policy_id: string; vault_id
     paramsSchemaItems.push(shape);
   }
 
-  const scriptHex = applyParamsToScript(contributeValidator.compiledCode, [input.vault_policy_id, input.vault_id], {
-    dataType: 'list',
-    items: paramsSchemaItems,
-  }).toString();
+  const scriptHex = (applyParamsToScript as any)(
+    contributeValidator.compiledCode,
+    [input.vault_policy_id, input.vault_id],
+    {
+      dataType: 'list',
+      items: paramsSchemaItems,
+    }
+  ).toString();
 
   const scriptCsl = PlutusScript.new_v3(Buffer.from(scriptHex, 'hex'));
   const scriptHash = scriptCsl.hash().to_hex();

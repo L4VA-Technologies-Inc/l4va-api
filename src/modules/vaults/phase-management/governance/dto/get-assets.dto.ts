@@ -8,7 +8,7 @@ export class AssetBuySellDto {
 
   @ApiProperty({ description: 'Asset name' })
   @Expose()
-  @Transform(({ value, obj }) => {
+  @Transform(({ obj }) => {
     // Extract name from onchainMetadata or convert hex asset_name to string
     return obj.metadata?.onchainMetadata?.name || (obj.asset_name ? Buffer.from(obj.asset_name, 'hex').toString() : '');
   })

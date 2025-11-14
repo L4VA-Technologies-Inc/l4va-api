@@ -163,8 +163,11 @@ export class TransactionsService {
         'vault.name',
       ])
       .where('transaction.user_id = :id', { id })
-      .skip(skip)
-      .take(parsedLimit);
+      .skip(skip);
+
+    if (!isExport) {
+      queryBuilder.take(parsedLimit);
+    }
 
     switch (filter) {
       case TransactionType.all:

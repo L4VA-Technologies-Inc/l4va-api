@@ -1,5 +1,5 @@
-import { Controller, Get, Post, Param, Body, UseGuards, Query, Request } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { Controller, Get, UseGuards, Query, Request } from '@nestjs/common';
+import { ApiTags, ApiResponse } from '@nestjs/swagger';
 
 import { AuthGuard } from '../../auth/auth.guard';
 import { AuthRequest } from '../../auth/dto/auth-user.interface';
