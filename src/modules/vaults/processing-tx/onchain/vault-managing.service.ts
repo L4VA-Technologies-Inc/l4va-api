@@ -23,13 +23,14 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
+import { TransactionsService } from '../offchain-tx/transactions.service';
+
 import { BlockchainService } from './blockchain.service';
 import { Datum1 } from './types/type';
 import { generate_tag_from_txhash_index, getUtxosExtract, getVaultUtxo } from './utils/lib';
 import { VaultInsertingService } from './vault-inserting.service';
 
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
-import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { TransactionType } from '@/types/transaction.types';
 import { SmartContractVaultStatus, VaultPrivacy } from '@/types/vault.types';
@@ -91,14 +92,13 @@ export class VaultManagingService {
   private readonly blockfrost: BlockFrostAPI;
 
   constructor(
-    @InjectRepository(Transaction)
-    private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(AssetsWhitelistEntity)
     private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
     private readonly configService: ConfigService,
     @Inject(BlockchainService)
     private readonly blockchainService: BlockchainService,
-    private readonly vaultInsertingService: VaultInsertingService
+    private readonly vaultInsertingService: VaultInsertingService,
+    private readonly transactionsService: TransactionsService
   ) {
     this.blueprintTitle = this.configService.get<string>('BLUEPRINT_TITLE');
     this.scPolicyId = this.configService.get<string>('SC_POLICY_ID');
@@ -403,14 +403,12 @@ export class VaultManagingService {
 
   async updateVaultMetadataTx({
     vault,
-    transactionId,
     acquireMultiplier,
     adaPairMultiplier,
     vaultStatus,
     adaDistribution,
   }: {
     vault: Vault;
-    transactionId: string;
     vaultStatus: SmartContractVaultStatus;
     acquireMultiplier?: [string, string | null, number][];
     adaPairMultiplier?: number;
@@ -420,18 +418,16 @@ export class VaultManagingService {
     txHash: string;
     message: string;
   }> {
-    const transaction = await this.transactionRepository.findOne({
-      where: { id: transactionId },
+    const transaction = await this.transactionsService.createTransaction({
+      vault_id: vault.id,
+      type: TransactionType.updateVault,
+      assets: [], // No assets needed for this transaction as it's metadata update
     });
 
     const assetsWhitelist = await this.assetsWhitelistRepository.find({
       where: { vault: { id: vault.id } },
       select: ['policy_id'],
     });
-
-    if (!transaction || transaction.type !== TransactionType.updateVault) {
-      throw new NotFoundException('Transaction not found');
-    }
 
     const { utxos: adminUtxos } = await getUtxosExtract(
       Address.from_bech32(this.adminAddress),
