@@ -140,7 +140,7 @@ export class TransactionsService {
   }
 
   async getByUserId(id: string, query: GetTransactionsDto): Promise<TransactionsResponseDto> {
-    const { page = '1', limit = '10', filter = TransactionType.all, status, order = 'DESC', period } = query;
+    const { page, limit, filter = TransactionType.all, status, order = 'DESC', period, isExport = false } = query;
 
     const parsedPage = Number(page);
     const parsedLimit = Number(limit);

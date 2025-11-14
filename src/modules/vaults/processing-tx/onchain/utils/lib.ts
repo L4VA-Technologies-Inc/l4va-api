@@ -111,8 +111,6 @@ export const validateUtxoStillExists = async (
   }
 };
 
-// Add removing utxo that already spent, by passing it in argument
-export const getUtxosExctract = async (address: Address, min = 0, blockfrost: BlockFrostAPI): Promise<string[]> => {
 /**
  * This function fetches all UTXOs from an address, validates their existence on-chain,
  * and optionally collects specific UTXOs that contain required tokens for transaction building.
