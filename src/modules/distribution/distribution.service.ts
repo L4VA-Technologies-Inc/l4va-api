@@ -100,6 +100,8 @@ export class DistributionService {
     lpVtAmount: number;
     vtPrice: number;
     fdv: number;
+    adjustedVtLpAmount: number;
+    adaPairMultiplier: number;
   } {
     const { totalAcquiredAda, assetsOfferedPercent, lpPercent, vtSupply } = params;
 
@@ -112,13 +114,16 @@ export class DistributionService {
     // LP ADA / LP VT
     const vtPrice = this.round15(lpAdaAmount / lpVtValue);
 
-    // const vtPrice = this.round15(totalAcquiredAda / assetsOfferedPercent / vtSupply);
+    const adaPairMultiplier = Math.floor(lpVtValue / (totalAcquiredAda * 1_000_000));
+    const adjustedVtLpAmount = adaPairMultiplier * totalAcquiredAda * 1_000_000;
 
     return {
       lpAdaAmount,
       lpVtAmount: lpVtValue,
       vtPrice,
       fdv,
+      adjustedVtLpAmount,
+      adaPairMultiplier,
     };
   }
 
@@ -158,21 +163,6 @@ export class DistributionService {
       acquireMultiplier,
       adaDistribution,
     };
-  }
-
-  /**
-   * Calculates the LP ADA multiplier with precision validation
-   * @returns Object containing the multiplier and validation info
-   */
-  calculateLpAdaMultiplier(
-    lpVtAmount: number,
-    totalAcquiredAda: number
-  ): {
-    adaPairMultiplier: number;
-  } {
-    const multiplier = Math.floor(lpVtAmount / (totalAcquiredAda * 1_000_000));
-
-    return { adaPairMultiplier: multiplier };
   }
 
   private round15(amount: number): number {

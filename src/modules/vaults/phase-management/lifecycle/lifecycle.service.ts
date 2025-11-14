@@ -482,12 +482,13 @@ export class LifecycleService {
         const ASSETS_OFFERED_PERCENT = vault.tokens_for_acquires * 0.01;
         const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
         // 3. Calculate LP Tokens
-        const { lpAdaAmount, lpVtAmount, vtPrice, fdv } = this.distributionService.calculateLpTokens({
-          vtSupply,
-          totalAcquiredAda,
-          assetsOfferedPercent: ASSETS_OFFERED_PERCENT,
-          lpPercent: LP_PERCENT,
-        });
+        const { lpAdaAmount, lpVtAmount, vtPrice, fdv, adjustedVtLpAmount, adaPairMultiplier } =
+          this.distributionService.calculateLpTokens({
+            vtSupply,
+            totalAcquiredAda,
+            assetsOfferedPercent: ASSETS_OFFERED_PERCENT,
+            lpPercent: LP_PERCENT,
+          });
         try {
           const lpClaimExists = await this.claimRepository.exists({
             where: {
@@ -499,13 +500,15 @@ export class LifecycleService {
             await this.claimRepository.save({
               vault: { id: vault.id },
               type: ClaimType.LP,
-              amount: lpVtAmount,
+              amount: adjustedVtLpAmount,
               status: ClaimStatus.AVAILABLE,
               metadata: {
                 adaAmount: Math.floor(lpAdaAmount * 1_000_000),
               },
             });
-            this.logger.log(`Created LP claim for vault owner: ${lpVtAmount} VT tokens (${lpAdaAmount} ADA)`);
+            this.logger.log(
+              `Created LP claim for vault owner: ${lpVtAmount} VT tokens, adjusted to ${adjustedVtLpAmount} (${lpAdaAmount} ADA)`
+            );
           }
         } catch (error) {
           this.logger.error(`Failed to create LP claim for vault ${vault.id}:`, error);
@@ -662,8 +665,6 @@ export class LifecycleService {
           acquirerClaims: finalAcquirerClaims,
         });
 
-        // Multiplier for LP
-        const { adaPairMultiplier } = this.distributionService.calculateLpAdaMultiplier(lpVtAmount, totalAcquiredAda);
         const transaction = await this.transactionsService.createTransaction({
           vault_id: vault.id,
           type: TransactionType.updateVault,
