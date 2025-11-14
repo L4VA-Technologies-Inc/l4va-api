@@ -6,10 +6,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import AWS, { S3 } from 'aws-sdk';
 import { ManagedUpload } from 'aws-sdk/clients/s3';
 import * as csv from 'csv-parse';
+import sharp from 'sharp';
 import { Repository } from 'typeorm';
 import { v4 as uuid } from 'uuid';
 
 import { FileEntity } from '@/database/file.entity';
+import { AwsUploadImageDto, ImageResizeMap } from '@/modules/aws_bucket/dto/aws.dto';
 
 @Injectable()
 export class AwsService {
@@ -142,20 +144,44 @@ export class AwsService {
     }
   }
 
-  async uploadImage(file: Express.Multer.File, host: string) {
+  async uploadImage(file: Express.Multer.File, host: string, body?: AwsUploadImageDto) {
     try {
-      const uploadResult = await this.uploadS3(file.buffer, `${uuid()}`, file.mimetype);
-      const protocol = process.env.NODE_ENV === 'dev' ? 'http://' : 'https://';
-      if (uploadResult) {
-        const newFile = this.fileRepository.create({
-          file_key: uploadResult.Key,
-          file_url: `${protocol}${host}/api/v1/image/${uploadResult.Key}`,
-          file_name: file.originalname,
-          file_type: file.mimetype,
-        });
-        await this.fileRepository.save(newFile);
-        if (newFile) return newFile;
+      let processedImageBuffer = file.buffer;
+      let mimeType = file.mimetype;
+
+      const imageType = body?.imageType;
+      const resizeParams = imageType ? ImageResizeMap[imageType] : null;
+
+      if (resizeParams) {
+        processedImageBuffer = await sharp(file.buffer)
+          .resize(resizeParams.width, resizeParams.height, {
+            fit: 'cover',
+            position: 'center',
+          })
+          .webp({
+            quality: 80,
+            lossless: false,
+            alphaQuality: 80,
+          })
+          .toBuffer();
+
+        mimeType = 'image/webp';
       }
+
+      const uploadResult = await this.uploadS3(processedImageBuffer, `${uuid()}`, mimeType);
+      const protocol = process.env.NODE_ENV === 'dev' ? 'http://' : 'https://';
+
+      if (!uploadResult) throw new BadRequestException('Failed to upload file to S3');
+
+      const newFile = this.fileRepository.create({
+        file_key: uploadResult.Key,
+        file_url: `${protocol}${host}/api/v1/image/${uploadResult.Key}`,
+        file_name: file.originalname,
+        file_type: mimeType,
+      });
+
+      await this.fileRepository.save(newFile);
+      return newFile;
     } catch (error) {
       this.logger.error('Error uploading image file:', error);
       throw new BadRequestException('Failed to upload image file');
