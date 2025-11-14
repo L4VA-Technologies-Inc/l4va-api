@@ -8,6 +8,8 @@ import {
   Address,
   FixedTransaction,
   PrivateKey,
+  TransactionUnspentOutputs,
+  TransactionUnspentOutput,
 } from '@emurgo/cardano-serialization-lib-nodejs';
 import {
   BadRequestException,
@@ -21,13 +23,14 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
+import { TransactionsService } from '../offchain-tx/transactions.service';
+
 import { BlockchainService } from './blockchain.service';
 import { Datum1 } from './types/type';
-import { generate_tag_from_txhash_index, getUtxos, getVaultUtxo } from './utils/lib';
+import { generate_tag_from_txhash_index, getUtxosExtract, getVaultUtxo } from './utils/lib';
 import { VaultInsertingService } from './vault-inserting.service';
 
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
-import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { TransactionType } from '@/types/transaction.types';
 import { SmartContractVaultStatus, VaultPrivacy } from '@/types/vault.types';
@@ -89,14 +92,13 @@ export class VaultManagingService {
   private readonly blockfrost: BlockFrostAPI;
 
   constructor(
-    @InjectRepository(Transaction)
-    private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(AssetsWhitelistEntity)
     private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
     private readonly configService: ConfigService,
     @Inject(BlockchainService)
     private readonly blockchainService: BlockchainService,
-    private readonly vaultInsertingService: VaultInsertingService
+    private readonly vaultInsertingService: VaultInsertingService,
+    private readonly transactionsService: TransactionsService
   ) {
     this.blueprintTitle = this.configService.get<string>('BLUEPRINT_TITLE');
     this.scPolicyId = this.configService.get<string>('SC_POLICY_ID');
@@ -126,10 +128,23 @@ export class VaultManagingService {
       .to_address()
       .to_bech32();
 
-    const utxos = await getUtxos(Address.from_bech32(vaultConfig.customerAddress), 0, this.blockfrost); // Any UTXO works.
-    if (utxos.len() === 0) {
-      throw new Error('No UTXOs found.');
+    // Use the optimized function with better error handling
+    const { utxos: utxoHexArray } = await getUtxosExtract(
+      Address.from_bech32(vaultConfig.customerAddress),
+      this.blockfrost,
+      { minAda: 4000000 } // 4 ADA minimum
+    );
+
+    if (utxoHexArray.length === 0) {
+      throw new Error('No UTXOs found with at least 4 ADA.');
     }
+
+    // Convert hex array back to TransactionUnspentOutputs for compatibility
+    const utxos = TransactionUnspentOutputs.new();
+    utxoHexArray.forEach(utxoHex => {
+      const utxo = TransactionUnspentOutput.from_hex(utxoHex);
+      utxos.add(utxo);
+    });
 
     const selectedUtxo = utxos.get(0);
     const REQUIRED_INPUTS = [selectedUtxo.to_hex()];
@@ -180,6 +195,7 @@ export class VaultManagingService {
       const input: {
         changeAddress: string;
         message: string;
+        utxos: string[];
         mint: Array<object>;
         scriptInteractions: object[];
         outputs: (
@@ -197,6 +213,7 @@ export class VaultManagingService {
       } = {
         changeAddress: vaultConfig.customerAddress,
         message: `${vaultConfig.vaultName} Vault Creation`,
+        utxos: utxoHexArray,
         mint: [
           {
             version: 'cip25',
@@ -386,14 +403,12 @@ export class VaultManagingService {
 
   async updateVaultMetadataTx({
     vault,
-    transactionId,
     acquireMultiplier,
     adaPairMultiplier,
     vaultStatus,
     adaDistribution,
   }: {
     vault: Vault;
-    transactionId: string;
     vaultStatus: SmartContractVaultStatus;
     acquireMultiplier?: [string, string | null, number][];
     adaPairMultiplier?: number;
@@ -403,8 +418,10 @@ export class VaultManagingService {
     txHash: string;
     message: string;
   }> {
-    const transaction = await this.transactionRepository.findOne({
-      where: { id: transactionId },
+    const transaction = await this.transactionsService.createTransaction({
+      vault_id: vault.id,
+      type: TransactionType.updateVault,
+      assets: [], // No assets needed for this transaction as it's metadata update
     });
 
     const assetsWhitelist = await this.assetsWhitelistRepository.find({
@@ -412,9 +429,11 @@ export class VaultManagingService {
       select: ['policy_id'],
     });
 
-    if (!transaction || transaction.type !== TransactionType.updateVault) {
-      throw new NotFoundException('Transaction not found');
-    }
+    const { utxos: adminUtxos } = await getUtxosExtract(
+      Address.from_bech32(this.adminAddress),
+      this.blockfrost,
+      { minAda: 4000000 } // 4 ADA minimum
+    );
 
     const allowedPolicies: string[] =
       Array.isArray(assetsWhitelist) && assetsWhitelist.length > 0
@@ -429,6 +448,7 @@ export class VaultManagingService {
     const input = {
       changeAddress: this.adminAddress,
       message: `Vault ${vault.id} Update`,
+      utxos: adminUtxos,
       scriptInteractions: [
         {
           purpose: 'spend',
@@ -500,24 +520,19 @@ export class VaultManagingService {
 
     this.logger.debug('Vault update transaction input:', JSON.stringify(input));
 
-    try {
-      // Build the transaction using BlockchainService
-      const buildResponse = await this.blockchainService.buildTransaction(input);
+    // Build the transaction using BlockchainService
+    const buildResponse = await this.blockchainService.buildTransaction(input);
 
-      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+    const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+    txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
-      const response = await this.vaultInsertingService.submitTransaction({
-        transaction: txToSubmitOnChain.to_hex(),
-        vaultId: vault.id,
-        txId: transaction.id,
-      });
+    const response = await this.vaultInsertingService.submitTransaction({
+      transaction: txToSubmitOnChain.to_hex(),
+      vaultId: vault.id,
+      txId: transaction.id,
+    });
 
-      return { success: true, txHash: response.txHash, message: 'Transaction submitted successfully' };
-    } catch (error) {
-      this.logger.error('Failed to build vault update tx:', error);
-      throw error;
-    }
+    return { success: true, txHash: response.txHash, message: 'Transaction submitted successfully' };
   }
 
   /**

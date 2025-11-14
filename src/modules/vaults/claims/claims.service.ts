@@ -17,7 +17,7 @@ import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { Datum, Redeemer, Redeemer1 } from '@/modules/vaults/processing-tx/onchain/types/type';
-import { generate_tag_from_txhash_index, getUtxosExctract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import { generate_tag_from_txhash_index, getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { AssetOriginType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -162,7 +162,6 @@ export class ClaimsService {
         });
 
         if (existingClaim) {
-          this.logger.log(`Cancellation claim already exists for transaction ${tx.id}`);
           continue;
         }
 
@@ -218,7 +217,6 @@ export class ClaimsService {
         });
 
         if (existingClaim) {
-          this.logger.log(`Cancellation claim already exists for transaction ${tx.id}`);
           continue;
         }
 
@@ -260,16 +258,12 @@ export class ClaimsService {
     success: boolean;
   }> {
     const claim = await this.claimRepository.findOne({
-      where: { id: claimId, type: ClaimType.CANCELLATION },
+      where: { id: claimId, type: ClaimType.CANCELLATION, status: ClaimStatus.AVAILABLE },
       relations: ['user', 'vault', 'transaction'],
     });
 
     if (!claim) {
-      throw new NotFoundException('Cancellation claim not found');
-    }
-
-    if (claim.status !== ClaimStatus.AVAILABLE) {
-      throw new BadRequestException('Cancellation claim is not available');
+      throw new NotFoundException('Cancellation claim not found or not available');
     }
 
     const { vault, user, transaction } = claim;
@@ -303,7 +297,7 @@ export class ClaimsService {
       throw new Error('No lps to claim.');
     }
 
-    const adminUtxos = await getUtxosExctract(Address.from_bech32(this.adminAddress), 0, this.blockfrost);
+    const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost);
     if (adminUtxos.length === 0) {
       throw new Error('No UTXOs found.');
     }

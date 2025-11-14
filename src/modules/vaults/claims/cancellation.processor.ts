@@ -4,7 +4,7 @@ import { Job } from 'bullmq';
 
 import { ClaimsService } from './claims.service';
 
-import { AssetsService } from '@/modules/vaults/processing-tx/assets/assets.service';
+import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { ClaimStatus } from '@/types/claim.types';
 
 @Processor('cancellationProcessing')

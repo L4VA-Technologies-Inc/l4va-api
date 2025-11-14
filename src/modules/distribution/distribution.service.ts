@@ -100,29 +100,30 @@ export class DistributionService {
     lpVtAmount: number;
     vtPrice: number;
     fdv: number;
+    adjustedVtLpAmount: number;
+    adaPairMultiplier: number;
   } {
-    const { totalAcquiredAda, vtSupply, assetsOfferedPercent, lpPercent } = params;
-
-    // Calculate VT price (this part is correct in your current code)
-    const vtPrice = this.round15(totalAcquiredAda / assetsOfferedPercent / vtSupply);
+    const { totalAcquiredAda, assetsOfferedPercent, lpPercent, vtSupply } = params;
 
     const fdv = this.round2(totalAcquiredAda / assetsOfferedPercent);
 
-    // LP gets lpPercent of the total vault value
-    const lpTotalValue = this.round15(fdv * lpPercent);
-
     // Divide equally between ADA and VT
-    const lpAdaAmount = this.round15(lpTotalValue / 2);
-    const lpVtValue = this.round15(lpTotalValue / 2);
+    const lpAdaAmount = Math.round(((lpPercent * fdv) / 2) * 1e6) / 1e6;
+    const lpVtValue = this.round15((lpPercent * vtSupply) / 2);
 
-    // Convert VT value to tokens
-    const lpVtAmount = Math.round(lpVtValue / vtPrice);
+    // LP ADA / LP VT
+    const vtPrice = this.round15(lpAdaAmount / lpVtValue);
+
+    const adaPairMultiplier = Math.floor(lpVtValue / (totalAcquiredAda * 1_000_000));
+    const adjustedVtLpAmount = adaPairMultiplier * totalAcquiredAda * 1_000_000;
 
     return {
       lpAdaAmount,
-      lpVtAmount,
+      lpVtAmount: lpVtValue,
       vtPrice,
       fdv,
+      adjustedVtLpAmount,
+      adaPairMultiplier,
     };
   }
 
@@ -162,21 +163,6 @@ export class DistributionService {
       acquireMultiplier,
       adaDistribution,
     };
-  }
-
-  /**
-   * Calculates the LP ADA multiplier with precision validation
-   * @returns Object containing the multiplier and validation info
-   */
-  calculateLpAdaMultiplier(
-    lpVtAmount: number,
-    totalAcquiredAda: number
-  ): {
-    adaPairMultiplier: number;
-  } {
-    const multiplier = Math.floor(lpVtAmount / (totalAcquiredAda * 1_000_000));
-
-    return { adaPairMultiplier: multiplier };
   }
 
   private round15(amount: number): number {

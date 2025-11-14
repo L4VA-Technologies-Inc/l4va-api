@@ -90,7 +90,7 @@ export class BlockchainService {
    * @param txData Transaction data to be built
    * @returns Object containing complete and partial transaction CBOR
    */
-  async buildTransaction(txData: any): Promise<TransactionBuildResponse> {
+  async buildTransaction(txData: object): Promise<TransactionBuildResponse> {
     try {
       const contractDeployed = await fetch(`${this.anvilApi}/transactions/build`, {
         method: 'POST',
@@ -361,7 +361,6 @@ export class BlockchainService {
           return false;
         }
         // Other errors might indicate network issues, so we'll assume not registered
-        this.logger.warn(`Error checking stake registration for ${scriptHash}: ${blockfrostError.message}`);
         return false;
       }
     } catch (error) {

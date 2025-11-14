@@ -10,7 +10,6 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { BlockchainScannerService } from '@/modules/vaults/processing-tx/onchain/blockchain-scanner.service';
-import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
 import { AssetStatus, AssetOriginType } from '@/types/asset.types';
 import { BlockchainTransactionListItem } from '@/types/blockchain.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -30,19 +29,15 @@ export class ContributionService {
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
     private readonly transactionsService: TransactionsService,
-    private readonly blockchainScanner: BlockchainScannerService,
-    private readonly metadataRegistryApiService: MetadataRegistryApiService
+    private readonly blockchainScanner: BlockchainScannerService
   ) {}
 
   /**
    * Syncs contribution transactions for a vault by comparing on-chain transactions
    * with the transactions stored in the database
    *
-   * Make PR to update VT metadata
+   * Make PR to update VT metadata if needed
    *
-   * BUG: script_hash and policy_id are the same
-   *
-   * TODO: Handle where pr fails to submit, maybe retry later
    * @param vaultId - The ID of the vault to sync transactions for
    * @returns An object containing processed blockchain transactions and database transactions
    */
@@ -128,8 +123,6 @@ export class ContributionService {
       // Collect transactions that need status updates
       const txsToUpdate: { tx_hash: string; tx_index: number }[] = [];
 
-      const needsPolicyIdUpdate = !vault.policy_id;
-
       // Process each transaction
       const processedBlockchainTxs = filteredTxs.map(tx => {
         const dbTx = dbTxMap.get(tx.tx_hash) || null;
@@ -152,30 +145,6 @@ export class ContributionService {
           statusUpdated,
         };
       });
-
-      // If we need to update policy ID, do it once
-      if (needsPolicyIdUpdate && txsToUpdate.length > 0) {
-        try {
-          vault.policy_id = vault.script_hash;
-          await this.vaultRepository.save(vault);
-          try {
-            this.logger.log(`Create PR to update Vault Metadata`);
-            await this.metadataRegistryApiService.submitTokenMetadata({
-              vaultId: vault.id,
-              subject: `${vault.script_hash}${vault.asset_vault_name}`,
-              name: vault.name,
-              description: vault.description,
-              ticker: vault.vault_token_ticker,
-              logo: vault.ft_token_img?.file_url || '',
-              decimals: vault.ft_token_decimals || 9,
-            });
-          } catch (error) {
-            this.logger.error('Error updating vault metadata:', error);
-          }
-        } catch (error) {
-          this.logger.error(`Failed to update vault policy ID`, error);
-        }
-      }
 
       if (txsToUpdate.length > 0) {
         try {
