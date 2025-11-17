@@ -1,5 +1,9 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
+import {
+  FixedTransaction,
+  PrivateKey,
+  Transaction as CardanoTransaction,
+} from '@emurgo/cardano-serialization-lib-nodejs';
 import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -530,5 +534,10 @@ export class BlockchainService {
 
     this.logger.warn(`Transaction ${txHash} confirmation timeout after ${maxWaitTime / 1000} seconds`);
     return false;
+  }
+
+  getTransactionSize(txHex: string): number {
+    const tx = CardanoTransaction.from_bytes(Buffer.from(txHex, 'hex'));
+    return tx.to_bytes().length;
   }
 }

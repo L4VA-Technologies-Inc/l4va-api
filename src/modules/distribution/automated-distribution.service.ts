@@ -471,7 +471,7 @@ export class AutomatedDistributionService {
 
     const buildResponse = await this.blockchainService.buildTransaction(input);
 
-    const actualTxSize = this.getTransactionSize(buildResponse.complete);
+    const actualTxSize = this.blockchainService.getTransactionSize(buildResponse.complete);
     this.logger.debug(`Transaction size: ${actualTxSize} bytes (${(actualTxSize / 1024).toFixed(2)} KB)`);
 
     if (actualTxSize > this.MAX_TX_SIZE) {
@@ -984,7 +984,7 @@ export class AutomatedDistributionService {
         const input = this.buildBatchedPaymentInput(vault, testClaims, adminUtxos, dispatchUtxos);
 
         const buildResponse = await this.blockchainService.buildTransaction(input);
-        const txSize = this.getTransactionSize(buildResponse.complete);
+        const txSize = this.blockchainService.getTransactionSize(buildResponse.complete);
 
         this.logger.debug(`Batch size ${testBatchSize}: ${txSize} bytes (${(txSize / 1024).toFixed(2)} KB)`);
 
@@ -1059,7 +1059,7 @@ export class AutomatedDistributionService {
 
       // Build transaction
       const buildResponse = await this.blockchainService.buildTransaction(input);
-      const txSize = this.getTransactionSize(buildResponse.complete);
+      const txSize = this.blockchainService.getTransactionSize(buildResponse.complete);
 
       this.logger.log(`Batch payment transaction built: ${txSize} bytes (${(txSize / 1024).toFixed(2)} KB)`);
 
@@ -1686,7 +1686,7 @@ export class AutomatedDistributionService {
         try {
           const buildResponse = await this.blockchainService.buildTransaction(input);
 
-          const actualTxSize = this.getTransactionSize(buildResponse.complete);
+          const actualTxSize = this.blockchainService.getTransactionSize(buildResponse.complete);
           this.logger.debug(`Transaction size: ${actualTxSize} bytes (${(actualTxSize / 1024).toFixed(2)} KB)`);
 
           const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
@@ -1794,10 +1794,5 @@ export class AutomatedDistributionService {
     return EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(scriptHash)))
       .to_address()
       .to_bech32();
-  }
-
-  private getTransactionSize(txHex: string): number {
-    const tx = CardanoTransaction.from_bytes(Buffer.from(txHex, 'hex'));
-    return tx.to_bytes().length;
   }
 }
