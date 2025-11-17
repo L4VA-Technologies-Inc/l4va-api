@@ -92,6 +92,23 @@ interface AddressesUtxo {
   reference_script_hash: string;
 }
 
+/**
+ * Flow Comparison:
+ *
+ * Normal flow
+ * 1. processAcquirerExtractions() → Extract acquirer claims
+ * 2. Wait for all acquirer extractions to complete
+ * 3. Register stake credential
+ * 4. processContributorPayments() → Pay contributors
+ * 5. finalizeVaultDistribution() → Create LP & snapshot
+ *
+ * Edge Case Vault (Acquirers = 0%):
+ * 1. Skip acquirer extractions (none needed)
+ * 2. Register stake credential (still required for dispatch address)
+ * 3. Apply dispatch parameters (if not already done)
+ * 4. processContributorPayments() → Pay contributors (no ADA, just VT)
+ * 5. finalizeVaultDistribution() → Create LP (if LP% > 0) & snapshot
+ */
 @Injectable()
 export class AutomatedDistributionService {
   private readonly logger = new Logger(AutomatedDistributionService.name);
@@ -196,7 +213,7 @@ export class AutomatedDistributionService {
         // distribution_in_progress: false,
         created_at: MoreThan(new Date('2025-10-22').toISOString()),
       },
-      select: ['id'],
+      select: ['id', 'tokens_for_acquires'],
     });
 
     for (const vault of readyVaults) {
@@ -204,6 +221,17 @@ export class AutomatedDistributionService {
         this.logger.log(`Processing vault ${vault.id} for distribution`);
 
         await this.vaultRepository.update({ id: vault.id }, { distribution_in_progress: true }); // Mark as processing to prevent duplicate processing
+
+        if (vault.tokens_for_acquires === 0) {
+          this.logger.log(
+            `Vault ${vault.id} has 0% tokens for acquirers. ` +
+              `Skipping acquirer extractions, proceeding directly to contributor payments.`
+          );
+
+          // No acquirer extractions needed - go straight to contributor payments
+          // The vault should already have stake registered from lifecycle service
+          continue; // Will be picked up by checkExtractionsAndTriggerPayments
+        }
 
         await this.processAcquirerExtractions(vault.id); // Queue extraction transactions for acquirer claims
       } catch (error) {
@@ -696,7 +724,6 @@ export class AutomatedDistributionService {
   }
 
   private async checkExtractionsAndTriggerPayments(): Promise<void> {
-    // Single query to get all vaults with their acquirer claim counts
     const vaultsWithClaims = await this.vaultRepository
       .createQueryBuilder('vault')
       .select([
@@ -706,6 +733,7 @@ export class AutomatedDistributionService {
         'vault.script_hash',
         'vault.dispatch_parametized_hash',
         'vault.dispatch_preloaded_script',
+        'vault.tokens_for_acquires',
       ])
       .leftJoin(
         'claims',
@@ -731,7 +759,6 @@ export class AutomatedDistributionService {
 
     this.logger.log(`Found ${vaults.length} vaults in distribution to check`);
 
-    // Process each vault sequentially
     for (let i = 0; i < vaults.length; i++) {
       const vault = vaults[i];
       const remainingAcquirerClaims = parseInt(claimCounts[i].remainingAcquirerClaims || '0');
@@ -739,23 +766,32 @@ export class AutomatedDistributionService {
       try {
         this.logger.log(`Checking vault ${vault.id} - ${remainingAcquirerClaims} acquirer claims remaining`);
 
-        // 1. Check if there are any remaining acquirer claims
-        if (remainingAcquirerClaims > 0) {
+        // Check if vault has 0% for acquirers (skip acquirer check)
+        const shouldSkipAcquirerCheck = vault.tokens_for_acquires === 0;
+
+        if (!shouldSkipAcquirerCheck) {
+          // Normal flow: Check if acquirer claims are done
+          if (remainingAcquirerClaims > 0) {
+            this.logger.log(
+              `Vault ${vault.id} still has ${remainingAcquirerClaims} acquirer claims pending. ` +
+                `Skipping contributor payments for now.`
+            );
+            continue;
+          }
+
+          this.logger.log(`All acquirer extractions complete for vault ${vault.id}`);
+        } else {
           this.logger.log(
-            `Vault ${vault.id} still has ${remainingAcquirerClaims} acquirer claims pending. ` +
-              `Skipping contributor payments for now.`
+            `Vault ${vault.id} has 0% for acquirers. ` +
+              `No acquirer claims expected, proceeding directly to contributor payments.`
           );
-          continue; // Move to next vault
         }
 
-        this.logger.log(`All acquirer extractions complete for vault ${vault.id}`);
-
-        // 2. Check if stake credential is registered
+        // Check stake registration (same for all vaults)
         if (!vault.stake_registered) {
           this.logger.log(`Registering stake credential for vault ${vault.id}`);
 
           try {
-            // Apply dispatch parameters if not already done
             let dispatchHash = vault.dispatch_parametized_hash;
 
             if (!dispatchHash) {
@@ -776,7 +812,6 @@ export class AutomatedDistributionService {
               );
             }
 
-            // Register stake credential
             const stakeResult = await this.blockchainService.registerScriptStake(dispatchHash);
 
             if (stakeResult.success) {
@@ -787,24 +822,23 @@ export class AutomatedDistributionService {
                   `Proceeding to contributor payments.`
               );
 
-              // Now process contributor payments
               await this.processContributorPayments(vault.id);
             } else {
               this.logger.error(
                 `Failed to register stake credential for vault ${vault.id}. ` + `Will retry in next cycle.`
               );
-              continue; // Move to next vault
+              continue;
             }
           } catch (error) {
             this.logger.error(`Error during stake registration for vault ${vault.id}:`, error);
-            continue; // Move to next vault
+            continue;
           }
         } else {
+          // Stake already registered, proceed to contributor payments
           await this.processContributorPayments(vault.id);
         }
       } catch (error) {
         this.logger.error(`Error processing vault ${vault.id} for contributor payments:`, error);
-        // Continue to next vault even if this one fails
       }
     }
 
@@ -817,21 +851,44 @@ export class AutomatedDistributionService {
     asset_vault_name: string
   ): Promise<void> {
     try {
-      // Create liquidity pool
-      const { txHash } = await this.vyfiService.createLiquidityPool(vaultId);
+      // Get vault to check LP percentage
+      const vault = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        select: ['id', 'liquidity_pool_contribution'],
+      });
 
-      if (txHash) {
-        // Mark vault as fully processed
-        await this.vaultRepository.update(
-          { id: vaultId },
-          {
-            distribution_in_progress: false,
-            distribution_processed: true,
-          }
-        );
-
-        await this.governanceService.createAutomaticSnapshot(vaultId, `${script_hash}${asset_vault_name}`);
+      if (!vault) {
+        throw new Error(`Vault ${vaultId} not found`);
       }
+
+      const lpPercent = vault.liquidity_pool_contribution || 0;
+
+      // Only create LP if LP percentage > 0
+      if (lpPercent > 0) {
+        const { txHash } = await this.vyfiService.createLiquidityPool(vaultId);
+
+        if (txHash) {
+          this.logger.log(`Liquidity pool created for vault ${vaultId} with tx: ${txHash}`);
+        }
+      } else {
+        this.logger.log(`Vault ${vaultId} has 0% LP contribution. Skipping liquidity pool creation.`);
+      }
+
+      // Mark vault as fully processed (regardless of LP creation)
+      await this.vaultRepository.update(
+        { id: vaultId },
+        {
+          distribution_in_progress: false,
+          distribution_processed: true,
+        }
+      );
+
+      // Create governance snapshot
+      await this.governanceService.createAutomaticSnapshot(vaultId, `${script_hash}${asset_vault_name}`);
+
+      this.logger.log(
+        `Vault ${vaultId} distribution finalized successfully ` + `(LP: ${lpPercent > 0 ? 'created' : 'skipped'})`
+      );
     } catch (error) {
       this.logger.error(`Failed to finalize vault distribution for ${vaultId}:`, error);
       // Reset the vault state on failure
