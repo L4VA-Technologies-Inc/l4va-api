@@ -144,11 +144,11 @@ export class VaultInsertingService {
 
         // For ADA contributions, we just need UTXOs with sufficient ADA + minimum for fees
         const { utxos } = await getUtxosExtract(Address.from_bech32(params.changeAddress), this.blockfrost, {
-          minAda: 2000000,
+          minAda: 4000000,
         });
 
         if (utxos.length === 0) {
-          throw new Error(`No UTXOs found with at least 2 ADA.`);
+          throw new Error(`No UTXOs found with at least 4 ADA.`);
         }
 
         // For ADA, any UTXO with sufficient balance works
