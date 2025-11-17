@@ -11,7 +11,7 @@ import { ClaimStatus, ClaimType } from '@/types/claim.types';
 @Injectable()
 export class AutomaticCancellationService {
   private readonly logger = new Logger(AutomaticCancellationService.name);
-  private readonly DEFAULT_BATCH_SIZE = 15;
+  private readonly DEFAULT_BATCH_SIZE = 25;
 
   constructor(
     @InjectRepository(Claim)
