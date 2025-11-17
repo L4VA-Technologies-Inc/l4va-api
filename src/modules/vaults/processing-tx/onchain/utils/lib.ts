@@ -56,6 +56,8 @@ interface GetUtxosOptions {
   targetAssets?: TargetAsset[];
   /** Whether to validate UTXO existence on-chain (default: true) */
   validateUtxos?: boolean;
+  /** Maximum number of UTXOs to return */
+  maxUtxos?: number;
 }
 
 interface GetUtxosResult {
@@ -122,6 +124,7 @@ export const validateUtxoStillExists = async (
  * @param options.targetToken - Single token unit to collect (policyId + assetName hex) - legacy support
  * @param options.targetTokenAmount - Amount of single target token to collect - legacy support
  * @param options.targetAssets - Array of assets to collect with their required amounts
+ * @param options.maxUtxos - Maximum number of UTXOs to return (default: 15)
  *
  * @returns Promise resolving to UTXOs and optional required inputs with asset breakdown
  *
@@ -160,6 +163,7 @@ export const getUtxosExtract = async (
     targetTokenAmount = 0,
     targetAssets = [],
     validateUtxos = true,
+    maxUtxos = 15,
   } = options;
 
   // Handle backward compatibility - convert single token to array format
@@ -169,6 +173,8 @@ export const getUtxosExtract = async (
   } else if (targetAssets.length > 0) {
     assetsToCollect = [...targetAssets];
   }
+
+  const hasTargetAssets = assetsToCollect.length > 0;
 
   // Initialize asset collection tracking
   const assetCollections: Map<string, AssetCollection> = new Map();
@@ -182,9 +188,10 @@ export const getUtxosExtract = async (
   });
 
   const utxos = await blockfrost.addressesUtxosAll(address.to_bech32());
-  const parsedUtxos: string[] = [];
+  const allValidUtxos: string[] = [];
   const filteredUtxos: string[] = [];
-  const allRequiredInputs: Set<string> = new Set();
+  const requiredTokenUtxos: Set<string> = new Set(); // UTXOs containing required tokens
+  const additionalUtxos: string[] = []; // UTXOs without required tokens (for padding)
 
   if (filterByAda !== undefined) {
     for (const utxo of utxos) {
@@ -218,10 +225,11 @@ export const getUtxosExtract = async (
       TransactionOutput.new(address, assetsToValue(amount))
     ).to_hex();
 
-    parsedUtxos.push(utxoHex);
+    allValidUtxos.push(utxoHex);
 
-    // Check if this UTXO contains any target assets
-    if (assetCollections.size > 0) {
+    // If we have target assets, check if this UTXO contains any
+    let containsTargetAsset = false;
+    if (hasTargetAssets) {
       for (const [tokenUnit, collection] of assetCollections) {
         // Skip if we already collected enough of this asset
         if (collection.collected >= collection.required) continue;
@@ -234,23 +242,25 @@ export const getUtxosExtract = async (
           // Update collection tracking
           collection.collected += quantity;
           collection.utxos.push(utxoHex);
-          allRequiredInputs.add(utxoHex);
+          requiredTokenUtxos.add(utxoHex);
+          containsTargetAsset = true;
         }
       }
+    }
 
-      // Early exit optimization - stop if all assets are collected
-      const allAssetsCollected = Array.from(assetCollections.values()).every(
-        collection => collection.collected >= collection.required
-      );
+    // If this UTXO doesn't contain target assets, add to additional pool
+    if (!containsTargetAsset && hasTargetAssets) {
+      additionalUtxos.push(utxoHex);
+    }
 
-      if (allAssetsCollected) {
-        break;
-      }
+    // Early exit optimization - stop collecting once we have enough UTXOs
+    if (!hasTargetAssets && allValidUtxos.length >= maxUtxos) {
+      break;
     }
   }
 
   // Validate that all required assets were collected
-  if (assetCollections.size > 0) {
+  if (hasTargetAssets) {
     const missingAssets = Array.from(assetCollections.values()).filter(
       collection => collection.collected < collection.required
     );
@@ -264,9 +274,20 @@ export const getUtxosExtract = async (
     }
   }
 
-  // Prepare result
+  let selectedUtxos: string[];
+
+  if (!hasTargetAssets) {
+    selectedUtxos = allValidUtxos.slice(0, maxUtxos);
+  } else {
+    const requiredUtxosArray = Array.from(requiredTokenUtxos);
+    const remainingSlots = Math.max(0, maxUtxos - requiredUtxosArray.length);
+
+    const additionalSelected = additionalUtxos.slice(0, remainingSlots);
+    selectedUtxos = [...requiredUtxosArray, ...additionalSelected];
+  }
+
   const result: GetUtxosResult = {
-    utxos: parsedUtxos,
+    utxos: selectedUtxos,
   };
 
   // Add filtered UTXOs if filterByAda was specified
@@ -274,8 +295,8 @@ export const getUtxosExtract = async (
     result.filteredUtxos = filteredUtxos;
   }
 
-  if (assetCollections.size > 0) {
-    result.requiredInputs = Array.from(allRequiredInputs);
+  if (hasTargetAssets) {
+    result.requiredInputs = Array.from(requiredTokenUtxos);
     result.assetBreakdown = Array.from(assetCollections.values());
   }
 

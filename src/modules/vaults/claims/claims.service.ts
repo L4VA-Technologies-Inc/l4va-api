@@ -22,6 +22,27 @@ import { AssetOriginType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
+interface CancellationInput {
+  changeAddress: string;
+  message: string;
+  utxos: string[];
+  mint?: Array<object>;
+  scriptInteractions: object[];
+  outputs: {
+    address: string;
+    assets?: object[];
+    lovelace?: number;
+    datum?: { type: 'inline'; value: string | Datum; shape?: object };
+  }[];
+  requiredSigners: string[];
+  referenceInputs: { txHash: string; index: number }[];
+  validityInterval: {
+    start: boolean;
+    end: boolean;
+  };
+  network: string;
+}
+
 @Injectable()
 export class ClaimsService {
   private readonly logger = new Logger(ClaimsService.name);
@@ -29,6 +50,7 @@ export class ClaimsService {
   private readonly adminAddress: string;
   private readonly adminHash: string;
   private blockfrost: BlockFrostAPI;
+  private readonly MAX_TX_SIZE = 15900;
 
   constructor(
     @InjectRepository(Transaction)
@@ -253,144 +275,150 @@ export class ClaimsService {
     }
   }
 
-  async buildAndSubmitCancellationTransaction(claimId: string): Promise<{
+  async buildAndSubmitBatchCancellationTransaction(claimIds: string[]): Promise<{
     txHash: string;
     success: boolean;
+    processedClaims: string[];
   }> {
-    const claim = await this.claimRepository.findOne({
-      where: { id: claimId, type: ClaimType.CANCELLATION, status: ClaimStatus.AVAILABLE },
+    if (claimIds.length === 0) {
+      throw new BadRequestException('Must provide at least 1 claim ID for batch processing');
+    }
+
+    this.logger.debug(`Building batch cancellation transaction for  ${claimIds.length} claims: ${claimIds.join(', ')}`);
+
+    // Fetch all claims with relations
+    const claims = await this.claimRepository.find({
+      where: {
+        id: In(claimIds),
+        type: ClaimType.CANCELLATION,
+        status: ClaimStatus.AVAILABLE,
+      },
       relations: ['user', 'vault', 'transaction'],
     });
 
-    if (!claim) {
-      throw new NotFoundException('Cancellation claim not found or not available');
+    if (claims.length !== claimIds.length) {
+      throw new NotFoundException('One or more cancellation claims not found or not available');
     }
 
-    const { vault, user, transaction } = claim;
-
-    if (transaction.type !== TransactionType.contribute && transaction.type !== TransactionType.acquire) {
-      throw new BadRequestException('Transaction is not a contribution or acquisition');
-    }
-
-    const POLICY_ID = vault.script_hash;
-    const lpsUnit = vault.script_hash + '72656365697074';
-    const txUtxos = await this.blockfrost.txsUtxos(transaction.tx_hash);
-    const output = txUtxos.outputs[0];
-    if (!output) {
-      throw new Error('No output found');
-    }
-
-    if (output.consumed_by_tx) {
-      this.logger.warn(
-        `Contribution UTXO ${transaction.tx_hash}#0 already consumed by transaction ${output.consumed_by_tx}. Marking claim ${claim.id} as claimed.`
-      );
-
-      await this.updateClaimStatus(claim.id, ClaimStatus.CLAIMED, {
-        claimReason: 'UTXO_ALREADY_SPENT',
-      });
-      return;
-    }
-
-    const amountOfLpsToClaim = output.amount.find((a: { unit: string; quantity: string }) => a.unit === lpsUnit);
-
-    if (!amountOfLpsToClaim) {
-      throw new Error('No lps to claim.');
+    // Validate all claims belong to the same vault
+    const vaultId = claims[0].vault.id;
+    if (!claims.every(claim => claim.vault.id === vaultId)) {
+      throw new BadRequestException('All claims must belong to the same vault');
     }
 
     const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost);
     if (adminUtxos.length === 0) {
       throw new Error('No UTXOs found.');
     }
-    const datumTag = generate_tag_from_txhash_index(transaction.tx_hash, 0);
 
-    const refundAssets = [];
-    let refundLovelace = 0;
+    const vault = claims[0].vault;
+    const POLICY_ID = vault.script_hash;
+    const lpsUnit = vault.script_hash + '72656365697074';
 
-    // Process ALL amounts from the original UTXO to build exact refund
-    for (const amount of output.amount) {
-      if (amount.unit === 'lovelace') {
-        refundLovelace = parseInt(amount.quantity);
-      } else if (amount.unit !== lpsUnit) {
-        refundAssets.push({
-          assetName: { name: amount.unit.slice(56), format: 'hex' },
-          policyId: amount.unit.slice(0, 56),
-          quantity: parseInt(amount.quantity),
-        });
+    const scriptInteractions: any[] = [];
+    const outputs: any[] = [];
+    const mintAssets: any[] = [];
+    let totalReceiptsToburn = 0;
+
+    // Process each claim
+    for (let i = 0; i < claims.length; i++) {
+      const claim = claims[i];
+      const { user, transaction } = claim;
+
+      if (transaction.type !== TransactionType.contribute && transaction.type !== TransactionType.acquire) {
+        throw new BadRequestException(`Transaction ${transaction.id} is not a contribution or acquisition`);
       }
-      // Skip receipt token as it gets burned
+
+      // Get UTXO data for this transaction
+      const txUtxos = await this.blockfrost.txsUtxos(transaction.tx_hash);
+      const output = txUtxos.outputs[0];
+      if (!output) {
+        throw new Error(`No output found for transaction ${transaction.tx_hash}`);
+      }
+
+      const amountOfLpsToClaim = output.amount.find((a: { unit: string; quantity: string }) => a.unit === lpsUnit);
+      if (!amountOfLpsToClaim) {
+        throw new Error(`No LPs to claim for transaction ${transaction.tx_hash}`);
+      }
+
+      // Build refund assets and lovelace for this claim
+      const refundAssets: any[] = [];
+      let refundLovelace = 0;
+
+      for (const amount of output.amount) {
+        if (amount.unit === 'lovelace') {
+          refundLovelace = parseInt(amount.quantity);
+        } else if (amount.unit !== lpsUnit) {
+          refundAssets.push({
+            assetName: { name: amount.unit.slice(56), format: 'hex' },
+            policyId: amount.unit.slice(0, 56),
+            quantity: parseInt(amount.quantity),
+          });
+        }
+      }
+
+      const datumTag = generate_tag_from_txhash_index(transaction.tx_hash, 0);
+
+      // Add script interaction for spending this UTXO
+      scriptInteractions.push({
+        purpose: 'spend',
+        hash: POLICY_ID,
+        outputRef: {
+          txHash: transaction.tx_hash,
+          index: 0,
+        },
+        redeemer: {
+          type: 'json',
+          value: {
+            __variant: 'CancelAsset',
+            __data: {
+              cancel_output_index: i, // Use claim index as output index
+            },
+          } satisfies Redeemer1,
+        },
+      });
+
+      // Add output for this claim's refund
+      outputs.push({
+        address: user.address,
+        assets: refundAssets.length > 0 ? refundAssets : undefined,
+        lovelace: refundLovelace,
+        datum: {
+          type: 'inline',
+          value: PlutusData.new_bytes(Buffer.from(datumTag, 'hex')).to_hex(),
+        },
+      });
+
+      totalReceiptsToburn++;
     }
 
-    const input: {
-      changeAddress: string;
-      message: string;
-      utxos: string[];
-      mint?: Array<object>;
-      scriptInteractions: object[];
-      outputs: {
-        address: string;
-        assets?: object[];
-        lovelace?: number;
-        datum?: { type: 'inline'; value: string | Datum; shape?: object };
-      }[];
-      requiredSigners: string[];
-      referenceInputs: { txHash: string; index: number }[];
-      validityInterval: {
-        start: boolean;
-        end: boolean;
-      };
-      network: string;
-    } = {
+    // Add mint script interaction (single one for all burns)
+    scriptInteractions.push({
+      purpose: 'mint',
+      hash: POLICY_ID,
+      redeemer: {
+        type: 'json',
+        value: 'CancelContribution' satisfies Redeemer,
+      },
+    });
+
+    // Add mint instruction to burn all receipts
+    mintAssets.push({
+      version: 'cip25',
+      assetName: { name: 'receipt', format: 'utf8' },
+      policyId: POLICY_ID,
+      type: 'plutus',
+      quantity: -totalReceiptsToburn, // Burn all receipts in one go
+      metadata: {},
+    });
+
+    const input: CancellationInput = {
       changeAddress: this.adminAddress,
-      message: `Cancel ${transaction.type === TransactionType.contribute ? 'asset' : 'ADA'} contribution - return assets to contributor`,
+      message: `Batch cancel ${claims.length} claims - return assets to contributors`,
+      scriptInteractions,
       utxos: adminUtxos,
-      scriptInteractions: [
-        {
-          purpose: 'spend',
-          hash: POLICY_ID,
-          outputRef: {
-            txHash: transaction.tx_hash,
-            index: 0,
-          },
-          redeemer: {
-            type: 'json',
-            value: {
-              __variant: 'CancelAsset',
-              __data: {
-                cancel_output_index: 0,
-              },
-            } satisfies Redeemer1,
-          },
-        },
-        {
-          purpose: 'mint',
-          hash: POLICY_ID,
-          redeemer: {
-            type: 'json',
-            value: 'CancelContribution' satisfies Redeemer,
-          },
-        },
-      ],
-      mint: [
-        {
-          version: 'cip25',
-          assetName: { name: 'receipt', format: 'utf8' },
-          policyId: POLICY_ID,
-          type: 'plutus',
-          quantity: -1, // Burn the receipt
-          metadata: {},
-        },
-      ],
-      outputs: [
-        {
-          address: user.address,
-          assets: refundAssets.length > 0 ? refundAssets : undefined,
-          lovelace: refundLovelace,
-          datum: {
-            type: 'inline',
-            value: PlutusData.new_bytes(Buffer.from(datumTag, 'hex')).to_hex(),
-          },
-        },
-      ],
+      mint: mintAssets,
+      outputs,
       requiredSigners: [this.adminHash],
       referenceInputs: [
         {
@@ -407,63 +435,55 @@ export class ClaimsService {
 
     try {
       const buildResponse = await this.blockchainService.buildTransaction(input);
+      const actualTxSize = this.blockchainService.getTransactionSize(buildResponse.complete);
+      this.logger.debug(`Transaction size: ${actualTxSize} bytes (${(actualTxSize / 1024).toFixed(2)} KB)`);
+
+      if (actualTxSize > this.MAX_TX_SIZE) {
+        throw new Error(
+          `Transaction size ${actualTxSize} bytes exceeds safe limit (${this.MAX_TX_SIZE} bytes). ` +
+            `Reduce batch size.`
+        );
+      }
+
       const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
       txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
-      // Create internal transaction record
-      const internalTx = await this.transactionRepository.save({
-        user_id: user.id,
-        vault_id: vault.id,
-        type: TransactionType.cancel,
-        status: TransactionStatus.created,
-      });
+      // Create internal transaction records for each claim
+      const internalTxs = await Promise.all(
+        claims.map(claim =>
+          this.transactionRepository.save({
+            user_id: claim.user.id,
+            vault_id: vault.id,
+            type: TransactionType.cancel,
+            status: TransactionStatus.created,
+          })
+        )
+      );
 
-      // Submit transaction
       const response = await this.blockchainService.submitTransaction({
         transaction: txToSubmitOnChain.to_hex(),
       });
 
-      if (!response.txHash) {
-        throw new Error('Failed to submit cancellation transaction - no txHash returned');
-      }
-
-      // Update transaction with hash immediately
-      await this.transactionRepository.update(
-        { id: internalTx.id },
-        { tx_hash: response.txHash, status: TransactionStatus.submitted }
-      );
-
-      this.logger.log(
-        `Cancellation transaction ${response.txHash} submitted for claim ${claimId}, waiting for confirmation...`
-      );
-
-      // Wait for confirmation using blockchain service
-      const confirmed = await this.blockchainService.waitForTransactionConfirmation(response.txHash);
-
-      if (confirmed) {
-        // Update transaction status to confirmed
-        await this.transactionRepository.update({ id: internalTx.id }, { status: TransactionStatus.confirmed });
-
-        this.logger.log(`Cancellation transaction ${response.txHash} confirmed for claim ${claimId}`);
+      if (response.txHash) {
+        // Update all internal transactions
+        await Promise.all(
+          internalTxs.map(internalTx =>
+            this.transactionRepository.update(
+              { id: internalTx.id },
+              { tx_hash: response.txHash, status: TransactionStatus.confirmed }
+            )
+          )
+        );
 
         return {
           success: true,
           txHash: response.txHash,
-        };
-      } else {
-        // Handle timeout
-        await this.transactionRepository.update({ id: internalTx.id }, { status: TransactionStatus.failed });
-
-        this.logger.warn(`Cancellation transaction ${response.txHash} confirmation timeout for claim ${claimId}`);
-
-        // Still return success but with a warning - transaction was submitted
-        return {
-          success: true,
-          txHash: response.txHash,
+          processedClaims: claimIds,
         };
       }
     } catch (error) {
-      throw new Error(`Failed to submit cancellation transaction: ${error.message}`);
+      this.logger.error(`Failed to build/submit batch cancellation transaction: ${error.message}`);
+      throw error;
     }
   }
 
@@ -499,30 +519,50 @@ export class ClaimsService {
     }
   }
 
-  // async buildClaimTransaction(claimId: string): Promise<{
-  //   success: boolean;
-  //   transactionId: string;
-  //   presignedTx: string;
-  // }> {
-  //   const claim = await this.claimRepository.findOne({
-  //     where: { id: claimId },
-  //     relations: ['user', 'vault', 'transaction'],
-  //   });
+  /**
+   * Updates the status of multiple claims with optional metadata
+   *
+   * @param claimIds - Array of claim IDs to update
+   * @param status - The new status to set for all claims
+   * @param metadata - Optional metadata to merge with existing metadata for each claim
+   * @returns Promise<void>
+   */
+  async updateMultipleClaimsStatus(
+    claimIds: string[],
+    status: ClaimStatus,
+    metadata?: Record<string, any>
+  ): Promise<void> {
+    if (claimIds.length === 0) {
+      return;
+    }
 
-  //   const vault = claim.vault;
-  //   const user = claim.user;
+    try {
+      if (metadata) {
+        // If metadata is provided, we need to merge it with existing metadata for each claim
+        const existingClaims = await this.claimRepository.find({
+          where: { id: In(claimIds) },
+          select: ['id', 'metadata'],
+        });
 
-  //   if (!claim) {
-  //     throw new NotFoundException('Claim not found');
-  //   }
+        const updates = existingClaims.map(claim => ({
+          id: claim.id,
+          status,
+          metadata: {
+            ...(claim.metadata || {}),
+            ...metadata,
+          },
+        }));
 
-  //   if (claim.status !== ClaimStatus.AVAILABLE && claim.status !== ClaimStatus.PENDING) {
-  //     throw new Error('Claim is not available for extraction');
-  //   }
-
-  //   if (!vault || !user) {
-  //     throw new Error('Vault or user not found for claim');
-  //   }
-  //   // return await this.claimAcquirer(claim, user, vault);
-  // }
+        await this.claimRepository.save(updates);
+        this.logger.log(`Updated ${claimIds.length} claims status to ${status} with metadata`);
+      } else {
+        // If no metadata, simple bulk update
+        await this.claimRepository.update({ id: In(claimIds) }, { status });
+        this.logger.log(`Updated ${claimIds.length} claims status to ${status}`);
+      }
+    } catch (error) {
+      this.logger.error(`Failed to update ${claimIds.length} claims status to ${status}:`, error);
+      throw error;
+    }
+  }
 }

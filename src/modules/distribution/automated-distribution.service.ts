@@ -7,7 +7,6 @@ import {
   Credential,
   FixedTransaction,
   PrivateKey,
-  Transaction as CardanoTransaction,
   Address,
 } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable, Logger } from '@nestjs/common';
