@@ -169,6 +169,12 @@ export class TransactionsService {
       queryBuilder.take(parsedLimit);
     }
 
+    const baseStatuses = [TransactionStatus.confirmed, TransactionStatus.pending];
+
+    queryBuilder.andWhere('transaction.status IN (:...statuses)', {
+      statuses: status ?? baseStatuses,
+    });
+
     switch (filter) {
       case TransactionType.all:
         queryBuilder.andWhere('transaction.type IN (:...types)', {
@@ -190,12 +196,6 @@ export class TransactionsService {
           type: TransactionType.acquire,
         });
         break;
-    }
-
-    if (status) {
-      queryBuilder.andWhere('transaction.status IN (:...statuses)', {
-        statuses: status,
-      });
     }
 
     if (period?.from && period?.to) {
@@ -365,5 +365,13 @@ export class TransactionsService {
     return {
       success: true,
     };
+  }
+
+  async updateTransactionStatusById(id: string, status: TransactionStatus): Promise<void> {
+    const tx = await this.transactionRepository.findOne({ where: { id } });
+    if (!tx) return;
+
+    tx.status = status;
+    await this.transactionRepository.save(tx);
   }
 }
