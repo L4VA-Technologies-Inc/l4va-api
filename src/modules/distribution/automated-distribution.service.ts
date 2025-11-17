@@ -172,37 +172,6 @@ export class AutomatedDistributionService {
     }
   }
 
-  //Haven`t tested this
-  // private async resetStuckVaults(): Promise<void> {
-  //   const thirtyMinutesAgo = new Date();
-  //   thirtyMinutesAgo.setMinutes(thirtyMinutesAgo.getMinutes() - 30);
-
-  //   const stuckVaults = await this.vaultRepository.find({
-  //     where: {
-  //       distribution_in_progress: true,
-  //       distribution_processed: false,
-  //       updated_at: LessThan(thirtyMinutesAgo.toISOString()), // Stuck for more than 30 minutes
-  //     },
-  //     select: ['id', 'updated_at'],
-  //   });
-
-  //   if (stuckVaults.length > 0) {
-  //     this.logger.warn(`Found ${stuckVaults.length} stuck vaults, resetting them`);
-
-  //     await this.vaultRepository.update(
-  //       { id: In(stuckVaults.map(v => v.id)) },
-  //       {
-  //         distribution_in_progress: false,
-  //         // Don't reset distribution_processed - if it was being processed, it might have partially completed
-  //       }
-  //     );
-
-  //     for (const vault of stuckVaults) {
-  //       this.logger.log(`Reset stuck vault ${vault.id} (stuck since ${vault.updated_at})`);
-  //     }
-  //   }
-  // }
-
   private async processLockedVaultsForDistribution(): Promise<void> {
     const readyVaults = await this.vaultRepository.find({
       where: {
@@ -314,7 +283,7 @@ export class AutomatedDistributionService {
     // Create a single extraction transaction record for the batch
     const extractionTx = await this.transactionRepository.save({
       vault_id: vaultId,
-      user_id: null, // Batch transaction - no single user
+      user_id: null,
       type: TransactionType.extractDispatch,
       status: TransactionStatus.created,
       metadata: {
@@ -326,17 +295,34 @@ export class AutomatedDistributionService {
     this.logger.debug(`Processing batch extraction for ${claims.length} claims, transaction ${extractionTx.id}`);
 
     try {
-      // Try batch processing first
       await this.processBatchExtraction(vault, claims, extractionTx, dispatchResult.parameterizedHash);
     } catch (error) {
       this.logger.warn(`Batch extraction failed for ${claims.length} claims: ${error.message}`);
-      this.logger.log(`Falling back to individual claim processing for vault ${vaultId}`);
 
       // Mark the batch transaction as failed
       await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
 
-      // Process each claim individually
-      await this.processAcquireClaimsIndividually(vault, claims, vaultId, dispatchResult.parameterizedHash);
+      // If batch size is 1, this is already the smallest unit - mark claim as failed
+      if (claims.length === 1) {
+        this.logger.error(`Single claim extraction failed for claim ${claims[0].id}`);
+        await this.claimsService.updateClaimStatus(claims[0].id, ClaimStatus.FAILED);
+        return;
+      }
+
+      // Split batch in half and retry with smaller batches
+      const midPoint = Math.ceil(claims.length / 2);
+      const firstHalf = claims.slice(0, midPoint);
+      const secondHalf = claims.slice(midPoint);
+
+      this.logger.log(`Splitting batch into two smaller batches: ${firstHalf.length} and ${secondHalf.length} claims`);
+
+      // Process each half separately
+      await this.processAcquirerBatch(vault, firstHalf, vaultId);
+
+      // Add delay between batches
+      await new Promise(resolve => setTimeout(resolve, 5000));
+
+      await this.processAcquirerBatch(vault, secondHalf, vaultId);
     }
   }
 
@@ -524,7 +510,10 @@ export class AutomatedDistributionService {
 
     if (confirmed) {
       // Update all claims and assets only after confirmation
-      await this.claimRepository.update({ id: In(claims.map(c => c.id)) }, { status: ClaimStatus.CLAIMED });
+      await this.claimsService.updateMultipleClaimsStatus(
+        claims.map(c => c.id),
+        ClaimStatus.CLAIMED
+      );
 
       for (const claim of claims) {
         await this.assetService.markAssetsAsDistributedByTransaction(claim.transaction.id);
@@ -537,189 +526,6 @@ export class AutomatedDistributionService {
       // Handle timeout/failure
       await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
       throw new Error(`Transaction ${response.txHash} failed to confirm within timeout period`);
-    }
-  }
-
-  private async processAcquireClaimsIndividually(
-    vault: Vault,
-    claims: Claim[],
-    vaultId: string,
-    dispatchParametizedHash: string
-  ): Promise<void> {
-    const DISPATCH_ADDRESS = this.getDispatchAddress(dispatchParametizedHash);
-
-    for (const claim of claims) {
-      try {
-        await new Promise(resolve => setTimeout(resolve, 2000));
-
-        // Create individual transaction record
-        const extractionTx = await this.transactionRepository.save({
-          vault_id: vaultId,
-          user_id: claim.user.id,
-          type: TransactionType.extractDispatch,
-          status: TransactionStatus.created,
-          metadata: {
-            claimId: claim.id,
-            individualProcessing: true,
-          },
-        });
-
-        const { user } = claim;
-        const originalTx = claim.transaction;
-
-        if (!originalTx || !originalTx.tx_hash) {
-          throw new Error(`Original transaction not found for claim ${claim.id}`);
-        }
-
-        const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
-          minAda: 4000000,
-        });
-        if (adminUtxos.length === 0) {
-          throw new Error('No UTXOs on admin wallet was found.');
-        }
-        const datumTag = generate_tag_from_txhash_index(originalTx.tx_hash, 0);
-
-        const adaPairMultiplier = Number(vault.ada_pair_multiplier);
-        const claimMultiplier = Number(claim.metadata.multiplier);
-        const originalAmount = Number(originalTx.amount);
-        const claimMintQuantity = claimMultiplier * (originalAmount * 1_000_000);
-        const vaultMintQuantity = adaPairMultiplier * originalAmount * 1_000_000;
-        const totalMintQuantity = (adaPairMultiplier + claimMultiplier) * (originalAmount * 1_000_000);
-        const dispatchLovelace = Number(originalTx.amount) * 1_000_000;
-
-        const input: ExtractInput = {
-          changeAddress: this.adminAddress,
-          message: `Extract ADA for claim ${claim.id}`,
-          utxos: adminUtxos,
-          scriptInteractions: [
-            {
-              purpose: 'spend',
-              hash: vault.script_hash,
-              outputRef: {
-                txHash: originalTx.tx_hash,
-                index: 0,
-              },
-              redeemer: {
-                type: 'json',
-                value: {
-                  __variant: 'ExtractAda',
-                  __data: {
-                    vault_token_output_index: 0, // Single output for individual processing
-                  },
-                },
-              },
-            },
-            {
-              purpose: 'mint',
-              hash: vault.script_hash,
-              redeemer: {
-                type: 'json',
-                value: 'MintVaultToken',
-              },
-            },
-          ],
-          mint: [
-            {
-              version: 'cip25',
-              assetName: { name: vault.asset_vault_name, format: 'hex' },
-              policyId: vault.script_hash,
-              type: 'plutus',
-              quantity: totalMintQuantity,
-              metadata: {},
-            },
-            {
-              version: 'cip25',
-              assetName: { name: 'receipt', format: 'utf8' },
-              policyId: vault.script_hash,
-              type: 'plutus',
-              quantity: -1, // Burn one receipt
-              metadata: {},
-            },
-          ],
-          outputs: [
-            {
-              address: user.address,
-              assets: [
-                {
-                  assetName: { name: vault.asset_vault_name, format: 'hex' },
-                  policyId: vault.script_hash,
-                  quantity: claimMintQuantity,
-                },
-              ],
-              datum: {
-                type: 'inline',
-                value: {
-                  datum_tag: datumTag,
-                  ada_paid: undefined,
-                },
-                shape: {
-                  validatorHash: this.unparametizedDispatchHash,
-                  purpose: 'spend',
-                },
-              },
-            },
-            {
-              address: this.adminAddress,
-              assets: [
-                {
-                  assetName: { name: vault.asset_vault_name, format: 'hex' },
-                  policyId: vault.script_hash,
-                  quantity: vaultMintQuantity,
-                },
-              ],
-            },
-            {
-              address: DISPATCH_ADDRESS,
-              lovelace: dispatchLovelace,
-            },
-          ],
-          requiredSigners: [this.adminHash],
-          referenceInputs: [
-            {
-              txHash: vault.last_update_tx_hash,
-              index: 0,
-            },
-          ],
-          validityInterval: {
-            start: true,
-            end: true,
-          },
-          network: 'preprod',
-        };
-
-        const buildResponse = await this.blockchainService.buildTransaction(input);
-        const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-        txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
-
-        const response = await this.blockchainService.submitTransaction({
-          transaction: txToSubmitOnChain.to_hex(),
-          signatures: [],
-        });
-
-        // Update transaction hash immediately
-        await this.transactionRepository.update(
-          { id: extractionTx.id },
-          { tx_hash: response.txHash, status: TransactionStatus.submitted }
-        );
-
-        this.logger.log(`Individual extraction transaction ${response.txHash} submitted, waiting for confirmation...`);
-        const confirmed = await this.blockchainService.waitForTransactionConfirmation(response.txHash);
-
-        if (confirmed) {
-          await this.claimsService.updateClaimStatus(claim.id, ClaimStatus.CLAIMED);
-          await this.assetService.markAssetsAsDistributedByTransaction(claim.transaction.id);
-
-          await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.confirmed });
-
-          this.logger.log(`Individual extraction transaction ${response.txHash} confirmed for claim ${claim.id}`);
-        } else {
-          this.logger.warn(`Individual extraction transaction ${response.txHash} timeout for claim ${claim.id}`);
-          await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
-        }
-      } catch (error) {
-        this.logger.error(`Failed to process individual extraction for claim ${claim.id}:`, error);
-        continue;
-      }
     }
   }
 
@@ -902,24 +708,16 @@ export class AutomatedDistributionService {
   private async processContributorPayments(vaultId: string): Promise<void> {
     this.logger.log(`Starting contributor payment processing for vault ${vaultId}`);
 
-    // Get vault and claims
-    const vault = await this.vaultRepository.findOne({
-      where: { id: vaultId },
-    });
-
-    if (!vault) {
-      this.logger.error(`Vault ${vaultId} not found`);
-      return;
-    }
-
     const readyClaims = await this.claimRepository.find({
       where: {
         vault: { id: vaultId },
         type: ClaimType.CONTRIBUTOR,
         status: ClaimStatus.PENDING,
       },
-      relations: ['user', 'transaction'],
+      relations: ['user', 'transaction', 'vault'],
     });
+
+    const vault = readyClaims[0].vault;
 
     if (readyClaims.length === 0) {
       this.logger.log(`No ready contributor claims for vault ${vaultId}`);
@@ -945,7 +743,6 @@ export class AutomatedDistributionService {
       batchNumber++;
 
       try {
-        // Get remaining claims
         const remainingClaims = readyClaims.slice(processedCount);
 
         // Try to determine optimal batch size by testing transaction builds
@@ -968,19 +765,30 @@ export class AutomatedDistributionService {
         // Delay between batches
         if (processedCount < readyClaims.length) {
           this.logger.debug('Waiting 20s before next batch');
-
           await new Promise(resolve => setTimeout(resolve, 20000));
         }
       } catch (error) {
         this.logger.error(`Failed to process payment batch ${batchNumber}:`, error);
 
-        // Fallback to individual processing for failed batch
-        const failedBatch = readyClaims.slice(processedCount, processedCount + 1);
-        this.logger.log(`Falling back to individual payment processing`);
+        const failedClaim = readyClaims[processedCount];
 
-        await this.processIndividualPayments(vault, failedBatch);
+        // Try processing single claim as a "batch of 1"
+        this.logger.log(`Retrying single claim ${failedClaim.id} as batch of 1`);
 
-        processedCount += 1; // Only increment by 1 since we processed individually
+        try {
+          await this.processBatchedPayments(vault, [failedClaim], dispatchUtxos);
+          processedCount += 1;
+        } catch (singleError) {
+          this.logger.error(`Failed to process single claim ${failedClaim.id}:`, singleError);
+
+          // Mark claim as failed
+          await this.claimsService.updateClaimStatus(failedClaim.id, ClaimStatus.FAILED);
+
+          processedCount += 1;
+        }
+
+        // Add delay before next attempt
+        await new Promise(resolve => setTimeout(resolve, 20000));
       }
     }
 
@@ -1154,15 +962,8 @@ export class AutomatedDistributionService {
         throw new Error(`Batch payment transaction ${response.txHash} failed to confirm`);
       }
 
-      // Update all claims in batch to CLAIMED
-      await this.claimRepository.update(
-        { id: In(claimIds) },
-        {
-          status: ClaimStatus.CLAIMED,
-        }
-      );
-
-      // Update transaction status
+      // Update all claims in batch to CLAIMED and Transaction to confirmed
+      await this.claimsService.updateMultipleClaimsStatus(claimIds, ClaimStatus.CLAIMED);
       await this.transactionRepository.update({ id: batchTransaction.id }, { status: TransactionStatus.confirmed });
 
       // Mark assets as distributed
@@ -1188,30 +989,6 @@ export class AutomatedDistributionService {
       );
 
       throw error;
-    }
-  }
-
-  /**
-   * Fallback: process payments individually
-   */
-  private async processIndividualPayments(vault: Vault, claims: Claim[]): Promise<void> {
-    for (const [index, claim] of claims.entries()) {
-      try {
-        this.logger.log(`Processing individual payment for claim ${claim.id} ` + `(${index + 1}/${claims.length})`);
-
-        // Use your existing single payment logic
-        await this.processSinglePayment(vault, claims);
-
-        // Delay between payments
-        if (index < claims.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 20000));
-        }
-      } catch (error) {
-        this.logger.error(`Failed to process individual payment for claim ${claim.id}:`, error);
-
-        // Mark claim as failed
-        await this.claimRepository.update({ id: claim.id }, { status: ClaimStatus.FAILED });
-      }
     }
   }
 
@@ -1467,352 +1244,6 @@ export class AutomatedDistributionService {
     };
 
     return input;
-  }
-
-  private async processSinglePayment(vault: Vault, claims: Claim[]): Promise<void> {
-    const vaultId = vault.id;
-
-    if (claims.length === 0) {
-      this.logger.log(`No contributor claims for payment in vault ${vaultId}. Marking vault as processed.`);
-      await this.finalizeVaultDistribution(vaultId, vault.script_hash, vault.asset_vault_name);
-    }
-
-    for (const claim of claims) {
-      try {
-        await new Promise(resolve => setTimeout(resolve, 20000)); // 20 seconds between transactions
-
-        // Get ADA amount from metadata
-        const adaAmount = claim.metadata?.adaAmount;
-        if (!adaAmount) {
-          throw new Error(`Claim ${claim.id} missing ADA amount`);
-        }
-
-        // Create payment transaction record
-        const transaction = await this.transactionRepository.save({
-          vault_id: vaultId,
-          user_id: claim.user_id,
-          type: TransactionType.claim,
-          status: TransactionStatus.pending,
-          metadata: {
-            claimId: claim.id,
-            vtAmount: claim.amount,
-            adaAmount,
-          },
-        });
-
-        const PARAMETERIZED_DISPATCH_HASH = vault.dispatch_parametized_hash;
-        const DISPATCH_ADDRESS = this.getDispatchAddress(PARAMETERIZED_DISPATCH_HASH);
-
-        // Get original contribution transaction
-        const originalTx = claim.transaction;
-        if (!originalTx || !originalTx.tx_hash) {
-          throw new Error(`Original transaction not found for claim ${claim.id}`);
-        }
-
-        const contributedAssets = await this.assetRepository.find({
-          where: { transaction: { id: originalTx.id } },
-        });
-
-        // Format assets for the transaction output
-        const contributionAssets: {
-          assetName: { name: string; format: string };
-          policyId: string;
-          quantity: number;
-        }[] = [];
-
-        // Process each asset
-        if (contributedAssets.length > 0) {
-          for (const asset of contributedAssets) {
-            contributionAssets.push({
-              assetName: {
-                name: asset.asset_id,
-                format: 'hex', // Always use 'hex' format
-              },
-              policyId: asset.policy_id,
-              quantity: Number(asset.quantity),
-            });
-          }
-        }
-
-        const contribTxUtxos = await this.blockfrost.txsUtxos(originalTx.tx_hash);
-        const contribOutput = contribTxUtxos.outputs[0];
-        if (!contribOutput) {
-          throw new Error('No contribution output found');
-        }
-
-        // Check if this output has been consumed
-        if (contribOutput.consumed_by_tx) {
-          this.logger.warn(
-            `Contribution UTXO ${originalTx.tx_hash}#0 already consumed by transaction ${contribOutput.consumed_by_tx}. Marking claim ${claim.id} as failed.`
-          );
-
-          await this.claimsService.updateClaimStatus(claim.id, ClaimStatus.FAILED, {
-            failureReason: 'UTXO_ALREADY_SPENT',
-            consumedByTx: contribOutput.consumed_by_tx,
-            failedAt: new Date().toISOString(),
-          });
-
-          await this.transactionRepository.update(
-            { id: transaction.id },
-            {
-              status: TransactionStatus.failed,
-              metadata: {
-                ...transaction.metadata,
-                failureReason: 'UTXO_ALREADY_SPENT',
-                consumedByTx: contribOutput.consumed_by_tx,
-              } as any,
-            }
-          );
-
-          this.logger.log(`Claim ${claim.id} marked as failed due to spent UTXO`);
-          continue; // Skip to next claim
-        }
-
-        // Find a suitable UTXO at dispatch address with enough ADA
-        const dispatchUtxos = await this.blockfrost.addressesUtxos(DISPATCH_ADDRESS);
-        if (!dispatchUtxos || dispatchUtxos.length === 0) {
-          throw new Error('No UTXOs found at dispatch address');
-        }
-
-        // Calculate total lovelace available in dispatch address
-        const minRequired = adaAmount + 1_000_000; // Payment + minimum ADA
-        const { selectedUtxos, totalAmount } = this.selectDispatchUtxos(dispatchUtxos, minRequired);
-
-        if (selectedUtxos.length === 0 || totalAmount < minRequired) {
-          throw new Error(
-            `Insufficient ADA at dispatch address. Need ${minRequired} lovelace, but only ${totalAmount} available across all UTXOs`
-          );
-        }
-
-        const actualRemainingDispatchLovelace = totalAmount - adaAmount;
-
-        // Validate the balance equation
-        const balanceValid = totalAmount >= actualRemainingDispatchLovelace + adaAmount;
-        if (!balanceValid) {
-          throw new Error(
-            `Balance equation invalid: ${totalAmount} < ${actualRemainingDispatchLovelace} + ${adaAmount}`
-          );
-        }
-
-        const userAddress = claim.user?.address;
-        const datumTag = generate_tag_from_txhash_index(originalTx.tx_hash, 0);
-
-        const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(vault.script_hash)))
-          .to_address()
-          .to_bech32();
-
-        const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
-          minAda: 4_000_000,
-        });
-        if (adminUtxos.length === 0) {
-          throw new Error('No UTXOs on admin wallet was found.');
-        }
-
-        const input: PayAdaContributionInput = {
-          changeAddress: this.adminAddress,
-          message: `Pay ADA to contributor for claim ${claim.id}`,
-          utxos: adminUtxos,
-          preloadedScripts: [vault.dispatch_preloaded_script.preloadedScript],
-          scriptInteractions: [
-            ...selectedUtxos.map(utxo => ({
-              purpose: 'spend',
-              hash: PARAMETERIZED_DISPATCH_HASH,
-              outputRef: {
-                txHash: utxo.tx_hash,
-                index: utxo.output_index,
-              },
-              redeemer: {
-                type: 'json',
-                value: null,
-              },
-            })),
-            {
-              purpose: 'withdraw',
-              hash: PARAMETERIZED_DISPATCH_HASH,
-              redeemer: {
-                type: 'json',
-                value: null,
-              },
-            },
-            {
-              purpose: 'mint',
-              hash: vault.script_hash,
-              redeemer: {
-                type: 'json',
-                value: 'MintVaultToken',
-              },
-            },
-            {
-              purpose: 'spend',
-              hash: vault.script_hash,
-              outputRef: {
-                txHash: originalTx.tx_hash,
-                index: 0,
-              },
-              redeemer: {
-                type: 'json',
-                value: {
-                  __variant: 'CollectVaultToken',
-                  __data: {
-                    vault_token_output_index: 0,
-                    change_output_index: 1,
-                  },
-                },
-              },
-            },
-          ],
-          mint: [
-            {
-              version: 'cip25',
-              assetName: { name: vault.asset_vault_name, format: 'hex' },
-              policyId: vault.script_hash,
-              type: 'plutus',
-              quantity: Number(claim.amount),
-              metadata: {},
-            },
-            {
-              version: 'cip25',
-              assetName: { name: 'receipt', format: 'utf8' },
-              policyId: vault.script_hash,
-              type: 'plutus',
-              quantity: -1,
-              metadata: {},
-            },
-          ],
-          outputs: [
-            {
-              address: userAddress,
-              assets: [
-                {
-                  assetName: { name: vault.asset_vault_name, format: 'hex' },
-                  policyId: vault.script_hash,
-                  quantity: Number(claim.amount),
-                },
-              ],
-              lovelace: adaAmount,
-              datum: {
-                type: 'inline',
-                value: {
-                  datum_tag: datumTag,
-                  ada_paid: adaAmount,
-                },
-                shape: {
-                  validatorHash: this.unparametizedDispatchHash,
-                  purpose: 'spend',
-                },
-              },
-            },
-            {
-              address: SC_ADDRESS,
-              lovelace: Number(contribOutput.amount.find((u: any) => u.unit === 'lovelace')?.quantity),
-              assets: contributionAssets, // Here should be assets that user contributed to Vault
-              datum: {
-                type: 'inline',
-                value: {
-                  policy_id: vault.script_hash,
-                  asset_name: vault.asset_vault_name,
-                  owner: userAddress,
-                  datum_tag: datumTag,
-                },
-                shape: {
-                  validatorHash: vault.script_hash,
-                  purpose: 'spend',
-                },
-              },
-            },
-            {
-              address: DISPATCH_ADDRESS,
-              lovelace: actualRemainingDispatchLovelace,
-            },
-          ],
-          requiredSigners: [this.adminHash],
-          referenceInputs: [
-            {
-              txHash: vault.last_update_tx_hash,
-              index: 0,
-            },
-          ],
-          validityInterval: {
-            start: true,
-            end: true,
-          },
-          network: 'preprod',
-        };
-
-        try {
-          const buildResponse = await this.blockchainService.buildTransaction(input);
-
-          const actualTxSize = this.blockchainService.getTransactionSize(buildResponse.complete);
-          this.logger.debug(`Transaction size: ${actualTxSize} bytes (${(actualTxSize / 1024).toFixed(2)} KB)`);
-
-          const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-          txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
-
-          const response = await this.blockchainService.submitTransaction({
-            transaction: txToSubmitOnChain.to_hex(),
-            signatures: [],
-          });
-
-          await this.transactionRepository.update(
-            { id: transaction.id },
-            { tx_hash: response.txHash, status: TransactionStatus.submitted }
-          );
-
-          this.logger.log(
-            `Payment transaction ${response.txHash} submitted for claim ${claim.id}, waiting for confirmation...`
-          );
-
-          // Wait for confirmation
-          const confirmed = await this.blockchainService.waitForTransactionConfirmation(response.txHash);
-
-          if (confirmed) {
-            await this.transactionRepository.update({ id: transaction.id }, { status: TransactionStatus.confirmed });
-            await this.claimsService.updateClaimStatus(claim.id, ClaimStatus.CLAIMED);
-
-            this.logger.log(`Payment transaction ${response.txHash} confirmed for claim ${claim.id}`);
-          } else {
-            this.logger.warn(`Payment transaction ${response.txHash} timeout for claim ${claim.id}`);
-            await this.transactionRepository.update({ id: transaction.id }, { status: TransactionStatus.failed });
-            await this.claimRepository.update({ id: claim.id }, { status: ClaimStatus.FAILED });
-          }
-        } catch (error) {
-          const trimmedInput = { ...input };
-          delete trimmedInput.preloadedScripts;
-          this.logger.warn(JSON.stringify(trimmedInput));
-          this.logger.error(`Failed to submit payment transaction:`, error);
-
-          await this.transactionRepository.update({ id: transaction.id }, { status: TransactionStatus.failed });
-          await this.claimRepository.update({ id: claim.id }, { status: ClaimStatus.FAILED });
-        }
-
-        this.logger.log(`Payment transaction processed for claim ${claim.id}`);
-      } catch (error) {
-        this.logger.error(`Failed to process payment for claim ${claim.id}:`, error);
-      }
-    }
-
-    // Mark vault as processed after all payments are queued
-    const allFailedClaims = await this.claimRepository.count({
-      where: {
-        vault: { id: vaultId },
-        status: ClaimStatus.FAILED,
-      },
-    });
-
-    if (allFailedClaims > 0) {
-      this.logger.warn(`Vault ${vaultId} has ${allFailedClaims} failed claims total. NOT marking as fully processed.`);
-
-      // Only mark extraction as done, but not fully processed
-      await this.vaultRepository.update(
-        { id: vaultId },
-        {
-          distribution_in_progress: false,
-          // Don't set distribution_processed to true if there are failed claims
-        }
-      );
-    } else {
-      await this.finalizeVaultDistribution(vaultId, vault.script_hash, vault.asset_vault_name);
-    }
   }
 
   // Helper methods
