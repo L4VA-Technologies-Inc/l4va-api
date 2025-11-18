@@ -427,7 +427,24 @@ export class LifecycleService {
           return;
         }
       }
-      await this.executeContributionToAcquireTransition(vault);
+
+      // Check if vault should skip acquire phase (Acquirers % = 0%)
+      if (vault.tokens_for_acquires === 0) {
+        this.logger.log(
+          `Vault ${vault.id} has 0% tokens for acquirers. ` +
+            `Skipping acquire phase and transitioning directly to governance.`
+        );
+
+        // Calculate distributions without acquire phase
+        // FDV = TVL of contributed assets
+        // All VT goes to contributors (minus LP if ADA was contributed)
+
+        // Skip to governance immediately after contribution window ends
+        await this.executeContributionDirectToGovernance(vault);
+        return;
+      } else {
+        await this.executeContributionToAcquireTransition(vault);
+      }
     }
   }
 
@@ -673,6 +690,7 @@ export class LifecycleService {
           this.distributionService.calculateLpTokens({
             vtSupply,
             totalAcquiredAda,
+            totalContributedValueAda,
             assetsOfferedPercent: ASSETS_OFFERED_PERCENT,
             lpPercent: LP_PERCENT,
           });
@@ -938,6 +956,325 @@ export class LifecycleService {
       }
     } catch (error) {
       this.logger.error(`Error executing acquire to governance transition for vault ${vault.id}`, error);
+    }
+  }
+
+  /**
+   * Handle direct transition from Contribution to Governance (skip Acquire phase)
+   * Used when Acquirers % = 0%
+   *
+   * Flow:
+   * - No acquire phase occurs
+   * - FDV = TVL of contributed assets
+   * - All VT tokens (minus LP) go to contributors
+   * - No ADA distribution (no acquirers to distribute from)
+   * - Contributors receive VT based on their proportional contribution value
+   */
+  private async executeContributionDirectToGovernance(vault: Vault): Promise<void> {
+    try {
+      this.logger.log(
+        `Starting direct contribution to governance transition for vault ${vault.id} ` + `(0% for acquirers)`
+      );
+
+      await this.contributionService.syncContributionTransactions(vault.id);
+
+      // Calculate total value of contributed assets (this becomes the FDV)
+      const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
+      const totalContributedValueAda = assetsValue.totalValueAda;
+
+      if (totalContributedValueAda === 0) {
+        this.logger.warn(`Vault ${vault.id} has no contributed value. Marking as failed.`);
+
+        const response = await this.vaultManagingService.updateVaultMetadataTx({
+          vault,
+          vaultStatus: SmartContractVaultStatus.CANCELLED,
+        });
+
+        await this.claimsService.createCancellationClaims(vault, 'no_contributions');
+
+        await this.executePhaseTransition({
+          vaultId: vault.id,
+          newStatus: VaultStatus.failed,
+          newScStatus: SmartContractVaultStatus.CANCELLED,
+          txHash: response.txHash,
+        });
+
+        return;
+      }
+
+      const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
+      const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
+
+      // Calculate LP tokens with 0% for acquirers
+      const { lpAdaAmount, lpVtAmount, vtPrice, fdv, adjustedVtLpAmount, adaPairMultiplier } =
+        this.distributionService.calculateLpTokens({
+          vtSupply,
+          totalAcquiredAda: 0, // No acquirers
+          assetsOfferedPercent: 0, // 0% for acquirers
+          lpPercent: LP_PERCENT,
+          totalContributedValueAda: totalContributedValueAda,
+        });
+
+      this.logger.log(
+        `Vault ${vault.id} LP calculation: ` +
+          `VT Price: ${vtPrice} ADA, FDV: ${fdv} ADA (= TVL), ` +
+          `LP VT: ${lpVtAmount}, LP ADA: ${lpAdaAmount}`
+      );
+
+      // Create LP claim if applicable
+      if (adjustedVtLpAmount > 0 && lpAdaAmount > 0) {
+        const lpClaimExists = await this.claimRepository.exists({
+          where: { vault: { id: vault.id }, type: ClaimType.LP },
+        });
+
+        if (!lpClaimExists) {
+          await this.claimRepository.save({
+            vault: { id: vault.id },
+            type: ClaimType.LP,
+            amount: adjustedVtLpAmount,
+            status: ClaimStatus.AVAILABLE,
+            metadata: { adaAmount: Math.floor(lpAdaAmount * 1_000_000) },
+          });
+
+          this.logger.log(`Created LP claim: ${adjustedVtLpAmount} VT tokens, ${lpAdaAmount} ADA`);
+        }
+      } else {
+        this.logger.log(`No LP claim created (LP % = ${vault.liquidity_pool_contribution}%)`);
+      }
+
+      // Get contribution transactions
+      const contributionTransactions = await this.transactionsRepository.find({
+        where: {
+          vault_id: vault.id,
+          type: TransactionType.contribute,
+          status: TransactionStatus.confirmed,
+        },
+        relations: ['user'],
+        order: { created_at: 'ASC' },
+      });
+
+      if (contributionTransactions.length === 0) {
+        this.logger.warn(`Vault ${vault.id} has no confirmed contribution transactions. Marking as failed.`);
+
+        const response = await this.vaultManagingService.updateVaultMetadataTx({
+          vault,
+          vaultStatus: SmartContractVaultStatus.CANCELLED,
+        });
+
+        await this.executePhaseTransition({
+          vaultId: vault.id,
+          newStatus: VaultStatus.failed,
+          newScStatus: SmartContractVaultStatus.CANCELLED,
+          txHash: response.txHash,
+        });
+
+        return;
+      }
+
+      // Calculate value of each contribution transaction
+      const contributionValueByTransaction: Record<string, number> = {};
+      const userContributedValueMap: Record<string, number> = {};
+
+      for (const tx of contributionTransactions) {
+        if (!tx.user_id) continue;
+
+        // Get assets associated with this transaction
+        const txAssets = await this.assetsRepository.find({
+          where: {
+            transaction: { id: tx.id },
+            origin_type: AssetOriginType.CONTRIBUTED,
+            deleted: false,
+          },
+        });
+
+        let transactionValueAda = 0;
+
+        // Calculate value of assets in this transaction
+        for (const asset of txAssets) {
+          try {
+            const { priceAda } = await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_id);
+            const quantity = asset.quantity || 1;
+            transactionValueAda += priceAda * quantity;
+          } catch (error) {
+            this.logger.error(`Error getting price for asset ${asset.policy_id}.${asset.asset_id}:`, error.message);
+          }
+        }
+
+        // Store value of this transaction
+        contributionValueByTransaction[tx.id] = transactionValueAda;
+
+        // Track total per user
+        if (!userContributedValueMap[tx.user.id]) {
+          userContributedValueMap[tx.user.id] = 0;
+        }
+        userContributedValueMap[tx.user.id] += transactionValueAda;
+      }
+
+      // Create contributor claims (VT tokens only, no ADA)
+      const contributorClaims: Partial<Claim>[] = [];
+
+      for (const tx of contributionTransactions) {
+        if (!tx.user || !tx.user.id) continue;
+
+        const userId = tx.user.id;
+        const txValueAda = contributionValueByTransaction[tx.id] || 0;
+
+        // Skip transactions with zero value
+        if (txValueAda <= 0) {
+          this.logger.warn(`Skipping contribution transaction ${tx.id} with zero value`);
+          continue;
+        }
+
+        try {
+          // Check if claim already exists
+          const claimExists = await this.claimRepository.exists({
+            where: {
+              transaction: { id: tx.id },
+              type: ClaimType.CONTRIBUTOR,
+            },
+          });
+
+          if (claimExists) {
+            this.logger.log(`Claim already exists for contributor transaction ${tx.id}`);
+            continue;
+          }
+
+          const userTotalValue = userContributedValueMap[userId] || 0;
+
+          // Calculate contributor tokens (no ADA, only VT)
+          const contributorResult = this.distributionService.calculateContributorTokens({
+            txContributedValue: txValueAda,
+            userTotalValue,
+            totalAcquiredAda: 0, // No acquirers
+            totalTvl: totalContributedValueAda,
+            lpAdaAmount,
+            lpVtAmount,
+            vtSupply,
+            ASSETS_OFFERED_PERCENT: 0, // 0% for acquirers = 100% for contributors
+          });
+
+          // Create claim with VT tokens only (no ADA distribution)
+          const claim = this.claimRepository.create({
+            user: { id: userId },
+            vault: { id: vault.id },
+            type: ClaimType.CONTRIBUTOR,
+            amount: contributorResult.vtAmount,
+            status: ClaimStatus.PENDING,
+            transaction: { id: tx.id },
+            metadata: {
+              adaAmount: 0, // No ADA distribution (no acquirers)
+              vtPrice,
+              contributedValueAda: txValueAda,
+              userTotalValueAda: userTotalValue,
+              proportionOfUserTotal: contributorResult.proportionOfUserTotal,
+              userTotalVtTokens: contributorResult.userTotalVtTokens,
+              noAcquirers: true, // Flag for clarity
+            },
+          });
+
+          contributorClaims.push(claim);
+
+          this.logger.log(
+            `Created contributor claim for user ${userId}: ` +
+              `${contributorResult.vtAmount} VT tokens (no ADA) for transaction ${tx.id}`
+          );
+        } catch (error) {
+          this.logger.error(`Failed to create contributor claim for user ${userId} transaction ${tx.id}:`, error);
+        }
+      }
+
+      // Save all contributor claims
+      if (contributorClaims.length > 0) {
+        try {
+          await this.claimRepository.save(contributorClaims);
+          this.logger.log(`Saved ${contributorClaims.length} contributor claims for vault ${vault.id}`);
+        } catch (error) {
+          this.logger.error(`Failed to save batch of contributor claims for vault ${vault.id}:`, error);
+          throw error;
+        }
+      } else {
+        this.logger.warn(
+          `No contributor claims created for vault ${vault.id}. ` +
+            `This may indicate an issue with contribution value calculations.`
+        );
+      }
+
+      // Get final claims for multiplier calculation
+      const finalContributorClaims = await this.claimRepository.find({
+        where: {
+          vault: { id: vault.id },
+          type: ClaimType.CONTRIBUTOR,
+        },
+        relations: ['transaction', 'transaction.assets'],
+        order: { created_at: 'ASC' },
+      });
+
+      // Calculate acquire multipliers (only contributors, no acquirers)
+      const { acquireMultiplier } = this.distributionService.calculateAcquireMultipliers({
+        contributorsClaims: finalContributorClaims,
+        acquirerClaims: [], // No acquirers
+      });
+
+      this.logger.log(
+        `Calculated acquire multipliers for ${finalContributorClaims.length} contributors ` + `(no acquirers)`
+      );
+
+      // Update vault metadata and transition to governance
+      const response = await this.vaultManagingService.updateVaultMetadataTx({
+        vault,
+        acquireMultiplier,
+        adaDistribution: [], // No ADA distribution (no acquirers)
+        adaPairMultiplier,
+        vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
+      });
+
+      if (!response.txHash) {
+        this.logger.error(`Failed to get txHash for vault ${vault.id} metadata update transaction`);
+        throw new Error('Failed to update vault metadata');
+      }
+
+      // Transition to governance phase
+      await this.executePhaseTransition({
+        vaultId: vault.id,
+        newStatus: VaultStatus.locked,
+        phaseStartField: 'governance_phase_start',
+        newScStatus: SmartContractVaultStatus.SUCCESSFUL,
+        txHash: response.txHash,
+        acquire_multiplier: acquireMultiplier,
+        ada_pair_multiplier: adaPairMultiplier,
+        vtPrice,
+        fdv,
+        fdvTvl: 1, // FDV = TVL when no acquirers
+      });
+
+      this.logger.log(
+        `Successfully transitioned vault ${vault.id} directly to governance ` +
+          `(0% acquirers). FDV: ${fdv} ADA, VT Price: ${vtPrice} ADA`
+      );
+
+      // Emit events
+      try {
+        this.eventEmitter.emit('distribution.claim_available', {
+          vaultId: vault.id,
+          vaultName: vault.name,
+          tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+        });
+
+        this.eventEmitter.emit('vault.success', {
+          vaultId: vault.id,
+          vaultName: vault.name,
+          tokenHoldersIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+          adaSpent: 0, // No acquirers
+          tokenPercentage: 0, // 0% for acquirers
+          tokenTicker: vault.vault_token_ticker,
+          impliedVaultValue: totalContributedValueAda, // FDV = TVL
+        });
+      } catch (error) {
+        this.logger.error(`Error emitting events for vault ${vault.id}:`, error);
+      }
+    } catch (error) {
+      this.logger.error(`Error in direct contribution to governance for vault ${vault.id}:`, error);
+      throw error;
     }
   }
 }

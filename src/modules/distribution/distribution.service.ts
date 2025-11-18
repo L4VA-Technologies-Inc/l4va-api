@@ -68,13 +68,28 @@ export class DistributionService {
     // Calculate proportion of this transaction within user's total contribution
     const proportionOfUserTotal = userTotalValue > 0 ? txContributedValue / userTotalValue : 0;
 
-    // Calculate total VT tokens for the user
-    const contributorShare = userTotalValue / totalTvl;
-    const userTotalVtTokens = this.round15((vtSupply - lpVtAmount) * (1 - ASSETS_OFFERED_PERCENT) * contributorShare);
+    // Calculate contributor share of total value
+    const contributorShare = totalTvl > 0 ? userTotalValue / totalTvl : 0;
 
-    // Calculate VT tokens for this specific transaction
-    const vtAmount = userTotalVtTokens * proportionOfUserTotal;
+    // Edge Case: If Acquirers = 100% (Contributors = 0%)
+    // Contributors get NO VT, but receive ALL ADA (minus LP)
+    let userTotalVtTokens: number;
+    let vtAmount: number;
 
+    if (ASSETS_OFFERED_PERCENT >= 1.0) {
+      // All tokens go to acquirers, contributors get 0 VT
+      userTotalVtTokens = 0;
+      vtAmount = 0;
+
+      this.logger.log(`Contributors get 0 VT (Acquirers = 100%). ` + `They will receive ADA only.`);
+    } else {
+      // Normal calculation: Contributors get VT based on their share
+      userTotalVtTokens = this.round15((vtSupply - lpVtAmount) * (1 - ASSETS_OFFERED_PERCENT) * contributorShare);
+      vtAmount = userTotalVtTokens * proportionOfUserTotal;
+    }
+
+    // Calculate ADA distribution
+    // Contributors receive ADA from acquirers (minus LP allocation)
     const adaForContributors = totalAcquiredAda - lpAdaAmount;
     const userAdaShare = contributorShare * adaForContributors;
     const adaAmount = userAdaShare * proportionOfUserTotal;
@@ -89,12 +104,24 @@ export class DistributionService {
 
   /**
    * Calculate liquidity pool tokens and values
+   *
+   * Edge cases handled:
+   * - Acquirers % = 0%: Use TVL as FDV, no acquire phase
+   * - LP % = 0%: No liquidity pool, calculate token price from FDV/Supply
+   * - Both can be 0% simultaneously
    */
-  calculateLpTokens(params: {
+  calculateLpTokens({
+    totalAcquiredAda,
+    assetsOfferedPercent,
+    lpPercent,
+    vtSupply,
+    totalContributedValueAda,
+  }: {
     totalAcquiredAda: number;
     vtSupply: number;
     assetsOfferedPercent: number;
     lpPercent: number;
+    totalContributedValueAda: number; // TVL of contributed assets (for edge case handling)
   }): {
     lpAdaAmount: number;
     lpVtAmount: number;
@@ -103,19 +130,74 @@ export class DistributionService {
     adjustedVtLpAmount: number;
     adaPairMultiplier: number;
   } {
-    const { totalAcquiredAda, assetsOfferedPercent, lpPercent, vtSupply } = params;
+    let fdv: number;
 
-    const fdv = this.round2(totalAcquiredAda / assetsOfferedPercent);
+    // Edge Case 1: No acquirers (Acquirers % = 0%)
+    if (assetsOfferedPercent === 0) {
+      // Use TVL of contributed assets as FDV
+      fdv = totalContributedValueAda;
 
-    // Divide equally between ADA and VT
+      this.logger.log(
+        `No acquirers scenario: Using TVL (${totalContributedValueAda} ADA) as FDV. ` + `No acquire phase will occur.`
+      );
+
+      // If also no LP, return zero values with calculated token price
+      if (lpPercent === 0 || fdv === 0) {
+        const vtPrice = fdv > 0 ? this.round15(fdv / vtSupply) : 0;
+
+        this.logger.log(`No LP scenario: VT price = ${vtPrice} ADA (FDV ${fdv} / Supply ${vtSupply})`);
+
+        return {
+          lpAdaAmount: 0,
+          lpVtAmount: 0,
+          vtPrice,
+          fdv,
+          adjustedVtLpAmount: 0,
+          adaPairMultiplier: 0,
+        };
+      }
+
+      // If LP exists with 0% acquirers, calculate LP from TVL
+      // LP can only exist if ADA was contributed as an asset
+    } else {
+      // Normal FDV calculation: Total ADA from acquirers / % tokens offered
+      fdv = this.round2(totalAcquiredAda / assetsOfferedPercent);
+    }
+
+    // Edge Case 2: No liquidity pool (LP % = 0%)
+    if (lpPercent === 0) {
+      const vtPrice = this.round15(fdv / vtSupply);
+
+      this.logger.log(
+        `No LP scenario: VT price calculated from FDV: ${vtPrice} ADA ` + `(FDV ${fdv} / Supply ${vtSupply})`
+      );
+
+      return {
+        lpAdaAmount: 0,
+        lpVtAmount: 0,
+        vtPrice,
+        fdv,
+        adjustedVtLpAmount: 0,
+        adaPairMultiplier: 0,
+      };
+    }
+
+    // Normal LP calculation
+    // LP % is a percentage of the FDV VALUE, split equally between ADA and VT
     const lpAdaAmount = Math.round(((lpPercent * fdv) / 2) * 1e6) / 1e6;
     const lpVtValue = this.round15((lpPercent * vtSupply) / 2);
 
-    // LP ADA / LP VT
-    const vtPrice = this.round15(lpAdaAmount / lpVtValue);
+    // Calculate token price: LP ADA / LP VT
+    const vtPrice = lpVtValue > 0 ? this.round15(lpAdaAmount / lpVtValue) : 0;
 
-    const adaPairMultiplier = Math.floor(lpVtValue / (totalAcquiredAda * 1_000_000));
+    // Calculate multiplier for on-chain representation
+    const adaPairMultiplier = totalAcquiredAda > 0 ? Math.floor(lpVtValue / (totalAcquiredAda * 1_000_000)) : 0;
     const adjustedVtLpAmount = adaPairMultiplier * totalAcquiredAda * 1_000_000;
+
+    this.logger.log(
+      `LP calculation: ${lpAdaAmount} ADA + ${lpVtValue} VT @ ${vtPrice} ADA/VT ` +
+        `(FDV: ${fdv}, LP%: ${lpPercent * 100}%)`
+    );
 
     return {
       lpAdaAmount,
@@ -127,11 +209,16 @@ export class DistributionService {
     };
   }
 
-  calculateAcquireMultipliers(params: { contributorsClaims: Claim[]; acquirerClaims: Claim[] }): {
+  calculateAcquireMultipliers({
+    contributorsClaims,
+    acquirerClaims,
+  }: {
+    contributorsClaims: Claim[];
+    acquirerClaims?: Claim[];
+  }): {
     acquireMultiplier: [string, string, number][];
     adaDistribution: [string, string, number][];
   } {
-    const { contributorsClaims, acquirerClaims } = params;
     const acquireMultiplier = [];
     const adaDistribution = [];
 
@@ -154,10 +241,15 @@ export class DistributionService {
       });
     }
 
-    for (const claim of acquirerClaims) {
-      const multiplier = claim.metadata?.multiplier || Math.floor(claim.amount / claim.transaction.amount / 1_000_000);
-      acquireMultiplier.push(['', '', multiplier]);
-    }
+    // for (const claim of acquirerClaims) {
+    //   const multiplier = claim.metadata?.multiplier || Math.floor(claim.amount / claim.transaction.amount / 1_000_000);
+    //   acquireMultiplier.push(['', '', multiplier]);
+    // }
+
+    const multiplier =
+      acquirerClaims[0].metadata?.multiplier ||
+      Math.floor(acquirerClaims[0].amount / acquirerClaims[0].transaction.amount / 1_000_000);
+    acquireMultiplier.push(['', '', multiplier]);
 
     return {
       acquireMultiplier,
