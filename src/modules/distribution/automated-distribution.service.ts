@@ -64,17 +64,12 @@ interface PayAdaContributionInput {
   }[];
   requiredSigners: string[];
   referenceInputs: { txHash: string; index: number }[];
-  deposits?: {
-    hash: string;
-    type: string;
-    deposit: string;
-  }[];
   validityInterval: {
     start: boolean;
     end: boolean;
   };
   network: string;
-  preloadedScripts?: any;
+  preloadedScripts: object[];
 }
 
 interface AddressesUtxo {
@@ -147,7 +142,7 @@ export class AutomatedDistributionService {
     });
   }
 
-  @Cron('0 */15 * * * *')
+  @Cron('0 */2 * * * *')
   async processVaultDistributions(): Promise<void> {
     if (this.isRunning) {
       this.logger.warn('Distribution process already running, skipping this execution');
@@ -671,11 +666,11 @@ export class AutomatedDistributionService {
 
       // Only create LP if LP percentage > 0
       if (lpPercent > 0) {
-        const { txHash } = await this.vyfiService.createLiquidityPool(vaultId);
-
-        if (txHash) {
-          this.logger.log(`Liquidity pool created for vault ${vaultId} with tx: ${txHash}`);
-        }
+        const { withdrawalTxHash, lpCreationTxHash } =
+          await this.vyfiService.createLiquidityPoolWithWithdrawal(vaultId);
+        this.logger.log(
+          `LP created for vault ${vaultId}. ` + `Withdrawal: ${withdrawalTxHash}, LP Creation: ${lpCreationTxHash}`
+        );
       } else {
         this.logger.log(`Vault ${vaultId} has 0% LP contribution. Skipping liquidity pool creation.`);
       }
@@ -708,6 +703,23 @@ export class AutomatedDistributionService {
   private async processContributorPayments(vaultId: string): Promise<void> {
     this.logger.log(`Starting contributor payment processing for vault ${vaultId}`);
 
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: [
+        'id',
+        'script_hash',
+        'asset_vault_name',
+        'dispatch_parametized_hash',
+        'dispatch_preloaded_script',
+        'last_update_tx_hash',
+      ],
+    });
+
+    if (!vault) {
+      this.logger.error(`Vault ${vaultId} not found`);
+      return;
+    }
+
     const readyClaims = await this.claimRepository.find({
       where: {
         vault: { id: vaultId },
@@ -716,8 +728,6 @@ export class AutomatedDistributionService {
       },
       relations: ['user', 'transaction', 'vault'],
     });
-
-    const vault = readyClaims[0].vault;
 
     if (readyClaims.length === 0) {
       this.logger.log(`No ready contributor claims for vault ${vaultId}`);
@@ -845,7 +855,7 @@ export class AutomatedDistributionService {
         this.logger.debug(`Testing batch size ${testBatchSize}...`);
 
         // Build test transaction
-        const input = this.buildBatchedPaymentInput(vault, testClaims, adminUtxos, dispatchUtxos);
+        const input = await this.buildBatchedPaymentInput(vault, testClaims, adminUtxos, dispatchUtxos);
 
         const buildResponse = await this.blockchainService.buildTransaction(input);
         const txSize = this.blockchainService.getTransactionSize(buildResponse.complete);
