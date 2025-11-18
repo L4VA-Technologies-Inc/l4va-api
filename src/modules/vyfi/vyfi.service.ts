@@ -8,9 +8,10 @@ import {
   FixedTransaction,
   PrivateKey,
   ScriptHash,
+  TransactionUnspentOutput,
 } from '@emurgo/cardano-serialization-lib-nodejs';
 import { HttpService } from '@nestjs/axios';
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { firstValueFrom } from 'rxjs';
@@ -35,7 +36,6 @@ const VYFI_CONSTANTS = {
 
 @Injectable()
 export class VyfiService {
-  private readonly logger = new Logger(VyfiService.name);
   private readonly vyfiApiUrl = 'https://api.vyfi.io';
   private readonly adminSKey: string;
   private readonly adminAddress: string;
@@ -112,59 +112,30 @@ export class VyfiService {
   }
 
   /**
-   * Create VyFi Liquidity Pool with Dispatch Withdrawal
-   *
-   * This is the enhanced version that combines:
-   * 1. Withdrawal of ADA from vault dispatch script
-   * 2. Collection of vault tokens from admin address
-   * 3. Creation of VyFi liquidity pool in single transaction
-   *
-   * Transaction Flow:
-   * - Inputs: Admin UTXOs (vault tokens + fees) + Dispatch UTXOs (ADA)
-   * - Outputs: VyFi pool (tokens + ADA) + Admin change
-   *
-   *
-   * @param vaultId - ID of the vault to process
-   * @returns Transaction hash of submitted LP creation
-   * @throws NotFoundException if claim not found
-   * @throws Error if pool already exists or insufficient funds
-   *
+   * Step 1: Withdraw ADA from dispatch script to admin address
    */
-  async createLiquidityPool(vaultId: string): Promise<{
+  async withdrawAdaFromDispatch(vaultId: string): Promise<{
     txHash: string;
+    withdrawnAmount: number;
   }> {
     const claim = await this.claimRepository.findOne({
       where: { vault: { id: vaultId }, type: ClaimType.LP, status: ClaimStatus.AVAILABLE },
       relations: ['vault'],
     });
 
-    if (!claim) {
-      throw new NotFoundException('Liquidity pool claim not found');
-    }
-
-    // First check if pool exists
-    const poolCheck = await this.checkPool({
-      networkId: 0,
-      tokenAUnit: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
-      tokenBUnit: 'lovelace',
-    });
-
-    if (poolCheck.exists) {
-      throw new Error('Pool already exists');
-    }
-
-    if (!claim.vault?.dispatch_parametized_hash) {
-      throw new Error('Vault does not have dispatch script configured');
+    if (!claim || !claim.vault?.dispatch_parametized_hash) {
+      throw new NotFoundException('Vault or dispatch script not found');
     }
 
     const DISPATCH_ADDRESS = this.getDispatchAddress(claim.vault.dispatch_parametized_hash);
-    // Get dispatch UTXOs to withdraw ADA from
+
+    // Get dispatch UTXOs
     const dispatchUtxos = await this.blockfrost.addressesUtxos(DISPATCH_ADDRESS);
     if (!dispatchUtxos || dispatchUtxos.length === 0) {
       throw new Error('No UTXOs found at dispatch address');
     }
 
-    // Calculate total available ADA from dispatch script
+    // Calculate total ADA to withdraw
     let totalDispatchAda = 0;
     const validDispatchUtxos: any[] = [];
 
@@ -176,46 +147,27 @@ export class VyfiService {
       }
     }
 
-    // Calculate required ADA for LP creation
-    const requiredLpAda = Number(claim.metadata?.adaAmount || 0);
-
-    if (totalDispatchAda < requiredLpAda) {
-      throw new Error(
-        `Insufficient ADA in dispatch script. Need ${requiredLpAda} lovelace, but only ${totalDispatchAda} available`
-      );
+    if (totalDispatchAda === 0) {
+      throw new Error('No ADA available in dispatch script');
     }
 
-    // Generate metadata
-    const metadataText = this.formatMetadataText(
-      {
-        policyId: claim.vault.script_hash,
-        assetName: claim.vault.asset_vault_name,
-      },
-      claim.vault.vault_token_ticker
-    );
-
-    // Get admin UTXOs (for transaction fees and vault tokens)
-    const { utxos: adminUtxos, requiredInputs } = await getUtxosExtract(
-      Address.from_bech32(this.adminAddress),
-      this.blockfrost,
-      {
-        targetTokenAmount: +claim.amount,
-        targetToken: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
-      }
-    );
+    // Get admin UTXOs for fees
+    const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
+      minAda: 2_000_000, // Just need ADA for fees
+    });
 
     if (adminUtxos.length === 0) {
-      throw new Error('No admin UTXOs found.');
+      throw new Error('No admin UTXOs found for fees');
     }
 
-    // Build combined transaction
+    // Build withdrawal transaction
     const input = {
       changeAddress: this.adminAddress,
-      message: metadataText,
+      message: 'Withdraw ADA from dispatch for LP creation',
       utxos: adminUtxos,
       preloadedScripts: [claim.vault.dispatch_preloaded_script.preloadedScript],
       scriptInteractions: [
-        // Withdraw from all dispatch UTXOs
+        // Spend all dispatch UTXOs
         ...validDispatchUtxos.map(utxo => ({
           purpose: 'spend',
           hash: claim.vault.dispatch_parametized_hash,
@@ -228,7 +180,7 @@ export class VyfiService {
             value: null,
           },
         })),
-        // Withdraw rewards from dispatch script
+        // Withdraw rewards
         {
           purpose: 'withdraw',
           hash: claim.vault.dispatch_parametized_hash,
@@ -239,33 +191,13 @@ export class VyfiService {
         },
       ],
       outputs: [
-        // Send tokens + ADA to VyFi pool FROM ADMIN
+        // Send all ADA to admin address
         {
-          address: VYFI_CONSTANTS.POOL_ADDRESS,
-          assets: [
-            {
-              assetName: { name: claim.vault.asset_vault_name, format: 'hex' },
-              policyId: claim.vault.script_hash,
-              quantity: +claim.amount,
-            },
-          ],
-          lovelace: VYFI_CONSTANTS.TOTAL_REQUIRED_ADA + requiredLpAda, // Use exact required amount
+          address: this.adminAddress,
+          lovelace: totalDispatchAda,
         },
-        // If there's leftover ADA after LP creation, keep it in admin
-        ...(totalDispatchAda > requiredLpAda
-          ? [
-              {
-                address: this.adminAddress,
-                lovelace: totalDispatchAda - requiredLpAda,
-              },
-            ]
-          : []),
       ],
-      metadata: {
-        [674]: metadataText,
-      },
       requiredSigners: [this.adminHash],
-      requiredInputs, // For vault tokens from admin
       referenceInputs: [
         {
           txHash: claim.vault.last_update_tx_hash,
@@ -283,16 +215,146 @@ export class VyfiService {
     const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
     txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
-    // Submit the transaction
     const submitResponse = await this.blockchainService.submitTransaction({
       transaction: txToSubmitOnChain.to_hex(),
       signatures: [],
     });
 
+    return {
+      txHash: submitResponse.txHash,
+      withdrawnAmount: totalDispatchAda,
+    };
+  }
+
+  /**
+   * Step 2: Create VyFi liquidity pool using admin UTXOs only
+   * (No script interactions, so admin address will be first input)
+   */
+  async createLiquidityPoolSimple(vaultId: string): Promise<{
+    txHash: string;
+  }> {
+    const claim = await this.claimRepository.findOne({
+      where: { vault: { id: vaultId }, type: ClaimType.LP, status: ClaimStatus.AVAILABLE },
+      relations: ['vault'],
+    });
+
+    if (!claim) {
+      throw new NotFoundException('Liquidity pool claim not found');
+    }
+
+    // Check if pool exists
+    const poolCheck = await this.checkPool({
+      networkId: 0,
+      tokenAUnit: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
+      tokenBUnit: 'lovelace',
+    });
+
+    if (poolCheck.exists) {
+      throw new Error('Pool already exists');
+    }
+
+    // Calculate required ADA
+    const requiredLpAda = Number(claim.metadata?.adaAmount || 0);
+
+    // Generate metadata
+    const metadataText = this.formatMetadataText(
+      {
+        policyId: claim.vault.script_hash,
+        assetName: claim.vault.asset_vault_name,
+      },
+      claim.vault.vault_token_ticker
+    );
+
+    const { utxos: allAdminUtxos, requiredInputs } = await getUtxosExtract(
+      Address.from_bech32(this.adminAddress),
+      this.blockfrost,
+      {
+        targetTokenAmount: +claim.amount,
+        targetToken: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
+      }
+    );
+
+    const adminUtxos = allAdminUtxos.filter(utxo => {
+      const utxoCbor = Buffer.from(utxo, 'hex');
+      try {
+        const decoded = TransactionUnspentOutput.from_bytes(utxoCbor);
+        const address = decoded.output().address().to_bech32();
+        return address === this.adminAddress; // ✅ Only admin UTxOs
+      } catch (error) {
+        console.error('Failed to decode UTXO:', error);
+        return false;
+      }
+    });
+
+    if (adminUtxos.length === 0) {
+      throw new Error('No admin UTXOs found or insufficient ADA');
+    }
+
+    const input = {
+      changeAddress: this.adminAddress,
+      message: metadataText,
+      utxos: adminUtxos,
+      outputs: [
+        {
+          address: VYFI_CONSTANTS.POOL_ADDRESS,
+          assets: [
+            {
+              assetName: { name: claim.vault.asset_vault_name, format: 'hex' },
+              policyId: claim.vault.script_hash,
+              quantity: +claim.amount,
+            },
+          ],
+          lovelace: VYFI_CONSTANTS.TOTAL_REQUIRED_ADA + requiredLpAda,
+        },
+      ],
+      metadata: {
+        [674]: metadataText,
+      },
+      requiredSigners: [this.adminHash],
+      requiredInputs,
+      validityInterval: {
+        start: true,
+        end: true,
+      },
+      network: 'preprod',
+    };
+
+    const buildResponse = await this.blockchainService.buildTransaction(input);
+    const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+    txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+    const submitResponse = await this.blockchainService.submitTransaction({
+      transaction: txToSubmitOnChain.to_hex(),
+      signatures: [],
+    });
+
+    // Mark claim as claimed
     await this.claimRepository.update({ id: claim.id }, { status: ClaimStatus.CLAIMED });
 
     return {
       txHash: submitResponse.txHash,
+    };
+  }
+
+  /**
+   * Combined flow: Withdraw then create LP
+   */
+  async createLiquidityPoolWithWithdrawal(vaultId: string): Promise<{
+    withdrawalTxHash: string;
+    lpCreationTxHash: string;
+  }> {
+    // Step 1: Withdraw ADA from dispatch
+    const { txHash: withdrawalTxHash } = await this.withdrawAdaFromDispatch(vaultId);
+
+    // Wait for withdrawal to confirm
+    await new Promise(resolve => setTimeout(resolve, 90000));
+
+    // Step 2: Create LP using admin UTXOs only
+    const { txHash: lpCreationTxHash } = await this.createLiquidityPoolSimple(vaultId);
+
+    return {
+      withdrawalTxHash,
+      lpCreationTxHash,
     };
   }
 
@@ -388,6 +450,196 @@ export class VyfiService {
   //     transaction: txToSubmitOnChain.to_hex(),
   //     signatures: [],
   //   });
+
+  //   return {
+  //     txHash: submitResponse.txHash,
+  //   };
+  // }
+
+  /**
+   * Create VyFi Liquidity Pool with Dispatch Withdrawal
+   *
+   * Currently doesn`t work, because first input is SC_ADDRESS, which Vyfi takes as address to send LP tokens
+   * In future they will add logic to explicitly set return address for LP tokens
+   *
+   * This is the enhanced version that combines:
+   * 1. Withdrawal of ADA from vault dispatch script
+   * 2. Collection of vault tokens from admin address
+   * 3. Creation of VyFi liquidity pool in single transaction
+   *
+   * Transaction Flow:
+   * - Inputs: Admin UTXOs (vault tokens + fees) + Dispatch UTXOs (ADA)
+   * - Outputs: VyFi pool (tokens + ADA) + Admin change
+   *
+   *
+   * @param vaultId - ID of the vault to process
+   * @returns Transaction hash of submitted LP creation
+   * @throws NotFoundException if claim not found
+   * @throws Error if pool already exists or insufficient funds
+   *
+   */
+  // async createLiquidityPool(vaultId: string): Promise<{
+  //   txHash: string;
+  // }> {
+  //   const claim = await this.claimRepository.findOne({
+  //     where: { vault: { id: vaultId }, type: ClaimType.LP, status: ClaimStatus.AVAILABLE },
+  //     relations: ['vault'],
+  //   });
+
+  //   if (!claim) {
+  //     throw new NotFoundException('Liquidity pool claim not found');
+  //   }
+
+  //   // First check if pool exists
+  //   const poolCheck = await this.checkPool({
+  //     networkId: 0,
+  //     tokenAUnit: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
+  //     tokenBUnit: 'lovelace',
+  //   });
+
+  //   if (poolCheck.exists) {
+  //     throw new Error('Pool already exists');
+  //   }
+
+  //   if (!claim.vault?.dispatch_parametized_hash) {
+  //     throw new Error('Vault does not have dispatch script configured');
+  //   }
+
+  //   const DISPATCH_ADDRESS = this.getDispatchAddress(claim.vault.dispatch_parametized_hash);
+  //   // Get dispatch UTXOs to withdraw ADA from
+  //   const dispatchUtxos = await this.blockfrost.addressesUtxos(DISPATCH_ADDRESS);
+  //   if (!dispatchUtxos || dispatchUtxos.length === 0) {
+  //     throw new Error('No UTXOs found at dispatch address');
+  //   }
+
+  //   // Calculate total available ADA from dispatch script
+  //   let totalDispatchAda = 0;
+  //   const validDispatchUtxos: any[] = [];
+
+  //   for (const utxo of dispatchUtxos) {
+  //     const adaAmount = parseInt(utxo.amount.find(a => a.unit === 'lovelace')?.quantity || '0');
+  //     if (adaAmount > 0) {
+  //       totalDispatchAda += adaAmount;
+  //       validDispatchUtxos.push(utxo);
+  //     }
+  //   }
+
+  //   // Calculate required ADA for LP creation
+  //   const requiredLpAda = Number(claim.metadata?.adaAmount || 0);
+
+  //   if (totalDispatchAda < requiredLpAda) {
+  //     throw new Error(
+  //       `Insufficient ADA in dispatch script. Need ${requiredLpAda} lovelace, but only ${totalDispatchAda} available`
+  //     );
+  //   }
+
+  //   // Generate metadata
+  //   const metadataText = this.formatMetadataText(
+  //     {
+  //       policyId: claim.vault.script_hash,
+  //       assetName: claim.vault.asset_vault_name,
+  //     },
+  //     claim.vault.vault_token_ticker
+  //   );
+
+  //   // Get admin UTXOs (for transaction fees and vault tokens)
+  //   const { utxos: adminUtxos, requiredInputs } = await getUtxosExtract(
+  //     Address.from_bech32(this.adminAddress),
+  //     this.blockfrost,
+  //     {
+  //       targetTokenAmount: +claim.amount,
+  //       targetToken: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
+  //     }
+  //   );
+
+  //   if (adminUtxos.length === 0) {
+  //     throw new Error('No admin UTXOs found.');
+  //   }
+
+  //   // Build combined transaction
+  //   const input = {
+  //     changeAddress: this.adminAddress,
+  //     message: metadataText,
+  //     utxos: adminUtxos,
+  //     preloadedScripts: [claim.vault.dispatch_preloaded_script.preloadedScript],
+  //     scriptInteractions: [
+  //       // Withdraw from all dispatch UTXOs
+  //       ...validDispatchUtxos.map(utxo => ({
+  //         purpose: 'spend',
+  //         hash: claim.vault.dispatch_parametized_hash,
+  //         outputRef: {
+  //           txHash: utxo.tx_hash,
+  //           index: utxo.output_index,
+  //         },
+  //         redeemer: {
+  //           type: 'json',
+  //           value: null,
+  //         },
+  //       })),
+  //       // Withdraw rewards from dispatch script
+  //       {
+  //         purpose: 'withdraw',
+  //         hash: claim.vault.dispatch_parametized_hash,
+  //         redeemer: {
+  //           type: 'json',
+  //           value: null,
+  //         },
+  //       },
+  //     ],
+  //     outputs: [
+  //       // Send tokens + ADA to VyFi pool FROM ADMIN
+  //       {
+  //         address: VYFI_CONSTANTS.POOL_ADDRESS,
+  //         assets: [
+  //           {
+  //             assetName: { name: claim.vault.asset_vault_name, format: 'hex' },
+  //             policyId: claim.vault.script_hash,
+  //             quantity: +claim.amount,
+  //           },
+  //         ],
+  //         lovelace: VYFI_CONSTANTS.TOTAL_REQUIRED_ADA + requiredLpAda, // Use exact required amount
+  //       },
+  //       // If there's leftover ADA after LP creation, keep it in admin
+  //       ...(totalDispatchAda > requiredLpAda
+  //         ? [
+  //             {
+  //               address: this.adminAddress,
+  //               lovelace: totalDispatchAda - requiredLpAda,
+  //             },
+  //           ]
+  //         : []),
+  //     ],
+  //     metadata: {
+  //       [674]: metadataText,
+  //     },
+  //     requiredSigners: [this.adminHash],
+  //     requiredInputs, // For vault tokens from admin
+  //     referenceInputs: [
+  //       {
+  //         txHash: claim.vault.last_update_tx_hash,
+  //         index: 0,
+  //       },
+  //     ],
+  //     validityInterval: {
+  //       start: true,
+  //       end: true,
+  //     },
+  //     network: 'preprod',
+  //   };
+
+  //   console.log(JSON.stringify(input));
+
+  //   const buildResponse = await this.blockchainService.buildTransaction(input);
+  //   const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+  //   txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+  //   // Submit the transaction
+  //   const submitResponse = await this.blockchainService.submitTransaction({
+  //     transaction: txToSubmitOnChain.to_hex(),
+  //     signatures: [],
+  //   });
+
+  //   await this.claimRepository.update({ id: claim.id }, { status: ClaimStatus.CLAIMED });
 
   //   return {
   //     txHash: submitResponse.txHash,
