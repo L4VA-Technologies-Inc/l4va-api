@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config/dist/config.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -14,15 +15,18 @@ import { VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class AcquireService {
-  private readonly PROTOCOL_ACQUIRERS_FEE = 2_000_000; // should be 4 ADA
+  private readonly PROTOCOL_ACQUIRERS_FEE: number;
 
   constructor(
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-    private readonly transactionsService: TransactionsService
-  ) {}
+    private readonly transactionsService: TransactionsService,
+    private readonly configService: ConfigService
+  ) {
+    this.PROTOCOL_ACQUIRERS_FEE = this.configService.get<number>('PROTOCOL_ACQUIRERS_FEE');
+  }
 
   async acquire(
     vaultId: string,

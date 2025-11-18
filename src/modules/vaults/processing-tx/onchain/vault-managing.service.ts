@@ -76,6 +76,31 @@ export interface VaultCreateConfig {
   customMetadata?: [string, string][];
 }
 
+interface VaultCreationInput {
+  changeAddress: string;
+  message: string;
+  utxos: string[];
+  mint: Array<object>;
+  scriptInteractions: object[];
+  outputs: (
+    | {
+        address: string;
+        assets: object[];
+        datum: { type: 'inline'; value: Datum1; shape: object };
+      }
+    | {
+        address: string;
+        datum: { type: 'script'; hash: string };
+      }
+    // VLRM Fee
+    | {
+        address: string;
+        assets: object[];
+      }
+  )[];
+  requiredInputs: string[];
+}
+
 const one_day = 24 * 60 * 60 * 1000;
 
 @Injectable()
@@ -90,6 +115,11 @@ export class VaultManagingService {
   private readonly unparametizedScriptHash: string;
   private readonly blueprintTitle: string;
   private readonly blockfrost: BlockFrostAPI;
+
+  private readonly VLRM_HEX_ASSET_NAME: string;
+  private readonly VLRM_POLICY_ID: string;
+  private readonly VLRM_CREATOR_FEE: number;
+  private readonly VLRM_CREATOR_FEE_ENABLED: boolean;
 
   constructor(
     @InjectRepository(AssetsWhitelistEntity)
@@ -107,6 +137,10 @@ export class VaultManagingService {
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.vaultScriptAddress = this.configService.get<string>('VAULT_SCRIPT_ADDRESS');
     this.unparametizedScriptHash = this.configService.get<string>('CONTRIBUTION_SCRIPT_HASH');
+    this.VLRM_HEX_ASSET_NAME = this.configService.get<string>('VLRM_HEX_ASSET_NAME');
+    this.VLRM_POLICY_ID = this.configService.get<string>('VLRM_POLICY_ID');
+    this.VLRM_CREATOR_FEE = this.configService.get<number>('VLRM_CREATOR_FEE');
+    this.VLRM_CREATOR_FEE_ENABLED = this.configService.get<boolean>('VLRM_CREATOR_FEE_ENABLED');
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
     });
@@ -191,26 +225,12 @@ export class VaultManagingService {
       throw new Error('Failed to find script hash');
     }
 
+    const vaultAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(scriptHash)))
+      .to_address()
+      .to_bech32();
+
     try {
-      const input: {
-        changeAddress: string;
-        message: string;
-        utxos: string[];
-        mint: Array<object>;
-        scriptInteractions: object[];
-        outputs: (
-          | {
-              address: string;
-              assets: object[];
-              datum: { type: 'inline'; value: Datum1; shape: object };
-            }
-          | {
-              address: string;
-              datum: { type: 'script'; hash: string };
-            }
-        )[];
-        requiredInputs: string[];
-      } = {
+      const input: VaultCreationInput = {
         changeAddress: vaultConfig.customerAddress,
         message: `${vaultConfig.vaultName} Vault Creation`,
         utxos: utxoHexArray,
@@ -297,6 +317,20 @@ export class VaultManagingService {
               hash: scriptHash,
             },
           },
+          ...(this.VLRM_CREATOR_FEE_ENABLED
+            ? [
+                {
+                  address: vaultAddress,
+                  assets: [
+                    {
+                      assetName: { name: this.VLRM_HEX_ASSET_NAME, format: 'hex' },
+                      policyId: this.VLRM_POLICY_ID,
+                      quantity: this.VLRM_CREATOR_FEE,
+                    },
+                  ],
+                },
+              ]
+            : []),
         ],
         requiredInputs: REQUIRED_INPUTS,
       };

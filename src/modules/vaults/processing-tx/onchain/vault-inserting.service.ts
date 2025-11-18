@@ -64,12 +64,19 @@ interface ContributionInput {
   message: string;
   mint: object[];
   scriptInteractions: object[];
-  outputs: {
-    address: string;
-    assets?: object[];
-    lovelace?: number; // Required if Contribution in ADA
-    datum?: { type: 'inline'; value: Datum; shape: object };
-  }[];
+  outputs: (
+    | {
+        address: string;
+        assets?: object[];
+        lovelace?: number; // Required if Contribution in ADA
+        datum?: { type: 'inline'; value: Datum; shape: object };
+      }
+    // Fee output
+    | {
+        address: string;
+        lovelace: number;
+      }
+  )[];
   requiredSigners: string[];
   requiredInputs?: string[];
   referenceInputs: { txHash: string; index: number }[];
@@ -83,7 +90,8 @@ interface ContributionInput {
 @Injectable()
 export class VaultInsertingService {
   private readonly logger = new Logger(VaultInsertingService.name);
-  private readonly FLAT_FEE = 4_000_000; // Flat fee in lovelace
+  private readonly FLAT_FEE: number;
+  private readonly feeAddress: string;
   private readonly adminAddress: string;
   private readonly adminHash: string;
   private readonly adminSKey: string;
@@ -100,7 +108,8 @@ export class VaultInsertingService {
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
-
+    this.feeAddress = this.configService.get<string>('FEE_ADDRESS');
+    this.FLAT_FEE = this.configService.get<number>('PROTOCOL_FLAT_FEE');
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
     });
@@ -247,10 +256,20 @@ export class VaultInsertingService {
               },
             },
           },
+          // Flat Fee
           {
             address: this.adminAddress,
             lovelace: this.FLAT_FEE,
           },
+          // Protocol Fee
+          ...(transaction.fee > 0
+            ? [
+                {
+                  address: this.feeAddress, // Fee address
+                  lovelace: transaction.fee * 1000000,
+                },
+              ]
+            : []),
         ],
         requiredSigners: [this.adminHash],
         requiredInputs, // Add the required inputs here

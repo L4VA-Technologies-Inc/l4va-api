@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config/dist/config.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Not, Repository } from 'typeorm';
 
@@ -18,7 +19,8 @@ import { VaultStatus } from '@/types/vault.types';
 @Injectable()
 export class ContributionService {
   private readonly logger = new Logger(ContributionService.name);
-  private readonly PROTOCOL_CONTRIBUTORS_FEE = 2_000_000; // Should be 4 ADA contributeReq.assets.length * this.PROTOCOL_CONTRIBUTORS_FEE
+  private readonly PROTOCOL_CONTRIBUTORS_FEE: number;
+
   constructor(
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
@@ -29,8 +31,11 @@ export class ContributionService {
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
     private readonly transactionsService: TransactionsService,
-    private readonly blockchainScanner: BlockchainScannerService
-  ) {}
+    private readonly blockchainScanner: BlockchainScannerService,
+    private readonly configService: ConfigService
+  ) {
+    this.PROTOCOL_CONTRIBUTORS_FEE = this.configService.get<number>('PROTOCOL_CONTRIBUTORS_FEE');
+  }
 
   /**
    * Syncs contribution transactions for a vault by comparing on-chain transactions
