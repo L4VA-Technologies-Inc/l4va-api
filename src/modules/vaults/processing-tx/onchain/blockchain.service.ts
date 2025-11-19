@@ -118,15 +118,16 @@ export class BlockchainService {
           buildResponse.message?.includes('missing from UTxO set')
         ) {
           // Try to extract the specific UTxO reference
-          const match = buildResponse.message.match(
-            /Unknown transaction input \(missing from UTxO set\): ([a-f0-9]+)#(\d+)/
-          );
+          const match = buildResponse.message.match(/([a-f0-9]{64})#(\d+)/);
+
           if (match) {
-            const [txHash, indexStr] = match;
-            this.logger.warn(`Missing UTxO reference: ${txHash}#${indexStr}`);
-            throw new MissingUtxoException(txHash, parseInt(indexStr));
+            const txHash = match[1];
+            const outputIndex = parseInt(match[2]);
+
+            this.logger.warn(`Missing UTxO reference: ${txHash}#${outputIndex}`);
+            throw new MissingUtxoException(txHash, outputIndex);
           } else {
-            this.logger.warn(`Missing UTxO reference (unspecified): ${buildResponse.message}`);
+            this.logger.warn(`Missing UTxO reference: ${buildResponse.message}`);
             throw new MissingUtxoException();
           }
         }
@@ -520,14 +521,13 @@ export class BlockchainService {
       try {
         const txDetails = await this.blockfrost.txs(txHash);
         if (txDetails && txDetails.block_height) {
-          await new Promise(resolve => setTimeout(resolve, 80000)); // Wait for 2 blocks before reusing its outputs
+          await new Promise(resolve => setTimeout(resolve, 40000));
           return true;
         }
 
         // Wait before next check
         await new Promise(resolve => setTimeout(resolve, checkInterval));
       } catch (error) {
-        this.logger.warn(`Error checking transaction ${txHash}:`, error.message);
         await new Promise(resolve => setTimeout(resolve, checkInterval));
       }
     }
