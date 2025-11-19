@@ -467,8 +467,6 @@ export class VaultManagingService {
       throw new Error(`${vault.publication_hash} not found`);
     }
 
-    this.logger.log(`Found ${utxoDetails.outputs.length} outputs for transaction ${vault.publication_hash}`);
-
     // Find the output with the script address that contains the collateral
     const scriptOutputIndex = utxoDetails.outputs.findIndex(output => output.address === this.vaultScriptAddress);
 
