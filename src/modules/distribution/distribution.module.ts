@@ -1,9 +1,14 @@
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { AutomatedDistributionService } from './automated-distribution.service';
-import { DistributionService } from './distribution.service';
+import { AcquirerExtractionBuilder } from './builders/acquirer-extraction.builder';
+import { ContributorPaymentBuilder } from './builders/contributor-payment.builder';
+import { DistributionCalculationService } from './distribution-calculation.service';
+import { AcquirerDistributionOrchestrator } from './orchestrators/acquirer-distribution.orchestrator';
+import { ContributorDistributionOrchestrator } from './orchestrators/contributor-distribution.orchestrator';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
@@ -28,7 +33,23 @@ import { VyfiModule } from '@/modules/vyfi/vyfi.module';
     ClaimsModule,
     VyfiModule,
   ],
-  providers: [DistributionService, AutomatedDistributionService],
-  exports: [DistributionService, AutomatedDistributionService],
+  providers: [
+    DistributionCalculationService,
+    AutomatedDistributionService,
+    AcquirerExtractionBuilder,
+    ContributorPaymentBuilder,
+    AcquirerDistributionOrchestrator,
+    ContributorDistributionOrchestrator,
+    {
+      provide: BlockFrostAPI,
+      useFactory: (configService: ConfigService) => {
+        return new BlockFrostAPI({
+          projectId: configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
+        });
+      },
+      inject: [ConfigService],
+    },
+  ],
+  exports: [DistributionCalculationService],
 })
 export class DistributionModule {}

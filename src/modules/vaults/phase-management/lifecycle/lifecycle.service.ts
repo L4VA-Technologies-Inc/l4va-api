@@ -11,7 +11,7 @@ import { Claim } from '@/database/claim.entity';
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
-import { DistributionService } from '@/modules/distribution/distribution.service';
+import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { ContributionService } from '@/modules/vaults/phase-management/contribution/contribution.service';
 import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
@@ -45,7 +45,7 @@ export class LifecycleService {
     private readonly tokenRegistryRepository: Repository<TokenRegistry>,
     private readonly contributionService: ContributionService,
     private readonly vaultManagingService: VaultManagingService,
-    private readonly distributionService: DistributionService,
+    private readonly distributionCalculationService: DistributionCalculationService,
     private readonly taptoolsService: TaptoolsService,
     private readonly metadataRegistryApiService: MetadataRegistryApiService,
     private readonly claimsService: ClaimsService,
@@ -687,7 +687,7 @@ export class LifecycleService {
         const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
         // 3. Calculate LP Tokens
         const { lpAdaAmount, lpVtAmount, vtPrice, fdv, adjustedVtLpAmount, adaPairMultiplier } =
-          this.distributionService.calculateLpTokens({
+          this.distributionCalculationService.calculateLpTokens({
             vtSupply,
             totalAcquiredAda,
             totalContributedValueAda,
@@ -743,7 +743,7 @@ export class LifecycleService {
               continue;
             }
 
-            const { vtReceived, multiplier } = this.distributionService.calculateAcquirerTokens({
+            const { vtReceived, multiplier } = this.distributionCalculationService.calculateAcquirerTokens({
               adaSent,
               totalAcquiredValueAda: totalAcquiredAda,
               lpAdaAmount,
@@ -805,7 +805,7 @@ export class LifecycleService {
             const userTotalValue = userContributedValueMap[userId] || 0;
 
             // Single method call to get all values
-            const contributorResult = this.distributionService.calculateContributorTokens({
+            const contributorResult = this.distributionCalculationService.calculateContributorTokens({
               txContributedValue: txValueAda,
               userTotalValue,
               totalAcquiredAda,
@@ -863,7 +863,7 @@ export class LifecycleService {
         const finalContributorClaims = finalClaims.filter(cl => cl.type === ClaimType.CONTRIBUTOR);
         const finalAcquirerClaims = finalClaims.filter(cl => cl.type === ClaimType.ACQUIRER);
 
-        const { acquireMultiplier, adaDistribution } = this.distributionService.calculateAcquireMultipliers({
+        const { acquireMultiplier, adaDistribution } = this.distributionCalculationService.calculateAcquireMultipliers({
           contributorsClaims: finalContributorClaims,
           acquirerClaims: finalAcquirerClaims,
         });
@@ -1007,7 +1007,7 @@ export class LifecycleService {
 
       // Calculate LP tokens with 0% for acquirers
       const { lpAdaAmount, lpVtAmount, vtPrice, fdv, adjustedVtLpAmount, adaPairMultiplier } =
-        this.distributionService.calculateLpTokens({
+        this.distributionCalculationService.calculateLpTokens({
           vtSupply,
           totalAcquiredAda: 0, // No acquirers
           assetsOfferedPercent: 0, // 0% for acquirers
@@ -1142,7 +1142,7 @@ export class LifecycleService {
           const userTotalValue = userContributedValueMap[userId] || 0;
 
           // Calculate contributor tokens (no ADA, only VT)
-          const contributorResult = this.distributionService.calculateContributorTokens({
+          const contributorResult = this.distributionCalculationService.calculateContributorTokens({
             txContributedValue: txValueAda,
             userTotalValue,
             totalAcquiredAda: 0, // No acquirers
@@ -1210,7 +1210,7 @@ export class LifecycleService {
       });
 
       // Calculate acquire multipliers (only contributors, no acquirers)
-      const { acquireMultiplier } = this.distributionService.calculateAcquireMultipliers({
+      const { acquireMultiplier } = this.distributionCalculationService.calculateAcquireMultipliers({
         contributorsClaims: finalContributorClaims,
         acquirerClaims: [], // No acquirers
       });

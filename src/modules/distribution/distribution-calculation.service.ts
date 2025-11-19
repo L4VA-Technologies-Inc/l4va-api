@@ -3,7 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Claim } from '@/database/claim.entity';
 
 /**
- * DistributionService
+ * DistributionCalculationService
  *
  * This service provides core business logic for calculating token and ADA distributions
  * for contributors and acquirers in the vault system. It includes formulas for
@@ -11,8 +11,8 @@ import { Claim } from '@/database/claim.entity';
  * value retention metrics.
  */
 @Injectable()
-export class DistributionService {
-  private readonly logger = new Logger(DistributionService.name);
+export class DistributionCalculationService {
+  private readonly logger = new Logger(DistributionCalculationService.name);
 
   constructor() {}
 
