@@ -299,8 +299,7 @@ export class AutomatedDistributionService {
 
       // If batch size is 1, this is already the smallest unit - mark claim as failed
       if (claims.length === 1) {
-        this.logger.error(`Single claim extraction failed for claim ${claims[0].id}`);
-        await this.claimsService.updateClaimStatus(claims[0].id, ClaimStatus.FAILED);
+        // await this.claimsService.updateClaimStatus(claims[0].id, ClaimStatus.FAILED);
         return;
       }
 
@@ -796,10 +795,8 @@ export class AutomatedDistributionService {
           await this.processBatchedPayments(vault, [failedClaim], dispatchUtxos);
           processedCount += 1;
         } catch (singleError) {
-          this.logger.error(`Failed to process single claim ${failedClaim.id}:`, singleError);
-
           // Mark claim as failed
-          await this.claimsService.updateClaimStatus(failedClaim.id, ClaimStatus.FAILED);
+          // await this.claimsService.updateClaimStatus(failedClaim.id, ClaimStatus.FAILED);
 
           processedCount += 1;
         }
