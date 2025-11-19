@@ -10,6 +10,9 @@ import {
   PrivateKey,
   TransactionUnspentOutputs,
   TransactionUnspentOutput,
+  TransactionOutput,
+  TransactionHash,
+  TransactionInput,
 } from '@emurgo/cardano-serialization-lib-nodejs';
 import {
   BadRequestException,
@@ -27,11 +30,12 @@ import { TransactionsService } from '../offchain-tx/transactions.service';
 
 import { BlockchainService } from './blockchain.service';
 import { Datum1 } from './types/type';
-import { generate_tag_from_txhash_index, getUtxosExtract, getVaultUtxo } from './utils/lib';
+import { assetsToValue, generate_tag_from_txhash_index, getUtxosExtract, getVaultUtxo } from './utils/lib';
 import { VaultInsertingService } from './vault-inserting.service';
 
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Vault } from '@/database/vault.entity';
+import { VaultCreationInput } from '@/modules/distribution/distribution.types';
 import { TransactionType } from '@/types/transaction.types';
 import { SmartContractVaultStatus, VaultPrivacy } from '@/types/vault.types';
 
@@ -76,31 +80,6 @@ export interface VaultCreateConfig {
   customMetadata?: [string, string][];
 }
 
-interface VaultCreationInput {
-  changeAddress: string;
-  message: string;
-  utxos: string[];
-  mint: Array<object>;
-  scriptInteractions: object[];
-  outputs: (
-    | {
-        address: string;
-        assets: object[];
-        datum: { type: 'inline'; value: Datum1; shape: object };
-      }
-    | {
-        address: string;
-        datum: { type: 'script'; hash: string };
-      }
-    // VLRM Fee
-    | {
-        address: string;
-        assets: object[];
-      }
-  )[];
-  requiredInputs: string[];
-}
-
 const one_day = 24 * 60 * 60 * 1000;
 
 @Injectable()
@@ -112,6 +91,7 @@ export class VaultManagingService {
   private readonly adminSKey: string;
   private readonly adminAddress: string;
   private readonly vaultScriptAddress: string;
+  private readonly vaultScriptSKey: string;
   private readonly unparametizedScriptHash: string;
   private readonly blueprintTitle: string;
   private readonly blockfrost: BlockFrostAPI;
@@ -136,6 +116,7 @@ export class VaultManagingService {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.vaultScriptAddress = this.configService.get<string>('VAULT_SCRIPT_ADDRESS');
+    this.vaultScriptSKey = this.configService.get<string>('VAULT_SCRIPT_SKEY');
     this.unparametizedScriptHash = this.configService.get<string>('CONTRIBUTION_SCRIPT_HASH');
     this.VLRM_HEX_ASSET_NAME = this.configService.get<string>('VLRM_HEX_ASSET_NAME');
     this.VLRM_POLICY_ID = this.configService.get<string>('VLRM_POLICY_ID');
@@ -317,7 +298,7 @@ export class VaultManagingService {
               hash: scriptHash,
             },
           },
-          ...(this.VLRM_CREATOR_FEE_ENABLED
+          ...(!this.VLRM_CREATOR_FEE_ENABLED
             ? [
                 {
                   address: vaultAddress,
@@ -466,7 +447,7 @@ export class VaultManagingService {
     const { utxos: adminUtxos } = await getUtxosExtract(
       Address.from_bech32(this.adminAddress),
       this.blockfrost,
-      { minAda: 4000000 } // 4 ADA minimum
+      { minAda: 4000000, maxUtxos: 1 } // 4 ADA minimum
     );
 
     const allowedPolicies: string[] =
@@ -479,6 +460,42 @@ export class VaultManagingService {
       .to_bech32();
 
     const vaultUtxo = await getVaultUtxo(this.scPolicyId, vault.asset_vault_name, this.blockfrost);
+
+    const utxoDetails = await this.blockfrost.txsUtxos(vault.publication_hash);
+
+    if (!utxoDetails || !utxoDetails.outputs) {
+      throw new Error(`${vault.publication_hash} not found`);
+    }
+
+    this.logger.log(`Found ${utxoDetails.outputs.length} outputs for transaction ${vault.publication_hash}`);
+
+    // Find the output with the script address that contains the collateral
+    const scriptOutputIndex = utxoDetails.outputs.findIndex(output => output.address === this.vaultScriptAddress);
+
+    if (scriptOutputIndex === -1) {
+      this.logger.error(`No output found with vault script address ${this.vaultScriptAddress}`);
+      this.logger.error(`Available addresses: ${utxoDetails.outputs.map(o => o.address).join(', ')}`);
+      throw new Error(`No output found with vault script address ${this.vaultScriptAddress}`);
+    }
+
+    const scriptOutput = utxoDetails.outputs[scriptOutputIndex];
+    const refScriptPayBackAmount = Number(scriptOutput.amount[0].quantity);
+
+    if (refScriptPayBackAmount <= 0) {
+      throw new Error(`Collateral UTXO has zero or negative ADA amount: ${refScriptPayBackAmount}`);
+    }
+
+    // Create the UTXO reference for the script collateral
+    const scriptUtxo = TransactionUnspentOutput.new(
+      TransactionInput.new(TransactionHash.from_hex(vault.publication_hash), scriptOutputIndex),
+      TransactionOutput.new(
+        Address.from_bech32(this.vaultScriptAddress),
+        assetsToValue([{ unit: 'lovelace', quantity: refScriptPayBackAmount }])
+      )
+    );
+
+    adminUtxos.push(scriptUtxo.to_hex());
+
     const input = {
       changeAddress: this.adminAddress,
       message: `Vault ${vault.id} Update`,
@@ -548,6 +565,10 @@ export class VaultManagingService {
             },
           },
         },
+        {
+          address: vault.owner.address, // Send back to vault owner
+          lovelace: refScriptPayBackAmount, // Refund amount (adjust based on actual collateral)
+        },
       ],
       requiredSigners: [this.adminHash],
     };
@@ -558,6 +579,7 @@ export class VaultManagingService {
     const buildResponse = await this.blockchainService.buildTransaction(input);
 
     const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+    txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.vaultScriptSKey));
     txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
     const response = await this.vaultInsertingService.submitTransaction({
