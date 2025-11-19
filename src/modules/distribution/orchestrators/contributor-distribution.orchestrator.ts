@@ -62,7 +62,7 @@ export class ContributorDistributionOrchestrator {
         type: ClaimType.CONTRIBUTOR,
         status: ClaimStatus.PENDING,
       },
-      relations: ['user', 'transaction', 'vault'],
+      relations: ['user', 'transaction'],
     });
 
     if (readyClaims.length === 0) {
