@@ -34,6 +34,7 @@ export class ContributorPaymentBuilder {
   /**
    * Build batched payment transaction input for multiple contributor claims
    */
+
   async buildPaymentInput(
     vault: Vault,
     claims: Claim[],
@@ -96,16 +97,9 @@ export class ContributorPaymentBuilder {
         },
       });
 
-      // Output 1: Payment to user with vault tokens
-      outputs.push({
+      // Output 1: Payment to user with vault tokens (only if quantity > 0)
+      const userOutput: TransactionOutput = {
         address: userAddress,
-        assets: [
-          {
-            assetName: { name: vault.asset_vault_name, format: 'hex' },
-            policyId: vault.script_hash,
-            quantity: vaultTokenQuantity,
-          },
-        ],
         lovelace: adaAmount,
         datum: {
           type: 'inline',
@@ -118,7 +112,20 @@ export class ContributorPaymentBuilder {
             purpose: 'spend',
           },
         },
-      });
+      };
+
+      // Only add vault tokens if quantity > 0
+      if (vaultTokenQuantity > 0) {
+        userOutput.assets = [
+          {
+            assetName: { name: vault.asset_vault_name, format: 'hex' },
+            policyId: vault.script_hash,
+            quantity: vaultTokenQuantity,
+          },
+        ];
+      }
+
+      outputs.push(userOutput);
 
       // Output 2: Return to SC address with original contributed assets
       outputs.push({
@@ -211,30 +218,37 @@ export class ContributorPaymentBuilder {
     const totalVaultTokenQuantity = mintAssets.reduce((sum, m) => sum + m.vaultTokenQuantity, 0);
     const totalReceiptBurn = mintAssets.reduce((sum, m) => sum + m.receiptBurn, 0);
 
+    // Build mint array - only include vault tokens if quantity > 0
+    const mintArray: any[] = [];
+
+    if (totalVaultTokenQuantity > 0) {
+      mintArray.push({
+        version: 'cip25',
+        assetName: { name: vault.asset_vault_name, format: 'hex' },
+        policyId: vault.script_hash,
+        type: 'plutus',
+        quantity: totalVaultTokenQuantity,
+        metadata: {},
+      });
+    }
+
+    // Always include receipt burn (it's negative)
+    mintArray.push({
+      version: 'cip25',
+      assetName: { name: 'receipt', format: 'utf8' },
+      policyId: vault.script_hash,
+      type: 'plutus',
+      quantity: totalReceiptBurn,
+      metadata: {},
+    });
+
     return {
       changeAddress: config.adminAddress,
       message: `Batch payment for ${claims.length} contributors`,
       utxos: adminUtxos,
       preloadedScripts: [vault.dispatch_preloaded_script.preloadedScript],
       scriptInteractions,
-      mint: [
-        {
-          version: 'cip25',
-          assetName: { name: vault.asset_vault_name, format: 'hex' },
-          policyId: vault.script_hash,
-          type: 'plutus',
-          quantity: totalVaultTokenQuantity,
-          metadata: {},
-        },
-        {
-          version: 'cip25',
-          assetName: { name: 'receipt', format: 'utf8' },
-          policyId: vault.script_hash,
-          type: 'plutus',
-          quantity: totalReceiptBurn,
-          metadata: {},
-        },
-      ],
+      mint: mintArray,
       outputs,
       requiredSigners: [config.adminHash],
       referenceInputs: [
