@@ -18,7 +18,7 @@ import { Vault } from '@/database/vault.entity';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { Datum, Redeemer, Redeemer1 } from '@/modules/vaults/processing-tx/onchain/types/type';
 import { generate_tag_from_txhash_index, getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
-import { AssetOriginType } from '@/types/asset.types';
+import { AssetOriginType, AssetStatus } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
@@ -300,9 +300,16 @@ export class ClaimsService {
       throw new NotFoundException('One or more cancellation claims not found or not available');
     }
 
-    // Validate all claims belong to the same vault
-    const vaultId = claims[0].vault.id;
-    if (!claims.every(claim => claim.vault.id === vaultId)) {
+    // ADD UTXO VALIDATION HERE
+    const { validClaims } = await this.validateClaimUtxos(claims);
+
+    if (validClaims.length === 0) {
+      throw new BadRequestException('All cancellation claims have invalid or already-spent UTXOs');
+    }
+
+    // Validate all VALID claims belong to the same vault
+    const vaultId = validClaims[0].vault.id;
+    if (!validClaims.every(claim => claim.vault.id === vaultId)) {
       throw new BadRequestException('All claims must belong to the same vault');
     }
 
@@ -311,7 +318,7 @@ export class ClaimsService {
       throw new Error('No UTXOs found.');
     }
 
-    const vault = claims[0].vault;
+    const vault = validClaims[0].vault;
     const POLICY_ID = vault.script_hash;
     const lpsUnit = vault.script_hash + '72656365697074';
 
@@ -321,8 +328,8 @@ export class ClaimsService {
     let totalReceiptsToburn = 0;
 
     // Process each claim
-    for (let i = 0; i < claims.length; i++) {
-      const claim = claims[i];
+    for (let i = 0; i < validClaims.length; i++) {
+      const claim = validClaims[i];
       const { user, transaction } = claim;
 
       if (transaction.type !== TransactionType.contribute && transaction.type !== TransactionType.acquire) {
@@ -478,7 +485,7 @@ export class ClaimsService {
         return {
           success: true,
           txHash: response.txHash,
-          processedClaims: claimIds,
+          processedClaims: validClaims.map(c => c.id),
         };
       }
     } catch (error) {
@@ -488,51 +495,22 @@ export class ClaimsService {
   }
 
   /**
-   * Updates the status of a claim with optional metadata
+   * Updates the status of one or more claims with optional metadata
    *
-   * @param claimId - The ID of the claim to update
-   * @param status - The new status to set
-   * @param metadata - Optional metadata to set
-   * @returns Promise<void>
-   */
-  async updateClaimStatus(claimId: string, status: ClaimStatus, metadata?: Record<string, any>): Promise<void> {
-    try {
-      const updateData: Partial<Claim> = {
-        status,
-      };
-
-      if (metadata) {
-        const existingClaim = await this.claimRepository.findOne({
-          where: { id: claimId },
-          select: ['metadata'],
-        });
-
-        updateData.metadata = {
-          ...(existingClaim?.metadata || {}),
-          ...metadata,
-        };
-      }
-
-      await this.claimRepository.update({ id: claimId }, updateData);
-    } catch (error) {
-      this.logger.error(`Failed to update claim ${claimId} status to ${status}:`, error);
-    }
-  }
-
-  /**
-   * Updates the status of multiple claims with optional metadata
-   *
-   * @param claimIds - Array of claim IDs to update
+   * @param claimIds - Array of claim IDs to update (can be single item)
    * @param status - The new status to set for all claims
    * @param metadata - Optional metadata to merge with existing metadata for each claim
    * @returns Promise<void>
    */
-  async updateMultipleClaimsStatus(
-    claimIds: string[],
+  async updateClaimStatus(
+    claimIds: string | string[],
     status: ClaimStatus,
     metadata?: Record<string, any>
   ): Promise<void> {
-    if (claimIds.length === 0) {
+    // Normalize input to always be an array
+    const claimIdArray = Array.isArray(claimIds) ? claimIds : [claimIds];
+
+    if (claimIdArray.length === 0) {
       return;
     }
 
@@ -540,7 +518,7 @@ export class ClaimsService {
       if (metadata) {
         // If metadata is provided, we need to merge it with existing metadata for each claim
         const existingClaims = await this.claimRepository.find({
-          where: { id: In(claimIds) },
+          where: { id: In(claimIdArray) },
           select: ['id', 'metadata'],
         });
 
@@ -554,15 +532,130 @@ export class ClaimsService {
         }));
 
         await this.claimRepository.save(updates);
-        this.logger.log(`Updated ${claimIds.length} claims status to ${status} with metadata`);
+        this.logger.log(`Updated ${claimIdArray.length} claims status to ${status} with metadata`);
       } else {
         // If no metadata, simple bulk update
-        await this.claimRepository.update({ id: In(claimIds) }, { status });
-        this.logger.log(`Updated ${claimIds.length} claims status to ${status}`);
+        await this.claimRepository.update({ id: In(claimIdArray) }, { status });
+        this.logger.log(`Updated ${claimIdArray.length} claims status to ${status}`);
       }
     } catch (error) {
-      this.logger.error(`Failed to update ${claimIds.length} claims status to ${status}:`, error);
+      this.logger.error(`Failed to update ${claimIdArray.length} claims status to ${status}:`, error);
       throw error;
     }
+  }
+
+  /**
+   * Validates that claim UTXOs exist and are unspent
+   * Automatically marks already-spent UTXOs as CLAIMED
+   *
+   * @param claims - Array of claims to validate
+   * @param skipStatusUpdate - If true, don't update invalid claims (useful for cancellations where you want to handle separately)
+   * @returns Object containing valid and invalid claims with details
+   */
+  async validateClaimUtxos(
+    claims: Claim[],
+    skipStatusUpdate: boolean = false
+  ): Promise<{
+    validClaims: Claim[];
+    invalidClaims: Array<{
+      claim: Claim;
+      reason: 'no_tx_hash' | 'no_output' | 'already_consumed' | 'error';
+      details?: string;
+    }>;
+  }> {
+    const validClaims: Claim[] = [];
+    const invalidClaims: Array<{
+      claim: Claim;
+      reason: 'no_tx_hash' | 'no_output' | 'already_consumed' | 'error';
+      details?: string;
+    }> = [];
+
+    for (const claim of claims) {
+      const originalTx = claim.transaction;
+
+      if (!originalTx || !originalTx.tx_hash) {
+        this.logger.warn(`Claim ${claim.id} has no transaction hash`);
+        invalidClaims.push({
+          claim,
+          reason: 'no_tx_hash',
+        });
+        continue;
+      }
+
+      try {
+        const utxoDetails = await this.blockfrost.txsUtxos(originalTx.tx_hash);
+        const outputIndex = claim.metadata?.outputIndex ?? 0; // Allow configurable output index
+        const output = utxoDetails.outputs[outputIndex];
+
+        if (!output) {
+          this.logger.warn(`No output found for claim ${claim.id} at ${originalTx.tx_hash}#${outputIndex}`);
+          invalidClaims.push({
+            claim,
+            reason: 'no_output',
+            details: `Output index ${outputIndex} not found`,
+          });
+          continue;
+        }
+
+        if (output.consumed_by_tx) {
+          this.logger.warn(
+            `UTXO for claim ${claim.id} already consumed by ${output.consumed_by_tx}. ` +
+              `Marking as already processed.`
+          );
+          invalidClaims.push({
+            claim,
+            reason: 'already_consumed',
+            details: output.consumed_by_tx,
+          });
+          continue;
+        }
+
+        // UTXO is valid and unspent
+        validClaims.push(claim);
+      } catch (error) {
+        this.logger.error(`Error checking UTXO for claim ${claim.id}:`, error);
+        invalidClaims.push({
+          claim,
+          reason: 'error',
+          details: error.message,
+        });
+      }
+    }
+
+    // Automatically handle already-consumed UTXOs (unless explicitly skipped)
+    if (!skipStatusUpdate && invalidClaims.length > 0) {
+      const alreadyConsumedClaims = invalidClaims.filter(ic => ic.reason === 'already_consumed').map(ic => ic.claim);
+
+      if (alreadyConsumedClaims.length > 0) {
+        this.logger.log(
+          `Found ${alreadyConsumedClaims.length} claims with already-spent UTXOs. ` +
+            `Marking as CLAIMED: ${alreadyConsumedClaims.map(c => c.id).join(', ')}`
+        );
+
+        await this.updateClaimStatus(
+          alreadyConsumedClaims.map(c => c.id),
+          ClaimStatus.CLAIMED,
+          { autoMarkedReason: 'utxo_already_consumed' }
+        );
+
+        // Mark assets as distributed for acquirer claims
+        for (const claim of alreadyConsumedClaims) {
+          if (claim.type === ClaimType.ACQUIRER) {
+            try {
+              await this.assetsRepository.update(
+                { transaction: { id: claim.transaction.id } },
+                { status: AssetStatus.DISTRIBUTED }
+              );
+            } catch (error) {
+              this.logger.error(`Failed to mark assets as distributed for claim ${claim.id}:`, error);
+            }
+          }
+        }
+      }
+    }
+
+    this.logger.log(`UTXO Validation complete: ${validClaims.length} valid, ${invalidClaims.length} invalid claims`);
+
+    return { validClaims, invalidClaims };
   }
 }

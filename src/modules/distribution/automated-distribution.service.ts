@@ -334,6 +334,23 @@ export class AutomatedDistributionService {
     if (adminUtxos.length === 0) {
       throw new Error('No UTXOs on admin wallet was found.');
     }
+
+    const { validClaims, invalidClaims } = await this.claimsService.validateClaimUtxos(claims);
+
+    // If no valid claims remain, don't process
+    if (validClaims.length === 0) {
+      this.logger.log(`No valid claims remaining after UTXO validation. Skipping batch.`);
+      await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
+      return;
+    }
+
+    if (invalidClaims.length > 0) {
+      this.logger.warn(
+        `Removed ${invalidClaims.length} invalid contributor claims: ` +
+          invalidClaims.map(ic => `${ic.claim.id} (${ic.reason})`).join(', ')
+      );
+    }
+
     // Build script interactions for all claims in the batch
     const scriptInteractions: object[] = [];
     const mintAssets: object[] = [];
@@ -347,7 +364,7 @@ export class AutomatedDistributionService {
     let totalMintQuantity = 0;
     let totalDispatchLovelace = 0;
 
-    for (const claim of claims) {
+    for (const claim of validClaims) {
       const { user } = claim;
       const originalTx = claim.transaction;
 
@@ -505,7 +522,7 @@ export class AutomatedDistributionService {
 
     if (confirmed) {
       // Update all claims and assets only after confirmation
-      await this.claimsService.updateMultipleClaimsStatus(
+      await this.claimsService.updateClaimStatus(
         claims.map(c => c.id),
         ClaimStatus.CLAIMED
       );
@@ -703,17 +720,7 @@ export class AutomatedDistributionService {
   private async processContributorPayments(vaultId: string): Promise<void> {
     this.logger.log(`Starting contributor payment processing for vault ${vaultId}`);
 
-    const vault = await this.vaultRepository.findOne({
-      where: { id: vaultId },
-      select: [
-        'id',
-        'script_hash',
-        'asset_vault_name',
-        'dispatch_parametized_hash',
-        'dispatch_preloaded_script',
-        'last_update_tx_hash',
-      ],
-    });
+    const vault = await this.vaultRepository.findOne({ where: { id: vaultId } });
 
     if (!vault) {
       this.logger.error(`Vault ${vaultId} not found`);
@@ -902,19 +909,32 @@ export class AutomatedDistributionService {
    * Process a batch of payments in a single transaction
    */
   private async processBatchedPayments(vault: Vault, claims: Claim[], dispatchUtxos: AddressesUtxo[]): Promise<void> {
-    const claimIds = claims.map(c => c.id);
+    this.logger.log(`Building batched payment transaction for ${claims.length} claims`);
 
-    this.logger.log(`Building batched payment transaction for ${claims.length} claims `);
+    // ADD UTXO VALIDATION HERE
+    const { validClaims, invalidClaims } = await this.claimsService.validateClaimUtxos(claims);
 
-    // Create batch transaction record
+    if (validClaims.length === 0) {
+      this.logger.warn(`No valid claims remaining after UTXO validation for contributor payments`);
+      throw new Error('All contributor claims have invalid UTXOs');
+    }
+
+    if (invalidClaims.length > 0) {
+      this.logger.warn(
+        `Removed ${invalidClaims.length} invalid contributor claims: ` +
+          invalidClaims.map(ic => `${ic.claim.id} (${ic.reason})`).join(', ')
+      );
+    }
+
+    // Create batch transaction record (use validClaims count)
     const batchTransaction = await this.transactionRepository.save({
       vault_id: vault.id,
       user_id: null,
       type: TransactionType.claim,
       status: TransactionStatus.created,
       metadata: {
-        batchSize: claims.length,
-        claimIds,
+        batchSize: validClaims.length, // CHANGED
+        claimIds: validClaims.map(c => c.id), // CHANGED
       },
     });
 
@@ -929,7 +949,7 @@ export class AutomatedDistributionService {
       }
 
       // Build batched transaction
-      const input = await this.buildBatchedPaymentInput(vault, claims, adminUtxos, dispatchUtxos);
+      const input = await this.buildBatchedPaymentInput(vault, validClaims, adminUtxos, dispatchUtxos);
 
       // Build transaction
       const buildResponse = await this.blockchainService.buildTransaction(input);
@@ -973,16 +993,19 @@ export class AutomatedDistributionService {
       }
 
       // Update all claims in batch to CLAIMED and Transaction to confirmed
-      await this.claimsService.updateMultipleClaimsStatus(claimIds, ClaimStatus.CLAIMED);
+      await this.claimsService.updateClaimStatus(
+        validClaims.map(c => c.id),
+        ClaimStatus.CLAIMED
+      );
       await this.transactionRepository.update({ id: batchTransaction.id }, { status: TransactionStatus.confirmed });
 
       // Mark assets as distributed
-      for (const claim of claims) {
+      for (const claim of validClaims) {
         await this.assetService.markAssetsAsDistributedByTransaction(claim.transaction.id);
       }
 
       this.logger.log(
-        `Successfully processed batch payment for ${claims.length} claims ` + `with tx: ${response.txHash}`
+        `Successfully processed batch payment for ${validClaims.length} claims ` + `with tx: ${response.txHash}`
       );
     } catch (error) {
       this.logger.error(`Failed to process batched payments:`, error);

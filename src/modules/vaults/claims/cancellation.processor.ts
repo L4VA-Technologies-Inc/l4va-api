@@ -138,7 +138,7 @@ export class CancellationProcessor extends WorkerHost {
           `❌ Failed to process batch of ${currentBatchSize} claims after ${job.attemptsMade + 1} attempts: ${error.message}`
         );
 
-        await this.claimsService.updateMultipleClaimsStatus(claimIds, ClaimStatus.FAILED, {
+        await this.claimsService.updateClaimStatus(claimIds, ClaimStatus.FAILED, {
           failureReason: error.message,
           batchSize: currentBatchSize,
         });
@@ -182,7 +182,7 @@ export class CancellationProcessor extends WorkerHost {
       this.logger.log(`✅ Re-queued ${reducedClaimIds.length} claims with reduced batch size`);
     } catch (queueError) {
       this.logger.error(`Failed to requeue reduced batch: ${queueError.message}`);
-      await this.claimsService.updateMultipleClaimsStatus(reducedClaimIds, ClaimStatus.FAILED, {
+      await this.claimsService.updateClaimStatus(reducedClaimIds, ClaimStatus.FAILED, {
         failureReason: `Requeue failed: ${queueError.message}`,
         batchSize: newBatchSize,
       });
@@ -213,7 +213,7 @@ export class CancellationProcessor extends WorkerHost {
       } catch (queueError) {
         this.logger.error(`Failed to queue remaining claims: ${queueError.message}`);
 
-        await this.claimsService.updateMultipleClaimsStatus(remainingClaimIds, ClaimStatus.FAILED, {
+        await this.claimsService.updateClaimStatus(remainingClaimIds, ClaimStatus.FAILED, {
           failureReason: `Requeue failed: ${queueError.message}`,
           batchSize: remainingClaimIds.length,
         });
