@@ -34,7 +34,6 @@ export class ContributorPaymentBuilder {
   /**
    * Build batched payment transaction input for multiple contributor claims
    */
-
   async buildPaymentInput(
     vault: Vault,
     claims: Claim[],

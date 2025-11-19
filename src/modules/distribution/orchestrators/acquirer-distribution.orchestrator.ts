@@ -51,7 +51,27 @@ export class AcquirerDistributionOrchestrator {
       unparametizedDispatchHash: string;
     }
   ): Promise<void> {
-    const vault = await this.loadVaultWithAcquirerClaims(vaultId);
+    const vault = await this.vaultRepository
+      .createQueryBuilder('vault')
+      .select([
+        'vault.id',
+        'vault.script_hash',
+        'vault.asset_vault_name',
+        'vault.ada_pair_multiplier',
+        'vault.last_update_tx_hash',
+        'vault.dispatch_parametized_hash',
+        'vault.dispatch_preloaded_script',
+        'vault.tokens_for_acquires',
+        'vault.stake_registered',
+      ])
+      .leftJoinAndSelect('vault.claims', 'claim', 'claim.type = :type AND claim.status = :status', {
+        type: ClaimType.ACQUIRER,
+        status: ClaimStatus.PENDING,
+      })
+      .leftJoinAndSelect('claim.transaction', 'transaction')
+      .leftJoinAndSelect('claim.user', 'user')
+      .where('vault.id = :vaultId', { vaultId })
+      .getOne();
 
     if (!vault) {
       throw new Error(`Vault ${vaultId} not found`);
@@ -222,30 +242,5 @@ export class AcquirerDistributionOrchestrator {
     await this.processAcquirerBatch(vault, firstHalf, vaultId, config);
     await new Promise(resolve => setTimeout(resolve, 5000));
     await this.processAcquirerBatch(vault, secondHalf, vaultId, config);
-  }
-
-  /**
-   * Load vault with acquirer claims
-   */
-  private async loadVaultWithAcquirerClaims(vaultId: string): Promise<Vault | null> {
-    return this.vaultRepository
-      .createQueryBuilder('vault')
-      .select([
-        'vault.id',
-        'vault.script_hash',
-        'vault.asset_vault_name',
-        'vault.ada_pair_multiplier',
-        'vault.last_update_tx_hash',
-        'vault.dispatch_parametized_hash',
-        'vault.dispatch_preloaded_script',
-      ])
-      .leftJoinAndSelect('vault.claims', 'claim', 'claim.type = :type AND claim.status = :status', {
-        type: ClaimType.ACQUIRER,
-        status: ClaimStatus.PENDING,
-      })
-      .leftJoinAndSelect('claim.transaction', 'transaction')
-      .leftJoinAndSelect('claim.user', 'user')
-      .where('vault.id = :vaultId', { vaultId })
-      .getOne();
   }
 }
