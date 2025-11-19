@@ -249,6 +249,8 @@ export class VaultInsertingService {
         presignedTx: txToSubmitOnChain.to_hex(),
       };
     } catch (error) {
+      await this.transactionsService.updateTransactionStatusById(params.txId, TransactionStatus.failed);
+
       if (error instanceof NotFoundException) {
         throw new NotFoundException(error.message);
       }
@@ -302,6 +304,7 @@ export class VaultInsertingService {
 
         return { txHash: result.txHash };
       } catch (updateError) {
+        await this.transactionsService.updateTransactionStatusById(signedTx.txId, TransactionStatus.failed);
         this.logger.error(
           `Failed to update transaction ${signedTx.txId} with hash ${result.txHash}`,
           updateError.stack
@@ -310,6 +313,7 @@ export class VaultInsertingService {
       }
     } catch (error) {
       this.logger.error('Error submitting transaction', error);
+      await this.transactionsService.updateTransactionStatusById(signedTx.txId, TransactionStatus.failed);
       if (error instanceof ValidityIntervalException) {
         throw error;
       }

@@ -29,7 +29,8 @@ import { VaultInsertingService } from './vault-inserting.service';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
-import { TransactionType } from '@/types/transaction.types';
+import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { SmartContractVaultStatus, VaultPrivacy } from '@/types/vault.types';
 
 export interface VaultConfig {
@@ -96,7 +97,8 @@ export class VaultManagingService {
     private readonly configService: ConfigService,
     @Inject(BlockchainService)
     private readonly blockchainService: BlockchainService,
-    private readonly vaultInsertingService: VaultInsertingService
+    private readonly vaultInsertingService: VaultInsertingService,
+    private readonly transactionsService: TransactionsService
   ) {
     this.blueprintTitle = this.configService.get<string>('BLUEPRINT_TITLE');
     this.scPolicyId = this.configService.get<string>('SC_POLICY_ID');
@@ -515,6 +517,7 @@ export class VaultManagingService {
 
       return { success: true, txHash: response.txHash, message: 'Transaction submitted successfully' };
     } catch (error) {
+      await this.transactionsService.updateTransactionStatusById(transactionId, TransactionStatus.failed);
       this.logger.error('Failed to build vault update tx:', error);
       throw error;
     }
