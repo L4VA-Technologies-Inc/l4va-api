@@ -60,6 +60,14 @@ export interface PayAdaContributionInput extends TransactionInput {
   preloadedScripts: object[];
 }
 
+export interface ExtractInput extends TransactionInput {
+  deposits?: {
+    hash: string;
+    type: string;
+    deposit: string;
+  }[];
+}
+
 export interface TransactionOutput {
   address: string;
   assets?: AssetOutput[];
