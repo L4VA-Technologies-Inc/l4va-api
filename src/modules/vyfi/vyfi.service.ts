@@ -8,7 +8,6 @@ import {
   FixedTransaction,
   PrivateKey,
   ScriptHash,
-  TransactionUnspentOutput,
 } from '@emurgo/cardano-serialization-lib-nodejs';
 import { HttpService } from '@nestjs/axios';
 import { Injectable, NotFoundException } from '@nestjs/common';
@@ -265,7 +264,7 @@ export class VyfiService {
       claim.vault.vault_token_ticker
     );
 
-    const { utxos: allAdminUtxos, requiredInputs } = await getUtxosExtract(
+    const { utxos: adminUtxos, requiredInputs } = await getUtxosExtract(
       Address.from_bech32(this.adminAddress),
       this.blockfrost,
       {
@@ -273,18 +272,6 @@ export class VyfiService {
         targetToken: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
       }
     );
-
-    const adminUtxos = allAdminUtxos.filter(utxo => {
-      const utxoCbor = Buffer.from(utxo, 'hex');
-      try {
-        const decoded = TransactionUnspentOutput.from_bytes(utxoCbor);
-        const address = decoded.output().address().to_bech32();
-        return address === this.adminAddress; // ✅ Only admin UTxOs
-      } catch (error) {
-        console.error('Failed to decode UTXO:', error);
-        return false;
-      }
-    });
 
     if (adminUtxos.length === 0) {
       throw new Error('No admin UTXOs found or insufficient ADA');

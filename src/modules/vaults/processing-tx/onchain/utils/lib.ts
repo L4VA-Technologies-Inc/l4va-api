@@ -71,7 +71,7 @@ interface GetUtxosResult {
   assetBreakdown?: AssetCollection[];
 }
 
-const assetsToValue = (assets: Amount[]): Value => {
+export const assetsToValue = (assets: Amount[]): Value => {
   const multiAsset = MultiAsset.new();
   const lovelace = assets.find(asset => asset.unit === 'lovelace');
   const policies = assets.filter(asset => asset.unit !== 'lovelace').map(asset => asset.unit.slice(0, 56));
@@ -107,7 +107,6 @@ export const validateUtxoStillExists = async (
     const output = utxoDetails.outputs[outputIndex];
 
     return output && !output.consumed_by_tx;
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
   } catch (error) {
     return false;
   }
@@ -207,11 +206,13 @@ export const getUtxosExtract = async (
   }
 
   for (const utxo of utxos) {
-    const { tx_hash, output_index, amount } = utxo;
+    const { tx_hash, output_index, amount, inline_datum } = utxo;
     const adaAmount = Number(amount[0].quantity);
 
     // Skip UTXOs below minimum ADA threshold
     if (adaAmount <= minAda) continue;
+
+    if (inline_datum === '49616e76696c2d746167') continue; // Skip UTXOs with "Ianvil-tag" inline datum
 
     // Validate UTXO existence to prevent double-spending
     if (validateUtxos) {
