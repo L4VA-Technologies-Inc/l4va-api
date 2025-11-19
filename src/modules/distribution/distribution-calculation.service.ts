@@ -31,8 +31,8 @@ export class DistributionCalculationService {
     const { adaSent, vtSupply, ASSETS_OFFERED_PERCENT, totalAcquiredValueAda, lpVtAmount } = params;
 
     // ((ADA sent to the vault / total acquire ADA) * Assets Offered Percent) * (VT Supply - LP VT)
-    const percentOfTotalAcquireAdaSent = this.round15(adaSent / totalAcquiredValueAda);
-    const vtReceived = this.round15(percentOfTotalAcquireAdaSent * ASSETS_OFFERED_PERCENT * (vtSupply - lpVtAmount));
+    const percentOfTotalAcquireAdaSent = this.round25(adaSent / totalAcquiredValueAda);
+    const vtReceived = this.round25(percentOfTotalAcquireAdaSent * ASSETS_OFFERED_PERCENT * (vtSupply - lpVtAmount));
     const multiplier = Math.floor(vtReceived / adaSent / 1_000_000);
     const adjustedVtAmount = multiplier * adaSent * 1_000_000;
     return {
@@ -84,7 +84,7 @@ export class DistributionCalculationService {
       this.logger.log(`Contributors get 0 VT (Acquirers = 100%). ` + `They will receive ADA only.`);
     } else {
       // Normal calculation: Contributors get VT based on their share
-      userTotalVtTokens = this.round15((vtSupply - lpVtAmount) * (1 - ASSETS_OFFERED_PERCENT) * contributorShare);
+      userTotalVtTokens = this.round25((vtSupply - lpVtAmount) * (1 - ASSETS_OFFERED_PERCENT) * contributorShare);
       vtAmount = userTotalVtTokens * proportionOfUserTotal;
     }
 
@@ -143,7 +143,7 @@ export class DistributionCalculationService {
 
       // If also no LP, return zero values with calculated token price
       if (lpPercent === 0 || fdv === 0) {
-        const vtPrice = fdv > 0 ? this.round15(fdv / vtSupply) : 0;
+        const vtPrice = fdv > 0 ? this.round25(fdv / vtSupply) : 0;
 
         this.logger.log(`No LP scenario: VT price = ${vtPrice} ADA (FDV ${fdv} / Supply ${vtSupply})`);
 
@@ -166,7 +166,7 @@ export class DistributionCalculationService {
 
     // Edge Case 2: No liquidity pool (LP % = 0%)
     if (lpPercent === 0) {
-      const vtPrice = this.round15(fdv / vtSupply);
+      const vtPrice = this.round25(fdv / vtSupply);
 
       this.logger.log(
         `No LP scenario: VT price calculated from FDV: ${vtPrice} ADA ` + `(FDV ${fdv} / Supply ${vtSupply})`
@@ -185,10 +185,10 @@ export class DistributionCalculationService {
     // Normal LP calculation
     // LP % is a percentage of the FDV VALUE, split equally between ADA and VT
     const lpAdaAmount = Math.round(((lpPercent * fdv) / 2) * 1e6) / 1e6;
-    const lpVtValue = this.round15((lpPercent * vtSupply) / 2);
+    const lpVtValue = this.round25((lpPercent * vtSupply) / 2);
 
     // Calculate token price: LP ADA / LP VT
-    const vtPrice = lpVtValue > 0 ? this.round15(lpAdaAmount / lpVtValue) : 0;
+    const vtPrice = lpVtValue > 0 ? this.round25(lpAdaAmount / lpVtValue) : 0;
 
     // Calculate multiplier for on-chain representation
     const adaPairMultiplier = totalAcquiredAda > 0 ? Math.floor(lpVtValue / (totalAcquiredAda * 1_000_000)) : 0;
@@ -241,10 +241,12 @@ export class DistributionCalculationService {
       });
     }
 
-    // for (const claim of acquirerClaims) {
-    //   const multiplier = claim.metadata?.multiplier || Math.floor(claim.amount / claim.transaction.amount / 1_000_000);
-    //   acquireMultiplier.push(['', '', multiplier]);
-    // }
+    if (!acquirerClaims || acquirerClaims.length === 0) {
+      return {
+        acquireMultiplier,
+        adaDistribution,
+      };
+    }
 
     const multiplier =
       acquirerClaims[0].metadata?.multiplier ||
@@ -257,7 +259,7 @@ export class DistributionCalculationService {
     };
   }
 
-  private round15(amount: number): number {
+  private round25(amount: number): number {
     return Math.round(amount * 1e25) / 1e25;
   }
 
