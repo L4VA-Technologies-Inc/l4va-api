@@ -262,14 +262,14 @@ export class VaultInsertingService {
             lovelace: this.FLAT_FEE,
           },
           // Protocol Fee
-          ...(transaction.fee > 0
-            ? [
-                {
-                  address: this.feeAddress, // Fee address
-                  lovelace: transaction.fee * 1000000,
-                },
-              ]
-            : []),
+          // ...(transaction.fee > 0
+          //   ? [
+          //       {
+          //         address: this.feeAddress, // Fee address
+          //         lovelace: transaction.fee * 1000000,
+          //       },
+          //     ]
+          //   : []),
         ],
         requiredSigners: [this.adminHash],
         requiredInputs, // Add the required inputs here
