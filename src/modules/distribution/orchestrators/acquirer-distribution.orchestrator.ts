@@ -178,6 +178,9 @@ export class AcquirerDistributionOrchestrator {
       );
     }
 
+    // Check if this is the first extraction (will register stake)
+    const isFirstExtraction = !vault.stake_registered;
+
     // Build transaction input
     const input = await this.extractionBuilder.buildExtractionInput(vault, validClaims, adminUtxos, config);
 
@@ -221,6 +224,11 @@ export class AcquirerDistributionOrchestrator {
       }
 
       await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.confirmed });
+
+      if (isFirstExtraction) {
+        await this.vaultRepository.update({ id: vault.id }, { stake_registered: true });
+        this.logger.log(`Marked vault ${vault.id} stake as registered`);
+      }
 
       this.logger.log(`Batch extraction transaction ${response.txHash} confirmed and processed`);
     } else {

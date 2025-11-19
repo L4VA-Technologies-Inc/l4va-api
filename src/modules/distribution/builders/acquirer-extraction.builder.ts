@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 
-import { TransactionInput, ScriptInteraction, TransactionOutput, MintAsset } from '../distribution.types';
+import { ExtractInput, ScriptInteraction, TransactionOutput, MintAsset } from '../distribution.types';
 
 import { Claim } from '@/database/claim.entity';
 import { Vault } from '@/database/vault.entity';
@@ -28,7 +28,7 @@ export class AcquirerExtractionBuilder {
       adminHash: string;
       unparametizedDispatchHash: string;
     }
-  ): Promise<TransactionInput> {
+  ): Promise<ExtractInput> {
     const DISPATCH_ADDRESS = getAddressFromHash(vault.dispatch_parametized_hash);
 
     const scriptInteractions: ScriptInteraction[] = [];
@@ -70,7 +70,7 @@ export class AcquirerExtractionBuilder {
           value: {
             __variant: 'ExtractAda',
             __data: {
-              vault_token_output_index: outputs.length,
+              vault_token_output_index: outputs?.length,
             },
           },
         },
@@ -166,6 +166,17 @@ export class AcquirerExtractionBuilder {
         start: true,
         end: true,
       },
+      ...(!vault.stake_registered
+        ? {
+            deposits: [
+              {
+                hash: vault.dispatch_parametized_hash,
+                type: 'script',
+                deposit: 'stake',
+              },
+            ],
+          }
+        : {}),
       network: 'preprod',
     };
   }
