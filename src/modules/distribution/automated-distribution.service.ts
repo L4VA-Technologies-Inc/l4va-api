@@ -214,7 +214,7 @@ export class AutomatedDistributionService {
    * Ensure stake credential is registered for vault dispatch address
    */
   private async ensureStakeRegistered(vault: Vault): Promise<void> {
-    if (vault.stake_registered) {
+    if (vault.stake_registered || Number(vault.tokens_for_acquires) === 0) {
       return;
     }
 
