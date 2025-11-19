@@ -429,7 +429,7 @@ export class LifecycleService {
       }
 
       // Check if vault should skip acquire phase (Acquirers % = 0%)
-      if (vault.tokens_for_acquires === 0) {
+      if (Number(vault.tokens_for_acquires) === 0) {
         this.logger.log(
           `Vault ${vault.id} has 0% tokens for acquirers. ` +
             `Skipping acquire phase and transitioning directly to governance.`
@@ -981,26 +981,6 @@ export class LifecycleService {
       // Calculate total value of contributed assets (this becomes the FDV)
       const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
       const totalContributedValueAda = assetsValue.totalValueAda;
-
-      if (totalContributedValueAda === 0) {
-        this.logger.warn(`Vault ${vault.id} has no contributed value. Marking as failed.`);
-
-        const response = await this.vaultManagingService.updateVaultMetadataTx({
-          vault,
-          vaultStatus: SmartContractVaultStatus.CANCELLED,
-        });
-
-        await this.claimsService.createCancellationClaims(vault, 'no_contributions');
-
-        await this.executePhaseTransition({
-          vaultId: vault.id,
-          newStatus: VaultStatus.failed,
-          newScStatus: SmartContractVaultStatus.CANCELLED,
-          txHash: response.txHash,
-        });
-
-        return;
-      }
 
       const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
       const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
