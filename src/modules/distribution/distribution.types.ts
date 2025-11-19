@@ -1,6 +1,4 @@
-/**
- * Type definitions for distribution module
- */
+import { Datum, Datum1 } from '../vaults/processing-tx/onchain/types/type';
 
 export interface TransactionInput {
   changeAddress: string;
@@ -11,6 +9,49 @@ export interface TransactionInput {
   outputs: TransactionOutput[];
   requiredSigners: string[];
   referenceInputs: ReferenceInput[];
+  validityInterval: ValidityInterval;
+  network: string;
+}
+
+export interface VaultCreationInput {
+  changeAddress: string;
+  message: string;
+  utxos: string[];
+  mint: MintAsset[];
+  scriptInteractions: ScriptInteraction[];
+  outputs: (
+    | {
+        address: string;
+        assets: AssetOutput[];
+        datum: { type: 'inline'; value: Datum1; shape: object };
+      }
+    | {
+        address: string;
+        datum: { type: 'script'; hash: string };
+      }
+    // VLRM Fee
+    | {
+        address: string;
+        assets: AssetOutput[];
+      }
+  )[];
+  requiredInputs: string[];
+}
+
+export interface CancellationInput {
+  changeAddress: string;
+  message: string;
+  utxos: string[];
+  mint?: MintAsset[];
+  scriptInteractions: ScriptInteraction[];
+  outputs: {
+    address: string;
+    assets?: AssetOutput[];
+    lovelace?: number;
+    datum?: { type: 'inline'; value: string | Datum; shape?: object };
+  }[];
+  requiredSigners: string[];
+  referenceInputs: { txHash: string; index: number }[];
   validityInterval: ValidityInterval;
   network: string;
 }

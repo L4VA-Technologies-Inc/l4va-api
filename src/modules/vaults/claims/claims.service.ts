@@ -15,33 +15,13 @@ import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { CancellationInput } from '@/modules/distribution/distribution.types';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
-import { Datum, Redeemer, Redeemer1 } from '@/modules/vaults/processing-tx/onchain/types/type';
+import { Redeemer, Redeemer1 } from '@/modules/vaults/processing-tx/onchain/types/type';
 import { generate_tag_from_txhash_index, getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { AssetOriginType, AssetStatus } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
-
-interface CancellationInput {
-  changeAddress: string;
-  message: string;
-  utxos: string[];
-  mint?: Array<object>;
-  scriptInteractions: object[];
-  outputs: {
-    address: string;
-    assets?: object[];
-    lovelace?: number;
-    datum?: { type: 'inline'; value: string | Datum; shape?: object };
-  }[];
-  requiredSigners: string[];
-  referenceInputs: { txHash: string; index: number }[];
-  validityInterval: {
-    start: boolean;
-    end: boolean;
-  };
-  network: string;
-}
 
 @Injectable()
 export class ClaimsService {
