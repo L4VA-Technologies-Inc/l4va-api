@@ -68,7 +68,7 @@ export class AutomatedDistributionService {
     };
   }
 
-  @Cron('0 */2 * * * *')
+  @Cron('0 */15 * * * *')
   async processVaultDistributions(): Promise<void> {
     if (this.isRunning) {
       this.logger.warn('Distribution process already running, skipping this execution');
@@ -102,7 +102,7 @@ export class AutomatedDistributionService {
         distribution_processed: false,
         created_at: MoreThan(new Date('2025-10-22').toISOString()),
       },
-      select: ['id', 'tokens_for_acquires'],
+      select: ['id', 'tokens_for_acquires', 'dispatch_parametized_hash', 'script_hash', 'asset_vault_name'],
     });
 
     for (const vault of readyVaults) {
@@ -111,13 +111,15 @@ export class AutomatedDistributionService {
 
         await this.vaultRepository.update({ id: vault.id }, { distribution_in_progress: true });
 
-        if (vault.tokens_for_acquires === 0) {
+        if (Number(vault.tokens_for_acquires) === 0) {
           this.logger.log(
             `Vault ${vault.id} has 0% tokens for acquirers. ` +
               `Skipping acquirer extractions, proceeding directly to contributor payments.`
           );
           continue; // Will be picked up by checkExtractionsAndTriggerPayments
         }
+
+        await this.ensureDispatchParameterized(vault);
 
         // Delegate to acquirer orchestrator
         await this.acquirerOrchestrator.processAcquirerExtractions(vault.id, this.getConfig());
@@ -141,6 +143,7 @@ export class AutomatedDistributionService {
         'vault.dispatch_parametized_hash',
         'vault.dispatch_preloaded_script',
         'vault.tokens_for_acquires',
+        'vault.last_update_tx_hash',
       ])
       .leftJoin(
         'claims',
@@ -190,9 +193,6 @@ export class AutomatedDistributionService {
             : `All acquirer extractions complete for vault ${vault.id}`
         );
 
-        // Ensure stake is registered
-        await this.ensureStakeRegistered(vault);
-
         // Delegate to contributor orchestrator
         await this.contributorOrchestrator.processContributorPayments(vault.id, vault, this.getConfig());
 
@@ -211,46 +211,33 @@ export class AutomatedDistributionService {
   }
 
   /**
-   * Ensure stake credential is registered for vault dispatch address
+   * Ensure dispatch script is parameterized for vault
    */
-  private async ensureStakeRegistered(vault: Vault): Promise<void> {
-    if (vault.stake_registered || Number(vault.tokens_for_acquires) === 0) {
+  private async ensureDispatchParameterized(vault: Vault): Promise<void> {
+    if (vault.dispatch_parametized_hash) {
       return;
     }
 
-    this.logger.log(`Registering stake credential for vault ${vault.id}`);
+    this.logger.log(`Parameterizing dispatch script for vault ${vault.id}`);
 
     try {
-      let dispatchHash = vault.dispatch_parametized_hash;
+      const dispatchResult = await this.blockchainService.applyDispatchParameters({
+        vault_policy: this.SC_POLICY_ID,
+        vault_id: vault.asset_vault_name,
+        contribution_script_hash: vault.script_hash,
+      });
 
-      if (!dispatchHash) {
-        const dispatchResult = await this.blockchainService.applyDispatchParameters({
-          vault_policy: this.SC_POLICY_ID,
-          vault_id: vault.asset_vault_name,
-          contribution_script_hash: vault.script_hash,
-        });
+      await this.vaultRepository.update(
+        { id: vault.id },
+        {
+          dispatch_parametized_hash: dispatchResult.parameterizedHash,
+          dispatch_preloaded_script: dispatchResult.fullResponse,
+        }
+      );
 
-        dispatchHash = dispatchResult.parameterizedHash;
-
-        await this.vaultRepository.update(
-          { id: vault.id },
-          {
-            dispatch_parametized_hash: dispatchResult.parameterizedHash,
-            dispatch_preloaded_script: dispatchResult.fullResponse,
-          }
-        );
-      }
-
-      const stakeResult = await this.blockchainService.registerScriptStake(dispatchHash);
-
-      if (stakeResult.success) {
-        await this.vaultRepository.update({ id: vault.id }, { stake_registered: true });
-        this.logger.log(`Successfully registered stake credential for vault ${vault.id}`);
-      } else {
-        throw new Error('Failed to register stake credential');
-      }
+      this.logger.log(`Successfully parameterized dispatch script for vault ${vault.id}`);
     } catch (error) {
-      this.logger.error(`Error during stake registration for vault ${vault.id}:`, error);
+      this.logger.error(`Error parameterizing dispatch script for vault ${vault.id}:`, error);
       throw error;
     }
   }
