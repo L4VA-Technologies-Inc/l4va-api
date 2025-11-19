@@ -18,6 +18,8 @@ import {
   BigInt,
   hash_plutus_data,
   PlutusList,
+  EnterpriseAddress,
+  Credential,
 } from '@emurgo/cardano-serialization-lib-nodejs';
 
 interface Amount {
@@ -348,4 +350,10 @@ export async function getVaultUtxo(
     }
     throw e;
   }
+}
+
+export function getAddressFromHash(hash: string): string {
+  return EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(hash)))
+    .to_address()
+    .to_bech32();
 }
