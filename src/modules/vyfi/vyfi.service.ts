@@ -1,14 +1,7 @@
 import { Buffer } from 'buffer';
 
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import {
-  Address,
-  Credential,
-  EnterpriseAddress,
-  FixedTransaction,
-  PrivateKey,
-  ScriptHash,
-} from '@emurgo/cardano-serialization-lib-nodejs';
+import { Address, FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { HttpService } from '@nestjs/axios';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -17,7 +10,7 @@ import { firstValueFrom } from 'rxjs';
 import { Repository } from 'typeorm';
 
 import { BlockchainService } from '../vaults/processing-tx/onchain/blockchain.service';
-import { getUtxosExtract } from '../vaults/processing-tx/onchain/utils/lib';
+import { getAddressFromHash, getUtxosExtract } from '../vaults/processing-tx/onchain/utils/lib';
 
 import { Claim } from '@/database/claim.entity';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
@@ -126,7 +119,7 @@ export class VyfiService {
       throw new NotFoundException('Vault or dispatch script not found');
     }
 
-    const DISPATCH_ADDRESS = this.getDispatchAddress(claim.vault.dispatch_parametized_hash);
+    const DISPATCH_ADDRESS = getAddressFromHash(claim.vault.dispatch_parametized_hash);
 
     // Get dispatch UTXOs
     const dispatchUtxos = await this.blockfrost.addressesUtxos(DISPATCH_ADDRESS);
@@ -350,12 +343,6 @@ export class VyfiService {
     return `L4VA: LP Factory Create Pool Order Request -- /${tokenAUnit} --- ADA/${ticker}`;
   }
 
-  private getDispatchAddress(scriptHash: string): string {
-    return EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(scriptHash)))
-      .to_address()
-      .to_bech32();
-  }
-
   // Original TX with only creating LP
   // async createLiquidityPool(claimId: string): Promise<{
   //   txHash: string;
@@ -492,7 +479,7 @@ export class VyfiService {
   //     throw new Error('Vault does not have dispatch script configured');
   //   }
 
-  //   const DISPATCH_ADDRESS = this.getDispatchAddress(claim.vault.dispatch_parametized_hash);
+  //   const DISPATCH_ADDRESS = getAddressFromHash(claim.vault.dispatch_parametized_hash);
   //   // Get dispatch UTXOs to withdraw ADA from
   //   const dispatchUtxos = await this.blockfrost.addressesUtxos(DISPATCH_ADDRESS);
   //   if (!dispatchUtxos || dispatchUtxos.length === 0) {
