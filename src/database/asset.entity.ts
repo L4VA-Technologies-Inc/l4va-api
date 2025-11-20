@@ -136,13 +136,13 @@ export class Asset {
   updated_at: Date;
 
   @BeforeInsert()
-  setAddedAt() {
+  setAddedAt(): void {
     this.added_at = new Date();
     this.updated_at = new Date();
   }
 
   @BeforeUpdate()
-  updateTimestamp() {
+  updateTimestamp(): void {
     this.updated_at = new Date();
   }
 }

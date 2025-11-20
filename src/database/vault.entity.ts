@@ -607,12 +607,12 @@ export class Vault {
   governance_phase_start?: string;
 
   @BeforeInsert()
-  setDate() {
+  setDate(): void {
     this.created_at = new Date().toISOString();
   }
 
   @BeforeUpdate()
-  updateDate() {
+  updateDate(): void {
     this.updated_at = new Date().toISOString();
   }
 }
