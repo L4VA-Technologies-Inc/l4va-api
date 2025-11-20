@@ -261,8 +261,7 @@ export class VyfiService {
       Address.from_bech32(this.adminAddress),
       this.blockfrost,
       {
-        targetTokenAmount: +claim.amount,
-        targetToken: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
+        targetAssets: [{ token: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`, amount: +claim.amount }],
       }
     );
 
@@ -380,10 +379,9 @@ export class VyfiService {
   //   const { utxos: adminUtxos, requiredInputs } = await getUtxosExtract(
   //     Address.from_bech32(this.adminAddress),
   //     this.blockfrost,
-  //     {
-  //       targetTokenAmount: +claim.amount,
-  //       targetToken: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
-  //     }
+  //    {
+  //      targetAssets: [{ token: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`, amount: +claim.amount }],
+  //    }
   //   );
 
   //   if (adminUtxos.length === 0) {
@@ -520,10 +518,9 @@ export class VyfiService {
   //   const { utxos: adminUtxos, requiredInputs } = await getUtxosExtract(
   //     Address.from_bech32(this.adminAddress),
   //     this.blockfrost,
-  //     {
-  //       targetTokenAmount: +claim.amount,
-  //       targetToken: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
-  //     }
+  //    {
+  //      targetAssets: [{ token: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`, amount: +claim.amount }],
+  //    }
   //   );
 
   //   if (adminUtxos.length === 0) {

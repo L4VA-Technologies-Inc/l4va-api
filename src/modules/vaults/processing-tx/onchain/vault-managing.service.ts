@@ -147,7 +147,10 @@ export class VaultManagingService {
     const { utxos: utxoHexArray } = await getUtxosExtract(
       Address.from_bech32(vaultConfig.customerAddress),
       this.blockfrost,
-      { minAda: 4000000 } // 4 ADA minimum
+      {
+        minAda: 4000000,
+        targetAssets: [{ token: `${this.VLRM_POLICY_ID}${this.VLRM_HEX_ASSET_NAME}`, amount: this.VLRM_CREATOR_FEE }],
+      } // 4 ADA minimum
     );
 
     if (utxoHexArray.length === 0) {

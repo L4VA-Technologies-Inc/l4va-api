@@ -50,10 +50,6 @@ interface GetUtxosOptions {
   minAda?: number;
   /** Filter UTXOs based on ADA amount for specific selection (in lovelace) */
   filterByAda?: number;
-  /** Single token unit to collect (backward compatibility) */
-  targetToken?: string;
-  /** Amount of single token needed (backward compatibility) */
-  targetTokenAmount?: number;
   /** Array of assets to collect */
   targetAssets?: TargetAsset[];
   /** Whether to validate UTXO existence on-chain (default: true) */
@@ -157,29 +153,13 @@ export const getUtxosExtract = async (
   blockfrost: BlockFrostAPI,
   options: GetUtxosOptions = {}
 ): Promise<GetUtxosResult> => {
-  const {
-    targetToken,
-    minAda = 0,
-    filterByAda,
-    targetTokenAmount = 0,
-    targetAssets = [],
-    validateUtxos = true,
-    maxUtxos = 15,
-  } = options;
+  const { minAda = 0, filterByAda, targetAssets = [], validateUtxos = true, maxUtxos = 15 } = options;
 
-  // Handle backward compatibility - convert single token to array format
-  let assetsToCollect: TargetAsset[] = [];
-  if (targetToken && targetTokenAmount > 0) {
-    assetsToCollect = [{ token: targetToken, amount: targetTokenAmount }];
-  } else if (targetAssets.length > 0) {
-    assetsToCollect = [...targetAssets];
-  }
-
-  const hasTargetAssets = assetsToCollect.length > 0;
+  const hasTargetAssets = targetAssets.length > 0;
 
   // Initialize asset collection tracking
   const assetCollections: Map<string, AssetCollection> = new Map();
-  assetsToCollect.forEach(asset => {
+  targetAssets.forEach(asset => {
     assetCollections.set(asset.token, {
       token: asset.token,
       collected: 0,
