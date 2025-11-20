@@ -44,59 +44,83 @@ export class ChatService {
   }
 
   generateUserToken(userId: string): string {
-    const token = this.serverClient.createToken(userId);
-    return token;
+    try {
+      const token = this.serverClient.createToken(userId);
+      return token;
+    } catch (error) {
+      throw error;
+    }
   }
 
   async createOrUpdateUser(userId: string, userData: { name?: string; image?: string; role?: string }) {
-    const user = {
-      id: userId,
-      name: userData.name || `User ${userId}`,
-      image: userData.image || `https://getstream.io/random_png/?id=${userId}&name=${userData.name || userId}`,
-      role: userData.role || 'user',
-      ...userData,
-    };
+    try {
+      const user = {
+        id: userId,
+        name: userData.name || `User ${userId}`,
+        image: userData.image || `https://getstream.io/random_png/?id=${userId}&name=${userData.name || userId}`,
+        role: userData.role || 'user',
+        ...userData,
+      };
 
-    const response = await this.serverClient.upsertUser(user);
-    return response;
+      const response = await this.serverClient.upsertUser(user);
+      return response;
+    } catch (error) {
+      throw error;
+    }
   }
 
   async addMembersToVaultChannel(vaultId: string, userIds: string[]) {
-    const channel = this.serverClient.channel('messaging', `vault-${vaultId}`);
-    await channel.addMembers(userIds);
-    return true;
+    try {
+      const channel = this.serverClient.channel('messaging', `vault-${vaultId}`);
+      await channel.addMembers(userIds);
+      return true;
+    } catch (error) {
+      throw error;
+    }
   }
 
   async removeMembersFromVaultChannel(vaultId: string, userIds: string[]) {
-    const channel = this.serverClient.channel('messaging', `vault-${vaultId}`);
-    await channel.removeMembers(userIds);
-    return true;
+    try {
+      const channel = this.serverClient.channel('messaging', `vault-${vaultId}`);
+      await channel.removeMembers(userIds);
+      return true;
+    } catch (error) {
+      throw error;
+    }
   }
 
   async getVaultChannelInfo(vaultId: string) {
-    const channel = this.serverClient.channel('messaging', `vault-${vaultId}`);
-    const channelState = await channel.query();
+    try {
+      const channel = this.serverClient.channel('messaging', `vault-${vaultId}`);
+      const channelState = await channel.query();
 
-    return {
-      id: channel.id,
-      type: channel.type,
-      memberCount: Object.keys(channelState.members || {}).length,
-      createdAt: channelState.channel?.created_at,
-      updatedAt: channelState.channel?.updated_at,
-      members: channelState.members,
-    };
+      return {
+        id: channel.id,
+        type: channel.type,
+        memberCount: Object.keys(channelState.members || {}).length,
+        createdAt: channelState.channel?.created_at,
+        updatedAt: channelState.channel?.updated_at,
+        members: channelState.members,
+      };
+    } catch (error) {
+      throw error;
+    }
   }
 
   async sendSystemMessage(vaultId: string, text: string, data?: any) {
-    const channel = this.serverClient.channel('messaging', `vault-${vaultId}`);
+    try {
+      const channel = this.serverClient.channel('messaging', `vault-${vaultId}`);
 
-    await channel.sendMessage({
-      text,
-      user: { id: 'system', name: 'System' },
-      type: 'system',
-      ...data,
-    });
+      await channel.sendMessage({
+        text,
+        user: { id: 'system', name: 'System' },
+        type: 'system',
+        ...data,
+      });
 
-    return true;
+      return true;
+    } catch (error) {
+      throw error;
+    }
   }
 }

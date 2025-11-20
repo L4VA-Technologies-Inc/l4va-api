@@ -16,7 +16,7 @@ import { BlockchainWebhookDto } from './dto/webhook.dto';
 import { ValidityIntervalException } from './exceptions/validity-interval.exception';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
 import { Datum, Redeemer } from './types/type';
-import { getUtxosExctract } from './utils/lib';
+import { getUtxosExtract } from './utils/lib';
 
 import { Vault } from '@/database/vault.entity';
 import { TransactionStatus } from '@/types/transaction.types';
@@ -58,10 +58,40 @@ export interface TransactionSubmitResponse {
   txHash: string;
 }
 
+interface ContributionInput {
+  changeAddress: string;
+  utxos: string[];
+  message: string;
+  mint: object[];
+  scriptInteractions: object[];
+  outputs: (
+    | {
+        address: string;
+        assets?: object[];
+        lovelace?: number; // Required if Contribution in ADA
+        datum?: { type: 'inline'; value: Datum; shape: object };
+      }
+    // Fee output
+    | {
+        address: string;
+        lovelace: number;
+      }
+  )[];
+  requiredSigners: string[];
+  requiredInputs?: string[];
+  referenceInputs: { txHash: string; index: number }[];
+  validityInterval: {
+    start: boolean;
+    end: boolean;
+  };
+  network: string;
+}
+
 @Injectable()
 export class VaultInsertingService {
   private readonly logger = new Logger(VaultInsertingService.name);
-  private readonly FLAT_FEE = 4_000_000; // Flat fee in lovelace
+  private readonly FLAT_FEE: number;
+  private readonly feeAddress: string;
   private readonly adminAddress: string;
   private readonly adminHash: string;
   private readonly adminSKey: string;
@@ -78,7 +108,8 @@ export class VaultInsertingService {
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
-
+    this.feeAddress = this.configService.get<string>('FEE_ADDRESS');
+    this.FLAT_FEE = this.configService.get<number>('PROTOCOL_FLAT_FEE');
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
     });
@@ -105,34 +136,59 @@ export class VaultInsertingService {
         throw new Error('Vault script hash is missing - vault may not be properly configured');
       }
 
-      const utxos = await getUtxosExctract(Address.from_bech32(params.changeAddress), 0, this.blockfrost); // Any UTXO works.
-
-      if (utxos.length === 0) {
-        throw new Error('No UTXOs found.');
-      }
-
       const VAULT_ID = vault.asset_vault_name;
       const CONTRIBUTION_SCRIPT_HASH = vault.script_hash;
       const LAST_UPDATE_TX_HASH = vault.publication_hash;
       const LAST_UPDATE_TX_INDEX = 0;
       const isAda = params.outputs[0].assets[0].assetName === 'lovelace';
-      let quantity = 0;
-      let assetsList = [
-        {
-          assetName: { name: VAULT_ID, format: 'hex' },
-          policyId: CONTRIBUTION_SCRIPT_HASH,
-          quantity: 1000,
-        },
-        {
-          assetName: { name: params.outputs[0].assets[0].assetName, format: 'hex' },
-          policyId: params.outputs[0].assets[0].policyId,
-          quantity: 1,
-        },
-      ];
 
+      let quantity = 0;
+      let assetsList = [];
+      let requiredInputs: string[] = [];
+      let allUtxos: string[] = [];
+
+      // Determine what tokens the user is contributing
       if (isAda) {
         quantity = params.outputs[0].assets[0].quantity * 1000000;
+
+        // For ADA contributions, we just need UTXOs with sufficient ADA + minimum for fees
+        const { utxos } = await getUtxosExtract(Address.from_bech32(params.changeAddress), this.blockfrost, {
+          minAda: 4000000,
+        });
+
+        if (utxos.length === 0) {
+          throw new Error(`No UTXOs found with at least 4 ADA.`);
+        }
+
+        // For ADA, any UTXO with sufficient balance works
+        allUtxos = utxos;
       } else {
+        // For NFT/Token contributions, collect all assets in one call
+        const targetAssets = params.outputs[0].assets.map(asset => ({
+          token: `${asset.policyId}${asset.assetName}`,
+          amount: asset.quantity,
+        }));
+
+        const { filteredUtxos, requiredInputs: tokenUtxos } = await getUtxosExtract(
+          Address.from_bech32(params.changeAddress),
+          this.blockfrost,
+          {
+            targetAssets,
+            validateUtxos: false,
+            minAda: 1000000,
+            filterByAda: 4_000_000,
+          }
+        );
+
+        if (!tokenUtxos || tokenUtxos.length === 0) {
+          throw new Error('No UTXOs found containing required tokens');
+        }
+
+        // Set required inputs and all available UTXOs
+        requiredInputs = tokenUtxos;
+        allUtxos = filteredUtxos;
+
+        // Format assets for the transaction output
         assetsList = params.outputs[0].assets.map(asset => ({
           assetName: { name: asset.assetName, format: 'hex' },
           policyId: asset.policyId,
@@ -140,36 +196,17 @@ export class VaultInsertingService {
         }));
       }
 
-      const input: {
-        changeAddress: string;
-        utxos?: string[]; // Only for Contribution in NFT
-        message: string;
-        mint: Array<object>;
-        scriptInteractions: object[];
-        outputs: {
-          address: string;
-          assets?: object[];
-          lovelace?: number; // Required if Contribution in ADA
-          datum?: { type: 'inline'; value: Datum; shape: object };
-        }[];
-        requiredSigners: string[];
-        referenceInputs: { txHash: string; index: number }[];
-        validityInterval: {
-          start: boolean;
-          end: boolean;
-        };
-        network: string;
-      } = {
+      const input: ContributionInput = {
         changeAddress: params.changeAddress,
         message: 'Asset(s) contributed to vault',
-        // utxos: utxos,
+        utxos: allUtxos, // All available UTXOs for selection
         mint: [
           {
             version: 'cip25',
             assetName: { name: 'receipt', format: 'utf8' },
             policyId: CONTRIBUTION_SCRIPT_HASH,
             type: 'plutus',
-            quantity: 1, // Mint 1 VT token
+            quantity: 1, // Mint 1 receipt token
             metadata: {},
           },
         ],
@@ -219,12 +256,23 @@ export class VaultInsertingService {
               },
             },
           },
+          // Flat Fee
           {
             address: this.adminAddress,
             lovelace: this.FLAT_FEE,
           },
+          // Protocol Fee
+          // ...(transaction.fee > 0
+          //   ? [
+          //       {
+          //         address: this.feeAddress, // Fee address
+          //         lovelace: transaction.fee * 1000000,
+          //       },
+          //     ]
+          //   : []),
         ],
         requiredSigners: [this.adminHash],
+        requiredInputs, // Add the required inputs here
         referenceInputs: [
           {
             txHash: LAST_UPDATE_TX_HASH,
@@ -254,7 +302,6 @@ export class VaultInsertingService {
       if (error instanceof NotFoundException) {
         throw new NotFoundException(error.message);
       }
-
       throw error;
     }
   }

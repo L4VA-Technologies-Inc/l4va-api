@@ -1539,21 +1539,21 @@ export class VaultsService {
 
     let targetDecimals: number;
     if (tokenSupply >= 900_000_000_000) {
-      targetDecimals = 3;
+      targetDecimals = 1;
     } else if (tokenSupply >= 90_000_000_000) {
-      targetDecimals = 4;
+      targetDecimals = 1;
     } else if (tokenSupply >= 9_000_000_000) {
-      targetDecimals = 5;
+      targetDecimals = 2;
     } else if (tokenSupply >= 900_000_000) {
-      targetDecimals = 6;
+      targetDecimals = 3;
     } else if (tokenSupply >= 90_000_000) {
-      targetDecimals = 7;
+      targetDecimals = 4;
     } else if (tokenSupply >= 9_000_000) {
-      targetDecimals = 8;
+      targetDecimals = 5;
     } else if (tokenSupply >= 1_000_000) {
-      targetDecimals = 9;
+      targetDecimals = 6;
     } else {
-      targetDecimals = 9;
+      targetDecimals = 6;
     }
 
     const safeDecimals = Math.min(targetDecimals, maxSafeDecimals);

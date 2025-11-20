@@ -5,7 +5,6 @@ import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { Repository } from 'typeorm';
 
-import { AssetsService } from '../vaults/processing-tx/assets/assets.service';
 import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
 
 import { AssetValueDto, BlockfrostAssetResponseDto } from './dto/asset-value.dto';
@@ -14,6 +13,7 @@ import { PaginationQueryDto, PaginationMetaDto } from './dto/pagination.dto';
 import { WalletOverviewDto, PaginatedWalletSummaryDto } from './dto/wallet-summary.dto';
 
 import { Vault } from '@/database/vault.entity';
+import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 
 @Injectable()

@@ -20,17 +20,17 @@ import { DistributionModule } from './modules/distribution/distribution.module';
 import { JwtGlobalModule } from './modules/globals/jwt_global_module/jwt_global.module';
 import { UsersModule } from './modules/users/users.module';
 import { ClaimsModule } from './modules/vaults/claims/claims.module';
-import { LpTokensModule } from './modules/vaults/lp-tokens/lp-tokens.module';
 import { AcquireModule } from './modules/vaults/phase-management/acquire/acquire.module';
 import { ContributionModule } from './modules/vaults/phase-management/contribution/contribution.module';
 import { GovernanceModule } from './modules/vaults/phase-management/governance/governance.module';
-import { AssetsModule } from './modules/vaults/processing-tx/assets/assets.module';
 import { TransactionsModule } from './modules/vaults/processing-tx/offchain-tx/transactions.module';
 import { BlockchainModule } from './modules/vaults/processing-tx/onchain/blockchain.module';
 import { VaultsModule } from './modules/vaults/vaults.module';
 import { VyfiModule } from './modules/vyfi/vyfi.module';
 
-import { NotificationModule } from '@/modules/notification/notification.module'; // Hello =)
+import { NotificationModule } from '@/modules/notification/notification.module';
+import { AssetsModule } from '@/modules/vaults/assets/assets.module';
+
 @Module({
   imports: [
     SentryModule.forRoot(),
@@ -75,7 +75,6 @@ import { NotificationModule } from '@/modules/notification/notification.module';
     ContributionModule,
     AcquireModule,
     TransactionsModule,
-    LpTokensModule,
     DistributionModule,
     ClaimsModule,
     VyfiModule,

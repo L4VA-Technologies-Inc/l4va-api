@@ -8,6 +8,11 @@ import {
   Address,
   FixedTransaction,
   PrivateKey,
+  TransactionUnspentOutputs,
+  TransactionUnspentOutput,
+  TransactionOutput,
+  TransactionHash,
+  TransactionInput,
 } from '@emurgo/cardano-serialization-lib-nodejs';
 import {
   BadRequestException,
@@ -21,14 +26,15 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
+
 import { BlockchainService } from './blockchain.service';
 import { Datum1 } from './types/type';
-import { generate_tag_from_txhash_index, getUtxos, getVaultUtxo } from './utils/lib';
+import { assetsToValue, generate_tag_from_txhash_index, getUtxosExtract, getVaultUtxo } from './utils/lib';
 import { VaultInsertingService } from './vault-inserting.service';
 
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
-import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { VaultCreationInput } from '@/modules/distribution/distribution.types';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { SmartContractVaultStatus, VaultPrivacy } from '@/types/vault.types';
@@ -85,13 +91,17 @@ export class VaultManagingService {
   private readonly adminSKey: string;
   private readonly adminAddress: string;
   private readonly vaultScriptAddress: string;
+  private readonly vaultScriptSKey: string;
   private readonly unparametizedScriptHash: string;
   private readonly blueprintTitle: string;
   private readonly blockfrost: BlockFrostAPI;
 
+  private readonly VLRM_HEX_ASSET_NAME: string;
+  private readonly VLRM_POLICY_ID: string;
+  private readonly VLRM_CREATOR_FEE: number;
+  private readonly VLRM_CREATOR_FEE_ENABLED: boolean;
+
   constructor(
-    @InjectRepository(Transaction)
-    private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(AssetsWhitelistEntity)
     private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
     private readonly configService: ConfigService,
@@ -106,7 +116,12 @@ export class VaultManagingService {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.vaultScriptAddress = this.configService.get<string>('VAULT_SCRIPT_ADDRESS');
+    this.vaultScriptSKey = this.configService.get<string>('VAULT_SCRIPT_SKEY');
     this.unparametizedScriptHash = this.configService.get<string>('CONTRIBUTION_SCRIPT_HASH');
+    this.VLRM_HEX_ASSET_NAME = this.configService.get<string>('VLRM_HEX_ASSET_NAME');
+    this.VLRM_POLICY_ID = this.configService.get<string>('VLRM_POLICY_ID');
+    this.VLRM_CREATOR_FEE = this.configService.get<number>('VLRM_CREATOR_FEE');
+    this.VLRM_CREATOR_FEE_ENABLED = this.configService.get<boolean>('VLRM_CREATOR_FEE_ENABLED');
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
     });
@@ -128,13 +143,30 @@ export class VaultManagingService {
       .to_address()
       .to_bech32();
 
-    const utxos = await getUtxos(Address.from_bech32(vaultConfig.customerAddress), 0, this.blockfrost); // Any UTXO works.
-    if (utxos.len() === 0) {
-      throw new Error('No UTXOs found.');
+    // Use the optimized function with better error handling
+    const { filteredUtxos: utxoHexArray, requiredInputs } = await getUtxosExtract(
+      Address.from_bech32(vaultConfig.customerAddress),
+      this.blockfrost,
+      {
+        minAda: 2000000,
+        filterByAda: 8000000,
+        targetAssets: [{ token: `${this.VLRM_POLICY_ID}${this.VLRM_HEX_ASSET_NAME}`, amount: this.VLRM_CREATOR_FEE }],
+      } // 4 ADA minimum
+    );
+
+    if (utxoHexArray.length === 0) {
+      throw new Error('No UTXOs found with at least 4 ADA.');
     }
 
+    // Convert hex array back to TransactionUnspentOutputs for compatibility
+    const utxos = TransactionUnspentOutputs.new();
+    utxoHexArray.forEach(utxoHex => {
+      const utxo = TransactionUnspentOutput.from_hex(utxoHex);
+      utxos.add(utxo);
+    });
+
     const selectedUtxo = utxos.get(0);
-    const REQUIRED_INPUTS = [selectedUtxo.to_hex()];
+    const REQUIRED_INPUTS = [selectedUtxo.to_hex(), ...requiredInputs];
     const assetName = generate_tag_from_txhash_index(
       selectedUtxo.input().transaction_id().to_hex(),
       selectedUtxo.input().index()
@@ -178,27 +210,15 @@ export class VaultManagingService {
       throw new Error('Failed to find script hash');
     }
 
+    const vaultAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(scriptHash)))
+      .to_address()
+      .to_bech32();
+
     try {
-      const input: {
-        changeAddress: string;
-        message: string;
-        mint: Array<object>;
-        scriptInteractions: object[];
-        outputs: (
-          | {
-              address: string;
-              assets: object[];
-              datum: { type: 'inline'; value: Datum1; shape: object };
-            }
-          | {
-              address: string;
-              datum: { type: 'script'; hash: string };
-            }
-        )[];
-        requiredInputs: string[];
-      } = {
+      const input: VaultCreationInput = {
         changeAddress: vaultConfig.customerAddress,
         message: `${vaultConfig.vaultName} Vault Creation`,
+        utxos: utxoHexArray,
         mint: [
           {
             version: 'cip25',
@@ -237,7 +257,7 @@ export class VaultManagingService {
               value: {
                 vault_status: SmartContractVaultStatus.OPEN,
                 contract_type: vaultConfig.contractType,
-                asset_whitelist: vaultConfig.allowedPolicies,
+                asset_whitelist: [...vaultConfig.allowedPolicies, this.VLRM_POLICY_ID],
                 // contributor_whitelist: vaultConfig.allowedContributors, // address list of contributors
                 asset_window: {
                   // Time allowed to upload NFT
@@ -282,6 +302,20 @@ export class VaultManagingService {
               hash: scriptHash,
             },
           },
+          ...(!this.VLRM_CREATOR_FEE_ENABLED
+            ? [
+                {
+                  address: vaultAddress,
+                  assets: [
+                    {
+                      assetName: { name: this.VLRM_HEX_ASSET_NAME, format: 'hex' },
+                      policyId: this.VLRM_POLICY_ID,
+                      quantity: this.VLRM_CREATOR_FEE,
+                    },
+                  ],
+                },
+              ]
+            : []),
         ],
         requiredInputs: REQUIRED_INPUTS,
       };
@@ -388,14 +422,12 @@ export class VaultManagingService {
 
   async updateVaultMetadataTx({
     vault,
-    transactionId,
     acquireMultiplier,
     adaPairMultiplier,
     vaultStatus,
     adaDistribution,
   }: {
     vault: Vault;
-    transactionId: string;
     vaultStatus: SmartContractVaultStatus;
     acquireMultiplier?: [string, string | null, number][];
     adaPairMultiplier?: number;
@@ -405,8 +437,10 @@ export class VaultManagingService {
     txHash: string;
     message: string;
   }> {
-    const transaction = await this.transactionRepository.findOne({
-      where: { id: transactionId },
+    const transaction = await this.transactionsService.createTransaction({
+      vault_id: vault.id,
+      type: TransactionType.updateVault,
+      assets: [], // No assets needed for this transaction as it's metadata update
     });
 
     const assetsWhitelist = await this.assetsWhitelistRepository.find({
@@ -414,9 +448,11 @@ export class VaultManagingService {
       select: ['policy_id'],
     });
 
-    if (!transaction || transaction.type !== TransactionType.updateVault) {
-      throw new NotFoundException('Transaction not found');
-    }
+    const { utxos: adminUtxos } = await getUtxosExtract(
+      Address.from_bech32(this.adminAddress),
+      this.blockfrost,
+      { minAda: 4000000, maxUtxos: 1 } // 4 ADA minimum
+    );
 
     const allowedPolicies: string[] =
       Array.isArray(assetsWhitelist) && assetsWhitelist.length > 0
@@ -428,9 +464,44 @@ export class VaultManagingService {
       .to_bech32();
 
     const vaultUtxo = await getVaultUtxo(this.scPolicyId, vault.asset_vault_name, this.blockfrost);
+
+    const utxoDetails = await this.blockfrost.txsUtxos(vault.publication_hash);
+
+    if (!utxoDetails || !utxoDetails.outputs) {
+      throw new Error(`${vault.publication_hash} not found`);
+    }
+
+    // Find the output with the script address that contains the collateral
+    const scriptOutputIndex = utxoDetails.outputs.findIndex(output => output.address === this.vaultScriptAddress);
+
+    if (scriptOutputIndex === -1) {
+      this.logger.error(`No output found with vault script address ${this.vaultScriptAddress}`);
+      this.logger.error(`Available addresses: ${utxoDetails.outputs.map(o => o.address).join(', ')}`);
+      throw new Error(`No output found with vault script address ${this.vaultScriptAddress}`);
+    }
+
+    const scriptOutput = utxoDetails.outputs[scriptOutputIndex];
+    const refScriptPayBackAmount = Number(scriptOutput.amount[0].quantity);
+
+    if (refScriptPayBackAmount <= 0) {
+      throw new Error(`Collateral UTXO has zero or negative ADA amount: ${refScriptPayBackAmount}`);
+    }
+
+    // Create the UTXO reference for the script collateral
+    const scriptUtxo = TransactionUnspentOutput.new(
+      TransactionInput.new(TransactionHash.from_hex(vault.publication_hash), scriptOutputIndex),
+      TransactionOutput.new(
+        Address.from_bech32(this.vaultScriptAddress),
+        assetsToValue([{ unit: 'lovelace', quantity: refScriptPayBackAmount }])
+      )
+    );
+
+    adminUtxos.push(scriptUtxo.to_hex());
+
     const input = {
       changeAddress: this.adminAddress,
       message: `Vault ${vault.id} Update`,
+      utxos: adminUtxos,
       scriptInteractions: [
         {
           purpose: 'spend',
@@ -496,28 +567,32 @@ export class VaultManagingService {
             },
           },
         },
+        {
+          address: vault.owner.address, // Send back to vault owner
+          lovelace: refScriptPayBackAmount, // Refund amount (adjust based on actual collateral)
+        },
       ],
       requiredSigners: [this.adminHash],
     };
 
     this.logger.debug('Vault update transaction input:', JSON.stringify(input));
-
     try {
-      // Build the transaction using BlockchainService
-      const buildResponse = await this.blockchainService.buildTransaction(input);
+    // Build the transaction using BlockchainService
+    const buildResponse = await this.blockchainService.buildTransaction(input);
 
-      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+    const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+    txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.vaultScriptSKey));
+    txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
-      const response = await this.vaultInsertingService.submitTransaction({
-        transaction: txToSubmitOnChain.to_hex(),
-        vaultId: vault.id,
-        txId: transaction.id,
-      });
+    const response = await this.vaultInsertingService.submitTransaction({
+      transaction: txToSubmitOnChain.to_hex(),
+      vaultId: vault.id,
+      txId: transaction.id,
+    });
 
       return { success: true, txHash: response.txHash, message: 'Transaction submitted successfully' };
     } catch (error) {
-      await this.transactionsService.updateTransactionStatusById(transactionId, TransactionStatus.failed);
+      await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
       this.logger.error('Failed to build vault update tx:', error);
       throw error;
     }
