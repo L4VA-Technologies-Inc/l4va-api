@@ -275,7 +275,13 @@ export const getUtxosExtract = async (
 
   // Add filtered UTXOs if filterByAda was specified
   if (filterByAda !== undefined) {
-    result.filteredUtxos = filteredUtxos;
+    // Include required token UTXOs if they exist
+    if (hasTargetAssets) {
+      const requiredUtxosArray = Array.from(requiredTokenUtxos);
+      result.filteredUtxos = [...new Set([...filteredUtxos, ...requiredUtxosArray])];
+    } else {
+      result.filteredUtxos = filteredUtxos;
+    }
   }
 
   if (hasTargetAssets) {

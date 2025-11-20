@@ -144,11 +144,12 @@ export class VaultManagingService {
       .to_bech32();
 
     // Use the optimized function with better error handling
-    const { utxos: utxoHexArray } = await getUtxosExtract(
+    const { filteredUtxos: utxoHexArray, requiredInputs } = await getUtxosExtract(
       Address.from_bech32(vaultConfig.customerAddress),
       this.blockfrost,
       {
-        minAda: 4000000,
+        minAda: 2000000,
+        filterByAda: 8000000,
         targetAssets: [{ token: `${this.VLRM_POLICY_ID}${this.VLRM_HEX_ASSET_NAME}`, amount: this.VLRM_CREATOR_FEE }],
       } // 4 ADA minimum
     );
@@ -165,7 +166,7 @@ export class VaultManagingService {
     });
 
     const selectedUtxo = utxos.get(0);
-    const REQUIRED_INPUTS = [selectedUtxo.to_hex()];
+    const REQUIRED_INPUTS = [selectedUtxo.to_hex(), ...requiredInputs];
     const assetName = generate_tag_from_txhash_index(
       selectedUtxo.input().transaction_id().to_hex(),
       selectedUtxo.input().index()
@@ -256,7 +257,7 @@ export class VaultManagingService {
               value: {
                 vault_status: SmartContractVaultStatus.OPEN,
                 contract_type: vaultConfig.contractType,
-                asset_whitelist: vaultConfig.allowedPolicies,
+                asset_whitelist: [...vaultConfig.allowedPolicies, this.VLRM_POLICY_ID],
                 // contributor_whitelist: vaultConfig.allowedContributors, // address list of contributors
                 asset_window: {
                   // Time allowed to upload NFT

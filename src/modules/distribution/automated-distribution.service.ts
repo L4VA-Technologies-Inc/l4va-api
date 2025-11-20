@@ -111,6 +111,8 @@ export class AutomatedDistributionService {
 
         await this.vaultRepository.update({ id: vault.id }, { distribution_in_progress: true });
 
+        await this.ensureDispatchParameterized(vault);
+
         if (Number(vault.tokens_for_acquires) === 0) {
           this.logger.log(
             `Vault ${vault.id} has 0% tokens for acquirers. ` +
@@ -118,8 +120,6 @@ export class AutomatedDistributionService {
           );
           continue; // Will be picked up by checkExtractionsAndTriggerPayments
         }
-
-        await this.ensureDispatchParameterized(vault);
 
         // Delegate to acquirer orchestrator
         await this.acquirerOrchestrator.processAcquirerExtractions(vault.id, this.getConfig());
