@@ -24,6 +24,8 @@ import { TokenMetadataDto } from './dto/token-metadata.dto';
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { TokenRegistryStatus } from '@/types/tokenRegistry.types';
 
+import sharp from 'sharp';
+
 type ItemData = {
   sequenceNumber: number;
   value: string | number;
@@ -309,10 +311,7 @@ export class MetadataRegistryApiService {
         })
       );
 
-      const sharp = await import('sharp');
-
-      const resizedImageBuffer = await sharp
-        .default(response.data)
+      const resizedImageBuffer = await sharp(response.data)
         .resize({
           width: 128,
           height: 128,
@@ -327,8 +326,7 @@ export class MetadataRegistryApiService {
           `Image still too large after resizing (${Math.round(resizedImageBuffer.length / 1024)}KB), using placeholder`
         );
 
-        const tinyImageBuffer = await sharp
-          .default(response.data)
+        const tinyImageBuffer = await sharp(response.data)
           .resize(64, 64, { fit: 'inside' })
           .png({ quality: 60, compressionLevel: 9 })
           .toBuffer();

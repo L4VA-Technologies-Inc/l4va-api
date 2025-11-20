@@ -1,4 +1,5 @@
 import {
+  Body,
   ClassSerializerInterceptor,
   Controller,
   FileTypeValidator,
@@ -23,6 +24,7 @@ import { AuthGuard } from '../auth/auth.guard';
 import { AwsService } from './aws.service';
 
 import { ApiDoc } from '@/decorators/api-doc.decorator';
+import { AwsUploadImageDto } from '@/modules/aws_bucket/dto/aws.dto';
 
 export const mbMultiplication = 1024 * 1024;
 
@@ -51,10 +53,11 @@ export class AwsController {
       })
     )
     file: Express.Multer.File,
-    @Req() req: Request
+    @Req() req: Request,
+    @Body() body: AwsUploadImageDto
   ) {
     const { host } = req.headers;
-    return await this.awsService.uploadImage(file, host);
+    return await this.awsService.uploadImage(file, host, body);
   }
 
   @ApiDoc({

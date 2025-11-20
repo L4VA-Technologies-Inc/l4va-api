@@ -26,7 +26,6 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { TransactionsService } from '../offchain-tx/transactions.service';
 
 import { BlockchainService } from './blockchain.service';
 import { Datum1 } from './types/type';
@@ -36,7 +35,8 @@ import { VaultInsertingService } from './vault-inserting.service';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Vault } from '@/database/vault.entity';
 import { VaultCreationInput } from '@/modules/distribution/distribution.types';
-import { TransactionType } from '@/types/transaction.types';
+import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { SmartContractVaultStatus, VaultPrivacy } from '@/types/vault.types';
 
 export interface VaultConfig {
@@ -576,7 +576,7 @@ export class VaultManagingService {
     };
 
     this.logger.debug('Vault update transaction input:', JSON.stringify(input));
-
+    try {
     // Build the transaction using BlockchainService
     const buildResponse = await this.blockchainService.buildTransaction(input);
 
@@ -590,7 +590,12 @@ export class VaultManagingService {
       txId: transaction.id,
     });
 
-    return { success: true, txHash: response.txHash, message: 'Transaction submitted successfully' };
+      return { success: true, txHash: response.txHash, message: 'Transaction submitted successfully' };
+    } catch (error) {
+      await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
+      this.logger.error('Failed to build vault update tx:', error);
+      throw error;
+    }
   }
 
   /**
