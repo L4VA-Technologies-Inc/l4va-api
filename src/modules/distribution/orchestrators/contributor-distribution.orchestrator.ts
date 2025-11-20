@@ -137,6 +137,7 @@ export class ContributorDistributionOrchestrator {
           await this.processBatchedPayments(vault, [failedClaim], dispatchUtxos, config);
           processedCount += 1;
         } catch (singleError) {
+          this.logger.error(`Failed to process single claim ${failedClaim.id}:`, singleError);
           processedCount += 1;
         }
 

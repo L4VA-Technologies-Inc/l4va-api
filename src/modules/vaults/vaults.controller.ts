@@ -56,7 +56,7 @@ export class VaultsController {
   })
   @UseGuards(AuthGuard)
   @Post('/publish')
-  async publishVault(@Request() req, @Body() publishDto: PublishVaultDto): Promise<VaultFullResponse> {
+  async publishVault(@Request() req: AuthRequest, @Body() publishDto: PublishVaultDto): Promise<VaultFullResponse> {
     const userId = req.user.sub;
     try {
       return await this.vaultsService.publishVault(userId, publishDto);
@@ -148,7 +148,10 @@ export class VaultsController {
   })
   @UseGuards(AuthGuard)
   @Get('my/drafts')
-  getMyDraftVaults(@Request() req, @Query() query: GetVaultsDto): Promise<PaginatedResponseDto<VaultShortResponse>> {
+  getMyDraftVaults(
+    @Request() req: AuthRequest,
+    @Query() query: GetVaultsDto
+  ): Promise<PaginatedResponseDto<VaultShortResponse>> {
     const userId = req.user.sub;
     return this.draftVaultsService.getMyDraftVaults(userId, query.page, query.limit, query.sortBy, query.sortOrder);
   }
@@ -160,7 +163,10 @@ export class VaultsController {
   })
   @UseGuards(OptionalAuthGuard)
   @Get(':id')
-  async getVaultById(@Param('id') id: string, @Request() req): Promise<VaultFullResponse | Record<string, unknown>> {
+  async getVaultById(
+    @Param('id') id: string,
+    @Request() req: AuthRequest
+  ): Promise<VaultFullResponse | Record<string, unknown>> {
     const userId = req.user?.sub;
 
     if (!userId) {

@@ -9,6 +9,7 @@ import { AcquireService } from './acquire.service';
 import { AcquireReq } from './dto/acquire.req';
 
 import { Transaction } from '@/database/transaction.entity';
+import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
 
 @ApiTags('Acquire')
 @Controller('acquire')
@@ -23,7 +24,7 @@ export class AcquireController {
   @UseGuards(AuthGuard)
   @ApiResponse({ status: 201, description: 'Acquire successful' })
   async invest(
-    @Req() req,
+    @Req() req: AuthRequest,
     @Param('vaultId') vaultId: string,
     @Body() acquireReq: AcquireReq
   ): Promise<{

@@ -17,14 +17,13 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import axios from 'axios';
 import { firstValueFrom } from 'rxjs';
+import sharp from 'sharp';
 import { In, Repository } from 'typeorm';
 
 import { TokenMetadataDto } from './dto/token-metadata.dto';
 
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { TokenRegistryStatus } from '@/types/tokenRegistry.types';
-
-import sharp from 'sharp';
 
 type ItemData = {
   sequenceNumber: number;

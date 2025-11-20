@@ -26,7 +26,6 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-
 import { BlockchainService } from './blockchain.service';
 import { Datum1 } from './types/type';
 import { assetsToValue, generate_tag_from_txhash_index, getUtxosExtract, getVaultUtxo } from './utils/lib';
@@ -577,18 +576,18 @@ export class VaultManagingService {
 
     this.logger.debug('Vault update transaction input:', JSON.stringify(input));
     try {
-    // Build the transaction using BlockchainService
-    const buildResponse = await this.blockchainService.buildTransaction(input);
+      // Build the transaction using BlockchainService
+      const buildResponse = await this.blockchainService.buildTransaction(input);
 
-    const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-    txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.vaultScriptSKey));
-    txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.vaultScriptSKey));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
-    const response = await this.vaultInsertingService.submitTransaction({
-      transaction: txToSubmitOnChain.to_hex(),
-      vaultId: vault.id,
-      txId: transaction.id,
-    });
+      const response = await this.vaultInsertingService.submitTransaction({
+        transaction: txToSubmitOnChain.to_hex(),
+        vaultId: vault.id,
+        txId: transaction.id,
+      });
 
       return { success: true, txHash: response.txHash, message: 'Transaction submitted successfully' };
     } catch (error) {
