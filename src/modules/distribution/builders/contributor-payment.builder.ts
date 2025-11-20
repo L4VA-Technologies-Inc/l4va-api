@@ -10,7 +10,7 @@ import {
   AddressesUtxo,
   AssetOutput,
 } from '../distribution.types';
-import { selectDispatchUtxos, validateBalanceEquation, calculateMinimumLovelace } from '../utils/distribution.utils';
+import { selectDispatchUtxos, validateBalanceEquation } from '../utils/distribution.utils';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
@@ -53,6 +53,7 @@ export class ContributorPaymentBuilder {
     const outputs: TransactionOutput[] = [];
     const mintAssets: { vaultTokenQuantity: number; receiptBurn: number }[] = [];
 
+    const hasDispatchFunding = dispatchUtxos.length > 0;
     let totalPaymentAmount = 0;
     let currentOutputIndex = 0;
 
@@ -60,7 +61,10 @@ export class ContributorPaymentBuilder {
     for (const claim of claims) {
       const { transaction: originalTx, metadata } = claim;
       const adaAmount = Number(metadata.adaAmount);
-      totalPaymentAmount += adaAmount;
+
+      if (hasDispatchFunding) {
+        totalPaymentAmount += adaAmount;
+      }
 
       // Get original contribution assets
       const contributedAssets = await this.assetRepository.find({
@@ -96,11 +100,15 @@ export class ContributorPaymentBuilder {
         },
       });
 
-      // Output 1: Payment to user with vault tokens (only if quantity > 0)
+      // Output 1: Payment to user with vault tokens
       const userOutput: TransactionOutput = {
         address: userAddress,
-        lovelace: adaAmount,
-        datum: {
+      };
+
+      // Add ADA payment and datum only if dispatch funding exists
+      if (hasDispatchFunding) {
+        userOutput.lovelace = adaAmount;
+        userOutput.datum = {
           type: 'inline',
           value: {
             datum_tag: datumTag,
@@ -110,8 +118,21 @@ export class ContributorPaymentBuilder {
             validatorHash: config.unparametizedDispatchHash,
             purpose: 'spend',
           },
-        },
-      };
+        };
+      } else {
+        // When no dispatch funding, use OutputPayoutDatum with None for ada_paid
+        userOutput.datum = {
+          type: 'inline',
+          value: {
+            datum_tag: datumTag,
+            ada_paid: null, // This represents None in Aiken
+          },
+          shape: {
+            validatorHash: config.unparametizedDispatchHash,
+            purpose: 'spend',
+          },
+        };
+      }
 
       // Only add vault tokens if quantity > 0
       if (vaultTokenQuantity > 0) {
@@ -154,48 +175,61 @@ export class ContributorPaymentBuilder {
       currentOutputIndex += 2;
     }
 
-    // Select dispatch UTXOs and validate balance
-    const minRequired = calculateMinimumLovelace(totalPaymentAmount);
-    const { selectedUtxos, totalAmount } = selectDispatchUtxos(dispatchUtxos, minRequired);
+    // Handle dispatch UTXOs only if they exist
+    if (hasDispatchFunding) {
+      const minRequired = totalPaymentAmount;
+      const { selectedUtxos, totalAmount } = selectDispatchUtxos(dispatchUtxos, minRequired);
 
-    if (selectedUtxos.length === 0 || totalAmount < minRequired) {
-      throw new Error(
-        `Insufficient ADA at dispatch address. Need ${minRequired} lovelace, but only ${totalAmount} available`
-      );
-    }
+      if (selectedUtxos.length === 0 || totalAmount < minRequired) {
+        throw new Error(
+          `Insufficient ADA at dispatch address. Need ${minRequired} lovelace, but only ${totalAmount} available`
+        );
+      }
 
-    const actualRemainingDispatchLovelace = totalAmount - totalPaymentAmount;
+      const actualRemainingDispatchLovelace = totalAmount - totalPaymentAmount;
 
-    if (!validateBalanceEquation(totalAmount, actualRemainingDispatchLovelace, totalPaymentAmount)) {
-      throw new Error(
-        `Balance equation invalid: ${totalAmount} < ${actualRemainingDispatchLovelace} + ${totalPaymentAmount}`
-      );
-    }
+      if (!validateBalanceEquation(totalAmount, actualRemainingDispatchLovelace, totalPaymentAmount)) {
+        throw new Error(
+          `Balance equation invalid: ${totalAmount} < ${actualRemainingDispatchLovelace} + ${totalPaymentAmount}`
+        );
+      }
 
-    // Add dispatch script interactions
-    for (const utxo of selectedUtxos) {
+      // Add dispatch script interactions
+      for (const utxo of selectedUtxos) {
+        scriptInteractions.push({
+          purpose: 'spend',
+          hash: PARAMETERIZED_DISPATCH_HASH,
+          outputRef: {
+            txHash: utxo.tx_hash,
+            index: utxo.output_index,
+          },
+          redeemer: {
+            type: 'json',
+            value: null,
+          },
+        });
+      }
+
       scriptInteractions.push({
-        purpose: 'spend',
+        purpose: 'withdraw',
         hash: PARAMETERIZED_DISPATCH_HASH,
-        outputRef: {
-          txHash: utxo.tx_hash,
-          index: utxo.output_index,
-        },
         redeemer: {
           type: 'json',
           value: null,
         },
       });
-    }
 
-    scriptInteractions.push({
-      purpose: 'withdraw',
-      hash: PARAMETERIZED_DISPATCH_HASH,
-      redeemer: {
-        type: 'json',
-        value: null,
-      },
-    });
+      // Output: Return remaining ADA to dispatch address
+      outputs.push({
+        address: DISPATCH_ADDRESS,
+        lovelace: actualRemainingDispatchLovelace,
+      });
+    } else {
+      this.logger.log(
+        `No dispatch funding (0% acquirers/LP). Transaction will only mint vault tokens ` +
+          `and return contributed assets to contributors.`
+      );
+    }
 
     // Add mint script interaction
     scriptInteractions.push({
@@ -205,12 +239,6 @@ export class ContributorPaymentBuilder {
         type: 'json',
         value: 'MintVaultToken',
       },
-    });
-
-    // Output: Return remaining ADA to dispatch address
-    outputs.push({
-      address: DISPATCH_ADDRESS,
-      lovelace: actualRemainingDispatchLovelace,
     });
 
     // Calculate total mint quantities
@@ -227,25 +255,23 @@ export class ContributorPaymentBuilder {
         policyId: vault.script_hash,
         type: 'plutus',
         quantity: totalVaultTokenQuantity,
-        metadata: {},
       });
     }
 
-    // Always include receipt burn (it's negative)
+    // Always include receipt burn
     mintArray.push({
       version: 'cip25',
       assetName: { name: 'receipt', format: 'utf8' },
       policyId: vault.script_hash,
       type: 'plutus',
       quantity: totalReceiptBurn,
-      metadata: {},
     });
 
     return {
       changeAddress: config.adminAddress,
       message: `Batch payment for ${claims.length} contributors`,
       utxos: adminUtxos,
-      preloadedScripts: [vault.dispatch_preloaded_script.preloadedScript],
+      preloadedScripts: hasDispatchFunding ? [vault.dispatch_preloaded_script.preloadedScript] : [],
       scriptInteractions,
       mint: mintArray,
       outputs,
@@ -289,7 +315,22 @@ export class ContributorPaymentBuilder {
   /**
    * Get and validate contribution output from blockchain
    */
-  private async getAndValidateContributionOutput(txHash: string, claimId: string): Promise<any> {
+  private async getAndValidateContributionOutput(
+    txHash: string,
+    claimId: string
+  ): Promise<{
+    address: string;
+    amount: {
+      unit: string;
+      quantity: string;
+    }[];
+    output_index: number;
+    data_hash: string;
+    inline_datum: string;
+    collateral: boolean;
+    reference_script_hash: string;
+    consumed_by_tx?: string;
+  }> {
     const contribTxUtxos = await this.blockfrost.txsUtxos(txHash);
     const contribOutput = contribTxUtxos.outputs[0];
 

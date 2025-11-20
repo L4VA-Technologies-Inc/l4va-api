@@ -72,12 +72,26 @@ export class ContributorDistributionOrchestrator {
 
     this.logger.log(`Found ${readyClaims.length} contributor claims to process`);
 
-    // Get dispatch UTXOs once
-    const DISPATCH_ADDRESS = getAddressFromHash(vault.dispatch_parametized_hash);
-    const dispatchUtxos = await this.blockfrost.addressesUtxos(DISPATCH_ADDRESS);
+    // Get dispatch UTXOs only if vault has tokens for acquirers
+    const hasDispatchFunding = Number(vault.tokens_for_acquires) > 0;
+    let dispatchUtxos: AddressesUtxo[] = [];
 
-    if (!dispatchUtxos || dispatchUtxos.length === 0) {
-      throw new Error(`No UTXOs found at dispatch address for vault ${vaultId}`);
+    if (hasDispatchFunding) {
+      const DISPATCH_ADDRESS = getAddressFromHash(vault.dispatch_parametized_hash);
+      try {
+        dispatchUtxos = await this.blockfrost.addressesUtxos(DISPATCH_ADDRESS);
+
+        if (!dispatchUtxos || dispatchUtxos.length === 0) {
+          throw new Error(`No UTXOs found at dispatch address for vault ${vaultId}`);
+        }
+      } catch (error) {
+        this.logger.error(`Failed to fetch dispatch UTXOs for vault ${vaultId}:`, error);
+        throw error;
+      }
+    } else {
+      this.logger.log(
+        `Vault ${vaultId} has 0% for acquirers. No dispatch funding required, ` + `processing vault token minting only.`
+      );
     }
 
     // Process claims with dynamic batching

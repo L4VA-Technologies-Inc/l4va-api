@@ -695,24 +695,26 @@ export class LifecycleService {
             lpPercent: LP_PERCENT,
           });
         try {
-          const lpClaimExists = await this.claimRepository.exists({
-            where: {
-              vault: { id: vault.id },
-              type: ClaimType.LP,
-            },
-          });
-          if (!lpClaimExists) {
-            await this.claimRepository.save({
-              vault: { id: vault.id },
-              type: ClaimType.LP,
-              amount: adjustedVtLpAmount,
-              status: ClaimStatus.AVAILABLE,
-              metadata: {
-                adaAmount: Math.floor(lpAdaAmount * 1_000_000),
-              },
+          if (adjustedVtLpAmount > 0 && lpAdaAmount > 0) {
+            const lpClaimExists = await this.claimRepository.exists({
+              where: { vault: { id: vault.id }, type: ClaimType.LP },
             });
+
+            if (!lpClaimExists) {
+              await this.claimRepository.save({
+                vault: { id: vault.id },
+                type: ClaimType.LP,
+                amount: adjustedVtLpAmount,
+                status: ClaimStatus.AVAILABLE,
+                metadata: { adaAmount: Math.floor(lpAdaAmount * 1_000_000) },
+              });
+
+              this.logger.log(`Created LP claim: ${adjustedVtLpAmount} VT tokens, ${lpAdaAmount} ADA`);
+            }
+          } else {
             this.logger.log(
-              `Created LP claim for vault owner: ${lpVtAmount} VT tokens, adjusted to ${adjustedVtLpAmount} (${lpAdaAmount} ADA)`
+              `No LP claim created (LP % = ${vault.liquidity_pool_contribution}%, ` +
+                `LP VT: ${adjustedVtLpAmount}, LP ADA: ${lpAdaAmount})`
             );
           }
         } catch (error) {
