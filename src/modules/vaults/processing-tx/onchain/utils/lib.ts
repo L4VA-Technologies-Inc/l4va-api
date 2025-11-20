@@ -194,7 +194,7 @@ export const getUtxosExtract = async (
     // Skip UTXOs below minimum ADA threshold
     if (adaAmount <= minAda) continue;
 
-    if (inline_datum === '49616e76696c2d746167') continue; // Skip UTXOs with "Ianvil-tag" inline datum
+    if (inline_datum === '49616e76696c2d746167') continue; // Skip UTXOs with "Ianvil-tag" inline datum for LP
 
     // Validate UTXO existence to prevent double-spending
     if (validateUtxos) {

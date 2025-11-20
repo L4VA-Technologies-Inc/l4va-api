@@ -26,6 +26,7 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 export class AcquirerDistributionOrchestrator {
   private readonly logger = new Logger(AcquirerDistributionOrchestrator.name);
   private readonly MAX_TX_SIZE = 15900;
+  private readonly MAX_BATCH_SIZE = 30;
 
   constructor(
     @InjectRepository(Transaction)
@@ -83,12 +84,11 @@ export class AcquirerDistributionOrchestrator {
     if (claims.length === 0) return;
 
     // Process in batches
-    const batchSize = 30;
-    for (let i = 0; i < claims.length; i += batchSize) {
-      const batchClaims = claims.slice(i, i + batchSize);
+    for (let i = 0; i < claims.length; i += this.MAX_BATCH_SIZE) {
+      const batchClaims = claims.slice(i, i + this.MAX_BATCH_SIZE);
       await this.processAcquirerBatch(vault, batchClaims, vaultId, config);
 
-      if (i + batchSize < claims.length) {
+      if (i + this.MAX_BATCH_SIZE < claims.length) {
         await new Promise(resolve => setTimeout(resolve, 10000));
       }
     }
