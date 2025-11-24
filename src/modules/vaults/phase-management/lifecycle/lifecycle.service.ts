@@ -25,6 +25,7 @@ import {
   ContributionWindowType,
   InvestmentWindowType,
   SmartContractVaultStatus,
+  VaultFailureReason,
 } from '@/types/vault.types';
 
 @Injectable()
@@ -124,6 +125,8 @@ export class LifecycleService {
     vtPrice?: number;
     fdv?: number;
     fdvTvl?: number;
+    failureReason?: VaultFailureReason;
+    failureDetails?: any;
   }): Promise<void> {
     try {
       const vault = await this.vaultRepository.findOne({
@@ -143,6 +146,9 @@ export class LifecycleService {
       }
 
       if (data.newStatus === VaultStatus.failed) {
+        vault.failure_reason = data.failureReason;
+        vault.failure_details = data.failureDetails;
+
         const pr = await this.tokenRegistryRepository.findOne({
           where: {
             vault: { id: data.vaultId },
@@ -422,6 +428,11 @@ export class LifecycleService {
             newStatus: VaultStatus.failed,
             newScStatus: SmartContractVaultStatus.CANCELLED,
             txHash: response.txHash,
+            failureReason: VaultFailureReason.ASSET_THRESHOLD_VIOLATION,
+            failureDetails: {
+              message: 'Assets do not meet threshold requirements',
+              thresholdViolations,
+            },
           });
 
           return;
@@ -941,6 +952,12 @@ export class LifecycleService {
           newStatus: VaultStatus.failed,
           newScStatus: SmartContractVaultStatus.CANCELLED,
           txHash: response.txHash,
+          failureReason: VaultFailureReason.ACQUIRE_THRESHOLD_NOT_MET,
+          failureDetails: {
+            message: 'Required acquisition threshold not met',
+            requiredAda: requiredThresholdAda,
+            actualAda: totalAcquiredAda,
+          },
         });
 
         await new Promise(resolve => setTimeout(resolve, 20000)); // Wait until tx confirms

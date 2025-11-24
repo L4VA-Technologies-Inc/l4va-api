@@ -55,10 +55,18 @@ export class UsersService {
       throw new BadRequestException('User not found');
     }
 
+    const statuses = [
+      VaultStatus.published,
+      VaultStatus.contribution,
+      VaultStatus.acquire,
+      VaultStatus.locked,
+      VaultStatus.burned,
+    ];
+
     const vaultsCount = await this.vaultRepository
       .createQueryBuilder('vault')
       .andWhere('vault.deleted != :deleted', { deleted: true })
-      .andWhere('vault.vault_status != :createdStatus', { createdStatus: VaultStatus.created })
+      .andWhere('vault.vault_status IN (:...statuses)', { statuses })
       .andWhere(
         new Brackets(qb => {
           qb.where('vault.owner_id = :userId', { userId }).orWhere(
@@ -103,10 +111,19 @@ export class UsersService {
     }
 
     const adaPrice = await this.taptoolsService.getAdaPrice();
+
+    const statuses = [
+      VaultStatus.published,
+      VaultStatus.contribution,
+      VaultStatus.acquire,
+      VaultStatus.locked,
+      VaultStatus.burned,
+    ];
+
     const vaultsCount = await this.vaultRepository
       .createQueryBuilder('vault')
       .andWhere('vault.deleted != :deleted', { deleted: true })
-      .andWhere('vault.vault_status != :createdStatus', { createdStatus: VaultStatus.created })
+      .andWhere('vault.vault_status IN (:...statuses)', { statuses })
       .andWhere(
         new Brackets(qb => {
           qb.where('vault.owner_id = :userId', { userId }).orWhere(
