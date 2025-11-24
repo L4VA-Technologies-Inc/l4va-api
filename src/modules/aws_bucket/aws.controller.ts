@@ -1,8 +1,8 @@
 import {
+  BadRequestException,
   Body,
   ClassSerializerInterceptor,
   Controller,
-  FileTypeValidator,
   Get,
   Logger,
   MaxFileSizeValidator,
@@ -23,6 +23,7 @@ import { AuthGuard } from '../auth/auth.guard';
 
 import { AwsService } from './aws.service';
 
+import { FileEntity } from '@/database/file.entity';
 import { ApiDoc } from '@/decorators/api-doc.decorator';
 import { AwsUploadImageDto } from '@/modules/aws_bucket/dto/aws.dto';
 
@@ -46,16 +47,16 @@ export class AwsController {
   async uploadFile(
     @UploadedFile(
       new ParseFilePipe({
-        validators: [
-          new MaxFileSizeValidator({ maxSize: 5 * mbMultiplication }), // 5mb
-          new FileTypeValidator({ fileType: 'image/*' }),
-        ],
+        validators: [new MaxFileSizeValidator({ maxSize: 5 * mbMultiplication })], // 5mb
       })
     )
     file: Express.Multer.File,
     @Req() req: Request,
     @Body() body: AwsUploadImageDto
-  ) {
+  ): Promise<FileEntity> {
+    if (!file.mimetype?.startsWith('image/')) {
+      throw new BadRequestException('Only image files are allowed');
+    }
     const { host } = req.headers;
     return await this.awsService.uploadImage(file, host, body);
   }
@@ -66,7 +67,7 @@ export class AwsController {
     status: 200,
   })
   @Get('/image/:id')
-  async getImageFile(@Param('id') id, @Res() res: Response) {
+  async getImageFile(@Param('id') id: string, @Res() res: Response): Promise<void> {
     const response = await this.awsService.getImage(id);
     res.setHeader('Content-Type', response.headers['content-type']);
     res.setHeader('Cache-Control', 'public, max-age=3600');
@@ -79,7 +80,7 @@ export class AwsController {
     status: 200,
   })
   @Get('/csv/:id')
-  async getCsvFile(@Param('id') id, @Res() res: Response) {
+  async getCsvFile(@Param('id') id: string, @Res() res: Response): Promise<void> {
     const response = await this.awsService.getCsv(id);
     res.setHeader('Content-Type', response.headers['content-type']);
     res.setHeader('Cache-Control', 'public, max-age=3600');
@@ -97,19 +98,12 @@ export class AwsController {
   async handleCsvFiles(
     @UploadedFile(
       new ParseFilePipe({
-        validators: [
-          new MaxFileSizeValidator({ maxSize: 5 * mbMultiplication }),
-          new FileTypeValidator({ fileType: 'text/csv' }),
-        ],
+        validators: [new MaxFileSizeValidator({ maxSize: 5 * mbMultiplication })],
       })
     )
-    file: Express.Multer.File,
-    @Req() req: Request
-  ) {
-    // todo need to validate and parse csv and then return list of asset whitelist id's
-    this.logger.log('csv file received', file);
-    const { host } = req.headers;
-
-    return await this.awsService.uploadCSV(file, host);
+    file: Express.Multer.File
+  ): Promise<{ addresses: string[]; total: number }> {
+    this.logger.log('csv file received', { fileName: file.originalname, size: file.size });
+    return await this.awsService.processWhitelistCsv(file);
   }
 }
