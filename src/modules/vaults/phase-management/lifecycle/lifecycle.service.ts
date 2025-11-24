@@ -988,7 +988,7 @@ export class LifecycleService {
       const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
 
       // Calculate LP tokens with 0% for acquirers
-      const { lpAdaAmount, lpVtAmount, vtPrice, fdv, adjustedVtLpAmount, adaPairMultiplier } =
+      const { lpAdaAmount, lpVtAmount, vtPrice, fdv, adaPairMultiplier } =
         this.distributionCalculationService.calculateLpTokens({
           vtSupply,
           totalAcquiredAda: 0, // No acquirers
@@ -1003,27 +1003,6 @@ export class LifecycleService {
           `LP VT: ${lpVtAmount}, LP ADA: ${lpAdaAmount}`
       );
 
-      // Create LP claim if applicable
-      if (adjustedVtLpAmount > 0 && lpAdaAmount > 0) {
-        const lpClaimExists = await this.claimRepository.exists({
-          where: { vault: { id: vault.id }, type: ClaimType.LP },
-        });
-
-        if (!lpClaimExists) {
-          await this.claimRepository.save({
-            vault: { id: vault.id },
-            type: ClaimType.LP,
-            amount: adjustedVtLpAmount,
-            status: ClaimStatus.AVAILABLE,
-            metadata: { adaAmount: Math.floor(lpAdaAmount * 1_000_000) },
-          });
-
-          this.logger.log(`Created LP claim: ${adjustedVtLpAmount} VT tokens, ${lpAdaAmount} ADA`);
-        }
-      } else {
-        this.logger.log(`No LP claim created (LP % = ${vault.liquidity_pool_contribution}%)`);
-      }
-
       // Get contribution transactions
       const contributionTransactions = await this.transactionsRepository.find({
         where: {
@@ -1034,24 +1013,6 @@ export class LifecycleService {
         relations: ['user'],
         order: { created_at: 'ASC' },
       });
-
-      if (contributionTransactions.length === 0) {
-        this.logger.warn(`Vault ${vault.id} has no confirmed contribution transactions. Marking as failed.`);
-
-        const response = await this.vaultManagingService.updateVaultMetadataTx({
-          vault,
-          vaultStatus: SmartContractVaultStatus.CANCELLED,
-        });
-
-        await this.executePhaseTransition({
-          vaultId: vault.id,
-          newStatus: VaultStatus.failed,
-          newScStatus: SmartContractVaultStatus.CANCELLED,
-          txHash: response.txHash,
-        });
-
-        return;
-      }
 
       // Calculate value of each contribution transaction
       const contributionValueByTransaction: Record<string, number> = {};
