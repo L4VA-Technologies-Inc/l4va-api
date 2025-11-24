@@ -177,12 +177,11 @@ export class ContributorPaymentBuilder {
 
     // Handle dispatch UTXOs only if they exist
     if (hasDispatchFunding) {
-      const minRequired = totalPaymentAmount;
-      const { selectedUtxos, totalAmount } = selectDispatchUtxos(dispatchUtxos, minRequired);
+      const { selectedUtxos, totalAmount } = selectDispatchUtxos(dispatchUtxos, totalPaymentAmount);
 
-      if (selectedUtxos.length === 0 || totalAmount < minRequired) {
+      if (selectedUtxos.length === 0 || totalAmount < totalPaymentAmount) {
         throw new Error(
-          `Insufficient ADA at dispatch address. Need ${minRequired} lovelace, but only ${totalAmount} available`
+          `Insufficient ADA at dispatch address. Need ${totalPaymentAmount} lovelace, but only ${totalAmount} available`
         );
       }
 
@@ -226,8 +225,7 @@ export class ContributorPaymentBuilder {
       });
     } else {
       this.logger.log(
-        `No dispatch funding (0% acquirers/LP). Transaction will only mint vault tokens ` +
-          `and return contributed assets to contributors.`
+        `No dispatch funding (0% acquirers/LP). Transaction will only mint vault tokens and return contributed assets to contributors.`
       );
     }
 

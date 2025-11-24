@@ -90,7 +90,7 @@ export class ContributorDistributionOrchestrator {
       }
     } else {
       this.logger.log(
-        `Vault ${vaultId} has 0% for acquirers. No dispatch funding required, ` + `processing vault token minting only.`
+        `Vault ${vaultId} has 0% for acquirers. No dispatch funding required, processing vault token minting only.`
       );
     }
 
