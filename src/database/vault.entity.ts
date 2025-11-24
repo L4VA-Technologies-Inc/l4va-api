@@ -21,6 +21,7 @@ import {
   SmartContractVaultStatus,
   TerminationType,
   ValueMethod,
+  VaultFailureReason,
   VaultPrivacy,
   VaultStatus,
   VaultType,
@@ -615,4 +616,32 @@ export class Vault {
   updateDate(): void {
     this.updated_at = new Date().toISOString();
   }
+
+  @Expose({ name: 'failureReason' })
+  @Column({
+    name: 'failure_reason',
+    type: 'enum',
+    enum: VaultFailureReason,
+    nullable: true,
+  })
+  failure_reason?: VaultFailureReason;
+
+  @Expose({ name: 'failureDetails' })
+  @Column({
+    name: 'failure_details',
+    type: 'jsonb',
+    nullable: true,
+  })
+  failure_details?: {
+    message?: string;
+    thresholdViolations?: Array<{
+      policyId: string;
+      count: number;
+      min: number;
+      max: number;
+    }>;
+    requiredAda?: number;
+    actualAda?: number;
+    [key: string]: any;
+  };
 }

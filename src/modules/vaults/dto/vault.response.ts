@@ -9,6 +9,7 @@ import {
   ContributionWindowType,
   InvestmentWindowType,
   TerminationType,
+  VaultFailureReason,
 } from '../../../types/vault.types';
 
 import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
@@ -548,6 +549,13 @@ export class VaultFullResponse extends VaultShortResponse {
     expose: true,
   })
   owner: User;
+
+  @ApiProperty({ description: 'Failure reason', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  failureReason: VaultFailureReason;
 }
 
 export class VaultAcquireResponse {
