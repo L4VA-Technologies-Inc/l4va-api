@@ -7,6 +7,8 @@ import { TransactionsService } from '../../processing-tx/offchain-tx/transaction
 import { ContributionService } from './contribution.service';
 import { ContributeReq } from './dto/contribute.req';
 
+import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
+
 @ApiTags('Contributions')
 @Controller('contribute')
 export class ContributionController {
@@ -19,7 +21,7 @@ export class ContributionController {
   @ApiOperation({ summary: 'Contribute to a vault' })
   @UseGuards(AuthGuard)
   @ApiResponse({ status: 201, description: 'Contribution successful' })
-  async contribute(@Req() req, @Param('vaultId') vaultId: string, @Body() contributeReq: ContributeReq) {
+  async contribute(@Req() req: AuthRequest, @Param('vaultId') vaultId: string, @Body() contributeReq: ContributeReq) {
     const userId = req.user.sub;
     return this.contributionService.contribute(vaultId, contributeReq, userId);
   }

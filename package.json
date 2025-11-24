@@ -21,7 +21,9 @@
     "migration:generate": "npm run typeorm migration:generate -- -d src/config/typeorm.config.ts ./src/database/migrations/$npm_config_name",
     "migration:create": "npm run typeorm migration:create -- ./src/database/migrations/$npm_config_name",
     "migration:run": "npm run typeorm migration:run -- -d src/config/typeorm.config.ts",
-    "migration:revert": "npm run typeorm migration:revert -- -d src/config/typeorm.config.ts"
+    "migration:revert": "npm run typeorm migration:revert -- -d src/config/typeorm.config.ts",
+    "docs:generate": "npx @compodoc/compodoc -p tsconfig.json -d documentation",
+    "docs:serve": "npx @compodoc/compodoc -p tsconfig.json -d documentation -s"
   },
   "dependencies": {
     "@blaze-cardano/uplc": "0.3.0",
@@ -61,7 +63,7 @@
     "raw-body": "^3.0.0",
     "reflect-metadata": "^0.2.0",
     "rxjs": "^7.8.1",
-    "sharp": "^0.34.3",
+    "sharp": "^0.34.5",
     "stream-chat": "^9.22.1",
     "typeorm": "^0.3.20",
     "typeorm-naming-strategies": "^4.1.0",
@@ -77,6 +79,7 @@
     "@types/jest": "^29.5.2",
     "@types/multer": "^1.4.12",
     "@types/node": "^20.3.1",
+    "@types/sharp": "^0.31.1",
     "@types/supertest": "^6.0.0",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",

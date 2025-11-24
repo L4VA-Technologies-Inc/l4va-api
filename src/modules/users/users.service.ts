@@ -220,7 +220,7 @@ export class UsersService {
     return classToPlain(selectedUser, { excludeExtraneousValues: true }) as User;
   }
 
-  async updateUserAddress(userId: string, address: string) {
+  async updateUserAddress(userId: string, address: string): Promise<void> {
     await this.usersRepository.update(
       {
         id: userId,

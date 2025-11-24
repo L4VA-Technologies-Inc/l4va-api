@@ -1,0 +1,22 @@
+import { IsEnum, IsOptional } from 'class-validator';
+
+export enum ImageType {
+  BACKGROUND = 'background',
+  TICKER = 'ticker',
+}
+
+export class AwsUploadImageDto {
+  @IsOptional()
+  @IsEnum(ImageType)
+  imageType?: ImageType;
+}
+
+interface ImageResizeParams {
+  width: number;
+  height: number;
+}
+
+export const ImageResizeMap: Record<ImageType, ImageResizeParams> = {
+  [ImageType.BACKGROUND]: { width: 640, height: 640 },
+  [ImageType.TICKER]: { width: 256, height: 256 },
+};

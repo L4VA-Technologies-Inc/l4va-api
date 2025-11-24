@@ -1,8 +1,6 @@
 import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
-import { AuthGuard } from '../../../auth/auth.guard';
-
 import { CreateProposalReq } from './dto/create-proposal.req';
 import { AssetBuySellDto } from './dto/get-assets.dto';
 import { GetProposalsRes, GetProposalsResItem } from './dto/get-proposal.dto';
@@ -10,6 +8,8 @@ import { VoteReq } from './dto/vote.req';
 import { GovernanceService } from './governance.service';
 
 import { Asset } from '@/database/asset.entity';
+import { AuthGuard } from '@/modules/auth/auth.guard';
+import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
 import { OptionalAuthGuard } from '@/modules/auth/optional-auth.guard';
 
 @ApiTags('Governance')
@@ -45,7 +45,7 @@ export class GovernanceController {
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Vote on a proposal' })
   @ApiResponse({ status: 201, description: 'Vote recorded successfully' })
-  async vote(@Req() req, @Param('proposalId') proposalId: string, @Body() voteReq: VoteReq) {
+  async vote(@Req() req: AuthRequest, @Param('proposalId') proposalId: string, @Body() voteReq: VoteReq) {
     const userId = req.user.sub;
     return this.governanceService.vote(proposalId, voteReq, userId);
   }
@@ -54,7 +54,7 @@ export class GovernanceController {
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Get proposal details' })
   @ApiResponse({ status: 200, description: 'Proposal details' })
-  async getProposal(@Param('proposalId') proposalId: string, @Req() req) {
+  async getProposal(@Param('proposalId') proposalId: string, @Req() req: AuthRequest) {
     return this.governanceService.getProposal(proposalId, req.user.sub);
   }
 
@@ -62,7 +62,7 @@ export class GovernanceController {
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Get user voting power in a vault' })
   @ApiResponse({ status: 200, description: 'User voting power' })
-  async getVotingPower(@Req() req, @Param('vaultId') vaultId: string): Promise<string> {
+  async getVotingPower(@Req() req: AuthRequest, @Param('vaultId') vaultId: string): Promise<string> {
     const userId = req.user.sub;
     return this.governanceService.getVotingPower(vaultId, userId);
   }

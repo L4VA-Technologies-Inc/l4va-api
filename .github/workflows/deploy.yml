@@ -1,29 +1,13 @@
 name: Deploy API
 
 on:
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened]
   push:
     branches: [ main ]
 
 jobs:
-  save-logs:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Save container logs before any changes
-        uses: appleboy/ssh-action@master
-        continue-on-error: true
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USERNAME }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            cd ~/apps
-            mkdir -p logs/l4va-api
-            TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-            docker logs l4va-api > logs/l4va-api/deploy_${TIMESTAMP}.log 2>&1 || echo "No logs to save"
-            cd logs/l4va-api
-            ls -t | tail -n +11 | xargs -r rm -f
-            echo "Logs saved to logs/l4va-api/deploy_${TIMESTAMP}.log"
-
   build-check:
     runs-on: ubuntu-latest
     steps:
@@ -44,7 +28,28 @@ jobs:
       - name: Run linter
         run: npm run lint
 
+  save-logs:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Save container logs before any changes
+        uses: appleboy/ssh-action@master
+        continue-on-error: true
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd ~/apps
+            mkdir -p logs/l4va-api
+            TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+            docker logs l4va-api > logs/l4va-api/deploy_${TIMESTAMP}.log 2>&1 || echo "No logs to save"
+            cd logs/l4va-api
+            ls -t | tail -n +11 | xargs -r rm -f
+            echo "Logs saved to logs/l4va-api/deploy_${TIMESTAMP}.log"
+
   deploy:
+    if: github.event_name == 'push'
     needs: [save-logs, build-check]
     runs-on: ubuntu-latest
     steps:
@@ -69,3 +74,4 @@ jobs:
             cd ~/apps
             docker compose build l4va-api
             docker compose up -d l4va-api
+

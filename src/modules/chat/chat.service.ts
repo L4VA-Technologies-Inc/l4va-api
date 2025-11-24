@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { StreamChat } from 'stream-chat';
+import { APIResponse, ChannelMemberResponse, StreamChat, UserResponse } from 'stream-chat';
 
 @Injectable()
 export class ChatService {
@@ -48,7 +48,16 @@ export class ChatService {
     return token;
   }
 
-  async createOrUpdateUser(userId: string, userData: { name?: string; image?: string; role?: string }) {
+  async createOrUpdateUser(
+    userId: string,
+    userData: { name?: string; image?: string; role?: string }
+  ): Promise<
+    APIResponse & {
+      users: {
+        [key: string]: UserResponse;
+      };
+    }
+  > {
     const user = {
       id: userId,
       name: userData.name || `User ${userId}`,
@@ -61,19 +70,26 @@ export class ChatService {
     return response;
   }
 
-  async addMembersToVaultChannel(vaultId: string, userIds: string[]) {
+  async addMembersToVaultChannel(vaultId: string, userIds: string[]): Promise<boolean> {
     const channel = this.serverClient.channel('messaging', `vault-${vaultId}`);
     await channel.addMembers(userIds);
     return true;
   }
 
-  async removeMembersFromVaultChannel(vaultId: string, userIds: string[]) {
+  async removeMembersFromVaultChannel(vaultId: string, userIds: string[]): Promise<boolean> {
     const channel = this.serverClient.channel('messaging', `vault-${vaultId}`);
     await channel.removeMembers(userIds);
     return true;
   }
 
-  async getVaultChannelInfo(vaultId: string) {
+  async getVaultChannelInfo(vaultId: string): Promise<{
+    id: string;
+    type: string;
+    memberCount: number;
+    createdAt: string;
+    updatedAt: string;
+    members: ChannelMemberResponse[];
+  }> {
     const channel = this.serverClient.channel('messaging', `vault-${vaultId}`);
     const channelState = await channel.query();
 
@@ -87,7 +103,7 @@ export class ChatService {
     };
   }
 
-  async sendSystemMessage(vaultId: string, text: string, data?: any) {
+  async sendSystemMessage(vaultId: string, text: string, data?: any): Promise<boolean> {
     const channel = this.serverClient.channel('messaging', `vault-${vaultId}`);
 
     await channel.sendMessage({

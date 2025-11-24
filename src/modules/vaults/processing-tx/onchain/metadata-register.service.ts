@@ -17,7 +17,10 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import axios from 'axios';
 import { firstValueFrom } from 'rxjs';
-import { Repository } from 'typeorm';
+import sharp from 'sharp';
+import { In, Repository } from 'typeorm';
+
+import { TokenMetadataDto } from './dto/token-metadata.dto';
 
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { TokenRegistryStatus } from '@/types/tokenRegistry.types';
@@ -42,17 +45,8 @@ type TokenMetaData = {
   decimals?: ItemData; // how many decimals to the token
 };
 
-export type TokenMetaDataRaw = {
-  vaultId: string;
-  subject: string;
-  name: string;
-  description: string;
-  policy?: string;
-  ticker: string;
-  url?: string;
-  logo?: string;
-  decimals?: number;
-};
+// Deprecated: Use TokenMetadataDto instead
+export type TokenMetaDatametadataInput = TokenMetadataDto;
 
 @Injectable()
 export class MetadataRegistryApiService {
@@ -97,46 +91,61 @@ export class MetadataRegistryApiService {
   }
 
   /**
-   * Submits token metadata via API
-   * @param metadata Token metadata
+   * Submits vault token metadata to Cardano Token Registry via GitHub PR
+   * @param metadataInput Token metadata
    * @returns Submission result
    */
-  async submitTokenMetadata(raw: TokenMetaDataRaw): Promise<{ success: boolean; message: string; data?: unknown }> {
-    try {
-      const exists = await this.checkTokenExists(raw.subject);
-      if (exists) {
-        return { success: false, message: 'Token already exists' };
-      }
-    } catch (error) {
-      this.logger.error('Error checking token existence:', error);
+  async submitVaultTokenMetadata(
+    metadataInput: TokenMetadataDto
+  ): Promise<{ success: boolean; message: string; data?: unknown }> {
+    const existingPR = await this.tokenRegistryRepository.findOne({
+      where: {
+        vault: { id: metadataInput.vaultId },
+        status: In([TokenRegistryStatus.PENDING, TokenRegistryStatus.MERGED]),
+      },
+    });
+
+    if (existingPR) {
+      return { success: false, message: 'A token submission is already in progress for this vault' };
+    } else {
+      this.logger.log(`No existing PR found for vault ${metadataInput.vaultId}, proceeding with submission`);
+    }
+
+    const exists = await this.checkTokenExistsInRegistry(metadataInput.subject);
+    if (exists) {
+      return { success: false, message: 'Token already exists' };
     }
 
     try {
-      const name = this.signItemData(raw.subject, 0, raw.name);
-      const description = this.signItemData(raw.subject, 0, raw.description);
+      const name = this.signMetadataField(metadataInput.subject, 0, metadataInput.name);
+      const description = this.signMetadataField(metadataInput.subject, 0, metadataInput.description);
 
       // Optional fields
-      const ticker = raw.ticker ? this.signItemData(raw.subject, 0, raw.ticker) : undefined;
-      const url = raw.url ? this.signItemData(raw.subject, 0, raw.url) : undefined;
-      const policy = raw.policy ? raw.policy : undefined; // The base16-encoded CBOR "policy": "82018201828200581cf950845fdf374bba64605f96a9d5940890cc2bb92c4b5b55139cc00982051a09bde472",
-      const decimals = raw.decimals ? this.signItemData(raw.subject, 0, raw.decimals) : undefined;
+      const ticker = metadataInput.ticker
+        ? this.signMetadataField(metadataInput.subject, 0, metadataInput.ticker)
+        : undefined;
+      const url = metadataInput.url ? this.signMetadataField(metadataInput.subject, 0, metadataInput.url) : undefined;
+      // const policy = metadataInput.policy ? metadataInput.policy : undefined; // The base16-encoded CBOR "policy": "82018201828200581cf950845fdf374bba64605f96a9d5940890cc2bb92c4b5b55139cc00982051a09bde472",
+      const decimals = metadataInput.decimals
+        ? this.signMetadataField(metadataInput.subject, 0, metadataInput.decimals)
+        : undefined;
 
       let logoData: ItemData | undefined;
-      if (raw.logo) {
-        // If raw.logo is a URL, convert it to byte string
-        if (raw.logo.startsWith('http')) {
-          const logoBytes = await this.convertImgToBytes(raw.logo);
-          logoData = this.signItemData(raw.subject, 0, logoBytes);
+      if (metadataInput.logo) {
+        // If metadataInput.logo is a URL, convert it to byte string
+        if (metadataInput.logo.startsWith('http')) {
+          const logoBytes = await this.convertImageUrlToBase64(metadataInput.logo);
+          logoData = this.signMetadataField(metadataInput.subject, 0, logoBytes);
         } else {
           // If it's already a byte string, use it directly
-          logoData = this.signItemData(raw.subject, 0, raw.logo);
+          logoData = this.signMetadataField(metadataInput.subject, 0, metadataInput.logo);
         }
       }
 
       // Build full metadata object
       const metadata: TokenMetaData = {
-        subject: raw.subject,
-        policy,
+        subject: metadataInput.subject,
+        // policy,
         name,
         description,
         ticker,
@@ -149,7 +158,7 @@ export class MetadataRegistryApiService {
         return { success: false, message: 'Invalid token metadata format' };
       }
 
-      const result = await this.createTokenRegistry(metadata, raw.vaultId);
+      const result = await this.createMetadataRegistryPR(metadata, metadataInput.vaultId);
 
       return result;
     } catch (error) {
@@ -171,7 +180,7 @@ export class MetadataRegistryApiService {
    * @param subject Token identifier (policyId + assetName)
    * @returns true if token is already registered
    */
-  async checkTokenExists(subject: string): Promise<boolean> {
+  async checkTokenExistsInRegistry(subject: string): Promise<boolean> {
     try {
       const response = await axios.get(`${this.apiBaseUrl}/${subject}`);
       return response.status === 200;
@@ -291,7 +300,7 @@ export class MetadataRegistryApiService {
     }
   }
 
-  private async convertImgToBytes(imgUrl: string): Promise<string> {
+  private async convertImageUrlToBase64(imgUrl: string): Promise<string> {
     try {
       const response = await firstValueFrom(
         this.httpService.get(imgUrl, {
@@ -301,10 +310,7 @@ export class MetadataRegistryApiService {
         })
       );
 
-      const sharp = await import('sharp');
-
-      const resizedImageBuffer = await sharp
-        .default(response.data)
+      const resizedImageBuffer = await sharp(response.data)
         .resize({
           width: 128,
           height: 128,
@@ -319,8 +325,7 @@ export class MetadataRegistryApiService {
           `Image still too large after resizing (${Math.round(resizedImageBuffer.length / 1024)}KB), using placeholder`
         );
 
-        const tinyImageBuffer = await sharp
-          .default(response.data)
+        const tinyImageBuffer = await sharp(response.data)
           .resize(64, 64, { fit: 'inside' })
           .png({ quality: 60, compressionLevel: 9 })
           .toBuffer();
@@ -366,7 +371,10 @@ export class MetadataRegistryApiService {
     return true;
   }
 
-  private signItemData(subject: string, sequenceNumber: number, value: string | number): ItemData {
+  /**
+   * Signs a metadata field value with the admin private key
+   */
+  private signMetadataField(subject: string, sequenceNumber: number, value: string | number): ItemData {
     // Hash the subject, sequenceNumber, and value together
     const hash = crypto
       .createHash('sha256')
@@ -392,7 +400,10 @@ export class MetadataRegistryApiService {
     };
   }
 
-  private async createTokenRegistry(
+  /**
+   * Creates a GitHub Pull Request for token metadata submission
+   */
+  private async createMetadataRegistryPR(
     metadata: TokenMetaData,
     vaultId: string
   ): Promise<{ success: boolean; message: string; prUrl?: string }> {

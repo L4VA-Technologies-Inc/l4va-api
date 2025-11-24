@@ -1,5 +1,9 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
+import {
+  FixedTransaction,
+  PrivateKey,
+  Transaction as CardanoTransaction,
+} from '@emurgo/cardano-serialization-lib-nodejs';
 import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -90,7 +94,7 @@ export class BlockchainService {
    * @param txData Transaction data to be built
    * @returns Object containing complete and partial transaction CBOR
    */
-  async buildTransaction(txData: any): Promise<TransactionBuildResponse> {
+  async buildTransaction(txData: object): Promise<TransactionBuildResponse> {
     try {
       const contractDeployed = await fetch(`${this.anvilApi}/transactions/build`, {
         method: 'POST',
@@ -114,15 +118,16 @@ export class BlockchainService {
           buildResponse.message?.includes('missing from UTxO set')
         ) {
           // Try to extract the specific UTxO reference
-          const match = buildResponse.message.match(
-            /Unknown transaction input \(missing from UTxO set\): ([a-f0-9]+)#(\d+)/
-          );
+          const match = buildResponse.message.match(/([a-f0-9]{64})#(\d+)/);
+
           if (match) {
-            const [txHash, indexStr] = match;
-            this.logger.warn(`Missing UTxO reference: ${txHash}#${indexStr}`);
-            throw new MissingUtxoException(txHash, parseInt(indexStr));
+            const txHash = match[1];
+            const outputIndex = parseInt(match[2]);
+
+            this.logger.warn(`Missing UTxO reference: ${txHash}#${outputIndex}`);
+            throw new MissingUtxoException(txHash, outputIndex);
           } else {
-            this.logger.warn(`Missing UTxO reference (unspecified): ${buildResponse.message}`);
+            this.logger.warn(`Missing UTxO reference: ${buildResponse.message}`);
             throw new MissingUtxoException();
           }
         }
@@ -361,7 +366,6 @@ export class BlockchainService {
           return false;
         }
         // Other errors might indicate network issues, so we'll assume not registered
-        this.logger.warn(`Error checking stake registration for ${scriptHash}: ${blockfrostError.message}`);
         return false;
       }
     } catch (error) {
@@ -517,19 +521,23 @@ export class BlockchainService {
       try {
         const txDetails = await this.blockfrost.txs(txHash);
         if (txDetails && txDetails.block_height) {
-          await new Promise(resolve => setTimeout(resolve, 80000)); // Wait for 2 blocks before reusing its outputs
+          await new Promise(resolve => setTimeout(resolve, 40000));
           return true;
         }
 
         // Wait before next check
         await new Promise(resolve => setTimeout(resolve, checkInterval));
       } catch (error) {
-        this.logger.warn(`Error checking transaction ${txHash}:`, error.message);
         await new Promise(resolve => setTimeout(resolve, checkInterval));
       }
     }
 
     this.logger.warn(`Transaction ${txHash} confirmation timeout after ${maxWaitTime / 1000} seconds`);
     return false;
+  }
+
+  getTransactionSize(txHex: string): number {
+    const tx = CardanoTransaction.from_bytes(Buffer.from(txHex, 'hex'));
+    return tx.to_bytes().length;
   }
 }

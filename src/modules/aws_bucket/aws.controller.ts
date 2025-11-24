@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  Body,
   ClassSerializerInterceptor,
   Controller,
   Get,
@@ -24,6 +25,7 @@ import { AwsService } from './aws.service';
 
 import { FileEntity } from '@/database/file.entity';
 import { ApiDoc } from '@/decorators/api-doc.decorator';
+import { AwsUploadImageDto } from '@/modules/aws_bucket/dto/aws.dto';
 
 export const mbMultiplication = 1024 * 1024;
 
@@ -49,13 +51,14 @@ export class AwsController {
       })
     )
     file: Express.Multer.File,
-    @Req() req: Request
+    @Req() req: Request,
+    @Body() body: AwsUploadImageDto
   ): Promise<FileEntity> {
     if (!file.mimetype?.startsWith('image/')) {
       throw new BadRequestException('Only image files are allowed');
     }
     const { host } = req.headers;
-    return await this.awsService.uploadImage(file, host);
+    return await this.awsService.uploadImage(file, host, body);
   }
 
   @ApiDoc({

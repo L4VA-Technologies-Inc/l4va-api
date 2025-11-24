@@ -22,8 +22,11 @@ import { AuthGuard } from '../auth/auth.guard';
 import { AuthRequest } from '../auth/dto/auth-user.interface';
 import { mbMultiplication } from '../aws_bucket/aws.controller';
 
+import { PublicProfileRes } from './dto/public-profile.res';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UsersService } from './users.service';
+
+import { User } from '@/database/user.entity';
 
 @ApiTags('users')
 @Controller('users')
@@ -37,7 +40,7 @@ export class UsersController {
   })
   @UseGuards(AuthGuard)
   @Get('profile')
-  async getProfile(@Request() req: AuthRequest) {
+  async getProfile(@Request() req: AuthRequest): Promise<PublicProfileRes> {
     const userId = req.user.sub;
     return this.usersService.getProfile(userId);
   }
@@ -48,7 +51,7 @@ export class UsersController {
     status: 200,
   })
   @Get('/profile/:id')
-  async getPublicProfile(@Param('id') userId: string) {
+  async getPublicProfile(@Param('id') userId: string): Promise<PublicProfileRes> {
     return this.usersService.getPublicProfile(userId);
   }
 
@@ -59,7 +62,7 @@ export class UsersController {
   })
   @UseGuards(AuthGuard)
   @Patch('profile')
-  async updateProfile(@Request() req: AuthRequest, @Body() updateData: UpdateProfileDto) {
+  async updateProfile(@Request() req: AuthRequest, @Body() updateData: UpdateProfileDto): Promise<User> {
     const userId = req.user.sub;
     return this.usersService.updateProfile(userId, updateData);
   }
@@ -84,7 +87,7 @@ export class UsersController {
       })
     )
     file: Express.Multer.File
-  ) {
+  ): Promise<User> {
     const userId = req.user.sub;
     return this.usersService.uploadProfileImage(userId, file, req.get('host'));
   }
@@ -109,7 +112,7 @@ export class UsersController {
       })
     )
     file: Express.Multer.File
-  ) {
+  ): Promise<User> {
     const userId = req.user.sub;
     return this.usersService.uploadBannerImage(userId, file, req.get('host'));
   }

@@ -140,7 +140,7 @@ export class TransactionsService {
   }
 
   async getByUserId(id: string, query: GetTransactionsDto): Promise<TransactionsResponseDto> {
-    const { page = '1', limit = '10', filter = TransactionType.all, status, order = 'DESC', period } = query;
+    const { page, limit, status, period, filter = TransactionType.all, order = 'DESC', isExport = false } = query;
 
     const parsedPage = Number(page);
     const parsedLimit = Number(limit);
@@ -163,8 +163,17 @@ export class TransactionsService {
         'vault.name',
       ])
       .where('transaction.user_id = :id', { id })
-      .skip(skip)
-      .take(parsedLimit);
+      .skip(skip);
+
+    if (!isExport) {
+      queryBuilder.take(parsedLimit);
+    }
+
+    const baseStatuses = [TransactionStatus.confirmed, TransactionStatus.pending];
+
+    queryBuilder.andWhere('transaction.status IN (:...statuses)', {
+      statuses: status ?? baseStatuses,
+    });
 
     switch (filter) {
       case TransactionType.all:
@@ -187,12 +196,6 @@ export class TransactionsService {
           type: TransactionType.acquire,
         });
         break;
-    }
-
-    if (status) {
-      queryBuilder.andWhere('transaction.status IN (:...statuses)', {
-        statuses: status,
-      });
     }
 
     if (period?.from && period?.to) {
@@ -362,5 +365,13 @@ export class TransactionsService {
     return {
       success: true,
     };
+  }
+
+  async updateTransactionStatusById(id: string, status: TransactionStatus): Promise<void> {
+    const tx = await this.transactionRepository.findOne({ where: { id } });
+    if (!tx) return;
+
+    tx.status = status;
+    await this.transactionRepository.save(tx);
   }
 }

@@ -55,12 +55,12 @@ export class AssetsWhitelistEntity {
   created_at: string;
 
   @BeforeInsert()
-  setDate() {
+  setDate(): void {
     this.created_at = new Date().toISOString();
   }
 
   @BeforeUpdate()
-  updateDate() {
+  updateDate(): void {
     this.updated_at = new Date().toISOString();
   }
 }
