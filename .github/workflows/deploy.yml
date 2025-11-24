@@ -74,4 +74,5 @@ jobs:
             cd ~/apps
             docker compose build l4va-api
             docker compose up -d l4va-api
+            
 
