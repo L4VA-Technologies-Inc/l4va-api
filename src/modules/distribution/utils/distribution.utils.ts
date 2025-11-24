@@ -33,10 +33,3 @@ export function selectDispatchUtxos(dispatchUtxos: AddressesUtxo[], requiredAmou
 export function validateBalanceEquation(totalInput: number, totalOutput: number, totalPayment: number): boolean {
   return totalInput >= totalOutput + totalPayment;
 }
-
-/**
- * Calculate required minimum lovelace for transaction
- */
-export function calculateMinimumLovelace(paymentAmount: number): number {
-  return paymentAmount + 1_000_000; // Payment + minimum ADA
-}

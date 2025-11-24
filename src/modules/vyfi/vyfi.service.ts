@@ -598,8 +598,6 @@ export class VyfiService {
   //     network: 'preprod',
   //   };
 
-  //   console.log(JSON.stringify(input));
-
   //   const buildResponse = await this.blockchainService.buildTransaction(input);
   //   const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
   //   txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));

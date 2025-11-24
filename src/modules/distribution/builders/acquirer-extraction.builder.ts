@@ -100,16 +100,18 @@ export class AcquirerExtractionBuilder {
       });
 
       // Vault output with vault tokens
-      outputs.push({
-        address: config.adminAddress,
-        assets: [
-          {
-            assetName: { name: vault.asset_vault_name, format: 'hex' },
-            policyId: vault.script_hash,
-            quantity: vaultMintQuantity,
-          },
-        ],
-      });
+      if (vaultMintQuantity > 0) {
+        outputs.push({
+          address: config.adminAddress,
+          assets: [
+            {
+              assetName: { name: vault.asset_vault_name, format: 'hex' },
+              policyId: vault.script_hash,
+              quantity: vaultMintQuantity,
+            },
+          ],
+        });
+      }
     }
 
     // Add mint script interaction
