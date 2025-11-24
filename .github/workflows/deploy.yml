@@ -31,6 +31,7 @@ jobs:
   save-logs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    needs: [build-check]
     steps:
       - name: Save container logs before any changes
         uses: appleboy/ssh-action@master
@@ -74,4 +75,3 @@ jobs:
             cd ~/apps
             docker compose build l4va-api
             docker compose up -d l4va-api
-
