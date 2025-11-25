@@ -2,75 +2,58 @@ name: Deploy API
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [ main, dev ]
     types: [opened, synchronize, reopened]
   push:
-    branches: [ main ]
+    branches: [ main, dev ]
 
 jobs:
   build-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
+      - uses: actions/setup-node@v3
         with:
           node-version: '20'
           cache: 'npm'
-      
-      - name: Install dependencies
-        run: npm ci
-      
-      - name: Build project
-        run: npm run build
-      
-      - name: Run linter
-        run: npm run lint
-
-  save-logs:
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    needs: [build-check]
-    steps:
-      - name: Save container logs before any changes
-        uses: appleboy/ssh-action@master
-        continue-on-error: true
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USERNAME }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            cd ~/apps
-            mkdir -p logs/l4va-api
-            TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-            docker logs l4va-api > logs/l4va-api/deploy_${TIMESTAMP}.log 2>&1 || echo "No logs to save"
-            cd logs/l4va-api
-            ls -t | tail -n +11 | xargs -r rm -f
-            echo "Logs saved to logs/l4va-api/deploy_${TIMESTAMP}.log"
+      - run: npm ci
+      - run: npm run build
+      - run: npm run lint
 
   deploy:
     if: github.event_name == 'push'
-    needs: [save-logs, build-check]
+    needs: build-check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
 
-      - name: Copy files to VPS
+      - name: Save logs
+        uses: appleboy/ssh-action@master
+        continue-on-error: true
+        with:
+          host: ${{ github.ref == 'refs/heads/main' && secrets.SSH_HOST_DEV || secrets.SSH_HOST }}
+          username: ${{ github.ref == 'refs/heads/main' && secrets.SSH_USERNAME_DEV || secrets.SSH_USERNAME }}
+          key: ${{ github.ref == 'refs/heads/main' && secrets.SSH_PRIVATE_KEY_DEV || secrets.SSH_PRIVATE_KEY }}
+          script: |
+            mkdir -p ~/apps/logs/l4va-api
+            docker logs l4va-api > ~/apps/logs/l4va-api/$(date +"%Y%m%d_%H%M%S").log 2>&1 || true
+            cd ~/apps/logs/l4va-api && ls -t | tail -n +11 | xargs -r rm -f
+
+      - name: Deploy
         uses: appleboy/scp-action@master
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USERNAME }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          host: ${{ github.ref == 'refs/heads/main' && secrets.SSH_HOST_DEV || secrets.SSH_HOST }}
+          username: ${{ github.ref == 'refs/heads/main' && secrets.SSH_USERNAME_DEV || secrets.SSH_USERNAME }}
+          key: ${{ github.ref == 'refs/heads/main' && secrets.SSH_PRIVATE_KEY_DEV || secrets.SSH_PRIVATE_KEY }}
           source: "."
           target: "~/apps/l4va-api"
 
-      - name: Execute deploy commands
+      - name: Run
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USERNAME }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          host: ${{ github.ref == 'refs/heads/main' && secrets.SSH_HOST_DEV || secrets.SSH_HOST }}
+          username: ${{ github.ref == 'refs/heads/main' && secrets.SSH_USERNAME_DEV || secrets.SSH_USERNAME }}
+          key: ${{ github.ref == 'refs/heads/main' && secrets.SSH_PRIVATE_KEY_DEV || secrets.SSH_PRIVATE_KEY }}
           script: |
             cd ~/apps
             docker compose build l4va-api
