@@ -60,6 +60,35 @@ export interface PayAdaContributionInput extends TransactionInput {
   preloadedScripts: object[];
 }
 
+export interface ContributionInput {
+  changeAddress: string;
+  utxos: string[];
+  message: string;
+  mint: object[];
+  scriptInteractions: object[];
+  outputs: (
+    | {
+        address: string;
+        assets?: object[];
+        lovelace?: number; // Required if Contribution in ADA
+        datum?: { type: 'inline'; value: Datum; shape: object };
+      }
+    // Fee output
+    | {
+        address: string;
+        lovelace: number;
+      }
+  )[];
+  requiredSigners: string[];
+  requiredInputs?: string[];
+  referenceInputs: { txHash: string; index: number }[];
+  validityInterval: {
+    start: boolean;
+    end: boolean;
+  };
+  network: string;
+}
+
 export interface ExtractInput extends TransactionInput {
   deposits?: {
     hash: string;

@@ -50,12 +50,16 @@ interface GetUtxosOptions {
   minAda?: number;
   /** Filter UTXOs based on ADA amount for specific selection (in lovelace) */
   filterByAda?: number;
+  /** Target total ADA amount to collect (in lovelace) */
+  targetAdaAmount?: number;
   /** Array of assets to collect */
   targetAssets?: TargetAsset[];
   /** Whether to validate UTXO existence on-chain (default: true) */
   validateUtxos?: boolean;
   /** Maximum number of UTXOs to return */
   maxUtxos?: number;
+  /** Whether to exclude UTXOs with inline datums */
+  removeInlineDatums?: boolean;
 }
 
 interface GetUtxosResult {
@@ -67,6 +71,8 @@ interface GetUtxosResult {
   requiredInputs?: string[];
   /** Detailed breakdown of asset collection */
   assetBreakdown?: AssetCollection[];
+  /** Total ADA collected (in lovelace) - only if targetAdaAmount specified */
+  totalAdaCollected?: number;
 }
 
 export const assetsToValue = (assets: Amount[]): Value => {
@@ -153,9 +159,18 @@ export const getUtxosExtract = async (
   blockfrost: BlockFrostAPI,
   options: GetUtxosOptions = {}
 ): Promise<GetUtxosResult> => {
-  const { minAda = 0, filterByAda, targetAssets = [], validateUtxos = true, maxUtxos = 15 } = options;
+  const {
+    targetAdaAmount,
+    filterByAda,
+    targetAssets = [],
+    validateUtxos = true,
+    removeInlineDatums = true,
+    minAda = 0,
+    maxUtxos = 15,
+  } = options;
 
   const hasTargetAssets = targetAssets.length > 0;
+  const hasTargetAda = targetAdaAmount !== undefined && targetAdaAmount > 0;
 
   // Initialize asset collection tracking
   const assetCollections: Map<string, AssetCollection> = new Map();
@@ -171,8 +186,9 @@ export const getUtxosExtract = async (
   const utxos = await blockfrost.addressesUtxosAll(address.to_bech32());
   const allValidUtxos: string[] = [];
   const filteredUtxos: string[] = [];
-  const requiredTokenUtxos: Set<string> = new Set(); // UTXOs containing required tokens
-  const additionalUtxos: string[] = []; // UTXOs without required tokens (for padding)
+  const requiredTokenUtxos: Set<string> = new Set();
+  const additionalUtxos: string[] = [];
+  let totalAdaCollected = 0;
 
   if (filterByAda !== undefined) {
     for (const utxo of utxos) {
@@ -194,7 +210,7 @@ export const getUtxosExtract = async (
     // Skip UTXOs below minimum ADA threshold
     if (adaAmount <= minAda) continue;
 
-    if (inline_datum === '49616e76696c2d746167') continue; // Skip UTXOs with "Ianvil-tag" inline datum for LP
+    if (removeInlineDatums && inline_datum === '49616e76696c2d746167') continue;
 
     // Validate UTXO existence to prevent double-spending
     if (validateUtxos) {
@@ -210,19 +226,27 @@ export const getUtxosExtract = async (
 
     allValidUtxos.push(utxoHex);
 
+    // Track ADA collection if targeting specific amount
+    if (hasTargetAda) {
+      totalAdaCollected += adaAmount;
+      requiredTokenUtxos.add(utxoHex);
+
+      // Stop collecting once we have enough ADA
+      if (totalAdaCollected >= targetAdaAmount) {
+        break;
+      }
+    }
+
     // If we have target assets, check if this UTXO contains any
     let containsTargetAsset = false;
     if (hasTargetAssets) {
       for (const [tokenUnit, collection] of assetCollections) {
-        // Skip if we already collected enough of this asset
         if (collection.collected >= collection.required) continue;
 
-        // Check if this UTXO contains the target token
         const tokenAmount = amount.find(a => a.unit === tokenUnit);
         if (tokenAmount) {
           const quantity = Number(tokenAmount.quantity);
 
-          // Update collection tracking
           collection.collected += quantity;
           collection.utxos.push(utxoHex);
           requiredTokenUtxos.add(utxoHex);
@@ -232,12 +256,12 @@ export const getUtxosExtract = async (
     }
 
     // If this UTXO doesn't contain target assets, add to additional pool
-    if (!containsTargetAsset && hasTargetAssets) {
+    if (!containsTargetAsset && hasTargetAssets && !hasTargetAda) {
       additionalUtxos.push(utxoHex);
     }
 
-    // Early exit optimization - stop collecting once we have enough UTXOs
-    if (!hasTargetAssets && allValidUtxos.length >= maxUtxos) {
+    // Early exit optimization
+    if (!hasTargetAssets && !hasTargetAda && allValidUtxos.length >= maxUtxos) {
       break;
     }
   }
@@ -257,9 +281,14 @@ export const getUtxosExtract = async (
     }
   }
 
+  // Validate that target ADA amount was collected
+  if (hasTargetAda && totalAdaCollected < targetAdaAmount) {
+    throw new Error(`Insufficient ADA found. Need ${targetAdaAmount} lovelace, found ${totalAdaCollected} lovelace`);
+  }
+
   let selectedUtxos: string[];
 
-  if (!hasTargetAssets) {
+  if (!hasTargetAssets && !hasTargetAda) {
     selectedUtxos = allValidUtxos.slice(0, maxUtxos);
   } else {
     const requiredUtxosArray = Array.from(requiredTokenUtxos);
@@ -273,10 +302,8 @@ export const getUtxosExtract = async (
     utxos: selectedUtxos,
   };
 
-  // Add filtered UTXOs if filterByAda was specified
   if (filterByAda !== undefined) {
-    // Include required token UTXOs if they exist
-    if (hasTargetAssets) {
+    if (hasTargetAssets || hasTargetAda) {
       const requiredUtxosArray = Array.from(requiredTokenUtxos);
       result.filteredUtxos = [...new Set([...filteredUtxos, ...requiredUtxosArray])];
     } else {
@@ -287,6 +314,11 @@ export const getUtxosExtract = async (
   if (hasTargetAssets) {
     result.requiredInputs = Array.from(requiredTokenUtxos);
     result.assetBreakdown = Array.from(assetCollections.values());
+  }
+
+  if (hasTargetAda) {
+    result.requiredInputs = Array.from(requiredTokenUtxos);
+    result.totalAdaCollected = totalAdaCollected;
   }
 
   return result;

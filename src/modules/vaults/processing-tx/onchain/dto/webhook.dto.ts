@@ -2,7 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
 import { IsArray, IsNumber, IsObject, IsOptional, IsString, ValidateNested } from 'class-validator';
 
-class BlockfrostAmount {
+export class BlockfrostAmount {
   @ApiProperty({
     description: 'The unit of the value',
     example: 'lovelace',
@@ -20,7 +20,7 @@ class BlockfrostAmount {
   quantity: string;
 }
 
-class BlockfrostTxInput {
+export class BlockfrostTxInput {
   @ApiProperty({
     description: 'Input address',
     example: 'addr1q8suxg555ynm66ykapc2999hzyxnmre70xf6p20pa2z269agynrj803a45k5zqg2usxju3wk5gywqjdtd59salr9mpzq9g4r8a',
@@ -72,7 +72,7 @@ class BlockfrostTxInput {
   data_hash?: string | null;
 }
 
-class BlockfrostTxOutput {
+export class BlockfrostTxOutput {
   @ApiProperty({
     description: 'Output address',
     example: 'addr1q9zyjm3lkfjhgt2g6cyqts8kpwppl3l5ud8afpgqxzygrhgv45sex0xp482gdrnnkzdlajwc9zalzx8zvcvum2qvkqzsln7sdv',
@@ -108,7 +108,7 @@ class BlockfrostTxOutput {
   data_hash?: string | null;
 }
 
-class BlockfrostTransaction {
+export class BlockfrostTransaction {
   @ApiProperty({
     description: 'Transaction hash',
     example: '9358fccf785f40d5507ed81b38f16b03148baf341e1de4d511689eebb436dd4b',
@@ -214,6 +214,70 @@ class BlockfrostTransaction {
   @IsNumber()
   @Expose()
   utxo_count: number;
+
+  @ApiProperty({
+    description: 'Count of withdrawals',
+    example: 0,
+  })
+  @IsNumber()
+  @Expose()
+  withdrawal_count: number;
+
+  @ApiProperty({
+    description: 'Count of MIR certificates',
+    example: 0,
+  })
+  @IsNumber()
+  @Expose()
+  mir_cert_count: number;
+
+  @ApiProperty({
+    description: 'Count of delegations',
+    example: 0,
+  })
+  @IsNumber()
+  @Expose()
+  delegation_count: number;
+
+  @ApiProperty({
+    description: 'Count of stake certificates',
+    example: 0,
+  })
+  @IsNumber()
+  @Expose()
+  stake_cert_count: number;
+
+  @ApiProperty({
+    description: 'Count of pool updates',
+    example: 0,
+  })
+  @IsNumber()
+  @Expose()
+  pool_update_count: number;
+
+  @ApiProperty({
+    description: 'Count of pool retirements',
+    example: 0,
+  })
+  @IsNumber()
+  @Expose()
+  pool_retire_count: number;
+
+  @ApiProperty({
+    description: 'Count of asset mint or burn events',
+    example: 0,
+  })
+  @IsNumber()
+  @Expose()
+  asset_mint_or_burn_count: number;
+
+  @ApiProperty({
+    description: 'Count of redeemers',
+    example: 0,
+  })
+  @IsNumber()
+  @Expose()
+  redeemer_count: number;
 
   @ApiProperty({
     description: 'Whether the contract is valid',

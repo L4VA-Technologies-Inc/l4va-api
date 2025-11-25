@@ -12,6 +12,7 @@ import { BlockfrostAddressTotalDto, BlockfrostAddressDto } from './dto/blockfros
 import { PaginationQueryDto, PaginationMetaDto } from './dto/pagination.dto';
 import { WalletOverviewDto, PaginatedWalletSummaryDto } from './dto/wallet-summary.dto';
 
+import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
@@ -35,6 +36,8 @@ export class TaptoolsService {
   constructor(
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
     private readonly assetsService: AssetsService
   ) {
     this.taptoolsApiKey = process.env.TAPTOOLS_API_KEY || '';
@@ -353,7 +356,7 @@ export class TaptoolsService {
     // Get the vault to verify it exists
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
-      relations: ['assets'],
+      relations: ['assets', 'owner'],
     });
 
     if (!vault) {
@@ -474,6 +477,7 @@ export class TaptoolsService {
           isNft: asset.isNft,
         }))
       );
+      await this.userRepository.update({ id: vault.owner.id }, { tvl: totalValueAda });
     }
 
     const adaPrice = await this.getAdaPrice();
