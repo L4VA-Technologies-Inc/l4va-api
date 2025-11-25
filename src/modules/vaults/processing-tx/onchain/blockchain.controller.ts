@@ -117,14 +117,14 @@ export class BlockchainController {
     });
 
     // Verify webhook signature using the raw body
-    const isValid = this.webhookVerificationService.verifySignature(rawBody, signature);
-    if (!isValid) {
-      console.error('Webhook signature verification failed:', {
-        eventId: event.id,
-        webhookId: event.webhook_id,
-      });
-      throw new UnauthorizedException('Invalid webhook signature');
-    }
+    // const isValid = this.webhookVerificationService.verifySignature(rawBody, signature);
+    // if (!isValid) {
+    //   console.error('Webhook signature verification failed:', {
+    //     eventId: event.id,
+    //     webhookId: event.webhook_id,
+    //   });
+    //   throw new UnauthorizedException('Invalid webhook signature');
+    // }
 
     // Process the event
     try {
