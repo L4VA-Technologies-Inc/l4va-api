@@ -12,13 +12,14 @@ import { TransactionsService } from '../offchain-tx/transactions.service';
 import { BlockchainScannerService } from './blockchain-scanner.service';
 import { BlockchainService } from './blockchain.service';
 import { SubmitTransactionDto } from './dto/transaction.dto';
-import { BlockchainWebhookDto } from './dto/webhook.dto';
+import { BlockchainWebhookDto, BlockfrostTransaction, BlockfrostTxOutput } from './dto/webhook.dto';
 import { ValidityIntervalException } from './exceptions/validity-interval.exception';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
-import { Datum, Redeemer } from './types/type';
+import { Redeemer } from './types/type';
 import { getUtxosExtract } from './utils/lib';
 
 import { Vault } from '@/database/vault.entity';
+import { ContributionInput } from '@/modules/distribution/distribution.types';
 import { TransactionStatus } from '@/types/transaction.types';
 
 // Acquire and Contribution
@@ -58,35 +59,6 @@ export interface TransactionSubmitResponse {
   txHash: string;
 }
 
-interface ContributionInput {
-  changeAddress: string;
-  utxos: string[];
-  message: string;
-  mint: object[];
-  scriptInteractions: object[];
-  outputs: (
-    | {
-        address: string;
-        assets?: object[];
-        lovelace?: number; // Required if Contribution in ADA
-        datum?: { type: 'inline'; value: Datum; shape: object };
-      }
-    // Fee output
-    | {
-        address: string;
-        lovelace: number;
-      }
-  )[];
-  requiredSigners: string[];
-  requiredInputs?: string[];
-  referenceInputs: { txHash: string; index: number }[];
-  validityInterval: {
-    start: boolean;
-    end: boolean;
-  };
-  network: string;
-}
-
 @Injectable()
 export class VaultInsertingService {
   private readonly logger = new Logger(VaultInsertingService.name);
@@ -95,6 +67,17 @@ export class VaultInsertingService {
   private readonly adminAddress: string;
   private readonly adminHash: string;
   private readonly adminSKey: string;
+  private readonly VAULT_SCRIPT_ADDRESS = '70fd892d61b7db3490d79b8fd9e224264e3704f9b5041bf7cc35950fd2';
+  private readonly RECEIPT_ASSET_NAME = '72656365697074'; // "receipt" in hex
+
+  // Status mapping for blockchain events
+  private readonly STATUS_MAP: Record<OnchainTransactionStatus, TransactionStatus> = {
+    [OnchainTransactionStatus.PENDING]: TransactionStatus.pending,
+    [OnchainTransactionStatus.CONFIRMED]: TransactionStatus.confirmed,
+    [OnchainTransactionStatus.FAILED]: TransactionStatus.failed,
+    [OnchainTransactionStatus.NOT_FOUND]: TransactionStatus.stuck,
+  };
+
   private blockfrost: BlockFrostAPI;
   constructor(
     @InjectRepository(Vault)
@@ -153,7 +136,9 @@ export class VaultInsertingService {
 
         // For ADA contributions, we just need UTXOs with sufficient ADA + minimum for fees
         const { utxos } = await getUtxosExtract(Address.from_bech32(params.changeAddress), this.blockfrost, {
-          minAda: 6000000,
+          targetAdaAmount: quantity, // Contribution amount + buffer for fees
+          validateUtxos: false,
+          maxUtxos: 1000,
         });
 
         if (utxos.length === 0) {
@@ -369,18 +354,11 @@ export class VaultInsertingService {
   }
 
   async handleScannerEvent(event: any): Promise<void> {
+    this.logger.warn('Scanner webhook called - this endpoint is deprecated');
+
     // Determine transaction status based on blockchain data
     const tx = event.data.tx;
-    let status: OnchainTransactionStatus;
-    if (!tx.block || !tx.block_height) {
-      status = OnchainTransactionStatus.PENDING;
-    } else if (tx.valid_contract === false) {
-      status = OnchainTransactionStatus.FAILED;
-    } else if (tx.valid_contract === true) {
-      status = OnchainTransactionStatus.CONFIRMED;
-    } else {
-      status = OnchainTransactionStatus.PENDING;
-    }
+    const status = this.determineTransactionStatus(tx);
 
     // Map onchain status to internal transaction status
     const statusMap: Record<OnchainTransactionStatus, TransactionStatus> = {
@@ -390,99 +368,174 @@ export class VaultInsertingService {
       [OnchainTransactionStatus.NOT_FOUND]: TransactionStatus.stuck,
     };
 
-    const internalStatus = statusMap[status];
     const txIndex = typeof tx.index !== 'undefined' ? tx.index : 0;
-    await this.transactionsService.updateTransactionStatus(tx.hash, txIndex, internalStatus);
+    await this.transactionsService.updateTransactionStatus(tx.hash, txIndex, statusMap[status]);
   }
 
+  /**
+   * Handle blockchain webhook events from Blockfrost
+   * Webhook is configured to trigger on transactions involving vault reference address
+   * Filters for vault contributions by checking for receipt token minting
+   */
   async handleBlockchainEvent(event: BlockchainWebhookDto): Promise<void> {
-    // Only handle transaction events
     if (event.type !== 'transaction') {
+      this.logger.debug(`Ignoring non-transaction event type: ${event.type}`);
       return;
     }
 
-    // Process each transaction in the payload
+    this.logger.debug(`Processing ${event.payload.length} transaction(s) from blockchain webhook`);
+
     for (const txEvent of event.payload) {
-      const { tx, inputs, outputs } = txEvent;
-
-      // Determine transaction status based on blockchain data
-      let status: OnchainTransactionStatus;
-      if (!tx.block || !tx.block_height) {
-        status = OnchainTransactionStatus.PENDING;
-      } else if (tx.valid_contract === false) {
-        status = OnchainTransactionStatus.FAILED;
-      } else if (tx.valid_contract === true) {
-        status = OnchainTransactionStatus.CONFIRMED;
-      } else {
-        status = OnchainTransactionStatus.PENDING;
-      }
-
-      // Map onchain status to internal transaction status
-      const statusMap: Record<OnchainTransactionStatus, TransactionStatus> = {
-        [OnchainTransactionStatus.PENDING]: TransactionStatus.pending,
-        [OnchainTransactionStatus.CONFIRMED]: TransactionStatus.confirmed,
-        [OnchainTransactionStatus.FAILED]: TransactionStatus.failed,
-        [OnchainTransactionStatus.NOT_FOUND]: TransactionStatus.stuck,
-      };
-
-      // Update transaction status
-      const internalStatus = statusMap[status];
-      await this.transactionsService.updateTransactionStatus(tx.hash, tx.index, internalStatus);
-
-      // For confirmed transactions, analyze the transfer
-      if (status === OnchainTransactionStatus.CONFIRMED) {
-        const transferDetails = {
-          txHash: tx.hash,
-          blockHeight: tx.block_height,
-          timestamp: tx.block_time,
-          fee: tx.fees,
-          sender: inputs[0]?.address, // Usually the first input is the sender
-          transfers: [],
-        };
-
-        // Analyze each output
-        for (const output of outputs) {
-          const { address, amount } = output;
-
-          // Skip change outputs (outputs back to sender)
-          if (address === transferDetails.sender) {
-            continue;
-          }
-
-          // Process each asset in the output
-          for (const asset of amount) {
-            if (asset.unit === 'lovelace') {
-              // ADA transfer
-              transferDetails.transfers.push({
-                type: 'ADA',
-                recipient: address,
-                amount: (parseInt(asset.quantity) / 1_000_000).toString(), // Convert lovelace to ADA
-                unit: 'ADA',
-              });
-            } else if (asset.quantity === '1') {
-              // NFT transfer
-              transferDetails.transfers.push({
-                type: 'NFT',
-                recipient: address,
-                policyId: asset.unit.slice(0, 56),
-                assetName: asset.unit.slice(56),
-                unit: asset.unit,
-              });
-            } else {
-              // Other token transfer
-              transferDetails.transfers.push({
-                type: 'TOKEN',
-                recipient: address,
-                amount: asset.quantity,
-                unit: asset.unit,
-              });
-            }
-          }
-        }
-
-        // Log transfer details
-        // console.log('Transaction details:', JSON.stringify(transferDetails, null, 2));
-      }
+      await this.processTransaction(txEvent);
     }
   }
+
+  /**
+   * Process individual transaction from webhook
+   */
+  private async processTransaction(txEvent: any): Promise<void> {
+    const { tx, outputs } = txEvent;
+
+    // Check if this is a vault-related transaction (has receipt token)
+    const isVaultTransaction = this.isVaultTransaction(tx, outputs);
+
+    if (!isVaultTransaction) {
+      this.logger.debug(`Transaction ${tx.hash} doesn't involve receipt token, skipping`);
+      return;
+    }
+
+    this.logger.debug(`Processing vault transaction ${tx.hash}`);
+
+    try {
+      // Determine and update transaction status
+      const onchainStatus = this.determineTransactionStatus(tx);
+      const internalStatus = this.STATUS_MAP[onchainStatus];
+
+      // await this.transactionsService.updateTransactionStatus(tx.hash, tx.index, internalStatus);
+
+      this.logger.debug(`TEST: Transaction ${tx.hash} status could be updated to ${internalStatus}`);
+    } catch (error) {
+      this.logger.error(`Failed to process transaction ${tx.hash}: ${error.message}`, error.stack);
+    }
+  }
+
+  /**
+   * Check if transaction is a vault transaction (contribution or extraction)
+   * Identifies by checking if receipt token was minted
+   * Note: Webhook already filters for transactions involving vault reference address
+   */
+  private isVaultTransaction(tx: BlockfrostTransaction, outputs: BlockfrostTxOutput[]): boolean {
+    // Only process transactions that minted/burned assets
+    if (tx.asset_mint_or_burn_count === 0) {
+      return false;
+    }
+
+    // Check if any output contains a receipt token
+    // Receipt tokens always end with "receipt" in hex (72656365697074)
+    for (const output of outputs) {
+      for (const asset of output.amount) {
+        if (asset.unit !== 'lovelace' && asset.unit.endsWith(this.RECEIPT_ASSET_NAME)) {
+          this.logger.debug(`Found receipt token in tx ${tx.hash}: ${asset.unit}`);
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  private determineTransactionStatus(tx: any): OnchainTransactionStatus {
+    if (!tx.block || !tx.block_height) {
+      return OnchainTransactionStatus.PENDING;
+    } else if (tx.valid_contract === false) {
+      return OnchainTransactionStatus.FAILED;
+    } else if (tx.valid_contract === true) {
+      return OnchainTransactionStatus.CONFIRMED;
+    }
+    return OnchainTransactionStatus.PENDING;
+  }
+
+  // async handleBlockchainEvent(event: BlockchainWebhookDto): Promise<void> {
+  //   // Only handle transaction events
+  //   if (event.type !== 'transaction') {
+  //     return;
+  //   }
+
+  //   this.logger.log('Processing blockchain event with', JSON.stringify(event.payload), 'transactions');
+
+  //   // Process each transaction in the payload
+  //   for (const txEvent of event.payload) {
+  //     const { tx, inputs, outputs } = txEvent;
+
+  //     // Determine transaction status based on blockchain data
+  //     const status = this.determineTransactionStatus(txEvent.tx);
+
+  //     // Map onchain status to internal transaction status
+  //     const statusMap: Record<OnchainTransactionStatus, TransactionStatus> = {
+  //       [OnchainTransactionStatus.PENDING]: TransactionStatus.pending,
+  //       [OnchainTransactionStatus.CONFIRMED]: TransactionStatus.confirmed,
+  //       [OnchainTransactionStatus.FAILED]: TransactionStatus.failed,
+  //       [OnchainTransactionStatus.NOT_FOUND]: TransactionStatus.stuck,
+  //     };
+
+  //     // Update transaction status
+  //     const internalStatus = statusMap[status];
+  //     await this.transactionsService.updateTransactionStatus(tx.hash, tx.index, internalStatus);
+
+  //     // For confirmed transactions, analyze the transfer
+  //     if (status === OnchainTransactionStatus.CONFIRMED) {
+  //       const transferDetails = {
+  //         txHash: tx.hash,
+  //         blockHeight: tx.block_height,
+  //         timestamp: tx.block_time,
+  //         fee: tx.fees,
+  //         sender: inputs[0]?.address, // Usually the first input is the sender
+  //         transfers: [],
+  //       };
+
+  //       // Analyze each output
+  //       for (const output of outputs) {
+  //         const { address, amount } = output;
+
+  //         // Skip change outputs (outputs back to sender)
+  //         if (address === transferDetails.sender) {
+  //           continue;
+  //         }
+
+  //         // Process each asset in the output
+  //         for (const asset of amount) {
+  //           if (asset.unit === 'lovelace') {
+  //             // ADA transfer
+  //             transferDetails.transfers.push({
+  //               type: 'ADA',
+  //               recipient: address,
+  //               amount: (parseInt(asset.quantity) / 1_000_000).toString(), // Convert lovelace to ADA
+  //               unit: 'ADA',
+  //             });
+  //           } else if (asset.quantity === '1') {
+  //             // NFT transfer
+  //             transferDetails.transfers.push({
+  //               type: 'NFT',
+  //               recipient: address,
+  //               policyId: asset.unit.slice(0, 56),
+  //               assetName: asset.unit.slice(56),
+  //               unit: asset.unit,
+  //             });
+  //           } else {
+  //             // Other token transfer
+  //             transferDetails.transfers.push({
+  //               type: 'TOKEN',
+  //               recipient: address,
+  //               amount: asset.quantity,
+  //               unit: asset.unit,
+  //             });
+  //           }
+  //         }
+  //       }
+
+  //       // Log transfer details
+  //       // console.log('Transaction details:', JSON.stringify(transferDetails, null, 2));
+  //     }
+  //   }
+  // }
 }

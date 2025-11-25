@@ -293,7 +293,9 @@ export class ClaimsService {
       throw new BadRequestException('All claims must belong to the same vault');
     }
 
-    const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost);
+    const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
+      minAda: 4000000,
+    });
     if (adminUtxos.length === 0) {
       throw new Error('No UTXOs found.');
     }
