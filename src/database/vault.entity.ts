@@ -142,7 +142,7 @@ export class Vault {
     type: 'timestamptz',
     nullable: true,
   })
-  contribution_open_window_time?: string;
+  contribution_open_window_time?: Date;
 
   @Expose({ name: 'contributionDuration' })
   @Transform(({ value }) => (value ? Number(value) : null))
@@ -174,7 +174,7 @@ export class Vault {
     type: 'timestamptz',
     nullable: true,
   })
-  acquire_open_window_time?: string;
+  acquire_open_window_time?: Date;
 
   @Expose({ name: 'tokensForAcquires' })
   @Transform(({ value }) => (value ? Number(value) : null))
@@ -582,39 +582,41 @@ export class Vault {
 
   @Expose({ name: 'updatedAt' })
   @Column({ name: 'updated_at', type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
-  updated_at: string;
+  updated_at: Date;
 
   @Expose({ name: 'createdAt' })
   @Column({ name: 'created_at', type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
-  created_at: string;
+  created_at: Date;
 
   @Expose({ name: 'contributionPhaseStart' })
   @Column({ name: 'contribution_phase_start', type: 'timestamptz', nullable: true })
-  contribution_phase_start?: string;
+  contribution_phase_start?: Date;
 
   @Expose({ name: 'acquirePhaseStart' })
   @Column({ name: 'acquire_phase_start', type: 'timestamptz', nullable: true })
-  acquire_phase_start?: string;
+  acquire_phase_start?: Date;
 
   @Expose({ name: 'lockedAt' })
   @Column({ name: 'locked_at', type: 'timestamptz', nullable: true })
-  locked_at?: string;
+  locked_at?: Date;
 
   @Column({ name: 'deleted', type: 'boolean', nullable: false, default: false })
   deleted: boolean;
 
   @Expose({ name: 'governancePhaseStart' })
   @Column({ name: 'governance_phase_start', type: 'timestamptz', nullable: true })
-  governance_phase_start?: string;
+  governance_phase_start?: Date;
 
   @BeforeInsert()
   setDate(): void {
-    this.created_at = new Date().toISOString();
+    const now = new Date();
+    this.created_at = now;
+    this.updated_at = now;
   }
 
   @BeforeUpdate()
   updateDate(): void {
-    this.updated_at = new Date().toISOString();
+    this.updated_at = new Date();
   }
 
   @Expose({ name: 'failureReason' })
