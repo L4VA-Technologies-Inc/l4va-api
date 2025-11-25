@@ -538,13 +538,13 @@ export class VaultManagingService {
                   is_inclusive: true,
                 },
                 upper_bound: {
-                  bound_type: new Date(vault.acquire_phase_start).getTime(),
+                  bound_type: new Date(vault.contribution_phase_start + vault.contribution_duration).getTime(),
                   is_inclusive: true,
                 },
               },
               acquire_window: {
                 lower_bound: {
-                  bound_type: new Date(vault.acquire_phase_start).getTime(),
+                  bound_type: 'NegativeInfinity',
                   is_inclusive: true,
                 },
                 upper_bound: {
