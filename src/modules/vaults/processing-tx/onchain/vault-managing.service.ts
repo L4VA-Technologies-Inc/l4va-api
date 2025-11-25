@@ -450,7 +450,7 @@ export class VaultManagingService {
     const { utxos: adminUtxos } = await getUtxosExtract(
       Address.from_bech32(this.adminAddress),
       this.blockfrost,
-      { minAda: 4000000, maxUtxos: 1 } // 4 ADA minimum
+      { minAda: 4000000, maxUtxos: 2 } // 4 ADA minimum
     );
 
     const allowedPolicies: string[] =
