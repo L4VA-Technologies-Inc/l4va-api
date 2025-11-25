@@ -1,4 +1,4 @@
-import { Body, Controller, Post, UseGuards, HttpCode, Request, UnauthorizedException } from '@nestjs/common';
+import { Body, Controller, Post, UseGuards, HttpCode, Request } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import {
