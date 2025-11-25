@@ -49,7 +49,10 @@ export class BlockchainController {
 
   @Post('scanner-wh')
   @HttpCode(200)
-  @ApiOperation({ summary: 'Webhook endpoint for scanner events' })
+  @ApiOperation({
+    summary: '⚠️ DEPRECATED: Use Blockfrost webhooks instead',
+    deprecated: true,
+  })
   @ApiResponse({
     status: 200,
     description: 'Blockchain event processed successfully',
@@ -104,14 +107,14 @@ export class BlockchainController {
     }
 
     // Log headers and event info for debugging
-    // console.log('Received webhook event:', {
-    //   signature,
-    //   timestamp: req.headers['blockfrost-timestamp'],
-    //   eventId: event.id,
-    //   webhookId: event.webhook_id,
-    //   rawBodyLength: rawBody.length,
-    //   rawBodyPreview: rawBody.substring(0, 100) + '...',
-    // });
+    console.log('Received webhook event:', {
+      signature,
+      timestamp: req.headers['blockfrost-timestamp'],
+      eventId: event.id,
+      webhookId: event.webhook_id,
+      rawBodyLength: rawBody.length,
+      rawBodyPreview: rawBody.substring(0, 100) + '...',
+    });
 
     // Verify webhook signature using the raw body
     const isValid = this.webhookVerificationService.verifySignature(rawBody, signature);

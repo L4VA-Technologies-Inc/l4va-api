@@ -125,7 +125,9 @@ export class VaultInsertingService {
 
         // For ADA contributions, we just need UTXOs with sufficient ADA + minimum for fees
         const { utxos } = await getUtxosExtract(Address.from_bech32(params.changeAddress), this.blockfrost, {
-          minAda: 6000000,
+          targetAdaAmount: quantity, // Contribution amount + buffer for fees
+          validateUtxos: false,
+          maxUtxos: 1000,
         });
 
         if (utxos.length === 0) {
@@ -341,18 +343,11 @@ export class VaultInsertingService {
   }
 
   async handleScannerEvent(event: any): Promise<void> {
+    this.logger.warn('Scanner webhook called - this endpoint is deprecated');
+
     // Determine transaction status based on blockchain data
     const tx = event.data.tx;
-    let status: OnchainTransactionStatus;
-    if (!tx.block || !tx.block_height) {
-      status = OnchainTransactionStatus.PENDING;
-    } else if (tx.valid_contract === false) {
-      status = OnchainTransactionStatus.FAILED;
-    } else if (tx.valid_contract === true) {
-      status = OnchainTransactionStatus.CONFIRMED;
-    } else {
-      status = OnchainTransactionStatus.PENDING;
-    }
+    const status = this.determineTransactionStatus(tx);
 
     // Map onchain status to internal transaction status
     const statusMap: Record<OnchainTransactionStatus, TransactionStatus> = {
@@ -362,9 +357,8 @@ export class VaultInsertingService {
       [OnchainTransactionStatus.NOT_FOUND]: TransactionStatus.stuck,
     };
 
-    const internalStatus = statusMap[status];
     const txIndex = typeof tx.index !== 'undefined' ? tx.index : 0;
-    await this.transactionsService.updateTransactionStatus(tx.hash, txIndex, internalStatus);
+    await this.transactionsService.updateTransactionStatus(tx.hash, txIndex, statusMap[status]);
   }
 
   async handleBlockchainEvent(event: BlockchainWebhookDto): Promise<void> {
@@ -373,21 +367,14 @@ export class VaultInsertingService {
       return;
     }
 
+    this.logger.log('Processing blockchain event with', JSON.stringify(event.payload), 'transactions');
+
     // Process each transaction in the payload
     for (const txEvent of event.payload) {
       const { tx, inputs, outputs } = txEvent;
 
       // Determine transaction status based on blockchain data
-      let status: OnchainTransactionStatus;
-      if (!tx.block || !tx.block_height) {
-        status = OnchainTransactionStatus.PENDING;
-      } else if (tx.valid_contract === false) {
-        status = OnchainTransactionStatus.FAILED;
-      } else if (tx.valid_contract === true) {
-        status = OnchainTransactionStatus.CONFIRMED;
-      } else {
-        status = OnchainTransactionStatus.PENDING;
-      }
+      const status = this.determineTransactionStatus(txEvent.tx);
 
       // Map onchain status to internal transaction status
       const statusMap: Record<OnchainTransactionStatus, TransactionStatus> = {
@@ -456,5 +443,16 @@ export class VaultInsertingService {
         // console.log('Transaction details:', JSON.stringify(transferDetails, null, 2));
       }
     }
+  }
+
+  private determineTransactionStatus(tx: any): OnchainTransactionStatus {
+    if (!tx.block || !tx.block_height) {
+      return OnchainTransactionStatus.PENDING;
+    } else if (tx.valid_contract === false) {
+      return OnchainTransactionStatus.FAILED;
+    } else if (tx.valid_contract === true) {
+      return OnchainTransactionStatus.CONFIRMED;
+    }
+    return OnchainTransactionStatus.PENDING;
   }
 }
