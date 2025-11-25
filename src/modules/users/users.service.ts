@@ -117,7 +117,6 @@ export class UsersService {
       VaultStatus.locked,
       VaultStatus.burned,
     ];
-
     const vaultsCount = await this.vaultRepository
       .createQueryBuilder('vault')
       .andWhere('vault.deleted != :deleted', { deleted: true })
