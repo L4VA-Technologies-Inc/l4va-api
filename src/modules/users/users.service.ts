@@ -82,9 +82,7 @@ export class UsersService {
       .getCount();
 
     user.total_vaults = vaultsCount || 0;
-
     const plainUser = instanceToPlain(user);
-
     plainUser.banner_image = user.banner_image?.file_url || null;
     plainUser.profile_image = user.profile_image?.file_url || null;
 
@@ -116,7 +114,6 @@ export class UsersService {
       VaultStatus.locked,
       VaultStatus.burned,
     ];
-
     const vaultsCount = await this.vaultRepository
       .createQueryBuilder('vault')
       .andWhere('vault.deleted != :deleted', { deleted: true })
