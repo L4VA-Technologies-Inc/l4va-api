@@ -1,6 +1,7 @@
-import { Body, Controller, Post, UseGuards, HttpCode, Request } from '@nestjs/common';
+import { Body, Controller, Post, UseGuards, HttpCode, Request, UnauthorizedException } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
+import { WebhookVerificationService } from './blockchain-webhook.service';
 import {
   BuildTransactionDto,
   SubmitTransactionDto,
@@ -9,7 +10,6 @@ import {
 } from './dto/transaction.dto';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
 import { VaultInsertingService } from './vault-inserting.service';
-import { WebhookVerificationService } from './webhook-verification.service';
 
 import { AuthGuard } from '@/modules/auth/auth.guard';
 
@@ -47,38 +47,6 @@ export class BlockchainController {
     return this.transactionService.submitTransaction(params);
   }
 
-  @Post('scanner-wh')
-  @HttpCode(200)
-  @ApiOperation({
-    summary: '⚠️ DEPRECATED: Use Blockfrost webhooks instead',
-    deprecated: true,
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Blockchain event processed successfully',
-    type: Object,
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Invalid webhook signature',
-  })
-  async scannerWh(@Body() event: any, @Request() _req): Promise<{ status: string; details: any }> {
-    try {
-      await this.transactionService.handleScannerEvent(event);
-
-      return {
-        status: 'success',
-        details: 'txSummary',
-      };
-    } catch (error) {
-      console.error('Error processing webhook:', error);
-      return {
-        status: 'error',
-        details: error.message,
-      };
-    }
-  }
-
   @Post('tx-webhook')
   @HttpCode(200)
   @ApiOperation({ summary: 'Webhook endpoint for blockchain events' })
@@ -106,25 +74,15 @@ export class BlockchainController {
       rawBody = JSON.stringify(req.body);
     }
 
-    // Log headers and event info for debugging
-    console.log('Received webhook event:', {
-      signature,
-      timestamp: req.headers['blockfrost-timestamp'],
-      eventId: event.id,
-      webhookId: event.webhook_id,
-      rawBodyLength: rawBody.length,
-      rawBodyPreview: rawBody.substring(0, 100) + '...',
-    });
-
     // Verify webhook signature using the raw body
-    // const isValid = this.webhookVerificationService.verifySignature(rawBody, signature);
-    // if (!isValid) {
-    //   console.error('Webhook signature verification failed:', {
-    //     eventId: event.id,
-    //     webhookId: event.webhook_id,
-    //   });
-    //   throw new UnauthorizedException('Invalid webhook signature');
-    // }
+    const isValid = this.webhookVerificationService.verifySignature(rawBody, signature);
+    if (!isValid) {
+      console.error('Webhook signature verification failed:', {
+        eventId: event.id,
+        webhookId: event.webhook_id,
+      });
+      throw new UnauthorizedException('Invalid webhook signature');
+    }
 
     // Process the event
     try {

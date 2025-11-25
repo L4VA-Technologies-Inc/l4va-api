@@ -5,13 +5,12 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { TransactionsModule } from '../offchain-tx/transactions.module';
 
-import { BlockchainScannerService } from './blockchain-scanner.service';
+import { WebhookVerificationService } from './blockchain-webhook.service';
 import { BlockchainController } from './blockchain.controller';
 import { BlockchainService } from './blockchain.service';
 import { MetadataRegistryApiService } from './metadata-register.service';
 import { VaultInsertingService } from './vault-inserting.service';
 import { VaultManagingService } from './vault-managing.service';
-import { WebhookVerificationService } from './webhook-verification.service';
 
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
@@ -32,14 +31,12 @@ import { Vault } from '@/database/vault.entity';
     MetadataRegistryApiService,
     BlockchainService,
     VaultInsertingService,
-    BlockchainScannerService,
     WebhookVerificationService,
     VaultManagingService,
   ],
   exports: [
     BlockchainService,
     VaultInsertingService,
-    BlockchainScannerService,
     WebhookVerificationService,
     VaultManagingService,
     MetadataRegistryApiService,

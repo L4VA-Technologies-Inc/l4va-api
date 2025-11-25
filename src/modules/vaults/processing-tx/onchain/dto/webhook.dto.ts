@@ -288,7 +288,7 @@ export class BlockfrostTransaction {
   valid_contract?: boolean;
 }
 
-class BlockfrostTransactionEvent {
+export class BlockfrostTransactionEvent {
   @ApiProperty({
     description: 'Transaction details',
     type: BlockfrostTransaction,

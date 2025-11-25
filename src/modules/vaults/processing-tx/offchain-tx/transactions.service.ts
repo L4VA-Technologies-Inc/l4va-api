@@ -1,9 +1,11 @@
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config/dist/config.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { plainToInstance } from 'class-transformer';
 import { AssetOriginType, AssetStatus, AssetType } from 'src/types/asset.types';
 import { TransactionStatus, TransactionType } from 'src/types/transaction.types';
-import { Repository } from 'typeorm';
+import { In, IsNull, Not, Repository } from 'typeorm';
 
 import { TransactionsResponseDto, TransactionsResponseItemsDto } from './dto/transactions-response.dto';
 
@@ -17,6 +19,7 @@ import { GetTransactionsDto } from '@/modules/vaults/processing-tx/offchain-tx/d
 @Injectable()
 export class TransactionsService {
   private readonly logger = new Logger(TransactionsService.name);
+  private readonly blockfrost: BlockFrostAPI;
 
   constructor(
     @InjectRepository(Transaction)
@@ -27,8 +30,13 @@ export class TransactionsService {
     private readonly assetRepository: Repository<Asset>,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
-    private readonly taptoolsService: TaptoolsService
-  ) {}
+    private readonly taptoolsService: TaptoolsService,
+    private readonly configService: ConfigService
+  ) {
+    this.blockfrost = new BlockFrostAPI({
+      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
+    });
+  }
 
   async createTransaction(data: {
     vault_id: string;
@@ -373,5 +381,100 @@ export class TransactionsService {
 
     tx.status = status;
     await this.transactionRepository.save(tx);
+  }
+
+  /**
+   * Syncs contribution transactions for a vault by comparing on-chain transactions
+   * with the transactions stored in the database
+   *
+   * @param vaultId The ID of the vault
+   * @returns
+   */
+  async syncVaultTransactions(vaultId: string): Promise<void> {
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: [
+        'id',
+        'policy_id',
+        'contract_address',
+        'asset_vault_name',
+        'name',
+        'script_hash',
+        'description',
+        'ft_token_img',
+        'vault_token_ticker',
+      ],
+      relations: ['ft_token_img'],
+    });
+
+    if (!vault || !vault.contract_address) {
+      throw new NotFoundException('Vault not found or missing contract address');
+    }
+
+    const vaultHasTxs = await this.transactionRepository.exists({
+      where: {
+        vault_id: vaultId,
+        tx_hash: Not(IsNull()),
+        status: Not(TransactionStatus.confirmed),
+      },
+    });
+
+    if (!vaultHasTxs) {
+      return;
+    }
+
+    const blockchainTxs = await this.blockfrost.addressesTransactionsAll(vault.contract_address, {
+      order: 'asc',
+    });
+
+    const filteredTxs = blockchainTxs.filter(tx => tx.block_height != null);
+
+    // If no transactions to process, return early
+    if (filteredTxs.length === 0) {
+      return;
+    }
+    const txHashes = filteredTxs.map(tx => tx.tx_hash);
+
+    const dbTxs = await this.transactionRepository.find({
+      where: { tx_hash: In(txHashes) },
+    });
+
+    // Create lookup map for faster access
+    const dbTxMap = new Map(dbTxs.map(tx => [tx.tx_hash, tx]));
+    // Collect transactions that need status updates
+    const txsToUpdate: { tx_hash: string; tx_index: number }[] = [];
+
+    filteredTxs.map(tx => {
+      const dbTx = dbTxMap.get(tx.tx_hash) || null;
+      let statusUpdated = false;
+
+      // If transaction exists in DB and status is not confirmed, mark for update
+      if (dbTx && dbTx.status !== TransactionStatus.confirmed) {
+        // Mark for status update
+        txsToUpdate.push({
+          tx_hash: tx.tx_hash,
+          tx_index: tx.tx_index,
+        });
+
+        statusUpdated = true;
+      }
+
+      return {
+        tx,
+        dbTx,
+        statusUpdated,
+      };
+    });
+
+    if (txsToUpdate.length > 0) {
+      try {
+        await Promise.all(
+          txsToUpdate.map(tx => this.updateTransactionStatus(tx.tx_hash, tx.tx_index, TransactionStatus.confirmed))
+        );
+        this.logger.log(`Updated ${txsToUpdate.length} transactions to confirmed status`);
+      } catch (error) {
+        this.logger.error('Failed to update transaction statuses', error);
+      }
+    }
   }
 }

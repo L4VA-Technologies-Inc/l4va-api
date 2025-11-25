@@ -14,50 +14,6 @@ import { MissingUtxoException } from './exceptions/utxo-missing.exception';
 import { ValidityIntervalException } from './exceptions/validity-interval.exception';
 import { VaultValidationException } from './exceptions/vault-validation.exception';
 
-export enum OnchainTransactionStatus {
-  PENDING = 'pending',
-  CONFIRMED = 'confirmed',
-  FAILED = 'failed',
-  NOT_FOUND = 'not_found',
-}
-
-export interface TransactionBuildResponse {
-  complete: string;
-  partial: string;
-}
-
-export interface TransactionSubmitResponse {
-  txHash: string;
-}
-
-export interface ApplyParamsPayload {
-  params: Record<string, any[]>;
-  blueprint: {
-    title: string;
-    version: string;
-  };
-}
-
-export interface ApplyParamsResponse {
-  preloadedScript: {
-    blueprint: {
-      preamble: any;
-      validators: Array<{
-        title: string;
-        hash: string;
-      }>;
-    };
-  };
-}
-
-export interface UploadBlueprintPayload {
-  blueprint: {
-    preamble: any;
-    validators: any[];
-  };
-  refs?: Record<string, { txHash: string; index: number }>;
-}
-
 @Injectable()
 export class BlockchainService {
   private readonly logger = new Logger(BlockchainService.name);
