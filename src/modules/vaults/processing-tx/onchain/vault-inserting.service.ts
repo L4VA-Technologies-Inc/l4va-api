@@ -12,7 +12,7 @@ import { TransactionsService } from '../offchain-tx/transactions.service';
 import { BlockchainScannerService } from './blockchain-scanner.service';
 import { BlockchainService } from './blockchain.service';
 import { SubmitTransactionDto } from './dto/transaction.dto';
-import { BlockchainWebhookDto } from './dto/webhook.dto';
+import { BlockchainWebhookDto, BlockfrostTransaction, BlockfrostTxOutput } from './dto/webhook.dto';
 import { ValidityIntervalException } from './exceptions/validity-interval.exception';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
 import { Redeemer } from './types/type';
@@ -68,6 +68,15 @@ export class VaultInsertingService {
   private readonly adminHash: string;
   private readonly adminSKey: string;
   private readonly VAULT_SCRIPT_ADDRESS = '70fd892d61b7db3490d79b8fd9e224264e3704f9b5041bf7cc35950fd2';
+  private readonly RECEIPT_ASSET_NAME = '72656365697074'; // "receipt" in hex
+
+  // Status mapping for blockchain events
+  private readonly STATUS_MAP: Record<OnchainTransactionStatus, TransactionStatus> = {
+    [OnchainTransactionStatus.PENDING]: TransactionStatus.pending,
+    [OnchainTransactionStatus.CONFIRMED]: TransactionStatus.confirmed,
+    [OnchainTransactionStatus.FAILED]: TransactionStatus.failed,
+    [OnchainTransactionStatus.NOT_FOUND]: TransactionStatus.stuck,
+  };
 
   private blockfrost: BlockFrostAPI;
   constructor(
@@ -363,51 +372,76 @@ export class VaultInsertingService {
     await this.transactionsService.updateTransactionStatus(tx.hash, txIndex, statusMap[status]);
   }
 
+  /**
+   * Handle blockchain webhook events from Blockfrost
+   * Webhook is configured to trigger on transactions involving vault reference address
+   * Filters for vault contributions by checking for receipt token minting
+   */
   async handleBlockchainEvent(event: BlockchainWebhookDto): Promise<void> {
-    this.logger.debug('Received blockchain webhook event');
-
     if (event.type !== 'transaction') {
+      this.logger.debug(`Ignoring non-transaction event type: ${event.type}`);
       return;
     }
 
+    this.logger.debug(`Processing ${event.payload.length} transaction(s) from blockchain webhook`);
+
     for (const txEvent of event.payload) {
-      const { tx, inputs, outputs } = txEvent;
-
-      // Check if transaction involves vault script address
-      const involvesVault = this.checkVaultInvolvement(inputs, outputs);
-
-      if (!involvesVault) {
-        this.logger.debug(`Transaction ${tx.hash} doesn't involve vault address, skipping`);
-        continue;
-      }
-
-      this.logger.log(`Processing vault transaction ${tx.hash}`);
-
-      // Determine transaction status
-      const status = this.determineTransactionStatus(txEvent.tx);
-
-      // Map to internal transaction status
-      const statusMap: Record<OnchainTransactionStatus, TransactionStatus> = {
-        [OnchainTransactionStatus.PENDING]: TransactionStatus.pending,
-        [OnchainTransactionStatus.CONFIRMED]: TransactionStatus.confirmed,
-        [OnchainTransactionStatus.FAILED]: TransactionStatus.failed,
-        [OnchainTransactionStatus.NOT_FOUND]: TransactionStatus.stuck,
-      };
-
-      const internalStatus = statusMap[status];
-      await this.transactionsService.updateTransactionStatus(tx.hash, tx.index, internalStatus);
-
-      this.logger.log(`Transaction ${tx.hash} status updated to ${internalStatus}`);
+      await this.processTransaction(txEvent);
     }
   }
 
   /**
-   * Check if transaction involves vault script address
+   * Process individual transaction from webhook
    */
-  private checkVaultInvolvement(inputs: any[], outputs: any[]): boolean {
-    const hasVaultInput = inputs.some(input => input.address === this.VAULT_SCRIPT_ADDRESS);
-    const hasVaultOutput = outputs.some(output => output.address === this.VAULT_SCRIPT_ADDRESS);
-    return hasVaultInput || hasVaultOutput;
+  private async processTransaction(txEvent: any): Promise<void> {
+    const { tx, outputs } = txEvent;
+
+    // Check if this is a vault-related transaction (has receipt token)
+    const isVaultTransaction = this.isVaultTransaction(tx, outputs);
+
+    if (!isVaultTransaction) {
+      this.logger.debug(`Transaction ${tx.hash} doesn't involve receipt token, skipping`);
+      return;
+    }
+
+    this.logger.debug(`Processing vault transaction ${tx.hash}`);
+
+    try {
+      // Determine and update transaction status
+      const onchainStatus = this.determineTransactionStatus(tx);
+      const internalStatus = this.STATUS_MAP[onchainStatus];
+
+      // await this.transactionsService.updateTransactionStatus(tx.hash, tx.index, internalStatus);
+
+      this.logger.debug(`TEST: Transaction ${tx.hash} status could be updated to ${internalStatus}`);
+    } catch (error) {
+      this.logger.error(`Failed to process transaction ${tx.hash}: ${error.message}`, error.stack);
+    }
+  }
+
+  /**
+   * Check if transaction is a vault transaction (contribution or extraction)
+   * Identifies by checking if receipt token was minted
+   * Note: Webhook already filters for transactions involving vault reference address
+   */
+  private isVaultTransaction(tx: BlockfrostTransaction, outputs: BlockfrostTxOutput[]): boolean {
+    // Only process transactions that minted/burned assets
+    if (tx.asset_mint_or_burn_count === 0) {
+      return false;
+    }
+
+    // Check if any output contains a receipt token
+    // Receipt tokens always end with "receipt" in hex (72656365697074)
+    for (const output of outputs) {
+      for (const asset of output.amount) {
+        if (asset.unit !== 'lovelace' && asset.unit.endsWith(this.RECEIPT_ASSET_NAME)) {
+          this.logger.debug(`Found receipt token in tx ${tx.hash}: ${asset.unit}`);
+          return true;
+        }
+      }
+    }
+
+    return false;
   }
 
   private determineTransactionStatus(tx: any): OnchainTransactionStatus {
