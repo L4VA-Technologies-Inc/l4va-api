@@ -216,6 +216,70 @@ class BlockfrostTransaction {
   utxo_count: number;
 
   @ApiProperty({
+    description: 'Count of withdrawals',
+    example: 0,
+  })
+  @IsNumber()
+  @Expose()
+  withdrawal_count: number;
+
+  @ApiProperty({
+    description: 'Count of MIR certificates',
+    example: 0,
+  })
+  @IsNumber()
+  @Expose()
+  mir_cert_count: number;
+
+  @ApiProperty({
+    description: 'Count of delegations',
+    example: 0,
+  })
+  @IsNumber()
+  @Expose()
+  delegation_count: number;
+
+  @ApiProperty({
+    description: 'Count of stake certificates',
+    example: 0,
+  })
+  @IsNumber()
+  @Expose()
+  stake_cert_count: number;
+
+  @ApiProperty({
+    description: 'Count of pool updates',
+    example: 0,
+  })
+  @IsNumber()
+  @Expose()
+  pool_update_count: number;
+
+  @ApiProperty({
+    description: 'Count of pool retirements',
+    example: 0,
+  })
+  @IsNumber()
+  @Expose()
+  pool_retire_count: number;
+
+  @ApiProperty({
+    description: 'Count of asset mint or burn events',
+    example: 0,
+  })
+  @IsNumber()
+  @Expose()
+  asset_mint_or_burn_count: number;
+
+  @ApiProperty({
+    description: 'Count of redeemers',
+    example: 0,
+  })
+  @IsNumber()
+  @Expose()
+  redeemer_count: number;
+
+  @ApiProperty({
     description: 'Whether the contract is valid',
     example: true,
   })
