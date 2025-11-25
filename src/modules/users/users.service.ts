@@ -138,6 +138,7 @@ export class UsersService {
         })
       )
       .getCount();
+      
     const tvlResult = await this.assetRepository
       .createQueryBuilder('asset')
       .select(
