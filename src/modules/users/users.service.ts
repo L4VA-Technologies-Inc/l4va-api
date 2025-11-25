@@ -15,7 +15,6 @@ import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
-import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { VaultStatus } from '@/types/vault.types';
 
 @Injectable()
@@ -110,8 +109,6 @@ export class UsersService {
       throw new BadRequestException('User not found');
     }
 
-    const adaPrice = await this.taptoolsService.getAdaPrice();
-
     const statuses = [
       VaultStatus.published,
       VaultStatus.contribution,
@@ -138,29 +135,12 @@ export class UsersService {
         })
       )
       .getCount();
-    const tvlResult = await this.assetRepository
-      .createQueryBuilder('asset')
-      .select(
-        'SUM(CASE WHEN asset.type = :nftType THEN asset.floor_price::numeric ELSE asset.dex_price::numeric * asset.quantity END)',
-        'tvl'
-      )
-      .where('asset.added_by = :userId', { userId })
-      .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
-      .andWhere('asset.status = :status', { status: AssetStatus.LOCKED })
-      .andWhere(
-        '(asset.type = :nftType AND asset.floor_price IS NOT NULL) OR (asset.type = :ftType AND asset.dex_price IS NOT NULL)'
-      )
-      .setParameter('nftType', AssetType.NFT)
-      .setParameter('ftType', AssetType.FT)
-      .getRawOne();
-
-    const tvl = tvlResult?.tvl ? parseFloat(tvlResult.tvl) : 0;
     user.total_vaults = vaultsCount || 0;
-    user.tvl = tvl;
     const plainedUsers = instanceToPlain(user);
 
-    plainedUsers.totalValueUsd = parseFloat((tvl * adaPrice).toFixed(2));
-    plainedUsers.totalValueAda = tvl;
+    plainedUsers.totalValueUsd = parseFloat((user.tvl * (await this.taptoolsService.getAdaPrice())).toFixed(2));
+    plainedUsers.totalValueAda = user.tvl;
+
     return plainToInstance(PublicProfileRes, plainedUsers, { excludeExtraneousValues: true });
   }
 
