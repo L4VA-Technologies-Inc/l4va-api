@@ -32,7 +32,7 @@ export class BlockchainController {
   async buildTransaction(@Body() params: BuildTransactionDto): Promise<{
     presignedTx: string;
   }> {
-    return this.vaultContributionService.buildTransaction(params);
+    return this.vaultContributionService.buildContributionTransaction(params);
   }
 
   @Post('transaction/submit')
@@ -44,7 +44,7 @@ export class BlockchainController {
   })
   @UseGuards(AuthGuard)
   async submitTransaction(@Body() params: SubmitTransactionDto): Promise<TransactionSubmitResponseDto> {
-    return this.vaultContributionService.submitTransaction(params);
+    return this.vaultContributionService.submitContributionTransaction(params);
   }
 
   @Post('tx-webhook')
@@ -75,11 +75,9 @@ export class BlockchainController {
       rawBody = JSON.stringify(req.body);
     }
 
-    // Process the event with signature verification
     try {
       const updatedLocalTxIds = await this.blockchainWebhookService.handleBlockchainEvent(rawBody, signatureHeader);
 
-      // Return transaction summary
       const txSummary = event.payload.map(txEvent => ({
         txHash: txEvent.tx.hash,
         updatedLocalTxIds,
@@ -90,7 +88,6 @@ export class BlockchainController {
         details: txSummary,
       };
     } catch (error) {
-      console.error('Error processing webhook:', error);
       return {
         status: 'error',
         details: error.message,

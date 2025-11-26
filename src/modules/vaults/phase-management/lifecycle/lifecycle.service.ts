@@ -271,12 +271,12 @@ export class LifecycleService {
     // Handle immediate start vaults
     const immediateStartVaults = await this.vaultRepository
       .createQueryBuilder('vault')
+      .leftJoin('transactions', 'tx', 'tx.vault_id = vault.id')
       .where('vault.vault_status = :status', { status: VaultStatus.published })
       .andWhere('vault.contract_address IS NOT NULL')
-      .andWhere('vault.contract_address != :testAddress', {
-        testAddress: 'addr_test1wr7cjttpkldnfyxhnw8anc3yye8rwp8ek5zpha7vxk2sl5svh2ceg', // SC address, not vault address
-      })
       .andWhere('vault.contribution_open_window_type = :type', { type: ContributionWindowType.uponVaultLaunch })
+      .andWhere('tx.type = :txType', { txType: TransactionType.createVault })
+      .andWhere('tx.status = :txStatus', { txStatus: TransactionStatus.confirmed })
       .getMany();
 
     for (const vault of immediateStartVaults) {
@@ -305,13 +305,13 @@ export class LifecycleService {
     // Handle custom start time vaults
     const customStartVaults = await this.vaultRepository
       .createQueryBuilder('vault')
+      .leftJoin('transactions', 'tx', 'tx.vault_id = vault.id')
       .where('vault.vault_status = :status', { status: VaultStatus.published })
       .andWhere('vault.contribution_open_window_type = :type', { type: ContributionWindowType.custom })
       .andWhere('vault.contribution_open_window_time IS NOT NULL')
       .andWhere('vault.contract_address IS NOT NULL')
-      .andWhere('vault.contract_address != :testAddress', {
-        testAddress: 'addr_test1wr7cjttpkldnfyxhnw8anc3yye8rwp8ek5zpha7vxk2sl5svh2ceg',
-      })
+      .andWhere('tx.type = :txType', { txType: TransactionType.createVault })
+      .andWhere('tx.status = :txStatus', { txStatus: TransactionStatus.confirmed })
       .getMany();
 
     for (const vault of customStartVaults) {

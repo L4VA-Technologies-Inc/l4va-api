@@ -8,6 +8,7 @@ export enum TransactionStatus {
 }
 
 export enum TransactionType {
+  createVault = 'create-vault',
   mint = 'mint',
   payment = 'payment',
   contribute = 'contribute', // Contains NFTs

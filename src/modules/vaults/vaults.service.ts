@@ -1,3 +1,4 @@
+import { Credential, EnterpriseAddress, ScriptHash } from '@emurgo/cardano-serialization-lib-nodejs';
 import {
   BadRequestException,
   Injectable,
@@ -751,7 +752,8 @@ export class VaultsService {
       signedTx,
       vault.asset_vault_name,
       vault.script_hash,
-      vault.apply_params_result
+      vault.apply_params_result,
+      vault.id
     );
     vault.vault_status = VaultStatus.published;
     vault.publication_hash = publishedTx.txHash;
@@ -1442,6 +1444,7 @@ export class VaultsService {
           id: vaultId,
           owner: { id: userId },
         },
+        select: ['id', 'script_hash', 'vault_status', 'deleted'],
       });
 
       if (!vault) {
@@ -1453,11 +1456,19 @@ export class VaultsService {
         signatures: publishDto.signatures,
       });
 
+      const contractAddress = EnterpriseAddress.new(
+        0,
+        Credential.from_scripthash(ScriptHash.from_hex(vault.script_hash))
+      )
+        .to_address()
+        .to_bech32();
+
       vault.deleted = true;
       vault.liquidation_hash = txHash;
       vault.vault_status = VaultStatus.burned;
+      vault.contract_address = contractAddress;
 
-      await this.vaultsRepository.save(vault);
+      await this.vaultsRepository.update({ id: vault.id }, { ...vault });
       await this.transactionsService.updateTransactionHash(publishDto.txId, txHash);
 
       this.logger.log(`Vault ${vaultId} successfully marked as burned`);

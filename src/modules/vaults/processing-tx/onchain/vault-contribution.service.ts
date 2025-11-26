@@ -50,7 +50,7 @@ export class VaultContributionService {
     });
   }
 
-  async buildTransaction(params: BuildTransactionParams): Promise<{
+  async buildContributionTransaction(params: BuildTransactionParams): Promise<{
     presignedTx: string;
   }> {
     try {
@@ -248,7 +248,7 @@ export class VaultContributionService {
    * @param signedTx Object containing the transaction and signatures
    * @returns Transaction hash
    */
-  async submitTransaction(signedTx: SubmitTransactionDto): Promise<TransactionSubmitResponse> {
+  async submitContributionTransaction(signedTx: SubmitTransactionDto): Promise<TransactionSubmitResponse> {
     if (!signedTx.txId) {
       throw new Error('Contribution transaction ID is required');
     }

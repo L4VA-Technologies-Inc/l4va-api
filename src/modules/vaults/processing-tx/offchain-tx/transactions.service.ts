@@ -59,52 +59,138 @@ export class TransactionsService {
     });
   }
 
-  async updateTransactionStatus(txHash: string, txIndex: number, status: TransactionStatus): Promise<Transaction> {
+  async createAssets(txId: string): Promise<{ success: boolean }> {
     const transaction = await this.transactionRepository.findOne({
-      where: { tx_hash: txHash },
+      where: { id: txId },
     });
 
     if (!transaction) {
-      throw new Error(`Transaction with hash ${txHash} not found`);
+      throw new NotFoundException('Transaction not found');
     }
 
-    const vault = await this.vaultRepository.findOne({
+    const pendingAssets = transaction.metadata || [];
+
+    // If everything is ok, create the actual assets and update transaction status
+    const user = await this.usersRepository.findOne({
+      where: { id: transaction.user_id },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found for the transaction');
+    }
+
+    if (transaction.type === TransactionType.acquire) {
+      await Promise.all(
+        pendingAssets.map(async assetItem => {
+          const asset = this.assetRepository.create({
+            transaction,
+            vault: { id: transaction.vault_id },
+            type: AssetType.ADA, // Using ADA type for acquire
+            policy_id: assetItem.policyId || '',
+            asset_id: assetItem.assetName,
+            quantity: assetItem.quantity,
+            status: AssetStatus.PENDING,
+            origin_type: AssetOriginType.ACQUIRED,
+            added_by: user,
+            metadata: assetItem?.metadata || {},
+          });
+
+          await this.assetRepository.save(asset);
+        })
+      );
+    } else if (transaction.type === TransactionType.contribute) {
+      await Promise.all(
+        pendingAssets.map(async assetItem => {
+          const asset = this.assetRepository.create({
+            transaction,
+            vault: { id: transaction.vault_id },
+            type: assetItem.type,
+            policy_id: assetItem.policyId || '',
+            asset_id: assetItem.assetName,
+            quantity: assetItem.quantity,
+            status: AssetStatus.PENDING,
+            origin_type: AssetOriginType.CONTRIBUTED,
+            added_by: user,
+            metadata: assetItem?.metadata || {},
+          });
+
+          return this.assetRepository.save(asset);
+        })
+      );
+    }
+
+    return {
+      success: true,
+    };
+  }
+
+  async getTransaction(txHash: string): Promise<Transaction | null> {
+    return this.transactionRepository.findOne({
+      where: { tx_hash: txHash },
+    });
+  }
+
+  async getContributionTransactions(vaultId?: string): Promise<Transaction[]> {
+    const where: any = { type: TransactionType.contribute };
+    if (vaultId) {
+      where.vault_id = vaultId;
+    }
+
+    return this.transactionRepository.find({
+      where,
+      order: { id: 'DESC' },
+      relations: ['assets'],
+    });
+  }
+
+  async getAcquireTransactions(vaultId?: string): Promise<Transaction[]> {
+    const where: any = { type: TransactionType.acquire };
+    if (vaultId) {
+      where.vault_id = vaultId;
+    }
+
+    return this.transactionRepository.find({
+      where,
+      order: { id: 'DESC' },
+      relations: ['vault'],
+    });
+  }
+
+  async getVaultTransactions(
+    vaultId: string,
+    status?: TransactionStatus,
+    type?: TransactionType
+  ): Promise<Transaction[]> {
+    const where: any = { vault_id: vaultId };
+    if (status) {
+      where.status = status;
+    }
+    if (type) {
+      where.type = type;
+    }
+
+    return this.transactionRepository.find({
+      where,
+      order: { id: 'DESC' },
+      relations: ['vault', 'assets'],
+    });
+  }
+
+  /**
+   * Get the last update transaction for a vault
+   * @param vaultId The ID of the vault
+   * @returns The most recent update transaction or null if none found
+   */
+  async getLastVaultUpdate(vaultId: string): Promise<Transaction | null> {
+    const transactions = await this.transactionRepository.find({
       where: {
-        id: transaction.vault_id,
+        vault_id: vaultId,
       },
+      order: { id: 'DESC' },
+      take: 1,
     });
 
-    const assets = await this.assetRepository.findBy({
-      transaction: {
-        id: transaction.id,
-      },
-    });
-
-    assets.map(async item => {
-      const asset = await this.assetRepository.findOne({
-        where: {
-          id: item.id,
-        },
-      });
-      asset.vault = vault;
-      asset.status = AssetStatus.LOCKED;
-      await this.assetRepository.save(asset);
-    });
-
-    transaction.status = status;
-    transaction.tx_index = txIndex.toString();
-
-    const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(transaction.vault_id);
-
-    vault.require_reserved_cost_ada = assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01);
-    vault.require_reserved_cost_usd = assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01);
-    vault.total_assets_cost_ada = assetsPrices.totalValueAda;
-    vault.total_assets_cost_usd = assetsPrices.totalValueUsd;
-    vault.total_acquired_value_ada = assetsPrices.totalAcquiredAda;
-
-    await this.vaultRepository.save(vault);
-
-    return this.transactionRepository.save(transaction);
+    return transactions.length > 0 ? transactions[0] : null;
   }
 
   async getTransactionsBySender(address: string): Promise<Transaction[]> {
@@ -138,12 +224,6 @@ export class TransactionsService {
     return this.transactionRepository.find({
       where: { utxo_output: address },
       order: { id: 'DESC' },
-    });
-  }
-
-  async findById(id: string): Promise<Transaction> {
-    return this.transactionRepository.findOne({
-      where: { id },
     });
   }
 
@@ -230,157 +310,92 @@ export class TransactionsService {
     return { items, total, page: parsedPage, limit: parsedLimit };
   }
 
-  async updateTransactionHash(id: string, txHash: string): Promise<Transaction> {
-    const transaction = await this.findById(id);
-    if (!transaction) {
-      throw new Error(`Transaction with id ${id} not found`);
-    }
+  async updateTransactionHash(id: string, txHash: string): Promise<void> {
+    const result = await this.transactionRepository.update(
+      { id },
+      {
+        tx_hash: txHash,
+        status: TransactionStatus.pending,
+      }
+    );
 
-    transaction.tx_hash = txHash;
-    transaction.status = TransactionStatus.pending;
-    return await this.transactionRepository.save(transaction);
+    if (result.affected === 0) {
+      throw new NotFoundException(`Transaction with id ${id} not found`);
+    }
   }
 
-  async getTransaction(txHash: string): Promise<Transaction | null> {
-    return this.transactionRepository.findOne({
-      where: { tx_hash: txHash },
-    });
-  }
-
-  async getContributionTransactions(vaultId?: string): Promise<Transaction[]> {
-    const where: any = { type: TransactionType.contribute };
-    if (vaultId) {
-      where.vault_id = vaultId;
-    }
-
-    return this.transactionRepository.find({
-      where,
-      order: { id: 'DESC' },
-      relations: ['assets'],
-    });
-  }
-
-  async getAcquireTransactions(vaultId?: string): Promise<Transaction[]> {
-    const where: any = { type: TransactionType.acquire };
-    if (vaultId) {
-      where.vault_id = vaultId;
-    }
-
-    return this.transactionRepository.find({
-      where,
-      order: { id: 'DESC' },
-      relations: ['vault'],
-    });
-  }
-
-  async getVaultTransactions(
-    vaultId: string,
-    status?: TransactionStatus,
-    type?: TransactionType
-  ): Promise<Transaction[]> {
-    const where: any = { vault_id: vaultId };
-    if (status) {
-      where.status = status;
-    }
-    if (type) {
-      where.type = type;
-    }
-
-    return this.transactionRepository.find({
-      where,
-      order: { id: 'DESC' },
-      relations: ['vault', 'assets'],
-    });
-  }
-
-  /**
-   * Get the last update transaction for a vault
-   * @param vaultId The ID of the vault
-   * @returns The most recent update transaction or null if none found
-   */
-  async getLastVaultUpdate(vaultId: string): Promise<Transaction | null> {
-    const transactions = await this.transactionRepository.find({
-      where: {
+  async updateCreateVaultTransactionHashByVaultId(vaultId: string, txHash: string): Promise<void> {
+    const result = await this.transactionRepository.update(
+      {
         vault_id: vaultId,
+        tx_hash: IsNull(),
+        type: TransactionType.createVault,
       },
-      order: { id: 'DESC' },
-      take: 1,
-    });
+      {
+        tx_hash: txHash,
+        status: TransactionStatus.pending,
+      }
+    );
 
-    return transactions.length > 0 ? transactions[0] : null;
-  }
-
-  async createAssets(txId: string): Promise<{ success: boolean }> {
-    const transaction = await this.transactionRepository.findOne({
-      where: { id: txId },
-    });
-
-    if (!transaction) {
-      throw new NotFoundException('Transaction not found');
+    if (result.affected === 0) {
+      throw new NotFoundException(`Transaction for vault id ${vaultId} not found`);
     }
-
-    const pendingAssets = transaction.metadata || [];
-
-    // If everything is ok, create the actual assets and update transaction status
-    const user = await this.usersRepository.findOne({
-      where: { id: transaction.user_id },
-    });
-
-    if (!user) {
-      throw new NotFoundException('User not found for the transaction');
-    }
-
-    if (transaction.type === TransactionType.acquire) {
-      await Promise.all(
-        pendingAssets.map(async assetItem => {
-          const asset = this.assetRepository.create({
-            transaction,
-            vault: { id: transaction.vault_id },
-            type: AssetType.ADA, // Using ADA type for acquire
-            policy_id: assetItem.policyId || '',
-            asset_id: assetItem.assetName,
-            quantity: assetItem.quantity,
-            status: AssetStatus.PENDING,
-            origin_type: AssetOriginType.ACQUIRED,
-            added_by: user,
-            metadata: assetItem?.metadata || {},
-          });
-
-          await this.assetRepository.save(asset);
-        })
-      );
-    } else if (transaction.type === TransactionType.contribute) {
-      await Promise.all(
-        pendingAssets.map(async assetItem => {
-          const asset = this.assetRepository.create({
-            transaction,
-            vault: { id: transaction.vault_id },
-            type: assetItem.type,
-            policy_id: assetItem.policyId || '',
-            asset_id: assetItem.assetName,
-            quantity: assetItem.quantity,
-            status: AssetStatus.PENDING,
-            origin_type: AssetOriginType.CONTRIBUTED,
-            added_by: user,
-            metadata: assetItem?.metadata || {},
-          });
-
-          return this.assetRepository.save(asset);
-        })
-      );
-    }
-
-    return {
-      success: true,
-    };
   }
 
   async updateTransactionStatusById(id: string, status: TransactionStatus): Promise<void> {
-    const tx = await this.transactionRepository.findOne({ where: { id } });
-    if (!tx) return;
+    const result = await this.transactionRepository.update({ id }, { status });
 
-    tx.status = status;
-    await this.transactionRepository.save(tx);
+    if (result.affected === 0) {
+      this.logger.warn(`Transaction with id ${id} not found or status unchanged`);
+    }
+  }
+
+  async updateTransactionStatus(txHash: string, txIndex: number, status: TransactionStatus): Promise<Transaction> {
+    const transaction = await this.transactionRepository.findOne({
+      where: { tx_hash: txHash },
+    });
+
+    if (!transaction) {
+      throw new Error(`Transaction with hash ${txHash} not found`);
+    }
+
+    const vault = await this.vaultRepository.findOne({
+      where: {
+        id: transaction.vault_id,
+      },
+    });
+
+    const assets = await this.assetRepository.findBy({
+      transaction: {
+        id: transaction.id,
+      },
+    });
+
+    assets.map(async item => {
+      const asset = await this.assetRepository.findOne({
+        where: {
+          id: item.id,
+        },
+      });
+      asset.vault = vault;
+      asset.status = AssetStatus.LOCKED;
+      await this.assetRepository.save(asset);
+    });
+
+    transaction.status = status;
+    transaction.tx_index = txIndex.toString();
+
+    const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(transaction.vault_id);
+
+    vault.require_reserved_cost_ada = assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01);
+    vault.require_reserved_cost_usd = assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01);
+    vault.total_assets_cost_ada = assetsPrices.totalValueAda;
+    vault.total_assets_cost_usd = assetsPrices.totalValueUsd;
+    vault.total_acquired_value_ada = assetsPrices.totalAcquiredAda;
+
+    await this.vaultRepository.save(vault);
+
+    return this.transactionRepository.save(transaction);
   }
 
   /**

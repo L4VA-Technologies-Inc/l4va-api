@@ -35,7 +35,7 @@ import { Vault } from '@/database/vault.entity';
 import { VaultCreationInput } from '@/modules/distribution/distribution.types';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { SmartContractVaultStatus, VaultPrivacy } from '@/types/vault.types';
+import { ApplyParamsResult, SmartContractVaultStatus, VaultPrivacy } from '@/types/vault.types';
 
 export interface VaultConfig {
   vaultName: string;
@@ -136,6 +136,12 @@ export class VaultManagingService {
     scriptHash: string;
     applyParamsResult: any;
   }> {
+    const transaction = await this.transactionsService.createTransaction({
+      vault_id: vaultConfig.vaultId,
+      type: TransactionType.createVault,
+      assets: [], // No assets needed for this transaction as it's metadata update
+    });
+
     this.scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
       .to_address()
       .to_bech32();
@@ -332,6 +338,8 @@ export class VaultManagingService {
       };
     } catch (error) {
       this.logger.error('Failed to create vault:', error);
+      await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
+
       throw error;
     }
   }
@@ -564,12 +572,10 @@ export class VaultManagingService {
             },
           },
         },
-        scriptOutputIndex === -1
-          ? null // Only include if we found the script output
-          : {
-              address: vault.owner.address, // Send back to vault owner
-              lovelace: refScriptPayBackAmount, // Refund amount (adjust based on actual collateral)
-            },
+        {
+          address: vault.owner.address, // Send back to vault owner
+          lovelace: refScriptPayBackAmount, // Refund amount (adjust based on actual collateral)
+        },
       ],
       requiredSigners: [this.adminHash],
     };
@@ -605,7 +611,8 @@ export class VaultManagingService {
     signedTx: { transaction: string; signatures: string | string[] },
     assetName: string,
     scriptHash: string,
-    applyParamsResult: any
+    applyParamsResult: ApplyParamsResult,
+    vaultId: string
   ): Promise<{
     txHash: string;
   }> {
@@ -617,9 +624,10 @@ export class VaultManagingService {
         transaction: signedTx.transaction,
         signatures,
       });
-      const { txHash } = result;
 
-      if (txHash) {
+      await this.transactionsService.updateCreateVaultTransactionHashByVaultId(vaultId, result.txHash);
+
+      if (result.txHash) {
         // Step 4: Update blueprint with the script transaction reference
         await this.blockchainService.uploadBlueprint({
           blueprint: {
@@ -636,7 +644,7 @@ export class VaultManagingService {
           },
           refs: {
             [scriptHash]: {
-              txHash: txHash,
+              txHash: result.txHash,
               index: 1, // Script output is at index 1 (vault is at index 0)
             },
           },

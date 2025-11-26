@@ -4,12 +4,7 @@ import { ConfigService } from '@nestjs/config';
 
 import { TransactionsService } from '../offchain-tx/transactions.service';
 
-import {
-  BlockchainWebhookDto,
-  BlockfrostTransaction,
-  BlockfrostTransactionEvent,
-  BlockfrostTxOutput,
-} from './dto/webhook.dto';
+import { BlockchainWebhookDto, BlockfrostTransaction, BlockfrostTransactionEvent } from './dto/webhook.dto';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
 
 import { TransactionStatus } from '@/types/transaction.types';
@@ -88,16 +83,9 @@ export class BlockchainWebhookService {
    * Process individual transaction from webhook
    */
   private async processTransaction(txEvent: BlockfrostTransactionEvent): Promise<string> {
-    const { tx, outputs } = txEvent;
+    const { tx } = txEvent;
 
     // Check if this is a vault-related transaction (has receipt token)
-    const isVaultTransaction = this.isVaultTransaction(tx, outputs);
-
-    if (!isVaultTransaction) {
-      this.logger.debug(`Transaction ${tx.hash} doesn't involve receipt token, skipping`);
-      return;
-    }
-
     this.logger.debug(`Processing vault transaction ${tx.hash}`);
 
     try {
@@ -109,31 +97,6 @@ export class BlockchainWebhookService {
       this.logger.error(`Failed to process transaction ${tx.hash}: ${error.message}`, error.stack);
       return;
     }
-  }
-
-  /**
-   * Check if transaction is a vault transaction (contribution or extraction)
-   * Identifies by checking if receipt token was minted
-   * Note: Webhook already filters for transactions involving vault reference address
-   */
-  private isVaultTransaction(tx: BlockfrostTransaction, outputs: BlockfrostTxOutput[]): boolean {
-    // Only process transactions that minted/burned assets
-    if (tx.asset_mint_or_burn_count === 0) {
-      return false;
-    }
-
-    // Check if any output contains a receipt token
-    // Receipt tokens always end with "receipt" in hex (72656365697074)
-    for (const output of outputs) {
-      for (const asset of output.amount) {
-        if (asset.unit !== 'lovelace' && asset.unit.endsWith(this.RECEIPT_ASSET_NAME)) {
-          this.logger.debug(`Found receipt token in tx ${tx.hash}: ${asset.unit}`);
-          return true;
-        }
-      }
-    }
-
-    return false;
   }
 
   private determineInternalTransactionStatus(tx: BlockfrostTransaction): TransactionStatus {
