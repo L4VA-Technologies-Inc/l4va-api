@@ -1,7 +1,7 @@
 import { Body, Controller, Post, UseGuards, HttpCode, Request, UnauthorizedException } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
-import { WebhookVerificationService } from './blockchain-webhook.service';
+import { BlockchainWebhookService } from './blockchain-webhook.service';
 import {
   BuildTransactionDto,
   SubmitTransactionDto,
@@ -9,7 +9,7 @@ import {
   TransactionSubmitResponseDto,
 } from './dto/transaction.dto';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
-import { VaultInsertingService } from './vault-inserting.service';
+import { VaultContributionService } from './vault-contribution.service';
 
 import { AuthGuard } from '@/modules/auth/auth.guard';
 
@@ -17,8 +17,8 @@ import { AuthGuard } from '@/modules/auth/auth.guard';
 @Controller('blockchain')
 export class BlockchainController {
   constructor(
-    private readonly transactionService: VaultInsertingService,
-    private readonly webhookVerificationService: WebhookVerificationService
+    private readonly vaultContributionService: VaultContributionService,
+    private readonly blockchainWebhookService: BlockchainWebhookService
   ) {}
 
   @Post('transaction/build')
@@ -32,7 +32,7 @@ export class BlockchainController {
   async buildTransaction(@Body() params: BuildTransactionDto): Promise<{
     presignedTx: string;
   }> {
-    return this.transactionService.buildTransaction(params);
+    return this.vaultContributionService.buildTransaction(params);
   }
 
   @Post('transaction/submit')
@@ -44,7 +44,7 @@ export class BlockchainController {
   })
   @UseGuards(AuthGuard)
   async submitTransaction(@Body() params: SubmitTransactionDto): Promise<TransactionSubmitResponseDto> {
-    return this.transactionService.submitTransaction(params);
+    return this.vaultContributionService.submitTransaction(params);
   }
 
   @Post('tx-webhook')
@@ -74,19 +74,9 @@ export class BlockchainController {
       rawBody = JSON.stringify(req.body);
     }
 
-    // Verify webhook signature using the raw body
-    const isValid = this.webhookVerificationService.verifySignature(rawBody, signature);
-    if (!isValid) {
-      console.error('Webhook signature verification failed:', {
-        eventId: event.id,
-        webhookId: event.webhook_id,
-      });
-      throw new UnauthorizedException('Invalid webhook signature');
-    }
-
     // Process the event
     try {
-      await this.transactionService.handleBlockchainEvent(event);
+      await this.blockchainWebhookService.handleBlockchainEvent(event);
 
       // Return transaction summary
       const txSummary = event.payload.map(txEvent => ({

@@ -6,6 +6,7 @@ import { Repository } from 'typeorm';
 import { ContributeReq } from './dto/contribute.req';
 
 import { Asset } from '@/database/asset.entity';
+import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { AssetStatus, AssetOriginType } from '@/types/asset.types';
@@ -17,6 +18,8 @@ export class ContributionService {
   private readonly PROTOCOL_CONTRIBUTORS_FEE: number;
 
   constructor(
+    @InjectRepository(User)
+    private readonly usersRepository: Repository<User>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(Asset)

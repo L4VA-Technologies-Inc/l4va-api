@@ -29,7 +29,6 @@ import { Repository } from 'typeorm';
 import { BlockchainService } from './blockchain.service';
 import { Datum1 } from './types/type';
 import { assetsToValue, generate_tag_from_txhash_index, getUtxosExtract, getVaultUtxo } from './utils/lib';
-import { VaultInsertingService } from './vault-inserting.service';
 
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Vault } from '@/database/vault.entity';
@@ -106,7 +105,6 @@ export class VaultManagingService {
     private readonly configService: ConfigService,
     @Inject(BlockchainService)
     private readonly blockchainService: BlockchainService,
-    private readonly vaultInsertingService: VaultInsertingService,
     private readonly transactionsService: TransactionsService
   ) {
     this.blueprintTitle = this.configService.get<string>('BLUEPRINT_TITLE');
@@ -585,12 +583,11 @@ export class VaultManagingService {
       txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.vaultScriptSKey));
       txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
-      const response = await this.vaultInsertingService.submitTransaction({
+      const response = await this.blockchainService.submitTransaction({
         transaction: txToSubmitOnChain.to_hex(),
-        vaultId: vault.id,
-        txId: transaction.id,
       });
 
+      await this.transactionsService.updateTransactionHash(transaction.id, response.txHash);
       return { success: true, txHash: response.txHash, message: 'Transaction submitted successfully' };
     } catch (error) {
       await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);

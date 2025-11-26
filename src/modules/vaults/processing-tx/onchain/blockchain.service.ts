@@ -13,6 +13,13 @@ import { UTxOInsufficientException } from './exceptions/utxo-insufficient.except
 import { MissingUtxoException } from './exceptions/utxo-missing.exception';
 import { ValidityIntervalException } from './exceptions/validity-interval.exception';
 import { VaultValidationException } from './exceptions/vault-validation.exception';
+import {
+  ApplyParamsPayload,
+  ApplyParamsResponse,
+  TransactionBuildResponse,
+  TransactionSubmitResponse,
+  UploadBlueprintPayload,
+} from './types/transaction-status.enum';
 
 @Injectable()
 export class BlockchainService {

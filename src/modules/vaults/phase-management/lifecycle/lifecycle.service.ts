@@ -5,6 +5,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
 import { ClaimsService } from '../../claims/claims.service';
+import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
@@ -50,6 +51,7 @@ export class LifecycleService {
     private readonly taptoolsService: TaptoolsService,
     private readonly metadataRegistryApiService: MetadataRegistryApiService,
     private readonly claimsService: ClaimsService,
+    private readonly transactionsService: TransactionsService,
     private readonly eventEmitter: EventEmitter2
   ) {}
 
@@ -364,7 +366,7 @@ export class LifecycleService {
         this.logger.error('Error updating vault metadata:', error);
       }
 
-      await this.contributionService.syncContributionTransactions(vault.id);
+      await this.transactionsService.syncVaultTransactions(vault.id);
 
       const policyIdCounts = vault.assets.reduce(
         (counts, asset) => {
@@ -574,7 +576,7 @@ export class LifecycleService {
       }
 
       // Sync transactions one more time
-      await this.contributionService.syncContributionTransactions(vault.id);
+      await this.transactionsService.syncVaultTransactions(vault.id);
 
       // 1. First get all relevant transactions for this vault
       const allTransactions = await this.transactionsRepository.find({
@@ -995,7 +997,7 @@ export class LifecycleService {
         `Starting direct contribution to governance transition for vault ${vault.id} ` + `(0% for acquirers)`
       );
 
-      await this.contributionService.syncContributionTransactions(vault.id);
+      await this.transactionsService.syncVaultTransactions(vault.id);
 
       // Calculate total value of contributed assets (this becomes the FDV)
       const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);

@@ -23,8 +23,8 @@ import { TransactionStatus } from '@/types/transaction.types';
 // Acquire and Contribution
 
 @Injectable()
-export class VaultInsertingService {
-  private readonly logger = new Logger(VaultInsertingService.name);
+export class VaultContributionService {
+  private readonly logger = new Logger(VaultContributionService.name);
   private readonly FLAT_FEE: number;
   private readonly feeAddress: string;
   private readonly adminAddress: string;
@@ -250,58 +250,29 @@ export class VaultInsertingService {
    */
   async submitTransaction(signedTx: SubmitTransactionDto): Promise<TransactionSubmitResponse> {
     if (!signedTx.txId) {
-      throw new Error('Transaction ID is required');
+      throw new Error('Contribution transaction ID is required');
     }
 
     if (!signedTx.transaction) {
-      throw new Error('Transaction data is required');
+      throw new Error('Contribution transaction data is required');
     }
 
     try {
-      this.logger.log(`Submitting transaction ${signedTx.txId} to blockchain`);
-
       // Submit the transaction using BlockchainService
       const result = await this.blockchainService.submitTransaction({
         transaction: signedTx.transaction,
         signatures: signedTx.signatures || [],
       });
-
-      try {
-        // Update the transaction hash in our database
-        await this.transactionsService.createAssets(signedTx.txId);
-        await this.transactionsService.updateTransactionHash(signedTx.txId, result.txHash);
-        this.logger.log(`Successfully updated transaction ${signedTx.txId} with hash ${result.txHash}`);
-
-        // Update monitoring for the vault if it exists
-        if (signedTx.vaultId) {
-          const vault = await this.vaultsRepository.findOne({
-            where: { id: signedTx.vaultId },
-            select: ['contract_address', 'name'],
-          });
-
-          if (!vault) {
-            this.logger.warn(`Vault ${signedTx.vaultId} not found when updating monitoring address`);
-          } else if (vault.contract_address) {
-            await this.blockchainScanner.checkMonitoringAddress(vault.contract_address, vault.name);
-          }
-        }
-
-        return { txHash: result.txHash };
-      } catch (updateError) {
-        await this.transactionsService.updateTransactionStatusById(signedTx.txId, TransactionStatus.failed);
-        this.logger.error(
-          `Failed to update transaction ${signedTx.txId} with hash ${result.txHash}`,
-          updateError.stack
-        );
-        throw new Error(`Transaction submitted but failed to update local record: ${updateError.message}`);
-      }
+      await this.transactionsService.createAssets(signedTx.txId);
+      await this.transactionsService.updateTransactionHash(signedTx.txId, result.txHash);
+      return { txHash: result.txHash };
     } catch (error) {
       this.logger.error('Error submitting transaction', error);
       await this.transactionsService.updateTransactionStatusById(signedTx.txId, TransactionStatus.failed);
       if (error instanceof ValidityIntervalException) {
         throw error;
       }
-      throw new Error(`Failed to submit transaction: ${error.message}`);
+      throw new Error(`Failed to submit contribution transaction: ${error.message}`);
     }
   }
 }

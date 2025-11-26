@@ -16,8 +16,8 @@ import { OnchainTransactionStatus } from './types/transaction-status.enum';
 import { TransactionStatus } from '@/types/transaction.types';
 
 @Injectable()
-export class WebhookVerificationService {
-  private readonly logger = new Logger(WebhookVerificationService.name);
+export class BlockchainWebhookService {
+  private readonly logger = new Logger(BlockchainWebhookService.name);
   private readonly webhookAuthToken: string;
   private readonly maxEventAge: number;
   private readonly RECEIPT_ASSET_NAME = '72656365697074'; // "receipt" in hex
@@ -113,6 +113,7 @@ export class WebhookVerificationService {
 
   /**
    * Handle blockchain webhook events from Blockfrost
+   * Verifies signature and processes transactions
    * Webhook is configured to trigger on transactions involving vault reference address
    * Filters for vault contributions by checking for receipt token minting
    */
