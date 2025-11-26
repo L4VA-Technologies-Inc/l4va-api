@@ -1,4 +1,4 @@
-import { Body, Controller, Post, UseGuards, HttpCode, Request, UnauthorizedException } from '@nestjs/common';
+import { Body, Controller, Post, UseGuards, HttpCode, Request } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { BlockchainWebhookService } from './blockchain-webhook.service';
@@ -59,39 +59,30 @@ export class BlockchainController {
     status: 401,
     description: 'Invalid webhook signature',
   })
-  async handleWebhook(@Body() event: BlockchainWebhookDto, @Request() req): Promise<{ status: string; details: any }> {
-    const signature = req.headers['blockfrost-signature'];
+  async handleWebhook(
+    @Body() event: BlockchainWebhookDto,
+    @Request() req: { headers: Record<string, string>; body: unknown }
+  ): Promise<{ status: string; details: any }> {
+    const signatureHeader = req.headers['blockfrost-signature'];
 
     // Get raw body from the request
     let rawBody: string;
     if (Buffer.isBuffer(req.body)) {
       // If body-parser.raw() was used
       rawBody = req.body.toString('utf8');
-      // Parse the raw body into our DTO
-      event = JSON.parse(rawBody);
     } else {
       // Fallback to stringifying the parsed body
       rawBody = JSON.stringify(req.body);
     }
 
-    // Process the event
+    // Process the event with signature verification
     try {
-      await this.blockchainWebhookService.handleBlockchainEvent(event);
+      const updatedLocalTxIds = await this.blockchainWebhookService.handleBlockchainEvent(rawBody, signatureHeader);
 
       // Return transaction summary
       const txSummary = event.payload.map(txEvent => ({
         txHash: txEvent.tx.hash,
-        blockHeight: txEvent.tx.block_height,
-        timestamp: txEvent.tx.block_time,
-        status: txEvent.tx.valid_contract ? 'confirmed' : 'failed',
-        transfers: txEvent.outputs.map(output => ({
-          recipient: output.address,
-          assets: output.amount.map(asset => ({
-            unit: asset.unit,
-            quantity: asset.quantity,
-            type: asset.unit === 'lovelace' ? 'ADA' : asset.quantity === '1' ? 'NFT' : 'TOKEN',
-          })),
-        })),
+        updatedLocalTxIds,
       }));
 
       return {

@@ -1,6 +1,5 @@
-import * as crypto from 'crypto';
-
-import { Injectable, Logger } from '@nestjs/common';
+import { verifyWebhookSignature, SignatureVerificationError } from '@blockfrost/blockfrost-js';
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import { TransactionsService } from '../offchain-tx/transactions.service';
@@ -38,86 +37,36 @@ export class BlockchainWebhookService {
     this.maxEventAge = 600; // 10 minutes max age for webhook events
   }
 
-  verifySignature(payload: string, signatureHeader: string): boolean {
-    if (!this.webhookAuthToken) {
-      this.logger.error('BLOCKFROST_WEBHOOK_AUTH_TOKEN is not configured');
-      throw new Error('BLOCKFROST_WEBHOOK_AUTH_TOKEN is not configured');
-    }
-
-    if (!signatureHeader) {
-      this.logger.error('blockfrost-signature header is missing');
-      throw new Error('blockfrost-signature header is missing');
-    }
-
-    try {
-      // Parse the signature header
-      const [timestampHeader, signatureValue] = signatureHeader.split(',');
-      const timestamp = timestampHeader.split('=')[1];
-      const signature = signatureValue.split('=')[1];
-
-      // Log parsed values
-      this.logger.debug('Parsed signature components:', {
-        timestamp,
-        signature,
-        payloadLength: payload.length,
-      });
-
-      // Prepare the signature payload as per Blockfrost docs
-      const signaturePayload = `${timestamp}.${payload}`;
-
-      // Compute HMAC
-      const expectedSignature = crypto
-        .createHmac('sha256', this.webhookAuthToken)
-        .update(signaturePayload)
-        .digest('hex');
-
-      // Log computed values for debugging
-      this.logger.debug('Computed signature:', {
-        expectedSignature,
-        receivedSignature: signature,
-        match: expectedSignature === signature,
-      });
-
-      // Verify timestamp is within tolerance
-      const currentTime = Math.floor(Date.now() / 1000);
-      const timeDiff = Math.abs(currentTime - parseInt(timestamp));
-
-      if (timeDiff > this.maxEventAge) {
-        this.logger.error('Webhook event is too old:', {
-          eventTime: timestamp,
-          currentTime,
-          maxAge: this.maxEventAge,
-        });
-        return false;
-      }
-
-      // Compare signatures
-      if (expectedSignature === signature) {
-        this.logger.log('Webhook signature verified successfully');
-        return true;
-      }
-
-      this.logger.error('Signature mismatch:', {
-        expected: expectedSignature,
-        received: signature,
-      });
-      return false;
-    } catch (error) {
-      this.logger.error('Error during signature verification:', {
-        error: error.message,
-        signatureHeader,
-      });
-      return false;
-    }
-  }
-
   /**
    * Handle blockchain webhook events from Blockfrost
-   * Verifies signature and processes transactions
    * Webhook is configured to trigger on transactions involving vault reference address
    * Filters for vault contributions by checking for receipt token minting
+   * Verifies webhook signature using Blockfrost SDK
    */
-  async handleBlockchainEvent(event: BlockchainWebhookDto): Promise<void> {
+  async handleBlockchainEvent(rawBody: string, signatureHeader: string): Promise<string[]> {
+    // Verify webhook signature using Blockfrost SDK
+    let event: BlockchainWebhookDto;
+    try {
+      const verifiedEvent = verifyWebhookSignature(
+        rawBody,
+        signatureHeader,
+        this.webhookAuthToken,
+        this.maxEventAge // Maximum allowed age of the webhook event in seconds
+      );
+      event = verifiedEvent as unknown as BlockchainWebhookDto;
+      this.logger.log('Webhook signature verified successfully');
+    } catch (error) {
+      if (error instanceof SignatureVerificationError) {
+        this.logger.error('Invalid webhook signature', {
+          signatureHeader: error.detail?.signatureHeader,
+          error: error.message,
+        });
+        throw new UnauthorizedException('Invalid webhook signature');
+      }
+      this.logger.error('Error verifying webhook signature', error);
+      throw error;
+    }
+
     if (event.type !== 'transaction') {
       this.logger.debug(`Ignoring non-transaction event type: ${event.type}`);
       return;
@@ -125,15 +74,20 @@ export class BlockchainWebhookService {
 
     this.logger.debug(`Processing ${event.payload.length} transaction(s) from blockchain webhook`);
 
+    const updatedLocalTxIds: string[] = [];
+
     for (const txEvent of event.payload) {
-      await this.processTransaction(txEvent);
+      const localTxId = await this.processTransaction(txEvent);
+      if (localTxId) updatedLocalTxIds.push(localTxId);
     }
+
+    return updatedLocalTxIds;
   }
 
   /**
    * Process individual transaction from webhook
    */
-  private async processTransaction(txEvent: BlockfrostTransactionEvent): Promise<void> {
+  private async processTransaction(txEvent: BlockfrostTransactionEvent): Promise<string> {
     const { tx, outputs } = txEvent;
 
     // Check if this is a vault-related transaction (has receipt token)
@@ -148,10 +102,12 @@ export class BlockchainWebhookService {
 
     try {
       const internalStatus = this.determineInternalTransactionStatus(tx);
-      await this.transactionsService.updateTransactionStatus(tx.hash, tx.index, internalStatus);
+      const transaction = await this.transactionsService.updateTransactionStatus(tx.hash, tx.index, internalStatus);
       this.logger.debug(`TEST: Transaction ${tx.hash} status could be updated to ${internalStatus}`);
+      return transaction.id;
     } catch (error) {
       this.logger.error(`Failed to process transaction ${tx.hash}: ${error.message}`, error.stack);
+      return;
     }
   }
 
