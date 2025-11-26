@@ -755,6 +755,12 @@ export class VaultsService {
       vault.apply_params_result,
       vault.id
     );
+
+    const contractAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(vault.script_hash)))
+      .to_address()
+      .to_bech32();
+
+    vault.contract_address = contractAddress;
     vault.vault_status = VaultStatus.published;
     vault.publication_hash = publishedTx.txHash;
     await this.vaultsRepository.save(vault);
@@ -1456,17 +1462,9 @@ export class VaultsService {
         signatures: publishDto.signatures,
       });
 
-      const contractAddress = EnterpriseAddress.new(
-        0,
-        Credential.from_scripthash(ScriptHash.from_hex(vault.script_hash))
-      )
-        .to_address()
-        .to_bech32();
-
       vault.deleted = true;
       vault.liquidation_hash = txHash;
       vault.vault_status = VaultStatus.burned;
-      vault.contract_address = contractAddress;
 
       await this.vaultsRepository.update({ id: vault.id }, { ...vault });
       await this.transactionsService.updateTransactionHash(publishDto.txId, txHash);

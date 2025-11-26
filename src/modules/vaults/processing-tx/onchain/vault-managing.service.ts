@@ -453,11 +453,10 @@ export class VaultManagingService {
       select: ['policy_id'],
     });
 
-    const { utxos: adminUtxos } = await getUtxosExtract(
-      Address.from_bech32(this.adminAddress),
-      this.blockfrost,
-      { minAda: 4000000, maxUtxos: 2 } // 4 ADA minimum
-    );
+    const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
+      minAda: 6000000,
+      maxUtxos: 5,
+    });
 
     const allowedPolicies: string[] =
       Array.isArray(assetsWhitelist) && assetsWhitelist.length > 0
