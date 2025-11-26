@@ -544,7 +544,7 @@ export class VaultManagingService {
               },
               acquire_window: {
                 lower_bound: {
-                  bound_type: 'NegativeInfinity',
+                  bound_type: new Date(vault.contribution_phase_start + vault.contribution_duration).getTime(),
                   is_inclusive: true,
                 },
                 upper_bound: {
@@ -566,10 +566,12 @@ export class VaultManagingService {
             },
           },
         },
-        {
-          address: vault.owner.address, // Send back to vault owner
-          lovelace: refScriptPayBackAmount, // Refund amount (adjust based on actual collateral)
-        },
+        scriptOutputIndex === -1
+          ? null // Only include if we found the script output
+          : {
+              address: vault.owner.address, // Send back to vault owner
+              lovelace: refScriptPayBackAmount, // Refund amount (adjust based on actual collateral)
+            },
       ],
       requiredSigners: [this.adminHash],
     };
