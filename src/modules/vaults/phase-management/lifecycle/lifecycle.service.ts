@@ -785,6 +785,14 @@ export class LifecycleService {
 
         if (acquirerClaims.length > 0) {
           try {
+            const minMultiplier = Math.min(...acquirerClaims.map(c => c.metadata.multiplier));
+
+            for (const claim of acquirerClaims) {
+              const transaction = acquisitionTransactions.find(tx => tx.id === claim.transaction.id);
+              claim.amount = minMultiplier * transaction.amount * 1_000_000;
+              claim.metadata.multiplier = minMultiplier;
+            }
+
             await this.claimRepository.save(acquirerClaims);
           } catch (error) {
             this.logger.error(`Failed to save batch of acquirer claims:`, error);
