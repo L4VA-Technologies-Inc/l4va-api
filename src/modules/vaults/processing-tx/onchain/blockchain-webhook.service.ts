@@ -64,7 +64,7 @@ export class BlockchainWebhookService {
 
     if (event.type !== 'transaction') {
       this.logger.debug(`Ignoring non-transaction event type: ${event.type}`);
-      return;
+      return [];
     }
 
     this.logger.debug(`Processing ${event.payload.length} transaction(s) from blockchain webhook`);
@@ -73,7 +73,9 @@ export class BlockchainWebhookService {
 
     for (const txEvent of event.payload) {
       const localTxId = await this.processTransaction(txEvent);
-      if (localTxId) updatedLocalTxIds.push(localTxId);
+      if (localTxId) {
+        updatedLocalTxIds.push(localTxId);
+      }
     }
 
     return updatedLocalTxIds;
@@ -90,11 +92,16 @@ export class BlockchainWebhookService {
         tx.index,
         internalStatus
       );
+
+      if (!transaction) {
+        return null;
+      }
+
       this.logger.log(`WH: Transaction ${tx.hash} status updated to ${internalStatus}`);
       return transaction.id;
     } catch (error) {
       this.logger.error(`WH: Failed to process transaction ${tx.hash}: ${error.message}`, error.stack);
-      return;
+      return null;
     }
   }
 
