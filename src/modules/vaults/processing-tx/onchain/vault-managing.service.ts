@@ -157,10 +157,6 @@ export class VaultManagingService {
       } // 4 ADA minimum
     );
 
-    if (utxoHexArray.length === 0) {
-      throw new Error('No UTXOs found with at least 4 ADA.');
-    }
-
     // Convert hex array back to TransactionUnspentOutputs for compatibility
     const utxos = TransactionUnspentOutputs.new();
     utxoHexArray.forEach(utxoHex => {

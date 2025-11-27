@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer';
 
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { FixedTransaction, PrivateKey, Address } from '@emurgo/cardano-serialization-lib-nodejs';
-import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -88,14 +88,11 @@ export class VaultContributionService {
 
         // For ADA contributions, we just need UTXOs with sufficient ADA + minimum for fees
         const { utxos } = await getUtxosExtract(Address.from_bech32(params.changeAddress), this.blockfrost, {
+          minAda: 4000000,
           targetAdaAmount: quantity, // Contribution amount + buffer for fees
           validateUtxos: false,
-          maxUtxos: 1000,
+          maxUtxos: 200,
         });
-
-        if (utxos.length === 0) {
-          throw new Error(`No UTXOs found with at least 6 ADA.`);
-        }
 
         // For ADA, any UTXO with sufficient balance works
         allUtxos = utxos;
@@ -116,10 +113,6 @@ export class VaultContributionService {
             filterByAda: 4_000_000,
           }
         );
-
-        if (!tokenUtxos || tokenUtxos.length === 0) {
-          throw new Error('No UTXOs found containing required tokens');
-        }
 
         // Set required inputs and all available UTXOs
         requiredInputs = tokenUtxos;
@@ -235,10 +228,6 @@ export class VaultContributionService {
       };
     } catch (error) {
       await this.transactionsService.updateTransactionStatusById(params.txId, TransactionStatus.failed);
-
-      if (error instanceof NotFoundException) {
-        throw new NotFoundException(error.message);
-      }
       throw error;
     }
   }

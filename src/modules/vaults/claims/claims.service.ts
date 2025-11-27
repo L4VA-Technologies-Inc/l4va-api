@@ -296,9 +296,6 @@ export class ClaimsService {
     const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
       minAda: 4000000,
     });
-    if (adminUtxos.length === 0) {
-      throw new Error('No UTXOs found.');
-    }
 
     const vault = validClaims[0].vault;
     const POLICY_ID = vault.script_hash;

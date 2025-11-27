@@ -57,7 +57,7 @@ export class BlockchainService {
    * @param txData Transaction data to be built
    * @returns Object containing complete and partial transaction CBOR
    */
-  async buildTransaction(txData: object): Promise<TransactionBuildResponse> {
+  async buildTransaction(txData: any): Promise<TransactionBuildResponse> {
     try {
       const contractDeployed = await fetch(`${this.anvilApi}/transactions/build`, {
         method: 'POST',
@@ -68,9 +68,22 @@ export class BlockchainService {
       const buildResponse = await contractDeployed.json();
 
       if (!buildResponse.complete) {
+        // Handle "No utxo with at least X lovelace" error
+        if (buildResponse.message?.includes('No utxo with at least') && buildResponse.message?.includes('lovelace')) {
+          const match = buildResponse.message.match(/No utxo with at least (\d+) lovelace/);
+          const requiredLovelace = match ? parseInt(match[1]) : undefined;
+
+          this.logger.warn(
+            `Specific UTxO requirement during transaction build '${txData?.message ? txData.message : ''}' not met: ${requiredLovelace} lovelace`
+          );
+          throw new UTxOInsufficientException(buildResponse.message, requiredLovelace);
+        }
+
+        // Handle general balance insufficient errors
         if (
           buildResponse.message?.includes('UTxO Balance Insufficient') ||
-          buildResponse.message?.includes('Balance Insufficient')
+          buildResponse.message?.includes('Balance Insufficient') ||
+          buildResponse.message?.includes('Insufficient input')
         ) {
           this.logger.warn(`UTxO Balance Insufficient error: ${JSON.stringify(buildResponse)}`);
           throw new UTxOInsufficientException(buildResponse.message);
