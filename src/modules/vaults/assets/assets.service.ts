@@ -282,36 +282,6 @@ export class AssetsService {
     }
   }
 
-  async lockTransactionAssetsToVault(transactionId: string, vaultId: string): Promise<void> {
-    const assets = await this.assetsRepository.find({
-      where: {
-        transaction: { id: transactionId },
-      },
-    });
-
-    if (!assets.length) {
-      return;
-    }
-
-    const vault = await this.vaultsRepository.findOne({
-      where: { id: vaultId },
-    });
-
-    if (!vault) {
-      throw new BadRequestException(`Vault with id ${vaultId} not found`);
-    }
-
-    // Update all assets to be linked to the vault
-    await Promise.all(
-      assets.map(async asset => {
-        asset.vault = vault;
-        asset.status = AssetStatus.LOCKED;
-        asset.locked_at = new Date();
-        return this.assetsRepository.save(asset);
-      })
-    );
-  }
-
   async softDeleteAsset(assetId: string, userId: string): Promise<void> {
     const asset = await this.assetsRepository.findOne({
       where: { id: assetId, added_by: { id: userId }, deleted: false },

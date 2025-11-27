@@ -148,10 +148,6 @@ export class VyfiService {
       minAda: 2_000_000, // Just need ADA for fees
     });
 
-    if (adminUtxos.length === 0) {
-      throw new Error('No admin UTXOs found for fees');
-    }
-
     // Build withdrawal transaction
     const input = {
       changeAddress: this.adminAddress,
@@ -264,10 +260,6 @@ export class VyfiService {
         targetAssets: [{ token: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`, amount: +claim.amount }],
       }
     );
-
-    if (adminUtxos.length === 0) {
-      throw new Error('No admin UTXOs found or insufficient ADA');
-    }
 
     const input = {
       changeAddress: this.adminAddress,

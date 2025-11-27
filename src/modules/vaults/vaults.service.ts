@@ -22,9 +22,7 @@ import { PublishVaultDto } from './dto/publish-vault.dto';
 import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
 import { GovernanceService } from './phase-management/governance/governance.service';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
-import { BlockchainScannerService } from './processing-tx/onchain/blockchain-scanner.service';
 import { BlockchainService } from './processing-tx/onchain/blockchain.service';
-import { VaultValidationException } from './processing-tx/onchain/exceptions/vault-validation.exception';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
 import { VaultManagingService } from './processing-tx/onchain/vault-managing.service';
 
@@ -68,8 +66,6 @@ import {
 @Injectable()
 export class VaultsService {
   private readonly logger = new Logger(VaultsService.name);
-  private readonly MAX_RETRIES = 10;
-  private readonly INITIAL_RETRY_DELAY = 3000; // 3 seconds
 
   constructor(
     @InjectRepository(Vault)
@@ -92,65 +88,11 @@ export class VaultsService {
     private readonly assetsRepository: Repository<Asset>,
     private readonly awsService: AwsService,
     private readonly vaultContractService: VaultManagingService,
-    private readonly blockchainScannerService: BlockchainScannerService,
     private readonly blockchainService: BlockchainService,
     private readonly governanceService: GovernanceService,
     private readonly taptoolsService: TaptoolsService,
     private readonly transactionsService: TransactionsService
   ) {}
-
-  /**
-   * Waits asynchronously for a specified number of milliseconds.
-   * @param ms - Milliseconds to wait
-   */
-  private async wait(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-  /**
-   * Confirms and processes a blockchain transaction for a vault, with retry logic and exponential backoff.
-   * Updates the vault's contract address upon success.
-   * @param txHash - Transaction hash
-   * @param vault - Vault entity
-   * @param attempt - Current retry attempt
-   */
-  private async confirmAndProcessTransaction(txHash: string, vault: Vault, attempt = 0): Promise<void> {
-    try {
-      await this.wait(12000); // Initial wait before first attempt
-
-      const txDetail = await this.blockchainScannerService.getTransactionDetails(txHash);
-
-      if (!txDetail || !txDetail.output_amount || txDetail.output_amount.length < 2) {
-        throw new Error('Transaction output not found or invalid format');
-      }
-
-      const POLICY_ID = vault.script_hash;
-      const SC_ADDRESS = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(POLICY_ID)))
-        .to_address()
-        .to_bech32();
-
-      const updateResult = await this.vaultsRepository.update({ id: vault.id }, { contract_address: SC_ADDRESS });
-
-      if (updateResult.affected === 0) {
-        this.logger.error(`Vault ${vault.id} not found during transaction confirmation`);
-        return;
-      }
-
-      this.logger.log(`Successfully processed transaction ${txHash} for vault ${vault.id}`);
-    } catch (error) {
-      if (attempt >= this.MAX_RETRIES - 1) {
-        this.logger.error(`Max retries reached for transaction ${txHash}:`, error);
-        return;
-      }
-
-      // Exponential backoff: 3s, 6s, 12s, 24s, etc.
-      const delay = this.INITIAL_RETRY_DELAY * Math.pow(2, attempt);
-      this.logger.log(`Retrying confirm vault ${vault.id} tx in ${delay}ms...`);
-
-      await this.wait(delay);
-      return this.confirmAndProcessTransaction(txHash, vault, attempt + 1);
-    }
-  }
 
   /**
    * Parses a CSV file from AWS S3 and extracts valid Cardano addresses.
@@ -544,11 +486,6 @@ export class VaultsService {
     } catch (error) {
       this.logger.error('Error creating vault:', error);
 
-      // If it's already a BadRequestException, re-throw it
-      if (error instanceof BadRequestException || error instanceof VaultValidationException) {
-        throw error;
-      }
-
       // Handle database constraint violations as fallback
       if (error.code === '23505') {
         if (error.detail?.includes('vault_image_id')) {
@@ -571,7 +508,8 @@ export class VaultsService {
         );
       }
 
-      throw new BadRequestException('Failed to create vault. Please check your input and try again.');
+      // throw new BadRequestException('Failed to create vault. Please check your input and try again.');
+      throw error;
     }
   }
 
@@ -807,18 +745,20 @@ export class VaultsService {
       signedTx,
       vault.asset_vault_name,
       vault.script_hash,
-      vault.apply_params_result
+      vault.apply_params_result,
+      vault.id
     );
+
+    const contractAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(vault.script_hash)))
+      .to_address()
+      .to_bech32();
+
+    vault.contract_address = contractAddress;
     vault.vault_status = VaultStatus.published;
     vault.publication_hash = publishedTx.txHash;
     await this.vaultsRepository.save(vault);
 
     await this.usersRepository.increment({ id: vault.owner.id }, 'total_vaults', 1);
-
-    // Start transaction confirmation process in background
-    this.confirmAndProcessTransaction(publishedTx.txHash, vault).catch(error => {
-      this.logger.error(`Failed to process transaction ${publishedTx.txHash}:`, error);
-    });
 
     return plainToInstance(VaultFullResponse, instanceToPlain(vault), { excludeExtraneousValues: true });
   }
@@ -1503,6 +1443,7 @@ export class VaultsService {
           id: vaultId,
           owner: { id: userId },
         },
+        select: ['id', 'script_hash', 'vault_status', 'deleted'],
       });
 
       if (!vault) {
@@ -1518,7 +1459,7 @@ export class VaultsService {
       vault.liquidation_hash = txHash;
       vault.vault_status = VaultStatus.burned;
 
-      await this.vaultsRepository.save(vault);
+      await this.vaultsRepository.update({ id: vault.id }, { ...vault });
       await this.transactionsService.updateTransactionHash(publishDto.txId, txHash);
 
       this.logger.log(`Vault ${vaultId} successfully marked as burned`);

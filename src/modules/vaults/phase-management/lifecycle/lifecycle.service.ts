@@ -5,6 +5,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
 import { ClaimsService } from '../../claims/claims.service';
+import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
@@ -13,7 +14,6 @@ import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
-import { ContributionService } from '@/modules/vaults/phase-management/contribution/contribution.service';
 import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
 import { AssetOriginType } from '@/types/asset.types';
@@ -44,12 +44,12 @@ export class LifecycleService {
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(TokenRegistry)
     private readonly tokenRegistryRepository: Repository<TokenRegistry>,
-    private readonly contributionService: ContributionService,
     private readonly vaultManagingService: VaultManagingService,
     private readonly distributionCalculationService: DistributionCalculationService,
     private readonly taptoolsService: TaptoolsService,
     private readonly metadataRegistryApiService: MetadataRegistryApiService,
     private readonly claimsService: ClaimsService,
+    private readonly transactionsService: TransactionsService,
     private readonly eventEmitter: EventEmitter2
   ) {}
 
@@ -269,12 +269,12 @@ export class LifecycleService {
     // Handle immediate start vaults
     const immediateStartVaults = await this.vaultRepository
       .createQueryBuilder('vault')
+      .leftJoin('transactions', 'tx', 'tx.vault_id = vault.id')
       .where('vault.vault_status = :status', { status: VaultStatus.published })
       .andWhere('vault.contract_address IS NOT NULL')
-      .andWhere('vault.contract_address != :testAddress', {
-        testAddress: 'addr_test1wr7cjttpkldnfyxhnw8anc3yye8rwp8ek5zpha7vxk2sl5svh2ceg', // SC address, not vault address
-      })
       .andWhere('vault.contribution_open_window_type = :type', { type: ContributionWindowType.uponVaultLaunch })
+      .andWhere('tx.type = :txType', { txType: TransactionType.createVault })
+      .andWhere('tx.status = :txStatus', { txStatus: TransactionStatus.confirmed })
       .getMany();
 
     for (const vault of immediateStartVaults) {
@@ -303,13 +303,13 @@ export class LifecycleService {
     // Handle custom start time vaults
     const customStartVaults = await this.vaultRepository
       .createQueryBuilder('vault')
+      .leftJoin('transactions', 'tx', 'tx.vault_id = vault.id')
       .where('vault.vault_status = :status', { status: VaultStatus.published })
       .andWhere('vault.contribution_open_window_type = :type', { type: ContributionWindowType.custom })
       .andWhere('vault.contribution_open_window_time IS NOT NULL')
       .andWhere('vault.contract_address IS NOT NULL')
-      .andWhere('vault.contract_address != :testAddress', {
-        testAddress: 'addr_test1wr7cjttpkldnfyxhnw8anc3yye8rwp8ek5zpha7vxk2sl5svh2ceg',
-      })
+      .andWhere('tx.type = :txType', { txType: TransactionType.createVault })
+      .andWhere('tx.status = :txStatus', { txStatus: TransactionStatus.confirmed })
       .getMany();
 
     for (const vault of customStartVaults) {
@@ -364,7 +364,7 @@ export class LifecycleService {
         this.logger.error('Error updating vault metadata:', error);
       }
 
-      await this.contributionService.syncContributionTransactions(vault.id);
+      await this.transactionsService.syncVaultTransactions(vault.id);
 
       const policyIdCounts = vault.assets.reduce(
         (counts, asset) => {
@@ -574,7 +574,7 @@ export class LifecycleService {
       }
 
       // Sync transactions one more time
-      await this.contributionService.syncContributionTransactions(vault.id);
+      await this.transactionsService.syncVaultTransactions(vault.id);
 
       // 1. First get all relevant transactions for this vault
       const allTransactions = await this.transactionsRepository.find({
@@ -995,7 +995,7 @@ export class LifecycleService {
         `Starting direct contribution to governance transition for vault ${vault.id} ` + `(0% for acquirers)`
       );
 
-      await this.contributionService.syncContributionTransactions(vault.id);
+      await this.transactionsService.syncVaultTransactions(vault.id);
 
       // Calculate total value of contributed assets (this becomes the FDV)
       const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);

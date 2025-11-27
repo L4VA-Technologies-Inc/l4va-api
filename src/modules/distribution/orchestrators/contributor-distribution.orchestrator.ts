@@ -180,10 +180,6 @@ export class ContributorDistributionOrchestrator {
       minAda: 4_000_000,
     });
 
-    if (adminUtxos.length === 0) {
-      throw new Error('No admin UTXOs found for batch payment');
-    }
-
     // Test increasing batch sizes
     while (testBatchSize <= Math.min(this.MAX_BATCH_SIZE, claims.length)) {
       const testClaims = claims.slice(0, testBatchSize);
@@ -278,10 +274,6 @@ export class ContributorDistributionOrchestrator {
       const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(config.adminAddress), this.blockfrost, {
         minAda: 4_000_000,
       });
-
-      if (adminUtxos.length === 0) {
-        throw new Error('No admin UTXOs found for batch payment');
-      }
 
       // Build transaction
       const input = await this.paymentBuilder.buildPaymentInput(vault, validClaims, adminUtxos, dispatchUtxos, config);

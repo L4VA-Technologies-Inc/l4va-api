@@ -29,14 +29,13 @@ import { Repository } from 'typeorm';
 import { BlockchainService } from './blockchain.service';
 import { Datum1 } from './types/type';
 import { assetsToValue, generate_tag_from_txhash_index, getUtxosExtract, getVaultUtxo } from './utils/lib';
-import { VaultInsertingService } from './vault-inserting.service';
 
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Vault } from '@/database/vault.entity';
 import { VaultCreationInput } from '@/modules/distribution/distribution.types';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { SmartContractVaultStatus, VaultPrivacy } from '@/types/vault.types';
+import { ApplyParamsResult, SmartContractVaultStatus, VaultPrivacy } from '@/types/vault.types';
 
 export interface VaultConfig {
   vaultName: string;
@@ -106,7 +105,6 @@ export class VaultManagingService {
     private readonly configService: ConfigService,
     @Inject(BlockchainService)
     private readonly blockchainService: BlockchainService,
-    private readonly vaultInsertingService: VaultInsertingService,
     private readonly transactionsService: TransactionsService
   ) {
     this.blueprintTitle = this.configService.get<string>('BLUEPRINT_TITLE');
@@ -138,6 +136,12 @@ export class VaultManagingService {
     scriptHash: string;
     applyParamsResult: any;
   }> {
+    const transaction = await this.transactionsService.createTransaction({
+      vault_id: vaultConfig.vaultId,
+      type: TransactionType.createVault,
+      assets: [], // No assets needed for this transaction as it's metadata update
+    });
+
     this.scAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(this.scPolicyId)))
       .to_address()
       .to_bech32();
@@ -152,10 +156,6 @@ export class VaultManagingService {
         targetAssets: [{ token: `${this.VLRM_POLICY_ID}${this.VLRM_HEX_ASSET_NAME}`, amount: this.VLRM_CREATOR_FEE }],
       } // 4 ADA minimum
     );
-
-    if (utxoHexArray.length === 0) {
-      throw new Error('No UTXOs found with at least 4 ADA.');
-    }
 
     // Convert hex array back to TransactionUnspentOutputs for compatibility
     const utxos = TransactionUnspentOutputs.new();
@@ -334,6 +334,8 @@ export class VaultManagingService {
       };
     } catch (error) {
       this.logger.error('Failed to create vault:', error);
+      await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
+
       throw error;
     }
   }
@@ -447,11 +449,10 @@ export class VaultManagingService {
       select: ['policy_id'],
     });
 
-    const { utxos: adminUtxos } = await getUtxosExtract(
-      Address.from_bech32(this.adminAddress),
-      this.blockfrost,
-      { minAda: 4000000, maxUtxos: 2 } // 4 ADA minimum
-    );
+    const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
+      minAda: 6000000,
+      maxUtxos: 5,
+    });
 
     const allowedPolicies: string[] =
       Array.isArray(assetsWhitelist) && assetsWhitelist.length > 0
@@ -566,12 +567,10 @@ export class VaultManagingService {
             },
           },
         },
-        scriptOutputIndex === -1
-          ? null // Only include if we found the script output
-          : {
-              address: vault.owner.address, // Send back to vault owner
-              lovelace: refScriptPayBackAmount, // Refund amount (adjust based on actual collateral)
-            },
+        {
+          address: vault.owner.address, // Send back to vault owner
+          lovelace: refScriptPayBackAmount, // Refund amount (adjust based on actual collateral)
+        },
       ],
       requiredSigners: [this.adminHash],
     };
@@ -585,12 +584,11 @@ export class VaultManagingService {
       txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.vaultScriptSKey));
       txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
-      const response = await this.vaultInsertingService.submitTransaction({
+      const response = await this.blockchainService.submitTransaction({
         transaction: txToSubmitOnChain.to_hex(),
-        vaultId: vault.id,
-        txId: transaction.id,
       });
 
+      await this.transactionsService.updateTransactionHash(transaction.id, response.txHash);
       return { success: true, txHash: response.txHash, message: 'Transaction submitted successfully' };
     } catch (error) {
       await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
@@ -608,7 +606,8 @@ export class VaultManagingService {
     signedTx: { transaction: string; signatures: string | string[] },
     assetName: string,
     scriptHash: string,
-    applyParamsResult: any
+    applyParamsResult: ApplyParamsResult,
+    vaultId: string
   ): Promise<{
     txHash: string;
   }> {
@@ -620,9 +619,10 @@ export class VaultManagingService {
         transaction: signedTx.transaction,
         signatures,
       });
-      const { txHash } = result;
 
-      if (txHash) {
+      await this.transactionsService.updateCreateVaultTransactionHashByVaultId(vaultId, result.txHash);
+
+      if (result.txHash) {
         // Step 4: Update blueprint with the script transaction reference
         await this.blockchainService.uploadBlueprint({
           blueprint: {
@@ -639,7 +639,7 @@ export class VaultManagingService {
           },
           refs: {
             [scriptHash]: {
-              txHash: txHash,
+              txHash: result.txHash,
               index: 1, // Script output is at index 1 (vault is at index 0)
             },
           },

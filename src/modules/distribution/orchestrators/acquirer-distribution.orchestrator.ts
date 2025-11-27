@@ -158,10 +158,6 @@ export class AcquirerDistributionOrchestrator {
       minAda: 4000000,
     });
 
-    if (adminUtxos.length === 0) {
-      throw new Error('No UTXOs on admin wallet was found.');
-    }
-
     // Validate claims
     const { validClaims, invalidClaims } = await this.claimsService.validateClaimUtxos(claims);
 
