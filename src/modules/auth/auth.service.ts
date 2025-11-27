@@ -6,8 +6,8 @@ import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { generateUsername } from 'unique-username-generator';
 
-import { UsersService } from '../users/users.service';
 import { TaptoolsService } from '../taptools/taptools.service';
+import { UsersService } from '../users/users.service';
 
 import { LoginReq } from './dto/login.req';
 

@@ -23,7 +23,6 @@ import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './d
 import { GovernanceService } from './phase-management/governance/governance.service';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from './processing-tx/onchain/blockchain.service';
-import { VaultValidationException } from './processing-tx/onchain/exceptions/vault-validation.exception';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
 import { VaultManagingService } from './processing-tx/onchain/vault-managing.service';
 
