@@ -43,6 +43,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
         host: process.env.REDIS_HOST,
         port: 6379,
         role: 'master',
+        password: process.env.REDIS_PASSWORD,
       },
     }),
     TypeOrmModule.forRoot({
