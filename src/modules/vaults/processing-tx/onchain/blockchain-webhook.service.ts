@@ -82,18 +82,18 @@ export class BlockchainWebhookService {
   /**
    * Process individual transaction from webhook
    */
-  private async processTransaction(txEvent: BlockfrostTransactionEvent): Promise<string> {
+  private async processTransaction({ tx }: BlockfrostTransactionEvent): Promise<string> {
     try {
-      const internalStatus = this.determineInternalTransactionStatus(txEvent.tx);
+      const internalStatus = this.determineInternalTransactionStatus(tx);
       const transaction = await this.transactionsService.updateTransactionStatusAndLockAssets(
-        txEvent.tx.hash,
-        txEvent.tx.index,
+        tx.hash,
+        tx.index,
         internalStatus
       );
-      this.logger.log(`WH: Transaction ${txEvent.tx.hash} status updated to ${internalStatus}`);
+      this.logger.log(`WH: Transaction ${tx.hash} status updated to ${internalStatus}`);
       return transaction.id;
     } catch (error) {
-      this.logger.error(`WH: Failed to process transaction ${txEvent.tx.hash}: ${error.message}`, error.stack);
+      this.logger.error(`WH: Failed to process transaction ${tx.hash}: ${error.message}`, error.stack);
       return;
     }
   }
