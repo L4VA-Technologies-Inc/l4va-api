@@ -90,7 +90,11 @@ export class BlockchainWebhookService {
 
     try {
       const internalStatus = this.determineInternalTransactionStatus(tx);
-      const transaction = await this.transactionsService.updateTransactionStatus(tx.hash, tx.index, internalStatus);
+      const transaction = await this.transactionsService.updateTransactionStatusAndLockAssets(
+        tx.hash,
+        tx.index,
+        internalStatus
+      );
       this.logger.debug(`TEST: Transaction ${tx.hash} status could be updated to ${internalStatus}`);
       return transaction.id;
     } catch (error) {

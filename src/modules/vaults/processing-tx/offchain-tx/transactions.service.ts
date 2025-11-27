@@ -79,44 +79,43 @@ export class TransactionsService {
       throw new NotFoundException('User not found for the transaction');
     }
 
+    const assetsToCreate: Partial<Asset>[] = [];
+
     if (transaction.type === TransactionType.acquire) {
-      await Promise.all(
-        pendingAssets.map(async assetItem => {
-          const asset = this.assetRepository.create({
-            transaction,
-            vault: { id: transaction.vault_id },
-            type: AssetType.ADA, // Using ADA type for acquire
-            policy_id: assetItem.policyId || '',
-            asset_id: assetItem.assetName,
-            quantity: assetItem.quantity,
-            status: AssetStatus.PENDING,
-            origin_type: AssetOriginType.ACQUIRED,
-            added_by: user,
-            metadata: assetItem?.metadata || {},
-          });
-
-          await this.assetRepository.save(asset);
-        })
-      );
+      pendingAssets.forEach(assetItem => {
+        assetsToCreate.push({
+          transaction,
+          vault: { id: transaction.vault_id } as Vault,
+          type: AssetType.ADA, // Using ADA type for acquire
+          policy_id: assetItem.policyId || '',
+          asset_id: assetItem.assetName,
+          quantity: assetItem.quantity,
+          status: AssetStatus.PENDING,
+          origin_type: AssetOriginType.ACQUIRED,
+          added_by: user,
+          metadata: assetItem?.metadata || {},
+        });
+      });
     } else if (transaction.type === TransactionType.contribute) {
-      await Promise.all(
-        pendingAssets.map(async assetItem => {
-          const asset = this.assetRepository.create({
-            transaction,
-            vault: { id: transaction.vault_id },
-            type: assetItem.type,
-            policy_id: assetItem.policyId || '',
-            asset_id: assetItem.assetName,
-            quantity: assetItem.quantity,
-            status: AssetStatus.PENDING,
-            origin_type: AssetOriginType.CONTRIBUTED,
-            added_by: user,
-            metadata: assetItem?.metadata || {},
-          });
+      pendingAssets.forEach(assetItem => {
+        assetsToCreate.push({
+          transaction,
+          vault: { id: transaction.vault_id } as Vault,
+          type: assetItem.type,
+          policy_id: assetItem.policyId || '',
+          asset_id: assetItem.assetName,
+          quantity: assetItem.quantity,
+          status: AssetStatus.PENDING,
+          origin_type: AssetOriginType.CONTRIBUTED,
+          added_by: user,
+          metadata: assetItem?.metadata || {},
+        });
+      });
+    }
 
-          return this.assetRepository.save(asset);
-        })
-      );
+    // Bulk insert all assets in a single transaction
+    if (assetsToCreate.length > 0) {
+      await this.assetRepository.save(assetsToCreate);
     }
 
     return {
@@ -332,7 +331,11 @@ export class TransactionsService {
     }
   }
 
-  async updateTransactionStatus(txHash: string, txIndex: number, status: TransactionStatus): Promise<Transaction> {
+  async updateTransactionStatusAndLockAssets(
+    txHash: string,
+    txIndex: number,
+    status: TransactionStatus
+  ): Promise<Transaction> {
     const transaction = await this.transactionRepository.findOne({
       where: { tx_hash: txHash },
     });
@@ -466,7 +469,9 @@ export class TransactionsService {
     if (txsToUpdate.length > 0) {
       try {
         await Promise.all(
-          txsToUpdate.map(tx => this.updateTransactionStatus(tx.tx_hash, tx.tx_index, TransactionStatus.confirmed))
+          txsToUpdate.map(tx =>
+            this.updateTransactionStatusAndLockAssets(tx.tx_hash, tx.tx_index, TransactionStatus.confirmed)
+          )
         );
         this.logger.log(`Updated ${txsToUpdate.length} transactions to confirmed status`);
       } catch (error) {
