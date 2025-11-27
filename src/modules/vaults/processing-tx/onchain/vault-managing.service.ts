@@ -610,8 +610,7 @@ export class VaultManagingService {
     signedTx: { transaction: string; signatures: string | string[] },
     assetName: string,
     scriptHash: string,
-    applyParamsResult: ApplyParamsResult,
-    vaultId: string
+    applyParamsResult: ApplyParamsResult
   ): Promise<{
     txHash: string;
   }> {
@@ -623,8 +622,6 @@ export class VaultManagingService {
         transaction: signedTx.transaction,
         signatures,
       });
-
-      await this.transactionsService.updateCreateVaultTransactionHashByVaultId(vaultId, result.txHash);
 
       if (result.txHash) {
         // Step 4: Update blueprint with the script transaction reference

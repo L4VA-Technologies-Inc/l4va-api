@@ -263,6 +263,11 @@ export class VaultContributionService {
         transaction: signedTx.transaction,
         signatures: signedTx.signatures || [],
       });
+
+      if (!result.txHash) {
+        throw new Error('No transaction hash returned from blockchain submission');
+      }
+
       await this.transactionsService.createAssets(signedTx.txId);
       await this.transactionsService.updateTransactionHash(signedTx.txId, result.txHash);
       return { txHash: result.txHash };

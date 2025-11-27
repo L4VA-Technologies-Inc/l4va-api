@@ -315,30 +315,12 @@ export class TransactionsService {
       { id },
       {
         tx_hash: txHash,
-        status: TransactionStatus.pending,
+        status: TransactionStatus.submitted,
       }
     );
 
     if (result.affected === 0) {
       throw new NotFoundException(`Transaction with id ${id} not found`);
-    }
-  }
-
-  async updateCreateVaultTransactionHashByVaultId(vaultId: string, txHash: string): Promise<void> {
-    const result = await this.transactionRepository.update(
-      {
-        vault_id: vaultId,
-        tx_hash: IsNull(),
-        type: TransactionType.createVault,
-      },
-      {
-        tx_hash: txHash,
-        status: TransactionStatus.pending,
-      }
-    );
-
-    if (result.affected === 0) {
-      throw new NotFoundException(`Transaction for vault id ${vaultId} not found`);
     }
   }
 

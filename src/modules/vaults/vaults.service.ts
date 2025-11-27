@@ -67,8 +67,6 @@ import {
 @Injectable()
 export class VaultsService {
   private readonly logger = new Logger(VaultsService.name);
-  private readonly MAX_RETRIES = 10;
-  private readonly INITIAL_RETRY_DELAY = 3000; // 3 seconds
 
   constructor(
     @InjectRepository(Vault)
@@ -489,11 +487,6 @@ export class VaultsService {
     } catch (error) {
       this.logger.error('Error creating vault:', error);
 
-      // If it's already a BadRequestException, re-throw it
-      if (error instanceof BadRequestException || error instanceof VaultValidationException) {
-        throw error;
-      }
-
       // Handle database constraint violations as fallback
       if (error.code === '23505') {
         if (error.detail?.includes('vault_image_id')) {
@@ -516,7 +509,8 @@ export class VaultsService {
         );
       }
 
-      throw new BadRequestException('Failed to create vault. Please check your input and try again.');
+      // throw new BadRequestException('Failed to create vault. Please check your input and try again.');
+      throw error;
     }
   }
 
@@ -752,8 +746,7 @@ export class VaultsService {
       signedTx,
       vault.asset_vault_name,
       vault.script_hash,
-      vault.apply_params_result,
-      vault.id
+      vault.apply_params_result
     );
 
     const contractAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(vault.script_hash)))
