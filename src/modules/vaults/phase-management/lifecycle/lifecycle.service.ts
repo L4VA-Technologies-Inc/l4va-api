@@ -14,7 +14,6 @@ import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
-import { ContributionService } from '@/modules/vaults/phase-management/contribution/contribution.service';
 import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
 import { AssetOriginType } from '@/types/asset.types';
@@ -45,7 +44,6 @@ export class LifecycleService {
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(TokenRegistry)
     private readonly tokenRegistryRepository: Repository<TokenRegistry>,
-    private readonly contributionService: ContributionService,
     private readonly vaultManagingService: VaultManagingService,
     private readonly distributionCalculationService: DistributionCalculationService,
     private readonly taptoolsService: TaptoolsService,
