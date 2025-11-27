@@ -746,7 +746,8 @@ export class VaultsService {
       signedTx,
       vault.asset_vault_name,
       vault.script_hash,
-      vault.apply_params_result
+      vault.apply_params_result,
+      vault.id
     );
 
     const contractAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(vault.script_hash)))

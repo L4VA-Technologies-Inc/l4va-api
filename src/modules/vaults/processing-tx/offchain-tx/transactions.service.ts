@@ -323,6 +323,24 @@ export class TransactionsService {
     }
   }
 
+  async updateCreateVaultTransactionHashByVaultId(vaultId: string, txHash: string): Promise<void> {
+    const result = await this.transactionRepository.update(
+      {
+        vault_id: vaultId,
+        tx_hash: IsNull(),
+        type: TransactionType.createVault,
+      },
+      {
+        tx_hash: txHash,
+        status: TransactionStatus.submitted,
+      }
+    );
+
+    if (result.affected === 0) {
+      throw new NotFoundException(`Transaction for vault id ${vaultId} not found`);
+    }
+  }
+
   async updateTransactionStatusById(id: string, status: TransactionStatus): Promise<void> {
     const result = await this.transactionRepository.update({ id }, { status });
 
@@ -336,19 +354,20 @@ export class TransactionsService {
    * @param txHash Transaction hash
    * @param txIndex Transaction index
    * @param status New transaction status
-   * @returns Updated transaction
+   * @returns Updated transaction or null if not found
    */
   async updateTransactionStatusAndLockAssets(
     txHash: string,
     txIndex: number,
     status: TransactionStatus
-  ): Promise<Transaction> {
+  ): Promise<Transaction | null> {
     const transaction = await this.transactionRepository.findOne({
       where: { tx_hash: txHash },
     });
 
     if (!transaction) {
-      throw new NotFoundException(`Transaction with hash ${txHash} not found`);
+      this.logger.warn(`Transaction with hash ${txHash} not found in database, skipping update`);
+      return null;
     }
 
     // Update transaction status
