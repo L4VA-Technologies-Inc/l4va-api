@@ -331,6 +331,13 @@ export class TransactionsService {
     }
   }
 
+  /**
+   * Update transaction status by hash and optionally lock assets if they exist
+   * @param txHash Transaction hash
+   * @param txIndex Transaction index
+   * @param status New transaction status
+   * @returns Updated transaction
+   */
   async updateTransactionStatusAndLockAssets(
     txHash: string,
     txIndex: number,
@@ -341,44 +348,69 @@ export class TransactionsService {
     });
 
     if (!transaction) {
-      throw new Error(`Transaction with hash ${txHash} not found`);
+      throw new NotFoundException(`Transaction with hash ${txHash} not found`);
     }
 
-    const vault = await this.vaultRepository.findOne({
-      where: {
-        id: transaction.vault_id,
-      },
-    });
-
-    const assets = await this.assetRepository.findBy({
-      transaction: {
-        id: transaction.id,
-      },
-    });
-
-    assets.map(async item => {
-      const asset = await this.assetRepository.findOne({
-        where: {
-          id: item.id,
-        },
-      });
-      asset.vault = vault;
-      asset.status = AssetStatus.LOCKED;
-      await this.assetRepository.save(asset);
-    });
-
+    // Update transaction status
     transaction.status = status;
     transaction.tx_index = txIndex.toString();
 
-    const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(transaction.vault_id);
+    const assets = await this.assetRepository.find({
+      where: {
+        transaction: { id: transaction.id },
+      },
+    });
 
-    vault.require_reserved_cost_ada = assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01);
-    vault.require_reserved_cost_usd = assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01);
-    vault.total_assets_cost_ada = assetsPrices.totalValueAda;
-    vault.total_assets_cost_usd = assetsPrices.totalValueUsd;
-    vault.total_acquired_value_ada = assetsPrices.totalAcquiredAda;
+    // Only lock assets if they exist
+    if (assets.length > 0) {
+      const vault = await this.vaultRepository.findOne({
+        where: { id: transaction.vault_id },
+        select: [
+          'id',
+          'acquire_reserve',
+          'require_reserved_cost_ada',
+          'require_reserved_cost_usd',
+          'total_assets_cost_ada',
+          'total_assets_cost_usd',
+          'total_acquired_value_ada',
+        ],
+      });
 
-    await this.vaultRepository.save(vault);
+      if (!vault) {
+        this.logger.warn(`Vault ${transaction.vault_id} not found for transaction ${txHash}`);
+        return this.transactionRepository.save(transaction);
+      }
+
+      this.logger.log(`Locking ${assets.length} assets for transaction ${txHash}`);
+
+      // Bulk update assets to LOCKED status
+      await this.assetRepository.update(
+        { transaction: { id: transaction.id } },
+        {
+          status: AssetStatus.LOCKED,
+          vault: { id: vault.id },
+        }
+      );
+
+      // Calculate and update vault values only if assets were locked
+      const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(transaction.vault_id);
+
+      vault.require_reserved_cost_ada = assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01);
+      vault.require_reserved_cost_usd = assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01);
+      vault.total_assets_cost_ada = assetsPrices.totalValueAda;
+      vault.total_assets_cost_usd = assetsPrices.totalValueUsd;
+      vault.total_acquired_value_ada = assetsPrices.totalAcquiredAda;
+
+      await this.vaultRepository.update(vault.id, {
+        require_reserved_cost_ada: vault.require_reserved_cost_ada,
+        require_reserved_cost_usd: vault.require_reserved_cost_usd,
+        total_assets_cost_ada: vault.total_assets_cost_ada,
+        total_assets_cost_usd: vault.total_assets_cost_usd,
+        total_acquired_value_ada: vault.total_acquired_value_ada,
+      });
+    } else {
+      this.logger.log(`No assets found for transaction ${txHash}, skipping asset locking`);
+    }
 
     return this.transactionRepository.save(transaction);
   }
