@@ -101,7 +101,9 @@ export class AssetsService {
     let queryBuilder = this.assetsRepository
       .createQueryBuilder('asset')
       .where('asset.vault_id = :vaultId', { vaultId })
-      .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
+      .andWhere('asset.origin_type IN (:...originTypes)', {
+        originTypes: [AssetOriginType.CONTRIBUTED, AssetOriginType.FEE],
+      })
       .andWhere('asset.status IN (:...statuses)', {
         statuses: [AssetStatus.LOCKED, AssetStatus.RELEASED],
       });

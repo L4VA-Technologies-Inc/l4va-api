@@ -12,6 +12,7 @@ import { MetadataRegistryApiService } from './metadata-register.service';
 import { VaultContributionService } from './vault-contribution.service';
 import { VaultManagingService } from './vault-managing.service';
 
+import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
@@ -24,7 +25,7 @@ import { Vault } from '@/database/vault.entity';
     }),
     HttpModule,
     TransactionsModule,
-    TypeOrmModule.forFeature([Vault, Transaction, AssetsWhitelistEntity, TokenRegistry]),
+    TypeOrmModule.forFeature([Vault, Transaction, AssetsWhitelistEntity, TokenRegistry, Asset]),
   ],
   controllers: [BlockchainController],
   providers: [
