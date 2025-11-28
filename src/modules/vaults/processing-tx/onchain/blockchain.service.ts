@@ -76,7 +76,7 @@ export class BlockchainService {
           this.logger.warn(
             `Specific UTxO requirement during transaction build '${txData?.message ? txData.message : ''}' not met: ${requiredLovelace} lovelace`
           );
-          throw new UTxOInsufficientException(buildResponse.message, requiredLovelace);
+          throw new UTxOInsufficientException(requiredLovelace);
         }
 
         // Handle general balance insufficient errors
@@ -86,7 +86,7 @@ export class BlockchainService {
           buildResponse.message?.includes('Insufficient input')
         ) {
           this.logger.warn(`UTxO Balance Insufficient error: ${JSON.stringify(buildResponse)}`);
-          throw new UTxOInsufficientException(buildResponse.message);
+          throw new UTxOInsufficientException();
         }
 
         if (
