@@ -307,7 +307,7 @@ export class VaultManagingService {
               hash: scriptHash,
             },
           },
-          ...(!this.VLRM_CREATOR_FEE_ENABLED
+          ...(this.VLRM_CREATOR_FEE_ENABLED
             ? [
                 {
                   address: vaultAddress,
