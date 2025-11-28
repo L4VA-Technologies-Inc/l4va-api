@@ -6,8 +6,14 @@ import * as bodyParser from 'body-parser';
 import { json } from 'express';
 
 import { AppModule } from './app.module';
+import { loadSecrets } from './load-gcp-secrets';
 
 async function bootstrap() {
+  try {
+    await loadSecrets();
+  } catch (error) {
+    console.log(error);
+  }
   const app = await NestFactory.create(AppModule);
 
   // Configure raw body parser for webhook endpoint
