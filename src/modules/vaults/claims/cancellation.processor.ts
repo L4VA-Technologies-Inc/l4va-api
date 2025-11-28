@@ -78,10 +78,8 @@ export class CancellationProcessor extends WorkerHost {
       await job.updateProgress(90);
 
       // Update all claims status
-      await Promise.all(claimIds.map(claimId => this.claimsService.updateClaimStatus(claimId, ClaimStatus.CLAIMED)));
-
-      // Release assets for all claims
-      await Promise.all(claimIds.map(claimId => this.assetsService.releaseAssetByClaimId(claimId)));
+      await this.claimsService.updateClaimStatus(claimIds, ClaimStatus.CLAIMED);
+      await this.assetsService.releaseAssetsByClaim(claimIds);
 
       await job.updateProgress(100);
 

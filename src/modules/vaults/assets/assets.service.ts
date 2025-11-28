@@ -170,8 +170,12 @@ export class AssetsService {
     };
   }
 
-  async releaseAssetByClaimId(claimId: string): Promise<void> {
-    const claimWithAsset = await this.claimsRepository
+  async releaseAssetsByClaim(claimIds: string[]): Promise<void> {
+    if (claimIds.length === 0) {
+      throw new BadRequestException('At least one claim ID must be provided');
+    }
+
+    const claimsWithAssets = await this.claimsRepository
       .createQueryBuilder('claim')
       .select([
         'claim.id',
@@ -192,29 +196,52 @@ export class AssetsService {
       .innerJoin('claim.transaction', 'transaction')
       .innerJoin('transaction.assets', 'asset')
       .innerJoin('asset.vault', 'vault')
-      .where('claim.id = :claimId', { claimId })
+      .where('claim.id IN (:...claimIds)', { claimIds })
       .andWhere('asset.deleted = false')
-      .getOne();
+      .getMany();
 
-    if (!claimWithAsset) {
-      throw new BadRequestException('Claim not found or no associated asset');
+    if (claimsWithAssets.length === 0) {
+      throw new BadRequestException('No claims found or no associated assets');
     }
 
-    const asset = claimWithAsset.transaction.assets[0];
-
-    if (!asset) {
-      throw new BadRequestException('No asset associated with this claim');
+    if (claimsWithAssets.length !== claimIds.length) {
+      const foundIds = claimsWithAssets.map(c => c.id);
+      const missingIds = claimIds.filter(id => !foundIds.includes(id));
+      throw new BadRequestException(`Claims not found: ${missingIds.join(', ')}`);
     }
 
-    if (asset.status !== AssetStatus.LOCKED) {
-      throw new BadRequestException(
-        `Asset cannot be released. Current status: ${asset.status}. Only locked assets can be released.`
-      );
+    const assetsToRelease: string[] = [];
+    const errors: string[] = [];
+
+    for (const claim of claimsWithAssets) {
+      const asset = claim.transaction.assets[0];
+
+      if (!asset) {
+        errors.push(`No asset associated with claim ${claim.id}`);
+        continue;
+      }
+
+      if (asset.status !== AssetStatus.LOCKED) {
+        errors.push(
+          `Asset for claim ${claim.id} cannot be released. Current status: ${asset.status}. Only locked assets can be released.`
+        );
+        continue;
+      }
+
+      assetsToRelease.push(asset.id);
+    }
+
+    if (errors.length > 0) {
+      throw new BadRequestException(errors.join('; '));
+    }
+
+    if (assetsToRelease.length === 0) {
+      throw new BadRequestException('No assets eligible for release');
     }
 
     const now = new Date();
     await this.assetsRepository.update(
-      { id: asset.id },
+      { id: In(assetsToRelease) },
       {
         status: AssetStatus.RELEASED,
         released_at: now,

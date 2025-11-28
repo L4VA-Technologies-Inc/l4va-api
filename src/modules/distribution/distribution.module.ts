@@ -44,7 +44,7 @@ import { VyfiModule } from '@/modules/vyfi/vyfi.module';
       provide: BlockFrostAPI,
       useFactory: (configService: ConfigService) => {
         return new BlockFrostAPI({
-          projectId: configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
+          projectId: configService.get<string>('BLOCKFROST_API_KEY'),
         });
       },
       inject: [ConfigService],

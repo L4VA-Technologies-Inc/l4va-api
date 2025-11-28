@@ -44,7 +44,7 @@ export class BlockchainService {
     this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
     this.blueprintTitle = this.configService.get<string>('BLUEPRINT_TITLE');
     this.blockfrost = new BlockFrostAPI({
-      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
+      projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
     this.anvilHeaders = {
       'x-api-key': this.configService.get<string>('ANVIL_API_KEY'),

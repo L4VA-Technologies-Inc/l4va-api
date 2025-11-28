@@ -34,7 +34,7 @@ export class TransactionsService {
     private readonly configService: ConfigService
   ) {
     this.blockfrost = new BlockFrostAPI({
-      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
+      projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
   }
 

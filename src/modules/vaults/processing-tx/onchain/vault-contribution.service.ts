@@ -46,7 +46,7 @@ export class VaultContributionService {
     this.feeAddress = this.configService.get<string>('FEE_ADDRESS');
     this.FLAT_FEE = this.configService.get<number>('PROTOCOL_FLAT_FEE');
     this.blockfrost = new BlockFrostAPI({
-      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
+      projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
   }
 

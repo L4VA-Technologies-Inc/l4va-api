@@ -120,7 +120,7 @@ export class VaultManagingService {
     this.VLRM_CREATOR_FEE = this.configService.get<number>('VLRM_CREATOR_FEE');
     this.VLRM_CREATOR_FEE_ENABLED = this.configService.get<boolean>('VLRM_CREATOR_FEE_ENABLED');
     this.blockfrost = new BlockFrostAPI({
-      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
+      projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
   }
 
@@ -450,8 +450,8 @@ export class VaultManagingService {
     });
 
     const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
-      minAda: 6000000,
-      maxUtxos: 5,
+      minAda: 4000000,
+      maxUtxos: 10,
     });
 
     const allowedPolicies: string[] =
@@ -467,36 +467,37 @@ export class VaultManagingService {
 
     const utxoDetails = await this.blockfrost.txsUtxos(vault.publication_hash);
 
-    if (!utxoDetails || !utxoDetails.outputs) {
-      throw new Error(`${vault.publication_hash} not found`);
+    let refScriptPayBackAmount = 0;
+
+    if (utxoDetails && utxoDetails.outputs) {
+      // Find the output with the script address that contains the collateral
+      const scriptOutputIndex = utxoDetails.outputs.findIndex(output => output.address === this.vaultScriptAddress);
+
+      if (scriptOutputIndex !== -1) {
+        const scriptOutput = utxoDetails.outputs[scriptOutputIndex];
+        refScriptPayBackAmount = Number(scriptOutput.amount[0].quantity);
+
+        if (refScriptPayBackAmount > 0) {
+          // Create the UTXO reference for the script collateral
+          const scriptUtxo = TransactionUnspentOutput.new(
+            TransactionInput.new(TransactionHash.from_hex(vault.publication_hash), scriptOutputIndex),
+            TransactionOutput.new(
+              Address.from_bech32(this.vaultScriptAddress),
+              assetsToValue([{ unit: 'lovelace', quantity: refScriptPayBackAmount }])
+            )
+          );
+
+          adminUtxos.push(scriptUtxo.to_hex());
+        } else {
+          this.logger.warn(`Script UTXO has zero or negative ADA amount: ${refScriptPayBackAmount}, skipping refund`);
+        }
+      } else {
+        this.logger.warn(`No output found with vault script address ${this.vaultScriptAddress}, skipping refund`);
+        this.logger.warn(`Available addresses: ${utxoDetails.outputs.map(o => o.address).join(', ')}`);
+      }
+    } else {
+      this.logger.warn(`Transaction ${vault.publication_hash} outputs not found, skipping script UTXO refund`);
     }
-
-    // Find the output with the script address that contains the collateral
-    const scriptOutputIndex = utxoDetails.outputs.findIndex(output => output.address === this.vaultScriptAddress);
-
-    if (scriptOutputIndex === -1) {
-      this.logger.error(`No output found with vault script address ${this.vaultScriptAddress}`);
-      this.logger.error(`Available addresses: ${utxoDetails.outputs.map(o => o.address).join(', ')}`);
-      throw new Error(`No output found with vault script address ${this.vaultScriptAddress}`);
-    }
-
-    const scriptOutput = utxoDetails.outputs[scriptOutputIndex];
-    const refScriptPayBackAmount = Number(scriptOutput.amount[0].quantity);
-
-    if (refScriptPayBackAmount <= 0) {
-      throw new Error(`Collateral UTXO has zero or negative ADA amount: ${refScriptPayBackAmount}`);
-    }
-
-    // Create the UTXO reference for the script collateral
-    const scriptUtxo = TransactionUnspentOutput.new(
-      TransactionInput.new(TransactionHash.from_hex(vault.publication_hash), scriptOutputIndex),
-      TransactionOutput.new(
-        Address.from_bech32(this.vaultScriptAddress),
-        assetsToValue([{ unit: 'lovelace', quantity: refScriptPayBackAmount }])
-      )
-    );
-
-    adminUtxos.push(scriptUtxo.to_hex());
 
     const input = {
       changeAddress: this.adminAddress,
@@ -567,13 +568,16 @@ export class VaultManagingService {
             },
           },
         },
-        {
-          address: vault.owner.address, // Send back to vault owner
-          lovelace: refScriptPayBackAmount, // Refund amount (adjust based on actual collateral)
-        },
       ],
       requiredSigners: [this.adminHash],
     };
+
+    if (refScriptPayBackAmount > 0) {
+      input.outputs.push({
+        address: vault.owner.address, // Send back to vault owner
+        lovelace: refScriptPayBackAmount, // Refund amount (adjust based on actual collateral)
+      } as any);
+    }
 
     this.logger.debug('Vault update transaction input:', JSON.stringify(input));
     try {
