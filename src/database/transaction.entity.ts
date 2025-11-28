@@ -97,9 +97,9 @@ export class Transaction {
 
   @Expose({ name: 'updatedAt' })
   @UpdateDateColumn({ type: 'timestamptz' })
-  updated_at: string;
+  updated_at: Date;
 
   @Expose({ name: 'createdAt' })
-  @CreateDateColumn({ name: 'created_at' })
-  created_at: string;
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
+  created_at: Date;
 }

@@ -233,11 +233,9 @@ export class VaultsService {
         : null;
 
       const contributionOpenWindowTime = data.contributionOpenWindowTime
-        ? new Date(data.contributionOpenWindowTime).toISOString()
+        ? new Date(data.contributionOpenWindowTime)
         : null;
-      const acquireOpenWindowTime = data.acquireOpenWindowTime
-        ? new Date(data.acquireOpenWindowTime).toISOString()
-        : null;
+      const acquireOpenWindowTime = data.acquireOpenWindowTime ? new Date(data.acquireOpenWindowTime) : null;
 
       // Prepare vault data
       const vaultData = transformToSnakeCase({
@@ -800,8 +798,11 @@ export class VaultsService {
       const start = new Date(vault.acquire_phase_start);
       const duration = Number(vault.acquire_window_duration);
       const timeLeft = new Date(start.getTime() + duration);
+      const { acquire_phase_start, ...rest } = vault as Vault & { acquire_phase_start: Date };
+
       return {
-        ...vault,
+        ...rest,
+        acquire_phase_start: acquire_phase_start ? acquire_phase_start.toISOString() : null,
         timeLeft: timeLeft.toISOString(),
       } as VaultAcquireResponse;
     });

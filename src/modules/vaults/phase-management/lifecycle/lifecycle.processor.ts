@@ -44,7 +44,7 @@ export class LifecycleProcessor extends WorkerHost {
 
       // Set phase start time if specified
       if (data.phaseStartField) {
-        (vault as any)[data.phaseStartField] = new Date().toISOString();
+        (vault as any)[data.phaseStartField] = new Date();
       }
 
       await this.vaultRepository.save(vault);

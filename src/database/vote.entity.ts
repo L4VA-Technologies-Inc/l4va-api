@@ -34,7 +34,7 @@ export class Vote {
   vote: VoteType;
 
   @Expose({ name: 'timestamp' })
-  @CreateDateColumn({ name: 'timestamp' })
+  @CreateDateColumn({ name: 'timestamp', type: 'timestamptz' })
   timestamp: Date;
 
   @ManyToOne(() => Proposal, proposal => proposal.votes, { nullable: false, onDelete: 'CASCADE' })

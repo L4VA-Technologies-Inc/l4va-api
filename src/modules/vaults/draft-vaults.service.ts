@@ -240,13 +240,13 @@ export class DraftVaultsService {
         vaultData.acquire_window_duration = data.acquireWindowDuration;
       }
       if (data.acquireOpenWindowTime !== undefined && data.acquireOpenWindowTime !== null) {
-        vaultData.acquire_open_window_time = new Date(data.acquireOpenWindowTime).toISOString();
+        vaultData.acquire_open_window_time = new Date(data.acquireOpenWindowTime);
       }
       if (data.acquireOpenWindowType !== undefined && data.acquireOpenWindowType !== null) {
         vaultData.acquire_open_window_type = data.acquireOpenWindowType;
       }
       if (data.contributionOpenWindowTime !== undefined && data.contributionOpenWindowTime !== null) {
-        vaultData.contribution_open_window_time = new Date(data.contributionOpenWindowTime).toISOString();
+        vaultData.contribution_open_window_time = new Date(data.contributionOpenWindowTime);
       }
       if (data.contributionOpenWindowType !== undefined && data.contributionOpenWindowType !== null) {
         vaultData.contribution_open_window_type = data.contributionOpenWindowType;

@@ -19,7 +19,7 @@ export class Snapshot {
   addressBalances: Record<string, string>;
 
   @Expose({ name: 'createdAt' })
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
   @Expose({ name: 'vault' })
