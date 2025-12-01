@@ -81,13 +81,7 @@ export class AssetsService {
     page: number = 1,
     limit: number = 10,
     search: string = ''
-  ): Promise<{
-    items: Record<string, unknown>[];
-    total: number;
-    page: number;
-    limit: number;
-    totalPages: number;
-  }> {
+  ): Promise<import('./dto/get-contributed-assets.res').GetContributedAssetsRes> {
     // Verify vault ownership
     const vault = await this.vaultsRepository.findOne({
       where: {
@@ -128,13 +122,7 @@ export class AssetsService {
     vaultId: string,
     page: number = 1,
     limit: number = 10
-  ): Promise<{
-    items: Record<string, unknown>[];
-    total: number;
-    page: number;
-    limit: number;
-    totalPages: number;
-  }> {
+  ): Promise<import('./dto/get-acquired-assets.res').GetAcquiredAssetsRes> {
     // Verify vault ownership
     const vault = await this.vaultsRepository.findOne({
       where: {

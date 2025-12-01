@@ -10,6 +10,7 @@ import { TaptoolsService } from '../taptools/taptools.service';
 import { UsersService } from '../users/users.service';
 
 import { LoginReq } from './dto/login.req';
+import { LoginRes } from './dto/login.res';
 
 import { transformImageToUrl } from '@/helpers';
 
@@ -21,7 +22,7 @@ export class AuthService {
     private readonly taptoolsService: TaptoolsService
   ) {}
 
-  async verifySignature(signatureData: LoginReq) {
+  async verifySignature(signatureData: LoginReq): Promise<LoginRes> {
     try {
       const { signature, stakeAddress, walletAddress } = signatureData;
 

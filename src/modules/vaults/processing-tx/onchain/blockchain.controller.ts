@@ -8,6 +8,8 @@ import {
   TransactionBuildResponseDto,
   TransactionSubmitResponseDto,
 } from './dto/transaction.dto';
+import { BuildTransactionRes } from './dto/build-transaction.res';
+import { HandleWebhookRes } from './dto/handle-webhook.res';
 import { BlockchainWebhookDto } from './dto/webhook.dto';
 import { VaultContributionService } from './vault-contribution.service';
 
@@ -26,12 +28,10 @@ export class BlockchainController {
   @ApiResponse({
     status: 200,
     description: 'Transaction built successfully',
-    type: TransactionBuildResponseDto,
+    type: BuildTransactionRes,
   })
   @UseGuards(AuthGuard)
-  async buildTransaction(@Body() params: BuildTransactionDto): Promise<{
-    presignedTx: string;
-  }> {
+  async buildTransaction(@Body() params: BuildTransactionDto): Promise<BuildTransactionRes> {
     return this.vaultContributionService.buildContributionTransaction(params);
   }
 
@@ -53,7 +53,7 @@ export class BlockchainController {
   @ApiResponse({
     status: 200,
     description: 'Blockchain event processed successfully',
-    type: Object,
+    type: HandleWebhookRes,
   })
   @ApiResponse({
     status: 401,
@@ -62,7 +62,7 @@ export class BlockchainController {
   async handleWebhook(
     @Body() event: BlockchainWebhookDto,
     @Request() req: { headers: Record<string, string>; body: unknown }
-  ): Promise<{ status: string; details: any }> {
+  ): Promise<HandleWebhookRes> {
     const signatureHeader = req.headers['blockfrost-signature'];
 
     // Get raw body from the request

@@ -6,6 +6,8 @@ import { TransactionsService } from '../../processing-tx/offchain-tx/transaction
 
 import { ContributionService } from './contribution.service';
 import { ContributeReq } from './dto/contribute.req';
+import { GetContributionTransactionsQueryDto } from './dto/get-contribution-transactions-query.dto';
+import { GetContributionTransactionsRes } from './dto/get-contribution-transactions.res';
 
 import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
 
@@ -29,8 +31,9 @@ export class ContributionController {
   @Get('transactions')
   @ApiOperation({ summary: 'Get all contribution transactions' })
   @UseGuards(AuthGuard)
-  @ApiResponse({ status: 200, description: 'Returns all contribution transactions' })
-  async getContributionTransactions(@Query('vaultId') vaultId?: string) {
-    return this.transactionsService.getContributionTransactions(vaultId);
+  @ApiResponse({ status: 200, description: 'Returns all contribution transactions', type: GetContributionTransactionsRes })
+  async getContributionTransactions(@Query() query: GetContributionTransactionsQueryDto): Promise<GetContributionTransactionsRes> {
+    const transactions = await this.transactionsService.getContributionTransactions(query.vaultId);
+    return { transactions };
   }
 }
