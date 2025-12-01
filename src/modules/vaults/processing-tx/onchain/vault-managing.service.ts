@@ -7,9 +7,6 @@ import {
   PrivateKey,
   TransactionUnspentOutputs,
   TransactionUnspentOutput,
-  TransactionOutput,
-  TransactionHash,
-  TransactionInput,
 } from '@emurgo/cardano-serialization-lib-nodejs';
 import {
   BadRequestException,
