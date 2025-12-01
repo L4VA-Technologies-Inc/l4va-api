@@ -1,7 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose } from 'class-transformer';
 
-export class CreateProposalProposalDto {
+export class CreatedProposalDto {
   @Expose()
   @ApiProperty({ description: 'Proposal ID', example: '123e4567-e89b-12d3-a456-426614174000' })
   id: string;
@@ -25,6 +25,6 @@ export class CreateProposalRes {
   message: string;
 
   @Expose()
-  @ApiProperty({ description: 'Created proposal data', type: CreateProposalProposalDto })
-  proposal: CreateProposalProposalDto;
+  @ApiProperty({ description: 'Created proposal data', type: CreatedProposalDto })
+  proposal: CreatedProposalDto;
 }

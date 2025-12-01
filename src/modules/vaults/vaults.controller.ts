@@ -206,8 +206,11 @@ export class VaultsController {
   })
   @UseGuards(AuthGuard)
   @Post(':id/burn/build')
-  async burnVaultAttempt(@Param('id') id: string, @Request() req: AuthRequest): Promise<BuildBurnTransactionRes> {
-    return await this.vaultsService.buildBurnTransaction(id, req.user.sub);
+  async burnVaultAttempt(
+    @Param() params: GetVaultParamDto,
+    @Request() req: AuthRequest
+  ): Promise<BuildBurnTransactionRes> {
+    return await this.vaultsService.buildBurnTransaction(params.id, req.user.sub);
   }
 
   @ApiDoc({
@@ -218,11 +221,11 @@ export class VaultsController {
   @UseGuards(AuthGuard)
   @Post(':id/burn/publish')
   async burnPublishAtempt(
-    @Param('id') id: string,
+    @Param() params: GetVaultParamDto,
     @Body() publishDto: PublishVaultDto,
     @Request() req: AuthRequest
   ): Promise<PublishBurnTransactionRes> {
     const userId = req.user.sub;
-    return await this.vaultsService.publishBurnTransaction(id, userId, publishDto);
+    return await this.vaultsService.publishBurnTransaction(params.id, userId, publishDto);
   }
 }

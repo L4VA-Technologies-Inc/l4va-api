@@ -17,6 +17,9 @@ export class HandleWebhookRes {
   status: string;
 
   @Expose()
-  @ApiProperty({ description: 'Transaction summary details', type: [WebhookTxSummaryDto] })
+  @ApiProperty({
+    description: 'Transaction summary details (array on success) or error message (string on error)',
+    oneOf: [{ type: 'array', items: { $ref: '#/components/schemas/WebhookTxSummaryDto' } }, { type: 'string' }],
+  })
   details: WebhookTxSummaryDto[] | string;
 }

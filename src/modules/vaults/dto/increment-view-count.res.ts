@@ -7,7 +7,7 @@ export class IncrementViewCountRes {
   affected: number;
 
   @Expose()
-  @ApiProperty({ description: 'Whether any rows were affected', example: true })
+  @ApiProperty({ description: 'Generated maps from the database operation', example: [] })
   generatedMaps: unknown[];
 
   @Expose()

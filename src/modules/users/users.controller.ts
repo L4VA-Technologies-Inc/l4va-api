@@ -22,9 +22,9 @@ import { AuthGuard } from '../auth/auth.guard';
 import { AuthRequest } from '../auth/dto/auth-user.interface';
 import { mbMultiplication } from '../aws_bucket/aws.controller';
 
+import { GetPublicProfileParamDto } from './dto/get-public-profile-param.dto';
 import { PublicProfileRes } from './dto/public-profile.res';
 import { UpdateProfileDto } from './dto/update-profile.dto';
-import { GetPublicProfileParamDto } from './dto/get-public-profile-param.dto';
 import { UploadImageRes } from './dto/upload-image.res';
 import { UsersService } from './users.service';
 

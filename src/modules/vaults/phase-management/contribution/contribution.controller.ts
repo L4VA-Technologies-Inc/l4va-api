@@ -31,8 +31,14 @@ export class ContributionController {
   @Get('transactions')
   @ApiOperation({ summary: 'Get all contribution transactions' })
   @UseGuards(AuthGuard)
-  @ApiResponse({ status: 200, description: 'Returns all contribution transactions', type: GetContributionTransactionsRes })
-  async getContributionTransactions(@Query() query: GetContributionTransactionsQueryDto): Promise<GetContributionTransactionsRes> {
+  @ApiResponse({
+    status: 200,
+    description: 'Returns all contribution transactions',
+    type: GetContributionTransactionsRes,
+  })
+  async getContributionTransactions(
+    @Query() query: GetContributionTransactionsQueryDto
+  ): Promise<GetContributionTransactionsRes> {
     const transactions = await this.transactionsService.getContributionTransactions(query.vaultId);
     return { transactions };
   }
