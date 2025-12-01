@@ -252,31 +252,32 @@ export class AssetsService {
     );
   }
 
-  async markAssetsAsDistributedByTransaction(transactionId: string): Promise<void> {
+  async markAssetsAsDistributedByTransactions(transactionIds: string[]): Promise<void> {
+    if (transactionIds.length === 0) {
+      return;
+    }
+
     const assets = await this.assetsRepository.find({
       where: {
-        transaction: { id: transactionId },
+        transaction: { id: In(transactionIds) },
         deleted: false,
+        status: AssetStatus.LOCKED, // Only locked assets can be distributed
       },
     });
 
-    if (!assets.length) {
-      throw new BadRequestException('No assets found for the given transaction');
+    if (assets.length === 0) {
+      throw new BadRequestException(`No locked assets found for ${transactionIds.length} transactions`);
     }
 
-    const now = new Date();
-    await Promise.all(
-      assets.map(async asset => {
-        if (asset.status !== AssetStatus.LOCKED) {
-          throw new BadRequestException(
-            `Asset with ID ${asset.id} cannot be distributed. Current status: ${asset.status}. Only locked assets can be distributed.`
-          );
-        }
-
-        asset.status = AssetStatus.DISTRIBUTED;
-        asset.updated_at = now;
-        return this.assetsRepository.save(asset);
-      })
+    await this.assetsRepository.update(
+      {
+        transaction: { id: In(transactionIds) },
+        status: AssetStatus.LOCKED,
+        deleted: false,
+      },
+      {
+        status: AssetStatus.DISTRIBUTED,
+      }
     );
   }
 

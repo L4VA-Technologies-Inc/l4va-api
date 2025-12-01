@@ -13,6 +13,7 @@ import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
+import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
@@ -36,6 +37,7 @@ export class AcquirerDistributionOrchestrator {
     private readonly blockchainService: BlockchainService,
     private readonly claimsService: ClaimsService,
     private readonly assetService: AssetsService,
+    private readonly transactionService: TransactionsService,
     private readonly extractionBuilder: AcquirerExtractionBuilder,
     private readonly blockfrost: BlockFrostAPI
   ) {}
@@ -127,7 +129,7 @@ export class AcquirerDistributionOrchestrator {
     } catch (error) {
       this.logger.warn(`Batch extraction failed for ${claims.length} claims: ${error.message}`);
 
-      await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
+      await this.transactionService.updateTransactionStatusById(extractionTx.id, TransactionStatus.failed);
 
       // If single claim, mark as failed
       if (claims.length === 1) {
@@ -163,7 +165,7 @@ export class AcquirerDistributionOrchestrator {
 
     if (validClaims.length === 0) {
       this.logger.log(`No valid claims remaining after UTXO validation. Skipping batch.`);
-      await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
+      await this.transactionService.updateTransactionStatusById(extractionTx.id, TransactionStatus.failed);
       return;
     }
 
@@ -196,13 +198,9 @@ export class AcquirerDistributionOrchestrator {
 
     const response = await this.blockchainService.submitTransaction({
       transaction: txToSubmitOnChain.to_hex(),
-      signatures: [],
     });
 
-    await this.transactionRepository.update(
-      { id: extractionTx.id },
-      { tx_hash: response.txHash, status: TransactionStatus.submitted }
-    );
+    await this.transactionService.updateTransactionHash(extractionTx.id, response.txHash);
 
     this.logger.log(`Batch extraction transaction ${response.txHash} submitted, waiting for confirmation...`);
 
@@ -215,11 +213,8 @@ export class AcquirerDistributionOrchestrator {
         ClaimStatus.CLAIMED
       );
 
-      for (const claim of validClaims) {
-        await this.assetService.markAssetsAsDistributedByTransaction(claim.transaction.id);
-      }
-
-      await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.confirmed });
+      await this.assetService.markAssetsAsDistributedByTransactions(validClaims.map(c => c.transaction.id));
+      await this.transactionService.updateTransactionStatusById(extractionTx.id, TransactionStatus.confirmed);
 
       if (isFirstExtraction) {
         await this.vaultRepository.update({ id: vault.id }, { stake_registered: true });
@@ -228,7 +223,7 @@ export class AcquirerDistributionOrchestrator {
 
       this.logger.log(`Batch extraction transaction ${response.txHash} confirmed and processed`);
     } else {
-      await this.transactionRepository.update({ id: extractionTx.id }, { status: TransactionStatus.failed });
+      await this.transactionService.updateTransactionStatusById(extractionTx.id, TransactionStatus.failed);
       throw new Error(`Transaction ${response.txHash} failed to confirm within timeout period`);
     }
   }

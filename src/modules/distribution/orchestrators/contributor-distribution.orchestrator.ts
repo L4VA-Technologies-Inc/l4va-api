@@ -324,9 +324,7 @@ export class ContributorDistributionOrchestrator {
       await this.transactionRepository.update({ id: batchTransaction.id }, { status: TransactionStatus.confirmed });
 
       // Mark assets as distributed
-      for (const claim of validClaims) {
-        await this.assetService.markAssetsAsDistributedByTransaction(claim.transaction.id);
-      }
+      await this.assetService.markAssetsAsDistributedByTransactions(validClaims.map(c => c.transaction.id));
 
       this.logger.log(
         `Successfully processed batch payment for ${validClaims.length} claims ` + `with tx: ${response.txHash}`

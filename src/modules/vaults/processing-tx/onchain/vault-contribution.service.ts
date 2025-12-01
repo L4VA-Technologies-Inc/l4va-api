@@ -44,7 +44,7 @@ export class VaultContributionService {
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.feeAddress = this.configService.get<string>('FEE_ADDRESS');
-    this.FLAT_FEE = this.configService.get<number>('PROTOCOL_FLAT_FEE');
+    this.FLAT_FEE = Number(this.configService.get<string>('PROTOCOL_FLAT_FEE'));
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
@@ -87,13 +87,18 @@ export class VaultContributionService {
         quantity = params.outputs[0].assets[0].quantity * 1000000;
 
         // For ADA contributions, we just need UTXOs with sufficient ADA + minimum for fees
-        const { utxos } = await getUtxosExtract(Address.from_bech32(params.changeAddress), this.blockfrost, {
-          minAda: 4000000,
-          targetAdaAmount: quantity, // Contribution amount + buffer for fees
-          validateUtxos: false,
-          maxUtxos: 200,
-        });
+        const { utxos, totalAdaCollected } = await getUtxosExtract(
+          Address.from_bech32(params.changeAddress),
+          this.blockfrost,
+          {
+            validateUtxos: false,
+            maxUtxos: 200,
+          }
+        );
 
+        if (totalAdaCollected < quantity + 2_000_000) {
+          throw new Error('Insufficient ADA in UTXOs to cover contribution amount and fees');
+        }
         // For ADA, any UTXO with sufficient balance works
         allUtxos = utxos;
       } else {
@@ -196,7 +201,7 @@ export class VaultContributionService {
           //   ? [
           //       {
           //         address: this.feeAddress, // Fee address
-          //         lovelace: transaction.fee * 1000000,
+          //         lovelace: transaction.fee,
           //       },
           //     ]
           //   : []),

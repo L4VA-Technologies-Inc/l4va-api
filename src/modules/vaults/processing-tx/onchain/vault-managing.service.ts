@@ -28,7 +28,7 @@ import { PublishVaultDto } from '../../dto/publish-vault.dto';
 import { BlockchainService } from './blockchain.service';
 import { Datum1 } from './types/type';
 import {
-  assetsToValue,
+  createUtxoHex,
   generate_tag_from_txhash_index,
   getAddressFromHash,
   getUtxosExtract,
@@ -161,6 +161,7 @@ export class VaultManagingService {
       {
         minAda: 2000000,
         filterByAda: 8000000,
+        validateUtxos: false,
         targetAssets: [{ token: `${this.VLRM_POLICY_ID}${this.VLRM_HEX_ASSET_NAME}`, amount: this.VLRM_CREATOR_FEE }],
       } // 4 ADA minimum
     );
@@ -485,15 +486,14 @@ export class VaultManagingService {
 
         if (refScriptPayBackAmount > 0) {
           // Create the UTXO reference for the script collateral
-          const scriptUtxo = TransactionUnspentOutput.new(
-            TransactionInput.new(TransactionHash.from_hex(vault.publication_hash), scriptOutputIndex),
-            TransactionOutput.new(
-              Address.from_bech32(this.vaultScriptAddress),
-              assetsToValue([{ unit: 'lovelace', quantity: refScriptPayBackAmount }])
-            )
+          const scriptUtxoHex = createUtxoHex(
+            vault.publication_hash,
+            scriptOutputIndex,
+            Address.from_bech32(this.vaultScriptAddress),
+            [{ unit: 'lovelace', quantity: refScriptPayBackAmount }]
           );
 
-          adminUtxos.push(scriptUtxo.to_hex());
+          adminUtxos.push(scriptUtxoHex);
         } else {
           this.logger.warn(`Script UTXO has zero or negative ADA amount: ${refScriptPayBackAmount}, skipping refund`);
         }

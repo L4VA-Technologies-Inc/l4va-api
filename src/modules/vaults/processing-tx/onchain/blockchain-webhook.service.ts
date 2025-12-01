@@ -7,14 +7,13 @@ import { TransactionsService } from '../offchain-tx/transactions.service';
 import { BlockchainWebhookDto, BlockfrostTransaction, BlockfrostTransactionEvent } from './dto/webhook.dto';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
 
-import { TransactionStatus } from '@/types/transaction.types';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
 @Injectable()
 export class BlockchainWebhookService {
   private readonly logger = new Logger(BlockchainWebhookService.name);
   private readonly webhookAuthToken: string;
   private readonly maxEventAge: number;
-  private readonly RECEIPT_ASSET_NAME = '72656365697074'; // "receipt" in hex
 
   // Status mapping for blockchain events
   private readonly STATUS_MAP: Record<OnchainTransactionStatus, TransactionStatus> = {
@@ -49,7 +48,6 @@ export class BlockchainWebhookService {
         this.maxEventAge // Maximum allowed age of the webhook event in seconds
       );
       event = verifiedEvent as unknown as BlockchainWebhookDto;
-      this.logger.log('Webhook signature verified successfully');
     } catch (error) {
       if (error instanceof SignatureVerificationError) {
         this.logger.error('Invalid webhook signature', {
@@ -87,7 +85,7 @@ export class BlockchainWebhookService {
   private async processTransaction({ tx }: BlockfrostTransactionEvent): Promise<string> {
     try {
       const internalStatus = this.determineInternalTransactionStatus(tx);
-      const transaction = await this.transactionsService.updateTransactionStatusAndLockAssets(
+      const transaction = await this.transactionsService.updateTransactionStatusByHash(
         tx.hash,
         tx.index,
         internalStatus
@@ -95,6 +93,21 @@ export class BlockchainWebhookService {
 
       if (!transaction) {
         return null;
+      }
+
+      if (internalStatus === TransactionStatus.confirmed) {
+        if (transaction.type === TransactionType.contribute || transaction.type === TransactionType.acquire) {
+          const lockedCount = await this.transactionsService.lockAssetsForTransaction(transaction.id);
+          this.logger.log(`Locked ${lockedCount} assets for transaction ${tx.hash}`);
+        }
+
+        if (transaction.type === TransactionType.extractDispatch) {
+          // For extract dispatch transactions, we should mark assets as distributed
+        }
+
+        if (transaction.type === TransactionType.cancel) {
+          // For extract dispatch transactions, we should mark assets as RELEASED
+        }
       }
 
       this.logger.log(`WH: Transaction ${tx.hash} status updated to ${internalStatus}`);

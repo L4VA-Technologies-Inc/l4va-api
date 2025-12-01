@@ -184,6 +184,13 @@ export const getUtxosExtract = async (
   });
 
   const utxos = await blockfrost.addressesUtxosAll(address.to_bech32());
+
+  const sortedUtxos = utxos.sort((a, b) => {
+    const adaA = Number(a.amount.find(amt => amt.unit === 'lovelace')?.quantity || 0);
+    const adaB = Number(b.amount.find(amt => amt.unit === 'lovelace')?.quantity || 0);
+    return adaB - adaA; // Descending order
+  });
+
   const allValidUtxos: string[] = [];
   const filteredUtxos: string[] = [];
   const requiredTokenUtxos: Set<string> = new Set();
@@ -191,19 +198,16 @@ export const getUtxosExtract = async (
   let totalAdaCollected = 0;
 
   if (filterByAda !== undefined) {
-    for (const utxo of utxos) {
+    for (const utxo of sortedUtxos) {
       const adaAmount = Number(utxo.amount[0].quantity);
       if (adaAmount >= filterByAda) {
-        const utxoHex = TransactionUnspentOutput.new(
-          TransactionInput.new(TransactionHash.from_hex(utxo.tx_hash), utxo.output_index),
-          TransactionOutput.new(address, assetsToValue(utxo.amount))
-        ).to_hex();
+        const utxoHex = createUtxoHex(utxo.tx_hash, utxo.output_index, address, utxo.amount);
         filteredUtxos.push(utxoHex);
       }
     }
   }
 
-  for (const utxo of utxos) {
+  for (const utxo of sortedUtxos) {
     const { tx_hash, output_index, amount, inline_datum } = utxo;
     const adaAmount = Number(amount[0].quantity);
 
@@ -219,16 +223,13 @@ export const getUtxosExtract = async (
     }
 
     // Create UTXO hex encoding for transaction building
-    const utxoHex = TransactionUnspentOutput.new(
-      TransactionInput.new(TransactionHash.from_hex(tx_hash), output_index),
-      TransactionOutput.new(address, assetsToValue(amount))
-    ).to_hex();
-
+    const utxoHex = createUtxoHex(tx_hash, output_index, address, amount);
     allValidUtxos.push(utxoHex);
+
+    totalAdaCollected += adaAmount;
 
     // Track ADA collection if targeting specific amount
     if (hasTargetAda) {
-      totalAdaCollected += adaAmount;
       requiredTokenUtxos.add(utxoHex);
 
       // Stop collecting once we have enough ADA
@@ -374,4 +375,11 @@ export function getAddressFromHash(hash: string): string {
   return EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(hash)))
     .to_address()
     .to_bech32();
+}
+
+export function createUtxoHex(txHash: string, outputIndex: number, address: Address, amount: Amount[]): string {
+  return TransactionUnspentOutput.new(
+    TransactionInput.new(TransactionHash.from_hex(txHash), outputIndex),
+    TransactionOutput.new(address, assetsToValue(amount))
+  ).to_hex();
 }
