@@ -47,24 +47,6 @@ export class ExtractAllVaultAssetsDto {
   treasuryAddress?: string;
 }
 
-export class SubmitExtractionTransactionDto {
-  @ApiProperty({
-    description: 'Transaction ID from the extraction preparation',
-    example: '123e4567-e89b-12d3-a456-426614174000',
-  })
-  @IsUUID()
-  @IsNotEmpty()
-  transactionId: string;
-
-  @ApiProperty({
-    description: 'Signed transaction hex to submit to blockchain',
-    example: '84a300818258203b40265111d8bb3c3c608d95b3a0bf83461ace32d79336579a1939b3aad1c0b700018282...',
-  })
-  @IsString()
-  @IsNotEmpty()
-  signedTxHex: string;
-}
-
 export class ExtractionStatusDto {
   @ApiProperty({
     description: 'UUID of the vault to check extraction status',

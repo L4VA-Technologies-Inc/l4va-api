@@ -1,19 +1,18 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { Address, PlutusData, TransactionUnspentOutput } from '@emurgo/cardano-serialization-lib-nodejs';
-import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { FixedTransaction, PrivateKey, TransactionUnspentOutput } from '@emurgo/cardano-serialization-lib-nodejs';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
 import { TransactionsService } from '../processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from '../processing-tx/onchain/blockchain.service';
-import { generate_tag_from_txhash_index, getUtxosExtract, getVaultUtxo } from '../processing-tx/onchain/utils/lib';
+import { getVaultUtxo } from '../processing-tx/onchain/utils/lib';
 
 import { Asset } from '@/database/asset.entity';
-import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetStatus } from '@/types/asset.types';
-import { TransactionStatus, TransactionType } from '@/types/transaction.types';
+import { TransactionType } from '@/types/transaction.types';
 
 export interface TreasuryExtractionConfig {
   vaultId: string;
@@ -24,7 +23,6 @@ export interface TreasuryExtractionConfig {
 export interface ExtractionResult {
   success: boolean;
   transactionId: string;
-  presignedTxHex: string;
   extractedAssets: Array<{
     assetId: string;
     policyId: string;
@@ -56,28 +54,21 @@ export class TreasuryExtractionService {
   private readonly adminAddress: string;
   private readonly adminSKey: string;
   private readonly adminHash: string;
-  private readonly scPolicyId: string;
   private readonly blockfrost: BlockFrostAPI;
-  private readonly blueprintTitle: string;
-  private readonly unparametizedScriptHash: string;
 
   constructor(
     @InjectRepository(Asset)
     private readonly assetsRepository: Repository<Asset>,
-    @InjectRepository(Transaction)
-    private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     private readonly configService: ConfigService,
-    private readonly blockchainService: BlockchainService,
-    private readonly transactionsService: TransactionsService
+    private readonly transactionsService: TransactionsService,
+    private readonly blockchainService: BlockchainService
   ) {
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
-    this.scPolicyId = this.configService.get<string>('SC_POLICY_ID');
-    this.blueprintTitle = this.configService.get<string>('BLUEPRINT_TITLE');
-    this.unparametizedScriptHash = this.configService.get<string>('CONTRIBUTION_SCRIPT_HASH');
+
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
@@ -85,12 +76,11 @@ export class TreasuryExtractionService {
 
   /**
    * Extract specific assets from a vault to treasury address
-   * This builds an ExtractAsset transaction for testing purposes
    */
   async extractAssetsToTreasury(config: TreasuryExtractionConfig): Promise<ExtractionResult> {
     this.logger.log(`Extracting ${config.assetIds.length} assets from vault ${config.vaultId} to treasury`);
 
-    // 1. Validate vault exists and get details
+    // 1. Validate vault
     const vault = await this.vaultRepository.findOne({
       where: { id: config.vaultId },
       relations: ['owner'],
@@ -107,7 +97,7 @@ export class TreasuryExtractionService {
           ? {
               id: In(config.assetIds),
               vault: { id: config.vaultId },
-              status: AssetStatus.LOCKED, // Only extract locked assets
+              status: AssetStatus.LOCKED,
             }
           : {
               vault: { id: config.vaultId },
@@ -120,29 +110,10 @@ export class TreasuryExtractionService {
       throw new BadRequestException(`No locked assets found for vault ${config.vaultId}`);
     }
 
-    this.logger.log(`Found ${assets.length} assets to extract`);
-
-    // 3. Determine treasury address (per-vault or default admin)
-    const treasuryAddress = config.treasuryAddress || this.adminAddress;
-
-    this.logger.log(`Treasury address: ${treasuryAddress}`);
-
-    // 4. Get admin UTXOs for transaction fees
-    const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost);
-
-    if (adminUtxos.length === 0) {
-      throw new BadRequestException('No admin UTXOs available for fees');
-    }
-
-    // 5. Group assets by their contribution transaction
+    // 3. Group by contribution transaction
     const assetsByContribution = new Map<string, Asset[]>();
-
     for (const asset of assets) {
-      if (!asset.transaction?.tx_hash) {
-        this.logger.warn(`Asset ${asset.id} has no contribution transaction, skipping`);
-        continue;
-      }
-
+      if (!asset.transaction?.tx_hash) continue;
       const txHash = asset.transaction.tx_hash;
       if (!assetsByContribution.has(txHash)) {
         assetsByContribution.set(txHash, []);
@@ -150,140 +121,120 @@ export class TreasuryExtractionService {
       assetsByContribution.get(txHash)!.push(asset);
     }
 
-    this.logger.log(`Assets grouped into ${assetsByContribution.size} contribution transactions`);
-
-    // 6. Build extraction transaction for the first contribution
-    // (For testing, we'll extract from one contribution at a time)
+    // 4. Extract from first contribution (for now)
     const [contributionTxHash, contributionAssets] = Array.from(assetsByContribution.entries())[0];
 
-    // 7. Get the contribution UTXO from the vault contract
-    const contributionUtxo = await this.getContributionUtxo(vault, contributionTxHash);
+    // 5. Get contribution UTXO details
+    const txUtxos = await this.blockfrost.txsUtxos(contributionTxHash);
 
-    if (!contributionUtxo) {
-      throw new NotFoundException(`Contribution UTXO not found for transaction ${contributionTxHash}`);
+    // Find the output with the contribution script address and assets
+    const contributionOutput = txUtxos.outputs.find(
+      output =>
+        output.address === vault.contract_address &&
+        output.amount.some(a => contributionAssets.some(asset => a.unit === `${asset.policy_id}${asset.asset_id}`))
+    );
+
+    if (!contributionOutput) {
+      throw new NotFoundException(`Contribution UTXO not found in tx ${contributionTxHash}`);
     }
 
-    // 8. Build the ExtractAsset tranactions
-    const buildTxInput = await this.buildExtractAssetTransaction({
-      vault,
-      contributionUtxo,
-      assets: contributionAssets,
-      treasuryAddress,
-      adminUtxos,
-    });
+    // 6. Extract assets from UTXO (excluding lovelace and receipt token)
+    const assetsToExtract = contributionOutput.amount
+      .filter((a: any) => {
+        if (a.unit === 'lovelace') return false;
+        if (a.unit.endsWith('72656365697074')) return false; // "receipt" in hex
+        return true;
+      })
+      .map((a: any) => ({
+        policyId: a.unit.slice(0, 56),
+        assetName: {
+          name: a.unit.slice(56),
+          format: 'hex' as const,
+        },
+        quantity: parseInt(a.quantity),
+      }));
 
-    // 9. Call blockchain service to build transaction
-    const buildResponse = await this.blockchainService.buildTransaction(buildTxInput);
+    const lovelace = contributionOutput.amount.find((a: any) => a.unit === 'lovelace')?.quantity || '0';
 
-    // 10. Create transaction record
+    // 7. Build transaction via Ada Anvil API
+    const treasuryAddress = config.treasuryAddress || this.adminAddress;
+
     const transaction = await this.transactionsService.createTransaction({
       vault_id: vault.id,
       type: TransactionType.extract,
-      assets: [], // Empty assets array, details in metadata
+      assets: [],
       metadata: {
         extractionType: 'treasury',
         treasuryAddress,
         contributionTxHash,
         assetCount: contributionAssets.length,
-        assetIds: contributionAssets.map(a => a.id),
       },
     });
 
-    this.logger.log(`Built extraction transaction ${transaction.id} for ${contributionAssets.length} assets`);
+    const input = {
+      changeAddress: this.adminAddress,
+      message: 'Admin extract assets from vault to treasury',
+      scriptInteractions: [
+        {
+          purpose: 'spend',
+          hash: vault.script_hash,
+          outputRef: {
+            txHash: contributionTxHash,
+            index: contributionOutput.output_index,
+          },
+          redeemer: {
+            type: 'json',
+            value: {
+              __variant: 'ExtractAsset',
+              __data: {
+                vault_token_output_index: null,
+              },
+            },
+          },
+        },
+      ],
+      outputs: [
+        {
+          address: treasuryAddress,
+          lovelace: lovelace,
+          assets: assetsToExtract,
+        },
+      ],
+      requiredSigners: [this.adminHash],
+      referenceInputs: [
+        {
+          txHash: vault.last_update_tx_hash,
+          index: 0,
+        },
+      ],
+      validityInterval: {
+        start: true,
+        end: true,
+      },
+      network: this.configService.get<string>('CARDANO_NETWORK'),
+    };
+
+    const buildResponse = await this.blockchainService.buildTransaction(input);
+
+    const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+    txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+    const response = await this.blockchainService.submitTransaction({
+      transaction: txToSubmitOnChain.to_hex(),
+    });
+
+    await this.transactionsService.updateTransactionHash(transaction.id, response.txHash);
 
     return {
       success: true,
       transactionId: transaction.id,
-      presignedTxHex: buildResponse.complete,
       extractedAssets: contributionAssets.map(asset => ({
         assetId: asset.id,
         policyId: asset.policy_id,
-        assetName: asset.asset_id, // asset_id is the hex-encoded asset name
+        assetName: asset.asset_id,
         contributionTxHash,
       })),
       treasuryAddress,
-    };
-  }
-
-  /**
-   * Extract all eligible assets from a vault to treasury (batch operation)
-   */
-  async extractAllVaultAssetsToTreasury(vaultId: string, treasuryAddress?: string): Promise<BatchExtractionResult> {
-    this.logger.log(`Starting batch extraction for vault ${vaultId}`);
-
-    // 1. Get all locked assets in the vault
-    const assets = await this.assetsRepository.find({
-      where: {
-        vault: { id: vaultId },
-        status: AssetStatus.LOCKED,
-      },
-      relations: ['transaction'],
-    });
-
-    if (assets.length === 0) {
-      return {
-        vaultId,
-        totalAssets: 0,
-        successfulExtractions: 0,
-        failedExtractions: 0,
-        results: [],
-        errors: [],
-      };
-    }
-
-    this.logger.log(`Found ${assets.length} locked assets to extract`);
-
-    // 2. Group assets by contribution transaction
-    const assetsByContribution = new Map<string, Asset[]>();
-
-    for (const asset of assets) {
-      if (!asset.transaction?.tx_hash) {
-        continue;
-      }
-      const txHash = asset.transaction.tx_hash;
-      if (!assetsByContribution.has(txHash)) {
-        assetsByContribution.set(txHash, []);
-      }
-      assetsByContribution.get(txHash)!.push(asset);
-    }
-
-    // 3. Extract from each contribution sequentially
-    const results: ExtractionResult[] = [];
-    const errors: Array<{ assetId: string; error: string }> = [];
-
-    for (const [contributionTxHash, contributionAssets] of assetsByContribution) {
-      try {
-        const result = await this.extractAssetsToTreasury({
-          vaultId,
-          assetIds: contributionAssets.map(a => a.id),
-          treasuryAddress,
-        });
-
-        results.push(result);
-
-        this.logger.log(`Successfully prepared extraction for contribution ${contributionTxHash}`);
-
-        // Wait a bit between transactions to avoid rate limiting
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      } catch (error) {
-        this.logger.error(`Failed to extract assets from contribution ${contributionTxHash}:`, error);
-
-        contributionAssets.forEach(asset => {
-          errors.push({
-            assetId: asset.id,
-            error: error.message || 'Unknown error',
-          });
-        });
-      }
-    }
-
-    return {
-      vaultId,
-      totalAssets: assets.length,
-      successfulExtractions: results.reduce((sum, r) => sum + r.extractedAssets.length, 0),
-      failedExtractions: errors.length,
-      results,
-      errors,
     };
   }
 
@@ -380,38 +331,5 @@ export class TreasuryExtractionService {
       network: 'preprod',
       signers: [this.adminSKey],
     };
-  }
-
-  /**
-   * Mark assets as extracted after successful transaction submission
-   */
-  async markAssetsAsExtracted(transactionId: string, txHash: string): Promise<void> {
-    const transaction = await this.transactionRepository.findOne({
-      where: { id: transactionId },
-      relations: ['assets'],
-    });
-
-    if (!transaction) {
-      throw new NotFoundException(`Transaction ${transactionId} not found`);
-    }
-
-    // Update transaction with tx hash
-    await this.transactionRepository.update(transactionId, {
-      tx_hash: txHash,
-      status: TransactionStatus.submitted,
-    });
-
-    // Mark assets as extracted (using RELEASED status for now)
-    if (transaction.assets && transaction.assets.length > 0) {
-      await this.assetsRepository.update(
-        transaction.assets.map(a => a.id),
-        {
-          status: AssetStatus.RELEASED, // Assets released from vault
-          released_at: new Date(),
-        }
-      );
-    }
-
-    this.logger.log(`Marked ${transaction.assets?.length || 0} assets as extracted for transaction ${txHash}`);
   }
 }
