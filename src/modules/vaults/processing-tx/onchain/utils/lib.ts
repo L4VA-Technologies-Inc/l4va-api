@@ -20,7 +20,11 @@ import {
   PlutusList,
   EnterpriseAddress,
   Credential,
+  NetworkInfo,
+  BaseAddress,
+  Bip32PrivateKey,
 } from '@emurgo/cardano-serialization-lib-nodejs';
+import * as bip39 from 'bip39';
 
 interface Amount {
   unit: string;
@@ -382,4 +386,57 @@ export function createUtxoHex(txHash: string, outputIndex: number, address: Addr
     TransactionInput.new(TransactionHash.from_hex(txHash), outputIndex),
     TransactionOutput.new(address, assetsToValue(amount))
   ).to_hex();
+}
+
+export async function generateCardanoWallet(isMainnet: boolean): Promise<{
+  ticker: string;
+  address: string;
+  privateKey: string;
+  mnemonic: string;
+}> {
+  const mnemonic = bip39.generateMnemonic();
+  const entropy = bip39.mnemonicToEntropy(mnemonic);
+  const rootKey = Bip32PrivateKey.from_bip39_entropy(Buffer.from(entropy, 'hex'), Buffer.from(''));
+
+  // Derivation path for external addresses in Cardano (m/1852'/1815'/0'/0/0)
+  const accountKey = rootKey
+    .derive(1852 | 0x80000000) // purpose
+    .derive(1815 | 0x80000000) // coin type
+    .derive(0 | 0x80000000) // account
+    .derive(0) // external chain
+    .derive(0); // first address
+
+  const stakeKey = rootKey
+    .derive(1852 | 0x80000000) // purpose
+    .derive(1815 | 0x80000000) // coin type
+    .derive(0 | 0x80000000) // account
+    .derive(2) // staking chain
+    .derive(0); // first staking address
+
+  const publicKey = accountKey.to_public();
+  const stakePublicKey = stakeKey.to_public();
+  const networkInfo = isMainnet ? NetworkInfo.mainnet() : NetworkInfo.testnet_preprod();
+
+  const baseAddress = BaseAddress.new(
+    networkInfo.network_id(),
+    Credential.from_keyhash(publicKey.to_raw_key().hash()),
+    Credential.from_keyhash(stakePublicKey.to_raw_key().hash())
+  );
+
+  const address = baseAddress.to_address().to_bech32();
+  const privateKey = accountKey.to_bech32();
+
+  const walletData = {
+    ticker: 'ADA',
+    address: address,
+    privateKey: privateKey,
+    mnemonic: mnemonic,
+  };
+
+  // Save wallet data to your own database
+  // Uncomment and replace this with your actual database save operation
+  // const wallet = new WalletModel(walletData);
+  // await wallet.save();
+
+  return walletData;
 }

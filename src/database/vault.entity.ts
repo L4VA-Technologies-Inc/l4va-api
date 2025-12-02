@@ -39,6 +39,7 @@ import { Snapshot } from './snapshot.entity';
 import { TagEntity } from './tag.entity';
 import { TokenRegistry } from './tokenRegistry.entity';
 import { User } from './user.entity';
+import { VaultTreasuryWallet } from './vaultTreasuryWallet.entity';
 
 @Entity('vaults')
 export class Vault {
@@ -390,6 +391,10 @@ export class Vault {
   @ManyToOne(() => User, (owner: User) => owner.id)
   @JoinColumn({ name: 'owner_id' })
   public owner: User;
+
+  @Expose({ name: 'treasuryWallet' })
+  @OneToOne(() => VaultTreasuryWallet, treasury => treasury.vault, { nullable: true })
+  treasury_wallet?: VaultTreasuryWallet;
 
   @Expose({ name: 'assetsWhitelist' })
   @OneToMany(() => AssetsWhitelistEntity, (asset: AssetsWhitelistEntity) => asset.vault)

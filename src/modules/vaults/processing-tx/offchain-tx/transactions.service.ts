@@ -349,7 +349,7 @@ export class TransactionsService {
     });
 
     if (!transaction) {
-      this.logger.warn(`Transaction with hash ${txHash} not found`);
+      this.logger.warn(`Transaction with hash ${txHash} not found during status update`);
       return null;
     }
 
