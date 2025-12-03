@@ -1,15 +1,24 @@
 import { SecretManagerServiceClient } from '@google-cloud/secret-manager';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class GoogleSecretService {
+  private readonly logger = new Logger(GoogleSecretService.name);
   private secretClient: SecretManagerServiceClient;
   private projectId: string;
 
   constructor(private readonly configService: ConfigService) {
-    this.secretClient = new SecretManagerServiceClient();
+    // Initialize with service account credentials
+    const credentialsPath = this.configService.get('GOOGLE_APPLICATION_CREDENTIALS');
+
+    this.secretClient = new SecretManagerServiceClient({
+      keyFilename: credentialsPath,
+    });
+
     this.projectId = this.configService.get('GCP_PROJECT_ID');
+
+    this.logger.log(`Initialized Secret Manager client for project: ${this.projectId}`);
   }
 
   /**

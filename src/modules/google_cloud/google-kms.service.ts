@@ -2,11 +2,12 @@ import * as crypto from 'crypto';
 
 import { PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { KeyManagementServiceClient } from '@google-cloud/kms';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class GoogleKMSService {
+  private readonly logger = new Logger(GoogleKMSService.name);
   private kmsClient: KeyManagementServiceClient;
   private projectId: string;
   private locationId: string;
@@ -14,11 +15,20 @@ export class GoogleKMSService {
   private keyId: string;
 
   constructor(private readonly configService: ConfigService) {
-    this.kmsClient = new KeyManagementServiceClient();
+    // Initialize with service account credentials
+    const credentialsPath = this.configService.get('GOOGLE_APPLICATION_CREDENTIALS');
+
+    this.kmsClient = new KeyManagementServiceClient({
+      keyFilename: credentialsPath,
+    });
+
     this.projectId = this.configService.get('GCP_PROJECT_ID');
     this.locationId = this.configService.get('GCP_KMS_LOCATION');
     this.keyRingId = this.configService.get('GCP_KMS_KEYRING');
     this.keyId = this.configService.get('GCP_KMS_KEY');
+
+    this.logger.log(`Initialized KMS client for project: ${this.projectId}`);
+    this.logger.log(`Using key: ${this.getKeyName()}`);
   }
 
   /**

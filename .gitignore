@@ -57,3 +57,5 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
 # Documentation (Compodoc)
 /documentation
+
+gcp-service-account.json
