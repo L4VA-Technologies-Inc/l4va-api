@@ -6,12 +6,14 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { TransactionsModule } from '../processing-tx/offchain-tx/transactions.module';
 import { BlockchainModule } from '../processing-tx/onchain/blockchain.module';
 
+import { TreasuryWalletService } from './treasure-wallet.service';
 import { TreasuryExtractionService } from './treasury-extraction.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { VaultTreasuryWallet } from '@/database/vaultTreasuryWallet.entity';
+import { GoogleCloudModule } from '@/modules/google_cloud/google-cloud.module';
 
 @Module({
   imports: [
@@ -21,9 +23,10 @@ import { VaultTreasuryWallet } from '@/database/vaultTreasuryWallet.entity';
     HttpModule,
     BlockchainModule,
     TransactionsModule,
+    GoogleCloudModule,
     TypeOrmModule.forFeature([Vault, Transaction, Asset, VaultTreasuryWallet]),
   ],
-  providers: [TreasuryExtractionService],
-  exports: [TreasuryExtractionService],
+  providers: [TreasuryWalletService, TreasuryExtractionService],
+  exports: [TreasuryWalletService, TreasuryExtractionService],
 })
 export class TreasureWalletModule {}

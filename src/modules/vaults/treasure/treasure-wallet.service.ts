@@ -5,23 +5,14 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
+import { CreateTreasuryWalletDto } from './dto/create-treasury-wallet.dto';
+import { TreasuryWalletInfoDto } from './dto/treasury-wallet-info.dto';
+
 import { Vault } from '@/database/vault.entity';
 import { VaultTreasuryWallet } from '@/database/vaultTreasuryWallet.entity';
 import { GoogleKMSService } from '@/modules/google_cloud/google-kms.service';
 import { GoogleSecretService } from '@/modules/google_cloud/google-secret.service';
 import { generateCardanoWallet } from '@/modules/vaults/processing-tx/onchain/utils/lib';
-
-export interface CreateTreasuryWalletDto {
-  vaultId: string;
-}
-
-export interface TreasuryWalletInfo {
-  id: string;
-  vaultId: string;
-  address: string;
-  publicKeyHash: string;
-  createdAt: Date;
-}
 
 @Injectable()
 export class TreasuryWalletService {
@@ -49,7 +40,7 @@ export class TreasuryWalletService {
    * Creates a new treasury wallet for a vault
    * Called automatically when vault transitions to 'locked' status
    */
-  async createTreasuryWallet(dto: CreateTreasuryWalletDto): Promise<TreasuryWalletInfo> {
+  async createTreasuryWallet(dto: CreateTreasuryWalletDto): Promise<TreasuryWalletInfoDto> {
     const { vaultId } = dto;
 
     this.logger.log(`Creating treasury wallet for vault ${vaultId}`);
@@ -88,7 +79,6 @@ export class TreasuryWalletService {
     const publicKeyHash = publicKey.hash().to_hex();
 
     // Encrypt private key using Google Cloud KMS (envelope encryption)
-    this.logger.log(`Encrypting private key for vault ${vaultId} using Google Cloud KMS`);
     const encryptedPackage = await this.googleKMSService.encryptTreasuryKey(privateKey, vaultId);
 
     // Store the encrypted package in database
@@ -106,9 +96,7 @@ export class TreasuryWalletService {
     // Optionally store mnemonic in Google Secret Manager (for recovery)
     let secretVersionName: string | undefined;
     try {
-      this.logger.log(`Storing mnemonic in Google Secret Manager for vault ${vaultId}`);
       secretVersionName = await this.storeWalletMnemonic(vaultId, walletData.mnemonic, vault.name);
-      this.logger.log(`Mnemonic stored: ${secretVersionName}`);
     } catch (error) {
       this.logger.error(`Failed to store mnemonic in Secret Manager: ${error.message}`);
       // Continue without failing - the encrypted private key is still available
@@ -133,8 +121,6 @@ export class TreasuryWalletService {
     });
 
     await this.treasuryWalletRepository.save(treasuryWallet);
-
-    this.logger.log(`✅ Treasury wallet created for vault ${vaultId}: ${walletData.address}`);
 
     return {
       id: treasuryWallet.id,
@@ -220,7 +206,7 @@ export class TreasuryWalletService {
   /**
    * Gets treasury wallet for a vault
    */
-  async getTreasuryWallet(vaultId: string): Promise<TreasuryWalletInfo | null> {
+  async getTreasuryWallet(vaultId: string): Promise<TreasuryWalletInfoDto | null> {
     const wallet = await this.treasuryWalletRepository.findOne({
       where: { vault_id: vaultId },
     });
@@ -349,44 +335,6 @@ export class TreasuryWalletService {
       this.logger.error(`Failed to fetch balance for treasury wallet ${wallet.treasury_address}:`, error);
       throw new Error(`Failed to fetch treasury wallet balance: ${error.message}`);
     }
-  }
-
-  /**
-   * Lists all treasury wallets
-   */
-  async listTreasuryWallets(filters?: {
-    vaultIds?: string[];
-    isActive?: boolean;
-    limit?: number;
-    offset?: number;
-  }): Promise<TreasuryWalletInfo[]> {
-    const queryBuilder = this.treasuryWalletRepository.createQueryBuilder('wallet');
-
-    if (filters?.vaultIds && filters.vaultIds.length > 0) {
-      queryBuilder.andWhere('wallet.vault_id IN (:...vaultIds)', { vaultIds: filters.vaultIds });
-    }
-
-    if (filters?.isActive !== undefined) {
-      queryBuilder.andWhere('wallet.is_active = :isActive', { isActive: filters.isActive });
-    }
-
-    if (filters?.limit) {
-      queryBuilder.take(filters.limit);
-    }
-
-    if (filters?.offset) {
-      queryBuilder.skip(filters.offset);
-    }
-
-    const wallets = await queryBuilder.orderBy('wallet.created_at', 'DESC').getMany();
-
-    return wallets.map(wallet => ({
-      id: wallet.id,
-      vaultId: wallet.vault_id,
-      address: wallet.treasury_address,
-      publicKeyHash: wallet.public_key_hash,
-      createdAt: wallet.created_at,
-    }));
   }
 
   /**
