@@ -242,7 +242,7 @@ export class VyfiService {
     }
 
     // Calculate required ADA
-    const requiredLpAda = Number(claim.metadata?.adaAmount || 0);
+    const requiredLpAda = Number(claim.lovelace_amount || 0);
 
     // Generate metadata
     const metadataText = this.formatMetadataText(
@@ -395,7 +395,7 @@ export class VyfiService {
   //             quantity: +claim.amount,
   //           },
   //         ],
-  //         lovelace: VYFI_CONSTANTS.TOTAL_REQUIRED_ADA + Number(claim.metadata?.adaAmount || 0),
+  //         lovelace: VYFI_CONSTANTS.TOTAL_REQUIRED_ADA + Number(claim.lovelace_amount || 0),
   //       },
   //     ],
   //     metadata: {
@@ -489,7 +489,7 @@ export class VyfiService {
   //   }
 
   //   // Calculate required ADA for LP creation
-  //   const requiredLpAda = Number(claim.metadata?.adaAmount || 0);
+  //   const requiredLpAda = Number(claim.lovelace_amount || 0);
 
   //   if (totalDispatchAda < requiredLpAda) {
   //     throw new Error(

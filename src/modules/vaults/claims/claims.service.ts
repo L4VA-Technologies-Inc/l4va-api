@@ -226,12 +226,11 @@ export class ClaimsService {
           user: { id: tx.user.id },
           vault: { id: vault.id },
           type: ClaimType.CANCELLATION,
-          amount: tx.amount, // ADA amount to return
+          lovelace_amount: tx.amount, // ADA amount to return
           status: ClaimStatus.AVAILABLE,
           description: `Return ADA from failed vault acquisition: ${vault.name}`,
           metadata: {
             transactionType: 'acquisition',
-            adaAmount: tx.amount,
             failureReason: reason,
             originalTxHash: tx.tx_hash,
             outputIndex: 0,

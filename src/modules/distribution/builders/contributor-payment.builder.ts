@@ -59,11 +59,10 @@ export class ContributorPaymentBuilder {
 
     // Process each claim in the batch
     for (const claim of claims) {
-      const { transaction: originalTx, metadata } = claim;
-      const adaAmount = Number(metadata.adaAmount);
+      const { transaction: originalTx, lovelace_amount } = claim;
 
       if (hasDispatchFunding) {
-        totalPaymentAmount += adaAmount;
+        totalPaymentAmount += Number(lovelace_amount);
       }
 
       // Get original contribution assets
@@ -107,12 +106,12 @@ export class ContributorPaymentBuilder {
 
       // Add ADA payment and datum only if dispatch funding exists
       if (hasDispatchFunding) {
-        userOutput.lovelace = adaAmount;
+        userOutput.lovelace = Number(lovelace_amount);
         userOutput.datum = {
           type: 'inline',
           value: {
             datum_tag: datumTag,
-            ada_paid: adaAmount,
+            ada_paid: Number(lovelace_amount),
           },
           shape: {
             validatorHash: config.unparametizedDispatchHash,

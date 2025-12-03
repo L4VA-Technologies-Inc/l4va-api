@@ -123,6 +123,8 @@ export class Vault {
   @Column({
     name: 'vt_price',
     type: 'numeric',
+    precision: 38,
+    scale: 25,
     nullable: true,
   })
   vt_price?: number;

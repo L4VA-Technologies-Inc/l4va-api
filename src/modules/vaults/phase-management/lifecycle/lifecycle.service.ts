@@ -717,7 +717,7 @@ export class LifecycleService {
                 type: ClaimType.LP,
                 amount: adjustedVtLpAmount,
                 status: ClaimStatus.AVAILABLE,
-                metadata: { adaAmount: Math.floor(lpAdaAmount * 1_000_000) },
+                lovelace_amount: Math.floor(lpAdaAmount * 1_000_000),
               });
 
               this.logger.log(`Created LP claim: ${adjustedVtLpAmount} VT tokens, ${lpAdaAmount} ADA`);
@@ -773,9 +773,7 @@ export class LifecycleService {
               amount: vtReceived,
               status: ClaimStatus.PENDING,
               transaction: { id: tx.id },
-              metadata: {
-                multiplier: multiplier,
-              },
+              multiplier: multiplier,
             });
             acquirerClaims.push(claim);
           } catch (error) {
@@ -790,7 +788,7 @@ export class LifecycleService {
             for (const claim of acquirerClaims) {
               const transaction = acquisitionTransactions.find(tx => tx.id === claim.transaction.id);
               claim.amount = minMultiplier * transaction.amount * 1_000_000;
-              claim.metadata.multiplier = minMultiplier;
+              claim.multiplier = minMultiplier;
             }
 
             await this.claimRepository.save(acquirerClaims);
@@ -845,9 +843,8 @@ export class LifecycleService {
               amount: contributorResult.vtAmount,
               status: ClaimStatus.PENDING, // Move to active after successful Extraction
               transaction: { id: tx.id },
+              lovelace_amount: contributorResult.lovelaceAmount,
               metadata: {
-                adaAmount: contributorResult.adaAmount,
-                vtPrice,
                 contributedValueAda: txValueAda,
                 userTotalValueAda: userTotalValue,
                 proportionOfUserTotal: contributorResult.proportionOfUserTotal,
@@ -856,9 +853,6 @@ export class LifecycleService {
             });
 
             contributorClaims.push(claim);
-            this.logger.log(
-              `Created contributor claim for user ${userId}: ${contributorResult.vtAmount} VT tokens, and ADA ${contributorResult.adaAmount} for transaction ${tx.id}`
-            );
           } catch (error) {
             this.logger.error(`Failed to create contributor claim for user ${userId} transaction ${tx.id}:`, error);
           }
@@ -1127,25 +1121,19 @@ export class LifecycleService {
             vault: { id: vault.id },
             type: ClaimType.CONTRIBUTOR,
             amount: contributorResult.vtAmount,
+            lovelace_amount: 0, // No ADA for 0% acquirers case
             status: ClaimStatus.PENDING,
             transaction: { id: tx.id },
             metadata: {
-              adaAmount: 0, // No ADA distribution (no acquirers)
-              vtPrice,
               contributedValueAda: txValueAda,
               userTotalValueAda: userTotalValue,
               proportionOfUserTotal: contributorResult.proportionOfUserTotal,
               userTotalVtTokens: contributorResult.userTotalVtTokens,
-              noAcquirers: true, // Flag for clarity
+              noAcquirers: true,
             },
           });
 
           contributorClaims.push(claim);
-
-          this.logger.log(
-            `Created contributor claim for user ${userId}: ` +
-              `${contributorResult.vtAmount} VT tokens (no ADA) for transaction ${tx.id}`
-          );
         } catch (error) {
           this.logger.error(`Failed to create contributor claim for user ${userId} transaction ${tx.id}:`, error);
         }
