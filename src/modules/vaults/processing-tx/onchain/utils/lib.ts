@@ -424,19 +424,16 @@ export async function generateCardanoWallet(isMainnet: boolean): Promise<{
   );
 
   const address = baseAddress.to_address().to_bech32();
-  const privateKey = accountKey.to_bech32();
+
+  // Convert Bip32PrivateKey to regular PrivateKey for signing transactions
+  const privateKey = accountKey.to_raw_key().to_bech32();
 
   const walletData = {
     ticker: 'ADA',
     address: address,
-    privateKey: privateKey,
+    privateKey: privateKey, // Now returns ed25519 private key in bech32 format
     mnemonic: mnemonic,
   };
-
-  // Save wallet data to your own database
-  // Uncomment and replace this with your actual database save operation
-  // const wallet = new WalletModel(walletData);
-  // await wallet.save();
 
   return walletData;
 }
