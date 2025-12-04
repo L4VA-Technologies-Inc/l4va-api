@@ -15,7 +15,6 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import axios from 'axios';
 import { firstValueFrom } from 'rxjs';
 import sharp from 'sharp';
 import { In, Repository } from 'typeorm';
@@ -23,6 +22,7 @@ import { In, Repository } from 'typeorm';
 import { TokenMetadataDto } from './dto/token-metadata.dto';
 
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
+import { Vault } from '@/database/vault.entity';
 import { TokenRegistryStatus } from '@/types/tokenRegistry.types';
 
 type ItemData = {
@@ -60,6 +60,8 @@ export class MetadataRegistryApiService {
   constructor(
     @InjectRepository(TokenRegistry)
     private readonly tokenRegistryRepository: Repository<TokenRegistry>,
+    @InjectRepository(Vault)
+    private readonly vaultRepository: Repository<Vault>,
     private readonly configService: ConfigService,
     private readonly httpService: HttpService
   ) {
@@ -86,7 +88,23 @@ export class MetadataRegistryApiService {
     this.logger.log(`Found ${pendingPRs.length} pending PRs to check`);
 
     for (const pr of pendingPRs) {
-      await this.checkPRStatus(pr);
+      const updatedPR = await this.checkPRStatus(pr);
+
+      // If PR was rejected or failed, automatically retry
+      if (updatedPR.status === TokenRegistryStatus.REJECTED) {
+        this.logger.log(`PR #${updatedPR.pr_number} is ${updatedPR.status}, attempting retry...`);
+
+        // Wait a bit before retrying to avoid rate limits
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        const retryResult = await this.retryFailedPR(updatedPR);
+
+        if (retryResult.success) {
+          this.logger.log(`Successfully retried PR #${updatedPR.pr_number}. New PR: ${retryResult.prUrl}`);
+        } else {
+          this.logger.warn(`Failed to retry PR #${updatedPR.pr_number}: ${retryResult.message}`);
+        }
+      }
     }
   }
 
@@ -158,9 +176,7 @@ export class MetadataRegistryApiService {
         return { success: false, message: 'Invalid token metadata format' };
       }
 
-      const result = await this.createMetadataRegistryPR(metadata, metadataInput.vaultId);
-
-      return result;
+      return await this.createMetadataRegistryPR(metadata, metadataInput.vaultId);
     } catch (error) {
       if (
         error instanceof BadRequestException ||
@@ -182,13 +198,28 @@ export class MetadataRegistryApiService {
    */
   async checkTokenExistsInRegistry(subject: string): Promise<boolean> {
     try {
-      const response = await axios.get(`${this.apiBaseUrl}/${subject}`);
-      return response.status === 200;
+      // Use authenticated Octokit to check if file exists in registry
+      const { Octokit } = await import('@octokit/rest');
+      const octokit = new Octokit({
+        auth: this.githubToken,
+      });
+
+      const filePath = `registry/${subject}.json`;
+
+      await octokit.repos.getContent({
+        owner: this.repoOwner,
+        repo: this.repoName,
+        path: filePath,
+      });
+
+      // If we get here, file exists
+      return true;
     } catch (error) {
-      // Якщо отримали 404, токен не знайдено
-      if (error.response?.status === 404) {
+      // If 404, token not found in registry
+      if (error.status === 404) {
         return false;
       }
+      this.logger.error(`Error checking token existence in registry: ${error.message}`);
       throw error;
     }
   }
@@ -198,16 +229,25 @@ export class MetadataRegistryApiService {
    */
   async checkPRStatus(pr: TokenRegistry): Promise<TokenRegistry> {
     try {
-      const url = `https://api.github.com/repos/${this.repoOwner}/${this.repoName}/pulls/${pr.pr_number}`;
-      const response = await firstValueFrom(this.httpService.get(url));
+      // Use authenticated Octokit for GitHub API requests
+      const { Octokit } = await import('@octokit/rest');
+      const octokit = new Octokit({
+        auth: this.githubToken,
+      });
+
+      const { data: pullRequest } = await octokit.pulls.get({
+        owner: this.repoOwner,
+        repo: this.repoName,
+        pull_number: pr.pr_number,
+      });
 
       pr.last_checked = new Date();
 
       // Update status based on GitHub response
-      if (response.data.state === 'closed') {
-        if (response.data.merged) {
+      if (pullRequest.state === 'closed') {
+        if (pullRequest.merged) {
           pr.status = TokenRegistryStatus.MERGED;
-          pr.merged_at = new Date(response.data.merged_at);
+          pr.merged_at = new Date(pullRequest.merged_at);
           this.logger.log(`PR #${pr.pr_number} for vault ${pr.vault_id} has been merged`);
         } else {
           pr.status = TokenRegistryStatus.REJECTED;
@@ -221,7 +261,7 @@ export class MetadataRegistryApiService {
       this.logger.error(`Error checking PR #${pr.pr_number} status:`, error.message);
 
       // If PR not found, mark as failed
-      if (error.response?.status === 404) {
+      if (error.status === 404) {
         pr.status = TokenRegistryStatus.FAILED;
         return this.tokenRegistryRepository.save(pr);
       }
@@ -297,6 +337,82 @@ export class MetadataRegistryApiService {
       }
 
       throw new InternalServerErrorException(`Failed to close PR: ${error.message}`);
+    }
+  }
+
+  /**
+   * Retries a failed or rejected PR by creating a new one with metadata from vault
+   * @param prRecord The failed TokenRegistry record
+   * @returns Object indicating success or failure
+   */
+  async retryFailedPR(prRecord: TokenRegistry): Promise<{ success: boolean; message: string; prUrl?: string }> {
+    try {
+      this.logger.log(`Retrying PR #${prRecord.pr_number} for vault ${prRecord.vault_id}`);
+
+      // Load vault with only necessary columns
+      const vault = await this.vaultRepository
+        .createQueryBuilder('vault')
+        .leftJoin('vault.ft_token_img', 'ft_token_img')
+        .select([
+          'vault.id',
+          'vault.script_hash',
+          'vault.asset_vault_name',
+          'vault.name',
+          'vault.description',
+          'vault.vault_token_ticker',
+          'vault.ft_token_decimals',
+          'ft_token_img.file_url',
+        ])
+        .where('vault.id = :vaultId', { vaultId: prRecord.vault_id })
+        .getOne();
+
+      if (!vault) {
+        this.logger.error(`Cannot retry PR #${prRecord.pr_number}: vault ${prRecord.vault_id} not found`);
+        return {
+          success: false,
+          message: 'Vault not found',
+        };
+      }
+
+      // Close the old PR if it's still open
+      try {
+        if (prRecord.status === TokenRegistryStatus.PENDING) {
+          await this.closePullRequest(prRecord.pr_number, 'Retrying submission due to validation failure');
+        }
+      } catch (error) {
+        this.logger.warn(`Could not close old PR #${prRecord.pr_number}: ${error.message}`);
+        // Continue with retry even if we can't close the old PR
+      }
+
+      // Mark old record as failed before creating new one
+      prRecord.status = TokenRegistryStatus.FAILED;
+      await this.tokenRegistryRepository.save(prRecord);
+
+      // Create metadata from vault data (same as in lifecycle.service.ts)
+      const metadataInput: TokenMetadataDto = {
+        vaultId: vault.id,
+        subject: `${vault.script_hash}${vault.asset_vault_name}`,
+        name: vault.name,
+        description: vault.description,
+        ticker: vault.vault_token_ticker,
+        logo: vault.ft_token_img?.file_url || '',
+        decimals: vault.ft_token_decimals,
+      };
+
+      // Submit using the same flow as initial submission
+      const result = await this.submitVaultTokenMetadata(metadataInput);
+
+      if (result.success) {
+        this.logger.log(`Successfully created retry PR for vault ${prRecord.vault_id}. Old PR: #${prRecord.pr_number}`);
+      }
+
+      return result;
+    } catch (error) {
+      this.logger.error(`Failed to retry PR #${prRecord.pr_number}:`, error);
+      return {
+        success: false,
+        message: `Failed to retry PR: ${error.message}`,
+      };
     }
   }
 
