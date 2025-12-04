@@ -4,8 +4,8 @@ import { instanceToPlain } from 'class-transformer';
 import { Repository, In } from 'typeorm';
 
 import { CreateAssetDto } from './dto/create-asset.dto';
-import { GetContributedAssetsRes } from './dto/get-contributed-assets.res';
 import { GetAcquiredAssetsRes } from './dto/get-acquired-assets.res';
+import { GetContributedAssetsRes } from './dto/get-contributed-assets.res';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
@@ -122,11 +122,7 @@ export class AssetsService {
       totalPages: Math.ceil(total / limit),
     };
   }
-  async getAcquiredAssets(
-    vaultId: string,
-    page: number = 1,
-    limit: number = 10
-  ): Promise<GetAcquiredAssetsRes> {
+  async getAcquiredAssets(vaultId: string, page: number = 1, limit: number = 10): Promise<GetAcquiredAssetsRes> {
     // Verify vault ownership
     const vault = await this.vaultsRepository.findOne({
       where: {
