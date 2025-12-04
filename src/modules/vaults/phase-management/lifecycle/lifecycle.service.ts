@@ -16,6 +16,7 @@ import { DistributionCalculationService } from '@/modules/distribution/distribut
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
+import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { AssetOriginType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TokenRegistryStatus } from '@/types/tokenRegistry.types';
@@ -48,6 +49,7 @@ export class LifecycleService {
     private readonly distributionCalculationService: DistributionCalculationService,
     private readonly taptoolsService: TaptoolsService,
     private readonly metadataRegistryApiService: MetadataRegistryApiService,
+    private readonly treasuryWalletService: TreasuryWalletService,
     private readonly claimsService: ClaimsService,
     private readonly transactionsService: TransactionsService,
     private readonly eventEmitter: EventEmitter2
@@ -196,6 +198,38 @@ export class LifecycleService {
           vault,
           phaseStatus: 'launched',
         });
+
+        try {
+          // Check if treasury wallet already exists
+          const existingWallet = await this.treasuryWalletService.getTreasuryWallet(vault.id);
+
+          if (!existingWallet) {
+            const treasuryWallet = await this.treasuryWalletService.createTreasuryWallet({
+              vaultId: vault.id,
+            });
+
+            this.logger.log(`✅ Treasury wallet created for vault ${vault.id}: ${treasuryWallet.address}`);
+
+            // Emit event for treasury wallet creation
+            this.eventEmitter.emit('treasury.wallet.created', {
+              vaultId: vault.id,
+              vaultName: vault.name,
+              treasuryAddress: treasuryWallet.address,
+              publicKeyHash: treasuryWallet.publicKeyHash,
+            });
+          } else {
+            this.logger.log(`Treasury wallet already exists for vault ${vault.id}: ${existingWallet.address}`);
+          }
+        } catch (error) {
+          this.logger.error(`Failed to create treasury wallet for vault ${vault.id}:`, error);
+
+          // ⚠️ IMPORTANT: Decide if you want to fail the vault transition or continue
+          // Option A: Fail the vault (recommended for production)
+          // throw error;
+
+          // Option B: Continue but log error (current implementation)
+          // The vault will be locked but without a treasury wallet
+        }
       }
 
       if (data.newScStatus === SmartContractVaultStatus.SUCCESSFUL) {
