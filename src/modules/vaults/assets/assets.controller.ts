@@ -1,7 +1,10 @@
 import { Controller, Get, Post, Body, Query, Param } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiTags, ApiResponse } from '@nestjs/swagger';
 
 import { AssetsService } from './assets.service';
+import { GetAcquiredAssetsRes } from './dto/get-acquired-assets.res';
+import { GetContributedAssetsReq } from './dto/get-contributed-assets.req';
+import { GetContributedAssetsRes } from './dto/get-contributed-assets.res';
 
 import { ApiDoc } from '@/decorators/api-doc.decorator';
 import { PaginationDto } from '@/modules/vaults/dto/pagination.dto';
@@ -17,16 +20,11 @@ export class AssetsController {
     status: 200,
   })
   @Post('contributed/:vaultId')
+  @ApiResponse({ type: GetContributedAssetsRes, status: 200 })
   getContributedAssets(
     @Param('vaultId') vaultId: string,
-    @Body() body: { search: string; page: number; limit: number }
-  ): Promise<{
-    items: Record<string, unknown>[];
-    total: number;
-    page: number;
-    limit: number;
-    totalPages: number;
-  }> {
+    @Body() body: GetContributedAssetsReq
+  ): Promise<GetContributedAssetsRes> {
     return this.assetsService.getVaultAssets(vaultId, body.page, body.limit, body.search);
   }
 
@@ -36,16 +34,8 @@ export class AssetsController {
     status: 200,
   })
   @Get('acquired/:vaultId')
-  getInvestedAssets(
-    @Param('vaultId') vaultId: string,
-    @Query() query: PaginationDto
-  ): Promise<{
-    items: Record<string, unknown>[];
-    total: number;
-    page: number;
-    limit: number;
-    totalPages: number;
-  }> {
+  @ApiResponse({ type: GetAcquiredAssetsRes, status: 200 })
+  getInvestedAssets(@Param('vaultId') vaultId: string, @Query() query: PaginationDto): Promise<GetAcquiredAssetsRes> {
     return this.assetsService.getAcquiredAssets(vaultId, query.page, query.limit);
   }
 }

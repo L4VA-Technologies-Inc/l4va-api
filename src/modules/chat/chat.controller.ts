@@ -2,6 +2,13 @@ import { Controller, Get, Post, Param, Body, HttpException, HttpStatus } from '@
 import { ApiTags, ApiOperation, ApiParam, ApiResponse } from '@nestjs/swagger';
 
 import { ChatService } from './chat.service';
+import { AddMembersReq } from './dto/add-members.req';
+import { AddMembersRes } from './dto/add-members.res';
+import { CreateUserReq } from './dto/create-user.req';
+import { CreateUserRes } from './dto/create-user.res';
+import { CreateVaultChannelReq } from './dto/create-vault-channel.req';
+import { CreateVaultChannelRes } from './dto/create-vault-channel.res';
+import { GenerateTokenRes } from './dto/generate-token.res';
 
 @ApiTags('chat')
 @Controller('chat')
@@ -11,8 +18,8 @@ export class ChatController {
   @Get('token/:userId')
   @ApiOperation({ summary: 'Generate Stream Chat token for user' })
   @ApiParam({ name: 'userId', description: 'User ID to generate token for' })
-  @ApiResponse({ status: 200, description: 'Token generated successfully' })
-  async generateToken(@Param('userId') userId: string) {
+  @ApiResponse({ status: 200, description: 'Token generated successfully', type: GenerateTokenRes })
+  async generateToken(@Param('userId') userId: string): Promise<GenerateTokenRes> {
     try {
       const token = this.chatService.generateUserToken(userId);
       return { token };
@@ -24,8 +31,11 @@ export class ChatController {
   @Post('vault/:vaultId/channel')
   @ApiOperation({ summary: 'Create or get vault chat channel' })
   @ApiParam({ name: 'vaultId', description: 'Vault ID to create channel for' })
-  @ApiResponse({ status: 200, description: 'Channel created/retrieved successfully' })
-  async createVaultChannel(@Param('vaultId') vaultId: string, @Body() body?: { createdByUserId?: string }) {
+  @ApiResponse({ status: 200, description: 'Channel created/retrieved successfully', type: CreateVaultChannelRes })
+  async createVaultChannel(
+    @Param('vaultId') vaultId: string,
+    @Body() body?: CreateVaultChannelReq
+  ): Promise<CreateVaultChannelRes> {
     try {
       const channel = await this.chatService.createVaultChatRoom(vaultId, body?.createdByUserId || 'system');
       return {
@@ -41,10 +51,8 @@ export class ChatController {
   @Post('user/:userId')
   @ApiOperation({ summary: 'Create or update user in Stream Chat' })
   @ApiParam({ name: 'userId', description: 'User ID' })
-  async createUser(
-    @Param('userId') userId: string,
-    @Body() userData: { name?: string; image?: string; role?: string }
-  ) {
+  @ApiResponse({ status: 200, description: 'User created/updated successfully', type: CreateUserRes })
+  async createUser(@Param('userId') userId: string, @Body() userData: CreateUserReq): Promise<CreateUserRes> {
     try {
       const user = await this.chatService.createOrUpdateUser(userId, userData);
       return { user, success: true };
@@ -56,7 +64,8 @@ export class ChatController {
   @Post('vault/:vaultId/members')
   @ApiOperation({ summary: 'Add members to vault chat channel' })
   @ApiParam({ name: 'vaultId', description: 'Vault ID' })
-  async addMembersToVault(@Param('vaultId') vaultId: string, @Body() body: { userIds: string[] }) {
+  @ApiResponse({ status: 200, description: 'Members added successfully', type: AddMembersRes })
+  async addMembersToVault(@Param('vaultId') vaultId: string, @Body() body: AddMembersReq): Promise<AddMembersRes> {
     try {
       await this.chatService.addMembersToVaultChannel(vaultId, body.userIds);
       return { success: true };

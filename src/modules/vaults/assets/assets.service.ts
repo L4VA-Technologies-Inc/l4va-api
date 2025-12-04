@@ -4,6 +4,8 @@ import { instanceToPlain } from 'class-transformer';
 import { Repository, In } from 'typeorm';
 
 import { CreateAssetDto } from './dto/create-asset.dto';
+import { GetContributedAssetsRes } from './dto/get-contributed-assets.res';
+import { GetAcquiredAssetsRes } from './dto/get-acquired-assets.res';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
@@ -81,13 +83,7 @@ export class AssetsService {
     page: number = 1,
     limit: number = 10,
     search: string = ''
-  ): Promise<{
-    items: Record<string, unknown>[];
-    total: number;
-    page: number;
-    limit: number;
-    totalPages: number;
-  }> {
+  ): Promise<GetContributedAssetsRes> {
     // Verify vault ownership
     const vault = await this.vaultsRepository.findOne({
       where: {
@@ -128,13 +124,7 @@ export class AssetsService {
     vaultId: string,
     page: number = 1,
     limit: number = 10
-  ): Promise<{
-    items: Record<string, unknown>[];
-    total: number;
-    page: number;
-    limit: number;
-    totalPages: number;
-  }> {
+  ): Promise<GetAcquiredAssetsRes> {
     // Verify vault ownership
     const vault = await this.vaultsRepository.findOne({
       where: {
