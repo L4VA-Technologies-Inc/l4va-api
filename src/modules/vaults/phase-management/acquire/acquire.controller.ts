@@ -7,8 +7,9 @@ import { ContributionAsset } from '../contribution/dto/contribute.req';
 
 import { AcquireService } from './acquire.service';
 import { AcquireReq } from './dto/acquire.req';
+import { GetInvestmentTransactionsQueryDto } from './dto/get-investment-transactions-query.dto';
+import { GetInvestmentTransactionsRes } from './dto/get-investment-transactions.res';
 
-import { Transaction } from '@/database/transaction.entity';
 import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
 
 @ApiTags('Acquire')
@@ -41,8 +42,11 @@ export class AcquireController {
   @Get('transactions')
   @ApiOperation({ summary: 'Get all acquire transactions' })
   @UseGuards(AuthGuard)
-  @ApiResponse({ status: 200, description: 'Returns all acquire transactions' })
-  async getInvestmentTransactions(@Query('vaultId') vaultId?: string): Promise<Transaction[]> {
-    return this.transactionsService.getAcquireTransactions(vaultId);
+  @ApiResponse({ status: 200, description: 'Returns all acquire transactions', type: GetInvestmentTransactionsRes })
+  async getInvestmentTransactions(
+    @Query() query: GetInvestmentTransactionsQueryDto
+  ): Promise<GetInvestmentTransactionsRes> {
+    const transactions = await this.transactionsService.getAcquireTransactions(query.vaultId);
+    return { transactions };
   }
 }
