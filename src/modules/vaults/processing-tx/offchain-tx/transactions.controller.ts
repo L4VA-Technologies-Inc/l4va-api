@@ -1,9 +1,10 @@
 import { Controller, Get, Post, Query, Request, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiTags, ApiResponse } from '@nestjs/swagger';
 
 import { AuthGuard } from '../../../auth/auth.guard';
 
 import { TransactionsResponseDto } from './dto/transactions-response.dto';
+import { TriggerHealthCheckRes } from './dto/trigger-health-check.res';
 import { TransactionHealthService } from './transaction-health.service';
 
 import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
@@ -29,10 +30,8 @@ export class TransactionsController {
 
   @Post('health-check')
   @ApiOperation({ summary: 'Manually trigger health check for stuck transactions' })
-  async triggerHealthCheck(): Promise<{
-    message: string;
-    checkedCount: number;
-  }> {
+  @ApiResponse({ status: 200, description: 'Health check completed', type: TriggerHealthCheckRes })
+  async triggerHealthCheck(): Promise<TriggerHealthCheckRes> {
     return this.transactionHealthService.triggerHealthCheck();
   }
 }
