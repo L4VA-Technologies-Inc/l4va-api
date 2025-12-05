@@ -637,9 +637,9 @@ export class VaultManagingService {
           origin_type: AssetOriginType.FEE,
           transaction: { id: signedTx.txId },
           added_by: { id: ownerId },
+          image: 'ipfs://QmdYu513Bu7nfKV5LKP6cmpZ8HHXifQLH6FTTzv3VbbqwP', // VLRM logo
           metadata: {
             purpose: 'vault_creation_fee',
-            asset_name: this.VLRM_HEX_ASSET_NAME,
           },
         });
 

@@ -85,10 +85,8 @@ export class AssetsService {
     search: string = ''
   ): Promise<GetContributedAssetsRes> {
     // Verify vault ownership
-    const vault = await this.vaultsRepository.findOne({
-      where: {
-        id: vaultId,
-      },
+    const vault = await this.vaultsRepository.exists({
+      where: { id: vaultId },
     });
 
     if (!vault) {
@@ -124,10 +122,8 @@ export class AssetsService {
   }
   async getAcquiredAssets(vaultId: string, page: number = 1, limit: number = 10): Promise<GetAcquiredAssetsRes> {
     // Verify vault ownership
-    const vault = await this.vaultsRepository.findOne({
-      where: {
-        id: vaultId,
-      },
+    const vault = await this.vaultsRepository.exists({
+      where: { id: vaultId },
     });
 
     if (!vault) {

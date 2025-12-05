@@ -62,6 +62,7 @@ export class TransactionsService {
   async createAssets(txId: string): Promise<{ success: boolean }> {
     const transaction = await this.transactionRepository.findOne({
       where: { id: txId },
+      select: ['id', 'type', 'vault_id', 'user_id', 'metadata'],
     });
 
     if (!transaction) {
@@ -93,7 +94,6 @@ export class TransactionsService {
           status: AssetStatus.PENDING,
           origin_type: AssetOriginType.ACQUIRED,
           added_by: user,
-          metadata: assetItem?.metadata || {},
         });
       });
     } else if (transaction.type === TransactionType.contribute) {
@@ -108,7 +108,10 @@ export class TransactionsService {
           status: AssetStatus.PENDING,
           origin_type: AssetOriginType.CONTRIBUTED,
           added_by: user,
-          metadata: assetItem?.metadata || {},
+          image: assetItem.metadata?.image ?? assetItem.metadata?.files?.[0]?.src ?? null,
+          decimals: assetItem.metadata?.decimals ?? null,
+          name: assetItem.metadata?.onchainMetadata?.name ?? null,
+          description: assetItem.metadata?.onchainMetadata?.description ?? null,
         });
       });
     }
@@ -116,6 +119,9 @@ export class TransactionsService {
     // Bulk insert all assets in a single transaction
     if (assetsToCreate.length > 0) {
       await this.assetRepository.save(assetsToCreate);
+
+      // Clear metadata after successful asset creation
+      await this.transactionRepository.update({ id: transaction.id }, { metadata: null });
     }
 
     return {
