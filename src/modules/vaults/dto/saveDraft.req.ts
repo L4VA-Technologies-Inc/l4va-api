@@ -18,6 +18,7 @@ import {
   InvestmentWindowType,
   TerminationType,
   ValueMethod,
+  VaultPreset,
   VaultPrivacy,
   VaultType,
 } from '../../../types/vault.types';
@@ -46,6 +47,13 @@ export class SaveDraftReq {
   @IsEnum(VaultType)
   @Expose()
   type?: VaultType | null;
+
+  @ApiProperty({ required: false, nullable: true, enum: VaultPreset })
+  @IsOptional()
+  @ValidateIf((o, v) => v !== null)
+  @IsEnum(VaultPreset)
+  @Expose()
+  preset?: VaultPreset | null;
 
   @ApiProperty({ required: false, nullable: true, enum: VaultPrivacy })
   @IsOptional()
