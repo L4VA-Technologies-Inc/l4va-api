@@ -27,6 +27,7 @@ import {
   InvestmentWindowType,
   TerminationType,
   ValueMethod,
+  VaultPreset,
   VaultPrivacy,
   VaultType,
 } from '@/types/vault.types';
@@ -49,6 +50,12 @@ export class CreateVaultReq {
   @IsEnum(VaultType)
   @Expose()
   type: VaultType;
+
+  @ApiProperty({ required: false, enum: VaultPreset })
+  @IsOptional()
+  @IsEnum(VaultPreset)
+  @Expose()
+  preset?: VaultPreset;
 
   @ApiProperty({ required: true })
   @IsNotEmpty()
