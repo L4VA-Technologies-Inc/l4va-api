@@ -5,6 +5,31 @@ import { KeyManagementServiceClient } from '@google-cloud/kms';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
+/**
+ * SECURITY DOCUMENTATION: Memory Handling of Sensitive Keys
+ *
+ * Limitations:
+ * 1. JavaScript strings are immutable and cannot be securely zeroed
+ * 2. The bech32 string created during PrivateKey conversion persists until GC
+ * 3. The PrivateKey object itself may contain string representations internally
+ *
+ * Mitigations Applied:
+ * - DEK (Data Encryption Key) is zeroed immediately after use
+ * - Decrypted key kept as Buffer as long as possible
+ * - Buffer zeroed immediately after PrivateKey construction
+ * - Try-catch ensures cleanup even on errors
+ *
+ * Remaining Risks:
+ * - String representation exists briefly in memory (seconds to minutes)
+ * - Could be captured in memory dumps or swap files
+ * - Cannot control Cardano Serialization Library's internal string handling
+ *
+ * Recommendations:
+ * - Run application with minimal swap space
+ * - Use encrypted memory if available (OS-level)
+ * - Consider using native modules for key handling if higher security needed
+ * - Monitor for memory dumps in production
+ */
 @Injectable()
 export class GoogleKMSService {
   private readonly logger = new Logger(GoogleKMSService.name);

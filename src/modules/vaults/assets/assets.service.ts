@@ -199,28 +199,20 @@ export class AssetsService {
     }
 
     const assetsToRelease: string[] = [];
-    const errors: string[] = [];
-
     for (const claim of claimsWithAssets) {
       const asset = claim.transaction.assets[0];
 
       if (!asset) {
-        errors.push(`No asset associated with claim ${claim.id}`);
-        continue;
+        throw new BadRequestException(`No asset associated with claim ${claim.id}`);
       }
 
       if (asset.status !== AssetStatus.LOCKED) {
-        errors.push(
+        throw new BadRequestException(
           `Asset for claim ${claim.id} cannot be released. Current status: ${asset.status}. Only locked assets can be released.`
         );
-        continue;
       }
 
       assetsToRelease.push(asset.id);
-    }
-
-    if (errors.length > 0) {
-      throw new BadRequestException(errors.join('; '));
     }
 
     if (assetsToRelease.length === 0) {

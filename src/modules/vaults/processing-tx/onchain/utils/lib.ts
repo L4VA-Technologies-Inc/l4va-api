@@ -189,10 +189,21 @@ export const getUtxosExtract = async (
 
   const utxos = await blockfrost.addressesUtxosAll(address.to_bech32());
 
-  const sortedUtxos = utxos.sort((a, b) => {
+  // Initial filtering before sorting to reduce unnecessary comparisons
+  const preFilteredUtxos = utxos.filter(utxo => {
+    const adaAmount = Number(utxo.amount[0].quantity);
+    // Pre-filter by minimum ADA if specified
+    if (minAda > 0 && adaAmount <= minAda) return false;
+    // Pre-filter inline datums if needed
+    if (removeInlineDatums && utxo.inline_datum === '49616e76696c2d746167') return false;
+    return true;
+  });
+
+  // Sort only the filtered UTXOs by ADA amount (descending)
+  const sortedUtxos = preFilteredUtxos.sort((a, b) => {
     const adaA = Number(a.amount.find(amt => amt.unit === 'lovelace')?.quantity || 0);
     const adaB = Number(b.amount.find(amt => amt.unit === 'lovelace')?.quantity || 0);
-    return adaB - adaA; // Descending order
+    return adaB - adaA;
   });
 
   const allValidUtxos: string[] = [];
@@ -212,13 +223,8 @@ export const getUtxosExtract = async (
   }
 
   for (const utxo of sortedUtxos) {
-    const { tx_hash, output_index, amount, inline_datum } = utxo;
+    const { tx_hash, output_index, amount } = utxo;
     const adaAmount = Number(amount[0].quantity);
-
-    // Skip UTXOs below minimum ADA threshold
-    if (adaAmount <= minAda) continue;
-
-    if (removeInlineDatums && inline_datum === '49616e76696c2d746167') continue;
 
     // Validate UTXO existence to prevent double-spending
     if (validateUtxos) {
@@ -388,6 +394,18 @@ export function createUtxoHex(txHash: string, outputIndex: number, address: Addr
   ).to_hex();
 }
 
+/**
+ * Generates random mnemonic for a vault wallet and derives the corresponding Cardano address and private key.
+ *
+ * Vault 1 → Random Mnemonic A
+ *
+ * Vault 2 → Random Mnemonic B
+ *
+ * Vault 3 → Random Mnemonic C
+ *
+ * @param isMainnet Whether to generate a wallet for the mainnet or testnet.
+ * @returns
+ */
 export async function generateCardanoWallet(isMainnet: boolean): Promise<{
   ticker: string;
   address: string;

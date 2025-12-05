@@ -315,7 +315,7 @@ export class TransactionsService {
       {
         tx_hash: txHash,
         status: TransactionStatus.submitted,
-        metadata: metadata ? metadata : undefined,
+        metadata,
       }
     );
 

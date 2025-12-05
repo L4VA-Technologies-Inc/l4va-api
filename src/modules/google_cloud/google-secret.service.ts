@@ -9,7 +9,6 @@ export class GoogleSecretService {
   private projectId: string;
 
   constructor(private readonly configService: ConfigService) {
-    // Initialize with service account credentials
     const credentialsPath = this.configService.get('GOOGLE_APPLICATION_CREDENTIALS');
 
     this.secretClient = new SecretManagerServiceClient({
@@ -22,43 +21,91 @@ export class GoogleSecretService {
   }
 
   /**
-   * Store master HD wallet seed
+   * Create a new secret in Google Secret Manager
    */
-  async storeMasterSeed(mnemonic: string): Promise<string> {
-    const secretId = 'l4va-treasury-master-seed';
+  async createSecret(secretId: string, labels: Record<string, string>): Promise<string> {
     const parent = `projects/${this.projectId}`;
 
-    // Create secret
     const [secret] = await this.secretClient.createSecret({
-      parent: parent,
-      secretId: secretId,
+      parent,
+      secretId,
       secret: {
         replication: {
           automatic: {},
         },
-        labels: {
-          purpose: 'treasury',
-          environment: process.env.NODE_ENV || 'development',
-        },
+        labels,
       },
     });
 
-    // Add secret version with the mnemonic
+    this.logger.log(`Created secret: ${secretId}`);
+    return secret.name!;
+  }
+
+  /**
+   * Add a new version to an existing secret
+   */
+  async addSecretVersion(secretId: string, data: Record<string, any>): Promise<string> {
+    const parent = `projects/${this.projectId}/secrets/${secretId}`;
+
     const [version] = await this.secretClient.addSecretVersion({
-      parent: secret.name,
+      parent,
       payload: {
-        data: Buffer.from(
-          JSON.stringify({
-            mnemonic: mnemonic,
-            derivation_standard: 'CIP-1852',
-            network: 'mainnet',
-            created_at: new Date().toISOString(),
-          })
-        ),
+        data: Buffer.from(JSON.stringify(data)),
       },
     });
 
     return version.name!;
+  }
+
+  /**
+   * Get the latest version of a secret
+   */
+  async getSecretValue(secretId: string): Promise<any> {
+    const name = `projects/${this.projectId}/secrets/${secretId}/versions/latest`;
+
+    const [version] = await this.secretClient.accessSecretVersion({
+      name,
+    });
+
+    const payload = version.payload?.data?.toString();
+    return JSON.parse(payload!);
+  }
+
+  /**
+   * Delete a secret from Secret Manager
+   */
+  async deleteSecret(secretId: string): Promise<void> {
+    const name = `projects/${this.projectId}/secrets/${secretId}`;
+
+    await this.secretClient.deleteSecret({ name });
+    this.logger.log(`Deleted secret: ${secretId}`);
+  }
+
+  /**
+   * Store master HD wallet seed
+   */
+  async storeMasterSeed(mnemonic: string): Promise<string> {
+    const secretId = 'l4va-treasury-master-seed';
+
+    const labels = {
+      purpose: 'treasury',
+      environment: process.env.NODE_ENV || 'development',
+    };
+
+    const data = {
+      mnemonic,
+      derivation_standard: 'CIP-1852',
+      network: 'mainnet',
+      created_at: new Date().toISOString(),
+    };
+
+    try {
+      await this.createSecret(secretId, labels);
+      return await this.addSecretVersion(secretId, data);
+    } catch (error) {
+      // If secret exists, just add new version
+      return await this.addSecretVersion(secretId, data);
+    }
   }
 
   /**
@@ -69,13 +116,6 @@ export class GoogleSecretService {
     derivation_standard: string;
     network: string;
   }> {
-    const secretName = `projects/${this.projectId}/secrets/l4va-treasury-master-seed/versions/latest`;
-
-    const [version] = await this.secretClient.accessSecretVersion({
-      name: secretName,
-    });
-
-    const payload = version.payload?.data?.toString();
-    return JSON.parse(payload!);
+    return await this.getSecretValue('l4va-treasury-master-seed');
   }
 }

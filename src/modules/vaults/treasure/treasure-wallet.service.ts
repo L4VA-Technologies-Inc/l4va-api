@@ -1,5 +1,6 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
+import { status as GrpcStatus } from '@grpc/grpc-js';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -13,7 +14,6 @@ import { VaultTreasuryWallet } from '@/database/vaultTreasuryWallet.entity';
 import { GoogleKMSService } from '@/modules/google_cloud/google-kms.service';
 import { GoogleSecretService } from '@/modules/google_cloud/google-secret.service';
 import { generateCardanoWallet } from '@/modules/vaults/processing-tx/onchain/utils/lib';
-
 @Injectable()
 export class TreasuryWalletService {
   private readonly logger = new Logger(TreasuryWalletService.name);
@@ -115,7 +115,6 @@ export class TreasuryWalletService {
         network: this.isMainnet ? 'mainnet' : 'preprod',
         encryptionMethod: 'google-kms-envelope',
         secretManagerVersion: secretVersionName,
-        createdAt: new Date().toISOString(),
       },
       is_active: true,
     });
@@ -136,69 +135,36 @@ export class TreasuryWalletService {
    */
   private async storeWalletMnemonic(vaultId: string, mnemonic: string, vaultName: string): Promise<string> {
     const secretId = `treasury-wallet-${vaultId}`;
-    const projectId = this.configService.get('GCP_PROJECT_ID');
 
-    const secretClient = this.googleSecretService['secretClient'];
-    const parent = `projects/${projectId}`;
+    const labels = {
+      purpose: 'treasury_wallet',
+      vault_id: vaultId.replace(/-/g, '_'),
+      vault_name: vaultName.toLowerCase().replace(/[^a-z0-9_]/g, '_'),
+      environment: process.env.NODE_ENV || 'development',
+    };
+
+    const data = {
+      mnemonic,
+      vaultId,
+      vaultName,
+      derivation_standard: 'CIP-1852',
+      network: this.isMainnet ? 'mainnet' : 'preprod',
+      created_at: new Date().toISOString(),
+    };
 
     try {
-      // Create secret
-      const [secret] = await secretClient.createSecret({
-        parent: parent,
-        secretId: secretId,
-        secret: {
-          replication: {
-            automatic: {},
-          },
-          labels: {
-            purpose: 'treasury_wallet',
-            vault_id: vaultId.replace(/-/g, '_'), // GCP labels don't allow hyphens
-            vault_name: vaultName.toLowerCase().replace(/[^a-z0-9_]/g, '_'),
-            environment: process.env.NODE_ENV || 'development',
-          },
-        },
-      });
-
-      // Add secret version with the mnemonic
-      const [version] = await secretClient.addSecretVersion({
-        parent: secret.name,
-        payload: {
-          data: Buffer.from(
-            JSON.stringify({
-              mnemonic: mnemonic,
-              vaultId: vaultId,
-              vaultName: vaultName,
-              derivation_standard: 'CIP-1852',
-              network: this.isMainnet ? 'mainnet' : 'preprod',
-              created_at: new Date().toISOString(),
-            })
-          ),
-        },
-      });
-
-      return version.name!;
-    } catch (error) {
-      if (error.code === 6) {
-        // Secret already exists, add a new version
+      await this.googleSecretService.createSecret(secretId, labels);
+      return await this.googleSecretService.addSecretVersion(secretId, data);
+    } catch (error: any) {
+      if (error.code === GrpcStatus.ALREADY_EXISTS) {
         this.logger.warn(`Secret ${secretId} already exists, adding new version`);
-        const secretName = `${parent}/secrets/${secretId}`;
-        const [version] = await secretClient.addSecretVersion({
-          parent: secretName,
-          payload: {
-            data: Buffer.from(
-              JSON.stringify({
-                mnemonic: mnemonic,
-                vaultId: vaultId,
-                vaultName: vaultName,
-                derivation_standard: 'CIP-1852',
-                network: this.isMainnet ? 'mainnet' : 'preprod',
-                created_at: new Date().toISOString(),
-              })
-            ),
-          },
-        });
-        return version.name!;
+        return await this.googleSecretService.addSecretVersion(secretId, data);
       }
+
+      this.logger.error(
+        `Failed to store mnemonic for vault ${vaultId}. ` + `Error code: ${error.code}, Message: ${error.message}`
+      );
+
       throw error;
     }
   }
@@ -268,21 +234,12 @@ export class TreasuryWalletService {
    * Gets mnemonic from Google Secret Manager (for recovery purposes)
    */
   async getTreasuryWalletMnemonic(vaultId: string): Promise<string> {
-    const projectId = this.configService.get('GCP_PROJECT_ID');
-    const secretName = `projects/${projectId}/secrets/treasury-wallet-${vaultId}/versions/latest`;
-
-    const secretClient = this.googleSecretService['secretClient'];
+    const secretId = `treasury-wallet-${vaultId}`;
 
     try {
-      const [version] = await secretClient.accessSecretVersion({
-        name: secretName,
-      });
-
-      const payload = version.payload?.data?.toString();
-      const data = JSON.parse(payload!);
-
+      const data = await this.googleSecretService.getSecretValue(secretId);
       return data.mnemonic;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to retrieve mnemonic for vault ${vaultId}:`, error);
       throw new Error(`Failed to retrieve wallet mnemonic: ${error.message}`);
     }
@@ -357,5 +314,20 @@ export class TreasuryWalletService {
     await this.treasuryWalletRepository.save(wallet);
 
     this.logger.log(`Deactivated treasury wallet for vault ${vaultId}`);
+  }
+
+  /**
+   * Delete secret when vault is burned/closed
+   */
+  async deleteVaultSecret(vaultId: string): Promise<void> {
+    const secretId = `treasury-wallet-${vaultId}`;
+
+    try {
+      await this.googleSecretService.deleteSecret(secretId);
+      this.logger.log(`Deleted secret for vault ${vaultId}`);
+    } catch (error: any) {
+      this.logger.error(`Failed to delete secret for vault ${vaultId}:`, error);
+      throw error;
+    }
   }
 }

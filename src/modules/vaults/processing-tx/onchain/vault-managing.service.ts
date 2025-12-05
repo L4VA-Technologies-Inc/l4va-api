@@ -496,7 +496,6 @@ export class VaultManagingService {
         }
       } else {
         this.logger.warn(`No output found with vault script address ${this.vaultScriptAddress}, skipping refund`);
-        this.logger.warn(`Available addresses: ${utxoDetails.outputs.map(o => o.address).join(', ')}`);
       }
     } else {
       this.logger.warn(`Transaction ${vault.publication_hash} outputs not found, skipping script UTXO refund`);

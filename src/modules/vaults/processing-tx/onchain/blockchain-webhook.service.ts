@@ -101,13 +101,8 @@ export class BlockchainWebhookService {
           this.logger.log(`Locked ${lockedCount} assets for transaction ${tx.hash}`);
         }
 
-        if (transaction.type === TransactionType.extractDispatch) {
-          // For extract dispatch transactions, we should mark assets as distributed
-        }
-
-        if (transaction.type === TransactionType.cancel) {
-          // For extract dispatch transactions, we should mark assets as RELEASED
-        }
+        // TODO: For extract dispatch transactions, we should mark assets as distributed
+        // TODO: For extract dispatch transactions, we should mark assets as RELEASED
       }
 
       this.logger.log(`WH: Transaction ${tx.hash} status updated to ${internalStatus}`);

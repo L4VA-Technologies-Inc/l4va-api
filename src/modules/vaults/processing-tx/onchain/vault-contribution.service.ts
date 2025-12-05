@@ -97,7 +97,9 @@ export class VaultContributionService {
         );
 
         if (totalAdaCollected < quantity + 2_000_000) {
-          throw new Error('Insufficient ADA in UTXOs to cover contribution amount and fees');
+          throw new Error(
+            `Insufficient ADA in UTXOs to cover contribution amount and fees - required: ${quantity + 2_000_000}, available: ${totalAdaCollected}`
+          );
         }
         // For ADA, any UTXO with sufficient balance works
         allUtxos = utxos;
