@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+
 import { DexHunterController } from './dexhunter.controller';
 import { DexHunterService } from './dexhunter.service';
 

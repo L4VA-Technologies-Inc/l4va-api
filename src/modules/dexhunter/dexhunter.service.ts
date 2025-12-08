@@ -1,13 +1,6 @@
-import { Injectable, BadRequestException, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { User } from '@/database/user.entity';
-import axios from "axios";
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { getUtxos } from '../vaults/processing-tx/onchain/utils/lib';
-import { Address } from '@emurgo/cardano-serialization-lib-nodejs';
-
 
 @Injectable()
 export class DexHunterService {
@@ -29,16 +22,9 @@ export class DexHunterService {
     this.apiKey = this.configService.get<string>('ANVIL_API_KEY');
   }
 
-
-
-
-
-
-
   async sell() {
     const utxos = await this.blockfrost.addressesUtxosAll(
       'addr_test1wzwdhey2vadqmk3q3xxl3ft0tr99gqtf4fz4amc60xeca2s7pnuqd'
     );
   }
-
 }
