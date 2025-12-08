@@ -7,10 +7,8 @@ import { Repository } from 'typeorm';
 
 import { Vault } from '@/database/vault.entity';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
-import {
-  TransactionBuildResponse,
-  TransactionSubmitResponse,
-} from '@/modules/vaults/processing-tx/onchain/types/transaction-status.enum';
+import { TransactionBuildResponse } from '@/modules/vaults/processing-tx/onchain/types/transaction-status.enum';
+import { getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 
 interface NFTListingInput {
@@ -82,6 +80,8 @@ interface BuyNFTPayload {
 export class WayUpService {
   private readonly logger = new Logger(WayUpService.name);
   private readonly blockfrost: BlockFrostAPI;
+
+  private readonly MIN_PRICE_ADA = 5; // Validate minimum price (5 ADA minimum per WayUp requirements)
 
   constructor(
     private readonly configService: ConfigService,
@@ -217,10 +217,9 @@ export class WayUpService {
     this.logger.log(`Creating NFT listing for vault ${vaultId}`);
 
     // Validate minimum price (5 ADA minimum per WayUp requirements)
-    const MIN_PRICE_ADA = 5;
-    const invalidPrices = listings.filter(l => l.priceAda < MIN_PRICE_ADA);
+    const invalidPrices = listings.filter(l => l.priceAda < this.MIN_PRICE_ADA);
     if (invalidPrices.length > 0) {
-      throw new Error(`All listings must have a minimum price of ${MIN_PRICE_ADA} ADA`);
+      throw new Error(`All listings must have a minimum price of ${this.MIN_PRICE_ADA} ADA`);
     }
 
     // Get vault and verify treasury wallet exists
@@ -240,57 +239,26 @@ export class WayUpService {
     const address = vault.treasury_wallet.treasury_address;
     this.logger.log(`Using treasury wallet address: ${address}`);
 
-    // Get UTXOs containing the NFTs to list
-    const utxos = await this.blockfrost.addressesUtxosAll(address);
+    // Collect target NFTs to list
+    const targetAssets = listings.map(listing => ({
+      token: listing.policyId + listing.assetName,
+      amount: 1,
+    }));
 
-    // Filter UTXOs that contain the NFTs we want to list
-    const filteredUtxos = utxos
-      .map(u => ({
-        ...u,
-        amount: u.amount.filter(
-          a =>
-            a.unit !== 'lovelace' &&
-            listings.some(l => a.unit === l.policyId + l.assetName || a.unit.startsWith(l.policyId))
-        ),
-      }))
-      .filter(u => u.amount.length > 0);
+    // Get UTXOs containing the NFTs using getUtxosExtract
+    const { utxos: serializedUtxos, requiredInputs } = await getUtxosExtract(
+      CardanoWasm.Address.from_bech32(address),
+      this.blockfrost,
+      {
+        targetAssets,
+        minAda: 1000000,
+        maxUtxos: 20,
+      }
+    );
 
-    if (filteredUtxos.length === 0) {
+    if (!requiredInputs || requiredInputs.length === 0) {
       throw new Error('No UTXOs found containing the NFTs to list');
     }
-
-    // Serialize UTXOs
-    const serializedUtxos: string[] = filteredUtxos.map(u => {
-      const value = CardanoWasm.Value.new(
-        CardanoWasm.BigNum.from_str(u.amount.find(a => a.unit === 'lovelace')?.quantity || '0')
-      );
-
-      const multiAsset = CardanoWasm.MultiAsset.new();
-      u.amount.forEach(a => {
-        if (a.unit !== 'lovelace') {
-          const policyId = CardanoWasm.ScriptHash.from_bytes(Buffer.from(a.unit.slice(0, 56), 'hex'));
-          const assetsMap = CardanoWasm.Assets.new();
-          assetsMap.insert(
-            CardanoWasm.AssetName.new(Buffer.from(a.unit.slice(56), 'hex')),
-            CardanoWasm.BigNum.from_str(a.quantity)
-          );
-          multiAsset.insert(policyId, assetsMap);
-        }
-      });
-      value.set_multiasset(multiAsset);
-
-      const txOut = CardanoWasm.TransactionOutput.new(CardanoWasm.Address.from_bech32(u.address), value);
-
-      const txUtxo = CardanoWasm.TransactionUnspentOutput.new(
-        CardanoWasm.TransactionInput.new(
-          CardanoWasm.TransactionHash.from_bytes(Buffer.from(u.tx_hash, 'hex')),
-          u.output_index
-        ),
-        txOut
-      );
-
-      return Buffer.from(txUtxo.to_bytes()).toString('hex');
-    });
 
     // Create listing payload
     const listingPayload: ListingPayload = {
@@ -334,52 +302,6 @@ export class WayUpService {
   }
 
   /**
-   * Sign a transaction using the vault's treasury wallet private key
-   *
-   * @param vaultId - The vault ID
-   * @param txHex - Transaction hex to sign
-   * @returns Signed transaction hex
-   */
-  private async signTransaction(vaultId: string, txHex: string): Promise<string> {
-    try {
-      // Get the decrypted private key from treasury wallet
-      const privateKey = await this.treasuryWalletService.getTreasuryWalletPrivateKey(vaultId);
-
-      // Deserialize and sign the transaction using FixedTransaction
-      const txToSign = FixedTransaction.from_bytes(Buffer.from(txHex, 'hex'));
-      txToSign.sign_and_add_vkey_signature(privateKey);
-
-      // Return the signed transaction as hex
-      return Buffer.from(txToSign.to_bytes()).toString('hex');
-    } catch (error) {
-      this.logger.error(`Failed to sign transaction for vault ${vaultId}`, error);
-      throw new Error(`Failed to sign transaction: ${error.message}`);
-    }
-  }
-
-  /**
-   * Submit a pre-signed transaction to WayUp marketplace
-   *
-   * @param signedTxHex - Signed transaction hex
-   * @returns Transaction submission response
-   */
-  async submitTransaction(signedTxHex: string): Promise<TransactionSubmitResponse> {
-    try {
-      this.logger.log('Submitting signed transaction to blockchain');
-
-      const submitResponse = await this.blockchainService.submitTransaction({
-        transaction: signedTxHex,
-      });
-
-      this.logger.log(`Transaction submitted successfully: ${submitResponse.txHash}`);
-      return submitResponse;
-    } catch (error) {
-      this.logger.error('Failed to submit transaction', error);
-      throw new Error(`Failed to submit transaction: ${error.message}`);
-    }
-  }
-
-  /**
    * Unlist NFTs from WayUp Marketplace
    * Builds, signs, and submits the unlist transaction to return NFTs to the vault's treasury wallet
    *
@@ -410,48 +332,19 @@ export class WayUpService {
     const address = vault.treasury_wallet.treasury_address;
     this.logger.log(`Using treasury wallet address: ${address}`);
 
-    // Get UTXOs to fund the unlist transaction
-    const utxos = await this.blockfrost.addressesUtxosAll(address);
+    // Get UTXOs to fund the unlist transaction using getUtxosExtract
+    const { utxos: serializedUtxos } = await getUtxosExtract(
+      CardanoWasm.Address.from_bech32(address),
+      this.blockfrost,
+      {
+        minAda: 1000000,
+        maxUtxos: 10,
+      }
+    );
 
-    if (utxos.length === 0) {
+    if (serializedUtxos.length === 0) {
       throw new Error('No UTXOs available in treasury wallet to fund unlist transaction');
     }
-
-    // Serialize UTXOs for transaction building
-    const serializedUtxos: string[] = utxos.slice(0, 10).map(u => {
-      const value = CardanoWasm.Value.new(
-        CardanoWasm.BigNum.from_str(u.amount.find(a => a.unit === 'lovelace')?.quantity || '0')
-      );
-
-      const multiAsset = CardanoWasm.MultiAsset.new();
-      u.amount.forEach(a => {
-        if (a.unit !== 'lovelace') {
-          const policyId = CardanoWasm.ScriptHash.from_bytes(Buffer.from(a.unit.slice(0, 56), 'hex'));
-          const assetsMap = CardanoWasm.Assets.new();
-          assetsMap.insert(
-            CardanoWasm.AssetName.new(Buffer.from(a.unit.slice(56), 'hex')),
-            CardanoWasm.BigNum.from_str(a.quantity)
-          );
-          multiAsset.insert(policyId, assetsMap);
-        }
-      });
-
-      if (multiAsset.len() > 0) {
-        value.set_multiasset(multiAsset);
-      }
-
-      const txOut = CardanoWasm.TransactionOutput.new(CardanoWasm.Address.from_bech32(u.address), value);
-
-      const txUtxo = CardanoWasm.TransactionUnspentOutput.new(
-        CardanoWasm.TransactionInput.new(
-          CardanoWasm.TransactionHash.from_bytes(Buffer.from(u.tx_hash, 'hex')),
-          u.output_index
-        ),
-        txOut
-      );
-
-      return Buffer.from(txUtxo.to_bytes()).toString('hex');
-    });
 
     // Create unlist payload
     const unlistPayload: UnlistPayload = {
@@ -503,11 +396,9 @@ export class WayUpService {
   ): Promise<{ txHash: string; updatedAssets: UpdateListingInput[] }> {
     this.logger.log(`Updating ${updates.length} NFT listing(s) for vault ${vaultId}`);
 
-    // Validate minimum price (5 ADA minimum per WayUp requirements)
-    const MIN_PRICE_ADA = 5;
-    const invalidPrices = updates.filter(u => u.newPriceAda < MIN_PRICE_ADA);
+    const invalidPrices = updates.filter(u => u.newPriceAda < this.MIN_PRICE_ADA);
     if (invalidPrices.length > 0) {
-      throw new Error(`All updated listings must have a minimum price of ${MIN_PRICE_ADA} ADA`);
+      throw new Error(`All updated listings must have a minimum price of ${this.MIN_PRICE_ADA} ADA`);
     }
 
     // Get vault and verify treasury wallet exists
@@ -527,48 +418,19 @@ export class WayUpService {
     const address = vault.treasury_wallet.treasury_address;
     this.logger.log(`Using treasury wallet address: ${address}`);
 
-    // Get UTXOs to fund the update transaction
-    const utxos = await this.blockfrost.addressesUtxosAll(address);
+    // Get UTXOs to fund the update transaction using getUtxosExtract
+    const { utxos: serializedUtxos } = await getUtxosExtract(
+      CardanoWasm.Address.from_bech32(address),
+      this.blockfrost,
+      {
+        minAda: 1000000,
+        maxUtxos: 10,
+      }
+    );
 
-    if (utxos.length === 0) {
+    if (serializedUtxos.length === 0) {
       throw new Error('No UTXOs available in treasury wallet to fund update transaction');
     }
-
-    // Serialize UTXOs for transaction building
-    const serializedUtxos: string[] = utxos.slice(0, 10).map(u => {
-      const value = CardanoWasm.Value.new(
-        CardanoWasm.BigNum.from_str(u.amount.find(a => a.unit === 'lovelace')?.quantity || '0')
-      );
-
-      const multiAsset = CardanoWasm.MultiAsset.new();
-      u.amount.forEach(a => {
-        if (a.unit !== 'lovelace') {
-          const policyId = CardanoWasm.ScriptHash.from_bytes(Buffer.from(a.unit.slice(0, 56), 'hex'));
-          const assetsMap = CardanoWasm.Assets.new();
-          assetsMap.insert(
-            CardanoWasm.AssetName.new(Buffer.from(a.unit.slice(56), 'hex')),
-            CardanoWasm.BigNum.from_str(a.quantity)
-          );
-          multiAsset.insert(policyId, assetsMap);
-        }
-      });
-
-      if (multiAsset.len() > 0) {
-        value.set_multiasset(multiAsset);
-      }
-
-      const txOut = CardanoWasm.TransactionOutput.new(CardanoWasm.Address.from_bech32(u.address), value);
-
-      const txUtxo = CardanoWasm.TransactionUnspentOutput.new(
-        CardanoWasm.TransactionInput.new(
-          CardanoWasm.TransactionHash.from_bytes(Buffer.from(u.tx_hash, 'hex')),
-          u.output_index
-        ),
-        txOut
-      );
-
-      return Buffer.from(txUtxo.to_bytes()).toString('hex');
-    });
 
     // Create update payload
     const updatePayload: UpdateListingPayload = {
@@ -641,52 +503,27 @@ export class WayUpService {
     const address = vault.treasury_wallet.treasury_address;
     this.logger.log(`Using treasury wallet address: ${address}`);
 
-    // Get UTXOs to fund the offer transaction
-    const utxos = await this.blockfrost.addressesUtxosAll(address);
+    // Calculate total ADA needed for all offers (in lovelace)
+    const totalOfferAda = offers.reduce((sum, offer) => sum + offer.priceAda, 0);
+    const totalOfferLovelace = totalOfferAda * 1_000_000;
+    this.logger.log(`Total ADA needed for offers: ${totalOfferAda} ADA (${totalOfferLovelace} lovelace)`);
 
-    if (utxos.length === 0) {
+    // Get UTXOs to fund the offer transaction using getUtxosExtract with targetAdaAmount
+    const { utxos: serializedUtxos, totalAdaCollected } = await getUtxosExtract(
+      CardanoWasm.Address.from_bech32(address),
+      this.blockfrost,
+      {
+        targetAdaAmount: totalOfferLovelace + 5_000_000, // Add 5 ADA buffer for fees
+        minAda: 1000000,
+        maxUtxos: 15,
+      }
+    );
+
+    if (serializedUtxos.length === 0) {
       throw new Error('No UTXOs available in treasury wallet to fund offer transaction');
     }
 
-    // Calculate total ADA needed for all offers
-    const totalOfferAda = offers.reduce((sum, offer) => sum + offer.priceAda, 0);
-    this.logger.log(`Total ADA needed for offers: ${totalOfferAda} ADA`);
-
-    // Serialize UTXOs for transaction building (take enough to cover offers + fees)
-    const serializedUtxos: string[] = utxos.slice(0, 15).map(u => {
-      const value = CardanoWasm.Value.new(
-        CardanoWasm.BigNum.from_str(u.amount.find(a => a.unit === 'lovelace')?.quantity || '0')
-      );
-
-      const multiAsset = CardanoWasm.MultiAsset.new();
-      u.amount.forEach(a => {
-        if (a.unit !== 'lovelace') {
-          const policyId = CardanoWasm.ScriptHash.from_bytes(Buffer.from(a.unit.slice(0, 56), 'hex'));
-          const assetsMap = CardanoWasm.Assets.new();
-          assetsMap.insert(
-            CardanoWasm.AssetName.new(Buffer.from(a.unit.slice(56), 'hex')),
-            CardanoWasm.BigNum.from_str(a.quantity)
-          );
-          multiAsset.insert(policyId, assetsMap);
-        }
-      });
-
-      if (multiAsset.len() > 0) {
-        value.set_multiasset(multiAsset);
-      }
-
-      const txOut = CardanoWasm.TransactionOutput.new(CardanoWasm.Address.from_bech32(u.address), value);
-
-      const txUtxo = CardanoWasm.TransactionUnspentOutput.new(
-        CardanoWasm.TransactionInput.new(
-          CardanoWasm.TransactionHash.from_bytes(Buffer.from(u.tx_hash, 'hex')),
-          u.output_index
-        ),
-        txOut
-      );
-
-      return Buffer.from(txUtxo.to_bytes()).toString('hex');
-    });
+    this.logger.log(`Collected ${totalAdaCollected} lovelace from ${serializedUtxos.length} UTXOs`);
 
     // Create offer payload
     const offerPayload: MakeOfferPayload = {
@@ -735,11 +572,9 @@ export class WayUpService {
   async buyNFT(vaultId: string, purchases: BuyNFTInput[]): Promise<{ txHash: string; purchases: BuyNFTInput[] }> {
     this.logger.log(`Buying ${purchases.length} NFT(s) for vault ${vaultId}`);
 
-    // Validate minimum price (5 ADA minimum per WayUp requirements)
-    const MIN_PRICE_ADA = 5;
-    const invalidPrices = purchases.filter(p => p.priceAda < MIN_PRICE_ADA);
+    const invalidPrices = purchases.filter(p => p.priceAda < this.MIN_PRICE_ADA);
     if (invalidPrices.length > 0) {
-      throw new Error(`All NFT purchases must be at least ${MIN_PRICE_ADA} ADA`);
+      throw new Error(`All NFT purchases must be at least ${this.MIN_PRICE_ADA} ADA`);
     }
 
     // Get vault and verify treasury wallet exists
@@ -759,52 +594,27 @@ export class WayUpService {
     const address = vault.treasury_wallet.treasury_address;
     this.logger.log(`Using treasury wallet address: ${address}`);
 
-    // Get UTXOs to fund the purchase transaction
-    const utxos = await this.blockfrost.addressesUtxosAll(address);
+    // Calculate total ADA needed for all purchases (in lovelace)
+    const totalPurchaseAda = purchases.reduce((sum, purchase) => sum + purchase.priceAda, 0);
+    const totalPurchaseLovelace = totalPurchaseAda * 1_000_000;
+    this.logger.log(`Total ADA needed for purchases: ${totalPurchaseAda} ADA (${totalPurchaseLovelace} lovelace)`);
 
-    if (utxos.length === 0) {
+    // Get UTXOs to fund the purchase transaction using getUtxosExtract with targetAdaAmount
+    const { utxos: serializedUtxos, totalAdaCollected } = await getUtxosExtract(
+      CardanoWasm.Address.from_bech32(address),
+      this.blockfrost,
+      {
+        targetAdaAmount: totalPurchaseLovelace + 10_000_000, // Add 10 ADA buffer for fees
+        minAda: 1000000,
+        maxUtxos: 20,
+      }
+    );
+
+    if (serializedUtxos.length === 0) {
       throw new Error('No UTXOs available in treasury wallet to fund purchase transaction');
     }
 
-    // Calculate total ADA needed for all purchases
-    const totalPurchaseAda = purchases.reduce((sum, purchase) => sum + purchase.priceAda, 0);
-    this.logger.log(`Total ADA needed for purchases: ${totalPurchaseAda} ADA`);
-
-    // Serialize UTXOs for transaction building (take enough to cover purchases + fees)
-    const serializedUtxos: string[] = utxos.slice(0, 20).map(u => {
-      const value = CardanoWasm.Value.new(
-        CardanoWasm.BigNum.from_str(u.amount.find(a => a.unit === 'lovelace')?.quantity || '0')
-      );
-
-      const multiAsset = CardanoWasm.MultiAsset.new();
-      u.amount.forEach(a => {
-        if (a.unit !== 'lovelace') {
-          const policyId = CardanoWasm.ScriptHash.from_bytes(Buffer.from(a.unit.slice(0, 56), 'hex'));
-          const assetsMap = CardanoWasm.Assets.new();
-          assetsMap.insert(
-            CardanoWasm.AssetName.new(Buffer.from(a.unit.slice(56), 'hex')),
-            CardanoWasm.BigNum.from_str(a.quantity)
-          );
-          multiAsset.insert(policyId, assetsMap);
-        }
-      });
-
-      if (multiAsset.len() > 0) {
-        value.set_multiasset(multiAsset);
-      }
-
-      const txOut = CardanoWasm.TransactionOutput.new(CardanoWasm.Address.from_bech32(u.address), value);
-
-      const txUtxo = CardanoWasm.TransactionUnspentOutput.new(
-        CardanoWasm.TransactionInput.new(
-          CardanoWasm.TransactionHash.from_bytes(Buffer.from(u.tx_hash, 'hex')),
-          u.output_index
-        ),
-        txOut
-      );
-
-      return Buffer.from(txUtxo.to_bytes()).toString('hex');
-    });
+    this.logger.log(`Collected ${totalAdaCollected} lovelace from ${serializedUtxos.length} UTXOs`);
 
     // Create buy payload
     const buyPayload: BuyNFTPayload = {
@@ -840,5 +650,29 @@ export class WayUpService {
       txHash: submitResponse.txHash,
       purchases: purchases,
     };
+  }
+
+  /**
+   * Sign a transaction using the vault's treasury wallet private key
+   *
+   * @param vaultId - The vault ID
+   * @param txHex - Transaction hex to sign
+   * @returns Signed transaction hex
+   */
+  private async signTransaction(vaultId: string, txHex: string): Promise<string> {
+    try {
+      // Get the decrypted private key from treasury wallet
+      const privateKey = await this.treasuryWalletService.getTreasuryWalletPrivateKey(vaultId);
+
+      // Deserialize and sign the transaction using FixedTransaction
+      const txToSign = FixedTransaction.from_bytes(Buffer.from(txHex, 'hex'));
+      txToSign.sign_and_add_vkey_signature(privateKey);
+
+      // Return the signed transaction as hex
+      return Buffer.from(txToSign.to_bytes()).toString('hex');
+    } catch (error) {
+      this.logger.error(`Failed to sign transaction for vault ${vaultId}`, error);
+      throw new Error(`Failed to sign transaction: ${error.message}`);
+    }
   }
 }

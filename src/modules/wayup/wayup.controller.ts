@@ -3,10 +3,7 @@ import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 
 import { WayUpService } from './wayup.service';
 
-import {
-  TransactionBuildResponse,
-  TransactionSubmitResponse,
-} from '@/modules/vaults/processing-tx/onchain/types/transaction-status.enum';
+import { TransactionBuildResponse } from '@/modules/vaults/processing-tx/onchain/types/transaction-status.enum';
 
 interface NFTListingDto {
   vaultId: string;
@@ -20,10 +17,6 @@ interface NFTListingDto {
 interface BuildListingDto {
   vaultId: string;
   policyIds?: Array<{ id: string; priceAda: number }>;
-}
-
-interface SubmitTransactionDto {
-  signedTxHex: string;
 }
 
 interface UnlistNFTDto {
@@ -164,12 +157,5 @@ export class WayUpController {
     purchases: Array<{ policyId: string; txHashIndex: string; priceAda: number }>;
   }> {
     return this.wayUpService.buyNFT(body.vaultId, body.purchases);
-  }
-
-  @Post('submit')
-  @ApiOperation({ summary: 'Submit a pre-signed transaction to the blockchain' })
-  @ApiResponse({ status: 200, description: 'Transaction submitted successfully' })
-  async submitTransaction(@Body() body: SubmitTransactionDto): Promise<TransactionSubmitResponse> {
-    return this.wayUpService.submitTransaction(body.signedTxHex);
   }
 }
