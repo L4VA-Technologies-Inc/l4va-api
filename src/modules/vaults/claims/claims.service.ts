@@ -5,6 +5,7 @@ import { Address, FixedTransaction, PlutusData, PrivateKey } from '@emurgo/carda
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
+import { create } from 'axios';
 import { plainToInstance } from 'class-transformer';
 import { In, Repository } from 'typeorm';
 
@@ -91,16 +92,6 @@ export class ClaimsService {
       order: { created_at: 'DESC' },
       relations: ['vault', 'vault.vault_image'],
       select: {
-        id: true,
-        type: true,
-        status: true,
-        amount: true,
-        description: true,
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        metadata: true,
-        created_at: true,
-        updated_at: true,
         vault: {
           id: true,
           name: true,
@@ -114,8 +105,15 @@ export class ClaimsService {
 
     const items = claims.map(claim => {
       const cleanClaim = {
-        ...claim,
+        id: claim.id,
+        type: claim.type,
+        status: claim.status,
         amount: claim.amount / 10 ** (claim.vault?.ft_token_decimals || 0),
+        adaAmount: claim.lovelace_amount ? claim.lovelace_amount / 1_000_000 : null,
+        multiplier: claim.multiplier,
+        description: claim.description,
+        createdAt: claim.created_at,
+        updatedAt: claim.updated_at,
         vault: {
           ...claim.vault,
           vaultImage: claim.vault?.vault_image?.file_url || null,
