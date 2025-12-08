@@ -1,7 +1,7 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class MigrateClaimsMetadataToColumns1765778339943 implements MigrationInterface {
-  name = 'MigrateClaimsMetadataToColumns1765778339943';
+export class MigrateClaimsMetadataToColumns1765181788082 implements MigrationInterface {
+  name = 'MigrateClaimsMetadataToColumns1765181788082';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`ALTER TABLE "vault_tags" DROP CONSTRAINT "FK_adf9f0b047319be1ec67ac1d1eb"`);
