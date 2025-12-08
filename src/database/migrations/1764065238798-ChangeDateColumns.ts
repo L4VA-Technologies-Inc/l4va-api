@@ -15,7 +15,9 @@ export class ChangeDateColumns1764065238798 implements MigrationInterface {
     await queryRunner.query(`ALTER TABLE "vote" DROP COLUMN "timestamp"`);
     await queryRunner.query(`ALTER TABLE "vote" ADD "timestamp" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()`);
     await queryRunner.query(`ALTER TABLE "proposal" DROP COLUMN "start_date"`);
-    await queryRunner.query(`ALTER TABLE "proposal" ADD "start_date" TIMESTAMP WITH TIME ZONE NOT NULL`);
+    await queryRunner.query(`ALTER TABLE "proposal" ADD "start_date" TIMESTAMP WITH TIME ZONE`);
+    await queryRunner.query(`UPDATE "proposal" SET "start_date" = CURRENT_TIMESTAMP WHERE "start_date" IS NULL`);
+    await queryRunner.query(`ALTER TABLE "proposal" ALTER COLUMN "start_date" SET NOT NULL`);
     await queryRunner.query(`ALTER TABLE "proposal" DROP COLUMN "end_date"`);
     await queryRunner.query(`ALTER TABLE "proposal" ADD "end_date" TIMESTAMP WITH TIME ZONE`);
     await queryRunner.query(`ALTER TABLE "proposal" DROP COLUMN "execution_date"`);
