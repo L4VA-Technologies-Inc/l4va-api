@@ -43,6 +43,12 @@ export class TreasuryWalletService {
   async createTreasuryWallet(dto: CreateTreasuryWalletDto): Promise<TreasuryWalletInfoDto> {
     const { vaultId } = dto;
 
+    // Skip treasury wallet creation for non-mainnet environments
+    if (!this.isMainnet) {
+      this.logger.log(`Skipping treasury wallet creation for vault ${vaultId} (non-mainnet environment)`);
+      return null;
+    }
+
     this.logger.log(`Creating treasury wallet for vault ${vaultId}`);
 
     // Check if vault exists
@@ -173,6 +179,10 @@ export class TreasuryWalletService {
    * Gets treasury wallet for a vault
    */
   async getTreasuryWallet(vaultId: string): Promise<TreasuryWalletInfoDto | null> {
+    if (!this.isMainnet) {
+      return null;
+    }
+
     const wallet = await this.treasuryWalletRepository.findOne({
       where: { vault_id: vaultId },
     });

@@ -77,6 +77,13 @@ export class TreasuryExtractionService {
   }
 
   async extractAssetsToTreasury(config: TreasuryExtractionConfig): Promise<ExtractionResult> {
+    // Skip extraction for non-mainnet environments
+    const isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+    if (!isMainnet) {
+      this.logger.log(`Skipping asset extraction for vault ${config.vaultId} (non-mainnet environment)`);
+      throw new BadRequestException('Treasury extraction is only available on mainnet');
+    }
+
     this.logger.log(`Extracting ${config.assetIds.length} assets from vault ${config.vaultId} to treasury`);
 
     // 1. Validate vault

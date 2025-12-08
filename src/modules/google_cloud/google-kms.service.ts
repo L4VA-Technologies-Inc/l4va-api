@@ -33,13 +33,22 @@ import { ConfigService } from '@nestjs/config';
 @Injectable()
 export class GoogleKMSService {
   private readonly logger = new Logger(GoogleKMSService.name);
-  private kmsClient: KeyManagementServiceClient;
+  private kmsClient: KeyManagementServiceClient | null = null;
   private projectId: string;
   private locationId: string;
   private keyRingId: string;
   private keyId: string;
+  private readonly isMainnet: boolean;
 
   constructor(private readonly configService: ConfigService) {
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+
+    // Only initialize GCP KMS on mainnet
+    if (!this.isMainnet) {
+      this.logger.log('Skipping KMS initialization (non-mainnet environment)');
+      return;
+    }
+
     // Initialize with service account credentials
     const credentialsPath = this.configService.get('GOOGLE_APPLICATION_CREDENTIALS');
 
@@ -60,6 +69,9 @@ export class GoogleKMSService {
    * Get full KMS key resource name
    */
   private getKeyName(): string {
+    if (!this.kmsClient) {
+      throw new Error('KMS client not initialized (non-mainnet environment)');
+    }
     return this.kmsClient.cryptoKeyPath(this.projectId, this.locationId, this.keyRingId, this.keyId);
   }
 
@@ -77,6 +89,10 @@ export class GoogleKMSService {
     algorithm: string;
     kmsKeyName: string;
   }> {
+    if (!this.isMainnet || !this.kmsClient) {
+      throw new Error('KMS encryption only available on mainnet');
+    }
+
     // 1. Generate data encryption key (DEK)
     const dek = crypto.randomBytes(32);
 
@@ -133,6 +149,10 @@ export class GoogleKMSService {
     },
     vaultId: string
   ): Promise<PrivateKey> {
+    if (!this.isMainnet || !this.kmsClient) {
+      throw new Error('KMS decryption only available on mainnet');
+    }
+
     const keyName = this.getKeyName();
 
     // 1. Decrypt DEK with Cloud KMS (use same AAD as encryption)

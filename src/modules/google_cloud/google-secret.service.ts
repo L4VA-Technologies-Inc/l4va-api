@@ -5,10 +5,19 @@ import { ConfigService } from '@nestjs/config';
 @Injectable()
 export class GoogleSecretService {
   private readonly logger = new Logger(GoogleSecretService.name);
-  private secretClient: SecretManagerServiceClient;
+  private secretClient: SecretManagerServiceClient | null = null;
   private projectId: string;
+  private readonly isMainnet: boolean;
 
   constructor(private readonly configService: ConfigService) {
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+
+    // Only initialize GCP Secret Manager on mainnet
+    if (!this.isMainnet) {
+      this.logger.log('Skipping Secret Manager initialization (non-mainnet environment)');
+      return;
+    }
+
     const credentialsPath = this.configService.get('GOOGLE_APPLICATION_CREDENTIALS');
 
     this.secretClient = new SecretManagerServiceClient({
@@ -24,6 +33,10 @@ export class GoogleSecretService {
    * Create a new secret in Google Secret Manager
    */
   async createSecret(secretId: string, labels: Record<string, string>): Promise<string> {
+    if (!this.isMainnet || !this.secretClient) {
+      throw new Error('Secret Manager only available on mainnet');
+    }
+
     const parent = `projects/${this.projectId}`;
 
     const [secret] = await this.secretClient.createSecret({
@@ -45,6 +58,10 @@ export class GoogleSecretService {
    * Add a new version to an existing secret
    */
   async addSecretVersion(secretId: string, data: Record<string, any>): Promise<string> {
+    if (!this.isMainnet || !this.secretClient) {
+      throw new Error('Secret Manager only available on mainnet');
+    }
+
     const parent = `projects/${this.projectId}/secrets/${secretId}`;
 
     const [version] = await this.secretClient.addSecretVersion({
@@ -61,6 +78,10 @@ export class GoogleSecretService {
    * Get the latest version of a secret
    */
   async getSecretValue(secretId: string): Promise<any> {
+    if (!this.isMainnet || !this.secretClient) {
+      throw new Error('Secret Manager only available on mainnet');
+    }
+
     const name = `projects/${this.projectId}/secrets/${secretId}/versions/latest`;
 
     const [version] = await this.secretClient.accessSecretVersion({
@@ -75,6 +96,10 @@ export class GoogleSecretService {
    * Delete a secret from Secret Manager
    */
   async deleteSecret(secretId: string): Promise<void> {
+    if (!this.isMainnet || !this.secretClient) {
+      throw new Error('Secret Manager only available on mainnet');
+    }
+
     const name = `projects/${this.projectId}/secrets/${secretId}`;
 
     await this.secretClient.deleteSecret({ name });

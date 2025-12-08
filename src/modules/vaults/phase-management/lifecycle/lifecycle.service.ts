@@ -199,36 +199,43 @@ export class LifecycleService {
           phaseStatus: 'launched',
         });
 
-        try {
-          // Check if treasury wallet already exists
-          const existingWallet = await this.treasuryWalletService.getTreasuryWallet(vault.id);
+        // Only create treasury wallet on mainnet
+        const isMainnet = process.env.CARDANO_NETWORK === 'mainnet';
 
-          if (!existingWallet) {
-            const treasuryWallet = await this.treasuryWalletService.createTreasuryWallet({
-              vaultId: vault.id,
-            });
+        if (isMainnet) {
+          try {
+            // Check if treasury wallet already exists
+            const existingWallet = await this.treasuryWalletService.getTreasuryWallet(vault.id);
 
-            this.logger.log(`✅ Treasury wallet created for vault ${vault.id}: ${treasuryWallet.address}`);
+            if (!existingWallet) {
+              const treasuryWallet = await this.treasuryWalletService.createTreasuryWallet({
+                vaultId: vault.id,
+              });
 
-            // Emit event for treasury wallet creation
-            this.eventEmitter.emit('treasury.wallet.created', {
-              vaultId: vault.id,
-              vaultName: vault.name,
-              treasuryAddress: treasuryWallet.address,
-              publicKeyHash: treasuryWallet.publicKeyHash,
-            });
-          } else {
-            this.logger.log(`Treasury wallet already exists for vault ${vault.id}: ${existingWallet.address}`);
+              this.logger.log(`✅ Treasury wallet created for vault ${vault.id}: ${treasuryWallet.address}`);
+
+              // Emit event for treasury wallet creation
+              this.eventEmitter.emit('treasury.wallet.created', {
+                vaultId: vault.id,
+                vaultName: vault.name,
+                treasuryAddress: treasuryWallet.address,
+                publicKeyHash: treasuryWallet.publicKeyHash,
+              });
+            } else {
+              this.logger.log(`Treasury wallet already exists for vault ${vault.id}: ${existingWallet.address}`);
+            }
+          } catch (error) {
+            this.logger.error(`Failed to create treasury wallet for vault ${vault.id}:`, error);
+
+            // ⚠️ IMPORTANT: Decide if you want to fail the vault transition or continue
+            // Option A: Fail the vault (recommended for production)
+            // throw error;
+
+            // Option B: Continue but log error (current implementation)
+            // The vault will be locked but without a treasury wallet
           }
-        } catch (error) {
-          this.logger.error(`Failed to create treasury wallet for vault ${vault.id}:`, error);
-
-          // ⚠️ IMPORTANT: Decide if you want to fail the vault transition or continue
-          // Option A: Fail the vault (recommended for production)
-          // throw error;
-
-          // Option B: Continue but log error (current implementation)
-          // The vault will be locked but without a treasury wallet
+        } else {
+          this.logger.log(`Skipping treasury wallet creation for vault ${vault.id} (non-mainnet environment)`);
         }
       }
 
