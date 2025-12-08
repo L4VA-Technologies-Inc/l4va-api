@@ -516,4 +516,46 @@ export class BlockchainService {
     const tx = CardanoTransaction.from_bytes(Buffer.from(txHex, 'hex'));
     return tx.to_bytes().length;
   }
+
+  /**
+   * Builds a WayUp marketplace transaction
+   * @param input Transaction input containing utxos, changeAddress, and create/unlist arrays
+   * @returns Transaction build response
+   */
+  async buildWayUpTransaction(input: {
+    changeAddress: string;
+    utxos: string[];
+    create?: {
+      assets: { policyId: string; assetName: string };
+      priceAda: number;
+    }[];
+    unlist?: {
+      policyId: string;
+      txHashIndex: string;
+    }[];
+  }): Promise<TransactionBuildResponse> {
+    try {
+      const response = await fetch(`${this.anvilApi.replace('/services', '')}/build-tx`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': this.configService.get<string>('ANVIL_API_KEY'),
+        },
+        body: JSON.stringify(input),
+      });
+
+      const buildResponse = await response.json();
+
+      if (!buildResponse.complete) {
+        this.logger.error('Failed to build WayUp transaction', buildResponse);
+        throw new Error('Failed to build complete WayUp transaction: ' + JSON.stringify(buildResponse));
+      }
+
+      this.logger.log('WayUp transaction built successfully');
+      return buildResponse;
+    } catch (error) {
+      this.logger.error('Error building WayUp transaction', error);
+      throw new Error(`Failed to build WayUp transaction: ${error.message}`);
+    }
+  }
 }
