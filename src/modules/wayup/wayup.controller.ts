@@ -52,6 +52,15 @@ interface MakeOfferDto {
   }>;
 }
 
+interface BuyNFTDto {
+  vaultId: string;
+  purchases: Array<{
+    policyId: string;
+    txHashIndex: string; // Format: txHash#outputIndex
+    priceAda: number;
+  }>;
+}
+
 @ApiTags('wayup')
 @Controller('wayup')
 export class WayUpController {
@@ -136,6 +145,25 @@ export class WayUpController {
     offers: Array<{ policyId: string; assetName: string; priceAda: number }>;
   }> {
     return this.wayUpService.makeOffer(body.vaultId, body.offers);
+  }
+
+  @Post('buy-nft')
+  @ApiOperation({ summary: 'Buy NFTs from WayUp Marketplace (build, sign, and submit)' })
+  @ApiResponse({
+    status: 200,
+    description: 'NFT purchase completed successfully',
+    schema: {
+      properties: {
+        txHash: { type: 'string' },
+        purchases: { type: 'array' },
+      },
+    },
+  })
+  async buyNFT(@Body() body: BuyNFTDto): Promise<{
+    txHash: string;
+    purchases: Array<{ policyId: string; txHashIndex: string; priceAda: number }>;
+  }> {
+    return this.wayUpService.buyNFT(body.vaultId, body.purchases);
   }
 
   @Post('submit')

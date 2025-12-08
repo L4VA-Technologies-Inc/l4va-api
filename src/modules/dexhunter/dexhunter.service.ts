@@ -23,8 +23,8 @@ export class DexHunterService {
   }
 
   async sell() {
-    const utxos = await this.blockfrost.addressesUtxosAll(
-      'addr_test1wzwdhey2vadqmk3q3xxl3ft0tr99gqtf4fz4amc60xeca2s7pnuqd'
-    );
+    // const utxos = await this.blockfrost.addressesUtxosAll(
+    //   'addr_test1wzwdhey2vadqmk3q3xxl3ft0tr99gqtf4fz4amc60xeca2s7pnuqd'
+    // );
   }
 }
