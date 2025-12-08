@@ -24,6 +24,12 @@ interface UnlistInput {
   txHashIndex: string; // Format: txHash#outputIndex
 }
 
+interface UpdateListingInput {
+  policyId: string;
+  txHashIndex: string; // Format: txHash#outputIndex
+  newPriceAda: number;
+}
+
 interface ListingPayload {
   changeAddress: string;
   utxos: string[];
@@ -40,6 +46,12 @@ interface UnlistPayload {
   changeAddress: string;
   utxos: string[];
   unlist: UnlistInput[];
+}
+
+interface UpdateListingPayload {
+  changeAddress: string;
+  utxos: string[];
+  update: UpdateListingInput[];
 }
 
 @Injectable()
@@ -450,6 +462,123 @@ export class WayUpService {
     return {
       txHash: submitResponse.txHash,
       unlistedAssets: unlistings,
+    };
+  }
+
+  /**
+   * Update NFT listing price on WayUp Marketplace
+   * Builds, signs, and submits the update transaction to change the listing price
+   *
+   * @param vaultId - The vault ID that owns the listings
+   * @param updates - Array of listings to update with new prices
+   * @returns Transaction hash of the submitted update transaction
+   */
+  async updateListing(
+    vaultId: string,
+    updates: UpdateListingInput[]
+  ): Promise<{ txHash: string; updatedAssets: UpdateListingInput[] }> {
+    this.logger.log(`Updating ${updates.length} NFT listing(s) for vault ${vaultId}`);
+
+    // Validate minimum price (5 ADA minimum per WayUp requirements)
+    const MIN_PRICE_ADA = 5;
+    const invalidPrices = updates.filter(u => u.newPriceAda < MIN_PRICE_ADA);
+    if (invalidPrices.length > 0) {
+      throw new Error(`All updated listings must have a minimum price of ${MIN_PRICE_ADA} ADA`);
+    }
+
+    // Get vault and verify treasury wallet exists
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      relations: ['treasury_wallet'],
+    });
+
+    if (!vault) {
+      throw new Error(`Vault ${vaultId} not found`);
+    }
+
+    if (!vault.treasury_wallet) {
+      throw new Error(`Treasury wallet not found for vault ${vaultId}`);
+    }
+
+    const address = vault.treasury_wallet.treasury_address;
+    this.logger.log(`Using treasury wallet address: ${address}`);
+
+    // Get UTXOs to fund the update transaction
+    const utxos = await this.blockfrost.addressesUtxosAll(address);
+
+    if (utxos.length === 0) {
+      throw new Error('No UTXOs available in treasury wallet to fund update transaction');
+    }
+
+    // Serialize UTXOs for transaction building
+    const serializedUtxos: string[] = utxos.slice(0, 10).map(u => {
+      const value = CardanoWasm.Value.new(
+        CardanoWasm.BigNum.from_str(u.amount.find(a => a.unit === 'lovelace')?.quantity || '0')
+      );
+
+      const multiAsset = CardanoWasm.MultiAsset.new();
+      u.amount.forEach(a => {
+        if (a.unit !== 'lovelace') {
+          const policyId = CardanoWasm.ScriptHash.from_bytes(Buffer.from(a.unit.slice(0, 56), 'hex'));
+          const assetsMap = CardanoWasm.Assets.new();
+          assetsMap.insert(
+            CardanoWasm.AssetName.new(Buffer.from(a.unit.slice(56), 'hex')),
+            CardanoWasm.BigNum.from_str(a.quantity)
+          );
+          multiAsset.insert(policyId, assetsMap);
+        }
+      });
+
+      if (multiAsset.len() > 0) {
+        value.set_multiasset(multiAsset);
+      }
+
+      const txOut = CardanoWasm.TransactionOutput.new(CardanoWasm.Address.from_bech32(u.address), value);
+
+      const txUtxo = CardanoWasm.TransactionUnspentOutput.new(
+        CardanoWasm.TransactionInput.new(
+          CardanoWasm.TransactionHash.from_bytes(Buffer.from(u.tx_hash, 'hex')),
+          u.output_index
+        ),
+        txOut
+      );
+
+      return Buffer.from(txUtxo.to_bytes()).toString('hex');
+    });
+
+    // Create update payload
+    const updatePayload: UpdateListingPayload = {
+      changeAddress: address,
+      utxos: serializedUtxos,
+      update: updates,
+    };
+
+    this.logger.log(`Building update transaction for ${updates.length} listing(s)`);
+    this.logger.log(`Updates: ${JSON.stringify(updates)}`);
+
+    // Build the transaction
+    const buildResponse = await this.blockchainService.buildWayUpTransaction(updatePayload);
+
+    if (!buildResponse.complete) {
+      throw new Error('Failed to build update listing transaction');
+    }
+
+    // Sign the transaction with treasury wallet private key
+    this.logger.log('Signing update listing transaction with treasury wallet');
+    const signedTx = await this.signTransaction(vaultId, buildResponse.complete);
+
+    // Submit the transaction
+    this.logger.log('Submitting update listing transaction to blockchain');
+    const submitResponse = await this.blockchainService.submitTransaction({
+      transaction: signedTx,
+    });
+
+    this.logger.log(`NFT listing update completed successfully. TxHash: ${submitResponse.txHash}`);
+    this.logger.log(`${updates.length} listing(s) updated with new prices`);
+
+    return {
+      txHash: submitResponse.txHash,
+      updatedAssets: updates,
     };
   }
 }

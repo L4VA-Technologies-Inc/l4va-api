@@ -34,6 +34,15 @@ interface UnlistNFTDto {
   }>;
 }
 
+interface UpdateListingDto {
+  vaultId: string;
+  updates: Array<{
+    policyId: string;
+    txHashIndex: string; // Format: txHash#outputIndex
+    newPriceAda: number;
+  }>;
+}
+
 @ApiTags('wayup')
 @Controller('wayup')
 export class WayUpController {
@@ -80,6 +89,25 @@ export class WayUpController {
     @Body() body: UnlistNFTDto
   ): Promise<{ txHash: string; unlistedAssets: Array<{ policyId: string; txHashIndex: string }> }> {
     return this.wayUpService.unlistNFTs(body.vaultId, body.unlistings);
+  }
+
+  @Post('update-listing')
+  @ApiOperation({ summary: 'Update NFT listing price on WayUp Marketplace (build, sign, and submit)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Listing price updated successfully',
+    schema: {
+      properties: {
+        txHash: { type: 'string' },
+        updatedAssets: { type: 'array' },
+      },
+    },
+  })
+  async updateListing(@Body() body: UpdateListingDto): Promise<{
+    txHash: string;
+    updatedAssets: Array<{ policyId: string; txHashIndex: string; newPriceAda: number }>;
+  }> {
+    return this.wayUpService.updateListing(body.vaultId, body.updates);
   }
 
   @Post('submit')

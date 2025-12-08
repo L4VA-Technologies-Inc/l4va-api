@@ -519,7 +519,7 @@ export class BlockchainService {
 
   /**
    * Builds a WayUp marketplace transaction
-   * @param input Transaction input containing utxos, changeAddress, and create/unlist arrays
+   * @param input Transaction input containing utxos, changeAddress, and create/unlist/update arrays
    * @returns Transaction build response
    */
   async buildWayUpTransaction(input: {
@@ -532,6 +532,11 @@ export class BlockchainService {
     unlist?: {
       policyId: string;
       txHashIndex: string;
+    }[];
+    update?: {
+      policyId: string;
+      txHashIndex: string;
+      newPriceAda: number;
     }[];
   }): Promise<TransactionBuildResponse> {
     try {
