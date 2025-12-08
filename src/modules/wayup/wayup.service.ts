@@ -7,7 +7,6 @@ import { Repository } from 'typeorm';
 
 import { Vault } from '@/database/vault.entity';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
-import { TransactionBuildResponse } from '@/modules/vaults/processing-tx/onchain/types/transaction-status.enum';
 import { getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 
@@ -93,113 +92,6 @@ export class WayUpService {
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
     });
-  }
-
-  async listNFTs(vaultId: string, policyIds?: { id: string; priceAda: number }[]): Promise<TransactionBuildResponse> {
-    // Get vault and verify treasury wallet exists
-    const vault = await this.vaultRepository.findOne({
-      where: { id: vaultId },
-      relations: ['treasury_wallet'],
-    });
-
-    if (!vault) {
-      throw new Error(`Vault ${vaultId} not found`);
-    }
-
-    if (!vault.treasury_wallet) {
-      throw new Error(`Treasury wallet not found for vault ${vaultId}`);
-    }
-
-    const address = vault.treasury_wallet.treasury_address;
-    this.logger.log(`Using treasury wallet address: ${address}`);
-
-    const utxos = await this.blockfrost.addressesUtxosAll(address);
-
-    const filtered = utxos
-      .map(u => ({
-        ...u,
-        amount: u.amount.filter(a => a.unit !== 'lovelace' && policyIds?.some(p => p.id === a.unit.slice(0, 56))),
-      }))
-      .filter(u => u.amount.length > 0);
-
-    if (filtered.length === 0) {
-      throw new Error('No matching assets found');
-    }
-
-    const serializedUtxos: string[] = filtered.map(u => {
-      const value = CardanoWasm.Value.new(
-        CardanoWasm.BigNum.from_str(u.amount.find(a => a.unit === 'lovelace')?.quantity || '0')
-      );
-
-      const multiAsset = CardanoWasm.MultiAsset.new();
-      u.amount.forEach(a => {
-        if (a.unit !== 'lovelace') {
-          const policyId = CardanoWasm.ScriptHash.from_bytes(Buffer.from(a.unit.slice(0, 56), 'hex'));
-          const assetsMap = CardanoWasm.Assets.new();
-          assetsMap.insert(
-            CardanoWasm.AssetName.new(Buffer.from(a.unit.slice(56), 'hex')),
-            CardanoWasm.BigNum.from_str(a.quantity)
-          );
-          multiAsset.insert(policyId, assetsMap);
-        }
-      });
-      value.set_multiasset(multiAsset);
-
-      const txOut = CardanoWasm.TransactionOutput.new(CardanoWasm.Address.from_bech32(u.address), value);
-
-      const txUtxo = CardanoWasm.TransactionUnspentOutput.new(
-        CardanoWasm.TransactionInput.new(
-          CardanoWasm.TransactionHash.from_bytes(Buffer.from(u.tx_hash, 'hex')),
-          u.output_index
-        ),
-        txOut
-      );
-
-      return Buffer.from(txUtxo.to_bytes()).toString('hex');
-    });
-
-    const create = filtered
-      .flatMap(u => u.amount)
-      .reduce<{ assets: { policyId: string; assetName: string }; priceAda: number }[]>((acc, a) => {
-        const exists = acc.find(
-          x => x.assets.policyId === a.unit.slice(0, 56) && x.assets.assetName === a.unit.slice(56)
-        );
-        if (!exists) {
-          const priceObj = policyIds?.find(p => p.id === a.unit.slice(0, 56));
-          if (priceObj) {
-            acc.push({
-              assets: {
-                policyId: a.unit.slice(0, 56),
-                assetName: a.unit.slice(56),
-              },
-              priceAda: priceObj.priceAda, // minimum 5 ADA,
-            });
-          }
-        }
-        return acc;
-      }, []);
-
-    const input = {
-      changeAddress: address,
-      utxos: serializedUtxos,
-      create,
-    };
-
-    this.logger.log(`Building WayUp transaction for vault ${vaultId}`);
-    this.logger.log(`Treasury address: ${address}`);
-    this.logger.log(`UTXOs count: ${serializedUtxos.length}`);
-    this.logger.log(`Assets to list: ${JSON.stringify(input.create)}`);
-
-    try {
-      // Use BlockchainService to build the transaction
-      const buildResponse = await this.blockchainService.buildWayUpTransaction(input);
-
-      this.logger.log(`WayUp transaction built successfully for vault ${vaultId}`);
-      return buildResponse;
-    } catch (e) {
-      this.logger.error(`Failed to build WayUp transaction for vault ${vaultId}`, e);
-      throw new Error(`Failed to build WayUp transaction: ${e.message}`);
-    }
   }
 
   /**
