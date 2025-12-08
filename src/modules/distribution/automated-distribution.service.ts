@@ -100,7 +100,7 @@ export class AutomatedDistributionService {
         vault_sc_status: SmartContractVaultStatus.SUCCESSFUL,
         last_update_tx_hash: Not(IsNull()),
         distribution_processed: false,
-        created_at: MoreThan(new Date('2025-10-22').toISOString()),
+        created_at: MoreThan(new Date('2025-10-22')),
       },
       select: ['id', 'tokens_for_acquires', 'dispatch_parametized_hash', 'script_hash', 'asset_vault_name'],
     });

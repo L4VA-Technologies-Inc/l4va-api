@@ -144,7 +144,7 @@ export class LifecycleService {
       vault.vault_status = data.newStatus;
 
       if (data.phaseStartField) {
-        vault[data.phaseStartField] = new Date().toISOString();
+        vault[data.phaseStartField] = new Date();
       }
 
       if (data.newStatus === VaultStatus.failed) {
@@ -242,7 +242,7 @@ export class LifecycleService {
       if (data.newScStatus === SmartContractVaultStatus.SUCCESSFUL) {
         vault.vault_sc_status = data.newScStatus;
         vault.last_update_tx_hash = data.txHash;
-        vault.locked_at = new Date().toISOString();
+        vault.locked_at = new Date();
         vault.ada_pair_multiplier = data.ada_pair_multiplier;
         vault.vt_price = data.vtPrice;
         vault.acquire_multiplier = data.acquire_multiplier;

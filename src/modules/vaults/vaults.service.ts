@@ -234,11 +234,9 @@ export class VaultsService {
         : null;
 
       const contributionOpenWindowTime = data.contributionOpenWindowTime
-        ? new Date(data.contributionOpenWindowTime).toISOString()
+        ? new Date(data.contributionOpenWindowTime)
         : null;
-      const acquireOpenWindowTime = data.acquireOpenWindowTime
-        ? new Date(data.acquireOpenWindowTime).toISOString()
-        : null;
+      const acquireOpenWindowTime = data.acquireOpenWindowTime ? new Date(data.acquireOpenWindowTime) : null;
 
       // Prepare vault data
       const vaultData = transformToSnakeCase({
@@ -789,11 +787,14 @@ export class VaultsService {
       .getMany();
 
     return vaults.map(vault => {
-      const start = new Date(vault.acquire_phase_start);
+      const start = vault.acquire_phase_start ?? new Date();
       const duration = Number(vault.acquire_window_duration);
       const timeLeft = new Date(start.getTime() + duration);
+      const { acquire_phase_start, ...rest } = vault as Vault & { acquire_phase_start: Date };
+
       return {
-        ...vault,
+        ...rest,
+        acquire_phase_start: acquire_phase_start ? acquire_phase_start.toISOString() : null,
         timeLeft: timeLeft.toISOString(),
       } as VaultAcquireResponse;
     });
@@ -1313,7 +1314,7 @@ export class VaultsService {
       switch (vault.vault_status) {
         case VaultStatus.published:
           // For published vaults, start time is when it was published
-          phaseStartTime = new Date(vault.created_at);
+          phaseStartTime = vault.created_at;
 
           // End time is when contribution phase starts
           if (vault.contribution_open_window_type === ContributionWindowType.uponVaultLaunch) {
@@ -1326,7 +1327,7 @@ export class VaultsService {
         case VaultStatus.contribution:
           // Start time is either actual contribution_phase_start or fallback to planned time
           phaseStartTime = vault.contribution_phase_start
-            ? new Date(vault.contribution_phase_start)
+            ? vault.contribution_phase_start
             : vault.contribution_open_window_time
               ? new Date(Number(vault.contribution_open_window_time))
               : null;
@@ -1340,7 +1341,7 @@ export class VaultsService {
         case VaultStatus.acquire:
           // Start time is either actual acquire_phase_start or fallback to planned time
           phaseStartTime = vault.acquire_phase_start
-            ? new Date(vault.acquire_phase_start)
+            ? vault.acquire_phase_start
             : vault.acquire_open_window_time
               ? new Date(Number(vault.acquire_open_window_time))
               : null;
@@ -1353,7 +1354,7 @@ export class VaultsService {
 
         case VaultStatus.locked:
           // Start time is when the vault was locked
-          phaseStartTime = vault.locked_at ? new Date(vault.locked_at) : null;
+          phaseStartTime = vault.locked_at ?? null;
           // No end time for locked vaults
           phaseEndTime = null;
           break;
