@@ -5,7 +5,6 @@ import { Address, FixedTransaction, PlutusData, PrivateKey } from '@emurgo/carda
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { create } from 'axios';
 import { plainToInstance } from 'class-transformer';
 import { In, Repository } from 'typeorm';
 
