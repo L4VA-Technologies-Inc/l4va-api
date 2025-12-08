@@ -43,6 +43,15 @@ interface UpdateListingDto {
   }>;
 }
 
+interface MakeOfferDto {
+  vaultId: string;
+  offers: Array<{
+    policyId: string;
+    assetName: string;
+    priceAda: number;
+  }>;
+}
+
 @ApiTags('wayup')
 @Controller('wayup')
 export class WayUpController {
@@ -108,6 +117,25 @@ export class WayUpController {
     updatedAssets: Array<{ policyId: string; txHashIndex: string; newPriceAda: number }>;
   }> {
     return this.wayUpService.updateListing(body.vaultId, body.updates);
+  }
+
+  @Post('make-offer')
+  @ApiOperation({ summary: 'Make an offer (bid) on NFTs in WayUp Marketplace (build, sign, and submit)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Offer created successfully',
+    schema: {
+      properties: {
+        txHash: { type: 'string' },
+        offers: { type: 'array' },
+      },
+    },
+  })
+  async makeOffer(@Body() body: MakeOfferDto): Promise<{
+    txHash: string;
+    offers: Array<{ policyId: string; assetName: string; priceAda: number }>;
+  }> {
+    return this.wayUpService.makeOffer(body.vaultId, body.offers);
   }
 
   @Post('submit')

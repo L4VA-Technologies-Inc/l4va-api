@@ -30,6 +30,12 @@ interface UpdateListingInput {
   newPriceAda: number;
 }
 
+interface MakeOfferInput {
+  policyId: string;
+  assetName: string;
+  priceAda: number;
+}
+
 interface ListingPayload {
   changeAddress: string;
   utxos: string[];
@@ -52,6 +58,12 @@ interface UpdateListingPayload {
   changeAddress: string;
   utxos: string[];
   update: UpdateListingInput[];
+}
+
+interface MakeOfferPayload {
+  changeAddress: string;
+  utxos: string[];
+  createOffer: MakeOfferInput[];
 }
 
 @Injectable()
@@ -579,6 +591,124 @@ export class WayUpService {
     return {
       txHash: submitResponse.txHash,
       updatedAssets: updates,
+    };
+  }
+
+  /**
+   * Make an offer (bid) on NFTs in WayUp Marketplace
+   * Builds, signs, and submits the offer transaction
+   *
+   * @param vaultId - The vault ID making the offers
+   * @param offers - Array of NFTs to bid on with offer amounts
+   * @returns Transaction hash of the submitted offer
+   */
+  async makeOffer(vaultId: string, offers: MakeOfferInput[]): Promise<{ txHash: string; offers: MakeOfferInput[] }> {
+    this.logger.log(`Creating ${offers.length} offer(s) for vault ${vaultId}`);
+
+    // Validate minimum offer (5 ADA minimum per WayUp requirements)
+    const MIN_OFFER_ADA = 5;
+    const invalidOffers = offers.filter(o => o.priceAda < MIN_OFFER_ADA);
+    if (invalidOffers.length > 0) {
+      throw new Error(`All offers must be at least ${MIN_OFFER_ADA} ADA`);
+    }
+
+    // Get vault and verify treasury wallet exists
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      relations: ['treasury_wallet'],
+    });
+
+    if (!vault) {
+      throw new Error(`Vault ${vaultId} not found`);
+    }
+
+    if (!vault.treasury_wallet) {
+      throw new Error(`Treasury wallet not found for vault ${vaultId}`);
+    }
+
+    const address = vault.treasury_wallet.treasury_address;
+    this.logger.log(`Using treasury wallet address: ${address}`);
+
+    // Get UTXOs to fund the offer transaction
+    const utxos = await this.blockfrost.addressesUtxosAll(address);
+
+    if (utxos.length === 0) {
+      throw new Error('No UTXOs available in treasury wallet to fund offer transaction');
+    }
+
+    // Calculate total ADA needed for all offers
+    const totalOfferAda = offers.reduce((sum, offer) => sum + offer.priceAda, 0);
+    this.logger.log(`Total ADA needed for offers: ${totalOfferAda} ADA`);
+
+    // Serialize UTXOs for transaction building (take enough to cover offers + fees)
+    const serializedUtxos: string[] = utxos.slice(0, 15).map(u => {
+      const value = CardanoWasm.Value.new(
+        CardanoWasm.BigNum.from_str(u.amount.find(a => a.unit === 'lovelace')?.quantity || '0')
+      );
+
+      const multiAsset = CardanoWasm.MultiAsset.new();
+      u.amount.forEach(a => {
+        if (a.unit !== 'lovelace') {
+          const policyId = CardanoWasm.ScriptHash.from_bytes(Buffer.from(a.unit.slice(0, 56), 'hex'));
+          const assetsMap = CardanoWasm.Assets.new();
+          assetsMap.insert(
+            CardanoWasm.AssetName.new(Buffer.from(a.unit.slice(56), 'hex')),
+            CardanoWasm.BigNum.from_str(a.quantity)
+          );
+          multiAsset.insert(policyId, assetsMap);
+        }
+      });
+
+      if (multiAsset.len() > 0) {
+        value.set_multiasset(multiAsset);
+      }
+
+      const txOut = CardanoWasm.TransactionOutput.new(CardanoWasm.Address.from_bech32(u.address), value);
+
+      const txUtxo = CardanoWasm.TransactionUnspentOutput.new(
+        CardanoWasm.TransactionInput.new(
+          CardanoWasm.TransactionHash.from_bytes(Buffer.from(u.tx_hash, 'hex')),
+          u.output_index
+        ),
+        txOut
+      );
+
+      return Buffer.from(txUtxo.to_bytes()).toString('hex');
+    });
+
+    // Create offer payload
+    const offerPayload: MakeOfferPayload = {
+      changeAddress: address,
+      utxos: serializedUtxos,
+      createOffer: offers,
+    };
+
+    this.logger.log(`Building offer transaction for ${offers.length} NFT(s)`);
+    this.logger.log(`Offers: ${JSON.stringify(offers)}`);
+
+    // Build the transaction
+    const buildResponse = await this.blockchainService.buildWayUpTransaction(offerPayload);
+
+    if (!buildResponse.complete) {
+      throw new Error('Failed to build offer transaction');
+    }
+
+    // Sign the transaction with treasury wallet private key
+    this.logger.log('Signing offer transaction with treasury wallet');
+    const signedTx = await this.signTransaction(vaultId, buildResponse.complete);
+
+    // Submit the transaction
+    this.logger.log('Submitting offer transaction to blockchain');
+    const submitResponse = await this.blockchainService.submitTransaction({
+      transaction: signedTx,
+    });
+
+    this.logger.log(`Offer(s) created successfully. TxHash: ${submitResponse.txHash}`);
+    this.logger.log(`${offers.length} offer(s) submitted for NFTs`);
+
+    return {
+      txHash: submitResponse.txHash,
+      offers: offers,
     };
   }
 }
