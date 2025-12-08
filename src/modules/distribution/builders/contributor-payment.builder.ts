@@ -1,0 +1,344 @@
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
+import { Injectable, Logger } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+
+import {
+  PayAdaContributionInput,
+  ScriptInteraction,
+  TransactionOutput,
+  AddressesUtxo,
+  AssetOutput,
+} from '../distribution.types';
+import { selectDispatchUtxos, validateBalanceEquation } from '../utils/distribution.utils';
+
+import { Asset } from '@/database/asset.entity';
+import { Claim } from '@/database/claim.entity';
+import { Vault } from '@/database/vault.entity';
+import { generate_tag_from_txhash_index, getAddressFromHash } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+
+/**
+ * Builds payment transactions for contributor claims
+ * Handles the logic of paying ADA + vault tokens to contributors
+ */
+@Injectable()
+export class ContributorPaymentBuilder {
+  private readonly logger = new Logger(ContributorPaymentBuilder.name);
+
+  constructor(
+    @InjectRepository(Asset)
+    private readonly assetRepository: Repository<Asset>,
+    private readonly blockfrost: BlockFrostAPI
+  ) {}
+
+  /**
+   * Build batched payment transaction input for multiple contributor claims
+   */
+  async buildPaymentInput(
+    vault: Vault,
+    claims: Claim[],
+    adminUtxos: string[],
+    dispatchUtxos: AddressesUtxo[],
+    config: {
+      adminAddress: string;
+      adminHash: string;
+      unparametizedDispatchHash: string;
+    }
+  ): Promise<PayAdaContributionInput> {
+    const PARAMETERIZED_DISPATCH_HASH = vault.dispatch_parametized_hash;
+    const DISPATCH_ADDRESS = getAddressFromHash(PARAMETERIZED_DISPATCH_HASH);
+    const SC_ADDRESS = getAddressFromHash(vault.script_hash);
+
+    const scriptInteractions: ScriptInteraction[] = [];
+    const outputs: TransactionOutput[] = [];
+    const mintAssets: { vaultTokenQuantity: number; receiptBurn: number }[] = [];
+
+    const hasDispatchFunding = dispatchUtxos.length > 0;
+    let totalPaymentAmount = 0;
+    let currentOutputIndex = 0;
+
+    // Process each claim in the batch
+    for (const claim of claims) {
+      const { transaction: originalTx, lovelace_amount } = claim;
+
+      if (hasDispatchFunding) {
+        totalPaymentAmount += Number(lovelace_amount);
+      }
+
+      // Get original contribution assets
+      const contributedAssets = await this.assetRepository.find({
+        where: { transaction: { id: originalTx.id } },
+      });
+
+      const contributionAssets = this.formatContributionAssets(contributedAssets);
+
+      // Get contribution output details and validate
+      const contribOutput = await this.getAndValidateContributionOutput(originalTx.tx_hash, claim.id);
+
+      const userAddress = claim.user.address;
+      const datumTag = generate_tag_from_txhash_index(originalTx.tx_hash, 0);
+      const vaultTokenQuantity = Number(claim.amount);
+
+      // Add script interaction for spending the contribution UTXO
+      scriptInteractions.push({
+        purpose: 'spend',
+        hash: vault.script_hash,
+        outputRef: {
+          txHash: originalTx.tx_hash,
+          index: 0,
+        },
+        redeemer: {
+          type: 'json',
+          value: {
+            __variant: 'CollectVaultToken',
+            __data: {
+              vault_token_output_index: currentOutputIndex,
+              change_output_index: currentOutputIndex + 1,
+            },
+          },
+        },
+      });
+
+      // Output 1: Payment to user with vault tokens
+      const userOutput: TransactionOutput = {
+        address: userAddress,
+      };
+
+      // Add ADA payment and datum only if dispatch funding exists
+      if (hasDispatchFunding) {
+        userOutput.lovelace = Number(lovelace_amount);
+        userOutput.datum = {
+          type: 'inline',
+          value: {
+            datum_tag: datumTag,
+            ada_paid: Number(lovelace_amount),
+          },
+          shape: {
+            validatorHash: config.unparametizedDispatchHash,
+            purpose: 'spend',
+          },
+        };
+      } else {
+        // When no dispatch funding, use OutputPayoutDatum with None for ada_paid
+        userOutput.datum = {
+          type: 'inline',
+          value: {
+            datum_tag: datumTag,
+            ada_paid: null, // This represents None in Aiken
+          },
+          shape: {
+            validatorHash: config.unparametizedDispatchHash,
+            purpose: 'spend',
+          },
+        };
+      }
+
+      // Only add vault tokens if quantity > 0
+      if (vaultTokenQuantity > 0) {
+        userOutput.assets = [
+          {
+            assetName: { name: vault.asset_vault_name, format: 'hex' },
+            policyId: vault.script_hash,
+            quantity: vaultTokenQuantity,
+          },
+        ];
+      }
+
+      outputs.push(userOutput);
+
+      // Output 2: Return to SC address with original contributed assets
+      outputs.push({
+        address: SC_ADDRESS,
+        lovelace: Number(contribOutput.amount.find((u: any) => u.unit === 'lovelace')?.quantity),
+        assets: contributionAssets,
+        datum: {
+          type: 'inline',
+          value: {
+            policy_id: vault.script_hash,
+            asset_name: vault.asset_vault_name,
+            owner: userAddress,
+            datum_tag: datumTag,
+          },
+          shape: {
+            validatorHash: vault.script_hash,
+            purpose: 'spend',
+          },
+        },
+      });
+
+      mintAssets.push({
+        vaultTokenQuantity,
+        receiptBurn: -1,
+      });
+
+      currentOutputIndex += 2;
+    }
+
+    // Handle dispatch UTXOs only if they exist
+    if (hasDispatchFunding) {
+      const { selectedUtxos, totalAmount } = selectDispatchUtxos(dispatchUtxos, totalPaymentAmount);
+
+      if (selectedUtxos.length === 0 || totalAmount < totalPaymentAmount) {
+        throw new Error(
+          `Insufficient ADA at dispatch address. Need ${totalPaymentAmount} lovelace, but only ${totalAmount} available`
+        );
+      }
+
+      const actualRemainingDispatchLovelace = totalAmount - totalPaymentAmount;
+
+      if (!validateBalanceEquation(totalAmount, actualRemainingDispatchLovelace, totalPaymentAmount)) {
+        throw new Error(
+          `Balance equation invalid: ${totalAmount} < ${actualRemainingDispatchLovelace} + ${totalPaymentAmount}`
+        );
+      }
+
+      // Add dispatch script interactions
+      for (const utxo of selectedUtxos) {
+        scriptInteractions.push({
+          purpose: 'spend',
+          hash: PARAMETERIZED_DISPATCH_HASH,
+          outputRef: {
+            txHash: utxo.tx_hash,
+            index: utxo.output_index,
+          },
+          redeemer: {
+            type: 'json',
+            value: null,
+          },
+        });
+      }
+
+      scriptInteractions.push({
+        purpose: 'withdraw',
+        hash: PARAMETERIZED_DISPATCH_HASH,
+        redeemer: {
+          type: 'json',
+          value: null,
+        },
+      });
+
+      // Output: Return remaining ADA to dispatch address
+      outputs.push({
+        address: DISPATCH_ADDRESS,
+        lovelace: actualRemainingDispatchLovelace,
+      });
+    } else {
+      this.logger.log(
+        `No dispatch funding (0% acquirers/LP). Transaction will only mint vault tokens and return contributed assets to contributors.`
+      );
+    }
+
+    // Add mint script interaction
+    scriptInteractions.push({
+      purpose: 'mint',
+      hash: vault.script_hash,
+      redeemer: {
+        type: 'json',
+        value: 'MintVaultToken',
+      },
+    });
+
+    // Calculate total mint quantities
+    const totalVaultTokenQuantity = mintAssets.reduce((sum, m) => sum + m.vaultTokenQuantity, 0);
+    const totalReceiptBurn = mintAssets.reduce((sum, m) => sum + m.receiptBurn, 0);
+
+    // Build mint array - only include vault tokens if quantity > 0
+    const mintArray: any[] = [];
+
+    if (totalVaultTokenQuantity > 0) {
+      mintArray.push({
+        version: 'cip25',
+        assetName: { name: vault.asset_vault_name, format: 'hex' },
+        policyId: vault.script_hash,
+        type: 'plutus',
+        quantity: totalVaultTokenQuantity,
+      });
+    }
+
+    // Always include receipt burn
+    mintArray.push({
+      version: 'cip25',
+      assetName: { name: 'receipt', format: 'utf8' },
+      policyId: vault.script_hash,
+      type: 'plutus',
+      quantity: totalReceiptBurn,
+    });
+
+    return {
+      changeAddress: config.adminAddress,
+      message: `Batch payment for ${claims.length} contributors`,
+      utxos: adminUtxos,
+      preloadedScripts: hasDispatchFunding ? [vault.dispatch_preloaded_script.preloadedScript] : [],
+      scriptInteractions,
+      mint: mintArray,
+      outputs,
+      requiredSigners: [config.adminHash],
+      referenceInputs: [
+        {
+          txHash: vault.last_update_tx_hash,
+          index: 0,
+        },
+      ],
+      validityInterval: {
+        start: true,
+        end: true,
+      },
+      network: 'preprod',
+    };
+  }
+
+  /**
+   * Format contributed assets for transaction output
+   */
+  private formatContributionAssets(assets: Asset[]): AssetOutput[] {
+    const contributionAssets: AssetOutput[] = [];
+
+    if (assets.length > 0) {
+      for (const asset of assets) {
+        contributionAssets.push({
+          assetName: {
+            name: asset.asset_id,
+            format: 'hex',
+          },
+          policyId: asset.policy_id,
+          quantity: Number(asset.quantity),
+        });
+      }
+    }
+
+    return contributionAssets;
+  }
+
+  /**
+   * Get and validate contribution output from blockchain
+   */
+  private async getAndValidateContributionOutput(
+    txHash: string,
+    claimId: string
+  ): Promise<{
+    address: string;
+    amount: {
+      unit: string;
+      quantity: string;
+    }[];
+    output_index: number;
+    data_hash: string;
+    inline_datum: string;
+    collateral: boolean;
+    reference_script_hash: string;
+    consumed_by_tx?: string;
+  }> {
+    const contribTxUtxos = await this.blockfrost.txsUtxos(txHash);
+    const contribOutput = contribTxUtxos.outputs[0];
+
+    if (!contribOutput) {
+      throw new Error(`No contribution output found for claim ${claimId}`);
+    }
+
+    if (contribOutput.consumed_by_tx) {
+      throw new Error(`Contribution UTXO ${txHash}#0 already consumed by ${contribOutput.consumed_by_tx}`);
+    }
+
+    return contribOutput;
+  }
+}

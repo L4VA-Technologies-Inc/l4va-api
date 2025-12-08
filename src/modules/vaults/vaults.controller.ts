@@ -1,15 +1,22 @@
-import { Controller, Post, Body, Get, Param, Request, UseGuards, Query, Logger } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { Controller, Post, Body, Get, Param, Request, UseGuards, Query, Logger, ParseUUIDPipe } from '@nestjs/common';
+import { ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 
 import { ApiDoc } from '../../decorators/api-doc.decorator';
 import { AuthGuard } from '../auth/auth.guard';
+import { AuthRequest } from '../auth/dto/auth-user.interface';
+import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 
 import { DraftVaultsService } from './draft-vaults.service';
+import { BuildBurnTransactionRes } from './dto/build-burn-transaction.res';
+import { CreateVaultRes } from './dto/create-vault.res';
 import { CreateVaultReq } from './dto/createVault.req';
+import { GetVaultParamDto } from './dto/get-vault-param.dto';
 import { GetVaultTransactionsDto } from './dto/get-vault-transactions.dto';
 import { VaultStatisticsResponse } from './dto/get-vaults-statistics.dto';
 import { GetVaultsDto } from './dto/get-vaults.dto';
+import { IncrementViewCountRes } from './dto/increment-view-count.res';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
+import { PublishBurnTransactionRes } from './dto/publish-burn-transaction.res';
 import { PublishVaultDto } from './dto/publish-vault.dto';
 import { SaveDraftReq } from './dto/saveDraft.req';
 import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
@@ -35,14 +42,7 @@ export class VaultsController {
   })
   @UseGuards(AuthGuard)
   @Post()
-  createVault(
-    @Request() req,
-    @Body()
-    data: CreateVaultReq
-  ): Promise<{
-    vaultId: string;
-    presignedTx: string;
-  }> {
+  createVault(@Request() req: AuthRequest, @Body() data: CreateVaultReq): Promise<CreateVaultRes> {
     const userId = req.user.sub;
     return this.vaultsService.createVault(userId, data);
   }
@@ -54,7 +54,7 @@ export class VaultsController {
   })
   @UseGuards(AuthGuard)
   @Post('/publish')
-  async publishVault(@Request() req, @Body() publishDto: PublishVaultDto): Promise<VaultFullResponse> {
+  async publishVault(@Request() req: AuthRequest, @Body() publishDto: PublishVaultDto): Promise<VaultFullResponse> {
     const userId = req.user.sub;
     try {
       return await this.vaultsService.publishVault(userId, publishDto);
@@ -72,7 +72,7 @@ export class VaultsController {
   @UseGuards(AuthGuard)
   @Post('save-draft')
   saveDraft(
-    @Request() req,
+    @Request() req: AuthRequest,
     @Body()
     data: SaveDraftReq
   ): Promise<any> {
@@ -81,18 +81,47 @@ export class VaultsController {
   }
 
   @ApiDoc({
-    summary: 'List of public vaults',
+    summary: 'List of vaults - works with or without authentication',
     description:
-      'Returns paginated list of all published vaults. Default page: 1, default limit: 10. Supports sorting by name, created_at, or updated_at. Response includes total count and total pages.',
+      'Returns paginated list of vaults. For authenticated users, includes private vaults they have access to. For unauthenticated users, shows only public vaults. Default page: 1, default limit: 10. Supports sorting by name, created_at, or updated_at.',
     status: 200,
   })
   @Post('search')
-  getVaults(@Body() filters: GetVaultsDto, @Request() req): Promise<PaginatedResponseDto<VaultShortResponse>> {
+  @UseGuards(OptionalAuthGuard)
+  getVaults(@Body() filters: GetVaultsDto, @Request() req: any): Promise<PaginatedResponseDto<VaultShortResponse>> {
     const userId = req.user?.sub;
+
+    if (filters.ownerId) {
+      return this.vaultsService.getVaults({
+        ...filters,
+        isPublicOnly: true,
+      });
+    }
+
+    // If no user is authenticated, only show public vaults
+    if (!userId) {
+      return this.vaultsService.getVaults({
+        ...filters,
+      });
+    }
+
+    // For authenticated users, show all vaults they have access to
     return this.vaultsService.getVaults({
       userId,
       ...filters,
     });
+  }
+
+  @ApiOperation({ summary: 'Increment view count for a vault by vault id' })
+  @ApiParam({ name: 'id', description: 'Vault ID' })
+  @Post(':id/view')
+  async incrementViewCount(@Param('id', new ParseUUIDPipe()) vaultId: string): Promise<IncrementViewCountRes> {
+    const result = await this.vaultsService.incrementViewCount(vaultId);
+    return {
+      affected: result.affected || 0,
+      generatedMaps: result.generatedMaps || [],
+      raw: result.raw,
+    };
   }
 
   @ApiDoc({
@@ -122,7 +151,10 @@ export class VaultsController {
   })
   @UseGuards(AuthGuard)
   @Get('my/drafts')
-  getMyDraftVaults(@Request() req, @Query() query: GetVaultsDto): Promise<PaginatedResponseDto<VaultShortResponse>> {
+  getMyDraftVaults(
+    @Request() req: AuthRequest,
+    @Query() query: GetVaultsDto
+  ): Promise<PaginatedResponseDto<VaultShortResponse>> {
     const userId = req.user.sub;
     return this.draftVaultsService.getMyDraftVaults(userId, query.page, query.limit, query.sortBy, query.sortOrder);
   }
@@ -132,20 +164,23 @@ export class VaultsController {
     description: 'Returns vault if user is the owner. Uses draft service for draft vaults.',
     status: 200,
   })
+  @UseGuards(OptionalAuthGuard)
   @Get(':id')
-  async getVaultById(@Param('id') id: string, @Request() req): Promise<VaultFullResponse | Record<string, unknown>> {
+  async getVaultById(
+    @Param() params: GetVaultParamDto,
+    @Request() req: AuthRequest
+  ): Promise<VaultFullResponse | Record<string, unknown>> {
     const userId = req.user?.sub;
 
     if (!userId) {
-      // If user is not authenticated, return public vault
-      return this.vaultsService.getVaultById(id);
+      return this.vaultsService.getVaultById(params.id);
     }
 
     try {
-      return await this.draftVaultsService.getDraftVaultById(id, userId);
+      return await this.draftVaultsService.getDraftVaultById(params.id, userId);
     } catch (error) {
       if (error?.message === 'Draft vault not found') {
-        return this.vaultsService.getVaultById(id);
+        return this.vaultsService.getVaultById(params.id, userId);
       }
       throw error;
     }
@@ -165,40 +200,32 @@ export class VaultsController {
   }
 
   @ApiDoc({
-    summary: 'Burn vault',
-    description: 'Returns list of vault transactions. By default shows only confirmed transactions.',
+    summary: 'Build burn transaction',
+    description: 'Builds a burn transaction for the specified vault and returns the presigned transaction.',
     status: 200,
   })
   @UseGuards(AuthGuard)
-  @Post('burn-build/:id')
+  @Post(':id/burn/build')
   async burnVaultAttempt(
-    @Param('id') id: string,
-    @Query() query: GetVaultTransactionsDto,
-    @Request() req
-  ): Promise<{
-    txId: string;
-    presignedTx: string;
-    contractAddress: string;
-  }> {
-    const userId = req.user.sub;
-    return await this.vaultsService.burnVaultAttempt(id, userId);
+    @Param() params: GetVaultParamDto,
+    @Request() req: AuthRequest
+  ): Promise<BuildBurnTransactionRes> {
+    return await this.vaultsService.buildBurnTransaction(params.id, req.user.sub);
   }
 
   @ApiDoc({
-    summary: 'Burn vault',
-    description: 'Returns list of vault transactions. By default shows only confirmed transactions.',
+    summary: 'Publish burn tx',
+    description: 'Publishes a signed burn transaction for the specified vault.',
     status: 200,
   })
   @UseGuards(AuthGuard)
-  @Post('burn-publish/:id')
+  @Post(':id/burn/publish')
   async burnPublishAtempt(
-    @Param('id') id: string,
-    @Query() query: GetVaultTransactionsDto,
+    @Param() params: GetVaultParamDto,
     @Body() publishDto: PublishVaultDto,
-    @Request() req
-  ): Promise<unknown> {
+    @Request() req: AuthRequest
+  ): Promise<PublishBurnTransactionRes> {
     const userId = req.user.sub;
-
-    return await this.vaultsService.burnVaultPublishTx(id, userId, publishDto);
+    return await this.vaultsService.publishBurnTransaction(params.id, userId, publishDto);
   }
 }

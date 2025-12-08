@@ -21,6 +21,7 @@ import {
   SmartContractVaultStatus,
   TerminationType,
   ValueMethod,
+  VaultFailureReason,
   VaultPrivacy,
   VaultStatus,
   VaultType,
@@ -29,6 +30,7 @@ import {
 import { AcquirerWhitelistEntity } from './acquirerWhitelist.entity';
 import { Asset } from './asset.entity';
 import { AssetsWhitelistEntity } from './assetsWhitelist.entity';
+import { Claim } from './claim.entity';
 import { ContributorWhitelistEntity } from './contributorWhitelist.entity';
 import { FileEntity } from './file.entity';
 import { LinkEntity } from './link.entity';
@@ -37,6 +39,7 @@ import { Snapshot } from './snapshot.entity';
 import { TagEntity } from './tag.entity';
 import { TokenRegistry } from './tokenRegistry.entity';
 import { User } from './user.entity';
+import { VaultTreasuryWallet } from './vaultTreasuryWallet.entity';
 
 @Entity('vaults')
 export class Vault {
@@ -88,6 +91,10 @@ export class Vault {
   @Column({ name: 'policy_id', nullable: true })
   policy_id: string;
 
+  @Expose({ name: 'countView' })
+  @Column({ name: 'count_view', type: 'integer', default: 0 })
+  count_view: number;
+
   @Expose({ name: 'assetVaultName' })
   @Column({
     name: 'asset_vault_name',
@@ -116,6 +123,8 @@ export class Vault {
   @Column({
     name: 'vt_price',
     type: 'numeric',
+    precision: 38,
+    scale: 25,
     nullable: true,
   })
   vt_price?: number;
@@ -136,7 +145,7 @@ export class Vault {
     type: 'timestamptz',
     nullable: true,
   })
-  contribution_open_window_time?: string;
+  contribution_open_window_time?: Date;
 
   @Expose({ name: 'contributionDuration' })
   @Transform(({ value }) => (value ? Number(value) : null))
@@ -168,7 +177,7 @@ export class Vault {
     type: 'timestamptz',
     nullable: true,
   })
-  acquire_open_window_time?: string;
+  acquire_open_window_time?: Date;
 
   @Expose({ name: 'tokensForAcquires' })
   @Transform(({ value }) => (value ? Number(value) : null))
@@ -347,6 +356,26 @@ export class Vault {
   })
   require_reserved_cost_ada: number;
 
+  @Expose({ name: 'fdv' })
+  @Transform(({ value }) => (value ? Number(value) : null))
+  @Column({
+    name: 'fdv',
+    type: 'numeric',
+    nullable: true,
+    default: 0,
+  })
+  fdv: number;
+
+  @Expose({ name: 'fdvTvl' })
+  @Transform(({ value }) => (value ? Number(value) : null))
+  @Column({
+    name: 'fdv_tvl',
+    type: 'numeric',
+    nullable: true,
+    default: 0,
+  })
+  fdv_tvl: number;
+
   @Expose({ name: 'vaultStatus' })
   @Column({
     name: 'vault_status',
@@ -365,6 +394,10 @@ export class Vault {
   @JoinColumn({ name: 'owner_id' })
   public owner: User;
 
+  @Expose({ name: 'treasuryWallet' })
+  @OneToOne(() => VaultTreasuryWallet, treasury => treasury.vault, { nullable: true })
+  treasury_wallet?: VaultTreasuryWallet;
+
   @Expose({ name: 'assetsWhitelist' })
   @OneToMany(() => AssetsWhitelistEntity, (asset: AssetsWhitelistEntity) => asset.vault)
   assets_whitelist?: AssetsWhitelistEntity[];
@@ -380,6 +413,9 @@ export class Vault {
   @Expose({ name: 'assets' })
   @OneToMany(() => Asset, (asset: Asset) => asset.vault)
   assets?: Asset[];
+
+  @OneToMany(() => Claim, claim => claim.vault)
+  claims?: Claim[];
 
   @OneToMany(() => Snapshot, snapshot => snapshot.vault)
   snapshots: Snapshot[];
@@ -399,6 +435,15 @@ export class Vault {
   })
   acquire_multiplier?: Array<[string, string | null, number]>; // [policyId, assetName?, multiplier]
 
+  @Expose({ name: 'adaDistribution' })
+  @Column({
+    name: 'ada_distribution',
+    type: 'jsonb',
+    nullable: true,
+    default: () => 'null',
+  })
+  ada_distribution?: Array<[string, string, number]>; // [policyId, assetName, ada]
+
   @Expose({ name: 'adaPairMultiplier' })
   @Transform(({ value }) => (value ? Number(value) : null))
   @Column({
@@ -408,6 +453,33 @@ export class Vault {
     default: 1,
   })
   ada_pair_multiplier?: number;
+
+  @Expose({ name: 'distributionInProgress' })
+  @Column({
+    name: 'distribution_in_progress',
+    type: 'boolean',
+    nullable: false,
+    default: false,
+  })
+  distribution_in_progress: boolean;
+
+  @Expose({ name: 'stakeRegistered' })
+  @Column({
+    name: 'stake_registered',
+    type: 'boolean',
+    nullable: false,
+    default: false,
+  })
+  stake_registered: boolean;
+
+  @Expose({ name: 'distributionProcessed' })
+  @Column({
+    name: 'distribution_processed',
+    type: 'boolean',
+    nullable: false,
+    default: false,
+  })
+  distribution_processed: boolean;
 
   @Exclude()
   @Column({
@@ -442,6 +514,23 @@ export class Vault {
     default: 0,
   })
   last_update_tx_index?: number;
+
+  @Expose({ name: 'dispatchParametizedHash' })
+  @Column({
+    name: 'dispatch_parametized_hash',
+    type: 'varchar',
+    nullable: true,
+  })
+  dispatch_parametized_hash?: string;
+
+  @Exclude()
+  @Column({
+    name: 'dispatch_preloaded_script',
+    type: 'jsonb',
+    nullable: true,
+    default: () => 'null',
+  })
+  dispatch_preloaded_script?: ApplyParamsResult;
 
   @Expose({ name: 'vaultPolicyId' })
   @Column({
@@ -500,38 +589,68 @@ export class Vault {
 
   @Expose({ name: 'updatedAt' })
   @Column({ name: 'updated_at', type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
-  updated_at: string;
+  updated_at: Date;
 
   @Expose({ name: 'createdAt' })
   @Column({ name: 'created_at', type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
-  created_at: string;
+  created_at: Date;
 
   @Expose({ name: 'contributionPhaseStart' })
   @Column({ name: 'contribution_phase_start', type: 'timestamptz', nullable: true })
-  contribution_phase_start?: string;
+  contribution_phase_start?: Date;
 
   @Expose({ name: 'acquirePhaseStart' })
   @Column({ name: 'acquire_phase_start', type: 'timestamptz', nullable: true })
-  acquire_phase_start?: string;
+  acquire_phase_start?: Date;
 
   @Expose({ name: 'lockedAt' })
   @Column({ name: 'locked_at', type: 'timestamptz', nullable: true })
-  locked_at?: string;
+  locked_at?: Date;
 
   @Column({ name: 'deleted', type: 'boolean', nullable: false, default: false })
   deleted: boolean;
 
   @Expose({ name: 'governancePhaseStart' })
   @Column({ name: 'governance_phase_start', type: 'timestamptz', nullable: true })
-  governance_phase_start?: string;
+  governance_phase_start?: Date;
 
   @BeforeInsert()
-  setDate() {
-    this.created_at = new Date().toISOString();
+  setDate(): void {
+    const now = new Date();
+    this.created_at = now;
+    this.updated_at = now;
   }
 
   @BeforeUpdate()
-  updateDate() {
-    this.updated_at = new Date().toISOString();
+  updateDate(): void {
+    this.updated_at = new Date();
   }
+
+  @Expose({ name: 'failureReason' })
+  @Column({
+    name: 'failure_reason',
+    type: 'enum',
+    enum: VaultFailureReason,
+    nullable: true,
+  })
+  failure_reason?: VaultFailureReason;
+
+  @Expose({ name: 'failureDetails' })
+  @Column({
+    name: 'failure_details',
+    type: 'jsonb',
+    nullable: true,
+  })
+  failure_details?: {
+    message?: string;
+    thresholdViolations?: Array<{
+      policyId: string;
+      count: number;
+      min: number;
+      max: number;
+    }>;
+    requiredAda?: number;
+    actualAda?: number;
+    [key: string]: any;
+  };
 }

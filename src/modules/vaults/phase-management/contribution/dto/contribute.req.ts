@@ -1,48 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Expose, Type, Transform } from 'class-transformer';
-import { IsArray, IsNotEmpty, IsOptional, ValidateNested, IsString } from 'class-validator';
+import { IsArray, IsNotEmpty, IsOptional, ValidateNested } from 'class-validator';
 
 import { AssetType } from '@/types/asset.types';
-
-class MetadataFile {
-  @ApiProperty()
-  @IsString()
-  src: string;
-
-  @ApiProperty()
-  @IsString()
-  name: string;
-
-  @ApiProperty()
-  @IsString()
-  mediaType: string;
-}
-
-class OnchainMetadata {
-  @ApiProperty()
-  @IsString()
-  name: string;
-
-  @ApiProperty({ type: [MetadataFile] })
-  @Type(() => MetadataFile)
-  files: MetadataFile[];
-
-  @ApiProperty()
-  @IsString()
-  image: string;
-
-  @ApiProperty()
-  @IsString()
-  owner: string;
-
-  @ApiProperty()
-  @IsString()
-  mediaType: string;
-
-  @ApiProperty()
-  @IsString()
-  description: string;
-}
 
 export class ContributionAsset {
   @ApiProperty({
@@ -121,7 +81,7 @@ export class ContributionAsset {
     if (typeof value === 'string') {
       try {
         return JSON.parse(value);
-      } catch (e) {
+      } catch {
         return {};
       }
     }

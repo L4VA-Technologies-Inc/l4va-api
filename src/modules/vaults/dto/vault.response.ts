@@ -9,6 +9,7 @@ import {
   ContributionWindowType,
   InvestmentWindowType,
   TerminationType,
+  VaultFailureReason,
 } from '../../../types/vault.types';
 
 import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
@@ -157,6 +158,13 @@ export class VaultShortResponse {
     expose: true,
   })
   ftTokenImg: FileEntity;
+
+  @ApiProperty({ description: 'VT token ticker', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  vaultTokenTicker?: string;
 }
 
 export class VaultFullResponse extends VaultShortResponse {
@@ -202,12 +210,63 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   maxContributeAssets: number;
 
+  @ApiProperty({ description: 'Fdv in ADA value' })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'fdvAda' },
+  })
+  fdvAda: number;
+
   @ApiProperty({ description: 'Required values cost for success acquire phase in usd' })
   @DtoRepresent({
     transform: false,
     expose: { name: 'requireReservedCostUsd' },
   })
   requireReservedCostUsd: number;
+
+  @ApiProperty({
+    description: 'Indicates whether the user can create proposals for this vault',
+    type: Boolean,
+    default: false,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  canCreateProposal: boolean;
+
+  @ApiProperty({
+    description: 'Indicates whether the user can acquire from this vault',
+    type: Boolean,
+    default: true,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  isWhitelistedAcquirer: boolean;
+
+  @ApiProperty({
+    description: 'Indicates whether the user can contribute to this vault',
+    type: Boolean,
+    default: true,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  isWhitelistedContributor: boolean;
+
+  @ApiProperty({
+    description: 'Indicates whether the user can see a chat',
+    type: Boolean,
+    default: false,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  isChatVisible: boolean;
 
   @ApiProperty({ description: 'Valuation type', enum: ValueMethod, required: false })
   @DtoRepresent({
@@ -370,13 +429,6 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   vaultAppreciation: number;
 
-  @ApiProperty({ description: 'Vault owner', type: () => User })
-  @DtoRepresent({
-    transform: false,
-    expose: true,
-  })
-  owner: User;
-
   @ApiProperty({ description: 'Creation threshold', required: false })
   @DtoRepresent({
     transform: false,
@@ -483,6 +535,27 @@ export class VaultFullResponse extends VaultShortResponse {
     expose: true,
   })
   updatedAt: string;
+
+  @ApiProperty({ description: 'Count view', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  countView: number;
+
+  @ApiProperty({ description: 'Owner of the vault', type: () => User })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  owner: User;
+
+  @ApiProperty({ description: 'Failure reason', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  failureReason: VaultFailureReason;
 }
 
 export class VaultAcquireResponse {

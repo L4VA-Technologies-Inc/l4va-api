@@ -24,23 +24,25 @@ export class FileEntity {
 
   @Expose({ name: 'metadata' })
   @Column({ name: 'metadata', type: 'jsonb', nullable: true })
-  metadata: {};
+  metadata: any;
 
   @Expose({ name: 'updatedAt' })
   @Column({ name: 'updated_at', type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
-  updated_at: string;
+  updated_at: Date;
 
   @Expose({ name: 'createdAt' })
   @Column({ name: 'created_at', type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
-  created_at: string;
+  created_at: Date;
 
   @BeforeInsert()
   setDate() {
-    this.created_at = new Date().toISOString();
+    const now = new Date();
+    this.created_at = now;
+    this.updated_at = now;
   }
 
   @BeforeUpdate()
   updateDate() {
-    this.updated_at = new Date().toISOString();
+    this.updated_at = new Date();
   }
 }

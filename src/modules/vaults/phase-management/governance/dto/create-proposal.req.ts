@@ -1,6 +1,16 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
-import { IsNotEmpty, IsString, IsEnum, IsOptional, IsDateString, ValidateNested, IsArray } from 'class-validator';
+import { Expose, Type } from 'class-transformer';
+import {
+  IsNotEmpty,
+  IsString,
+  IsEnum,
+  IsOptional,
+  IsDateString,
+  ValidateNested,
+  IsArray,
+  IsNumber,
+  IsBoolean,
+} from 'class-validator';
 
 import { ProposalType } from '@/types/proposal.types';
 
@@ -61,6 +71,7 @@ export class CreateProposalReq {
   })
   @IsNotEmpty()
   @IsString()
+  @Expose()
   title: string;
 
   @ApiProperty({
@@ -69,6 +80,7 @@ export class CreateProposalReq {
   })
   @IsNotEmpty()
   @IsString()
+  @Expose()
   description: string;
 
   @ApiProperty({
@@ -77,6 +89,7 @@ export class CreateProposalReq {
     example: ProposalType.DISTRIBUTION,
   })
   @IsEnum(ProposalType)
+  @Expose()
   type: ProposalType;
 
   @ApiProperty({
@@ -84,11 +97,23 @@ export class CreateProposalReq {
     example: '2025-08-05T10:00:00.000Z',
     type: 'string',
     format: 'date-time',
-    required: false,
+    required: true,
   })
-  @IsOptional()
+  @IsNotEmpty()
   @IsDateString()
-  startDate?: string;
+  @Expose()
+  startDate: string;
+
+  @ApiProperty({
+    description: 'Voting duration.',
+    example: '180000000',
+    type: 'number',
+    required: true,
+  })
+  @IsNotEmpty()
+  @IsNumber()
+  @Expose()
+  duration: number;
 
   @ApiProperty({
     description: 'Fungible tokens for staking proposal',
@@ -99,6 +124,7 @@ export class CreateProposalReq {
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => FungibleTokenDto)
+  @Expose()
   fts?: FungibleTokenDto[];
 
   @ApiProperty({
@@ -110,6 +136,7 @@ export class CreateProposalReq {
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => NonFungibleTokenDto)
+  @Expose()
   nfts?: NonFungibleTokenDto[];
 
   @ApiProperty({
@@ -121,6 +148,7 @@ export class CreateProposalReq {
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => DistributionAssetDto)
+  @Expose()
   distributionAssets?: DistributionAssetDto[];
 
   @ApiProperty({
@@ -129,6 +157,7 @@ export class CreateProposalReq {
   })
   @IsOptional()
   @IsString()
+  @Expose()
   proposalStart?: string;
 
   @ApiProperty({
@@ -137,5 +166,79 @@ export class CreateProposalReq {
     example: { assetId: 'xyz-123', targetPrice: '1000' },
   })
   @IsOptional()
+  @Expose()
   metadata?: Record<string, any>;
+}
+
+export enum ExecType {
+  BUY = 'BUY',
+  SELL = 'SELL',
+}
+
+export enum SellType {
+  MARKET = 'Market',
+  LIST = 'List',
+}
+
+export enum MethodType {
+  NA = 'N/A',
+  GTC = 'GTC',
+}
+
+export class BuyingSellOptionDto {
+  @ApiProperty({ description: 'Asset ID in the system' })
+  @IsString()
+  assetId: string;
+
+  @ApiProperty({ description: 'Asset name for display' })
+  @IsString()
+  assetName: string;
+
+  @ApiProperty({ description: 'Buy or sell', enum: ExecType })
+  @IsEnum(ExecType)
+  exec: ExecType;
+
+  @ApiProperty({ description: 'Quantity to buy/sell' })
+  @IsString()
+  quantity: string;
+
+  @ApiProperty({ description: 'Market or List sale type', enum: SellType })
+  @IsEnum(SellType)
+  sellType: SellType;
+
+  @ApiProperty({ description: 'Duration in milliseconds' })
+  @IsNumber()
+  duration: number;
+
+  @ApiProperty({ description: 'Is maximum quantity flag' })
+  @IsBoolean()
+  isMax: boolean;
+
+  @ApiProperty({ description: 'Method (N/A or GTC)', enum: MethodType })
+  @IsEnum(MethodType)
+  method: MethodType;
+
+  @ApiProperty({ description: 'Market platform' })
+  @IsString()
+  market: string;
+
+  @ApiProperty({ description: 'Price in ADA' })
+  @IsString()
+  price: string;
+}
+
+export class BuyingSellMetadataDto {
+  @ApiProperty({ description: 'List of buying/selling options' })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => BuyingSellOptionDto)
+  buyingSellingOptions: BuyingSellOptionDto[];
+
+  @ApiProperty({ description: 'Proposal start delay in milliseconds' })
+  @IsNumber()
+  proposalStart: number;
+
+  @ApiProperty({ description: 'Allow abstain voting' })
+  @IsBoolean()
+  abstain: boolean;
 }

@@ -1,5 +1,5 @@
 import { Expose } from 'class-transformer';
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn, JoinColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn, JoinColumn, Unique } from 'typeorm';
 
 import { VoteType } from '../types/vote.types';
 
@@ -8,6 +8,7 @@ import { Snapshot } from './snapshot.entity';
 import { User } from './user.entity';
 
 @Entity()
+@Unique(['proposal', 'voter'])
 export class Vote {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -34,7 +35,7 @@ export class Vote {
   vote: VoteType;
 
   @Expose({ name: 'timestamp' })
-  @CreateDateColumn({ name: 'timestamp' })
+  @CreateDateColumn({ name: 'timestamp', type: 'timestamptz' })
   timestamp: Date;
 
   @ManyToOne(() => Proposal, proposal => proposal.votes, { nullable: false, onDelete: 'CASCADE' })

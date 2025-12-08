@@ -19,10 +19,16 @@ import { Express } from 'express';
 
 import { ApiDoc } from '../../decorators/api-doc.decorator';
 import { AuthGuard } from '../auth/auth.guard';
+import { AuthRequest } from '../auth/dto/auth-user.interface';
 import { mbMultiplication } from '../aws_bucket/aws.controller';
 
+import { GetPublicProfileParamDto } from './dto/get-public-profile-param.dto';
+import { PublicProfileRes } from './dto/public-profile.res';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { UploadImageRes } from './dto/upload-image.res';
 import { UsersService } from './users.service';
+
+import { User } from '@/database/user.entity';
 
 @ApiTags('users')
 @Controller('users')
@@ -36,7 +42,7 @@ export class UsersController {
   })
   @UseGuards(AuthGuard)
   @Get('profile')
-  async getProfile(@Request() req) {
+  async getProfile(@Request() req: AuthRequest): Promise<PublicProfileRes> {
     const userId = req.user.sub;
     return this.usersService.getProfile(userId);
   }
@@ -47,8 +53,8 @@ export class UsersController {
     status: 200,
   })
   @Get('/profile/:id')
-  async getPublicProfile(@Param('id') userId: string) {
-    return this.usersService.getPublicProfile(userId);
+  async getPublicProfile(@Param() params: GetPublicProfileParamDto): Promise<PublicProfileRes> {
+    return this.usersService.getPublicProfile(params.id);
   }
 
   @ApiDoc({
@@ -58,7 +64,7 @@ export class UsersController {
   })
   @UseGuards(AuthGuard)
   @Patch('profile')
-  async updateProfile(@Request() req, @Body() updateData: UpdateProfileDto) {
+  async updateProfile(@Request() req: AuthRequest, @Body() updateData: UpdateProfileDto): Promise<User> {
     const userId = req.user.sub;
     return this.usersService.updateProfile(userId, updateData);
   }
@@ -73,7 +79,7 @@ export class UsersController {
   @Post('profile/image')
   @UseInterceptors(FileInterceptor('file'))
   async uploadProfileImage(
-    @Request() req,
+    @Request() req: AuthRequest,
     @UploadedFile(
       new ParseFilePipe({
         validators: [
@@ -83,9 +89,10 @@ export class UsersController {
       })
     )
     file: Express.Multer.File
-  ) {
+  ): Promise<UploadImageRes> {
     const userId = req.user.sub;
-    return this.usersService.uploadProfileImage(userId, file, req.get('host'));
+    const user = await this.usersService.uploadProfileImage(userId, file, req.get('host'));
+    return { user };
   }
 
   @ApiDoc({
@@ -98,7 +105,7 @@ export class UsersController {
   @Post('profile/banner')
   @UseInterceptors(FileInterceptor('file'))
   async uploadBannerImage(
-    @Request() req,
+    @Request() req: AuthRequest,
     @UploadedFile(
       new ParseFilePipe({
         validators: [
@@ -108,8 +115,9 @@ export class UsersController {
       })
     )
     file: Express.Multer.File
-  ) {
+  ): Promise<UploadImageRes> {
     const userId = req.user.sub;
-    return this.usersService.uploadBannerImage(userId, file, req.get('host'));
+    const user = await this.usersService.uploadBannerImage(userId, file, req.get('host'));
+    return { user };
   }
 }

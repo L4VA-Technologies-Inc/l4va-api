@@ -56,6 +56,14 @@ export class Claim {
   @Column({ type: 'bigint', default: 0 })
   amount: number;
 
+  @Expose({ name: 'lovelaceAmount' })
+  @Column({ name: 'lovelace_amount', type: 'bigint', nullable: true })
+  lovelace_amount?: number;
+
+  @Expose({ name: 'multiplier' })
+  @Column({ type: 'numeric', nullable: true })
+  multiplier?: number;
+
   @ManyToOne(() => Transaction, { nullable: true })
   @JoinColumn({ name: 'transaction_id' })
   transaction: Transaction;
@@ -82,20 +90,21 @@ export class Claim {
 
   @Expose({ name: 'createdAt' })
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
-  created_at: string;
+  created_at: Date;
 
   @Expose({ name: 'updatedAt' })
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
-  updated_at: string;
+  updated_at: Date;
 
   @BeforeInsert()
   setDate() {
-    this.created_at = new Date().toISOString();
-    this.updated_at = new Date().toISOString();
+    const now = new Date();
+    this.created_at = now;
+    this.updated_at = now;
   }
 
   @BeforeUpdate()
   updateDate() {
-    this.updated_at = new Date().toISOString();
+    this.updated_at = new Date();
   }
 }

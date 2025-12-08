@@ -5,15 +5,14 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { TransactionsModule } from '../offchain-tx/transactions.module';
 
-import { AnvilApiService } from './anvil-api.service';
-import { BlockchainScannerService } from './blockchain-scanner.service';
+import { BlockchainWebhookService } from './blockchain-webhook.service';
 import { BlockchainController } from './blockchain.controller';
 import { BlockchainService } from './blockchain.service';
 import { MetadataRegistryApiService } from './metadata-register.service';
-import { VaultInsertingService } from './vault-inserting.service';
+import { VaultContributionService } from './vault-contribution.service';
 import { VaultManagingService } from './vault-managing.service';
-import { WebhookVerificationService } from './webhook-verification.service';
 
+import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
@@ -26,23 +25,20 @@ import { Vault } from '@/database/vault.entity';
     }),
     HttpModule,
     TransactionsModule,
-    TypeOrmModule.forFeature([Vault, Transaction, AssetsWhitelistEntity, TokenRegistry]),
+    TypeOrmModule.forFeature([Vault, Transaction, AssetsWhitelistEntity, TokenRegistry, Asset]),
   ],
   controllers: [BlockchainController],
   providers: [
-    AnvilApiService,
     MetadataRegistryApiService,
     BlockchainService,
-    VaultInsertingService,
-    BlockchainScannerService,
-    WebhookVerificationService,
+    VaultContributionService,
+    BlockchainWebhookService,
     VaultManagingService,
   ],
   exports: [
     BlockchainService,
-    VaultInsertingService,
-    BlockchainScannerService,
-    WebhookVerificationService,
+    VaultContributionService,
+    BlockchainWebhookService,
     VaultManagingService,
     MetadataRegistryApiService,
   ],

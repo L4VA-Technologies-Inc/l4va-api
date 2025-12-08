@@ -8,11 +8,14 @@ export enum TransactionStatus {
 }
 
 export enum TransactionType {
+  createVault = 'create-vault',
   mint = 'mint',
   payment = 'payment',
   contribute = 'contribute', // Contains NFTs
   claim = 'claim',
   extract = 'extract',
+  extractDispatch = 'extract-dispatch',
+  cancel = 'cancel',
   acquire = 'acquire', // Contains only lovelace (ADA)
   investment = 'investment',
   burn = 'burn',
@@ -21,4 +24,5 @@ export enum TransactionType {
   extractLp = 'extract-lp',
   distributeLp = 'distribute-lp',
   updateVault = 'update-vault', // Vault metadata update transaction
+  all = 'all',
 }

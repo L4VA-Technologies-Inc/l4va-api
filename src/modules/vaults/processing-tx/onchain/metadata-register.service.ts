@@ -15,11 +15,14 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import axios from 'axios';
 import { firstValueFrom } from 'rxjs';
-import { Repository } from 'typeorm';
+import sharp from 'sharp';
+import { In, Repository } from 'typeorm';
+
+import { TokenMetadataDto } from './dto/token-metadata.dto';
 
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
+import { Vault } from '@/database/vault.entity';
 import { TokenRegistryStatus } from '@/types/tokenRegistry.types';
 
 type ItemData = {
@@ -42,17 +45,8 @@ type TokenMetaData = {
   decimals?: ItemData; // how many decimals to the token
 };
 
-export type TokenMetaDataRaw = {
-  vaultId: string;
-  subject: string;
-  name: string;
-  description: string;
-  policy?: string;
-  ticker: string;
-  url?: string;
-  logo?: string;
-  decimals?: number;
-};
+// Deprecated: Use TokenMetadataDto instead
+export type TokenMetaDatametadataInput = TokenMetadataDto;
 
 @Injectable()
 export class MetadataRegistryApiService {
@@ -66,17 +60,19 @@ export class MetadataRegistryApiService {
   constructor(
     @InjectRepository(TokenRegistry)
     private readonly tokenRegistryRepository: Repository<TokenRegistry>,
+    @InjectRepository(Vault)
+    private readonly vaultRepository: Repository<Vault>,
     private readonly configService: ConfigService,
     private readonly httpService: HttpService
   ) {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.githubToken = this.configService.get<string>('GITHUB_TOKEN');
-    this.apiBaseUrl = this.configService.get<string>('METADATA_API_TESTNET_URL');
-    this.repoOwner = this.configService.get<string>('METADATA_REGISTRY_TESTNET_OWNER');
-    this.repoName = this.configService.get<string>('METADATA_REGISTRY_TESTNET_REPO');
+    this.apiBaseUrl = this.configService.get<string>('METADATA_API_URL');
+    this.repoOwner = this.configService.get<string>('METADATA_REGISTRY_OWNER');
+    this.repoName = this.configService.get<string>('METADATA_REGISTRY_REPO');
   }
 
-  @Cron(CronExpression.EVERY_HOUR)
+  @Cron(CronExpression.EVERY_5_HOURS)
   async checkPendingPRs(): Promise<void> {
     this.logger.log('Checking pending token registry PRs');
 
@@ -92,51 +88,82 @@ export class MetadataRegistryApiService {
     this.logger.log(`Found ${pendingPRs.length} pending PRs to check`);
 
     for (const pr of pendingPRs) {
-      await this.checkPRStatus(pr);
+      const updatedPR = await this.checkPRStatus(pr);
+
+      // If PR was rejected or failed, automatically retry
+      if (updatedPR.status === TokenRegistryStatus.REJECTED) {
+        this.logger.log(`PR #${updatedPR.pr_number} is ${updatedPR.status}, attempting retry...`);
+
+        // Wait a bit before retrying to avoid rate limits
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        const retryResult = await this.retryFailedPR(updatedPR);
+
+        if (retryResult.success) {
+          this.logger.log(`Successfully retried PR #${updatedPR.pr_number}. New PR: ${retryResult.prUrl}`);
+        } else {
+          this.logger.warn(`Failed to retry PR #${updatedPR.pr_number}: ${retryResult.message}`);
+        }
+      }
     }
   }
 
   /**
-   * Submits token metadata via API
-   * @param metadata Token metadata
+   * Submits vault token metadata to Cardano Token Registry via GitHub PR
+   * @param metadataInput Token metadata
    * @returns Submission result
    */
-  async submitTokenMetadata(raw: TokenMetaDataRaw): Promise<{ success: boolean; message: string; data?: unknown }> {
-    try {
-      const exists = await this.checkTokenExists(raw.subject);
-      if (exists) {
-        return { success: false, message: 'Token already exists' };
-      }
-    } catch (error) {
-      this.logger.error('Error checking token existence:', error);
+  async submitVaultTokenMetadata(
+    metadataInput: TokenMetadataDto
+  ): Promise<{ success: boolean; message: string; data?: unknown }> {
+    const existingPR = await this.tokenRegistryRepository.findOne({
+      where: {
+        vault: { id: metadataInput.vaultId },
+        status: In([TokenRegistryStatus.PENDING, TokenRegistryStatus.MERGED]),
+      },
+    });
+
+    if (existingPR) {
+      return { success: false, message: 'A token submission is already in progress for this vault' };
+    } else {
+      this.logger.log(`No existing PR found for vault ${metadataInput.vaultId}, proceeding with submission`);
+    }
+
+    const exists = await this.checkTokenExistsInRegistry(metadataInput.subject);
+    if (exists) {
+      return { success: false, message: 'Token already exists' };
     }
 
     try {
-      const name = this.signItemData(raw.subject, 0, raw.name);
-      const description = this.signItemData(raw.subject, 0, raw.description);
+      const name = this.signMetadataField(metadataInput.subject, 0, metadataInput.name);
+      const description = this.signMetadataField(metadataInput.subject, 0, metadataInput.description);
 
       // Optional fields
-      const ticker = raw.ticker ? this.signItemData(raw.subject, 0, raw.ticker) : undefined;
-      const url = raw.url ? this.signItemData(raw.subject, 0, raw.url) : undefined;
-      const policy = raw.policy ? raw.policy : undefined; // The base16-encoded CBOR "policy": "82018201828200581cf950845fdf374bba64605f96a9d5940890cc2bb92c4b5b55139cc00982051a09bde472",
-      const decimals = raw.decimals ? this.signItemData(raw.subject, 0, raw.decimals) : undefined;
+      const ticker = metadataInput.ticker
+        ? this.signMetadataField(metadataInput.subject, 0, metadataInput.ticker)
+        : undefined;
+      const url = metadataInput.url ? this.signMetadataField(metadataInput.subject, 0, metadataInput.url) : undefined;
+      // const policy = metadataInput.policy ? metadataInput.policy : undefined; // The base16-encoded CBOR "policy": "82018201828200581cf950845fdf374bba64605f96a9d5940890cc2bb92c4b5b55139cc00982051a09bde472",
+      const decimals = metadataInput.decimals
+        ? this.signMetadataField(metadataInput.subject, 0, metadataInput.decimals)
+        : undefined;
 
       let logoData: ItemData | undefined;
-      if (raw.logo) {
-        // If raw.logo is a URL, convert it to byte string
-        if (raw.logo.startsWith('http')) {
-          const logoBytes = await this.convertImgToBytes(raw.logo);
-          logoData = this.signItemData(raw.subject, 0, logoBytes);
+      if (metadataInput.logo) {
+        // If metadataInput.logo is a URL, convert it to byte string
+        if (metadataInput.logo.startsWith('http')) {
+          const logoBytes = await this.convertImageUrlToBase64(metadataInput.logo);
+          logoData = this.signMetadataField(metadataInput.subject, 0, logoBytes);
         } else {
           // If it's already a byte string, use it directly
-          logoData = this.signItemData(raw.subject, 0, raw.logo);
+          logoData = this.signMetadataField(metadataInput.subject, 0, metadataInput.logo);
         }
       }
 
       // Build full metadata object
       const metadata: TokenMetaData = {
-        subject: raw.subject,
-        policy,
+        subject: metadataInput.subject,
+        // policy,
         name,
         description,
         ticker,
@@ -149,9 +176,7 @@ export class MetadataRegistryApiService {
         return { success: false, message: 'Invalid token metadata format' };
       }
 
-      const result = await this.createTokenRegistry(metadata, raw.vaultId);
-
-      return result;
+      return await this.createMetadataRegistryPR(metadata, metadataInput.vaultId);
     } catch (error) {
       if (
         error instanceof BadRequestException ||
@@ -171,15 +196,30 @@ export class MetadataRegistryApiService {
    * @param subject Token identifier (policyId + assetName)
    * @returns true if token is already registered
    */
-  async checkTokenExists(subject: string): Promise<boolean> {
+  async checkTokenExistsInRegistry(subject: string): Promise<boolean> {
     try {
-      const response = await axios.get(`${this.apiBaseUrl}/${subject}`);
-      return response.status === 200;
+      // Use authenticated Octokit to check if file exists in registry
+      const { Octokit } = await import('@octokit/rest');
+      const octokit = new Octokit({
+        auth: this.githubToken,
+      });
+
+      const filePath = `registry/${subject}.json`;
+
+      await octokit.repos.getContent({
+        owner: this.repoOwner,
+        repo: this.repoName,
+        path: filePath,
+      });
+
+      // If we get here, file exists
+      return true;
     } catch (error) {
-      // Якщо отримали 404, токен не знайдено
-      if (error.response?.status === 404) {
+      // If 404, token not found in registry
+      if (error.status === 404) {
         return false;
       }
+      this.logger.error(`Error checking token existence in registry: ${error.message}`);
       throw error;
     }
   }
@@ -189,16 +229,25 @@ export class MetadataRegistryApiService {
    */
   async checkPRStatus(pr: TokenRegistry): Promise<TokenRegistry> {
     try {
-      const url = `https://api.github.com/repos/${this.repoOwner}/${this.repoName}/pulls/${pr.pr_number}`;
-      const response = await firstValueFrom(this.httpService.get(url));
+      // Use authenticated Octokit for GitHub API requests
+      const { Octokit } = await import('@octokit/rest');
+      const octokit = new Octokit({
+        auth: this.githubToken,
+      });
+
+      const { data: pullRequest } = await octokit.pulls.get({
+        owner: this.repoOwner,
+        repo: this.repoName,
+        pull_number: pr.pr_number,
+      });
 
       pr.last_checked = new Date();
 
       // Update status based on GitHub response
-      if (response.data.state === 'closed') {
-        if (response.data.merged) {
+      if (pullRequest.state === 'closed') {
+        if (pullRequest.merged) {
           pr.status = TokenRegistryStatus.MERGED;
-          pr.merged_at = new Date(response.data.merged_at);
+          pr.merged_at = new Date(pullRequest.merged_at);
           this.logger.log(`PR #${pr.pr_number} for vault ${pr.vault_id} has been merged`);
         } else {
           pr.status = TokenRegistryStatus.REJECTED;
@@ -212,7 +261,7 @@ export class MetadataRegistryApiService {
       this.logger.error(`Error checking PR #${pr.pr_number} status:`, error.message);
 
       // If PR not found, mark as failed
-      if (error.response?.status === 404) {
+      if (error.status === 404) {
         pr.status = TokenRegistryStatus.FAILED;
         return this.tokenRegistryRepository.save(pr);
       }
@@ -291,18 +340,130 @@ export class MetadataRegistryApiService {
     }
   }
 
-  private async convertImgToBytes(imgUrl: string): Promise<string> {
+  /**
+   * Retries a failed or rejected PR by creating a new one with metadata from vault
+   * @param prRecord The failed TokenRegistry record
+   * @returns Object indicating success or failure
+   */
+  async retryFailedPR(prRecord: TokenRegistry): Promise<{ success: boolean; message: string; prUrl?: string }> {
     try {
-      this.logger.log(`Converting image to byte string: ${imgUrl}`);
-      const response = await firstValueFrom(this.httpService.get(imgUrl, { responseType: 'arraybuffer' }));
+      this.logger.log(`Retrying PR #${prRecord.pr_number} for vault ${prRecord.vault_id}`);
 
-      // TODO: test this, maybe add 'binary'
-      const base64Image = Buffer.from(response.data).toString('base64');
+      // Load vault with only necessary columns
+      const vault = await this.vaultRepository
+        .createQueryBuilder('vault')
+        .leftJoin('vault.ft_token_img', 'ft_token_img')
+        .select([
+          'vault.id',
+          'vault.script_hash',
+          'vault.asset_vault_name',
+          'vault.name',
+          'vault.description',
+          'vault.vault_token_ticker',
+          'vault.ft_token_decimals',
+          'ft_token_img.file_url',
+        ])
+        .where('vault.id = :vaultId', { vaultId: prRecord.vault_id })
+        .getOne();
+
+      if (!vault) {
+        this.logger.error(`Cannot retry PR #${prRecord.pr_number}: vault ${prRecord.vault_id} not found`);
+        return {
+          success: false,
+          message: 'Vault not found',
+        };
+      }
+
+      // Close the old PR if it's still open
+      try {
+        if (prRecord.status === TokenRegistryStatus.PENDING) {
+          await this.closePullRequest(prRecord.pr_number, 'Retrying submission due to validation failure');
+        }
+      } catch (error) {
+        this.logger.warn(`Could not close old PR #${prRecord.pr_number}: ${error.message}`);
+        // Continue with retry even if we can't close the old PR
+      }
+
+      // Mark old record as failed before creating new one
+      prRecord.status = TokenRegistryStatus.FAILED;
+      await this.tokenRegistryRepository.save(prRecord);
+
+      // Create metadata from vault data (same as in lifecycle.service.ts)
+      const metadataInput: TokenMetadataDto = {
+        vaultId: vault.id,
+        subject: `${vault.script_hash}${vault.asset_vault_name}`,
+        name: vault.name,
+        description: vault.description,
+        ticker: vault.vault_token_ticker,
+        logo: vault.ft_token_img?.file_url || '',
+        decimals: vault.ft_token_decimals,
+      };
+
+      // Submit using the same flow as initial submission
+      const result = await this.submitVaultTokenMetadata(metadataInput);
+
+      if (result.success) {
+        this.logger.log(`Successfully created retry PR for vault ${prRecord.vault_id}. Old PR: #${prRecord.pr_number}`);
+      }
+
+      return result;
+    } catch (error) {
+      this.logger.error(`Failed to retry PR #${prRecord.pr_number}:`, error);
+      return {
+        success: false,
+        message: `Failed to retry PR: ${error.message}`,
+      };
+    }
+  }
+
+  private async convertImageUrlToBase64(imgUrl: string): Promise<string> {
+    try {
+      const response = await firstValueFrom(
+        this.httpService.get(imgUrl, {
+          responseType: 'arraybuffer',
+          timeout: 10000,
+          maxContentLength: 5 * 1024 * 1024,
+        })
+      );
+
+      const resizedImageBuffer = await sharp(response.data)
+        .resize({
+          width: 128,
+          height: 128,
+          fit: 'inside',
+          withoutEnlargement: true,
+        })
+        .png({ quality: 85, compressionLevel: 9 })
+        .toBuffer();
+
+      if (resizedImageBuffer.length > 250 * 1024) {
+        this.logger.warn(
+          `Image still too large after resizing (${Math.round(resizedImageBuffer.length / 1024)}KB), using placeholder`
+        );
+
+        const tinyImageBuffer = await sharp(response.data)
+          .resize(64, 64, { fit: 'inside' })
+          .png({ quality: 60, compressionLevel: 9 })
+          .toBuffer();
+
+        if (tinyImageBuffer.length > 250 * 1024) {
+          return '';
+        }
+
+        return Buffer.from(tinyImageBuffer).toString('base64');
+      }
+
+      const base64Image = Buffer.from(resizedImageBuffer).toString('base64');
+
+      if (base64Image.length > 350 * 1024) {
+        this.logger.warn(`Base64 image too large (${Math.round(base64Image.length / 1024)}KB), using placeholder`);
+        return '';
+      }
 
       return base64Image;
     } catch (error) {
       this.logger.error(`Failed to convert image to byte string: ${error.message}`);
-      throw new InternalServerErrorException('Failed to convert image to byte string');
+      return '';
     }
   }
 
@@ -326,7 +487,10 @@ export class MetadataRegistryApiService {
     return true;
   }
 
-  private signItemData(subject: string, sequenceNumber: number, value: string | number): ItemData {
+  /**
+   * Signs a metadata field value with the admin private key
+   */
+  private signMetadataField(subject: string, sequenceNumber: number, value: string | number): ItemData {
     // Hash the subject, sequenceNumber, and value together
     const hash = crypto
       .createHash('sha256')
@@ -352,7 +516,10 @@ export class MetadataRegistryApiService {
     };
   }
 
-  private async createTokenRegistry(
+  /**
+   * Creates a GitHub Pull Request for token metadata submission
+   */
+  private async createMetadataRegistryPR(
     metadata: TokenMetaData,
     vaultId: string
   ): Promise<{ success: boolean; message: string; prUrl?: string }> {

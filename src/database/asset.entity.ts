@@ -105,6 +105,31 @@ export class Asset {
   })
   origin_type?: AssetOriginType;
 
+  @Expose({ name: 'image' })
+  @Column({ name: 'image', type: 'text', nullable: true })
+  image?: string; // stores ipfs://...
+
+  @Expose({ name: 'imageUrl' })
+  get imageUrl(): string | null {
+    if (!this.image) return null;
+    if (this.image.startsWith('ipfs://')) {
+      return this.image.replace('ipfs://', 'https://ipfs.io/ipfs/');
+    }
+    return this.image; // already HTTP or other protocol
+  }
+
+  @Expose({ name: 'decimals' })
+  @Column({ name: 'decimals', type: 'int', nullable: true })
+  decimals?: number;
+
+  @Expose({ name: 'name' })
+  @Column({ name: 'name', type: 'text', nullable: true })
+  name?: string;
+
+  @Expose({ name: 'description' })
+  @Column({ name: 'description', type: 'text', nullable: true })
+  description?: string;
+
   @Column({ type: 'jsonb', nullable: true })
   @Expose({ name: 'metadata' })
   metadata: any;
@@ -136,13 +161,13 @@ export class Asset {
   updated_at: Date;
 
   @BeforeInsert()
-  setAddedAt() {
+  setAddedAt(): void {
     this.added_at = new Date();
     this.updated_at = new Date();
   }
 
   @BeforeUpdate()
-  updateTimestamp() {
+  updateTimestamp(): void {
     this.updated_at = new Date();
   }
 }

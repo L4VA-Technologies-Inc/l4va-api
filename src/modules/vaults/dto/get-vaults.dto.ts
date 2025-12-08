@@ -11,6 +11,10 @@ export enum VaultFilter {
   acquire = 'acquire',
   published = 'published',
   draft = 'draft',
+  failed = 'failed',
+  terminated = 'terminated',
+  all = 'all',
+  govern = 'govern',
 }
 
 export enum VaultSortField {
@@ -116,7 +120,7 @@ export class GetVaultsDto extends PaginationDto {
   @ApiProperty({
     type: Boolean,
     required: false,
-    description: 'Filter to show only vaults owned by the user',
+    description: 'Filter to show only vaults user is participating in',
   })
   @Expose()
   @Transform(({ value }) => {
@@ -125,7 +129,7 @@ export class GetVaultsDto extends PaginationDto {
     }
     return value;
   })
-  isOwner?: boolean;
+  myVaults?: boolean;
 
   @IsEnum(SortOrder)
   @IsOptional()
@@ -274,4 +278,22 @@ export class GetVaultsDto extends PaginationDto {
   @Type(() => DateRangeDto)
   @IsOptional()
   acquireWindow?: DateRangeDto;
+
+  @ApiProperty({
+    type: String,
+    description: 'User ID of the vault owner (used to get public vaults of another user)',
+    example: 'user-uuid-1234',
+  })
+  @Expose()
+  @IsOptional()
+  ownerId?: string;
+
+  @ApiProperty({
+    type: String,
+    description: 'Search vaults by policy id or name',
+    example: 'VaultName or 32f03826f2816cdaae08714f3bddb447eaf48598700754f2ca1e8803',
+  })
+  @Expose()
+  @IsOptional()
+  search?: string;
 }

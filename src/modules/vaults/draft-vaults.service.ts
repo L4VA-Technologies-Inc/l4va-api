@@ -217,9 +217,15 @@ export class DraftVaultsService {
       if (data.ftTokenSupply) vaultData.ft_token_supply = data.ftTokenSupply;
       if (data.terminationType) vaultData.termination_type = data.terminationType;
       if (data.vaultTokenTicker) vaultData.vault_token_ticker = data.vaultTokenTicker;
-      if (data.tokensForAcquires) vaultData.tokens_for_acquires = data.tokensForAcquires;
-      if (data.acquireReserve) vaultData.acquire_reserve = data.acquireReserve;
-      if (data.liquidityPoolContribution) vaultData.liquidity_pool_contribution = data.liquidityPoolContribution;
+      if (data.tokensForAcquires !== undefined && data.tokensForAcquires !== null) {
+        vaultData.tokens_for_acquires = data.tokensForAcquires;
+      }
+      if (data.acquireReserve !== undefined && data.acquireReserve !== null) {
+        vaultData.acquire_reserve = data.acquireReserve;
+      }
+      if (data.liquidityPoolContribution !== undefined && data.liquidityPoolContribution !== null) {
+        vaultData.liquidity_pool_contribution = data.liquidityPoolContribution;
+      }
       if (data.creationThreshold) vaultData.creation_threshold = data.creationThreshold;
       if (data.startThreshold) vaultData.start_threshold = data.startThreshold;
       if (data.voteThreshold) vaultData.vote_threshold = data.voteThreshold;
@@ -234,13 +240,13 @@ export class DraftVaultsService {
         vaultData.acquire_window_duration = data.acquireWindowDuration;
       }
       if (data.acquireOpenWindowTime !== undefined && data.acquireOpenWindowTime !== null) {
-        vaultData.acquire_open_window_time = new Date(data.acquireOpenWindowTime).toISOString();
+        vaultData.acquire_open_window_time = new Date(data.acquireOpenWindowTime);
       }
       if (data.acquireOpenWindowType !== undefined && data.acquireOpenWindowType !== null) {
         vaultData.acquire_open_window_type = data.acquireOpenWindowType;
       }
       if (data.contributionOpenWindowTime !== undefined && data.contributionOpenWindowTime !== null) {
-        vaultData.contribution_open_window_time = new Date(data.contributionOpenWindowTime).toISOString();
+        vaultData.contribution_open_window_time = new Date(data.contributionOpenWindowTime);
       }
       if (data.contributionOpenWindowType !== undefined && data.contributionOpenWindowType !== null) {
         vaultData.contribution_open_window_type = data.contributionOpenWindowType;
@@ -327,11 +333,11 @@ export class DraftVaultsService {
       }
 
       // Handle contributor whitelist only if provided and vault is private
-      if (data.whitelistContributors !== undefined && data.whitelistContributors.length > 0) {
-        const contributorItems = data.whitelistContributors.map(item => {
+      if (data.contributorWhitelist !== undefined && data.contributorWhitelist.length > 0) {
+        const contributorItems = data.contributorWhitelist.map(item => {
           return this.contributorWhitelistRepository.create({
             vault: vault,
-            wallet_address: item.policyId,
+            wallet_address: item.walletAddress,
           });
         });
         await this.contributorWhitelistRepository.save(contributorItems);

@@ -2,6 +2,7 @@ export enum ClaimStatus {
   AVAILABLE = 'available',
   PENDING = 'pending',
   CLAIMED = 'claimed',
+  FAILED = 'failed',
 }
 
 export enum ClaimType {
@@ -10,4 +11,6 @@ export enum ClaimType {
   ACQUIRER = 'acquirer',
   L4VA = 'l4va',
   FINAL_DISTRIBUTION = 'final_distribution',
+  CANCELLATION = 'cancellation',
+  DISTRIBUTION = 'distribution',
 }

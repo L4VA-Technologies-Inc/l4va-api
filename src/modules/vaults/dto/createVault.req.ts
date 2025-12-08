@@ -212,12 +212,12 @@ export class CreateVaultReq {
 
   @ApiProperty({
     required: true,
-    description: 'Should be 1-10 characters',
+    description: 'Should be 1-9 characters',
   })
   @IsNotEmpty()
   @IsString()
   @MinLength(1)
-  @MaxLength(10)
+  @MaxLength(9)
   @Expose()
   vaultTokenTicker: string;
 
@@ -269,6 +269,7 @@ export class CreateVaultReq {
   })
   @IsNotEmpty()
   @IsNumber()
+  @Type(() => Number)
   @Min(0)
   @Max(100)
   @Expose()
@@ -313,6 +314,7 @@ export class CreateVaultReq {
   })
   @IsNotEmpty()
   @IsNumber()
+  @Type(() => Number)
   @Min(0)
   @Max(100)
   @Expose()
@@ -327,6 +329,7 @@ export class CreateVaultReq {
   })
   @IsNotEmpty()
   @IsNumber()
+  @Type(() => Number)
   @Min(0)
   @Max(100)
   @Expose()

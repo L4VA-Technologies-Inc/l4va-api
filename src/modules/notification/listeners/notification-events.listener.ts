@@ -1,13 +1,21 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 
+import { User } from '@/database/user.entity';
 import { NotificationService } from '@/modules/notification/notification.service';
 
 @Injectable()
 export class NotificationEventsListener {
   private readonly logger = new Logger(NotificationService.name);
 
-  constructor(private notificationService: NotificationService) {}
+  constructor(
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
+
+    private notificationService: NotificationService
+  ) {}
 
   @OnEvent('vault.launched')
   async handleVaultLaunched(event: {
@@ -23,6 +31,58 @@ export class NotificationEventsListener {
       address: event.address,
       vaultId: event.vaultId,
       vaultName: event.vaultName,
+    });
+  }
+
+  @OnEvent('vault.phase.email')
+  async handleVaultPhaseEmail(event: { vault: any; phaseStatus: string }) {
+    const user = await this.userRepository.findOne({
+      where: { id: event.vault.owner.id },
+    });
+    if (!user.email) return;
+
+    await this.notificationService.sendPhaseEmailNotification({
+      address: user.address,
+      email: user.email,
+      firstName: user.name,
+      vaultUrl: `https://testnet.l4va.org/vaults/${event.vault.id}`,
+      vaultName: event.vault.name,
+      phase: event.vault.vault_status,
+      phaseStatus: event.phaseStatus,
+      timeAt: new Date()
+        .toLocaleString('en-GB', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+        .replace(/\//g, '.'),
+    });
+  }
+
+  @OnEvent('vault.launched.email')
+  async handleVaultLaunchedPhaseEmail(event: { vault: any }) {
+    const user = await this.userRepository.findOne({
+      where: { id: event.vault.owner.id },
+    });
+    if (!user.email) return;
+
+    await this.notificationService.sendLaunchEmailNotification({
+      address: user.address,
+      email: user.email,
+      firstName: user.name,
+      vaultUrl: `https://testnet.l4va.org/vaults/${event.vault.id}`,
+      vaultName: event.vault.name,
+      timeAt: new Date()
+        .toLocaleString('en-GB', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+        .replace(/\//g, '.'),
     });
   }
 
@@ -76,6 +136,33 @@ export class NotificationEventsListener {
       },
       event.contributorIds
     );
+  }
+
+  @OnEvent('vault.failed.email')
+  async handleVaultFailedEmail(event: { vault: any }) {
+    const user = await this.userRepository.findOne({
+      where: { id: event.vault.owner.id },
+    });
+    if (!user.email) return;
+
+    await this.notificationService.sendFailedEmailNotification({
+      email: user.email,
+      firstName: user.name,
+      status: event.vault.vault_status,
+      vaultTokenTicker: event.vault.vault_token_ticker,
+      vaultUrl: `https://testnet.l4va.org/vaults/${event.vault.id}`,
+      failed_at: new Date()
+        .toLocaleString('en-GB', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+        .replace(/\//g, '.'),
+      vaultName: event.vault.name,
+      address: user.address,
+    });
   }
 
   @OnEvent('vault.favorite_launched') // Haven`t added
@@ -206,8 +293,8 @@ export class NotificationEventsListener {
   }): Promise<void> {
     await this.notificationService.sendBulkNotification(
       {
-        title: 'Distribution Claim Available',
-        description: `You have a new token distribution claim available from vault ${event.vaultName}. Claim your tokens now!`,
+        title: 'Token Distribution in Progress',
+        description: `Your tokens from vault ${event.vaultName} will be credited automatically to the wallet used for the transaction.`,
         vaultId: event.vaultId,
         vaultName: event.vaultName,
       },

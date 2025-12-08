@@ -1,6 +1,16 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Exclude, Expose } from 'class-transformer';
-import { Column, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn, Index } from 'typeorm';
+import {
+  Column,
+  Entity,
+  JoinColumn,
+  ManyToOne,
+  OneToMany,
+  PrimaryGeneratedColumn,
+  Index,
+  CreateDateColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 
 import { TransactionStatus, TransactionType } from '../types/transaction.types';
 
@@ -41,6 +51,7 @@ export class Transaction {
   @Column({ nullable: true })
   amount: number;
 
+  @ApiProperty({ description: 'Transaction fee in lovelace' })
   @Column({ nullable: true })
   fee: number;
 
@@ -83,4 +94,12 @@ export class Transaction {
   @Column({ name: 'vault_id', nullable: true })
   @Index()
   vault_id: string;
+
+  @Expose({ name: 'updatedAt' })
+  @UpdateDateColumn({ type: 'timestamptz' })
+  updated_at: Date;
+
+  @Expose({ name: 'createdAt' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
+  created_at: Date;
 }

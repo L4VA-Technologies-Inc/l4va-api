@@ -6,10 +6,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import AWS, { S3 } from 'aws-sdk';
 import { ManagedUpload } from 'aws-sdk/clients/s3';
 import * as csv from 'csv-parse';
+import sharp from 'sharp';
 import { Repository } from 'typeorm';
 import { v4 as uuid } from 'uuid';
 
 import { FileEntity } from '@/database/file.entity';
+import { AwsUploadImageDto, ImageResizeMap } from '@/modules/aws_bucket/dto/aws.dto';
 
 @Injectable()
 export class AwsService {
@@ -22,7 +24,7 @@ export class AwsService {
     private readonly fileRepository: Repository<FileEntity>,
     private readonly httpService: HttpService
   ) {}
-  getS3() {
+  getS3(): AWS.S3 {
     if (this.s3) {
       return this.s3;
     }
@@ -40,7 +42,7 @@ export class AwsService {
     return s3;
   }
 
-  async uploadS3(file, name, type): Promise<ManagedUpload.SendData> {
+  async uploadS3(file: Buffer, name: string, type: string): Promise<ManagedUpload.SendData> {
     const s3 = this.getS3();
     const params = {
       Bucket: 'static',
@@ -60,7 +62,7 @@ export class AwsService {
     });
   }
 
-  async getPreSignedURL(bucketName: string, key: string, contentType: string) {
+  async getPreSignedURL(bucketName: string, key: string): Promise<string> {
     const s3 = this.getS3();
     const params = {
       Bucket: bucketName,
@@ -71,20 +73,23 @@ export class AwsService {
     return s3.getSignedUrlPromise('getObject', params);
   }
 
-  async getImage(bucketKey: string) {
-    const preSignedUrl = await this.getPreSignedURL(this.bucketName, bucketKey, 'image/jpeg');
+  async getImage(bucketKey: string): Promise<any> {
+    const preSignedUrl = await this.getPreSignedURL(this.bucketName, bucketKey);
     return this.httpService.get(preSignedUrl, { responseType: 'stream' }).toPromise();
   }
 
-  async getCsv(bucketKey: string) {
-    const preSignedUrl = await this.getPreSignedURL(this.bucketName, bucketKey, 'text/csv');
+  // TODO: Remove csv upload to S3
+  async getCsv(bucketKey: string): Promise<any> {
+    const preSignedUrl = await this.getPreSignedURL(this.bucketName, bucketKey);
     return this.httpService.get(preSignedUrl, { responseType: 'stream' }).toPromise();
   }
 
-  private async validateCsvAddresses(buffer: Buffer): Promise<void> {
-    return new Promise((resolve, reject) => {
+  async parseCsvAddresses(buffer: Buffer): Promise<string[]> {
+    return new Promise<string[]>((resolve, reject) => {
       const addresses: string[] = [];
-      const cardanoAddressRegex = /^addr1[a-zA-Z0-9]{98}$/;
+      const cardanoAddressRegex = /^addr(_test)?1[a-z0-9]{20,}$/i;
+      let addressColumnIndex = 0;
+      let headersProcessed = false;
 
       csv
         .parse(buffer.toString(), {
@@ -93,13 +98,22 @@ export class AwsService {
           trim: true,
         })
         .on('data', data => {
-          const address = data[0];
-          if (!address || typeof address !== 'string' || !cardanoAddressRegex.test(address)) {
-            reject(
-              new BadRequestException(
-                `Invalid Cardano address format found in CSV: ${address}. Address must be a valid Cardano Shelley address starting with 'addr1' and containing 98 alphanumeric characters`
-              )
+          if (!headersProcessed) {
+            const normalizedHeaders = data.map(value => (typeof value === 'string' ? value.trim().toLowerCase() : ''));
+            const foundIndex = normalizedHeaders.findIndex(
+              header => header === 'address' || header.includes('address')
             );
+            addressColumnIndex = foundIndex >= 0 ? foundIndex : 0;
+            headersProcessed = true;
+            return;
+          }
+
+          const address = typeof data[addressColumnIndex] === 'string' ? data[addressColumnIndex].trim() : '';
+          if (!address) {
+            return;
+          }
+          if (!cardanoAddressRegex.test(address)) {
+            return;
           }
           addresses.push(address);
         })
@@ -107,7 +121,7 @@ export class AwsService {
           if (addresses.length === 0) {
             reject(new BadRequestException('CSV file is empty or contains no valid addresses'));
           }
-          resolve();
+          resolve(addresses);
         })
         .on('error', error => {
           reject(new BadRequestException(`Error parsing CSV: ${error.message}`));
@@ -115,49 +129,97 @@ export class AwsService {
     });
   }
 
-  async uploadCSV(file: Express.Multer.File, host: string) {
+  async processWhitelistCsv(file: Express.Multer.File): Promise<{ addresses: string[]; total: number }> {
     try {
-      // Validate CSV content before uploading
-      await this.validateCsvAddresses(file.buffer);
-
-      const uploadResult = await this.uploadS3(file.buffer, `${uuid()}`, file.mimetype);
-      const protocol = process.env.NODE_ENV === 'dev' ? 'http://' : 'https://';
-      if (uploadResult) {
-        const newFile = this.fileRepository.create({
-          file_key: uploadResult.Key,
-          file_url: `${protocol}${host}/api/v1/csv/${uploadResult.Key}`,
-          file_name: file.originalname,
-          file_type: file.mimetype,
-        });
-        await this.fileRepository.save(newFile);
-        if (newFile) return newFile;
+      const isCsv =
+        file.mimetype?.includes('csv') ||
+        file.originalname.toLowerCase().endsWith('.csv') ||
+        file.mimetype === 'application/vnd.ms-excel';
+      if (!isCsv) {
+        throw new BadRequestException('Only CSV files are allowed');
       }
+
+      const addresses = await this.parseCsvAddresses(file.buffer);
+      return { addresses, total: addresses.length };
     } catch (error) {
       if (error instanceof BadRequestException) {
-        throw error; // Re-throw validation errors
+        throw error;
       }
-      this.logger.error('Error uploading CSV file:', error);
-      throw new BadRequestException('Failed to upload CSV file');
+      this.logger.error('Error processing CSV file:', error);
+      throw new BadRequestException('Failed to process CSV file');
     }
   }
 
-  async uploadImage(file: Express.Multer.File, host: string) {
+  async uploadImage(file: Express.Multer.File, host: string, body?: AwsUploadImageDto): Promise<FileEntity> {
     try {
-      const uploadResult = await this.uploadS3(file.buffer, `${uuid()}`, file.mimetype);
-      const protocol = process.env.NODE_ENV === 'dev' ? 'http://' : 'https://';
-      if (uploadResult) {
-        const newFile = this.fileRepository.create({
-          file_key: uploadResult.Key,
-          file_url: `${protocol}${host}/api/v1/image/${uploadResult.Key}`,
-          file_name: file.originalname,
-          file_type: file.mimetype,
-        });
-        await this.fileRepository.save(newFile);
-        if (newFile) return newFile;
+      let processedImageBuffer = file.buffer;
+      let mimeType = file.mimetype;
+
+      const imageType = body?.imageType;
+      const resizeParams = imageType ? ImageResizeMap[imageType] : null;
+
+      if (resizeParams) {
+        processedImageBuffer = await sharp(file.buffer)
+          .resize(resizeParams.width, resizeParams.height, {
+            fit: 'cover',
+            position: 'center',
+          })
+          .webp({
+            quality: 80,
+            lossless: false,
+            alphaQuality: 80,
+          })
+          .toBuffer();
+
+        mimeType = 'image/webp';
       }
+
+      const uploadResult = await this.uploadS3(processedImageBuffer, `${uuid()}`, mimeType);
+      const protocol = process.env.NODE_ENV === 'dev' ? 'http://' : 'https://';
+
+      if (!uploadResult) throw new BadRequestException('Failed to upload file to S3');
+
+      const newFile = this.fileRepository.create({
+        file_key: uploadResult.Key,
+        file_url: `${protocol}${host}/api/v1/image/${uploadResult.Key}`,
+        file_name: file.originalname,
+        file_type: mimeType,
+      });
+
+      await this.fileRepository.save(newFile);
+      return newFile;
     } catch (error) {
       this.logger.error('Error uploading image file:', error);
       throw new BadRequestException('Failed to upload image file');
     }
+  }
+
+  /**
+   * Creates a new file record in the database for a vault, referencing an existing S3 object.
+   *
+   * @param fileKey - The S3 key of the original file to reference.
+   * @returns A promise that resolves to the newly created FileEntity.
+   * @throws {BadRequestException} If the original file with the given key is not found.
+   */
+  async createFileRecordForVault(fileKey: string): Promise<FileEntity> {
+    // Find the original file to get its metadata
+    const originalFile = await this.fileRepository.findOne({
+      where: { file_key: fileKey },
+    });
+
+    if (!originalFile) {
+      throw new BadRequestException(`File with key ${fileKey} not found`);
+    }
+
+    // Create a new file entity that points to the same S3 object
+    const newFile = this.fileRepository.create({
+      file_key: originalFile.file_key, // Same S3 key
+      file_url: originalFile.file_url,
+      file_name: originalFile.file_name,
+      file_type: originalFile.file_type,
+    });
+
+    // Save and return the new file entity
+    return this.fileRepository.save(newFile);
   }
 }

@@ -1,3 +1,4 @@
+import './instrument';
 import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
@@ -5,8 +6,14 @@ import * as bodyParser from 'body-parser';
 import { json } from 'express';
 
 import { AppModule } from './app.module';
+import { loadSecrets } from './load-gcp-secrets';
 
 async function bootstrap() {
+  try {
+    await loadSecrets();
+  } catch (error) {
+    console.log(error);
+  }
   const app = await NestFactory.create(AppModule);
 
   // Configure raw body parser for webhook endpoint
@@ -34,7 +41,7 @@ async function bootstrap() {
       whitelist: true,
       forbidNonWhitelisted: false,
       transform: true,
-      transformOptions: { excludeExtraneousValues: true },
+      transformOptions: { excludeExtraneousValues: false },
     })
   );
 

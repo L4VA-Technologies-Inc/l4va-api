@@ -1,7 +1,7 @@
-import { Injectable, BadRequestException, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { classToPlain, instanceToPlain, plainToInstance } from 'class-transformer';
-import { Repository } from 'typeorm';
+import { Brackets, Repository } from 'typeorm';
 
 import { transformImageToUrl } from '../../helpers';
 import { AwsService } from '../aws_bucket/aws.service';
@@ -15,7 +15,7 @@ import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
-import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
+import { VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class UsersService {
@@ -44,33 +44,52 @@ export class UsersService {
     });
   }
 
-  async getPublicProfile(userId: string): Promise<any> {
+  async getPublicProfile(userId: string): Promise<PublicProfileRes> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
       relations: ['profile_image', 'banner_image', 'social_links'],
     });
-    this.logger.log('USER', user);
 
     if (!user) {
       throw new BadRequestException('User not found');
     }
 
-    // Calculate total_vaults from the vaults relation
-    user.total_vaults = user.vaults?.length || 0;
+    const statuses = [
+      VaultStatus.published,
+      VaultStatus.contribution,
+      VaultStatus.acquire,
+      VaultStatus.locked,
+      VaultStatus.burned,
+    ];
 
-    const userSource = {
-      ...user,
-      banner_image: user.banner_image.file_url,
-      profile_image: user.profile_image.file_url,
-    };
+    const vaultsCount = await this.vaultRepository
+      .createQueryBuilder('vault')
+      .andWhere('vault.deleted != :deleted', { deleted: true })
+      .andWhere('vault.vault_status IN (:...statuses)', { statuses })
+      .andWhere(
+        new Brackets(qb => {
+          qb.where('vault.owner_id = :userId', { userId }).orWhere(
+            `EXISTS (
+                    SELECT 1 FROM assets
+                    WHERE assets.vault_id = vault.id 
+                    AND assets.added_by = :userId
+                    AND assets.status IN ('locked', 'distributed')
+                  )`,
+            { userId }
+          );
+        })
+      )
+      .getCount();
 
-    // Transform to plain object and remove sensitive data
-    const plainUser = classToPlain(userSource);
-    delete plainUser.address;
+    user.total_vaults = vaultsCount || 0;
+    const plainUser = instanceToPlain(user);
+    plainUser.banner_image = user.banner_image?.file_url || null;
+    plainUser.profile_image = user.profile_image?.file_url || null;
+
     delete plainUser.gains;
     delete plainUser.vaults;
 
-    return plainUser;
+    return plainToInstance(PublicProfileRes, plainUser, { excludeExtraneousValues: true });
   }
 
   async create(userData: Partial<User>): Promise<User> {
@@ -88,36 +107,37 @@ export class UsersService {
       throw new BadRequestException('User not found');
     }
 
-    const adaPrice = await this.taptoolsService.getAdaPrice();
-    const ownedVaultsCount = await this.vaultRepository.count({
-      where: {
-        owner: { id: userId },
-        deleted: false,
-      },
-    });
-    const tvlResult = await this.assetRepository
-      .createQueryBuilder('asset')
-      .select(
-        'SUM(CASE WHEN asset.type = :nftType THEN asset.floor_price::numeric ELSE asset.dex_price::numeric * asset.quantity END)',
-        'tvl'
-      )
-      .where('asset.added_by = :userId', { userId })
-      .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
-      .andWhere('asset.status = :status', { status: AssetStatus.LOCKED })
+    const statuses = [
+      VaultStatus.published,
+      VaultStatus.contribution,
+      VaultStatus.acquire,
+      VaultStatus.locked,
+      VaultStatus.burned,
+    ];
+    const vaultsCount = await this.vaultRepository
+      .createQueryBuilder('vault')
+      .andWhere('vault.deleted != :deleted', { deleted: true })
+      .andWhere('vault.vault_status IN (:...statuses)', { statuses })
       .andWhere(
-        '(asset.type = :nftType AND asset.floor_price IS NOT NULL) OR (asset.type = :ftType AND asset.dex_price IS NOT NULL)'
+        new Brackets(qb => {
+          qb.where('vault.owner_id = :userId', { userId }).orWhere(
+            `EXISTS (
+                    SELECT 1 FROM assets
+                    WHERE assets.vault_id = vault.id 
+                    AND assets.added_by = :userId
+                    AND assets.status IN ('locked', 'distributed')
+                  )`,
+            { userId }
+          );
+        })
       )
-      .setParameter('nftType', AssetType.NFT)
-      .setParameter('ftType', AssetType.FT)
-      .getRawOne();
-
-    const tvl = tvlResult?.tvl ? parseFloat(tvlResult.tvl) : 0;
-    user.total_vaults = ownedVaultsCount || 0;
-    user.tvl = tvl;
+      .getCount();
+    user.total_vaults = vaultsCount || 0;
     const plainedUsers = instanceToPlain(user);
 
-    plainedUsers.totalValueUsd = parseFloat((tvl * adaPrice).toFixed(2));
-    plainedUsers.totalValueAda = tvl;
+    plainedUsers.totalValueUsd = parseFloat((user.tvl * (await this.taptoolsService.getAdaPrice())).toFixed(2));
+    plainedUsers.totalValueAda = user.tvl;
+
     return plainToInstance(PublicProfileRes, plainedUsers, { excludeExtraneousValues: true });
   }
 
@@ -134,6 +154,10 @@ export class UsersService {
     // Update basic profile fields
     if (updateData.name !== undefined) {
       user.name = updateData.name;
+    }
+
+    if (updateData.email !== undefined) {
+      user.email = updateData.email;
     }
 
     if (updateData.description !== undefined) {
@@ -190,7 +214,7 @@ export class UsersService {
     return classToPlain(selectedUser, { excludeExtraneousValues: true }) as User;
   }
 
-  async updateUserAddress(userId: string, address: string) {
+  async updateUserAddress(userId: string, address: string): Promise<void> {
     await this.usersRepository.update(
       {
         id: userId,

@@ -6,9 +6,11 @@ import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { generateUsername } from 'unique-username-generator';
 
+import { TaptoolsService } from '../taptools/taptools.service';
 import { UsersService } from '../users/users.service';
 
 import { LoginReq } from './dto/login.req';
+import { LoginRes } from './dto/login.res';
 
 import { transformImageToUrl } from '@/helpers';
 
@@ -16,10 +18,11 @@ import { transformImageToUrl } from '@/helpers';
 export class AuthService {
   constructor(
     private usersService: UsersService,
-    private jwtService: JwtService
+    private jwtService: JwtService,
+    private readonly taptoolsService: TaptoolsService
   ) {}
 
-  async verifySignature(signatureData: LoginReq) {
+  async verifySignature(signatureData: LoginReq): Promise<LoginRes> {
     try {
       const { signature, stakeAddress, walletAddress } = signatureData;
 
@@ -95,11 +98,13 @@ export class AuthService {
           name: user.name,
           address: user.address,
           description: user.description,
-          tvl: user.tvl,
+          totalValueUsd: parseFloat((user.tvl * (await this.taptoolsService.getAdaPrice())).toFixed(2)),
+          totalValueAda: user.tvl,
           totalVaults: user.total_vaults,
           gains: user.gains,
           profileImage: profileImage,
           bannerImage: bannerImage,
+          email: user.email,
         },
       };
     } catch (error) {

@@ -5,7 +5,7 @@ import { Job } from 'bullmq';
 import { Repository } from 'typeorm';
 
 import { Vault } from '@/database/vault.entity';
-import { SmartContractVaultStatus, VaultStatus } from '@/types/vault.types';
+import { VaultStatus } from '@/types/vault.types';
 
 @Processor('phaseTransition')
 @Injectable()
@@ -42,15 +42,9 @@ export class LifecycleProcessor extends WorkerHost {
         return;
       }
 
-      // Update vault status
-      vault.vault_status = data.newStatus;
-      if (data.newStatus === VaultStatus.failed) {
-        vault.vault_sc_status = SmartContractVaultStatus.CANCELLED;
-      }
-
       // Set phase start time if specified
       if (data.phaseStartField) {
-        (vault as any)[data.phaseStartField] = new Date().toISOString();
+        (vault as any)[data.phaseStartField] = new Date();
       }
 
       await this.vaultRepository.save(vault);

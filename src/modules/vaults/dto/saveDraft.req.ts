@@ -1,6 +1,17 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
-import { IsArray, IsEnum, IsNumber, IsOptional, IsString, ValidateIf, Min, Max } from 'class-validator';
+import {
+  IsArray,
+  IsEnum,
+  IsNumber,
+  IsOptional,
+  IsString,
+  ValidateIf,
+  Min,
+  Max,
+  ArrayMaxSize,
+  IsObject,
+} from 'class-validator';
 
 import {
   ContributionWindowType,
@@ -10,9 +21,9 @@ import {
   VaultPrivacy,
   VaultType,
 } from '../../../types/vault.types';
-import { AssetWhitelist, ContributorWhitelist, AcquirerWhitelist, AcquirerWhitelistCsv, SocialLink } from '../types';
+import { ContributorWhitelist, AcquirerWhitelist, AcquirerWhitelistCsv, SocialLink } from '../types';
 
-
+import { AssetWhitelistDto } from './assetWhitelist.dto';
 
 export class SaveDraftReq {
   @ApiProperty({ required: false, nullable: true })
@@ -329,13 +340,23 @@ export class SaveDraftReq {
   @Expose()
   ftTokenImg?: string | null;
 
-  @ApiProperty({ required: false, nullable: true, type: [AssetWhitelist] })
-  @IsOptional()
-  @ValidateIf((o, v) => v !== null)
+  @ApiProperty({
+    description: 'List of whitelisted assets with their policy IDs and optional count caps (max 10 assets)',
+    type: [AssetWhitelistDto],
+    required: false,
+    example: [
+      {
+        id: '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd',
+        countCapMin: 1,
+        countCapMax: 10,
+      },
+    ],
+  })
   @IsArray()
-  @Type(() => AssetWhitelist)
+  @ArrayMaxSize(10, { message: 'A maximum of 10 assets can be whitelisted' })
+  @IsObject({ each: true })
   @Expose()
-  assetsWhitelist?: AssetWhitelist[] | null;
+  assetsWhitelist?: AssetWhitelistDto[];
 
   @ApiProperty({ required: false, nullable: true, type: [AcquirerWhitelist] })
   @IsOptional()
@@ -356,7 +377,7 @@ export class SaveDraftReq {
   @IsArray()
   @Type(() => ContributorWhitelist)
   @Expose()
-  whitelistContributors?: ContributorWhitelist[] | null;
+  contributorWhitelist?: ContributorWhitelist[] | null;
 
   @ApiProperty({ required: false, nullable: true, type: [SocialLink] })
   @IsOptional()

@@ -52,15 +52,15 @@ export class Proposal {
   externalLink: string;
 
   @Expose({ name: 'startDate' })
-  @Column({ name: 'start_date', nullable: false })
+  @Column({ name: 'start_date', nullable: false, type: 'timestamptz' })
   startDate: Date;
 
   @Expose({ name: 'endDate' })
-  @Column({ name: 'end_date', nullable: true })
+  @Column({ name: 'end_date', nullable: true, type: 'timestamptz' })
   endDate: Date;
 
   @Expose({ name: 'executionDate' })
-  @Column({ name: 'execution_date', nullable: true })
+  @Column({ name: 'execution_date', nullable: true, type: 'timestamptz' })
   executionDate: Date;
 
   @Expose({ name: 'snapshotId' })
@@ -85,12 +85,20 @@ export class Proposal {
   terminationReason?: string;
 
   @Expose({ name: 'terminationDate' })
-  @Column({ name: 'termination_date', nullable: true })
+  @Column({ name: 'termination_date', nullable: true, type: 'timestamptz' })
   terminationDate?: Date;
 
   @Expose({ name: 'burnAssets' })
   @Column({ name: 'burn_assets', type: 'json', nullable: true })
-  burnAssets?: any[];
+  burnAssets?: string[]; // Array of asset IDs to burn
+
+  @Expose({ name: 'buyingSellingOptions' })
+  @Column({ name: 'buying_selling_options', type: 'json', nullable: true })
+  buyingSellingOptions?: any[];
+
+  @Expose({ name: 'abstain' })
+  @Column({ name: 'abstain', type: 'boolean', nullable: true, default: false })
+  abstain?: boolean;
 
   @Expose({ name: 'creator' })
   @ManyToOne(() => User, { nullable: false, onDelete: 'CASCADE' })
@@ -114,6 +122,6 @@ export class Proposal {
   votes: Vote[];
 
   @Expose({ name: 'createdAt' })
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 }
