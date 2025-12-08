@@ -67,9 +67,9 @@ export class MetadataRegistryApiService {
   ) {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.githubToken = this.configService.get<string>('GITHUB_TOKEN');
-    this.apiBaseUrl = this.configService.get<string>('METADATA_API_TESTNET_URL');
-    this.repoOwner = this.configService.get<string>('METADATA_REGISTRY_TESTNET_OWNER');
-    this.repoName = this.configService.get<string>('METADATA_REGISTRY_TESTNET_REPO');
+    this.apiBaseUrl = this.configService.get<string>('METADATA_API_URL');
+    this.repoOwner = this.configService.get<string>('METADATA_REGISTRY_OWNER');
+    this.repoName = this.configService.get<string>('METADATA_REGISTRY_REPO');
   }
 
   @Cron(CronExpression.EVERY_5_HOURS)

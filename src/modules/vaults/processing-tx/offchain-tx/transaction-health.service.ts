@@ -8,7 +8,7 @@ import { Repository } from 'typeorm';
 import { TransactionsService } from './transactions.service';
 
 import { Transaction } from '@/database/transaction.entity';
-import { TransactionStatus } from '@/types/transaction.types';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
 @Injectable()
 export class TransactionHealthService {
@@ -23,7 +23,7 @@ export class TransactionHealthService {
     private readonly configService: ConfigService
   ) {
     this.blockfrost = new BlockFrostAPI({
-      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
+      projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
   }
 
@@ -80,11 +80,20 @@ export class TransactionHealthService {
           `Transaction ${transaction.tx_hash} is confirmed on-chain (block: ${blockchainTx.block_height}), updating status`
         );
 
-        await this.transactionsService.updateTransactionStatusAndLockAssets(
+        await this.transactionsService.updateTransactionStatusByHash(
           transaction.tx_hash,
           blockchainTx.index,
           TransactionStatus.confirmed
         );
+
+        if (!transaction) {
+          return null;
+        }
+
+        if (transaction.type === TransactionType.contribute || transaction.type === TransactionType.acquire) {
+          const lockedCount = await this.transactionsService.lockAssetsForTransaction(transaction.id);
+          this.logger.log(`Locked ${lockedCount} assets for transaction ${transaction.tx_hash}`);
+        }
       } else {
         // Transaction exists but not yet in a block
         this.logger.warn(`Transaction ${transaction.tx_hash} found on-chain but not yet confirmed (no block height)`);

@@ -46,7 +46,7 @@ export class ClaimsService {
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.blockfrost = new BlockFrostAPI({
-      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
+      projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
   }
 
@@ -91,16 +91,6 @@ export class ClaimsService {
       order: { created_at: 'DESC' },
       relations: ['vault', 'vault.vault_image'],
       select: {
-        id: true,
-        type: true,
-        status: true,
-        amount: true,
-        description: true,
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        metadata: true,
-        created_at: true,
-        updated_at: true,
         vault: {
           id: true,
           name: true,
@@ -114,8 +104,15 @@ export class ClaimsService {
 
     const items = claims.map(claim => {
       const cleanClaim = {
-        ...claim,
+        id: claim.id,
+        type: claim.type,
+        status: claim.status,
         amount: claim.amount / 10 ** (claim.vault?.ft_token_decimals || 0),
+        adaAmount: claim.lovelace_amount ? claim.lovelace_amount / 1_000_000 : null,
+        multiplier: claim.multiplier,
+        description: claim.description,
+        createdAt: claim.created_at,
+        updatedAt: claim.updated_at,
         vault: {
           ...claim.vault,
           vaultImage: claim.vault?.vault_image?.file_url || null,
@@ -226,12 +223,11 @@ export class ClaimsService {
           user: { id: tx.user.id },
           vault: { id: vault.id },
           type: ClaimType.CANCELLATION,
-          amount: tx.amount, // ADA amount to return
+          lovelace_amount: tx.amount, // ADA amount to return
           status: ClaimStatus.AVAILABLE,
           description: `Return ADA from failed vault acquisition: ${vault.name}`,
           metadata: {
             transactionType: 'acquisition',
-            adaAmount: tx.amount,
             failureReason: reason,
             originalTxHash: tx.tx_hash,
             outputIndex: 0,

@@ -45,7 +45,7 @@ export class VyfiService {
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.blockfrost = new BlockFrostAPI({
-      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
+      projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
   }
 
@@ -242,7 +242,7 @@ export class VyfiService {
     }
 
     // Calculate required ADA
-    const requiredLpAda = Number(claim.metadata?.adaAmount || 0);
+    const requiredLpAda = Number(claim.lovelace_amount || 0);
 
     // Generate metadata
     const metadataText = this.formatMetadataText(
@@ -395,7 +395,7 @@ export class VyfiService {
   //             quantity: +claim.amount,
   //           },
   //         ],
-  //         lovelace: VYFI_CONSTANTS.TOTAL_REQUIRED_ADA + Number(claim.metadata?.adaAmount || 0),
+  //         lovelace: VYFI_CONSTANTS.TOTAL_REQUIRED_ADA + Number(claim.lovelace_amount || 0),
   //       },
   //     ],
   //     metadata: {
@@ -489,7 +489,7 @@ export class VyfiService {
   //   }
 
   //   // Calculate required ADA for LP creation
-  //   const requiredLpAda = Number(claim.metadata?.adaAmount || 0);
+  //   const requiredLpAda = Number(claim.lovelace_amount || 0);
 
   //   if (totalDispatchAda < requiredLpAda) {
   //     throw new Error(

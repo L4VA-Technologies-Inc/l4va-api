@@ -47,7 +47,7 @@ export class TaptoolsService {
       baseURL: this.blockfrostTestnetUrl,
       timeout: 10000,
       headers: {
-        project_id: process.env.BLOCKFROST_TESTNET_API_KEY,
+        project_id: process.env.BLOCKFROST_API_KEY,
         'Content-Type': 'application/json',
       },
     });

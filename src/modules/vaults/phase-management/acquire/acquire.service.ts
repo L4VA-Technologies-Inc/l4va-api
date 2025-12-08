@@ -85,7 +85,6 @@ export class AcquireService {
       assets: [],
       userId,
       fee: this.PROTOCOL_ACQUIRERS_FEE,
-      metadata: acquireReq.assets,
     });
 
     return {

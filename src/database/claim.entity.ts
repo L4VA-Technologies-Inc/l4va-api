@@ -56,6 +56,14 @@ export class Claim {
   @Column({ type: 'bigint', default: 0 })
   amount: number;
 
+  @Expose({ name: 'lovelaceAmount' })
+  @Column({ name: 'lovelace_amount', type: 'bigint', nullable: true })
+  lovelace_amount?: number;
+
+  @Expose({ name: 'multiplier' })
+  @Column({ type: 'numeric', nullable: true })
+  multiplier?: number;
+
   @ManyToOne(() => Transaction, { nullable: true })
   @JoinColumn({ name: 'transaction_id' })
   transaction: Transaction;

@@ -34,7 +34,7 @@ export class TransactionsService {
     private readonly configService: ConfigService
   ) {
     this.blockfrost = new BlockFrostAPI({
-      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
+      projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
   }
 
@@ -62,6 +62,7 @@ export class TransactionsService {
   async createAssets(txId: string): Promise<{ success: boolean }> {
     const transaction = await this.transactionRepository.findOne({
       where: { id: txId },
+      select: ['id', 'type', 'vault_id', 'user_id', 'metadata'],
     });
 
     if (!transaction) {
@@ -93,7 +94,6 @@ export class TransactionsService {
           status: AssetStatus.PENDING,
           origin_type: AssetOriginType.ACQUIRED,
           added_by: user,
-          metadata: assetItem?.metadata || {},
         });
       });
     } else if (transaction.type === TransactionType.contribute) {
@@ -108,7 +108,10 @@ export class TransactionsService {
           status: AssetStatus.PENDING,
           origin_type: AssetOriginType.CONTRIBUTED,
           added_by: user,
-          metadata: assetItem?.metadata || {},
+          image: assetItem.metadata?.image ?? assetItem.metadata?.files?.[0]?.src ?? null,
+          decimals: assetItem.metadata?.decimals ?? null,
+          name: assetItem.metadata?.onchainMetadata?.name ?? null,
+          description: assetItem.metadata?.onchainMetadata?.description ?? null,
         });
       });
     }
@@ -116,6 +119,9 @@ export class TransactionsService {
     // Bulk insert all assets in a single transaction
     if (assetsToCreate.length > 0) {
       await this.assetRepository.save(assetsToCreate);
+
+      // Clear metadata after successful asset creation
+      await this.transactionRepository.update({ id: transaction.id }, { metadata: null });
     }
 
     return {
@@ -309,35 +315,18 @@ export class TransactionsService {
     return { items, total, page: parsedPage, limit: parsedLimit };
   }
 
-  async updateTransactionHash(id: string, txHash: string): Promise<void> {
+  async updateTransactionHash(id: string, txHash: string, metadata?: Record<string, any>): Promise<void> {
     const result = await this.transactionRepository.update(
       { id },
       {
         tx_hash: txHash,
         status: TransactionStatus.submitted,
+        metadata,
       }
     );
 
     if (result.affected === 0) {
       throw new NotFoundException(`Transaction with id ${id} not found`);
-    }
-  }
-
-  async updateCreateVaultTransactionHashByVaultId(vaultId: string, txHash: string): Promise<void> {
-    const result = await this.transactionRepository.update(
-      {
-        vault_id: vaultId,
-        tx_hash: IsNull(),
-        type: TransactionType.createVault,
-      },
-      {
-        tx_hash: txHash,
-        status: TransactionStatus.submitted,
-      }
-    );
-
-    if (result.affected === 0) {
-      throw new NotFoundException(`Transaction for vault id ${vaultId} not found`);
     }
   }
 
@@ -350,13 +339,13 @@ export class TransactionsService {
   }
 
   /**
-   * Update transaction status by hash and optionally lock assets if they exist
+   * Update transaction status by hash
    * @param txHash Transaction hash
    * @param txIndex Transaction index
    * @param status New transaction status
    * @returns Updated transaction or null if not found
    */
-  async updateTransactionStatusAndLockAssets(
+  async updateTransactionStatusByHash(
     txHash: string,
     txIndex: number,
     status: TransactionStatus
@@ -366,7 +355,7 @@ export class TransactionsService {
     });
 
     if (!transaction) {
-      this.logger.warn(`Transaction with hash ${txHash} not found in database, skipping update`);
+      this.logger.warn(`Transaction with hash ${txHash} not found during status update`);
       return null;
     }
 
@@ -374,64 +363,170 @@ export class TransactionsService {
     transaction.status = status;
     transaction.tx_index = txIndex.toString();
 
+    return this.transactionRepository.save(transaction);
+  }
+
+  /**
+   * Lock assets for a confirmed transaction and update vault values
+   * @param transactionId Transaction ID
+   * @returns Number of assets locked
+   */
+  async lockAssetsForTransaction(transactionId: string): Promise<number> {
+    const transaction = await this.transactionRepository.findOne({
+      where: { id: transactionId },
+      select: ['id', 'vault_id', 'tx_hash'],
+    });
+
+    if (!transaction) {
+      this.logger.warn(`Transaction ${transactionId} not found`);
+      return 0;
+    }
+
     const assets = await this.assetRepository.find({
       where: {
         transaction: { id: transaction.id },
+        status: AssetStatus.PENDING, // Only lock pending assets
+        deleted: false,
       },
     });
 
-    // Only lock assets if they exist
-    if (assets.length > 0) {
-      const vault = await this.vaultRepository.findOne({
-        where: { id: transaction.vault_id },
-        select: [
-          'id',
-          'acquire_reserve',
-          'require_reserved_cost_ada',
-          'require_reserved_cost_usd',
-          'total_assets_cost_ada',
-          'total_assets_cost_usd',
-          'total_acquired_value_ada',
-        ],
-      });
+    // No assets to lock
+    if (assets.length === 0) {
+      this.logger.log(`No pending assets found for transaction ${transaction.tx_hash}`);
+      return 0;
+    }
 
-      if (!vault) {
-        this.logger.warn(`Vault ${transaction.vault_id} not found for transaction ${txHash}`);
-        return this.transactionRepository.save(transaction);
+    const vault = await this.vaultRepository.findOne({
+      where: { id: transaction.vault_id },
+      select: [
+        'id',
+        'acquire_reserve',
+        'require_reserved_cost_ada',
+        'require_reserved_cost_usd',
+        'total_assets_cost_ada',
+        'total_assets_cost_usd',
+        'total_acquired_value_ada',
+      ],
+    });
+
+    if (!vault) {
+      this.logger.warn(`Vault ${transaction.vault_id} not found for transaction ${transaction.tx_hash}`);
+      return 0;
+    }
+
+    this.logger.log(`Locking ${assets.length} assets for transaction ${transaction.tx_hash}`);
+
+    // Bulk update assets to LOCKED status
+    const now = new Date();
+    await this.assetRepository.update(
+      {
+        transaction: { id: transaction.id },
+        status: AssetStatus.PENDING,
+        deleted: false,
+      },
+      {
+        status: AssetStatus.LOCKED,
+        locked_at: now,
+        updated_at: now,
       }
+    );
 
-      this.logger.log(`Locking ${assets.length} assets for transaction ${txHash}`);
+    // Calculate and update vault values
+    const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(transaction.vault_id);
 
-      // Bulk update assets to LOCKED status
-      await this.assetRepository.update(
-        { transaction: { id: transaction.id } },
+    await this.vaultRepository.update(vault.id, {
+      require_reserved_cost_ada: assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01),
+      require_reserved_cost_usd: assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01),
+      total_assets_cost_ada: assetsPrices.totalValueAda,
+      total_assets_cost_usd: assetsPrices.totalValueUsd,
+      total_acquired_value_ada: assetsPrices.totalAcquiredAda,
+    });
+
+    return assets.length;
+  }
+
+  /**
+   * Batch lock assets for multiple transactions
+   * More efficient than locking one by one
+   * @param transactionIds Array of transaction IDs
+   * @returns Total number of assets locked
+   */
+  async lockAssetsForTransactions(transactionIds: string[]): Promise<number> {
+    if (transactionIds.length === 0) {
+      return 0;
+    }
+
+    const transactions = await this.transactionRepository.find({
+      where: { id: In(transactionIds) },
+      select: ['id', 'vault_id', 'tx_hash', 'type'],
+    });
+
+    if (transactions.length === 0) {
+      this.logger.warn(`No transactions found for IDs: ${transactionIds.join(', ')}`);
+      return 0;
+    }
+
+    let totalLocked = 0;
+
+    // Group transactions by vault for efficient processing
+    const transactionsByVault = transactions.reduce(
+      (acc, tx) => {
+        if (!acc[tx.vault_id]) {
+          acc[tx.vault_id] = [];
+        }
+        acc[tx.vault_id].push(tx);
+        return acc;
+      },
+      {} as Record<string, typeof transactions>
+    );
+
+    // Process each vault's transactions
+    for (const [vaultId, vaultTransactions] of Object.entries(transactionsByVault)) {
+      const txIds = vaultTransactions.map(t => t.id);
+
+      // Bulk lock all pending assets for these transactions
+      const result = await this.assetRepository.update(
+        {
+          transaction: { id: In(txIds) },
+          status: AssetStatus.PENDING,
+          deleted: false,
+        },
         {
           status: AssetStatus.LOCKED,
-          vault: { id: vault.id },
+          locked_at: new Date(),
+          updated_at: new Date(),
         }
       );
 
-      // Calculate and update vault values only if assets were locked
-      const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(transaction.vault_id);
+      const lockedCount = result.affected || 0;
+      totalLocked += lockedCount;
 
-      vault.require_reserved_cost_ada = assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01);
-      vault.require_reserved_cost_usd = assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01);
-      vault.total_assets_cost_ada = assetsPrices.totalValueAda;
-      vault.total_assets_cost_usd = assetsPrices.totalValueUsd;
-      vault.total_acquired_value_ada = assetsPrices.totalAcquiredAda;
+      if (lockedCount > 0) {
+        this.logger.log(
+          `Locked ${lockedCount} assets for ${vaultTransactions.length} transactions in vault ${vaultId}`
+        );
 
-      await this.vaultRepository.update(vault.id, {
-        require_reserved_cost_ada: vault.require_reserved_cost_ada,
-        require_reserved_cost_usd: vault.require_reserved_cost_usd,
-        total_assets_cost_ada: vault.total_assets_cost_ada,
-        total_assets_cost_usd: vault.total_assets_cost_usd,
-        total_acquired_value_ada: vault.total_acquired_value_ada,
-      });
-    } else {
-      this.logger.log(`No assets found for transaction ${txHash}, skipping asset locking`);
+        // Update vault values once per vault
+        const vault = await this.vaultRepository.findOne({
+          where: { id: vaultId },
+          select: ['id', 'acquire_reserve'],
+        });
+
+        if (vault) {
+          const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(vaultId);
+
+          await this.vaultRepository.update(vault.id, {
+            require_reserved_cost_ada: assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01),
+            require_reserved_cost_usd: assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01),
+            total_assets_cost_ada: assetsPrices.totalValueAda,
+            total_assets_cost_usd: assetsPrices.totalValueUsd,
+            total_acquired_value_ada: assetsPrices.totalAcquiredAda,
+          });
+        }
+      }
     }
 
-    return this.transactionRepository.save(transaction);
+    return totalLocked;
   }
 
   /**
@@ -519,11 +614,22 @@ export class TransactionsService {
 
     if (txsToUpdate.length > 0) {
       try {
-        await Promise.all(
-          txsToUpdate.map(tx =>
-            this.updateTransactionStatusAndLockAssets(tx.tx_hash, tx.tx_index, TransactionStatus.confirmed)
-          )
-        );
+        for (const tx of txsToUpdate) {
+          const transaction = await this.updateTransactionStatusByHash(
+            tx.tx_hash,
+            tx.tx_index,
+            TransactionStatus.confirmed
+          );
+
+          if (!transaction) {
+            return null;
+          }
+
+          if (transaction.type === TransactionType.contribute || transaction.type === TransactionType.acquire) {
+            const lockedCount = await this.lockAssetsForTransaction(transaction.id);
+            this.logger.log(`Locked ${lockedCount} assets for transaction ${tx.tx_hash}`);
+          }
+        }
         this.logger.log(`Updated ${txsToUpdate.length} transactions to confirmed status`);
       } catch (error) {
         this.logger.error('Failed to update transaction statuses', error);

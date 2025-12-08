@@ -44,7 +44,7 @@ export class BlockchainService {
     this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
     this.blueprintTitle = this.configService.get<string>('BLUEPRINT_TITLE');
     this.blockfrost = new BlockFrostAPI({
-      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
+      projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
     this.anvilHeaders = {
       'x-api-key': this.configService.get<string>('ANVIL_API_KEY'),
@@ -76,7 +76,7 @@ export class BlockchainService {
           this.logger.warn(
             `Specific UTxO requirement during transaction build '${txData?.message ? txData.message : ''}' not met: ${requiredLovelace} lovelace`
           );
-          throw new UTxOInsufficientException(buildResponse.message, requiredLovelace);
+          throw new UTxOInsufficientException(requiredLovelace);
         }
 
         // Handle general balance insufficient errors
@@ -86,7 +86,7 @@ export class BlockchainService {
           buildResponse.message?.includes('Insufficient input')
         ) {
           this.logger.warn(`UTxO Balance Insufficient error: ${JSON.stringify(buildResponse)}`);
-          throw new UTxOInsufficientException(buildResponse.message);
+          throw new UTxOInsufficientException();
         }
 
         if (

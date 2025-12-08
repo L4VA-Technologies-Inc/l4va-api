@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 
 import { ExtractInput, ScriptInteraction, TransactionOutput, MintAsset } from '../distribution.types';
 
@@ -12,8 +12,6 @@ import { generate_tag_from_txhash_index, getAddressFromHash } from '@/modules/va
  */
 @Injectable()
 export class AcquirerExtractionBuilder {
-  private readonly logger = new Logger(AcquirerExtractionBuilder.name);
-
   constructor() {}
 
   /**
@@ -48,7 +46,7 @@ export class AcquirerExtractionBuilder {
 
       const datumTag = generate_tag_from_txhash_index(originalTx.tx_hash, 0);
       const adaPairMultiplier = Number(vault.ada_pair_multiplier);
-      const claimMultiplier = Number(claim.metadata.multiplier);
+      const claimMultiplier = Number(claim.multiplier);
       const originalAmount = Number(originalTx.amount);
 
       const claimMintQuantity = claimMultiplier * (originalAmount * 1_000_000);

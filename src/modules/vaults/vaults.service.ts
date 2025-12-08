@@ -1,4 +1,3 @@
-import { Credential, EnterpriseAddress, ScriptHash } from '@emurgo/cardano-serialization-lib-nodejs';
 import {
   BadRequestException,
   Injectable,
@@ -24,6 +23,7 @@ import { GovernanceService } from './phase-management/governance/governance.serv
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from './processing-tx/onchain/blockchain.service';
 import { valuation_sc_type, vault_sc_privacy } from './processing-tx/onchain/types/vault-sc-type';
+import { getAddressFromHash } from './processing-tx/onchain/utils/lib';
 import { VaultManagingService } from './processing-tx/onchain/vault-managing.service';
 
 import { AcquirerWhitelistEntity } from '@/database/acquirerWhitelist.entity';
@@ -151,6 +151,7 @@ export class VaultsService {
   ): Promise<{
     vaultId: string;
     presignedTx: string;
+    txId: string;
   }> {
     try {
       const owner = await this.usersRepository.findOne({
@@ -456,7 +457,7 @@ export class VaultsService {
         end: acquireStartTime + Number(finalVault.acquire_window_duration),
       };
 
-      const { presignedTx, contractAddress, vaultAssetName, scriptHash, applyParamsResult } =
+      const { presignedTx, contractAddress, vaultAssetName, scriptHash, applyParamsResult, transactionId } =
         await this.vaultContractService.createOnChainVaultTx({
           vaultName: finalVault.name,
           customerAddress: finalVault.owner.address,
@@ -480,6 +481,7 @@ export class VaultsService {
       return {
         vaultId: finalVault.id,
         presignedTx,
+        txId: transactionId,
       };
     } catch (error) {
       this.logger.error('Error creating vault:', error);
@@ -509,6 +511,36 @@ export class VaultsService {
       // throw new BadRequestException('Failed to create vault. Please check your input and try again.');
       throw error;
     }
+  }
+
+  /**
+   * Publishes a vault by submitting a signed transaction and updating vault status.
+   * Starts transaction confirmation in the background.
+   * @param userId - ID of the vault owner
+   * @param signedTx - Signed transaction object
+   * @returns Full vault response
+   */
+  async publishVault(userId: string, signedTx: PublishVaultDto): Promise<VaultFullResponse> {
+    const vault = await this.vaultsRepository.findOne({
+      where: {
+        id: signedTx.vaultId,
+      },
+      relations: ['owner'],
+    });
+    if (vault.owner.id !== userId) {
+      throw new UnauthorizedException('You must be an owner of vault!');
+    }
+
+    const publishedTx = await this.vaultContractService.submitOnChainVaultTx(signedTx, vault, userId);
+
+    vault.contract_address = getAddressFromHash(vault.script_hash);
+    vault.vault_status = VaultStatus.published;
+    vault.publication_hash = publishedTx.txHash;
+    await this.vaultsRepository.save(vault);
+
+    await this.usersRepository.increment({ id: vault.owner.id }, 'total_vaults', 1);
+
+    return plainToInstance(VaultFullResponse, instanceToPlain(vault), { excludeExtraneousValues: true });
   }
 
   /**
@@ -719,46 +751,6 @@ export class VaultsService {
         semiPrivate: { percentage: 0, valueAda: 0, valueUsd: 0 },
       };
     }
-  }
-
-  /**
-   * Publishes a vault by submitting a signed transaction and updating vault status.
-   * Starts transaction confirmation in the background.
-   * @param userId - ID of the vault owner
-   * @param signedTx - Signed transaction object
-   * @returns Full vault response
-   */
-  async publishVault(userId: string, signedTx): Promise<VaultFullResponse> {
-    const vault = await this.vaultsRepository.findOne({
-      where: {
-        id: signedTx.vaultId,
-      },
-      relations: ['owner'],
-    });
-    if (vault.owner.id !== userId) {
-      throw new UnauthorizedException('You must be an owner of vault!');
-    }
-
-    const publishedTx = await this.vaultContractService.submitOnChainVaultTx(
-      signedTx,
-      vault.asset_vault_name,
-      vault.script_hash,
-      vault.apply_params_result,
-      vault.id
-    );
-
-    const contractAddress = EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(vault.script_hash)))
-      .to_address()
-      .to_bech32();
-
-    vault.contract_address = contractAddress;
-    vault.vault_status = VaultStatus.published;
-    vault.publication_hash = publishedTx.txHash;
-    await this.vaultsRepository.save(vault);
-
-    await this.usersRepository.increment({ id: vault.owner.id }, 'total_vaults', 1);
-
-    return plainToInstance(VaultFullResponse, instanceToPlain(vault), { excludeExtraneousValues: true });
   }
 
   async prepareDraftResponse(id: string): Promise<VaultFullResponse> {

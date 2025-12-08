@@ -12,6 +12,7 @@ import { AddressesUtxo, BatchSizeResult } from '../distribution.types';
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { getAddressFromHash, getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
@@ -36,6 +37,7 @@ export class ContributorDistributionOrchestrator {
     private readonly blockchainService: BlockchainService,
     private readonly claimsService: ClaimsService,
     private readonly paymentBuilder: ContributorPaymentBuilder,
+    private readonly assetService: AssetsService,
     private readonly blockfrost: BlockFrostAPI
   ) {}
 
@@ -320,6 +322,9 @@ export class ContributorDistributionOrchestrator {
         ClaimStatus.CLAIMED
       );
       await this.transactionRepository.update({ id: batchTransaction.id }, { status: TransactionStatus.confirmed });
+
+      // Mark assets as distributed
+      await this.assetService.markAssetsAsDistributedByTransactions(validClaims.map(c => c.transaction.id));
 
       this.logger.log(
         `Successfully processed batch payment for ${validClaims.length} claims ` + `with tx: ${response.txHash}`

@@ -18,6 +18,7 @@ import { AwsModule } from './modules/aws_bucket/aws.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { DistributionModule } from './modules/distribution/distribution.module';
 import { JwtGlobalModule } from './modules/globals/jwt_global_module/jwt_global.module';
+import { GoogleCloudModule } from './modules/google_cloud/google-cloud.module';
 import { UsersModule } from './modules/users/users.module';
 import { ClaimsModule } from './modules/vaults/claims/claims.module';
 import { AcquireModule } from './modules/vaults/phase-management/acquire/acquire.module';
@@ -25,6 +26,7 @@ import { ContributionModule } from './modules/vaults/phase-management/contributi
 import { GovernanceModule } from './modules/vaults/phase-management/governance/governance.module';
 import { TransactionsModule } from './modules/vaults/processing-tx/offchain-tx/transactions.module';
 import { BlockchainModule } from './modules/vaults/processing-tx/onchain/blockchain.module';
+import { TreasureWalletModule } from './modules/vaults/treasure/treasure-wallet.module';
 import { VaultsModule } from './modules/vaults/vaults.module';
 import { VyfiModule } from './modules/vyfi/vyfi.module';
 
@@ -82,6 +84,8 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     GovernanceModule,
     NotificationModule,
     ChatModule,
+    GoogleCloudModule,
+    TreasureWalletModule,
     EventEmitterModule.forRoot(),
   ],
   controllers: [AppController],
