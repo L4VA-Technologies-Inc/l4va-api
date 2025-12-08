@@ -159,7 +159,9 @@ export class VaultManagingService {
         minAda: 2000000,
         filterByAda: 8000000,
         validateUtxos: false,
-        targetAssets: [{ token: `${this.VLRM_POLICY_ID}${this.VLRM_HEX_ASSET_NAME}`, amount: this.VLRM_CREATOR_FEE }],
+        ...(this.VLRM_CREATOR_FEE_ENABLED && {
+          targetAssets: [{ token: `${this.VLRM_POLICY_ID}${this.VLRM_HEX_ASSET_NAME}`, amount: this.VLRM_CREATOR_FEE }],
+        }),
       } // 4 ADA minimum
     );
 
