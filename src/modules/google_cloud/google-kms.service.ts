@@ -49,29 +49,37 @@ export class GoogleKMSService {
       return;
     }
 
-    // Initialize with service account credentials
-    const credentialsPath = this.configService.get('GOOGLE_APPLICATION_CREDENTIALS');
-
-    this.kmsClient = new KeyManagementServiceClient({
-      keyFilename: credentialsPath,
-    });
-
+    // Store configuration but don't create client yet (lazy initialization)
     this.projectId = this.configService.get('GCP_PROJECT_ID');
     this.locationId = this.configService.get('GCP_KMS_LOCATION');
     this.keyRingId = this.configService.get('GCP_KMS_KEYRING');
     this.keyId = this.configService.get('GCP_KMS_KEY');
 
-    this.logger.log(`Initialized KMS client for project: ${this.projectId}`);
-    this.logger.log(`Using key: ${this.getKeyName()}`);
+    this.logger.log(`KMS configuration loaded for project: ${this.projectId}`);
+  }
+
+  /**
+   * Lazy initialize KMS client on first use
+   */
+  private ensureKmsClient(): void {
+    if (!this.isMainnet) {
+      throw new Error('KMS client not available (non-mainnet environment)');
+    }
+
+    if (!this.kmsClient) {
+      const credentialsPath = this.configService.get('GOOGLE_APPLICATION_CREDENTIALS');
+      this.kmsClient = new KeyManagementServiceClient({
+        keyFilename: credentialsPath,
+      });
+      this.logger.log(`Initialized KMS client for project: ${this.projectId}`);
+    }
   }
 
   /**
    * Get full KMS key resource name
    */
   private getKeyName(): string {
-    if (!this.kmsClient) {
-      throw new Error('KMS client not initialized (non-mainnet environment)');
-    }
+    this.ensureKmsClient();
     return this.kmsClient.cryptoKeyPath(this.projectId, this.locationId, this.keyRingId, this.keyId);
   }
 
