@@ -18,24 +18,34 @@ export class GoogleSecretService {
       return;
     }
 
-    const credentialsPath = this.configService.get('GOOGLE_APPLICATION_CREDENTIALS');
-
-    this.secretClient = new SecretManagerServiceClient({
-      keyFilename: credentialsPath,
-    });
-
+    // Store configuration but don't create client yet (lazy initialization)
     this.projectId = this.configService.get('GCP_PROJECT_ID');
 
-    this.logger.log(`Initialized Secret Manager client for project: ${this.projectId}`);
+    this.logger.log(`Secret Manager configuration loaded for project: ${this.projectId}`);
+  }
+
+  /**
+   * Lazy initialize Secret Manager client on first use
+   */
+  private ensureSecretClient(): void {
+    if (!this.isMainnet) {
+      throw new Error('Secret Manager not available (non-mainnet environment)');
+    }
+
+    if (!this.secretClient) {
+      const credentialsPath = this.configService.get('GOOGLE_APPLICATION_CREDENTIALS');
+      this.secretClient = new SecretManagerServiceClient({
+        keyFilename: credentialsPath,
+      });
+      this.logger.log(`Initialized Secret Manager client for project: ${this.projectId}`);
+    }
   }
 
   /**
    * Create a new secret in Google Secret Manager
    */
   async createSecret(secretId: string, labels: Record<string, string>): Promise<string> {
-    if (!this.isMainnet || !this.secretClient) {
-      throw new Error('Secret Manager only available on mainnet');
-    }
+    this.ensureSecretClient();
 
     const parent = `projects/${this.projectId}`;
 
@@ -58,9 +68,7 @@ export class GoogleSecretService {
    * Add a new version to an existing secret
    */
   async addSecretVersion(secretId: string, data: Record<string, any>): Promise<string> {
-    if (!this.isMainnet || !this.secretClient) {
-      throw new Error('Secret Manager only available on mainnet');
-    }
+    this.ensureSecretClient();
 
     const parent = `projects/${this.projectId}/secrets/${secretId}`;
 
@@ -78,9 +86,7 @@ export class GoogleSecretService {
    * Get the latest version of a secret
    */
   async getSecretValue(secretId: string): Promise<any> {
-    if (!this.isMainnet || !this.secretClient) {
-      throw new Error('Secret Manager only available on mainnet');
-    }
+    this.ensureSecretClient();
 
     const name = `projects/${this.projectId}/secrets/${secretId}/versions/latest`;
 
@@ -96,9 +102,7 @@ export class GoogleSecretService {
    * Delete a secret from Secret Manager
    */
   async deleteSecret(secretId: string): Promise<void> {
-    if (!this.isMainnet || !this.secretClient) {
-      throw new Error('Secret Manager only available on mainnet');
-    }
+    this.ensureSecretClient();
 
     const name = `projects/${this.projectId}/secrets/${secretId}`;
 
