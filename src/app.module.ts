@@ -32,7 +32,7 @@ import { VyfiModule } from './modules/vyfi/vyfi.module';
 
 import { NotificationModule } from '@/modules/notification/notification.module';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
-
+// ================= App Module ================= //
 @Module({
   imports: [
     SentryModule.forRoot(),
