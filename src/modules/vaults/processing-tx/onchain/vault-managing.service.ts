@@ -124,7 +124,7 @@ export class VaultManagingService {
     this.VLRM_HEX_ASSET_NAME = this.configService.get<string>('VLRM_HEX_ASSET_NAME');
     this.VLRM_POLICY_ID = this.configService.get<string>('VLRM_POLICY_ID');
     this.VLRM_CREATOR_FEE = this.configService.get<number>('VLRM_CREATOR_FEE');
-    this.VLRM_CREATOR_FEE_ENABLED = this.configService.get<boolean>('VLRM_CREATOR_FEE_ENABLED');
+    this.VLRM_CREATOR_FEE_ENABLED = this.configService.get<string>('VLRM_CREATOR_FEE_ENABLED') === 'true';
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });

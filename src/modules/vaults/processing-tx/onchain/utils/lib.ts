@@ -69,10 +69,10 @@ interface GetUtxosOptions {
 interface GetUtxosResult {
   /** All valid UTXOs as hex strings (filtered by minAda) */
   utxos: string[];
+  /** UTXOs containing target tokens (only if targetToken/targetAssets specified) */
+  requiredInputs: string[];
   /** UTXOs filtered by higher ADA threshold (filterByAda) */
   filteredUtxos?: string[];
-  /** UTXOs containing target tokens (only if targetToken/targetAssets specified) */
-  requiredInputs?: string[];
   /** Detailed breakdown of asset collection */
   assetBreakdown?: AssetCollection[];
   /** Total ADA collected (in lovelace) - only if targetAdaAmount specified */
@@ -297,7 +297,7 @@ export const getUtxosExtract = async (
     throw new Error(`Insufficient ADA found. Need ${targetAdaAmount} lovelace, found ${totalAdaCollected} lovelace`);
   }
 
-  let selectedUtxos: string[];
+  let selectedUtxos: string[] = [];
 
   if (!hasTargetAssets && !hasTargetAda) {
     selectedUtxos = allValidUtxos.slice(0, maxUtxos);
@@ -311,6 +311,7 @@ export const getUtxosExtract = async (
 
   const result: GetUtxosResult = {
     utxos: selectedUtxos,
+    requiredInputs: [],
   };
 
   if (filterByAda !== undefined) {
