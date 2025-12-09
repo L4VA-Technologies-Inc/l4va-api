@@ -56,12 +56,12 @@ export class Proposal {
   startDate: Date;
 
   @Expose({ name: 'endDate' })
-  @Column({ name: 'end_date', nullable: true, type: 'timestamptz' })
+  @Column({ name: 'end_date', nullable: false, type: 'timestamptz' })
   endDate: Date;
 
   @Expose({ name: 'executionDate' })
   @Column({ name: 'execution_date', nullable: true, type: 'timestamptz' })
-  executionDate: Date;
+  executionDate?: Date;
 
   @Expose({ name: 'snapshotId' })
   @Column({ name: 'snapshot_id', nullable: true })
