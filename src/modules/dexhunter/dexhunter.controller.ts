@@ -1,7 +1,9 @@
 import { Controller, Post, Body } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 
-import { DexHunterService, EstimateSwapResponse, ExecuteSwapResponse } from './dexhunter.service';
+import { DexHunterService } from './dexhunter.service';
+import { EstimateSwapResponse } from './dto/estimate-swap.dto';
+import { ExecuteSwapResponse } from './dto/execute-swap.dto';
 
 interface EstimateSwapDto {
   tokenIn: string;
@@ -63,7 +65,6 @@ export class DexHunterController {
   async executeSwap(@Body() body: ExecuteSwapDto): Promise<ExecuteSwapResponse> {
     return this.dexHunterService.executeSwap(body.vaultId, {
       tokenIn: body.tokenIn,
-      tokenOut: body.tokenOut,
       amountIn: body.amountIn,
       slippage: body.slippage,
     });
