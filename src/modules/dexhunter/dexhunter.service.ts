@@ -66,9 +66,9 @@ export class DexHunterService {
     private readonly vaultRepository: Repository<Vault>
   ) {
     this.blockfrost = new BlockFrostAPI({
-      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
+      projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
-    this.dexHunterBaseUrl = 'https://api-us.dexhunterv3.app';
+    this.dexHunterBaseUrl = this.configService.get<string>('DEXHUNTER_BASE_URL');
     this.dexHunterApiKey = this.configService.get<string>('DEXHUNTER_API_KEY');
   }
 

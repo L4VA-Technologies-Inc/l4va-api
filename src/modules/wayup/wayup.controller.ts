@@ -3,8 +3,6 @@ import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 
 import { WayUpService } from './wayup.service';
 
-import { TransactionBuildResponse } from '@/modules/vaults/processing-tx/onchain/types/transaction-status.enum';
-
 interface NFTListingDto {
   vaultId: string;
   listings: Array<{
@@ -12,11 +10,6 @@ interface NFTListingDto {
     assetName: string;
     priceAda: number;
   }>;
-}
-
-interface BuildListingDto {
-  vaultId: string;
-  policyIds?: Array<{ id: string; priceAda: number }>;
 }
 
 interface UnlistNFTDto {
@@ -58,13 +51,6 @@ interface BuyNFTDto {
 @Controller('wayup')
 export class WayUpController {
   constructor(private readonly wayUpService: WayUpService) {}
-
-  @Post('list-nfts')
-  @ApiOperation({ summary: 'Build listing transaction for NFTs (legacy)' })
-  @ApiResponse({ status: 200, description: 'Transaction built successfully' })
-  async listNFTs(@Body() body: BuildListingDto): Promise<TransactionBuildResponse> {
-    return this.wayUpService.listNFTs(body.vaultId, body.policyIds);
-  }
 
   @Post('create-listing')
   @ApiOperation({ summary: 'Create NFT listing on WayUp Marketplace (build, sign, and submit)' })
