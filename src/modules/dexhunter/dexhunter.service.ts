@@ -1,5 +1,5 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import CardanoWasm, { FixedTransaction } from '@emurgo/cardano-serialization-lib-nodejs';
+import { FixedTransaction } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -7,40 +7,154 @@ import { Repository } from 'typeorm';
 
 import { Vault } from '@/database/vault.entity';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
-import { getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 
 export interface EstimateSwapInput {
-  tokenIn: string; // Policy ID + Asset Name (or 'lovelace' for ADA)
-  tokenOut: string; // Policy ID + Asset Name (or 'lovelace' for ADA)
+  /**
+   * Token being sold (input token)
+   */
+  tokenIn: string;
+
+  /**
+   * Token being bought (output token)
+   */
+  tokenOut: string;
+
+  /**
+   * Amount of input token to swap (in base units)
+   */
   amountIn: number;
-  slippage?: number; // Default 1% (0.01)
+
+  /**
+   * Maximum acceptable slippage tolerance as a percentage
+   */
+  slippage?: number;
 }
 
 export interface EstimateSwapResponse {
+  /**
+   * Average exchange rate for the token pair across all DEXes
+   * - Expressed as: 1 TokenIn = X TokenOut
+   * - Used for reference pricing
+   * @example 0.00001234 (1 SNEK = 0.00001234 ADA)
+   */
   averagePrice: number;
+
+  /**
+   * Net price after all fees are applied
+   * - Accounts for batcher fees, protocol fees, and slippage
+   * - This is the effective exchange rate you'll receive
+   * @example 0.00001200 (actual price after fees)
+   */
   netPrice: number;
+
+  /**
+   * Total amount of output token you will receive (in base units)
+   * - Includes slippage protection
+   * - This is the minimum guaranteed output
+   * @example 4050000 (4.05 ADA in lovelace)
+   */
   totalOutput: number;
+
+  /**
+   * Estimated output without slippage protection (in base units)
+   * - Best case scenario if price doesn't move
+   * - Used to calculate actual slippage
+   * @example 4100000 (4.10 ADA in lovelace)
+   */
   totalOutputWithoutSlippage: number;
+
+  /**
+   * Fee charged by the batcher for transaction execution (in lovelace)
+   * - Fixed fee for processing the swap transaction
+   * - Typically 1-2 ADA depending on the DEX
+   * @example 2000000 (2 ADA)
+   */
   batcherFee: number;
+
+  /**
+   * Fee charged by DexHunter protocol (in lovelace)
+   * - Protocol fee for routing and optimization services
+   * @example 25000 (0.025 ADA)
+   */
   dexhunterFee: number;
+
+  /**
+   * Fee shared with integration partner (in lovelace)
+   * - Revenue share for partners using DexHunter API
+   * @example 25000 (0.025 ADA)
+   */
   partnerFee: number;
+
+  /**
+   * Refundable deposit required for the transaction (in lovelace)
+   * - Temporary deposit locked during swap execution
+   * - Returned after transaction completes
+   * @example 2000000 (2 ADA)
+   */
   deposits: number;
+
+  /**
+   * Sum of all fees (batcher + dexhunter + partner fees) (in lovelace)
+   * - Does not include deposits (which are refundable)
+   * @example 4050000 (4.05 ADA total fees)
+   */
   totalFee: number;
+
+  /**
+   * Array of swap routes split across multiple DEXes
+   * - DexHunter optimizes by splitting orders across DEXes for best price
+   * - Each split represents a portion of the trade on a specific DEX
+   */
   splits: SwapSplit[];
 }
 
+/**
+ * Represents a single swap route split on a specific DEX
+ * DexHunter optimizes swaps by splitting orders across multiple DEXes
+ * to minimize price impact and maximize output
+ */
 export interface SwapSplit {
+  /**
+   * Name of the DEX where this portion of the swap is executed
+   */
   dex: string;
+
+  /**
+   * Amount of input token allocated to this DEX (in base units)
+   */
   amountIn: number;
+
+  /**
+   * Expected output amount from this DEX split (in base units)
+   */
   amountOut: number;
+
+  /**
+   * Price impact on this specific DEX (as percentage)
+   */
   priceImpact: number;
 }
 
 export interface ExecuteSwapInput {
+  /**
+   * Token being sold (input token)
+   */
   tokenIn: string;
+
+  /**
+   * Token being bought (output token)
+   */
   tokenOut: string;
+
+  /**
+   * Amount of input token to swap (in base units)
+   */
   amountIn: number;
+
+  /**
+   * Maximum acceptable slippage tolerance (as percentage)
+   */
   slippage?: number;
 }
 
@@ -50,6 +164,15 @@ export interface ExecuteSwapResponse {
   actualSlippage: number;
 }
 
+/**
+ * Build Swap Flow
+ * 1. Estimate Swap - Get price quote and fee breakdown
+ * 2. Build Swap Transaction - Get unsigned transaction CBOR from DexHunter | /swap/build
+ * 3. Sign Transaction - Sign with treasury wallet private key
+ * 4. Submit Transaction - Submit signed transaction to blockchain | /swap/sign
+ *
+ * @see https://docs.dexhunter.io for complete DexHunter API documentation
+ */
 @Injectable()
 export class DexHunterService {
   private readonly logger = new Logger(DexHunterService.name);
@@ -93,7 +216,7 @@ export class DexHunterService {
           token_in: input.tokenIn,
           token_out: input.tokenOut,
           amount_in: input.amountIn,
-          slippage: input.slippage || 0.01, // Default 1% slippage
+          slippage: input.slippage || 0.5, // Default 1% slippage
         }),
       });
 
@@ -128,6 +251,13 @@ export class DexHunterService {
    * Execute a token swap using DexHunter API and vault's treasury wallet
    * Swaps tokens to ADA and deposits back to treasury wallet
    *
+   * Flow:
+   * 1. Get swap estimate
+   * 2. Build transaction via /swap/build
+   * 3. Sign transaction with treasury wallet private key
+   * 4. Submit signed transaction via /swap/sign
+   * 5. Submit to blockchain
+   *
    * @param vaultId - The vault ID that owns the tokens
    * @param input - Swap execution parameters
    * @returns Transaction hash and swap details
@@ -152,7 +282,7 @@ export class DexHunterService {
     const address = vault.treasury_wallet.treasury_address;
     this.logger.log(`Using treasury wallet address: ${address}`);
 
-    // First, get swap estimate for expected output
+    // Step 1: Get swap estimate for expected output
     const estimate = await this.estimateSwap({
       tokenIn: input.tokenIn,
       tokenOut: input.tokenOut,
@@ -162,54 +292,27 @@ export class DexHunterService {
 
     this.logger.log(`Estimated output: ${estimate.totalOutput} ${input.tokenOut}`);
 
-    // Get UTXOs containing the tokens to swap
-    const targetAssets =
-      input.tokenIn === 'lovelace'
-        ? []
-        : [
-            {
-              token: input.tokenIn,
-              amount: 1, // We need at least 1 token
-            },
-          ];
-
-    const { utxos: serializedUtxos } = await getUtxosExtract(
-      CardanoWasm.Address.from_bech32(address),
-      this.blockfrost,
-      {
-        targetAssets: targetAssets.length > 0 ? targetAssets : undefined,
-        targetAdaAmount: input.tokenIn === 'lovelace' ? input.amountIn * 1_000_000 + 10_000_000 : undefined, // Add 10 ADA buffer for fees
-        minAda: 1000000,
-        maxUtxos: 20,
-      }
-    );
-
-    if (serializedUtxos.length === 0) {
-      throw new Error('No UTXOs available in treasury wallet to fund swap transaction');
-    }
-
-    this.logger.log(`Collected ${serializedUtxos.length} UTXOs for swap`);
-
-    // Build swap transaction using DexHunter API
-    const swapResponse = await fetch(`${this.dexHunterBaseUrl}/swap/swap`, {
+    // Step 2: Build swap transaction using DexHunter API
+    this.logger.log('Building swap transaction...');
+    const swapResponse = await fetch(`${this.dexHunterBaseUrl}/swap/build`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Partner-Id': this.dexHunterApiKey,
       },
       body: JSON.stringify({
+        buyer_address: address, // Treasury wallet receives the output
         token_in: input.tokenIn,
         token_out: input.tokenOut,
+        slippage: input.slippage || 0.5,
         amount_in: input.amountIn,
-        slippage: input.slippage || 0.01,
-        buyer_address: address, // Treasury wallet receives the output
-        utxos: serializedUtxos,
+        tx_optimization: true, // Enable DEX splitting for better prices
       }),
     });
 
     if (!swapResponse.ok) {
       const errorText = await swapResponse.text();
-      throw new Error(`DexHunter swap API error: ${swapResponse.status} - ${errorText}`);
+      throw new Error(`DexHunter /swap/build API error: ${swapResponse.status} - ${errorText}`);
     }
 
     const swapData = await swapResponse.json();
@@ -220,17 +323,53 @@ export class DexHunterService {
 
     this.logger.log('Swap transaction built successfully');
 
-    // Sign the transaction with treasury wallet private key
+    // Step 3: Sign the transaction with treasury wallet private key
+    this.logger.log('Signing transaction with treasury wallet...');
     const privateKey = await this.treasuryWalletService.getTreasuryWalletPrivateKey(vaultId);
     const txToSign = FixedTransaction.from_bytes(Buffer.from(swapData.cbor, 'hex'));
     txToSign.sign_and_add_vkey_signature(privateKey);
-    const signedTxHex = Buffer.from(txToSign.to_bytes()).toString('hex');
+    const witnessSet = txToSign.witness_set();
+    const vkeyWitnesses = witnessSet.vkeys();
 
-    this.logger.log('Swap transaction signed with treasury wallet');
+    // Extract signatures from witness set
+    const signatures: string[] = [];
+    for (let i = 0; i < vkeyWitnesses.len(); i++) {
+      const vkey = vkeyWitnesses.get(i);
+      signatures.push(Buffer.from(vkey.to_bytes()).toString('hex'));
+    }
 
-    // Submit the transaction
+    this.logger.log(`Transaction signed with ${signatures.length} signature(s)`);
+
+    // Step 4: Submit signed transaction to DexHunter /swap/sign endpoint
+    this.logger.log('Submitting signed transaction to DexHunter...');
+    const signResponse = await fetch(`${this.dexHunterBaseUrl}/swap/sign`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Partner-Id': this.dexHunterApiKey,
+      },
+      body: JSON.stringify({
+        txCbor: swapData.cbor,
+        signatures: signatures,
+      }),
+    });
+
+    if (!signResponse.ok) {
+      const errorText = await signResponse.text();
+      throw new Error(`DexHunter /swap/sign API error: ${signResponse.status} - ${errorText}`);
+    }
+
+    const signData = await signResponse.json();
+
+    if (!signData.cbor) {
+      throw new Error('No signed transaction CBOR returned from DexHunter');
+    }
+
+    this.logger.log('Signed transaction received from DexHunter');
+
+    // Step 5: Submit the final signed transaction to blockchain
     const submitResponse = await this.blockchainService.submitTransaction({
-      transaction: signedTxHex,
+      transaction: signData.cbor,
     });
 
     this.logger.log(`Swap transaction submitted successfully. TxHash: ${submitResponse.txHash}`);
@@ -244,24 +383,5 @@ export class DexHunterService {
       estimatedOutput: estimate.totalOutput,
       actualSlippage: actualSlippage,
     };
-  }
-
-  /**
-   * Sign a transaction using the vault's treasury wallet private key
-   *
-   * @param vaultId - The vault ID
-   * @param txHex - Transaction hex to sign
-   * @returns Signed transaction hex
-   */
-  private async signTransaction(vaultId: string, txHex: string): Promise<string> {
-    try {
-      const privateKey = await this.treasuryWalletService.getTreasuryWalletPrivateKey(vaultId);
-      const txToSign = FixedTransaction.from_bytes(Buffer.from(txHex, 'hex'));
-      txToSign.sign_and_add_vkey_signature(privateKey);
-      return Buffer.from(txToSign.to_bytes()).toString('hex');
-    } catch (error) {
-      this.logger.error(`Failed to sign transaction for vault ${vaultId}`, error);
-      throw new Error(`Failed to sign transaction: ${error.message}`);
-    }
   }
 }
