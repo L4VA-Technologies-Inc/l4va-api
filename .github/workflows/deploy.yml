@@ -79,9 +79,9 @@ jobs:
         uses: appleboy/ssh-action@master
         continue-on-error: true
         with:
-          host: ${{ github.ref == 'refs/heads/main' && secrets.SSH_HOST_DEV || secrets.SSH_HOST }}
-          username: ${{ github.ref == 'refs/heads/main' && secrets.SSH_USERNAME_DEV || secrets.SSH_USERNAME }}
-          key: ${{ github.ref == 'refs/heads/main' && secrets.SSH_PRIVATE_KEY_DEV || secrets.SSH_PRIVATE_KEY }}
+          host: ${{ github.ref == 'refs/heads/dev' && secrets.SSH_HOST_DEV || secrets.SSH_HOST }}
+          username: ${{ github.ref == 'refs/heads/dev' && secrets.SSH_USERNAME_DEV || secrets.SSH_USERNAME }}
+          key: ${{ github.ref == 'refs/heads/dev' && secrets.SSH_PRIVATE_KEY_DEV || secrets.SSH_PRIVATE_KEY }}
           script: |
             mkdir -p ~/apps/logs/l4va-api
             docker logs l4va-api > ~/apps/logs/l4va-api/$(date +"%Y%m%d_%H%M%S").log 2>&1 || true
@@ -93,9 +93,9 @@ jobs:
       - name: Deploy
         uses: appleboy/scp-action@master
         with:
-          host: ${{ github.ref == 'refs/heads/main' && secrets.SSH_HOST_DEV || secrets.SSH_HOST }}
-          username: ${{ github.ref == 'refs/heads/main' && secrets.SSH_USERNAME_DEV || secrets.SSH_USERNAME }}
-          key: ${{ github.ref == 'refs/heads/main' && secrets.SSH_PRIVATE_KEY_DEV || secrets.SSH_PRIVATE_KEY }}
+          host: ${{ github.ref == 'refs/heads/dev' && secrets.SSH_HOST_DEV || secrets.SSH_HOST }}
+          username: ${{ github.ref == 'refs/heads/dev' && secrets.SSH_USERNAME_DEV || secrets.SSH_USERNAME }}
+          key: ${{ github.ref == 'refs/heads/dev' && secrets.SSH_PRIVATE_KEY_DEV || secrets.SSH_PRIVATE_KEY }}
           source: '.'
           target: '~/apps/l4va-api'
 
@@ -105,9 +105,9 @@ jobs:
       - name: Run
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ github.ref == 'refs/heads/main' && secrets.SSH_HOST_DEV || secrets.SSH_HOST }}
-          username: ${{ github.ref == 'refs/heads/main' && secrets.SSH_USERNAME_DEV || secrets.SSH_USERNAME }}
-          key: ${{ github.ref == 'refs/heads/main' && secrets.SSH_PRIVATE_KEY_DEV || secrets.SSH_PRIVATE_KEY }}
+          host: ${{ github.ref == 'refs/heads/dev' && secrets.SSH_HOST_DEV || secrets.SSH_HOST }}
+          username: ${{ github.ref == 'refs/heads/dev' && secrets.SSH_USERNAME_DEV || secrets.SSH_USERNAME }}
+          key: ${{ github.ref == 'refs/heads/dev' && secrets.SSH_PRIVATE_KEY_DEV || secrets.SSH_PRIVATE_KEY }}
           script: |
             cd ~/apps
             docker compose build l4va-api
