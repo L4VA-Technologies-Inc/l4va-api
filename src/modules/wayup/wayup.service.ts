@@ -5,75 +5,23 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
+import {
+  BuyNFTInput,
+  BuyNFTPayload,
+  ListingPayload,
+  MakeOfferInput,
+  MakeOfferPayload,
+  NFTListingInput,
+  UnlistInput,
+  UnlistPayload,
+  UpdateListingInput,
+  UpdateListingPayload,
+} from './wayup.types';
+
 import { Vault } from '@/database/vault.entity';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
-
-interface NFTListingInput {
-  policyId: string;
-  assetName: string;
-  priceAda: number;
-}
-
-interface UnlistInput {
-  policyId: string;
-  txHashIndex: string; // Format: txHash#outputIndex
-}
-
-interface UpdateListingInput {
-  policyId: string;
-  txHashIndex: string; // Format: txHash#outputIndex
-  newPriceAda: number;
-}
-
-interface MakeOfferInput {
-  policyId: string;
-  assetName: string;
-  priceAda: number;
-}
-
-interface BuyNFTInput {
-  policyId: string;
-  txHashIndex: string; // Format: txHash#outputIndex
-  priceAda: number;
-}
-
-interface ListingPayload {
-  changeAddress: string;
-  utxos: string[];
-  create: Array<{
-    assets: {
-      policyId: string;
-      assetName: string;
-    };
-    priceAda: number;
-  }>;
-}
-
-interface UnlistPayload {
-  changeAddress: string;
-  utxos: string[];
-  unlist: UnlistInput[];
-}
-
-interface UpdateListingPayload {
-  changeAddress: string;
-  utxos: string[];
-  update: UpdateListingInput[];
-}
-
-interface MakeOfferPayload {
-  changeAddress: string;
-  utxos: string[];
-  createOffer: MakeOfferInput[];
-}
-
-interface BuyNFTPayload {
-  changeAddress: string;
-  utxos: string[];
-  buy: BuyNFTInput[];
-}
 
 @Injectable()
 export class WayUpService {

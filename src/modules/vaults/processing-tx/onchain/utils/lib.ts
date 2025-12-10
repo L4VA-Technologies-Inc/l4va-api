@@ -23,6 +23,7 @@ import {
   NetworkInfo,
   BaseAddress,
   Bip32PrivateKey,
+  Transaction as CardanoTransaction,
 } from '@emurgo/cardano-serialization-lib-nodejs';
 import * as bip39 from 'bip39';
 
@@ -393,6 +394,11 @@ export function createUtxoHex(txHash: string, outputIndex: number, address: Addr
     TransactionInput.new(TransactionHash.from_hex(txHash), outputIndex),
     TransactionOutput.new(address, assetsToValue(amount))
   ).to_hex();
+}
+
+export function getTransactionSize(txHex: string): number {
+  const tx = CardanoTransaction.from_bytes(Buffer.from(txHex, 'hex'));
+  return tx.to_bytes().length;
 }
 
 /**

@@ -18,7 +18,11 @@ import { Vault } from '@/database/vault.entity';
 import { CancellationInput } from '@/modules/distribution/distribution.types';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { Redeemer, Redeemer1 } from '@/modules/vaults/processing-tx/onchain/types/type';
-import { generate_tag_from_txhash_index, getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import {
+  generate_tag_from_txhash_index,
+  getTransactionSize,
+  getUtxosExtract,
+} from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { AssetOriginType, AssetStatus } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -417,7 +421,7 @@ export class ClaimsService {
 
     try {
       const buildResponse = await this.blockchainService.buildTransaction(input);
-      const actualTxSize = this.blockchainService.getTransactionSize(buildResponse.complete);
+      const actualTxSize = getTransactionSize(buildResponse.complete);
       this.logger.debug(`Transaction size: ${actualTxSize} bytes (${(actualTxSize / 1024).toFixed(2)} KB)`);
 
       if (actualTxSize > this.MAX_TX_SIZE) {
