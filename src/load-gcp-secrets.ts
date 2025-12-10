@@ -21,7 +21,7 @@ export async function loadSecrets(): Promise<void> {
   console.log('Loading secrets from GCP Secret Manager for mainnet...');
 
   const credentialsFile = 'gcp-service-account.json';
-  const credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS || path.join(process.cwd(), credentialsFile);
+  const credentialsPath = path.join(process.cwd(), credentialsFile);
 
   if (!fs.existsSync(credentialsPath)) {
     // eslint-disable-next-line no-console
@@ -29,9 +29,9 @@ export async function loadSecrets(): Promise<void> {
     return;
   }
 
+  process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
   // eslint-disable-next-line no-console
   console.log(`Found GCP credentials file: ${credentialsPath}`);
-  process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
 
   if (!process.env.GCP_PROJECT_ID) {
     try {
