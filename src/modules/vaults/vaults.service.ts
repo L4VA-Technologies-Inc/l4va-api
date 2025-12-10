@@ -871,24 +871,8 @@ export class VaultsService {
       fdvAda: vault.fdv * adaPrice,
     };
 
-    let canCreateProposal = false;
-    let isChatVisible = false;
-
-    if (userId) {
-      try {
-        isChatVisible = await this.checkChat(userId, vaultId);
-      } catch {
-        isChatVisible = false;
-      }
-    }
-
-    if (userId && vault.vault_status === VaultStatus.locked) {
-      try {
-        canCreateProposal = await this.governanceService.canUserCreateProposal(vaultId, userId);
-      } catch {
-        canCreateProposal = false;
-      }
-    }
+    const canCreateProposal = await this.governanceService.canUserCreateProposal(vaultId, userId);
+    const isChatVisible = await this.verifyChatAccess(userId, vaultId);
 
     let isWhitelistedContributor = vault.privacy === VaultPrivacy.public || vault.owner.id === userId;
     let isWhitelistedAcquirer = vault.privacy === VaultPrivacy.public || vault.owner.id === userId;
@@ -932,50 +916,54 @@ export class VaultsService {
     return plainToInstance(VaultFullResponse, result, { excludeExtraneousValues: true });
   }
 
-  async checkChat(userId: string, vaultId: string): Promise<boolean> {
-    const user = await this.usersRepository.findOne({
-      where: { id: userId },
-      select: ['id', 'address'],
-    });
+  async verifyChatAccess(userId: string, vaultId: string): Promise<boolean> {
+    try {
+      const user = await this.usersRepository.findOne({
+        where: { id: userId },
+        select: ['id', 'address'],
+      });
 
-    if (!user) {
+      if (!user) {
+        return false;
+      }
+
+      const result = await this.vaultsRepository
+        .createQueryBuilder('vault')
+        .leftJoin('vault.snapshots', 'snapshot')
+        .leftJoin(
+          'transactions',
+          'transaction',
+          'transaction.vault_id = vault.id AND transaction.user_id = :userId AND transaction.status = :confirmedStatus'
+        )
+        .select('vault.id')
+        .addSelect('vault.owner_id')
+        .addSelect('snapshot.address_balances')
+        .addSelect('transaction.id', 'has_transaction')
+        .where('vault.id = :vaultId', { vaultId })
+        .andWhere('vault.deleted = false')
+        .orderBy('snapshot.created_at', 'DESC')
+        .setParameters({
+          userId,
+          confirmedStatus: TransactionStatus.confirmed,
+        })
+        .getRawOne();
+
+      if (!result) {
+        return false;
+      }
+
+      if (result.owner_id === userId) {
+        return true;
+      }
+
+      if (result.address_balances?.[user.address]) {
+        return true;
+      }
+
+      return !!result.has_transaction;
+    } catch (error) {
       return false;
     }
-
-    const result = await this.vaultsRepository
-      .createQueryBuilder('vault')
-      .leftJoin('vault.snapshots', 'snapshot')
-      .leftJoin(
-        'transactions',
-        'transaction',
-        'transaction.vault_id = vault.id AND transaction.user_id = :userId AND transaction.status = :confirmedStatus'
-      )
-      .select('vault.id')
-      .addSelect('vault.owner_id')
-      .addSelect('snapshot.address_balances')
-      .addSelect('transaction.id', 'has_transaction')
-      .where('vault.id = :vaultId', { vaultId })
-      .andWhere('vault.deleted = false')
-      .orderBy('snapshot.created_at', 'DESC')
-      .setParameters({
-        userId,
-        confirmedStatus: TransactionStatus.confirmed,
-      })
-      .getRawOne();
-
-    if (!result) {
-      return false;
-    }
-
-    if (result.owner_id === userId) {
-      return true;
-    }
-
-    if (result.address_balances?.[user.address]) {
-      return true;
-    }
-
-    return !!result.has_transaction;
   }
 
   /**
