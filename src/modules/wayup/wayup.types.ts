@@ -99,6 +99,18 @@ export interface BuyNFTPayload {
 }
 
 /**
+ * Combined marketplace actions input
+ * Allows executing multiple types of marketplace operations in a single transaction
+ */
+export interface CombinedMarketplaceActionsInput {
+  listings?: NFTListingInput[]; // NFTs to list for sale
+  unlistings?: UnlistInput[]; // Listings to cancel
+  updates?: UpdateListingInput[]; // Listings to update price
+  offers?: MakeOfferInput[]; // Offers to make
+  purchases?: BuyNFTInput[]; // NFTs to buy
+}
+
+/**
  * Generic WayUp transaction input for blockchain service
  */
 export interface WayUpTransactionInput {

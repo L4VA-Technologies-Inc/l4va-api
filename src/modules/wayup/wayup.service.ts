@@ -8,6 +8,7 @@ import { Repository } from 'typeorm';
 import {
   BuyNFTInput,
   BuyNFTPayload,
+  CombinedMarketplaceActionsInput,
   ListingPayload,
   MakeOfferInput,
   MakeOfferPayload,
@@ -16,6 +17,7 @@ import {
   UnlistPayload,
   UpdateListingInput,
   UpdateListingPayload,
+  WayUpTransactionInput,
 } from './wayup.types';
 
 import { Vault } from '@/database/vault.entity';
@@ -489,6 +491,198 @@ export class WayUpService {
     return {
       txHash: submitResponse.txHash,
       purchases: purchases,
+    };
+  }
+
+  /**
+   * Execute multiple marketplace actions in a single transaction
+   * Combines listings, unlistings, updates, offers, and purchases into one atomic operation
+   *
+   * @param vaultId - The vault ID executing the actions
+   * @param actions - Combined marketplace actions to execute
+   * @returns Transaction hash and summary of executed actions
+   */
+  async executeCombinedMarketplaceActions(
+    vaultId: string,
+    actions: CombinedMarketplaceActionsInput
+  ): Promise<{
+    txHash: string;
+    summary: {
+      listedCount: number;
+      unlistedCount: number;
+      updatedCount: number;
+      offersCount: number;
+      purchasedCount: number;
+    };
+  }> {
+    this.logger.log(`Executing combined marketplace actions for vault ${vaultId}`);
+
+    // Validate that at least one action is provided
+    const hasActions =
+      (actions.listings?.length ?? 0) > 0 ||
+      (actions.unlistings?.length ?? 0) > 0 ||
+      (actions.updates?.length ?? 0) > 0 ||
+      (actions.offers?.length ?? 0) > 0 ||
+      (actions.purchases?.length ?? 0) > 0;
+
+    if (!hasActions) {
+      throw new Error('At least one marketplace action must be provided');
+    }
+
+    // Validate minimum prices for listings
+    if (actions.listings?.length > 0) {
+      const invalidPrices = actions.listings.filter(l => l.priceAda < this.MIN_PRICE_ADA);
+      if (invalidPrices.length > 0) {
+        throw new Error(`All listings must have a minimum price of ${this.MIN_PRICE_ADA} ADA`);
+      }
+    }
+
+    // Validate minimum prices for updates
+    if (actions.updates?.length > 0) {
+      const invalidPrices = actions.updates.filter(u => u.newPriceAda < this.MIN_PRICE_ADA);
+      if (invalidPrices.length > 0) {
+        throw new Error(`All updated listings must have a minimum price of ${this.MIN_PRICE_ADA} ADA`);
+      }
+    }
+
+    // Validate minimum prices for offers
+    if (actions.offers?.length > 0) {
+      const invalidOffers = actions.offers.filter(o => o.priceAda < this.MIN_PRICE_ADA);
+      if (invalidOffers.length > 0) {
+        throw new Error(`All offers must be at least ${this.MIN_PRICE_ADA} ADA`);
+      }
+    }
+
+    // Validate minimum prices for purchases
+    if (actions.purchases?.length > 0) {
+      const invalidPrices = actions.purchases.filter(p => p.priceAda < this.MIN_PRICE_ADA);
+      if (invalidPrices.length > 0) {
+        throw new Error(`All NFT purchases must be at least ${this.MIN_PRICE_ADA} ADA`);
+      }
+    }
+
+    // Get vault and verify treasury wallet exists
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      relations: ['treasury_wallet'],
+    });
+
+    if (!vault) {
+      throw new Error(`Vault ${vaultId} not found`);
+    }
+
+    if (!vault.treasury_wallet) {
+      throw new Error(`Treasury wallet not found for vault ${vaultId}`);
+    }
+
+    const address = vault.treasury_wallet.treasury_address;
+    this.logger.log(`Using treasury wallet address: ${address}`);
+
+    // Calculate total ADA needed for offers and purchases
+    const totalOffersAda = actions.offers?.reduce((sum, offer) => sum + offer.priceAda, 0) ?? 0;
+    const totalPurchasesAda = actions.purchases?.reduce((sum, purchase) => sum + purchase.priceAda, 0) ?? 0;
+    const totalAdaNeeded = (totalOffersAda + totalPurchasesAda) * 1_000_000;
+
+    // Collect target NFTs for listings if any
+    const targetAssets =
+      actions.listings?.map(listing => ({
+        token: listing.policyId + listing.assetName,
+        amount: 1,
+      })) ?? [];
+
+    // Get UTXOs - prioritize those with target NFTs if listings exist
+    const { utxos: serializedUtxos } = await getUtxosExtract(
+      CardanoWasm.Address.from_bech32(address),
+      this.blockfrost,
+      {
+        targetAssets: targetAssets.length > 0 ? targetAssets : undefined,
+        targetAdaAmount: totalAdaNeeded > 0 ? totalAdaNeeded + 15_000_000 : undefined, // 15 ADA buffer for fees
+        minAda: 1000000,
+        maxUtxos: 25,
+      }
+    );
+
+    if (serializedUtxos.length === 0) {
+      throw new Error('No UTXOs available in treasury wallet to fund transaction');
+    }
+
+    // Build combined payload
+    const combinedPayload: WayUpTransactionInput = {
+      changeAddress: address,
+      utxos: serializedUtxos,
+    };
+
+    // Add listings if provided
+    if (actions.listings?.length > 0) {
+      combinedPayload.create = actions.listings.map(listing => ({
+        assets: {
+          policyId: listing.policyId,
+          assetName: listing.assetName,
+        },
+        priceAda: listing.priceAda,
+      }));
+    }
+
+    // Add unlistings if provided
+    if (actions.unlistings?.length > 0) {
+      combinedPayload.unlist = actions.unlistings;
+    }
+
+    // Add updates if provided
+    if (actions.updates?.length > 0) {
+      combinedPayload.update = actions.updates;
+    }
+
+    // Add offers if provided
+    if (actions.offers?.length > 0) {
+      combinedPayload.createOffer = actions.offers;
+    }
+
+    // Add purchases if provided
+    if (actions.purchases?.length > 0) {
+      combinedPayload.buy = actions.purchases;
+    }
+
+    this.logger.log(
+      `Building combined transaction: ` +
+        `${actions.listings?.length ?? 0} listings, ` +
+        `${actions.unlistings?.length ?? 0} unlistings, ` +
+        `${actions.updates?.length ?? 0} updates, ` +
+        `${actions.offers?.length ?? 0} offers, ` +
+        `${actions.purchases?.length ?? 0} purchases`
+    );
+
+    // Build the transaction
+    const buildResponse = await this.blockchainService.buildWayUpTransaction(combinedPayload);
+
+    if (!buildResponse.complete) {
+      throw new Error('Failed to build combined marketplace transaction');
+    }
+
+    // Sign the transaction with treasury wallet private key
+    this.logger.log('Signing combined marketplace transaction with treasury wallet');
+    const signedTx = await this.signTransaction(vaultId, buildResponse.complete);
+
+    // Submit the transaction
+    this.logger.log('Submitting combined marketplace transaction to blockchain');
+    const submitResponse = await this.blockchainService.submitTransaction({
+      transaction: signedTx,
+    });
+
+    const summary = {
+      listedCount: actions.listings?.length ?? 0,
+      unlistedCount: actions.unlistings?.length ?? 0,
+      updatedCount: actions.updates?.length ?? 0,
+      offersCount: actions.offers?.length ?? 0,
+      purchasedCount: actions.purchases?.length ?? 0,
+    };
+
+    this.logger.log(`Combined marketplace transaction completed successfully. TxHash: ${submitResponse.txHash}`);
+    this.logger.log(`Summary: ${JSON.stringify(summary)}`);
+
+    return {
+      txHash: submitResponse.txHash,
+      summary,
     };
   }
 
