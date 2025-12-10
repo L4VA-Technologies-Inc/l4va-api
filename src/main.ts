@@ -5,14 +5,17 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import * as bodyParser from 'body-parser';
 import { json } from 'express';
 
-import { AppModule } from './app.module';
 import { loadSecrets } from './load-gcp-secrets';
+import { AppModule } from './app.module';
 
 async function bootstrap() {
   try {
     await loadSecrets();
+    // eslint-disable-next-line no-console
+    console.log('Secrets loaded successfully, initializing application modules...');
   } catch (error) {
-    console.log(error);
+    // eslint-disable-next-line no-console
+    console.error('Failed to load secrets:', error.message || error);
   }
   const app = await NestFactory.create(AppModule);
 
