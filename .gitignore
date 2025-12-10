@@ -57,5 +57,6 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
 # Documentation (Compodoc)
 /documentation
+l4va-protocol-mainnet.json
 
 gcp-service-account.json

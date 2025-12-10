@@ -2,10 +2,11 @@ name: Deploy API
 
 on:
   pull_request:
-    branches: [ main, dev ]
+    branches: [main, dev]
     types: [opened, synchronize, reopened]
+
   push:
-    branches: [ main, dev ]
+    branches: [main, dev]
 
 jobs:
   build-check:
@@ -24,36 +25,89 @@ jobs:
     if: github.event_name == 'push'
     needs: build-check
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v3
 
+      ##############################################################
+      # DETECT ENV BY BRANCH
+      ##############################################################
+      - name: Detect environment
+        id: env
+        run: |
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "environment=mainnet" >> $GITHUB_OUTPUT
+          else
+            echo "environment=testnet" >> $GITHUB_OUTPUT
+          fi
+          echo "Deploying to: ${{ steps.env.outputs.environment }}"
+
+      ##############################################################
+      # CREATE .env FOR TESTNET
+      ##############################################################
+      - name: Create .env for Testnet
+        if: steps.env.outputs.environment == 'testnet'
+        env:
+          TESTNET_ENV_VARS: ${{ secrets.TESTNET_ENV_VARS }}
+        run: |
+          echo "$TESTNET_ENV_VARS" > .env
+          echo "Created TESTNET .env"
+
+      ##############################################################
+      # CREATE GCP JSON + .env FOR MAINNET
+      ##############################################################
+      - name: Create gcp-service-account.json for Mainnet
+        if: steps.env.outputs.environment == 'mainnet'
+        env:
+          MAINNET_GOOGLE_SECRETS: ${{ secrets.MAINNET_GOOGLE_SECRETS }}
+        run: |
+          echo "$MAINNET_GOOGLE_SECRETS" | base64 -d > gcp-service-account.json
+          echo "Created gcp-service-account.json"
+
+      - name: Create .env for Mainnet
+        if: steps.env.outputs.environment == 'mainnet'
+        env:
+          MAINNET_ENV_VARS: ${{ secrets.MAINNET_ENV_VARS }}
+        run: |
+          echo "$MAINNET_ENV_VARS" > .env
+          echo "Created MAINNET .env"
+
+      ##############################################################
+      # SAVE LOGS FROM SERVER
+      ##############################################################
       - name: Save logs
         uses: appleboy/ssh-action@master
         continue-on-error: true
         with:
-          host: ${{ github.ref == 'refs/heads/main' && secrets.SSH_HOST_DEV || secrets.SSH_HOST }}
-          username: ${{ github.ref == 'refs/heads/main' && secrets.SSH_USERNAME_DEV || secrets.SSH_USERNAME }}
-          key: ${{ github.ref == 'refs/heads/main' && secrets.SSH_PRIVATE_KEY_DEV || secrets.SSH_PRIVATE_KEY }}
+          host: ${{ github.ref == 'refs/heads/dev' && secrets.SSH_HOST_DEV || secrets.SSH_HOST }}
+          username: ${{ github.ref == 'refs/heads/dev' && secrets.SSH_USERNAME_DEV || secrets.SSH_USERNAME }}
+          key: ${{ github.ref == 'refs/heads/dev' && secrets.SSH_PRIVATE_KEY_DEV || secrets.SSH_PRIVATE_KEY }}
           script: |
             mkdir -p ~/apps/logs/l4va-api
             docker logs l4va-api > ~/apps/logs/l4va-api/$(date +"%Y%m%d_%H%M%S").log 2>&1 || true
             cd ~/apps/logs/l4va-api && ls -t | tail -n +11 | xargs -r rm -f
 
+      ##############################################################
+      # DEPLOY FILES TO SERVER
+      ##############################################################
       - name: Deploy
         uses: appleboy/scp-action@master
         with:
-          host: ${{ github.ref == 'refs/heads/main' && secrets.SSH_HOST_DEV || secrets.SSH_HOST }}
-          username: ${{ github.ref == 'refs/heads/main' && secrets.SSH_USERNAME_DEV || secrets.SSH_USERNAME }}
-          key: ${{ github.ref == 'refs/heads/main' && secrets.SSH_PRIVATE_KEY_DEV || secrets.SSH_PRIVATE_KEY }}
-          source: "."
-          target: "~/apps/l4va-api"
+          host: ${{ github.ref == 'refs/heads/dev' && secrets.SSH_HOST_DEV || secrets.SSH_HOST }}
+          username: ${{ github.ref == 'refs/heads/dev' && secrets.SSH_USERNAME_DEV || secrets.SSH_USERNAME }}
+          key: ${{ github.ref == 'refs/heads/dev' && secrets.SSH_PRIVATE_KEY_DEV || secrets.SSH_PRIVATE_KEY }}
+          source: '.'
+          target: '~/apps/l4va-api'
 
+      ##############################################################
+      # RUN APPLICATION VIA DOCKER
+      ##############################################################
       - name: Run
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ github.ref == 'refs/heads/main' && secrets.SSH_HOST_DEV || secrets.SSH_HOST }}
-          username: ${{ github.ref == 'refs/heads/main' && secrets.SSH_USERNAME_DEV || secrets.SSH_USERNAME }}
-          key: ${{ github.ref == 'refs/heads/main' && secrets.SSH_PRIVATE_KEY_DEV || secrets.SSH_PRIVATE_KEY }}
+          host: ${{ github.ref == 'refs/heads/dev' && secrets.SSH_HOST_DEV || secrets.SSH_HOST }}
+          username: ${{ github.ref == 'refs/heads/dev' && secrets.SSH_USERNAME_DEV || secrets.SSH_USERNAME }}
+          key: ${{ github.ref == 'refs/heads/dev' && secrets.SSH_PRIVATE_KEY_DEV || secrets.SSH_PRIVATE_KEY }}
           script: |
             cd ~/apps
             docker compose build l4va-api
