@@ -47,7 +47,6 @@ jobs:
       ##############################################################
       - name: Create .env for Testnet
         if: steps.env.outputs.environment == 'testnet'
-        working-directory: l4va-api
         env:
           TESTNET_ENV_VARS: ${{ secrets.TESTNET_ENV_VARS }}
         run: |
@@ -59,7 +58,6 @@ jobs:
       ##############################################################
       - name: Create gcp-service-account.json for Mainnet
         if: steps.env.outputs.environment == 'mainnet'
-        working-directory: l4va-api
         env:
           MAINNET_GOOGLE_SECRETS: ${{ secrets.MAINNET_GOOGLE_SECRETS }}
         run: |
@@ -68,7 +66,6 @@ jobs:
 
       - name: Create .env for Mainnet
         if: steps.env.outputs.environment == 'mainnet'
-        working-directory: l4va-api
         env:
           MAINNET_ENV_VARS: ${{ secrets.MAINNET_ENV_VARS }}
         run: |
@@ -99,7 +96,7 @@ jobs:
           host: ${{ github.ref == 'refs/heads/main' && secrets.SSH_HOST_DEV || secrets.SSH_HOST }}
           username: ${{ github.ref == 'refs/heads/main' && secrets.SSH_USERNAME_DEV || secrets.SSH_USERNAME }}
           key: ${{ github.ref == 'refs/heads/main' && secrets.SSH_PRIVATE_KEY_DEV || secrets.SSH_PRIVATE_KEY }}
-          source: 'l4va-api/*'
+          source: '.'
           target: '~/apps/l4va-api'
 
       ##############################################################
