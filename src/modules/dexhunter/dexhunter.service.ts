@@ -166,16 +166,19 @@ export class DexHunterService {
     this.logger.log('Swap transaction built successfully');
 
     // Step 3: Sign the transaction with treasury wallet private key
+    // Step 3: Sign the transaction with BOTH keys
     this.logger.log('Signing transaction with treasury wallet...');
-    const privateKey = await this.treasuryWalletService.getTreasuryWalletPrivateKey(vaultId);
-    const txToSign = FixedTransaction.from_bytes(Buffer.from(swapData.cbor, 'hex'));
-    txToSign.sign_and_add_vkey_signature(privateKey);
-    const witnessSet = txToSign.witness_set();
+    const { privateKey, stakePrivateKey } = await this.treasuryWalletService.getTreasuryWalletPrivateKey(vaultId);
 
-    // Convert the entire witness set to hex string (CIP-30 format)
+    const txToSign = FixedTransaction.from_bytes(Buffer.from(swapData.cbor, 'hex'));
+
+    txToSign.sign_and_add_vkey_signature(privateKey);
+    txToSign.sign_and_add_vkey_signature(stakePrivateKey);
+
+    const witnessSet = txToSign.witness_set();
     const witnessSetHex = Buffer.from(witnessSet.to_bytes()).toString('hex');
 
-    this.logger.log('Transaction signed successfully');
+    this.logger.log('Transaction signed with both payment and stake keys');
 
     // Step 4: Submit signed transaction to DexHunter /swap/sign endpoint
     this.logger.log('Submitting signed transaction to DexHunter...');

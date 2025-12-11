@@ -417,6 +417,7 @@ export async function generateCardanoWallet(isMainnet: boolean): Promise<{
   ticker: string;
   address: string;
   privateKey: string;
+  stakePrivateKey: string;
   mnemonic: string;
 }> {
   const mnemonic = bip39.generateMnemonic();
@@ -452,12 +453,14 @@ export async function generateCardanoWallet(isMainnet: boolean): Promise<{
 
   // Convert Bip32PrivateKey to regular PrivateKey for signing transactions
   const privateKey = accountKey.to_raw_key().to_bech32();
+  const stakePrivateKey = stakeKey.to_raw_key().to_bech32(); // ADD THIS
 
   const walletData = {
     ticker: 'ADA',
-    address: address,
-    privateKey: privateKey, // Now returns ed25519 private key in bech32 format
-    mnemonic: mnemonic,
+    address,
+    privateKey, // Now returns ed25519 private key in bech32 format
+    stakePrivateKey,
+    mnemonic,
   };
 
   return walletData;

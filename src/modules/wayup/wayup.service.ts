@@ -696,7 +696,7 @@ export class WayUpService {
   private async signTransaction(vaultId: string, txHex: string): Promise<string> {
     try {
       // Get the decrypted private key from treasury wallet
-      const privateKey = await this.treasuryWalletService.getTreasuryWalletPrivateKey(vaultId);
+      const { privateKey } = await this.treasuryWalletService.getTreasuryWalletPrivateKey(vaultId);
 
       // Deserialize and sign the transaction using FixedTransaction
       const txToSign = FixedTransaction.from_bytes(Buffer.from(txHex, 'hex'));
