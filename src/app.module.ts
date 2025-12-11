@@ -33,6 +33,7 @@ import { VyfiModule } from './modules/vyfi/vyfi.module';
 import { WayUpModule } from './modules/wayup/wayup.module';
 
 import { NotificationModule } from '@/modules/notification/notification.module';
+import { PresetsModule } from '@/modules/presets/presets.module';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
 
 /*
@@ -105,6 +106,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     DexHunterModule,
     WayUpModule,
     EventEmitterModule.forRoot(),
+    PresetsModule,
   ],
   controllers: [AppController],
   providers: [
