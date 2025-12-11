@@ -334,13 +334,6 @@ export class SaveDraftReq {
   @ValidateIf((o, v) => v !== null)
   @IsString()
   @Expose()
-  bannerImage?: string | null;
-
-  @ApiProperty({ required: false, nullable: true })
-  @IsOptional()
-  @ValidateIf((o, v) => v !== null)
-  @IsString()
-  @Expose()
   ftTokenImg?: string | null;
 
   @ApiProperty({

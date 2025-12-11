@@ -3,19 +3,21 @@ import {
   Injectable,
   InternalServerErrorException,
   Logger,
+  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
-import { Brackets, In, Not, Repository, UpdateResult } from 'typeorm';
+import { Brackets, In, Not, Repository } from 'typeorm';
 
 import { AwsService } from '../aws_bucket/aws.service';
 import { TaptoolsService } from '../taptools/taptools.service';
 
 import { CreateVaultReq } from './dto/createVault.req';
 import { VaultStatisticsResponse } from './dto/get-vaults-statistics.dto';
-import { DateRangeDto, SortOrder, TVLCurrency, VaultFilter, VaultSortField } from './dto/get-vaults.dto';
+import { GetVaultsDto, SortOrder, TVLCurrency, VaultFilter } from './dto/get-vaults.dto';
+import { IncrementViewCountRes } from './dto/increment-view-count.res';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { PublishVaultDto } from './dto/publish-vault.dto';
 import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
@@ -404,7 +406,6 @@ export class VaultsService {
           'contributor_whitelist',
           'tags',
           'vault_image',
-          'banner_image',
           'ft_token_img',
         ],
       });
@@ -753,18 +754,12 @@ export class VaultsService {
     }
   }
 
-  async prepareDraftResponse(id: string): Promise<VaultFullResponse> {
-    const vault = await this.vaultsRepository.findOne({
-      where: { id },
-      relations: ['owner', 'social_links', 'acquirer_whitelist', 'tags', 'vault_image', 'banner_image', 'ft_token_img'],
-    });
-
-    if (!vault) {
-      throw new BadRequestException('Vault not found');
-    }
-    return plainToInstance(VaultFullResponse, vault, { excludeExtraneousValues: true });
-  }
-
+  /**
+   * DEPRECATED FOR NOW, NOT IN USE
+   * Retrieves top 5 public vaults currently in the acquire phase, sorted by total assets cost in ADA.
+   * Calculates time left for the acquire phase for each vault.
+   * @returns Array of VaultAcquireResponse objects
+   */
   async getAcquire(): Promise<VaultAcquireResponse[]> {
     const vaults = await this.vaultsRepository
       .createQueryBuilder('vault')
@@ -809,15 +804,7 @@ export class VaultsService {
   async getVaultById(vaultId: string, userId?: string): Promise<VaultFullResponse> {
     const vault = await this.vaultsRepository.findOne({
       where: { id: vaultId, deleted: false, vault_status: Not(VaultStatus.draft) },
-      relations: [
-        'social_links',
-        'assets_whitelist',
-        'acquirer_whitelist',
-        'vault_image',
-        'banner_image',
-        'ft_token_img',
-        'tags',
-      ],
+      relations: ['social_links', 'assets_whitelist', 'acquirer_whitelist', 'vault_image', 'ft_token_img', 'tags'],
       join: {
         alias: 'vault',
         leftJoinAndSelect: {
@@ -970,30 +957,15 @@ export class VaultsService {
    * Retrieves paginated and filtered list of vaults accessible to the user, with access control and sorting.
    * @returns Paginated response of vaults
    */
-  async getVaults(data: {
-    userId?: string;
-    filter?: VaultFilter;
-    page?: number;
-    limit?: number;
-    sortBy?: VaultSortField;
-    sortOrder?: SortOrder;
-    tags?: string[];
-    myVaults?: boolean;
-    reserveMet?: boolean;
-    isPublicOnly?: boolean;
-    minInitialVaultOffered?: number;
-    maxInitialVaultOffered?: number;
-    assetWhitelist?: string;
-    minTvl?: number;
-    maxTvl?: number;
-    tvlCurrency?: TVLCurrency;
-    contributionWindow?: DateRangeDto;
-    acquireWindow?: DateRangeDto;
-    ownerId?: string;
-    search?: string;
-  }): Promise<PaginatedResponseDto<VaultShortResponse>> {
+  async getVaults(
+    data: GetVaultsDto & {
+      userId?: string;
+      ownerId?: string;
+    }
+  ): Promise<PaginatedResponseDto<VaultShortResponse>> {
     const {
       userId,
+      ownerId,
       sortBy,
       tvlCurrency,
       minTvl,
@@ -1006,24 +978,20 @@ export class VaultsService {
       assetWhitelist,
       myVaults,
       filter,
+      reserveMet,
+      search,
       page = 1,
       limit = 10,
       sortOrder = SortOrder.DESC,
-      reserveMet,
-      search,
     } = data;
 
     // Create base query for all vaults
     const queryBuilder = this.vaultsRepository
       .createQueryBuilder('vault')
       .leftJoinAndSelect('vault.social_links', 'social_links')
-      .leftJoinAndSelect('vault.assets_whitelist', 'assets_whitelist')
       .leftJoinAndSelect('vault.vault_image', 'vault_image')
-      .leftJoinAndSelect('vault.banner_image', 'banner_image')
       .leftJoinAndSelect('vault.ft_token_img', 'ft_token_img')
       .leftJoinAndSelect('vault.tags', 'tags')
-      .leftJoinAndSelect('vault.contributor_whitelist', 'contributor_whitelist')
-      .leftJoinAndSelect('vault.acquirer_whitelist', 'acquirer_whitelist')
       .andWhere('vault.deleted != :deleted', { deleted: true })
       .andWhere('vault.vault_status != :createdStatus', { createdStatus: VaultStatus.created });
 
@@ -1069,9 +1037,9 @@ export class VaultsService {
           })
         );
       }
-    } else if (data.ownerId) {
+    } else if (ownerId) {
       // only show public vaults
-      queryBuilder.andWhere('vault.owner_id = :ownerId', { ownerId: data.ownerId });
+      queryBuilder.andWhere('vault.owner_id = :ownerId', { ownerId });
       queryBuilder.andWhere('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public });
     } else {
       queryBuilder.andWhere('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public });
@@ -1260,8 +1228,6 @@ export class VaultsService {
           ...plainVault,
           totalValueUsd: assetsPrices.totalValueUsd,
           totalValueAda: assetsPrices.totalValueAda,
-          baseAllocation: null,
-          total: null,
           invested: vault.total_acquired_value_ada,
           phaseStartTime: phaseStartTime ? phaseStartTime.toISOString() : null,
           phaseEndTime: phaseEndTime ? phaseEndTime.toISOString() : null,
@@ -1452,8 +1418,14 @@ export class VaultsService {
     }
   }
 
-  async incrementViewCount(vaultId: string): Promise<UpdateResult> {
-    return await this.vaultsRepository.increment({ id: vaultId }, 'count_view', 1);
+  async incrementViewCount(vaultId: string): Promise<IncrementViewCountRes> {
+    const result = await this.vaultsRepository.increment({ id: vaultId }, 'count_view', 1);
+
+    if (result.affected === 0) {
+      throw new NotFoundException('Vault not found');
+    }
+
+    return { success: true };
   }
 
   private calculateOptimalDecimals(tokenSupply: number): number {

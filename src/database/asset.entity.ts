@@ -34,10 +34,6 @@ export class Asset {
   })
   type: AssetType;
 
-  @Expose({ name: 'contractAddress' })
-  @Column({ name: 'contract_address', nullable: true })
-  contract_address: string;
-
   @Column({ type: 'decimal', precision: 20, scale: 2, default: 0 })
   quantity: number;
 
