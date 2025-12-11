@@ -1,9 +1,5 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import {
-  FixedTransaction,
-  PrivateKey,
-  Transaction as CardanoTransaction,
-} from '@emurgo/cardano-serialization-lib-nodejs';
+import { FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -20,6 +16,8 @@ import {
   TransactionSubmitResponse,
   UploadBlueprintPayload,
 } from './types/transaction-status.enum';
+
+import { WayUpTransactionInput } from '@/modules/wayup/wayup.types';
 
 @Injectable()
 export class BlockchainService {
@@ -400,38 +398,6 @@ export class BlockchainService {
     }
   }
 
-  private parseValidityIntervalError(errorMessage: string): {
-    invalidBefore?: number;
-    invalidHereafter?: number;
-    currentSlot?: number;
-  } {
-    // Parse: OutsideValidityIntervalUTxO (ValidityInterval {invalidBefore = SJust (SlotNo 103557269), invalidHereafter = SJust (SlotNo 103564469)}) (SlotNo 103557260)
-    const validityMatch = errorMessage.match(
-      /OutsideValidityIntervalUTxO.*?invalidBefore = SJust \(SlotNo (\d+)\).*?invalidHereafter = SJust \(SlotNo (\d+)\).*?\(SlotNo (\d+)\)/
-    );
-
-    if (validityMatch) {
-      return {
-        invalidBefore: parseInt(validityMatch[1]),
-        invalidHereafter: parseInt(validityMatch[2]),
-        currentSlot: parseInt(validityMatch[3]),
-      };
-    }
-
-    // Alternative parsing for different error formats
-    const slotMatch = errorMessage.match(/SlotNo (\d+)/g);
-    if (slotMatch && slotMatch.length >= 3) {
-      const slots = slotMatch.map(s => parseInt(s.match(/\d+/)[0]));
-      return {
-        invalidBefore: slots[0],
-        invalidHereafter: slots[1],
-        currentSlot: slots[2],
-      };
-    }
-
-    return {};
-  }
-
   /**
    * Apply parameters to the dispatch script
    * @param vault_policy - PolicyId of the vault
@@ -512,8 +478,65 @@ export class BlockchainService {
     return false;
   }
 
-  getTransactionSize(txHex: string): number {
-    const tx = CardanoTransaction.from_bytes(Buffer.from(txHex, 'hex'));
-    return tx.to_bytes().length;
+  /**
+   * Builds a WayUp marketplace transaction
+   * @param input Transaction input containing utxos, changeAddress, and create/unlist/update/createOffer/buy arrays
+   * @returns Transaction build response
+   */
+  async buildWayUpTransaction(input: WayUpTransactionInput): Promise<TransactionBuildResponse> {
+    try {
+      const response = await fetch(`https://prod.api.ada-anvil.app/marketplace/api/build-tx`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': this.configService.get<string>('ANVIL_API_KEY'),
+        },
+        body: JSON.stringify(input),
+      });
+
+      const buildResponse = await response.json();
+
+      if (!buildResponse.complete) {
+        throw new Error('Failed to build complete WayUp transaction: ' + JSON.stringify(buildResponse));
+      }
+
+      this.logger.log('WayUp transaction built successfully');
+      return buildResponse;
+    } catch (error) {
+      this.logger.error('Error building WayUp transaction', error);
+      throw new Error(`Failed to build WayUp transaction: ${error.message}`);
+    }
+  }
+
+  private parseValidityIntervalError(errorMessage: string): {
+    invalidBefore?: number;
+    invalidHereafter?: number;
+    currentSlot?: number;
+  } {
+    // Parse: OutsideValidityIntervalUTxO (ValidityInterval {invalidBefore = SJust (SlotNo 103557269), invalidHereafter = SJust (SlotNo 103564469)}) (SlotNo 103557260)
+    const validityMatch = errorMessage.match(
+      /OutsideValidityIntervalUTxO.*?invalidBefore = SJust \(SlotNo (\d+)\).*?invalidHereafter = SJust \(SlotNo (\d+)\).*?\(SlotNo (\d+)\)/
+    );
+
+    if (validityMatch) {
+      return {
+        invalidBefore: parseInt(validityMatch[1]),
+        invalidHereafter: parseInt(validityMatch[2]),
+        currentSlot: parseInt(validityMatch[3]),
+      };
+    }
+
+    // Alternative parsing for different error formats
+    const slotMatch = errorMessage.match(/SlotNo (\d+)/g);
+    if (slotMatch && slotMatch.length >= 3) {
+      const slots = slotMatch.map(s => parseInt(s.match(/\d+/)[0]));
+      return {
+        invalidBefore: slots[0],
+        invalidHereafter: slots[1],
+        currentSlot: slots[2],
+      };
+    }
+
+    return {};
   }
 }

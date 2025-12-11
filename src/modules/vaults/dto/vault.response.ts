@@ -67,20 +67,6 @@ export class VaultShortResponse {
     transform: ({ value }) => (value ? Number(value) : null),
     expose: true,
   })
-  baseAllocation: number;
-
-  @ApiProperty({ description: 'Tvl', required: true })
-  @DtoRepresent({
-    transform: ({ value }) => (value ? Number(value) : null),
-    expose: true,
-  })
-  total: number;
-
-  @ApiProperty({ description: 'Tvl', required: true })
-  @DtoRepresent({
-    transform: ({ value }) => (value ? Number(value) : null),
-    expose: true,
-  })
   invested?: number;
 
   @ApiProperty({ description: 'Privacy setting of the vault', enum: VaultPrivacy })
@@ -123,13 +109,6 @@ export class VaultShortResponse {
     expose: true,
   })
   vaultImage?: FileEntity;
-
-  @ApiProperty({ description: 'Banner image', required: true })
-  @DtoRepresent({
-    transform: ({ value }) => (value ? value.url : null),
-    expose: true,
-  })
-  bannerImage?: FileEntity;
 
   @ApiProperty({ description: 'Status of the vault', enum: VaultStatus })
   @DtoRepresent({

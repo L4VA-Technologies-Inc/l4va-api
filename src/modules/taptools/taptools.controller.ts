@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards, Query, Param, Body, Post } from '@nestjs/common';
+import { Controller, Get, UseGuards, Query, Param, Body, Post, ParseUUIDPipe } from '@nestjs/common';
 import { ApiBody, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { ApiDoc } from '../../decorators/api-doc.decorator';
@@ -35,7 +35,10 @@ export class TaptoolsController {
   @ApiQuery({ name: 'address', type: String, description: 'Wallet address' })
   @ApiResponse({ status: 404, description: 'Asset not found' })
   @UseGuards(AuthGuard)
-  async getAssetDetails(@Param('id') assetId: string, @Query('address') walletAddress: string): Promise<number> {
+  async getAssetDetails(
+    @Param('id', ParseUUIDPipe) assetId: string,
+    @Query('address') walletAddress: string
+  ): Promise<number> {
     return this.taptoolsService.getWalletAssetsQuantity(walletAddress, assetId);
   }
 

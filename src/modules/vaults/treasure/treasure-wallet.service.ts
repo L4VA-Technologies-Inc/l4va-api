@@ -79,15 +79,17 @@ export class TreasuryWalletService {
     // Generate new Cardano wallet
     const walletData = await generateCardanoWallet(this.isMainnet);
 
-    // Extract public key hash from the private key
+    // Extract public key hash from the payment private key
     const privateKey = PrivateKey.from_bech32(walletData.privateKey);
+    const stakePrivateKey = PrivateKey.from_bech32(walletData.stakePrivateKey);
     const publicKey = privateKey.to_public();
     const publicKeyHash = publicKey.hash().to_hex();
 
-    // Encrypt private key using Google Cloud KMS (envelope encryption)
+    // Encrypt BOTH keys using Google Cloud KMS
     const encryptedPackage = await this.googleKMSService.encryptTreasuryKey(privateKey, vaultId);
+    const encryptedStakePackage = await this.googleKMSService.encryptStakeKey(stakePrivateKey, vaultId);
 
-    // Store the encrypted package in database
+    // Store both encrypted packages
     const encryptedData = {
       encryptedKey: encryptedPackage.encryptedKey.toString('base64'),
       encryptedDEK: encryptedPackage.encryptedDEK.toString('base64'),
@@ -97,7 +99,17 @@ export class TreasuryWalletService {
       kmsKeyName: encryptedPackage.kmsKeyName,
     };
 
+    const encryptedStakeData = {
+      encryptedKey: encryptedStakePackage.encryptedKey.toString('base64'),
+      encryptedDEK: encryptedStakePackage.encryptedDEK.toString('base64'),
+      iv: encryptedStakePackage.iv.toString('base64'),
+      authTag: encryptedStakePackage.authTag.toString('base64'),
+      algorithm: encryptedStakePackage.algorithm,
+      kmsKeyName: encryptedStakePackage.kmsKeyName,
+    };
+
     const encryptedBuffer = Buffer.from(JSON.stringify(encryptedData));
+    const encryptedStakeBuffer = Buffer.from(JSON.stringify(encryptedStakeData));
 
     // Optionally store mnemonic in Google Secret Manager (for recovery)
     let secretVersionName: string | undefined;
@@ -114,6 +126,7 @@ export class TreasuryWalletService {
       treasury_address: walletData.address,
       public_key_hash: publicKeyHash,
       encrypted_private_key: encryptedBuffer,
+      encrypted_stake_private_key: encryptedStakeBuffer,
       encryption_key_id: encryptedPackage.kmsKeyName,
       metadata: {
         createdBy: 'system',
@@ -204,7 +217,10 @@ export class TreasuryWalletService {
    * Gets decrypted private key for treasury wallet (USE WITH CAUTION)
    * Decrypts using Google Cloud KMS
    */
-  async getTreasuryWalletPrivateKey(vaultId: string): Promise<PrivateKey> {
+  async getTreasuryWalletPrivateKey(vaultId: string): Promise<{
+    privateKey: PrivateKey;
+    stakePrivateKey: PrivateKey;
+  }> {
     const wallet = await this.treasuryWalletRepository.findOne({
       where: { vault_id: vaultId },
     });
@@ -213,14 +229,13 @@ export class TreasuryWalletService {
       throw new Error(`Treasury wallet not found for vault ${vaultId}`);
     }
 
-    if (!wallet.encrypted_private_key) {
-      throw new Error(`Treasury wallet ${wallet.id} has no encrypted private key`);
+    if (!wallet.encrypted_private_key || !wallet.encrypted_stake_private_key) {
+      throw new Error(`Treasury wallet ${wallet.id} has no encrypted keys`);
     }
 
     try {
-      // Parse the encrypted package from database
+      // Decrypt payment key
       const encryptedData = JSON.parse(wallet.encrypted_private_key.toString());
-
       const encryptedPackage = {
         encryptedKey: Buffer.from(encryptedData.encryptedKey, 'base64'),
         encryptedDEK: Buffer.from(encryptedData.encryptedDEK, 'base64'),
@@ -228,12 +243,21 @@ export class TreasuryWalletService {
         authTag: Buffer.from(encryptedData.authTag, 'base64'),
       };
 
-      this.logger.log(`Decrypting private key for vault ${vaultId} using Google Cloud KMS`);
+      // Decrypt stake key
+      const encryptedStakeData = JSON.parse(wallet.encrypted_stake_private_key.toString());
+      const encryptedStakePackage = {
+        encryptedKey: Buffer.from(encryptedStakeData.encryptedKey, 'base64'),
+        encryptedDEK: Buffer.from(encryptedStakeData.encryptedDEK, 'base64'),
+        iv: Buffer.from(encryptedStakeData.iv, 'base64'),
+        authTag: Buffer.from(encryptedStakeData.authTag, 'base64'),
+      };
 
-      // Decrypt using Google Cloud KMS
+      this.logger.log(`Decrypting keys for vault ${vaultId}`);
+
       const privateKey = await this.googleKMSService.decryptTreasuryKey(encryptedPackage, vaultId);
+      const stakePrivateKey = await this.googleKMSService.decryptStakeKey(encryptedStakePackage, vaultId);
 
-      return privateKey;
+      return { privateKey, stakePrivateKey };
     } catch (error) {
       this.logger.error(`Failed to decrypt treasury wallet ${wallet.id}:`, error);
       throw new Error(`Failed to decrypt treasury wallet credentials: ${error.message}`);

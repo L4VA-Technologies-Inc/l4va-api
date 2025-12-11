@@ -53,7 +53,7 @@ export class DraftVaultsService {
         owner: { id: userId },
         vault_status: VaultStatus.draft,
       },
-      relations: ['social_links', 'vault_image', 'banner_image', 'ft_token_img'],
+      relations: ['social_links', 'vault_image', 'ft_token_img'],
       skip: (page - 1) * limit,
       take: limit,
       order: {},
@@ -95,7 +95,6 @@ export class DraftVaultsService {
         'acquirer_whitelist',
         'contributor_whitelist',
         'vault_image',
-        'banner_image',
         'ft_token_img',
         'acquirer_whitelist_csv',
       ],
@@ -107,7 +106,6 @@ export class DraftVaultsService {
 
     // Transform image entities to URLs
     vault.vault_image = transformImageToUrl(vault.vault_image as FileEntity) as any;
-    vault.banner_image = transformImageToUrl(vault.banner_image as FileEntity) as any;
     vault.ft_token_img = transformImageToUrl(vault.ft_token_img as FileEntity) as any;
     delete vault.owner;
     delete vault.contribution_phase_start;
@@ -135,7 +133,6 @@ export class DraftVaultsService {
           'acquirer_whitelist',
           'acquirer_whitelist_csv',
           'vault_image',
-          'banner_image',
           'ft_token_img',
         ],
       });
@@ -173,13 +170,6 @@ export class DraftVaultsService {
           })
         : null;
 
-      const bannerImgKey = data.bannerImage?.split('image/')[1];
-      const bannerImg = bannerImgKey
-        ? await this.filesRepository.findOne({
-            where: { file_key: bannerImgKey },
-          })
-        : null;
-
       const ftTokenImgKey = data.ftTokenImg?.split('image/')[1];
       const ftTokenImg = ftTokenImgKey
         ? await this.filesRepository.findOne({
@@ -196,7 +186,6 @@ export class DraftVaultsService {
 
       // Check if the vault already has these files to avoid duplicate relations
       const hasVaultImage = existingVault?.vault_image?.file_key === imgKey;
-      const hasBannerImage = existingVault?.banner_image?.file_key === bannerImgKey;
       const hasFtTokenImage = existingVault?.ft_token_img?.file_key === ftTokenImgKey;
       const hasAcquirerWhitelistCsv = existingVault?.acquirer_whitelist_csv?.file_key === acquirerWhitelistCsvKey;
 
@@ -257,7 +246,6 @@ export class DraftVaultsService {
 
       // Handle file relationships only if provided and not already set
       if (vaultImg && !hasVaultImage) vaultData.vault_image = vaultImg;
-      if (bannerImg && !hasBannerImage) vaultData.banner_image = bannerImg;
       if (ftTokenImg && !hasFtTokenImage) vaultData.ft_token_img = ftTokenImg;
       if (acquirerWhitelistFile && !hasAcquirerWhitelistCsv) vaultData.acquirer_whitelist_csv = acquirerWhitelistFile;
 

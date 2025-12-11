@@ -23,6 +23,9 @@ export class VaultTreasuryWallet {
   @Column({ type: 'bytea', nullable: true })
   encrypted_private_key: Buffer; // Encrypted blob (SENSITIVE)
 
+  @Column({ type: 'bytea', nullable: true })
+  encrypted_stake_private_key: Buffer; // Encrypted blob (SENSITIVE)
+
   @Column()
   encryption_key_id: string; // KMS key ID reference
 

@@ -194,4 +194,113 @@ export class GoogleKMSService {
     // 3. Reconstruct PrivateKey from bech32
     return PrivateKey.from_bech32(privateKeyBech32);
   }
+
+  /**
+   * Encrypt stake private key using Cloud KMS (envelope encryption)
+   */
+  async encryptStakeKey(
+    stakePrivateKey: PrivateKey,
+    vaultId: string
+  ): Promise<{
+    encryptedKey: Buffer;
+    encryptedDEK: Buffer;
+    iv: Buffer;
+    authTag: Buffer;
+    algorithm: string;
+    kmsKeyName: string;
+  }> {
+    if (!this.isMainnet || !this.kmsClient) {
+      throw new Error('KMS encryption only available on mainnet');
+    }
+
+    // 1. Generate data encryption key (DEK)
+    const dek = crypto.randomBytes(32);
+
+    // 2. Convert stake private key to bech32 string
+    const stakePrivateKeyBech32 = stakePrivateKey.to_bech32();
+
+    // 3. Encrypt stake private key with DEK (AES-256-GCM)
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv('aes-256-gcm', dek, iv);
+
+    const encryptedKey = Buffer.concat([cipher.update(stakePrivateKeyBech32, 'utf8'), cipher.final()]);
+    const authTag = cipher.getAuthTag();
+
+    // 4. Encrypt DEK with Cloud KMS
+    const keyName = this.getKeyName();
+
+    const aad = Buffer.from(
+      JSON.stringify({
+        vaultId: vaultId,
+        purpose: 'treasury_wallet_stake',
+        algorithm: 'AES-256-GCM',
+      })
+    );
+
+    const [encryptResponse] = await this.kmsClient.encrypt({
+      name: keyName,
+      plaintext: dek,
+      additionalAuthenticatedData: aad,
+    });
+
+    // Zero out DEK from memory
+    dek.fill(0);
+
+    return {
+      encryptedKey,
+      encryptedDEK: Buffer.from(encryptResponse.ciphertext as Uint8Array),
+      iv,
+      authTag,
+      algorithm: 'AES-256-GCM',
+      kmsKeyName: keyName,
+    };
+  }
+
+  /**
+   * Decrypt stake key using Cloud KMS
+   */
+  async decryptStakeKey(
+    encryptedPackage: {
+      encryptedKey: Buffer;
+      encryptedDEK: Buffer;
+      iv: Buffer;
+      authTag: Buffer;
+    },
+    vaultId: string
+  ): Promise<PrivateKey> {
+    if (!this.isMainnet || !this.kmsClient) {
+      throw new Error('KMS decryption only available on mainnet');
+    }
+
+    const keyName = this.getKeyName();
+
+    const aad = Buffer.from(
+      JSON.stringify({
+        vaultId: vaultId,
+        purpose: 'treasury_wallet_stake',
+        algorithm: 'AES-256-GCM',
+      })
+    );
+
+    const [decryptResponse] = await this.kmsClient.decrypt({
+      name: keyName,
+      ciphertext: encryptedPackage.encryptedDEK,
+      additionalAuthenticatedData: aad,
+    });
+
+    const dek = Buffer.from(decryptResponse.plaintext as Uint8Array);
+
+    const decipher = crypto.createDecipheriv('aes-256-gcm', dek, encryptedPackage.iv);
+    decipher.setAuthTag(encryptedPackage.authTag);
+
+    const stakePrivateKeyBech32 = Buffer.concat([
+      decipher.update(encryptedPackage.encryptedKey),
+      decipher.final(),
+    ]).toString('utf8');
+
+    // Zero out DEK from memory
+    dek.fill(0);
+
+    return PrivateKey.from_bech32(stakePrivateKeyBech32);
+  }
 }

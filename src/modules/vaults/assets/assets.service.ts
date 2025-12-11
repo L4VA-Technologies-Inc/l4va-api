@@ -84,14 +84,6 @@ export class AssetsService {
     limit: number = 10,
     search: string = ''
   ): Promise<GetContributedAssetsRes> {
-    // Verify vault ownership
-    const vault = await this.vaultsRepository.exists({
-      where: { id: vaultId },
-    });
-
-    if (!vault) {
-      throw new BadRequestException('Vault not found or access denied');
-    }
     let queryBuilder = this.assetsRepository
       .createQueryBuilder('asset')
       .select([
@@ -99,7 +91,6 @@ export class AssetsService {
         'asset.policy_id',
         'asset.asset_id',
         'asset.type',
-        'asset.contract_address',
         'asset.quantity',
         'asset.floor_price',
         'asset.dex_price',
@@ -165,7 +156,6 @@ export class AssetsService {
         policy_id: true,
         asset_id: true,
         type: true,
-        contract_address: true,
         quantity: true,
         floor_price: true,
         dex_price: true,
