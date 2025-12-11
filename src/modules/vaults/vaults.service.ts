@@ -398,24 +398,26 @@ export class VaultsService {
 
       const finalVault = await this.vaultsRepository.findOne({
         where: { id: newVault.id },
-        relations: [
-          'owner',
-          'social_links',
-          'assets_whitelist',
-          'acquirer_whitelist',
-          'contributor_whitelist',
-          'tags',
-          'vault_image',
-          'ft_token_img',
-        ],
+        relations: ['owner', 'social_links', 'tags', 'vault_image', 'ft_token_img'],
       });
 
       if (!finalVault) {
         throw new BadRequestException('Failed to retrieve created vault');
       }
 
-      const policyWhitelist = [...new Set(finalVault?.assets_whitelist.map(item => item.policy_id))];
-      const contributorWhitelist = [...new Set(finalVault?.contributor_whitelist.map(item => item.wallet_address))];
+      // Load only policy_id from assets_whitelist
+      const assetsWhitelistData = await this.assetsWhitelistRepository.find({
+        where: { vault: { id: newVault.id } },
+        select: ['policy_id'],
+      });
+      const policyWhitelist = [...new Set(assetsWhitelistData.map(item => item.policy_id))];
+
+      // Load only wallet_address from contributor_whitelist
+      const contributorWhitelistData = await this.contributorWhitelistRepository.find({
+        where: { vault: { id: newVault.id } },
+        select: ['wallet_address'],
+      });
+      const contributorWhitelist = [...new Set(contributorWhitelistData.map(item => item.wallet_address))];
 
       const privacy = vault_sc_privacy[finalVault.privacy as VaultPrivacy];
       const valueMethod = valuation_sc_type[finalVault.value_method as ValueMethod];
@@ -804,7 +806,7 @@ export class VaultsService {
   async getVaultById(vaultId: string, userId?: string): Promise<VaultFullResponse> {
     const vault = await this.vaultsRepository.findOne({
       where: { id: vaultId, deleted: false, vault_status: Not(VaultStatus.draft) },
-      relations: ['social_links', 'assets_whitelist', 'acquirer_whitelist', 'vault_image', 'ft_token_img', 'tags'],
+      relations: ['social_links', 'vault_image', 'ft_token_img', 'tags'],
       join: {
         alias: 'vault',
         leftJoinAndSelect: {
@@ -820,6 +822,22 @@ export class VaultsService {
     if (!vault) {
       throw new BadRequestException('Vault not found');
     }
+
+    // Load only necessary fields from whitelists
+    const [assetsWhitelist, acquirerWhitelist] = await Promise.all([
+      this.assetsWhitelistRepository.find({
+        where: { vault: { id: vaultId } },
+        select: ['policy_id', 'asset_count_cap_min', 'asset_count_cap_max'],
+      }),
+      this.acquirerWhitelistRepository.find({
+        where: { vault: { id: vaultId } },
+        select: ['wallet_address'],
+      }),
+    ]);
+
+    // Attach to vault object for DTO transformation
+    vault.assets_whitelist = assetsWhitelist;
+    vault.acquirer_whitelist = acquirerWhitelist;
 
     // Get count of locked assets for this vault
     const assetCounts = await this.assetsRepository
