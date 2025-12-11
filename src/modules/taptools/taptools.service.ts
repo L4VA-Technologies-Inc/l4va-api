@@ -1,6 +1,8 @@
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Injectable, HttpException, Logger, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import axios, { AxiosError, AxiosInstance } from 'axios';
+import axios from 'axios';
 import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { Repository, In } from 'typeorm';
@@ -8,7 +10,7 @@ import { Repository, In } from 'typeorm';
 import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
 
 import { AssetValueDto, BlockfrostAssetResponseDto } from './dto/asset-value.dto';
-import { BlockfrostAddressTotalDto, BlockfrostAddressDto } from './dto/blockfrost-address.dto';
+import { BlockfrostAddressTotalDto } from './dto/blockfrost-address.dto';
 import { PaginationQueryDto, PaginationMetaDto } from './dto/pagination.dto';
 import { WalletOverviewDto, PaginatedWalletSummaryDto } from './dto/wallet-summary.dto';
 
@@ -21,11 +23,9 @@ import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 export class TaptoolsService {
   private readonly logger = new Logger(TaptoolsService.name);
   private readonly baseUrl = 'https://openapi.taptools.io/api/v1';
-  private readonly blockfrostTestnetUrl = 'https://cardano-preprod.blockfrost.io/api/v0/';
   private readonly taptoolsApiKey: string;
   private cache = new NodeCache({ stdTTL: 600 }); // cache for 10 minutes to reduce API calls for ADA price
-
-  private readonly blockfrostClient: AxiosInstance;
+  private readonly blockfrost: BlockFrostAPI;
   private assetDetailsCache = new NodeCache({ stdTTL: 3600, checkperiod: 300 });
 
   private readonly slackWebhookUrl = process.env.SLACK_BOT_TOKEN;
@@ -38,81 +38,13 @@ export class TaptoolsService {
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-    private readonly assetsService: AssetsService
+    private readonly assetsService: AssetsService,
+    private readonly configService: ConfigService
   ) {
-    this.taptoolsApiKey = process.env.TAPTOOLS_API_KEY || '';
-
-    // Configure Blockfrost client with proper configuration
-    this.blockfrostClient = axios.create({
-      baseURL: this.blockfrostTestnetUrl,
-      timeout: 10000,
-      headers: {
-        project_id: process.env.BLOCKFROST_API_KEY,
-        'Content-Type': 'application/json',
-      },
+    this.taptoolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
+    this.blockfrost = new BlockFrostAPI({
+      projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
-
-    // Add request interceptor for rate limiting
-    let lastRequestTime = 0;
-    const minRequestInterval = 15; // 15ms between requests (~60-67 req/sec)
-
-    this.blockfrostClient.interceptors.request.use(async config => {
-      const now = Date.now();
-      const timeSinceLastRequest = now - lastRequestTime;
-
-      if (timeSinceLastRequest < minRequestInterval) {
-        const delay = minRequestInterval - timeSinceLastRequest;
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
-
-      lastRequestTime = Date.now();
-      return config;
-    });
-
-    // Add response interceptor for error handling
-    this.blockfrostClient.interceptors.response.use(
-      response => response,
-      async (error: AxiosError) => {
-        const config = error.config;
-        // Send Slack alert for 429 errors (rate limiting)
-        if (error.response?.status === 429) {
-          await this.sendSlackAlert('rate_limit', {
-            service: 'Blockfrost API',
-            status: 429,
-            message: 'Rate limit exceeded',
-            endpoint: config?.url || 'unknown',
-            timestamp: new Date().toISOString(),
-          });
-        }
-
-        // Retry logic for rate limits and server errors
-        if (config && this.shouldRetry(error)) {
-          const retryCount = (config as any).__retryCount || 0;
-
-          if (retryCount < 3) {
-            (config as any).__retryCount = retryCount + 1;
-
-            // Exponential backoff
-            const delay = Math.pow(2, retryCount) * 1000;
-            await new Promise(resolve => setTimeout(resolve, delay));
-
-            return this.blockfrostClient.request(config);
-          }
-        }
-
-        return Promise.reject(error);
-      }
-    );
-  }
-
-  private shouldRetry(error: AxiosError): boolean {
-    return !!(
-      error.response?.status === 429 || // Rate limited
-      error.response?.status === 503 || // Service unavailable
-      (error.response?.status && error.response.status >= 500) || // Server errors
-      error.code === 'ECONNRESET' ||
-      error.code === 'ETIMEDOUT'
-    );
   }
 
   private isTestnetAddress(address: string): boolean {
@@ -196,18 +128,12 @@ export class TaptoolsService {
 
   async getWalletAssetsQuantity(walletAddress: string, assetId: string): Promise<number> {
     try {
-      // Use the more efficient /total endpoint
-      const response = await this.blockfrostClient.get<BlockfrostAddressTotalDto>(`/addresses/${walletAddress}/total`);
-
-      if (response.status === 200) {
-        const balances = this.calculateBalances(response.data);
-        return balances.get(assetId) || 0;
-      }
-
-      return 0;
+      const addressTotal = await this.blockfrost.addressesTotal(walletAddress);
+      const balances = this.calculateBalances(addressTotal);
+      return balances.get(assetId) || 0;
     } catch (err) {
       this.logger.error(`Error fetching asset quantity for ${assetId}:`, err.message);
-      if (err.response?.status === 404) {
+      if (err.response?.status_code === 404) {
         throw new HttpException('Wallet address not found', 404);
       }
       throw new HttpException('Failed to fetch asset quantity', 500);
@@ -244,18 +170,12 @@ export class TaptoolsService {
     }
 
     try {
-      // Use the configured Blockfrost client (includes retry and rate limiting)
-      const response = await this.blockfrostClient.get<BlockfrostAssetResponseDto>(`/assets/${assetId}`);
-
-      if (response.status !== 200) {
-        this.logger.warn(`Asset ${assetId} not found or API forbidden`);
-        return null;
-      }
+      const assetDetails = await this.blockfrost.assetsById(assetId);
 
       // Cache successful response
-      this.assetDetailsCache.set(cacheKey, response.data);
+      this.assetDetailsCache.set(cacheKey, assetDetails as BlockfrostAssetResponseDto);
 
-      return { details: response.data, cached: false };
+      return { details: assetDetails as BlockfrostAssetResponseDto, cached: false };
     } catch (error) {
       this.logger.debug(`Failed to fetch details for asset ${assetId}: ${error.message}`);
       return null;
@@ -681,21 +601,12 @@ export class TaptoolsService {
 
     try {
       // Validate address
-      const addressCheck = await this.blockfrostClient.get<BlockfrostAddressDto>(`/addresses/${walletAddress}`);
-      if (addressCheck.status !== 200) {
-        throw new HttpException('Invalid wallet address', 400);
-      }
+      await this.blockfrost.addresses(walletAddress);
 
       // Get totals
-      const assetsResponse = await this.blockfrostClient.get<BlockfrostAddressTotalDto>(
-        `/addresses/${walletAddress}/total`
-      );
+      const addressTotal = await this.blockfrost.addressesTotal(walletAddress);
 
-      if (assetsResponse.status !== 200) {
-        throw new HttpException('Failed to fetch wallet totals', 500);
-      }
-
-      const balances = this.calculateBalances(assetsResponse.data);
+      const balances = this.calculateBalances(addressTotal);
       const totalAda = (balances.get('lovelace') || 0) / 1000000;
       const nonAdaAssets = Array.from(balances.entries()).filter(
         ([unit, balance]) => unit !== 'lovelace' && balance > 0
@@ -724,7 +635,7 @@ export class TaptoolsService {
       return overview;
     } catch (err) {
       this.logger.error('Error creating wallet overview:', err.message);
-      if (err.response?.status === 404) {
+      if (err.response?.status_code === 404) {
         throw new HttpException('Wallet address not found', 404);
       }
       throw new HttpException('Failed to fetch wallet overview', 500);
@@ -790,15 +701,9 @@ export class TaptoolsService {
     }
 
     try {
-      const assetsResponse = await this.blockfrostClient.get<BlockfrostAddressTotalDto>(
-        `/addresses/${walletAddress}/total`
-      );
+      const addressTotal = await this.blockfrost.addressesTotal(walletAddress);
 
-      if (assetsResponse.status !== 200) {
-        throw new HttpException('Failed to fetch wallet assets', 500);
-      }
-
-      const balances = this.calculateBalances(assetsResponse.data);
+      const balances = this.calculateBalances(addressTotal);
       const assetUnits = Array.from(balances.entries())
         .filter(([unit, balance]) => unit !== 'lovelace' && balance > 0)
         .map(([unit, quantity]) => ({ unit, quantity }));
@@ -889,15 +794,11 @@ export class TaptoolsService {
     excludeFTs: boolean
   ): Promise<Array<{ policyId: string; name: string }>> {
     try {
-      const response = await this.blockfrostClient.get<BlockfrostAddressDto>(`/addresses/${walletAddress}`);
-
-      if (response.status !== 200) {
-        throw new HttpException('Wallet address not found', 404);
-      }
+      const addressInfo = await this.blockfrost.addresses(walletAddress);
 
       const uniquePolicies = new Map<string, string>();
 
-      for (const asset of response.data.amount) {
+      for (const asset of addressInfo.amount) {
         if (asset.unit === 'lovelace' || (excludeFTs && +asset.quantity > 1)) {
           continue;
         }
@@ -927,7 +828,7 @@ export class TaptoolsService {
     } catch (error) {
       this.logger.error(`Error fetching wallet policy IDs for ${walletAddress}:`, error.message);
 
-      if (error.response?.status === 404) {
+      if (error.response?.status_code === 404) {
         throw new HttpException('Wallet address not found', 404);
       }
 
