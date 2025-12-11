@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import axios, { AxiosError, AxiosInstance } from 'axios';
 import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 
 import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
 
@@ -505,6 +505,123 @@ export class TaptoolsService {
     };
 
     return summary;
+  }
+
+  /**
+   * Batch calculate vault assets values for multiple vaults
+   * Much more efficient than calling calculateVaultAssetsValue() for each vault
+   * @param vaultIds Array of vault IDs to calculate values for
+   * @returns Map of vaultId -> asset summary
+   */
+  async batchCalculateVaultAssetsValue(
+    vaultIds: string[]
+  ): Promise<Map<string, { totalValueAda: number; totalValueUsd: number; totalAcquiredAda: number }>> {
+    const resultMap = new Map<string, { totalValueAda: number; totalValueUsd: number; totalAcquiredAda: number }>();
+
+    if (vaultIds.length === 0) {
+      return resultMap;
+    }
+
+    try {
+      // Fetch all vaults at once
+      const vaults = await this.vaultRepository.find({
+        where: { id: In(vaultIds) },
+        relations: ['assets'],
+      });
+
+      const adaPrice = await this.getAdaPrice();
+
+      // Process each vault
+      for (const vault of vaults) {
+        let totalValueAda = 0;
+        let totalValueUsd = 0;
+        let totalAcquiredAda = 0;
+
+        // Group assets by policyId and assetId
+        const assetMap = new Map<
+          string,
+          {
+            policyId: string;
+            assetId: string;
+            quantity: number;
+            isNft: boolean;
+          }
+        >();
+
+        for (const asset of vault.assets) {
+          // Skip invalid statuses
+          if (asset.status !== AssetStatus.PENDING && asset.status !== AssetStatus.LOCKED) {
+            continue;
+          }
+
+          // Track acquired ADA
+          if (asset.origin_type === AssetOriginType.ACQUIRED && asset.policy_id === 'lovelace') {
+            totalAcquiredAda += Number(asset.quantity);
+          }
+
+          // Only process contributed assets for TVL
+          if (asset.origin_type !== AssetOriginType.CONTRIBUTED) {
+            continue;
+          }
+
+          const key = `${asset.policy_id}_${asset.asset_id}`;
+          const existingAsset = assetMap.get(key);
+
+          if (existingAsset) {
+            if (asset.type === AssetType.NFT) {
+              existingAsset.quantity += 1;
+            } else {
+              existingAsset.quantity += Number(asset.quantity);
+            }
+          } else {
+            assetMap.set(key, {
+              policyId: asset.policy_id,
+              assetId: asset.asset_id,
+              quantity: asset.type === AssetType.NFT ? 1 : Number(asset.quantity),
+              isNft: asset.type === AssetType.NFT,
+            });
+          }
+        }
+
+        // Calculate values for all assets
+        const assets = Array.from(assetMap.values());
+
+        for (const asset of assets) {
+          try {
+            // Handle ADA specially
+            if (asset.assetId === 'lovelace') {
+              const totalAdaValue = asset.quantity * 1e-6;
+              totalValueAda += totalAdaValue;
+              totalValueUsd += totalAdaValue * adaPrice;
+              continue;
+            }
+
+            // Get asset value
+            const assetValue = await this.getAssetValue(asset.policyId, asset.assetId);
+            const valueAda = assetValue?.priceAda || 0;
+            const valueUsd = assetValue?.priceUsd || 0;
+
+            totalValueAda += valueAda * asset.quantity;
+            totalValueUsd += valueUsd * asset.quantity;
+          } catch (error) {
+            // Skip assets that can't be valued
+            this.logger.debug(`Could not value asset ${asset.policyId}.${asset.assetId}: ${error.message}`);
+          }
+        }
+
+        resultMap.set(vault.id, {
+          totalValueAda: +totalValueAda.toFixed(6),
+          totalValueUsd: +totalValueUsd.toFixed(2),
+          totalAcquiredAda,
+        });
+      }
+
+      return resultMap;
+    } catch (error) {
+      this.logger.error('Error in batch calculate vault assets:', error.message);
+      // Return empty map on error
+      return resultMap;
+    }
   }
 
   async getWalletSummaryPaginated(paginationQuery: PaginationQueryDto): Promise<PaginatedWalletSummaryDto> {

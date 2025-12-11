@@ -1198,10 +1198,13 @@ export class VaultsService {
       .take(limit)
       .getManyAndCount();
 
-    // Transform vault images to URLs and convert to VaultShortResponse
+    // Batch calculate asset values for all vaults at once (fixes N+1 query problem)
+    const vaultIds = items.map(vault => vault.id);
+    const assetValuesMap = await this.taptoolsService.batchCalculateVaultAssetsValue(vaultIds);
 
-    const transformedItems = await Promise.all(
-      items.map(async vault => {
+    // Transform vault images to URLs and convert to VaultShortResponse
+    const transformedItems = items
+      .map(vault => {
         // Create plain object from entity
         const plainVault = instanceToPlain(vault);
 
@@ -1212,8 +1215,14 @@ export class VaultsService {
         const endTime = phaseEndTime ? new Date(phaseEndTime) : null;
         const timeRemaining = endTime ? Math.max(0, endTime.getTime() - now.getTime()) : null;
 
-        const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
+        // Get pre-calculated asset values from batch result
+        const assetsPrices = assetValuesMap.get(vault.id) || {
+          totalValueAda: 0,
+          totalValueUsd: 0,
+          totalAcquiredAda: 0,
+        };
 
+        // Apply reserveMet filter if needed
         if (reserveMet !== undefined) {
           const totalAcquiredAda = assetsPrices.totalAcquiredAda;
           const requireReservedCostAda = vault.require_reserved_cost_ada;
@@ -1239,9 +1248,9 @@ export class VaultsService {
           excludeExtraneousValues: true,
         });
       })
-    );
+      .filter(vault => vault !== null);
 
-    const filteredItems = transformedItems.filter(vault => vault !== null);
+    const filteredItems = transformedItems;
 
     return {
       items: filteredItems,
