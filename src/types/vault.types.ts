@@ -13,11 +13,12 @@ export enum VaultPrivacy {
   semiPrivate = 'semi-private',
 }
 
-export enum VaultPreset {
+export enum VaultPresetType {
   simple = 'simple',
   contributors = 'contributors',
   acquirers = 'acquirers',
   advanced = 'advanced',
+  custom = 'custom',
 }
 
 // step 2

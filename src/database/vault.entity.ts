@@ -22,7 +22,6 @@ import {
   TerminationType,
   ValueMethod,
   VaultFailureReason,
-  VaultPreset,
   VaultPrivacy,
   VaultStatus,
   VaultType,
@@ -58,11 +57,10 @@ export class Vault {
   type: VaultType;
 
   @Column({
-    type: 'enum',
-    enum: VaultPreset,
+    type: 'uuid',
     nullable: true,
   })
-  preset?: VaultPreset;
+  preset_id?: string;
 
   @Column({
     type: 'enum',

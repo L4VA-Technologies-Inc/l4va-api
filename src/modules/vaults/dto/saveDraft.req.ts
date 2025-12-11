@@ -11,6 +11,7 @@ import {
   Max,
   ArrayMaxSize,
   IsObject,
+  IsUUID,
 } from 'class-validator';
 
 import {
@@ -18,7 +19,6 @@ import {
   InvestmentWindowType,
   TerminationType,
   ValueMethod,
-  VaultPreset,
   VaultPrivacy,
   VaultType,
 } from '../../../types/vault.types';
@@ -48,12 +48,12 @@ export class SaveDraftReq {
   @Expose()
   type?: VaultType | null;
 
-  @ApiProperty({ required: false, nullable: true, enum: VaultPreset })
+  @ApiProperty({ required: false, nullable: true })
   @IsOptional()
+  @IsUUID()
   @ValidateIf((o, v) => v !== null)
-  @IsEnum(VaultPreset)
   @Expose()
-  preset?: VaultPreset | null;
+  preset_id?: string | null;
 
   @ApiProperty({ required: false, nullable: true, enum: VaultPrivacy })
   @IsOptional()
