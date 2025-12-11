@@ -10,8 +10,8 @@ export class RenameFields1746536544579 implements MigrationInterface {
     await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN "valuation_type"`);
     await queryRunner.query(`DROP TYPE "public"."vaults_valuation_type_enum"`);
     await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN IF EXISTS "off_assets_offered"`);
-    await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN "ft_token_ticker"`);
-    await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN "ft_acquire_reserve"`);
+    await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN IF EXISTS "ft_token_ticker"`);
+    await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN IF EXISTS "ft_acquire_reserve"`);
     await queryRunner.query(`CREATE TYPE "public"."vaults_value_method_enum" AS ENUM('lbe', 'fixed')`);
     await queryRunner.query(`ALTER TABLE "vaults" ADD "value_method" "public"."vaults_value_method_enum"`);
     await queryRunner.query(`ALTER TABLE "vaults" ADD "tokens_for_acquires" numeric`);
@@ -28,10 +28,10 @@ export class RenameFields1746536544579 implements MigrationInterface {
   public async down(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`ALTER TABLE "vault_tags" DROP CONSTRAINT "FK_adf9f0b047319be1ec67ac1d1eb"`);
     await queryRunner.query(`ALTER TABLE "vault_tags" DROP CONSTRAINT "FK_2b3fd4667b2be7a2d7a329083cc"`);
-    await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN "vault_token_ticker"`);
-    await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN "acquire_reserve"`);
-    await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN "tokens_for_acquires"`);
-    await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN "value_method"`);
+    await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN IF NOT EXISTS "vault_token_ticker"`);
+    await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN IF NOT EXISTS "acquire_reserve"`);
+    await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN IF NOT EXISTS "tokens_for_acquires"`);
+    await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN IF NOT EXISTS "value_method"`);
     await queryRunner.query(`DROP TYPE "public"."vaults_value_method_enum"`);
     await queryRunner.query(`ALTER TABLE "vaults" ADD "ft_acquire_reserve" numeric`);
     await queryRunner.query(`ALTER TABLE "vaults" ADD "ft_token_ticker" character varying`);
