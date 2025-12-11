@@ -321,11 +321,10 @@ export class WayUpService {
   async makeOffer(vaultId: string, offers: MakeOfferInput[]): Promise<{ txHash: string; offers: MakeOfferInput[] }> {
     this.logger.log(`Creating ${offers.length} offer(s) for vault ${vaultId}`);
 
-    // Validate minimum offer (5 ADA minimum per WayUp requirements)
-    const MIN_OFFER_ADA = 5;
-    const invalidOffers = offers.filter(o => o.priceAda < MIN_OFFER_ADA);
+    // Validate minimum offer (minimum per WayUp requirements)
+    const invalidOffers = offers.filter(o => o.priceAda < this.MIN_PRICE_ADA);
     if (invalidOffers.length > 0) {
-      throw new Error(`All offers must be at least ${MIN_OFFER_ADA} ADA`);
+      throw new Error(`All offers must be at least ${this.MIN_PRICE_ADA} ADA`);
     }
 
     // Get vault and verify treasury wallet exists

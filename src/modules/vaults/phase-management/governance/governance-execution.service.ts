@@ -701,14 +701,14 @@ export class GovernanceExecutionService {
         vaultId: proposal.vaultId,
         network: 'testnet',
       });
-      return;
+      return true;
     }
 
     this.logger.log(`[MAINNET] Executing staking proposal ${proposal.id}`);
 
     if (!proposal.fungibleTokens || proposal.fungibleTokens.length === 0) {
       this.logger.warn(`Staking proposal ${proposal.id} has no fungible tokens to stake`);
-      return;
+      return false;
     }
 
     try {
@@ -749,19 +749,14 @@ export class GovernanceExecutionService {
       this.logger.log(
         `[TESTNET] Distribution proposal ${proposal.id} marked as completed (no actual execution on testnet)`
       );
-      this.eventEmitter.emit('proposal.distribution.testnet.completed', {
-        proposalId: proposal.id,
-        vaultId: proposal.vaultId,
-        network: 'testnet',
-      });
-      return;
+      return true;
     }
 
     this.logger.log(`[MAINNET] Executing distribution proposal ${proposal.id}`);
 
     if (!proposal.distributionAssets || proposal.distributionAssets.length === 0) {
       this.logger.warn(`Distribution proposal ${proposal.id} has no assets to distribute`);
-      return;
+      return false;
     }
 
     try {

@@ -876,7 +876,10 @@ export class VaultsService {
       fdvAda: vault.fdv * adaPrice,
     };
 
-    const canCreateProposal = await this.governanceService.canUserCreateProposal(vaultId, userId);
+    let canCreateProposal = false;
+    if (userId !== undefined && userId !== null) {
+      canCreateProposal = await this.governanceService.canUserCreateProposal(vaultId, userId);
+    }
     const isChatVisible = await this.verifyChatAccess(userId, vaultId);
 
     let isWhitelistedContributor = vault.privacy === VaultPrivacy.public || vault.owner.id === userId;
