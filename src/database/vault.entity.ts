@@ -547,13 +547,6 @@ export class Vault {
   })
   vault_image?: FileEntity;
 
-  @Expose({ name: 'bannerImage' })
-  @OneToOne(() => FileEntity)
-  @JoinColumn({
-    name: 'banner_image_id',
-  })
-  banner_image?: FileEntity;
-
   @Expose({ name: 'acquirerWhitelistCsv' })
   @OneToOne(() => FileEntity)
   @JoinColumn({

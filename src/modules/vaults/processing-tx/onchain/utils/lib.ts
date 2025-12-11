@@ -23,6 +23,7 @@ import {
   NetworkInfo,
   BaseAddress,
   Bip32PrivateKey,
+  Transaction as CardanoTransaction,
 } from '@emurgo/cardano-serialization-lib-nodejs';
 import * as bip39 from 'bip39';
 
@@ -395,6 +396,11 @@ export function createUtxoHex(txHash: string, outputIndex: number, address: Addr
   ).to_hex();
 }
 
+export function getTransactionSize(txHex: string): number {
+  const tx = CardanoTransaction.from_bytes(Buffer.from(txHex, 'hex'));
+  return tx.to_bytes().length;
+}
+
 /**
  * Generates random mnemonic for a vault wallet and derives the corresponding Cardano address and private key.
  *
@@ -411,6 +417,7 @@ export async function generateCardanoWallet(isMainnet: boolean): Promise<{
   ticker: string;
   address: string;
   privateKey: string;
+  stakePrivateKey: string;
   mnemonic: string;
 }> {
   const mnemonic = bip39.generateMnemonic();
@@ -446,12 +453,14 @@ export async function generateCardanoWallet(isMainnet: boolean): Promise<{
 
   // Convert Bip32PrivateKey to regular PrivateKey for signing transactions
   const privateKey = accountKey.to_raw_key().to_bech32();
+  const stakePrivateKey = stakeKey.to_raw_key().to_bech32(); // ADD THIS
 
   const walletData = {
     ticker: 'ADA',
-    address: address,
-    privateKey: privateKey, // Now returns ed25519 private key in bech32 format
-    mnemonic: mnemonic,
+    address,
+    privateKey, // Now returns ed25519 private key in bech32 format
+    stakePrivateKey,
+    mnemonic,
   };
 
   return walletData;

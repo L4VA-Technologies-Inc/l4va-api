@@ -30,6 +30,7 @@ export class VaultContributionService {
   private readonly adminAddress: string;
   private readonly adminHash: string;
   private readonly adminSKey: string;
+  private readonly isMainnet: boolean;
 
   private blockfrost: BlockFrostAPI;
   constructor(
@@ -44,6 +45,7 @@ export class VaultContributionService {
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.feeAddress = this.configService.get<string>('FEE_ADDRESS');
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.FLAT_FEE = Number(this.configService.get<string>('PROTOCOL_FLAT_FEE'));
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
@@ -220,7 +222,7 @@ export class VaultContributionService {
           start: true,
           end: true,
         },
-        network: 'preprod',
+        network: this.isMainnet ? 'mainnet' : 'preprod',
       };
 
       // Build the transaction using BlockchainService

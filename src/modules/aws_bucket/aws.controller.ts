@@ -8,6 +8,7 @@ import {
   MaxFileSizeValidator,
   Param,
   ParseFilePipe,
+  ParseUUIDPipe,
   Post,
   Req,
   Res,
@@ -67,7 +68,7 @@ export class AwsController {
     status: 200,
   })
   @Get('/image/:id')
-  async getImageFile(@Param('id') id: string, @Res() res: Response): Promise<void> {
+  async getImageFile(@Param('id', ParseUUIDPipe) id: string, @Res() res: Response): Promise<void> {
     const response = await this.awsService.getImage(id);
     res.setHeader('Content-Type', response.headers['content-type']);
     res.setHeader('Cache-Control', 'public, max-age=3600');
@@ -80,7 +81,7 @@ export class AwsController {
     status: 200,
   })
   @Get('/csv/:id')
-  async getCsvFile(@Param('id') id: string, @Res() res: Response): Promise<void> {
+  async getCsvFile(@Param('id', ParseUUIDPipe) id: string, @Res() res: Response): Promise<void> {
     const response = await this.awsService.getCsv(id);
     res.setHeader('Content-Type', response.headers['content-type']);
     res.setHeader('Cache-Control', 'public, max-age=3600');

@@ -18,7 +18,11 @@ import { Vault } from '@/database/vault.entity';
 import { CancellationInput } from '@/modules/distribution/distribution.types';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { Redeemer, Redeemer1 } from '@/modules/vaults/processing-tx/onchain/types/type';
-import { generate_tag_from_txhash_index, getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import {
+  generate_tag_from_txhash_index,
+  getTransactionSize,
+  getUtxosExtract,
+} from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { AssetOriginType, AssetStatus } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -29,6 +33,7 @@ export class ClaimsService {
   private readonly adminSKey: string;
   private readonly adminAddress: string;
   private readonly adminHash: string;
+  private readonly isMainnet: boolean;
   private blockfrost: BlockFrostAPI;
   private readonly MAX_TX_SIZE = 15900;
 
@@ -45,6 +50,8 @@ export class ClaimsService {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
@@ -412,12 +419,12 @@ export class ClaimsService {
         start: true,
         end: true,
       },
-      network: 'preprod',
+      network: this.isMainnet ? 'mainnet' : 'preprod',
     };
 
     try {
       const buildResponse = await this.blockchainService.buildTransaction(input);
-      const actualTxSize = this.blockchainService.getTransactionSize(buildResponse.complete);
+      const actualTxSize = getTransactionSize(buildResponse.complete);
       this.logger.debug(`Transaction size: ${actualTxSize} bytes (${(actualTxSize / 1024).toFixed(2)} KB)`);
 
       if (actualTxSize > this.MAX_TX_SIZE) {

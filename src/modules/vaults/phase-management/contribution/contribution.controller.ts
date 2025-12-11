@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { AuthGuard } from '../../../auth/auth.guard';
@@ -23,7 +23,11 @@ export class ContributionController {
   @ApiOperation({ summary: 'Contribute to a vault' })
   @UseGuards(AuthGuard)
   @ApiResponse({ status: 201, description: 'Contribution successful' })
-  async contribute(@Req() req: AuthRequest, @Param('vaultId') vaultId: string, @Body() contributeReq: ContributeReq) {
+  async contribute(
+    @Req() req: AuthRequest,
+    @Param('vaultId', ParseUUIDPipe) vaultId: string,
+    @Body() contributeReq: ContributeReq
+  ) {
     const userId = req.user.sub;
     return this.contributionService.contribute(vaultId, contributeReq, userId);
   }

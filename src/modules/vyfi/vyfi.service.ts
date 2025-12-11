@@ -21,8 +21,6 @@ const VYFI_CONSTANTS = {
   MIN_POOL_ADA: 2000000, // 2 ADA in lovelace
   MIN_RETURN_ADA: 2000000, // 2 ADA in lovelace
   TOTAL_REQUIRED_ADA: 5900000, // 5.9 ADA in lovelace
-  POOL_ADDRESS:
-    'addr_test1qpjavykfl5n4t47xklzyuccevgple0e4c7mke2m6cd0z0fwy0pq8p292lgrquq7hx75c4wpvz0h8cjp69mp7men3nw8s46zete', // VyFi pool address preprod
   METADATA_LABEL: '53554741',
 };
 
@@ -33,6 +31,8 @@ export class VyfiService {
   private readonly adminAddress: string;
   private readonly adminHash: string;
   private readonly blockfrost: BlockFrostAPI;
+  private readonly poolAddress: string;
+  private readonly isMainnet: boolean;
 
   constructor(
     @InjectRepository(Claim)
@@ -44,6 +44,8 @@ export class VyfiService {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
+    this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
@@ -196,7 +198,7 @@ export class VyfiService {
         start: true,
         end: true,
       },
-      network: 'preprod',
+      network: this.isMainnet ? 'mainnet' : 'preprod',
     };
 
     const buildResponse = await this.blockchainService.buildTransaction(input);
@@ -267,7 +269,7 @@ export class VyfiService {
       utxos: adminUtxos,
       outputs: [
         {
-          address: VYFI_CONSTANTS.POOL_ADDRESS,
+          address: this.poolAddress,
           assets: [
             {
               assetName: { name: claim.vault.asset_vault_name, format: 'hex' },
@@ -287,7 +289,7 @@ export class VyfiService {
         start: true,
         end: true,
       },
-      network: 'preprod',
+      network: this.isMainnet ? 'mainnet' : 'preprod',
     };
 
     const buildResponse = await this.blockchainService.buildTransaction(input);
@@ -587,7 +589,7 @@ export class VyfiService {
   //       start: true,
   //       end: true,
   //     },
-  //     network: 'preprod',
+  //     network: this.isMainnet ? 'mainnet' : 'preprod',
   //   };
 
   //   const buildResponse = await this.blockchainService.buildTransaction(input);
