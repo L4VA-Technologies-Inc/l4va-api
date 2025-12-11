@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { AuthGuard } from '../../../auth/auth.guard';
@@ -26,7 +26,7 @@ export class AcquireController {
   @ApiResponse({ status: 201, description: 'Acquire successful' })
   async invest(
     @Req() req: AuthRequest,
-    @Param('vaultId') vaultId: string,
+    @Param('vaultId', ParseUUIDPipe) vaultId: string,
     @Body() acquireReq: AcquireReq
   ): Promise<{
     success: boolean;

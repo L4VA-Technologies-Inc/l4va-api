@@ -187,7 +187,10 @@ export class VaultsController {
   })
   @UseGuards(AuthGuard)
   @Get(':id/transactions')
-  async getVaultTransactions(@Param('id') id: string, @Query() query: GetVaultTransactionsDto): Promise<Transaction[]> {
+  async getVaultTransactions(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: GetVaultTransactionsDto
+  ): Promise<Transaction[]> {
     // Verify vault exists and user has access
     await this.vaultsService.getVaultById(id);
     return this.transactionsService.getVaultTransactions(id, query.status, query.type);

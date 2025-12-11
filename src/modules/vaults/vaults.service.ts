@@ -364,12 +364,12 @@ export class VaultsService {
       const allContributors = new Set([...contributorList, ...contributorsFromCsv]);
       const contributorsArray = [...allContributors];
 
-      contributorsArray.map(item => {
-        return this.contributorWhitelistRepository.save({
+      await this.contributorWhitelistRepository.save(
+        contributorsArray.map(item => ({
           vault: newVault,
           wallet_address: item,
-        });
-      });
+        }))
+      );
 
       // this.eventEmitter.emit('vault.whitelist_added', {
       //   vaultId: newVault.id,
