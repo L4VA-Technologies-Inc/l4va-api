@@ -33,6 +33,7 @@ export class ClaimsService {
   private readonly adminSKey: string;
   private readonly adminAddress: string;
   private readonly adminHash: string;
+  private readonly isMainnet: boolean;
   private blockfrost: BlockFrostAPI;
   private readonly MAX_TX_SIZE = 15900;
 
@@ -49,6 +50,8 @@ export class ClaimsService {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
@@ -416,7 +419,7 @@ export class ClaimsService {
         start: true,
         end: true,
       },
-      network: 'preprod',
+      network: this.isMainnet ? 'mainnet' : 'preprod',
     };
 
     try {
