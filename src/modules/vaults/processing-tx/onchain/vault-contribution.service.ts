@@ -137,7 +137,7 @@ export class VaultContributionService {
 
       const input: ContributionInput = {
         changeAddress: params.changeAddress,
-        message: 'Asset(s) contributed to vault',
+        message: `${isAda ? `${quantity / 1000000} ADA acquired` : `${params.outputs[0].assets.length} Asset(s) contributed`} to vault`,
         utxos: allUtxos, // All available UTXOs for selection
         mint: [
           {
