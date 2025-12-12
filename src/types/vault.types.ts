@@ -13,6 +13,14 @@ export enum VaultPrivacy {
   semiPrivate = 'semi-private',
 }
 
+export enum VaultPresetType {
+  simple = 'simple',
+  contributors = 'contributors',
+  acquirers = 'acquirers',
+  advanced = 'advanced',
+  custom = 'custom',
+}
+
 // step 2
 export enum ValueMethod {
   // Enum 0: 'FIXED' 1: 'LBE' in SC
