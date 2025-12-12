@@ -5,8 +5,8 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import * as bodyParser from 'body-parser';
 import { json } from 'express';
 
-import { loadSecrets } from './load-gcp-secrets';
 import { AppModule } from './app.module';
+import { loadSecrets } from './load-gcp-secrets';
 
 async function bootstrap() {
   try {

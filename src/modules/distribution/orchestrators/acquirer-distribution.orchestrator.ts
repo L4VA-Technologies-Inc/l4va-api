@@ -15,7 +15,7 @@ import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
-import { getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import { getTransactionSize, getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
@@ -184,7 +184,7 @@ export class AcquirerDistributionOrchestrator {
 
     // Build and validate transaction size
     const buildResponse = await this.blockchainService.buildTransaction(input);
-    const actualTxSize = this.blockchainService.getTransactionSize(buildResponse.complete);
+    const actualTxSize = getTransactionSize(buildResponse.complete);
 
     this.logger.debug(`Transaction size: ${actualTxSize} bytes (${(actualTxSize / 1024).toFixed(2)} KB)`);
 

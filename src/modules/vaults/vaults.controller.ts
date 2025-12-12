@@ -94,7 +94,6 @@ export class VaultsController {
     if (filters.ownerId) {
       return this.vaultsService.getVaults({
         ...filters,
-        isPublicOnly: true,
       });
     }
 
@@ -116,12 +115,7 @@ export class VaultsController {
   @ApiParam({ name: 'id', description: 'Vault ID' })
   @Post(':id/view')
   async incrementViewCount(@Param('id', new ParseUUIDPipe()) vaultId: string): Promise<IncrementViewCountRes> {
-    const result = await this.vaultsService.incrementViewCount(vaultId);
-    return {
-      affected: result.affected || 0,
-      generatedMaps: result.generatedMaps || [],
-      raw: result.raw,
-    };
+    return await this.vaultsService.incrementViewCount(vaultId);
   }
 
   @ApiDoc({
@@ -193,7 +187,10 @@ export class VaultsController {
   })
   @UseGuards(AuthGuard)
   @Get(':id/transactions')
-  async getVaultTransactions(@Param('id') id: string, @Query() query: GetVaultTransactionsDto): Promise<Transaction[]> {
+  async getVaultTransactions(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: GetVaultTransactionsDto
+  ): Promise<Transaction[]> {
     // Verify vault exists and user has access
     await this.vaultsService.getVaultById(id);
     return this.transactionsService.getVaultTransactions(id, query.status, query.type);

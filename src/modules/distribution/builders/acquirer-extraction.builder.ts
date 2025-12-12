@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config/dist/config.service';
 
 import { ExtractInput, ScriptInteraction, TransactionOutput, MintAsset } from '../distribution.types';
 
@@ -12,7 +13,11 @@ import { generate_tag_from_txhash_index, getAddressFromHash } from '@/modules/va
  */
 @Injectable()
 export class AcquirerExtractionBuilder {
-  constructor() {}
+  private readonly isMainnet: boolean;
+
+  constructor(private readonly configService: ConfigService) {
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+  }
 
   /**
    * Build extraction transaction input for a batch of acquirer claims
@@ -177,7 +182,7 @@ export class AcquirerExtractionBuilder {
             ],
           }
         : {}),
-      network: 'preprod',
+      network: this.isMainnet ? 'mainnet' : 'preprod',
     };
   }
 }

@@ -63,6 +63,8 @@ export class GovernanceService {
   private blockfrost: BlockFrostAPI;
   private readonly votingPowerCache: NodeCache;
   private readonly proposalCreationCache: NodeCache;
+  private readonly poolAddress: string;
+
   // private readonly snapshotCache: NodeCache;
 
   private readonly CACHE_TTL = {
@@ -91,6 +93,8 @@ export class GovernanceService {
     private readonly configService: ConfigService,
     private readonly eventEmitter: EventEmitter2
   ) {
+    this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
+
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
@@ -193,9 +197,13 @@ export class GovernanceService {
           if (response.length === 0) {
             hasMorePages = false;
           } else {
-            // Add addresses and balances to the mapping
+            // Add addresses and balances to the mapping, excluding pool address (LP VTs)
             for (const item of response) {
-              addressBalances[item.address] = item.quantity;
+              if (item.address !== this.poolAddress) {
+                addressBalances[item.address] = item.quantity;
+              } else {
+                this.logger.log(`Excluded pool address ${this.poolAddress} from snapshot (${item.quantity} VT in LP)`);
+              }
             }
             page++;
           }
@@ -939,6 +947,14 @@ export class GovernanceService {
 
       if (!user) {
         throw new NotFoundException('User not found');
+      }
+
+      // Verify user is not the pool address (LP VTs should not have voting power)
+      if (user.address === this.poolAddress) {
+        throw new BadRequestException(
+          'NO_VOTING_POWER',
+          'Liquidity pool addresses cannot vote. VT tokens in LP are excluded from governance.'
+        );
       }
 
       const voteWeight = snapshot.addressBalances[user.address];
