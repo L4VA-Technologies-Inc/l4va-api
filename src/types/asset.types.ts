@@ -6,12 +6,14 @@ export enum AssetType {
 
 export enum AssetStatus {
   PENDING = 'pending',
-  LOCKED = 'locked',
+  LOCKED = 'locked', // Asset is locked in the vault
   RELEASED = 'released',
   DISTRIBUTED = 'distributed',
+  EXTRACTED = 'extracted', // Asset has been extracted from the vault to the treasury wallet
 }
 
 export enum AssetOriginType {
   ACQUIRED = 'acquired',
   CONTRIBUTED = 'contributed',
+  FEE = 'fee',
 }

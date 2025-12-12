@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { CreateProposalReq } from './dto/create-proposal.req';
@@ -29,7 +29,7 @@ export class GovernanceController {
   @ApiResponse({ status: 201, description: 'Proposal created successfully', type: CreateProposalRes })
   async createProposal(
     @Req() req,
-    @Param('vaultId') vaultId: string,
+    @Param('vaultId', ParseUUIDPipe) vaultId: string,
     @Body() data: CreateProposalReq
   ): Promise<CreateProposalRes> {
     return this.governanceService.createProposal(vaultId, data, req.user.sub);
@@ -50,7 +50,7 @@ export class GovernanceController {
   @UseGuards(OptionalAuthGuard)
   @ApiOperation({ summary: 'Get all proposals for a vault' })
   @ApiResponse({ status: 200, description: 'List of proposals', type: [GetProposalsRes] })
-  async getProposals(@Param('vaultId') vaultId: string): Promise<GetProposalsResItem[]> {
+  async getProposals(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<GetProposalsResItem[]> {
     return this.governanceService.getProposals(vaultId);
   }
 
@@ -58,7 +58,11 @@ export class GovernanceController {
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Vote on a proposal' })
   @ApiResponse({ status: 201, description: 'Vote recorded successfully' })
-  async vote(@Req() req: AuthRequest, @Param('proposalId') proposalId: string, @Body() voteReq: VoteReq) {
+  async vote(
+    @Req() req: AuthRequest,
+    @Param('proposalId', ParseUUIDPipe) proposalId: string,
+    @Body() voteReq: VoteReq
+  ) {
     const userId = req.user.sub;
     return this.governanceService.vote(proposalId, voteReq, userId);
   }
@@ -67,7 +71,10 @@ export class GovernanceController {
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Get proposal details' })
   @ApiResponse({ status: 200, description: 'Proposal details', type: GetProposalDetailRes })
-  async getProposal(@Param('proposalId') proposalId: string, @Req() req: AuthRequest): Promise<GetProposalDetailRes> {
+  async getProposal(
+    @Param('proposalId', ParseUUIDPipe) proposalId: string,
+    @Req() req: AuthRequest
+  ): Promise<GetProposalDetailRes> {
     return this.governanceService.getProposal(proposalId, req.user.sub);
   }
 
@@ -75,7 +82,10 @@ export class GovernanceController {
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Get user voting power in a vault' })
   @ApiResponse({ status: 200, description: 'User voting power', type: GetVotingPowerRes })
-  async getVotingPower(@Req() req: AuthRequest, @Param('vaultId') vaultId: string): Promise<GetVotingPowerRes> {
+  async getVotingPower(
+    @Req() req: AuthRequest,
+    @Param('vaultId', ParseUUIDPipe) vaultId: string
+  ): Promise<GetVotingPowerRes> {
     const userId = req.user.sub;
     const votingPower = await this.governanceService.getVotingPower(vaultId, userId);
     return { votingPower };
@@ -89,7 +99,7 @@ export class GovernanceController {
     description: 'List of assets available for trading',
     type: [AssetBuySellDto],
   })
-  async getAssetsToBuySell(@Param('vaultId') vaultId: string): Promise<AssetBuySellDto[]> {
+  async getAssetsToBuySell(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<AssetBuySellDto[]> {
     return await this.governanceService.getAssetsToBuySell(vaultId);
   }
 
@@ -97,7 +107,7 @@ export class GovernanceController {
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Get assets to stake for a vault' })
   @ApiResponse({ status: 200, description: 'List of assets to stake', type: GetAssetsToStakeRes })
-  async getAssetsToStake(@Param('vaultId') vaultId: string): Promise<GetAssetsToStakeRes> {
+  async getAssetsToStake(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<GetAssetsToStakeRes> {
     const assets = await this.governanceService.getAssetsToStake(vaultId);
     return { assets };
   }
@@ -106,7 +116,7 @@ export class GovernanceController {
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Get assets to distribute for a vault' })
   @ApiResponse({ status: 200, description: 'List of assets to distribute', type: GetAssetsToDistributeRes })
-  async getAssetsToDistribute(@Param('vaultId') vaultId: string): Promise<GetAssetsToDistributeRes> {
+  async getAssetsToDistribute(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<GetAssetsToDistributeRes> {
     const assets = await this.governanceService.getAssetsToDistribute(vaultId);
     return { assets };
   }
@@ -119,7 +129,7 @@ export class GovernanceController {
     description: 'List of assets to terminate',
     type: [AssetBuySellDto],
   })
-  async getAssetsToTerminate(@Param('vaultId') vaultId: string): Promise<AssetBuySellDto[]> {
+  async getAssetsToTerminate(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<AssetBuySellDto[]> {
     return this.governanceService.getAssetsToTerminate(vaultId);
   }
 
@@ -127,7 +137,7 @@ export class GovernanceController {
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Get assets to burn for a vault' })
   @ApiResponse({ status: 200, description: 'List of assets to burn' })
-  async getAssetsToBurn(@Param('vaultId') vaultId: string): Promise<AssetBuySellDto[]> {
+  async getAssetsToBurn(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<AssetBuySellDto[]> {
     return this.governanceService.getAssetsToBurn(vaultId);
   }
 }

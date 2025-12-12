@@ -18,7 +18,11 @@ import { Vault } from '@/database/vault.entity';
 import { CancellationInput } from '@/modules/distribution/distribution.types';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { Redeemer, Redeemer1 } from '@/modules/vaults/processing-tx/onchain/types/type';
-import { generate_tag_from_txhash_index, getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import {
+  generate_tag_from_txhash_index,
+  getTransactionSize,
+  getUtxosExtract,
+} from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { AssetOriginType, AssetStatus } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -29,6 +33,7 @@ export class ClaimsService {
   private readonly adminSKey: string;
   private readonly adminAddress: string;
   private readonly adminHash: string;
+  private readonly isMainnet: boolean;
   private blockfrost: BlockFrostAPI;
   private readonly MAX_TX_SIZE = 15900;
 
@@ -45,8 +50,10 @@ export class ClaimsService {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+
     this.blockfrost = new BlockFrostAPI({
-      projectId: this.configService.get<string>('BLOCKFROST_TESTNET_API_KEY'),
+      projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
   }
 
@@ -91,16 +98,6 @@ export class ClaimsService {
       order: { created_at: 'DESC' },
       relations: ['vault', 'vault.vault_image'],
       select: {
-        id: true,
-        type: true,
-        status: true,
-        amount: true,
-        description: true,
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        metadata: true,
-        created_at: true,
-        updated_at: true,
         vault: {
           id: true,
           name: true,
@@ -114,8 +111,15 @@ export class ClaimsService {
 
     const items = claims.map(claim => {
       const cleanClaim = {
-        ...claim,
+        id: claim.id,
+        type: claim.type,
+        status: claim.status,
         amount: claim.amount / 10 ** (claim.vault?.ft_token_decimals || 0),
+        adaAmount: claim.lovelace_amount ? claim.lovelace_amount / 1_000_000 : null,
+        multiplier: claim.multiplier,
+        description: claim.description,
+        createdAt: claim.created_at,
+        updatedAt: claim.updated_at,
         vault: {
           ...claim.vault,
           vaultImage: claim.vault?.vault_image?.file_url || null,
@@ -226,12 +230,11 @@ export class ClaimsService {
           user: { id: tx.user.id },
           vault: { id: vault.id },
           type: ClaimType.CANCELLATION,
-          amount: tx.amount, // ADA amount to return
+          lovelace_amount: tx.amount, // ADA amount to return
           status: ClaimStatus.AVAILABLE,
           description: `Return ADA from failed vault acquisition: ${vault.name}`,
           metadata: {
             transactionType: 'acquisition',
-            adaAmount: tx.amount,
             failureReason: reason,
             originalTxHash: tx.tx_hash,
             outputIndex: 0,
@@ -416,12 +419,12 @@ export class ClaimsService {
         start: true,
         end: true,
       },
-      network: 'preprod',
+      network: this.isMainnet ? 'mainnet' : 'preprod',
     };
 
     try {
       const buildResponse = await this.blockchainService.buildTransaction(input);
-      const actualTxSize = this.blockchainService.getTransactionSize(buildResponse.complete);
+      const actualTxSize = getTransactionSize(buildResponse.complete);
       this.logger.debug(`Transaction size: ${actualTxSize} bytes (${(actualTxSize / 1024).toFixed(2)} KB)`);
 
       if (actualTxSize > this.MAX_TX_SIZE) {

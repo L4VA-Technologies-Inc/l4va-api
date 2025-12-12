@@ -40,6 +40,7 @@ import { Snapshot } from './snapshot.entity';
 import { TagEntity } from './tag.entity';
 import { TokenRegistry } from './tokenRegistry.entity';
 import { User } from './user.entity';
+import { VaultTreasuryWallet } from './vaultTreasuryWallet.entity';
 
 @Entity('vaults')
 export class Vault {
@@ -55,6 +56,12 @@ export class Vault {
     nullable: true,
   })
   type: VaultType;
+
+  @Column({
+    type: 'uuid',
+    nullable: true,
+  })
+  preset_id?: string;
 
   @Column({
     type: 'enum',
@@ -130,6 +137,8 @@ export class Vault {
   @Column({
     name: 'vt_price',
     type: 'numeric',
+    precision: 38,
+    scale: 25,
     nullable: true,
   })
   vt_price?: number;
@@ -399,6 +408,10 @@ export class Vault {
   @JoinColumn({ name: 'owner_id' })
   public owner: User;
 
+  @Expose({ name: 'treasuryWallet' })
+  @OneToOne(() => VaultTreasuryWallet, treasury => treasury.vault, { nullable: true })
+  treasury_wallet?: VaultTreasuryWallet;
+
   @Expose({ name: 'assetsWhitelist' })
   @OneToMany(() => AssetsWhitelistEntity, (asset: AssetsWhitelistEntity) => asset.vault)
   assets_whitelist?: AssetsWhitelistEntity[];
@@ -547,13 +560,6 @@ export class Vault {
     name: 'vault_image_id',
   })
   vault_image?: FileEntity;
-
-  @Expose({ name: 'bannerImage' })
-  @OneToOne(() => FileEntity)
-  @JoinColumn({
-    name: 'banner_image_id',
-  })
-  banner_image?: FileEntity;
 
   @Expose({ name: 'acquirerWhitelistCsv' })
   @OneToOne(() => FileEntity)

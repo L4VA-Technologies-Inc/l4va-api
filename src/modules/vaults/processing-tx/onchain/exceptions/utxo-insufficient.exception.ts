@@ -14,7 +14,7 @@ import { HttpException, HttpStatus } from '@nestjs/common';
  * https://dev.ada-anvil.io/anvil-api/troubleshooting#insufficient-inputs-balance-shortage
  */
 export class UTxOInsufficientException extends HttpException {
-  constructor(message?: string, requiredLovelace?: number) {
+  constructor(requiredLovelace?: number) {
     const isSpecificUtxoError = requiredLovelace !== undefined;
     const requiredAda = requiredLovelace ? (requiredLovelace / 1_000_000).toFixed(2) : null;
 
@@ -24,7 +24,7 @@ export class UTxOInsufficientException extends HttpException {
         error: 'UTxO Balance Insufficient',
         message: isSpecificUtxoError
           ? `No single UTxO found with at least ${requiredAda} ADA (${requiredLovelace.toLocaleString()} lovelace). Please consolidate UTxOs or ensure wallet has sufficient balance in individual UTxOs.`
-          : message || 'Not enough UTxO balance to build the transaction',
+          : 'Not enough UTxO balance to build the transaction',
         code: isSpecificUtxoError ? 'UTXO_MINIMUM_NOT_MET' : 'UTXO_INSUFFICIENT_BALANCE',
         ...(isSpecificUtxoError && {
           requiredLovelace,

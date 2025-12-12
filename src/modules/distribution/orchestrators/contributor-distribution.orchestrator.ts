@@ -12,9 +12,14 @@ import { AddressesUtxo, BatchSizeResult } from '../distribution.types';
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
-import { getAddressFromHash, getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import {
+  getAddressFromHash,
+  getTransactionSize,
+  getUtxosExtract,
+} from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
@@ -36,6 +41,7 @@ export class ContributorDistributionOrchestrator {
     private readonly blockchainService: BlockchainService,
     private readonly claimsService: ClaimsService,
     private readonly paymentBuilder: ContributorPaymentBuilder,
+    private readonly assetService: AssetsService,
     private readonly blockfrost: BlockFrostAPI
   ) {}
 
@@ -187,7 +193,7 @@ export class ContributorDistributionOrchestrator {
 
         const input = await this.paymentBuilder.buildPaymentInput(vault, testClaims, adminUtxos, dispatchUtxos, config);
         const buildResponse = await this.blockchainService.buildTransaction(input);
-        const txSize = this.blockchainService.getTransactionSize(buildResponse.complete);
+        const txSize = getTransactionSize(buildResponse.complete);
 
         this.logger.debug(`Batch size ${testBatchSize}: ${txSize} bytes (${(txSize / 1024).toFixed(2)} KB)`);
 
@@ -276,7 +282,7 @@ export class ContributorDistributionOrchestrator {
       // Build transaction
       const input = await this.paymentBuilder.buildPaymentInput(vault, validClaims, adminUtxos, dispatchUtxos, config);
       const buildResponse = await this.blockchainService.buildTransaction(input);
-      const txSize = this.blockchainService.getTransactionSize(buildResponse.complete);
+      const txSize = getTransactionSize(buildResponse.complete);
 
       this.logger.log(`Batch payment transaction built: ${txSize} bytes (${(txSize / 1024).toFixed(2)} KB)`);
 
@@ -320,6 +326,9 @@ export class ContributorDistributionOrchestrator {
         ClaimStatus.CLAIMED
       );
       await this.transactionRepository.update({ id: batchTransaction.id }, { status: TransactionStatus.confirmed });
+
+      // Mark assets as distributed
+      await this.assetService.markAssetsAsDistributedByTransactions(validClaims.map(c => c.transaction.id));
 
       this.logger.log(
         `Successfully processed batch payment for ${validClaims.length} claims ` + `with tx: ${response.txHash}`

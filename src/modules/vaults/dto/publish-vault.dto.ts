@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose } from 'class-transformer';
-import { IsString, IsNotEmpty, IsOptional } from 'class-validator';
+import { IsString, IsNotEmpty } from 'class-validator';
 
 export class PublishVaultDto {
   @ApiProperty({
@@ -25,7 +25,6 @@ export class PublishVaultDto {
     example: ['84a400...'],
     required: false,
   })
-  @IsOptional()
   @IsString({ each: true })
   @Expose()
   signatures?: string[];
@@ -35,7 +34,6 @@ export class PublishVaultDto {
     example: '123e4567-e89b-12d3-a456-426614174000',
     required: false,
   })
-  @IsOptional()
   @IsString()
   @Expose()
   txId?: string;

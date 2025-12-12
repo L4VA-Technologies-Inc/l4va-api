@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Param, Body, HttpException, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Param, Body, HttpException, HttpStatus, ParseUUIDPipe } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiParam, ApiResponse } from '@nestjs/swagger';
 
 import { ChatService } from './chat.service';
@@ -19,7 +19,7 @@ export class ChatController {
   @ApiOperation({ summary: 'Generate Stream Chat token for user' })
   @ApiParam({ name: 'userId', description: 'User ID to generate token for' })
   @ApiResponse({ status: 200, description: 'Token generated successfully', type: GenerateTokenRes })
-  async generateToken(@Param('userId') userId: string): Promise<GenerateTokenRes> {
+  async generateToken(@Param('userId', ParseUUIDPipe) userId: string): Promise<GenerateTokenRes> {
     try {
       const token = this.chatService.generateUserToken(userId);
       return { token };
@@ -33,7 +33,7 @@ export class ChatController {
   @ApiParam({ name: 'vaultId', description: 'Vault ID to create channel for' })
   @ApiResponse({ status: 200, description: 'Channel created/retrieved successfully', type: CreateVaultChannelRes })
   async createVaultChannel(
-    @Param('vaultId') vaultId: string,
+    @Param('vaultId', ParseUUIDPipe) vaultId: string,
     @Body() body?: CreateVaultChannelReq
   ): Promise<CreateVaultChannelRes> {
     try {
@@ -52,7 +52,10 @@ export class ChatController {
   @ApiOperation({ summary: 'Create or update user in Stream Chat' })
   @ApiParam({ name: 'userId', description: 'User ID' })
   @ApiResponse({ status: 200, description: 'User created/updated successfully', type: CreateUserRes })
-  async createUser(@Param('userId') userId: string, @Body() userData: CreateUserReq): Promise<CreateUserRes> {
+  async createUser(
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @Body() userData: CreateUserReq
+  ): Promise<CreateUserRes> {
     try {
       const user = await this.chatService.createOrUpdateUser(userId, userData);
       return { user, success: true };
@@ -65,7 +68,10 @@ export class ChatController {
   @ApiOperation({ summary: 'Add members to vault chat channel' })
   @ApiParam({ name: 'vaultId', description: 'Vault ID' })
   @ApiResponse({ status: 200, description: 'Members added successfully', type: AddMembersRes })
-  async addMembersToVault(@Param('vaultId') vaultId: string, @Body() body: AddMembersReq): Promise<AddMembersRes> {
+  async addMembersToVault(
+    @Param('vaultId', ParseUUIDPipe) vaultId: string,
+    @Body() body: AddMembersReq
+  ): Promise<AddMembersRes> {
     try {
       await this.chatService.addMembersToVaultChannel(vaultId, body.userIds);
       return { success: true };

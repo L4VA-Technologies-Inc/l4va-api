@@ -3,14 +3,6 @@ import { Expose } from 'class-transformer';
 
 export class IncrementViewCountRes {
   @Expose()
-  @ApiProperty({ description: 'Number of affected rows', example: 1 })
-  affected: number;
-
-  @Expose()
-  @ApiProperty({ description: 'Generated maps from the database operation', example: [] })
-  generatedMaps: unknown[];
-
-  @Expose()
-  @ApiProperty({ description: 'Raw database result', required: false })
-  raw?: unknown;
+  @ApiProperty({ description: 'Indicates if the view count was successfully incremented', example: true })
+  success: boolean;
 }

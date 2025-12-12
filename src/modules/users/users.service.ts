@@ -68,15 +68,26 @@ export class UsersService {
       .andWhere('vault.vault_status IN (:...statuses)', { statuses })
       .andWhere(
         new Brackets(qb => {
-          qb.where('vault.owner_id = :userId', { userId }).orWhere(
-            `EXISTS (
-                    SELECT 1 FROM assets
-                    WHERE assets.vault_id = vault.id 
-                    AND assets.added_by = :userId
-                    AND assets.status IN ('locked', 'distributed')
-                  )`,
-            { userId }
-          );
+          qb.where('vault.owner_id = :userId', { userId })
+            .orWhere(
+              `EXISTS (
+              SELECT 1 FROM assets
+              WHERE assets.vault_id = vault.id 
+              AND assets.added_by = :userId
+              AND assets.status IN ('locked', 'distributed')
+            )`,
+              { userId }
+            )
+            .orWhere(
+              `EXISTS (
+              SELECT 1 FROM snapshot
+              WHERE snapshot.vault_id = vault.id 
+              AND snapshot.address_balances -> :userAddress IS NOT NULL
+              ORDER BY snapshot.created_at DESC
+              LIMIT 1
+            )`,
+              { userAddress: user.address }
+            );
         })
       )
       .getCount();
@@ -120,15 +131,26 @@ export class UsersService {
       .andWhere('vault.vault_status IN (:...statuses)', { statuses })
       .andWhere(
         new Brackets(qb => {
-          qb.where('vault.owner_id = :userId', { userId }).orWhere(
-            `EXISTS (
-                    SELECT 1 FROM assets
-                    WHERE assets.vault_id = vault.id 
-                    AND assets.added_by = :userId
-                    AND assets.status IN ('locked', 'distributed')
-                  )`,
-            { userId }
-          );
+          qb.where('vault.owner_id = :userId', { userId })
+            .orWhere(
+              `EXISTS (
+              SELECT 1 FROM assets
+              WHERE assets.vault_id = vault.id 
+              AND assets.added_by = :userId
+              AND assets.status IN ('locked', 'distributed')
+            )`,
+              { userId }
+            )
+            .orWhere(
+              `EXISTS (
+              SELECT 1 FROM snapshot
+              WHERE snapshot.vault_id = vault.id 
+              AND snapshot.address_balances -> :userAddress IS NOT NULL
+              ORDER BY snapshot.created_at DESC
+              LIMIT 1
+            )`,
+              { userAddress: user.address }
+            );
         })
       )
       .getCount();

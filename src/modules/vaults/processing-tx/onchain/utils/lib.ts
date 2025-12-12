@@ -20,7 +20,12 @@ import {
   PlutusList,
   EnterpriseAddress,
   Credential,
+  NetworkInfo,
+  BaseAddress,
+  Bip32PrivateKey,
+  Transaction as CardanoTransaction,
 } from '@emurgo/cardano-serialization-lib-nodejs';
+import * as bip39 from 'bip39';
 
 interface Amount {
   unit: string;
@@ -65,10 +70,10 @@ interface GetUtxosOptions {
 interface GetUtxosResult {
   /** All valid UTXOs as hex strings (filtered by minAda) */
   utxos: string[];
+  /** UTXOs containing target tokens (only if targetToken/targetAssets specified) */
+  requiredInputs: string[];
   /** UTXOs filtered by higher ADA threshold (filterByAda) */
   filteredUtxos?: string[];
-  /** UTXOs containing target tokens (only if targetToken/targetAssets specified) */
-  requiredInputs?: string[];
   /** Detailed breakdown of asset collection */
   assetBreakdown?: AssetCollection[];
   /** Total ADA collected (in lovelace) - only if targetAdaAmount specified */
@@ -184,6 +189,24 @@ export const getUtxosExtract = async (
   });
 
   const utxos = await blockfrost.addressesUtxosAll(address.to_bech32());
+
+  // Initial filtering before sorting to reduce unnecessary comparisons
+  const preFilteredUtxos = utxos.filter(utxo => {
+    const adaAmount = Number(utxo.amount[0].quantity);
+    // Pre-filter by minimum ADA if specified
+    if (minAda > 0 && adaAmount <= minAda) return false;
+    // Pre-filter inline datums if needed
+    if (removeInlineDatums && utxo.inline_datum === '49616e76696c2d746167') return false;
+    return true;
+  });
+
+  // Sort only the filtered UTXOs by ADA amount (descending)
+  const sortedUtxos = preFilteredUtxos.sort((a, b) => {
+    const adaA = Number(a.amount.find(amt => amt.unit === 'lovelace')?.quantity || 0);
+    const adaB = Number(b.amount.find(amt => amt.unit === 'lovelace')?.quantity || 0);
+    return adaB - adaA;
+  });
+
   const allValidUtxos: string[] = [];
   const filteredUtxos: string[] = [];
   const requiredTokenUtxos: Set<string> = new Set();
@@ -191,26 +214,18 @@ export const getUtxosExtract = async (
   let totalAdaCollected = 0;
 
   if (filterByAda !== undefined) {
-    for (const utxo of utxos) {
+    for (const utxo of sortedUtxos) {
       const adaAmount = Number(utxo.amount[0].quantity);
       if (adaAmount >= filterByAda) {
-        const utxoHex = TransactionUnspentOutput.new(
-          TransactionInput.new(TransactionHash.from_hex(utxo.tx_hash), utxo.output_index),
-          TransactionOutput.new(address, assetsToValue(utxo.amount))
-        ).to_hex();
+        const utxoHex = createUtxoHex(utxo.tx_hash, utxo.output_index, address, utxo.amount);
         filteredUtxos.push(utxoHex);
       }
     }
   }
 
-  for (const utxo of utxos) {
-    const { tx_hash, output_index, amount, inline_datum } = utxo;
+  for (const utxo of sortedUtxos) {
+    const { tx_hash, output_index, amount } = utxo;
     const adaAmount = Number(amount[0].quantity);
-
-    // Skip UTXOs below minimum ADA threshold
-    if (adaAmount <= minAda) continue;
-
-    if (removeInlineDatums && inline_datum === '49616e76696c2d746167') continue;
 
     // Validate UTXO existence to prevent double-spending
     if (validateUtxos) {
@@ -219,16 +234,13 @@ export const getUtxosExtract = async (
     }
 
     // Create UTXO hex encoding for transaction building
-    const utxoHex = TransactionUnspentOutput.new(
-      TransactionInput.new(TransactionHash.from_hex(tx_hash), output_index),
-      TransactionOutput.new(address, assetsToValue(amount))
-    ).to_hex();
-
+    const utxoHex = createUtxoHex(tx_hash, output_index, address, amount);
     allValidUtxos.push(utxoHex);
+
+    totalAdaCollected += adaAmount;
 
     // Track ADA collection if targeting specific amount
     if (hasTargetAda) {
-      totalAdaCollected += adaAmount;
       requiredTokenUtxos.add(utxoHex);
 
       // Stop collecting once we have enough ADA
@@ -286,7 +298,7 @@ export const getUtxosExtract = async (
     throw new Error(`Insufficient ADA found. Need ${targetAdaAmount} lovelace, found ${totalAdaCollected} lovelace`);
   }
 
-  let selectedUtxos: string[];
+  let selectedUtxos: string[] = [];
 
   if (!hasTargetAssets && !hasTargetAda) {
     selectedUtxos = allValidUtxos.slice(0, maxUtxos);
@@ -300,6 +312,7 @@ export const getUtxosExtract = async (
 
   const result: GetUtxosResult = {
     utxos: selectedUtxos,
+    requiredInputs: [],
   };
 
   if (filterByAda !== undefined) {
@@ -374,4 +387,81 @@ export function getAddressFromHash(hash: string): string {
   return EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(hash)))
     .to_address()
     .to_bech32();
+}
+
+export function createUtxoHex(txHash: string, outputIndex: number, address: Address, amount: Amount[]): string {
+  return TransactionUnspentOutput.new(
+    TransactionInput.new(TransactionHash.from_hex(txHash), outputIndex),
+    TransactionOutput.new(address, assetsToValue(amount))
+  ).to_hex();
+}
+
+export function getTransactionSize(txHex: string): number {
+  const tx = CardanoTransaction.from_bytes(Buffer.from(txHex, 'hex'));
+  return tx.to_bytes().length;
+}
+
+/**
+ * Generates random mnemonic for a vault wallet and derives the corresponding Cardano address and private key.
+ *
+ * Vault 1 → Random Mnemonic A
+ *
+ * Vault 2 → Random Mnemonic B
+ *
+ * Vault 3 → Random Mnemonic C
+ *
+ * @param isMainnet Whether to generate a wallet for the mainnet or testnet.
+ * @returns
+ */
+export async function generateCardanoWallet(isMainnet: boolean): Promise<{
+  ticker: string;
+  address: string;
+  privateKey: string;
+  stakePrivateKey: string;
+  mnemonic: string;
+}> {
+  const mnemonic = bip39.generateMnemonic();
+  const entropy = bip39.mnemonicToEntropy(mnemonic);
+  const rootKey = Bip32PrivateKey.from_bip39_entropy(Buffer.from(entropy, 'hex'), Buffer.from(''));
+
+  // Derivation path for external addresses in Cardano (m/1852'/1815'/0'/0/0)
+  const accountKey = rootKey
+    .derive(1852 | 0x80000000) // purpose
+    .derive(1815 | 0x80000000) // coin type
+    .derive(0 | 0x80000000) // account
+    .derive(0) // external chain
+    .derive(0); // first address
+
+  const stakeKey = rootKey
+    .derive(1852 | 0x80000000) // purpose
+    .derive(1815 | 0x80000000) // coin type
+    .derive(0 | 0x80000000) // account
+    .derive(2) // staking chain
+    .derive(0); // first staking address
+
+  const publicKey = accountKey.to_public();
+  const stakePublicKey = stakeKey.to_public();
+  const networkInfo = isMainnet ? NetworkInfo.mainnet() : NetworkInfo.testnet_preprod();
+
+  const baseAddress = BaseAddress.new(
+    networkInfo.network_id(),
+    Credential.from_keyhash(publicKey.to_raw_key().hash()),
+    Credential.from_keyhash(stakePublicKey.to_raw_key().hash())
+  );
+
+  const address = baseAddress.to_address().to_bech32();
+
+  // Convert Bip32PrivateKey to regular PrivateKey for signing transactions
+  const privateKey = accountKey.to_raw_key().to_bech32();
+  const stakePrivateKey = stakeKey.to_raw_key().to_bech32(); // ADD THIS
+
+  const walletData = {
+    ticker: 'ADA',
+    address,
+    privateKey, // Now returns ed25519 private key in bech32 format
+    stakePrivateKey,
+    mnemonic,
+  };
+
+  return walletData;
 }

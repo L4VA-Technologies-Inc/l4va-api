@@ -43,18 +43,21 @@ export class ClaimResponseItemsDto {
   status: ClaimStatus;
 
   @Expose()
-  amount: string;
+  amount: number;
+
+  @Expose()
+  adaAmount: number | null;
+
+  @Expose()
+  multiplier: number | null;
 
   @Expose()
   description: string | null;
 
   @Expose()
-  metadata: Record<string, any> | null;
+  createdAt: string;
 
   @Expose()
-  created_at: string;
-
-  @Expose({ name: 'updated_at' })
   updatedAt: string;
 
   @Expose()

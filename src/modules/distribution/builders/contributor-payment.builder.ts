@@ -1,5 +1,6 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -24,12 +25,16 @@ import { generate_tag_from_txhash_index, getAddressFromHash } from '@/modules/va
 @Injectable()
 export class ContributorPaymentBuilder {
   private readonly logger = new Logger(ContributorPaymentBuilder.name);
+  private readonly isMainnet: boolean;
 
   constructor(
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
-    private readonly blockfrost: BlockFrostAPI
-  ) {}
+    private readonly blockfrost: BlockFrostAPI,
+    private readonly configService: ConfigService
+  ) {
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+  }
 
   /**
    * Build batched payment transaction input for multiple contributor claims
@@ -59,11 +64,10 @@ export class ContributorPaymentBuilder {
 
     // Process each claim in the batch
     for (const claim of claims) {
-      const { transaction: originalTx, metadata } = claim;
-      const adaAmount = Number(metadata.adaAmount);
+      const { transaction: originalTx, lovelace_amount } = claim;
 
       if (hasDispatchFunding) {
-        totalPaymentAmount += adaAmount;
+        totalPaymentAmount += Number(lovelace_amount);
       }
 
       // Get original contribution assets
@@ -107,12 +111,12 @@ export class ContributorPaymentBuilder {
 
       // Add ADA payment and datum only if dispatch funding exists
       if (hasDispatchFunding) {
-        userOutput.lovelace = adaAmount;
+        userOutput.lovelace = Number(lovelace_amount);
         userOutput.datum = {
           type: 'inline',
           value: {
             datum_tag: datumTag,
-            ada_paid: adaAmount,
+            ada_paid: Number(lovelace_amount),
           },
           shape: {
             validatorHash: config.unparametizedDispatchHash,
@@ -284,7 +288,7 @@ export class ContributorPaymentBuilder {
         start: true,
         end: true,
       },
-      network: 'preprod',
+      network: this.isMainnet ? 'mainnet' : 'preprod',
     };
   }
 

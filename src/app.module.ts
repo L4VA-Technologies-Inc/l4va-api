@@ -16,8 +16,10 @@ import { SentryMonitoringService } from './common/services/sentry-monitoring.ser
 import { AuthModule } from './modules/auth/auth.module';
 import { AwsModule } from './modules/aws_bucket/aws.module';
 import { ChatModule } from './modules/chat/chat.module';
+import { DexHunterModule } from './modules/dexhunter/dexhunter.module';
 import { DistributionModule } from './modules/distribution/distribution.module';
 import { JwtGlobalModule } from './modules/globals/jwt_global_module/jwt_global.module';
+import { GoogleCloudModule } from './modules/google_cloud/google-cloud.module';
 import { UsersModule } from './modules/users/users.module';
 import { ClaimsModule } from './modules/vaults/claims/claims.module';
 import { AcquireModule } from './modules/vaults/phase-management/acquire/acquire.module';
@@ -25,11 +27,28 @@ import { ContributionModule } from './modules/vaults/phase-management/contributi
 import { GovernanceModule } from './modules/vaults/phase-management/governance/governance.module';
 import { TransactionsModule } from './modules/vaults/processing-tx/offchain-tx/transactions.module';
 import { BlockchainModule } from './modules/vaults/processing-tx/onchain/blockchain.module';
+import { TreasureWalletModule } from './modules/vaults/treasure/treasure-wallet.module';
 import { VaultsModule } from './modules/vaults/vaults.module';
 import { VyfiModule } from './modules/vyfi/vyfi.module';
+import { WayUpModule } from './modules/wayup/wayup.module';
 
 import { NotificationModule } from '@/modules/notification/notification.module';
+import { PresetsModule } from '@/modules/presets/presets.module';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
+
+/*
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣠⣤⣶⣶⣶⣶⣶⣤⣄⡀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⣠⣴⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣶⣄⡀⠀⠀⠀⠀⠀
+⠀⠀⠀⣠⣴⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣮⣵⣄⠀⠀⠀
+⠀⠀⢾⣻⣿⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⢿⣿⣿⡀⠀
+⠀⠸⣽⣻⠃⣿⡿⠋⣉⠛⣿⣿⣿⣿⣿⣿⣿⣿⣏⡟⠉⡉⢻⣿⡌⣿⣳⡥⠀
+⠀⢜⣳⡟⢸⣿⣷⣄⣠⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣧⣤⣠⣼⣿⣇⢸⢧⢣⠀
+⠀⠨⢳⠇⣸⣿⣿⢿⣿⣿⣿⣿⡿⠿⠿⠿⢿⣿⣿⣿⣿⣿⣿⣿⣿⠀⡟⢆⠀
+⠀⠀⠈⠀⣾⣿⣿⣼⣿⣿⣿⣿⡀⠀⠀⠀⠀⣿⣿⣿⣿⣿⣽⣿⣿⠐⠈⠀⠀
+⠀⢀⣀⣼⣷⣭⣛⣯⡝⠿⢿⣛⣋⣤⣤⣀⣉⣛⣻⡿⢟⣵⣟⣯⣶⣿⣄⡀⠀
+⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣶⣶⣶⣾⣶⣶⣴⣾⣿⣿⣿⣿⣿⣿⢿⣿⣿⣧
+⣿⣿⣿⠿⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⠿⣿⡿
+*/
 
 @Module({
   imports: [
@@ -82,7 +101,12 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     GovernanceModule,
     NotificationModule,
     ChatModule,
+    GoogleCloudModule,
+    TreasureWalletModule,
+    DexHunterModule,
+    WayUpModule,
     EventEmitterModule.forRoot(),
+    PresetsModule,
   ],
   controllers: [AppController],
   providers: [

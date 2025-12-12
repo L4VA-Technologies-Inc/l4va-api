@@ -196,7 +196,6 @@ export class ContributionService {
       assets: [],
       userId,
       fee: this.PROTOCOL_CONTRIBUTORS_FEE,
-      metadata: contributeReq.assets,
     });
 
     return {

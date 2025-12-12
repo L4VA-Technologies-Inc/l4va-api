@@ -51,7 +51,7 @@ export class Transaction {
   @Column({ nullable: true })
   amount: number;
 
-  @ApiProperty({ description: 'Transaction fee in ADA' })
+  @ApiProperty({ description: 'Transaction fee in lovelace' })
   @Column({ nullable: true })
   fee: number;
 

@@ -2,6 +2,102 @@ import { Injectable, Logger } from '@nestjs/common';
 
 import { Claim } from '@/database/claim.entity';
 
+interface AcquirerTokenParams {
+  /** Amount of ADA sent by the acquirer (in ADA, not lovelace) */
+  adaSent: number;
+  /** Total ADA acquired from all acquirers */
+  totalAcquiredValueAda: number;
+  /** Amount of VT tokens allocated to liquidity pool */
+  lpVtAmount: number;
+  /** Amount of ADA allocated to liquidity pool */
+  lpAdaAmount: number;
+  /** Total supply of vault tokens */
+  vtSupply: number;
+  /** Percentage of tokens offered to acquirers (0-1) */
+  ASSETS_OFFERED_PERCENT: number;
+  /** Price per VT token in ADA */
+  vtPrice: number;
+}
+
+interface AcquirerTokenResult {
+  /** Number of VT tokens to be received */
+  vtReceived: number;
+  /** Multiplier used for on-chain calculation */
+  multiplier: number;
+}
+
+interface ContributorTokenParams {
+  /** Value contributed in this specific transaction (in ADA) */
+  txContributedValue: number;
+  /** Total value contributed by this user across all transactions */
+  userTotalValue: number;
+  /** Total value locked (TVL) from all contributors */
+  totalTvl: number;
+  /** Amount of VT tokens allocated to liquidity pool */
+  lpVtAmount: number;
+  /** Total ADA acquired from all acquirers */
+  totalAcquiredAda: number;
+  /** Amount of ADA allocated to liquidity pool */
+  lpAdaAmount: number;
+  /** Total supply of vault tokens */
+  vtSupply: number;
+  /** Percentage of tokens offered to acquirers (0-1) */
+  ASSETS_OFFERED_PERCENT: number;
+}
+
+interface ContributorTokenResult {
+  /** Number of VT tokens to be received */
+  vtAmount: number;
+  /** Amount of ADA to be received (in lovelace) */
+  lovelaceAmount: number;
+  /** Proportion of this tx within user's total contribution (0-1) */
+  proportionOfUserTotal: number;
+  /** Total VT tokens the user will receive */
+  userTotalVtTokens: number;
+}
+
+interface LiquidityPoolParams {
+  /** Total ADA acquired from all acquirers */
+  totalAcquiredAda: number;
+  /** Total supply of vault tokens */
+  vtSupply: number;
+  /** Percentage of tokens offered to acquirers (0-1) */
+  assetsOfferedPercent: number;
+  /** Percentage of FDV to allocate to LP (0-1) */
+  lpPercent: number;
+  /** Total value of contributed assets (fallback FDV if no acquirers) */
+  totalContributedValueAda: number;
+}
+
+interface LiquidityPoolResult {
+  /** Amount of ADA for the liquidity pool */
+  lpAdaAmount: number;
+  /** Amount of VT tokens for the liquidity pool */
+  lpVtAmount: number;
+  /** Calculated price per VT token in ADA */
+  vtPrice: number;
+  /** Fully diluted valuation of the vault */
+  fdv: number;
+  /** Adjusted VT amount for on-chain LP (using multiplier) */
+  adjustedVtLpAmount: number;
+  /** Multiplier for on-chain ADA pair calculation */
+  adaPairMultiplier: number;
+}
+
+interface AcquireMultiplierParams {
+  /** Claims from contributors with their asset allocations */
+  contributorsClaims: Claim[];
+  /** Optional claims from acquirers (empty if 0% acquirer scenario) */
+  acquirerClaims?: Claim[];
+}
+
+interface AcquireMultiplierResult {
+  /** Array of [policyId, assetName, vtAmount] for each asset */
+  acquireMultiplier: [string, string, number][];
+  /** Array of [policyId, assetName, adaAmount] for each asset */
+  adaDistribution: [string, string, number][];
+}
+
 /**
  * DistributionCalculationService
  *
@@ -9,6 +105,12 @@ import { Claim } from '@/database/claim.entity';
  * for contributors and acquirers in the vault system. It includes formulas for
  * liquidity pool allocation, VT token pricing, contributor/acquirer shares, and
  * value retention metrics.
+ *
+ * Edge Cases Handled:
+ * - Acquirers % = 0%: Contributors get all tokens, no acquire phase
+ * - Acquirers % = 100%: Contributors get only ADA, no VT tokens
+ * - LP % = 0%: No liquidity pool, price calculated from FDV/Supply
+ * - Combined edge cases (e.g., 0% acquirers + 0% LP)
  */
 @Injectable()
 export class DistributionCalculationService {
@@ -16,18 +118,7 @@ export class DistributionCalculationService {
 
   constructor() {}
 
-  calculateAcquirerTokens(params: {
-    adaSent: number;
-    totalAcquiredValueAda: number;
-    lpVtAmount: number;
-    lpAdaAmount: number;
-    vtSupply: number;
-    ASSETS_OFFERED_PERCENT: number;
-    vtPrice: number;
-  }): {
-    vtReceived: number;
-    multiplier: number;
-  } {
+  calculateAcquirerTokens(params: AcquirerTokenParams): AcquirerTokenResult {
     const { adaSent, vtSupply, ASSETS_OFFERED_PERCENT, totalAcquiredValueAda, lpVtAmount } = params;
 
     // ((ADA sent to the vault / total acquire ADA) * Assets Offered Percent) * (VT Supply - LP VT)
@@ -40,31 +131,18 @@ export class DistributionCalculationService {
       multiplier,
     };
   }
+  calculateContributorTokens(params: ContributorTokenParams): ContributorTokenResult {
+    const {
+      txContributedValue,
+      userTotalValue,
+      totalTvl,
+      lpVtAmount,
+      totalAcquiredAda,
+      lpAdaAmount,
+      vtSupply,
+      ASSETS_OFFERED_PERCENT,
+    } = params;
 
-  calculateContributorTokens({
-    txContributedValue,
-    userTotalValue,
-    totalTvl,
-    lpVtAmount,
-    totalAcquiredAda,
-    lpAdaAmount,
-    vtSupply,
-    ASSETS_OFFERED_PERCENT,
-  }: {
-    txContributedValue: number;
-    userTotalValue: number;
-    totalTvl: number;
-    lpVtAmount: number;
-    lpAdaAmount: number;
-    vtSupply: number;
-    ASSETS_OFFERED_PERCENT: number;
-    totalAcquiredAda: number;
-  }): {
-    vtAmount: number;
-    adaAmount: number;
-    proportionOfUserTotal: number;
-    userTotalVtTokens: number;
-  } {
     // Calculate proportion of this transaction within user's total contribution
     const proportionOfUserTotal = userTotalValue > 0 ? txContributedValue / userTotalValue : 0;
 
@@ -96,7 +174,7 @@ export class DistributionCalculationService {
 
     return {
       vtAmount: Math.floor(vtAmount),
-      adaAmount: Math.floor(adaAmount * 1_000_000), // Convert to lovelace
+      lovelaceAmount: Math.floor(adaAmount * 1_000_000), // Convert to lovelace
       proportionOfUserTotal,
       userTotalVtTokens: Math.round(userTotalVtTokens),
     };
@@ -110,26 +188,9 @@ export class DistributionCalculationService {
    * - LP % = 0%: No liquidity pool, calculate token price from FDV/Supply
    * - Both can be 0% simultaneously
    */
-  calculateLpTokens({
-    totalAcquiredAda,
-    assetsOfferedPercent,
-    lpPercent,
-    vtSupply,
-    totalContributedValueAda,
-  }: {
-    totalAcquiredAda: number;
-    vtSupply: number;
-    assetsOfferedPercent: number;
-    lpPercent: number;
-    totalContributedValueAda: number; // TVL of contributed assets (for edge case handling)
-  }): {
-    lpAdaAmount: number;
-    lpVtAmount: number;
-    vtPrice: number;
-    fdv: number;
-    adjustedVtLpAmount: number;
-    adaPairMultiplier: number;
-  } {
+  calculateLpTokens(params: LiquidityPoolParams): LiquidityPoolResult {
+    const { totalAcquiredAda, assetsOfferedPercent, lpPercent, vtSupply, totalContributedValueAda } = params;
+
     let fdv: number;
 
     // Edge Case 1: No acquirers (Acquirers % = 0%)
@@ -209,29 +270,22 @@ export class DistributionCalculationService {
     };
   }
 
-  calculateAcquireMultipliers({
-    contributorsClaims,
-    acquirerClaims,
-  }: {
-    contributorsClaims: Claim[];
-    acquirerClaims?: Claim[];
-  }): {
-    acquireMultiplier: [string, string, number][];
-    adaDistribution: [string, string, number][];
-  } {
+  calculateAcquireMultipliers(params: AcquireMultiplierParams): AcquireMultiplierResult {
+    const { contributorsClaims, acquirerClaims } = params;
+
     const acquireMultiplier = [];
     const adaDistribution = [];
 
     for (const claim of contributorsClaims) {
-      const contributorAdaAmount = claim.metadata?.adaAmount || 0;
+      const contributorLovelaceAmount = claim?.lovelace_amount || 0;
 
       // VT token distribution (existing logic)
       const baseVtShare = Math.floor(claim.amount / claim.transaction.assets.length);
       const vtRemainder = claim.amount - baseVtShare * claim.transaction.assets.length;
 
       // ADA distribution among assets
-      const baseAdaShare = Math.floor(contributorAdaAmount / claim.transaction.assets.length);
-      const adaRemainder = contributorAdaAmount - baseAdaShare * claim.transaction.assets.length;
+      const baseAdaShare = Math.floor(contributorLovelaceAmount / claim.transaction.assets.length);
+      const adaRemainder = contributorLovelaceAmount - baseAdaShare * claim.transaction.assets.length;
 
       claim.transaction.assets.forEach((asset, index) => {
         const vtShare = baseVtShare + (index < vtRemainder ? 1 : 0);
@@ -249,7 +303,7 @@ export class DistributionCalculationService {
     }
 
     const multiplier =
-      acquirerClaims[0].metadata?.multiplier ||
+      acquirerClaims[0].multiplier ||
       Math.floor(acquirerClaims[0].amount / acquirerClaims[0].transaction.amount / 1_000_000);
     acquireMultiplier.push(['', '', multiplier]);
 

@@ -4,8 +4,8 @@ import { instanceToPlain } from 'class-transformer';
 import { Repository, In } from 'typeorm';
 
 import { CreateAssetDto } from './dto/create-asset.dto';
-import { GetContributedAssetsRes } from './dto/get-contributed-assets.res';
 import { GetAcquiredAssetsRes } from './dto/get-acquired-assets.res';
+import { GetContributedAssetsRes } from './dto/get-contributed-assets.res';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
@@ -84,20 +84,33 @@ export class AssetsService {
     limit: number = 10,
     search: string = ''
   ): Promise<GetContributedAssetsRes> {
-    // Verify vault ownership
-    const vault = await this.vaultsRepository.findOne({
-      where: {
-        id: vaultId,
-      },
-    });
-
-    if (!vault) {
-      throw new BadRequestException('Vault not found or access denied');
-    }
     let queryBuilder = this.assetsRepository
       .createQueryBuilder('asset')
+      .select([
+        'asset.id',
+        'asset.policy_id',
+        'asset.asset_id',
+        'asset.type',
+        'asset.quantity',
+        'asset.floor_price',
+        'asset.dex_price',
+        'asset.deleted',
+        'asset.last_valuation',
+        'asset.status',
+        'asset.locked_at',
+        'asset.released_at',
+        'asset.origin_type',
+        'asset.image',
+        'asset.decimals',
+        'asset.name',
+        'asset.description',
+        'asset.added_at',
+        'asset.updated_at',
+      ])
       .where('asset.vault_id = :vaultId', { vaultId })
-      .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
+      .andWhere('asset.origin_type IN (:...originTypes)', {
+        originTypes: [AssetOriginType.CONTRIBUTED, AssetOriginType.FEE],
+      })
       .andWhere('asset.status IN (:...statuses)', {
         statuses: [AssetStatus.LOCKED, AssetStatus.RELEASED],
       });
@@ -120,16 +133,10 @@ export class AssetsService {
       totalPages: Math.ceil(total / limit),
     };
   }
-  async getAcquiredAssets(
-    vaultId: string,
-    page: number = 1,
-    limit: number = 10
-  ): Promise<GetAcquiredAssetsRes> {
+  async getAcquiredAssets(vaultId: string, page: number = 1, limit: number = 10): Promise<GetAcquiredAssetsRes> {
     // Verify vault ownership
-    const vault = await this.vaultsRepository.findOne({
-      where: {
-        id: vaultId,
-      },
+    const vault = await this.vaultsRepository.exists({
+      where: { id: vaultId },
     });
 
     if (!vault) {
@@ -143,6 +150,27 @@ export class AssetsService {
         },
         origin_type: AssetOriginType.ACQUIRED,
         status: In([AssetStatus.LOCKED, AssetStatus.RELEASED, AssetStatus.DISTRIBUTED]),
+      },
+      select: {
+        id: true,
+        policy_id: true,
+        asset_id: true,
+        type: true,
+        quantity: true,
+        floor_price: true,
+        dex_price: true,
+        deleted: true,
+        last_valuation: true,
+        status: true,
+        locked_at: true,
+        released_at: true,
+        origin_type: true,
+        image: true,
+        decimals: true,
+        name: true,
+        description: true,
+        added_at: true,
+        updated_at: true,
       },
       skip: (page - 1) * limit,
       take: limit,
@@ -160,8 +188,12 @@ export class AssetsService {
     };
   }
 
-  async releaseAssetByClaimId(claimId: string): Promise<void> {
-    const claimWithAsset = await this.claimsRepository
+  async releaseAssetsByClaim(claimIds: string[]): Promise<void> {
+    if (claimIds.length === 0) {
+      throw new BadRequestException('At least one claim ID must be provided');
+    }
+
+    const claimsWithAssets = await this.claimsRepository
       .createQueryBuilder('claim')
       .select([
         'claim.id',
@@ -182,29 +214,44 @@ export class AssetsService {
       .innerJoin('claim.transaction', 'transaction')
       .innerJoin('transaction.assets', 'asset')
       .innerJoin('asset.vault', 'vault')
-      .where('claim.id = :claimId', { claimId })
+      .where('claim.id IN (:...claimIds)', { claimIds })
       .andWhere('asset.deleted = false')
-      .getOne();
+      .getMany();
 
-    if (!claimWithAsset) {
-      throw new BadRequestException('Claim not found or no associated asset');
+    if (claimsWithAssets.length === 0) {
+      throw new BadRequestException('No claims found or no associated assets');
     }
 
-    const asset = claimWithAsset.transaction.assets[0];
-
-    if (!asset) {
-      throw new BadRequestException('No asset associated with this claim');
+    if (claimsWithAssets.length !== claimIds.length) {
+      const foundIds = claimsWithAssets.map(c => c.id);
+      const missingIds = claimIds.filter(id => !foundIds.includes(id));
+      throw new BadRequestException(`Claims not found: ${missingIds.join(', ')}`);
     }
 
-    if (asset.status !== AssetStatus.LOCKED) {
-      throw new BadRequestException(
-        `Asset cannot be released. Current status: ${asset.status}. Only locked assets can be released.`
-      );
+    const assetsToRelease: string[] = [];
+    for (const claim of claimsWithAssets) {
+      const asset = claim.transaction.assets[0];
+
+      if (!asset) {
+        throw new BadRequestException(`No asset associated with claim ${claim.id}`);
+      }
+
+      if (asset.status !== AssetStatus.LOCKED) {
+        throw new BadRequestException(
+          `Asset for claim ${claim.id} cannot be released. Current status: ${asset.status}. Only locked assets can be released.`
+        );
+      }
+
+      assetsToRelease.push(asset.id);
+    }
+
+    if (assetsToRelease.length === 0) {
+      throw new BadRequestException('No assets eligible for release');
     }
 
     const now = new Date();
     await this.assetsRepository.update(
-      { id: asset.id },
+      { id: In(assetsToRelease) },
       {
         status: AssetStatus.RELEASED,
         released_at: now,
@@ -213,31 +260,32 @@ export class AssetsService {
     );
   }
 
-  async markAssetsAsDistributedByTransaction(transactionId: string): Promise<void> {
+  async markAssetsAsDistributedByTransactions(transactionIds: string[]): Promise<void> {
+    if (transactionIds.length === 0) {
+      return;
+    }
+
     const assets = await this.assetsRepository.find({
       where: {
-        transaction: { id: transactionId },
+        transaction: { id: In(transactionIds) },
         deleted: false,
+        status: AssetStatus.LOCKED, // Only locked assets can be distributed
       },
     });
 
-    if (!assets.length) {
-      throw new BadRequestException('No assets found for the given transaction');
+    if (assets.length === 0) {
+      throw new BadRequestException(`No locked assets found for ${transactionIds.length} transactions`);
     }
 
-    const now = new Date();
-    await Promise.all(
-      assets.map(async asset => {
-        if (asset.status !== AssetStatus.LOCKED) {
-          throw new BadRequestException(
-            `Asset with ID ${asset.id} cannot be distributed. Current status: ${asset.status}. Only locked assets can be distributed.`
-          );
-        }
-
-        asset.status = AssetStatus.DISTRIBUTED;
-        asset.updated_at = now;
-        return this.assetsRepository.save(asset);
-      })
+    await this.assetsRepository.update(
+      {
+        transaction: { id: In(transactionIds) },
+        status: AssetStatus.LOCKED,
+        deleted: false,
+      },
+      {
+        status: AssetStatus.DISTRIBUTED,
+      }
     );
   }
 

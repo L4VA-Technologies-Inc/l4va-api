@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config/dist/config.service';
 
 import { ExtractInput, ScriptInteraction, TransactionOutput, MintAsset } from '../distribution.types';
 
@@ -12,9 +13,11 @@ import { generate_tag_from_txhash_index, getAddressFromHash } from '@/modules/va
  */
 @Injectable()
 export class AcquirerExtractionBuilder {
-  private readonly logger = new Logger(AcquirerExtractionBuilder.name);
+  private readonly isMainnet: boolean;
 
-  constructor() {}
+  constructor(private readonly configService: ConfigService) {
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+  }
 
   /**
    * Build extraction transaction input for a batch of acquirer claims
@@ -48,7 +51,7 @@ export class AcquirerExtractionBuilder {
 
       const datumTag = generate_tag_from_txhash_index(originalTx.tx_hash, 0);
       const adaPairMultiplier = Number(vault.ada_pair_multiplier);
-      const claimMultiplier = Number(claim.metadata.multiplier);
+      const claimMultiplier = Number(claim.multiplier);
       const originalAmount = Number(originalTx.amount);
 
       const claimMintQuantity = claimMultiplier * (originalAmount * 1_000_000);
@@ -179,7 +182,7 @@ export class AcquirerExtractionBuilder {
             ],
           }
         : {}),
-      network: 'preprod',
+      network: this.isMainnet ? 'mainnet' : 'preprod',
     };
   }
 }
