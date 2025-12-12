@@ -13,13 +13,14 @@ export async function loadSecrets(): Promise<void> {
 
   if (envExists) {
     const envContent = fs.readFileSync(envFilePath, 'utf8');
-  } 
+    const parsed = dotenv.parse(envContent);
+    Object.assign(process.env, parsed);
+  }
   const shouldLoadGcpSecrets = nodeEnv === 'mainnet';
 
   if (!shouldLoadGcpSecrets) {
     return;
   }
-
 
   let credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
 
@@ -77,7 +78,6 @@ export async function loadSecrets(): Promise<void> {
       .map(([key, value]) => `${key}=${value}`)
       .join('\n');
     fs.writeFileSync(envFilePath, envContent, 'utf8');
-
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error('Failed to load GCP secrets:', e.message || e);
