@@ -15,6 +15,7 @@ import {
   TransactionBuildResponse,
   TransactionSubmitResponse,
   UploadBlueprintPayload,
+  WayUpTransactionBuildResponse,
 } from './types/transaction-status.enum';
 
 import { WayUpTransactionInput } from '@/modules/wayup/wayup.types';
@@ -483,7 +484,7 @@ export class BlockchainService {
    * @param input Transaction input containing utxos, changeAddress, and create/unlist/update/createOffer/buy arrays
    * @returns Transaction build response
    */
-  async buildWayUpTransaction(input: WayUpTransactionInput): Promise<TransactionBuildResponse> {
+  async buildWayUpTransaction(input: WayUpTransactionInput): Promise<WayUpTransactionBuildResponse> {
     try {
       const response = await fetch(`https://prod.api.ada-anvil.app/marketplace/api/build-tx`, {
         method: 'POST',
@@ -496,7 +497,7 @@ export class BlockchainService {
 
       const buildResponse = await response.json();
 
-      if (!buildResponse.complete) {
+      if (!buildResponse.transactions || buildResponse.transactions.length === 0) {
         throw new Error('Failed to build complete WayUp transaction: ' + JSON.stringify(buildResponse));
       }
 

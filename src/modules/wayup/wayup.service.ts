@@ -121,13 +121,9 @@ export class WayUpService {
     // Build the transaction
     const buildResponse = await this.blockchainService.buildWayUpTransaction(listingPayload);
 
-    if (!buildResponse.complete) {
-      throw new Error('Failed to build listing transaction');
-    }
-
     // Sign the transaction with treasury wallet private key
     this.logger.log('Signing listing transaction with treasury wallet');
-    const signedTx = await this.signTransaction(vaultId, buildResponse.complete);
+    const signedTx = await this.signTransaction(vaultId, buildResponse.transactions[0]);
 
     // Submit the transaction
     this.logger.log('Submitting listing transaction to blockchain');
@@ -201,13 +197,9 @@ export class WayUpService {
     // Build the transaction
     const buildResponse = await this.blockchainService.buildWayUpTransaction(unlistPayload);
 
-    if (!buildResponse.complete) {
-      throw new Error('Failed to build unlist transaction');
-    }
-
     // Sign the transaction with treasury wallet private key
     this.logger.log('Signing unlist transaction with treasury wallet');
-    const signedTx = await this.signTransaction(vaultId, buildResponse.complete);
+    const signedTx = await this.signTransaction(vaultId, buildResponse.transactions[0]);
 
     // Submit the transaction
     this.logger.log('Submitting unlist transaction to blockchain');
@@ -287,13 +279,9 @@ export class WayUpService {
     // Build the transaction
     const buildResponse = await this.blockchainService.buildWayUpTransaction(updatePayload);
 
-    if (!buildResponse.complete) {
-      throw new Error('Failed to build update listing transaction');
-    }
-
     // Sign the transaction with treasury wallet private key
     this.logger.log('Signing update listing transaction with treasury wallet');
-    const signedTx = await this.signTransaction(vaultId, buildResponse.complete);
+    const signedTx = await this.signTransaction(vaultId, buildResponse.transactions[0]);
 
     // Submit the transaction
     this.logger.log('Submitting update listing transaction to blockchain');
@@ -379,13 +367,9 @@ export class WayUpService {
     // Build the transaction
     const buildResponse = await this.blockchainService.buildWayUpTransaction(offerPayload);
 
-    if (!buildResponse.complete) {
-      throw new Error('Failed to build offer transaction');
-    }
-
     // Sign the transaction with treasury wallet private key
     this.logger.log('Signing offer transaction with treasury wallet');
-    const signedTx = await this.signTransaction(vaultId, buildResponse.complete);
+    const signedTx = await this.signTransaction(vaultId, buildResponse.transactions[0]);
 
     // Submit the transaction
     this.logger.log('Submitting offer transaction to blockchain');
@@ -470,13 +454,9 @@ export class WayUpService {
     // Build the transaction
     const buildResponse = await this.blockchainService.buildWayUpTransaction(buyPayload);
 
-    if (!buildResponse.complete) {
-      throw new Error('Failed to build purchase transaction');
-    }
-
     // Sign the transaction with treasury wallet private key
     this.logger.log('Signing purchase transaction with treasury wallet');
-    const signedTx = await this.signTransaction(vaultId, buildResponse.complete);
+    const signedTx = await this.signTransaction(vaultId, buildResponse.transactions[0]);
 
     // Submit the transaction
     this.logger.log('Submitting purchase transaction to blockchain');
@@ -654,13 +634,9 @@ export class WayUpService {
     // Build the transaction
     const buildResponse = await this.blockchainService.buildWayUpTransaction(combinedPayload);
 
-    if (!buildResponse.complete) {
-      throw new Error('Failed to build combined marketplace transaction');
-    }
-
     // Sign the transaction with treasury wallet private key
     this.logger.log('Signing combined marketplace transaction with treasury wallet');
-    const signedTx = await this.signTransaction(vaultId, buildResponse.complete);
+    const signedTx = await this.signTransaction(vaultId, buildResponse.transactions[0]);
 
     // Submit the transaction
     this.logger.log('Submitting combined marketplace transaction to blockchain');
