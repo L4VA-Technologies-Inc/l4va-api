@@ -10,6 +10,27 @@ export interface TransactionBuildResponse {
   partial: string;
 }
 
+export interface WayUpTransactionBuildResponse {
+  transactions: string[];
+  distribution: Array<{
+    buy: number[];
+    acceptTrade: number[];
+    unlistTrade: number[];
+    unlist: number[];
+    unlistOffer: number[];
+    unlistCollectionOffer: number[];
+    acceptOffer: number[];
+    acceptCollectionOffer: number[];
+    migrate: number[];
+    update: number[];
+    updateTrade: number[];
+    create: number[];
+    createTrade: number[];
+    createCollectionOffer: number[];
+    createOffer: number[];
+  }>;
+}
+
 export interface TransactionSubmitResponse {
   txHash: string;
 }
