@@ -16,7 +16,7 @@ export class CreatePresetReq {
   @IsOptional()
   @IsEnum(VaultPresetType)
   @Expose()
-  type: VaultPresetType = VaultPresetType.simple;
+  type: VaultPresetType = VaultPresetType.custom;
 
   @ApiProperty({
     description: 'Preset configuration payload',

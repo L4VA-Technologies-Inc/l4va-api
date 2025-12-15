@@ -60,6 +60,10 @@ export class PresetsService {
       throw new NotFoundException('Preset not found');
     }
 
+    if (!preset.user_id) {
+      throw new ForbiddenException('Cannot delete base preset');
+    }
+
     if (preset.user_id !== userId) {
       throw new ForbiddenException('Preset does not belong to the user');
     }

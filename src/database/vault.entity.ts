@@ -22,7 +22,6 @@ import {
   TerminationType,
   ValueMethod,
   VaultFailureReason,
-  VaultPresetType,
   VaultPrivacy,
   VaultStatus,
   VaultType,
@@ -40,6 +39,7 @@ import { Snapshot } from './snapshot.entity';
 import { TagEntity } from './tag.entity';
 import { TokenRegistry } from './tokenRegistry.entity';
 import { User } from './user.entity';
+import { VaultPreset } from './vaultPreset.entity';
 import { VaultTreasuryWallet } from './vaultTreasuryWallet.entity';
 
 @Entity('vaults')
@@ -63,12 +63,9 @@ export class Vault {
   })
   preset_id?: string;
 
-  @Column({
-    type: 'enum',
-    enum: VaultPresetType,
-    nullable: true,
-  })
-  preset?: VaultPresetType;
+  @ManyToOne(() => VaultPreset, { nullable: true, onDelete: 'SET NULL', onUpdate: 'CASCADE' })
+  @JoinColumn({ name: 'preset_id' })
+  preset?: VaultPreset;
 
   @Column({
     type: 'enum',

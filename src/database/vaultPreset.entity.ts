@@ -1,7 +1,8 @@
 import { Expose } from 'class-transformer';
-import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
+import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
 
 import { VaultPresetType } from '../types/vault.types';
+import { User } from './user.entity';
 
 @Entity('vault_preset')
 export class VaultPreset {
@@ -21,6 +22,10 @@ export class VaultPreset {
 
   @Column({ type: 'uuid', nullable: true })
   user_id: string;
+
+  @ManyToOne(() => User, { nullable: true, onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'user_id' })
+  user?: User;
 
   @Column({ type: 'jsonb', nullable: true })
   config: Record<string, any>;
