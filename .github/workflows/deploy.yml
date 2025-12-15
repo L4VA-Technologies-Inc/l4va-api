@@ -27,20 +27,25 @@ jobs:
     runs-on: [self-hosted, dev]
     steps:
       - uses: actions/checkout@v3
+
       - name: Create .env for Testnet
         env:
           TESTNET_ENV_VARS: ${{ secrets.TESTNET_ENV_VARS }}
         run: |
           echo "$TESTNET_ENV_VARS" > .env
           echo "Created TESTNET .env"
+
       - name: Save logs before deploy
         run: |
           mkdir -p ~/apps/logs/l4va-api
           docker logs l4va-api > ~/apps/logs/l4va-api/$(date +"%Y%m%d_%H%M%S").log 2>&1 || true
           cd ~/apps/logs/l4va-api && ls -t | tail -n +11 | xargs -r rm -f
-      - name: Deploy files locally
+
+      - name: Prepare deployment directory
         run: |
-          cp -r $GITHUB_WORKSPACE/* ~/apps/l4va-api/
+          mkdir -p ~/apps/l4va-api/l4va-api
+          cp -r $GITHUB_WORKSPACE/* ~/apps/l4va-api/l4va-api/
+
       - name: Build and restart Docker container
         run: |
           cd ~/apps/l4va-api
@@ -53,26 +58,32 @@ jobs:
     runs-on: [self-hosted, prod]
     steps:
       - uses: actions/checkout@v3
+
       - name: Create gcp-service-account.json for Mainnet
         env:
           MAINNET_GOOGLE_SECRETS: ${{ secrets.MAINNET_GOOGLE_SECRETS }}
         run: |
           echo "$MAINNET_GOOGLE_SECRETS" | base64 -d > gcp-service-account.json
           echo "Created gcp-service-account.json"
+
       - name: Create .env for Mainnet
         env:
           MAINNET_ENV_VARS: ${{ secrets.MAINNET_ENV_VARS }}
         run: |
           echo "$MAINNET_ENV_VARS" > .env
           echo "Created MAINNET .env"
+
       - name: Save logs before deploy
         run: |
           mkdir -p ~/apps/logs/l4va-api
           docker logs l4va-api > ~/apps/logs/l4va-api/$(date +"%Y%m%d_%H%M%S").log 2>&1 || true
           cd ~/apps/logs/l4va-api && ls -t | tail -n +11 | xargs -r rm -f
-      - name: Deploy files locally
+
+      - name: Prepare deployment directory
         run: |
-          cp -r $GITHUB_WORKSPACE/* ~/apps/l4va-api/
+          mkdir -p ~/apps/l4va-api/l4va-api
+          cp -r $GITHUB_WORKSPACE/* ~/apps/l4va-api/l4va-api/
+
       - name: Build and restart Docker container
         run: |
           cd ~/apps/l4va-api
