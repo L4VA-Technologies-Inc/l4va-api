@@ -49,6 +49,7 @@ jobs:
       - name: Build and restart Docker container
         run: |
           cd ~/apps/l4va-api
+          docker rm -f l4va-api || true
           docker compose build l4va-api
           docker compose up -d --no-deps --force-recreate l4va-api 
   deploy-prod:
@@ -86,5 +87,6 @@ jobs:
       - name: Build and restart Docker container
         run: |
           cd ~/apps/l4va-api
+          docker rm -f l4va-api || true
           docker compose build l4va-api
           docker compose up -d --no-deps --force-recreate l4va-api 
