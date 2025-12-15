@@ -39,6 +39,7 @@ import { Snapshot } from './snapshot.entity';
 import { TagEntity } from './tag.entity';
 import { TokenRegistry } from './tokenRegistry.entity';
 import { User } from './user.entity';
+import { VaultPreset } from './vaultPreset.entity';
 import { VaultTreasuryWallet } from './vaultTreasuryWallet.entity';
 
 @Entity('vaults')
@@ -55,6 +56,16 @@ export class Vault {
     nullable: true,
   })
   type: VaultType;
+
+  @Column({
+    type: 'uuid',
+    nullable: true,
+  })
+  preset_id?: string;
+
+  @ManyToOne(() => VaultPreset, { nullable: true, onDelete: 'SET NULL', onUpdate: 'CASCADE' })
+  @JoinColumn({ name: 'preset_id' })
+  preset?: VaultPreset;
 
   @Column({
     type: 'enum',

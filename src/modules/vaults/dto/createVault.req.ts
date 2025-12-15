@@ -16,6 +16,7 @@ import {
   Max,
   ValidateIf,
   ArrayMinSize,
+  IsUUID,
 } from 'class-validator';
 
 import { AcquirerWhitelist, ContributorWhitelist, SocialLink, AcquirerWhitelistCsv } from '../types';
@@ -49,6 +50,12 @@ export class CreateVaultReq {
   @IsEnum(VaultType)
   @Expose()
   type: VaultType;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsUUID()
+  @Expose()
+  preset_id?: string;
 
   @ApiProperty({ required: true })
   @IsNotEmpty()

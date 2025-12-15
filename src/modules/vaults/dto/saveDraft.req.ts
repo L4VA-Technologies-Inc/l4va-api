@@ -11,6 +11,7 @@ import {
   Max,
   ArrayMaxSize,
   IsObject,
+  IsUUID,
 } from 'class-validator';
 
 import {
@@ -46,6 +47,13 @@ export class SaveDraftReq {
   @IsEnum(VaultType)
   @Expose()
   type?: VaultType | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @IsUUID()
+  @ValidateIf((o, v) => v !== null)
+  @Expose()
+  preset_id?: string | null;
 
   @ApiProperty({ required: false, nullable: true, enum: VaultPrivacy })
   @IsOptional()
