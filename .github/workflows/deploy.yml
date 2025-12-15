@@ -41,17 +41,18 @@ jobs:
           docker logs l4va-api > ~/apps/logs/l4va-api/$(date +"%Y%m%d_%H%M%S").log 2>&1 || true
           cd ~/apps/logs/l4va-api && ls -t | tail -n +11 | xargs -r rm -f
 
-      - name: Prepare deployment directory
+      - name: Copy code to apps/l4va-api
         run: |
-          mkdir -p ~/apps/l4va-api/l4va-api
-          cp -r $GITHUB_WORKSPACE/* ~/apps/l4va-api/l4va-api/
+          mkdir -p ~/apps/l4va-api
+          cp -r $GITHUB_WORKSPACE/* ~/apps/l4va-api/
 
       - name: Build and restart Docker container
         run: |
-          cd ~/apps/l4va-api
+          cd ~/apps
           docker rm -f l4va-api || true
           docker compose build l4va-api
-          docker compose up -d --no-deps --force-recreate l4va-api 
+          docker compose up -d --force-recreate l4va-api
+
   deploy-prod:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: build-check
@@ -79,14 +80,14 @@ jobs:
           docker logs l4va-api > ~/apps/logs/l4va-api/$(date +"%Y%m%d_%H%M%S").log 2>&1 || true
           cd ~/apps/logs/l4va-api && ls -t | tail -n +11 | xargs -r rm -f
 
-      - name: Prepare deployment directory
+      - name: Copy code to apps/l4va-api
         run: |
-          mkdir -p ~/apps/l4va-api/l4va-api
-          cp -r $GITHUB_WORKSPACE/* ~/apps/l4va-api/l4va-api/
+          mkdir -p ~/apps/l4va-api
+          cp -r $GITHUB_WORKSPACE/* ~/apps/l4va-api/
 
       - name: Build and restart Docker container
         run: |
-          cd ~/apps/l4va-api
+          cd ~/apps
           docker rm -f l4va-api || true
           docker compose build l4va-api
-          docker compose up -d --no-deps --force-recreate l4va-api 
+          docker compose up -d --force-recreate l4va-api
