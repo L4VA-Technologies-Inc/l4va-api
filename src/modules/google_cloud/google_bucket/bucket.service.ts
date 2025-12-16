@@ -42,37 +42,26 @@ export class GoogleCloudStorageService {
     this.bucketName = bucket;
     this.bucketPrefix = prefixParts.length > 0 ? prefixParts.join('/') : '';
 
-    // Initialize Storage with credentials
     const resolvedCredentialsPath = path.resolve(process.cwd(), credentialsPath);
 
-    // Check if file exists, if not try to use GOOGLE_APPLICATION_CREDENTIALS
     if (!fs.existsSync(resolvedCredentialsPath)) {
-      this.logger.warn(
-        `Credentials file not found at ${resolvedCredentialsPath}, trying GOOGLE_APPLICATION_CREDENTIALS`
+      throw new Error(
+        `GOOGLE_BUCKET_CREDENTIALS file not found at ${resolvedCredentialsPath}. Please ensure the credentials file exists.`
       );
-      this.storage = new Storage();
-    } else {
-      try {
-        // Try to read credentials and pass as object
-        const credentialsContent = fs.readFileSync(resolvedCredentialsPath, 'utf8');
-        const credentials = JSON.parse(credentialsContent);
-        this.storage = new Storage({
-          credentials: credentials,
-          projectId: credentials.project_id,
-        });
-        this.logger.log('Storage initialized with credentials object');
-      } catch (error) {
-        // Fallback to keyFilename if parsing fails
-        this.logger.warn(`Failed to parse credentials, using keyFilename: ${error.message}`);
-        this.storage = new Storage({
-          keyFilename: resolvedCredentialsPath,
-        });
-      }
     }
 
-    this.logger.log(
-      `Initialized Google Cloud Storage with bucket: ${this.bucketName}, prefix: ${this.bucketPrefix || 'none'}`
-    );
+    try {
+      const credentialsContent = fs.readFileSync(resolvedCredentialsPath, 'utf8');
+      const credentials = JSON.parse(credentialsContent);
+      this.storage = new Storage({
+        credentials: credentials,
+        projectId: credentials.project_id,
+      });
+    } catch (error) {
+      this.storage = new Storage({
+        keyFilename: resolvedCredentialsPath,
+      });
+    }
   }
 
   private getStorage(): Storage {
@@ -139,7 +128,6 @@ export class GoogleCloudStorageService {
       throw new BadRequestException(`Invalid file path for key: ${bucketKey}`);
     }
 
-    // Try to get contentType from database first
     let contentType = 'application/octet-stream';
     try {
       const fileEntity = await this.fileRepository.findOne({
@@ -152,27 +140,33 @@ export class GoogleCloudStorageService {
       this.logger.warn(`Could not get file type from database for ${bucketKey}: ${dbError.message}`);
     }
 
-    this.logger.log(`Attempting to get image. Bucket: ${this.bucketName}, Full path: ${fileName}, Key: ${bucketKey}`);
-
     try {
-      const bucket = this.getStorage().bucket(this.bucketName);
+      const storage = this.getStorage();
+      if (!storage) {
+        throw new Error('Storage is not initialized');
+      }
 
+      const bucket = storage.bucket(this.bucketName);
       if (!bucket) {
         throw new Error('Bucket is not initialized');
       }
 
-      const file = bucket.file(fileName);
+      const filePath = String(fileName).trim();
+      if (!filePath) {
+        throw new Error('File path is empty');
+      }
 
+      const file = bucket.file(filePath);
       if (!file) {
         throw new Error('File object is not created');
       }
 
-      // Try to create read stream directly - it will throw error if file doesn't exist
-      const stream = file.createReadStream();
+      const stream = file.createReadStream({
+        validation: false,
+      });
 
-      // Handle stream errors
       stream.on('error', streamError => {
-        this.logger.error(`Stream error for ${bucketKey}: ${streamError.message}`);
+        this.logger.error(`Stream error for ${bucketKey}: ${streamError.message}`, streamError);
       });
 
       return {
@@ -180,7 +174,6 @@ export class GoogleCloudStorageService {
         contentType,
       };
     } catch (error) {
-      this.logger.error(`Error getting image ${bucketKey}: ${error.message}`, error);
       if (error.code === 404 || error.message?.includes('No such object')) {
         throw new BadRequestException(`Image with key ${bucketKey} not found`);
       }
@@ -198,7 +191,6 @@ export class GoogleCloudStorageService {
       throw new BadRequestException(`Invalid file path for key: ${bucketKey}`);
     }
 
-    // Try to get contentType from database first
     let contentType = 'text/csv';
     try {
       const fileEntity = await this.fileRepository.findOne({
@@ -224,10 +216,8 @@ export class GoogleCloudStorageService {
         throw new Error('File object is not created');
       }
 
-      // Try to create read stream directly - it will throw error if file doesn't exist
       const stream = file.createReadStream();
 
-      // Handle stream errors
       stream.on('error', streamError => {
         this.logger.error(`Stream error for CSV ${bucketKey}: ${streamError.message}`);
       });
