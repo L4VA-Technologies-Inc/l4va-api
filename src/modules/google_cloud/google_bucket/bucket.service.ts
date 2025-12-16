@@ -112,6 +112,19 @@ export class GoogleCloudStorageService {
       throw new BadRequestException(`Invalid file key: ${bucketKey}`);
     }
 
+    // Try to get contentType from database first
+    let contentType = 'application/octet-stream';
+    try {
+      const fileEntity = await this.fileRepository.findOne({
+        where: { file_key: bucketKey },
+      });
+      if (fileEntity && fileEntity.file_type) {
+        contentType = fileEntity.file_type;
+      }
+    } catch (dbError) {
+      this.logger.warn(`Could not get file type from database for ${bucketKey}: ${dbError.message}`);
+    }
+
     const file = bucket.file(fileName);
 
     this.logger.log(`Attempting to get image. Bucket: ${this.bucketName}, Full path: ${fileName}, Key: ${bucketKey}`);
@@ -121,19 +134,6 @@ export class GoogleCloudStorageService {
       if (!exists) {
         this.logger.warn(`Image not found. Bucket: ${this.bucketName}, Full path: ${fileName}, Key: ${bucketKey}`);
         throw new BadRequestException(`Image with key ${bucketKey} not found`);
-      }
-
-      let contentType = 'application/octet-stream';
-      try {
-        const metadata = await file.getMetadata();
-        if (metadata && metadata[0] && metadata[0].contentType) {
-          contentType = metadata[0].contentType;
-        }
-        this.logger.log(`Image found. Content type: ${contentType}`);
-      } catch (metadataError) {
-        this.logger.warn(
-          `Could not get metadata for image ${bucketKey}, using default content type: ${metadataError.message}`
-        );
       }
 
       const stream = file.createReadStream();
@@ -159,24 +159,25 @@ export class GoogleCloudStorageService {
       throw new BadRequestException(`Invalid file key: ${bucketKey}`);
     }
 
+    // Try to get contentType from database first
+    let contentType = 'text/csv';
+    try {
+      const fileEntity = await this.fileRepository.findOne({
+        where: { file_key: bucketKey },
+      });
+      if (fileEntity && fileEntity.file_type) {
+        contentType = fileEntity.file_type;
+      }
+    } catch (dbError) {
+      this.logger.warn(`Could not get file type from database for ${bucketKey}: ${dbError.message}`);
+    }
+
     const file = bucket.file(fileName);
 
     try {
       const [exists] = await file.exists();
       if (!exists) {
         throw new BadRequestException(`CSV with key ${bucketKey} not found`);
-      }
-
-      let contentType = 'text/csv';
-      try {
-        const metadata = await file.getMetadata();
-        if (metadata && metadata[0] && metadata[0].contentType) {
-          contentType = metadata[0].contentType;
-        }
-      } catch (metadataError) {
-        this.logger.warn(
-          `Could not get metadata for CSV ${bucketKey}, using default content type: ${metadataError.message}`
-        );
       }
 
       const stream = file.createReadStream();
