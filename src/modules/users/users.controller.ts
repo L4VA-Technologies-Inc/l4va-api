@@ -20,7 +20,7 @@ import { Express } from 'express';
 import { ApiDoc } from '../../decorators/api-doc.decorator';
 import { AuthGuard } from '../auth/auth.guard';
 import { AuthRequest } from '../auth/dto/auth-user.interface';
-import { mbMultiplication } from '../aws_bucket/aws.controller';
+import { mbMultiplication } from '../google_cloud/google_bucket/bucket.controller';
 
 import { GetPublicProfileParamDto } from './dto/get-public-profile-param.dto';
 import { PublicProfileRes } from './dto/public-profile.res';

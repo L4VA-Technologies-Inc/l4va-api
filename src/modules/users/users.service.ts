@@ -4,7 +4,7 @@ import { classToPlain, instanceToPlain, plainToInstance } from 'class-transforme
 import { Brackets, Repository } from 'typeorm';
 
 import { transformImageToUrl } from '../../helpers';
-import { AwsService } from '../aws_bucket/aws.service';
+import { GoogleCloudStorageService } from '../google_cloud/google_bucket/bucket.service';
 import { TaptoolsService } from '../taptools/taptools.service';
 
 import { PublicProfileRes } from './dto/public-profile.res';
@@ -31,7 +31,7 @@ export class UsersService {
     private filesRepository: Repository<FileEntity>,
     @InjectRepository(LinkEntity)
     private linksRepository: Repository<LinkEntity>,
-    private readonly awsService: AwsService,
+    private readonly gcsService: GoogleCloudStorageService,
     private readonly taptoolsService: TaptoolsService
   ) {}
 
@@ -257,10 +257,8 @@ export class UsersService {
       throw new BadRequestException('User not found');
     }
 
-    // Upload image to S3
-    const uploadResult = await this.awsService.uploadImage(file, host);
+    const uploadResult = await this.gcsService.uploadImage(file, host);
 
-    // Create or update file entity
     const fileEntity = this.filesRepository.create({
       file_key: uploadResult.file_key,
       file_url: uploadResult.file_url,
@@ -287,8 +285,7 @@ export class UsersService {
       throw new BadRequestException('User not found');
     }
 
-    // Upload image to S3
-    const uploadResult = await this.awsService.uploadImage(file, host);
+    const uploadResult = await this.gcsService.uploadImage(file, host);
 
     // Create or update file entity
     const fileEntity = this.filesRepository.create({

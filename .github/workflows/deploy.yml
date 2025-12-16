@@ -34,6 +34,8 @@ jobs:
         run: |
           echo "$TESTNET_ENV_VARS" > .env
           echo "Created TESTNET .env"
+          echo "$GOOGLE_BUCKET" | base64 -d > gcp-bucket.json
+          echo "Created gcp-bucket.json"
 
       - name: Save logs before deploy
         run: |
@@ -66,6 +68,8 @@ jobs:
         run: |
           echo "$MAINNET_GOOGLE_SECRETS" | base64 -d > gcp-service-account.json
           echo "Created gcp-service-account.json"
+          echo "$GOOGLE_BUCKET" | base64 -d > gcp-bucket.json
+          echo "Created gcp-bucket.json"
 
       - name: Create .env for Mainnet
         env:

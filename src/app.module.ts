@@ -14,12 +14,12 @@ import { AppService } from './app.service';
 import { SentryInterceptor } from './common/interceptors/sentry.interceptor';
 import { SentryMonitoringService } from './common/services/sentry-monitoring.service';
 import { AuthModule } from './modules/auth/auth.module';
-import { AwsModule } from './modules/aws_bucket/aws.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { DexHunterModule } from './modules/dexhunter/dexhunter.module';
 import { DistributionModule } from './modules/distribution/distribution.module';
 import { JwtGlobalModule } from './modules/globals/jwt_global_module/jwt_global.module';
 import { GoogleCloudModule } from './modules/google_cloud/google-cloud.module';
+import { GoogleCloudStorageModule } from './modules/google_cloud/google_bucket/bucket.module';
 import { UsersModule } from './modules/users/users.module';
 import { ClaimsModule } from './modules/vaults/claims/claims.module';
 import { AcquireModule } from './modules/vaults/phase-management/acquire/acquire.module';
@@ -91,7 +91,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     BlockchainModule,
     VaultsModule,
     UsersModule,
-    AwsModule,
+    GoogleCloudStorageModule,
     ContributionModule,
     AcquireModule,
     TransactionsModule,
