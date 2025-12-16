@@ -105,11 +105,13 @@ export class GoogleCloudStorageService {
   }
 
   async getImage(bucketKey: string): Promise<{ stream: NodeJS.ReadableStream; contentType: string }> {
-    const bucket = this.getStorage().bucket(this.bucketName);
-    const fileName = this.getFullPath(bucketKey);
-
-    if (!fileName || typeof fileName !== 'string') {
+    if (!bucketKey || typeof bucketKey !== 'string') {
       throw new BadRequestException(`Invalid file key: ${bucketKey}`);
+    }
+
+    const fileName = this.getFullPath(bucketKey);
+    if (!fileName || typeof fileName !== 'string') {
+      throw new BadRequestException(`Invalid file path for key: ${bucketKey}`);
     }
 
     // Try to get contentType from database first
@@ -125,38 +127,50 @@ export class GoogleCloudStorageService {
       this.logger.warn(`Could not get file type from database for ${bucketKey}: ${dbError.message}`);
     }
 
-    const file = bucket.file(fileName);
-
     this.logger.log(`Attempting to get image. Bucket: ${this.bucketName}, Full path: ${fileName}, Key: ${bucketKey}`);
 
     try {
-      const [exists] = await file.exists();
-      if (!exists) {
-        this.logger.warn(`Image not found. Bucket: ${this.bucketName}, Full path: ${fileName}, Key: ${bucketKey}`);
-        throw new BadRequestException(`Image with key ${bucketKey} not found`);
+      const bucket = this.getStorage().bucket(this.bucketName);
+
+      if (!bucket) {
+        throw new Error('Bucket is not initialized');
       }
 
+      const file = bucket.file(fileName);
+
+      if (!file) {
+        throw new Error('File object is not created');
+      }
+
+      // Try to create read stream directly - it will throw error if file doesn't exist
       const stream = file.createReadStream();
+
+      // Handle stream errors
+      stream.on('error', streamError => {
+        this.logger.error(`Stream error for ${bucketKey}: ${streamError.message}`);
+      });
 
       return {
         stream,
         contentType,
       };
     } catch (error) {
-      if (error instanceof BadRequestException) {
-        throw error;
+      this.logger.error(`Error getting image ${bucketKey}: ${error.message}`, error);
+      if (error.code === 404 || error.message?.includes('No such object')) {
+        throw new BadRequestException(`Image with key ${bucketKey} not found`);
       }
-      this.logger.error(`Error getting image: ${error.message}`, error);
       throw new BadRequestException(`Failed to retrieve image: ${error.message}`);
     }
   }
 
   async getCsv(bucketKey: string): Promise<{ stream: NodeJS.ReadableStream; contentType: string }> {
-    const bucket = this.getStorage().bucket(this.bucketName);
-    const fileName = this.getFullPath(bucketKey);
-
-    if (!fileName || typeof fileName !== 'string') {
+    if (!bucketKey || typeof bucketKey !== 'string') {
       throw new BadRequestException(`Invalid file key: ${bucketKey}`);
+    }
+
+    const fileName = this.getFullPath(bucketKey);
+    if (!fileName || typeof fileName !== 'string') {
+      throw new BadRequestException(`Invalid file path for key: ${bucketKey}`);
     }
 
     // Try to get contentType from database first
@@ -172,25 +186,36 @@ export class GoogleCloudStorageService {
       this.logger.warn(`Could not get file type from database for ${bucketKey}: ${dbError.message}`);
     }
 
-    const file = bucket.file(fileName);
-
     try {
-      const [exists] = await file.exists();
-      if (!exists) {
-        throw new BadRequestException(`CSV with key ${bucketKey} not found`);
+      const bucket = this.getStorage().bucket(this.bucketName);
+
+      if (!bucket) {
+        throw new Error('Bucket is not initialized');
       }
 
+      const file = bucket.file(fileName);
+
+      if (!file) {
+        throw new Error('File object is not created');
+      }
+
+      // Try to create read stream directly - it will throw error if file doesn't exist
       const stream = file.createReadStream();
+
+      // Handle stream errors
+      stream.on('error', streamError => {
+        this.logger.error(`Stream error for CSV ${bucketKey}: ${streamError.message}`);
+      });
 
       return {
         stream,
         contentType,
       };
     } catch (error) {
-      if (error instanceof BadRequestException) {
-        throw error;
+      this.logger.error(`Error getting CSV ${bucketKey}: ${error.message}`, error);
+      if (error.code === 404 || error.message?.includes('No such object')) {
+        throw new BadRequestException(`CSV with key ${bucketKey} not found`);
       }
-      this.logger.error(`Error getting CSV: ${error.message}`, error);
       throw new BadRequestException(`Failed to retrieve CSV: ${error.message}`);
     }
   }
