@@ -107,47 +107,91 @@ export class GoogleCloudStorageService {
   async getImage(bucketKey: string): Promise<{ stream: NodeJS.ReadableStream; contentType: string }> {
     const bucket = this.getStorage().bucket(this.bucketName);
     const fileName = this.getFullPath(bucketKey);
+
+    if (!fileName || typeof fileName !== 'string') {
+      throw new BadRequestException(`Invalid file key: ${bucketKey}`);
+    }
+
     const file = bucket.file(fileName);
 
     this.logger.log(`Attempting to get image. Bucket: ${this.bucketName}, Full path: ${fileName}, Key: ${bucketKey}`);
 
-    const [exists] = await file.exists();
-    if (!exists) {
-      this.logger.warn(`Image not found. Bucket: ${this.bucketName}, Full path: ${fileName}, Key: ${bucketKey}`);
-      throw new BadRequestException(`Image with key ${bucketKey} not found`);
+    try {
+      const [exists] = await file.exists();
+      if (!exists) {
+        this.logger.warn(`Image not found. Bucket: ${this.bucketName}, Full path: ${fileName}, Key: ${bucketKey}`);
+        throw new BadRequestException(`Image with key ${bucketKey} not found`);
+      }
+
+      let contentType = 'application/octet-stream';
+      try {
+        const metadata = await file.getMetadata();
+        if (metadata && metadata[0] && metadata[0].contentType) {
+          contentType = metadata[0].contentType;
+        }
+        this.logger.log(`Image found. Content type: ${contentType}`);
+      } catch (metadataError) {
+        this.logger.warn(
+          `Could not get metadata for image ${bucketKey}, using default content type: ${metadataError.message}`
+        );
+      }
+
+      const stream = file.createReadStream();
+
+      return {
+        stream,
+        contentType,
+      };
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+      this.logger.error(`Error getting image: ${error.message}`, error);
+      throw new BadRequestException(`Failed to retrieve image: ${error.message}`);
     }
-
-    const [metadata] = await file.getMetadata();
-    const contentType = metadata.contentType || 'application/octet-stream';
-    this.logger.log(`Image found. Content type: ${contentType}`);
-
-    const stream = file.createReadStream();
-
-    return {
-      stream,
-      contentType,
-    };
   }
 
   async getCsv(bucketKey: string): Promise<{ stream: NodeJS.ReadableStream; contentType: string }> {
     const bucket = this.getStorage().bucket(this.bucketName);
     const fileName = this.getFullPath(bucketKey);
-    const file = bucket.file(fileName);
 
-    const [exists] = await file.exists();
-    if (!exists) {
-      throw new BadRequestException(`CSV with key ${bucketKey} not found`);
+    if (!fileName || typeof fileName !== 'string') {
+      throw new BadRequestException(`Invalid file key: ${bucketKey}`);
     }
 
-    const [metadata] = await file.getMetadata();
-    const contentType = metadata.contentType || 'text/csv';
+    const file = bucket.file(fileName);
 
-    const stream = file.createReadStream();
+    try {
+      const [exists] = await file.exists();
+      if (!exists) {
+        throw new BadRequestException(`CSV with key ${bucketKey} not found`);
+      }
 
-    return {
-      stream,
-      contentType,
-    };
+      let contentType = 'text/csv';
+      try {
+        const metadata = await file.getMetadata();
+        if (metadata && metadata[0] && metadata[0].contentType) {
+          contentType = metadata[0].contentType;
+        }
+      } catch (metadataError) {
+        this.logger.warn(
+          `Could not get metadata for CSV ${bucketKey}, using default content type: ${metadataError.message}`
+        );
+      }
+
+      const stream = file.createReadStream();
+
+      return {
+        stream,
+        contentType,
+      };
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+      this.logger.error(`Error getting CSV: ${error.message}`, error);
+      throw new BadRequestException(`Failed to retrieve CSV: ${error.message}`);
+    }
   }
 
   async parseCsvAddresses(buffer: Buffer): Promise<string[]> {
