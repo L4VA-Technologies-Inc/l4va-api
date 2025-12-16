@@ -11,7 +11,7 @@ import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
 import { Brackets, In, Not, Repository } from 'typeorm';
 
-import { AwsService } from '../aws_bucket/aws.service';
+import { GoogleCloudStorageService } from '../google_cloud/google_bucket/bucket.service';
 import { TaptoolsService } from '../taptools/taptools.service';
 
 import { CreateVaultReq } from './dto/createVault.req';
@@ -88,7 +88,7 @@ export class VaultsService {
     private readonly contributorWhitelistRepository: Repository<ContributorWhitelistEntity>,
     @InjectRepository(Asset)
     private readonly assetsRepository: Repository<Asset>,
-    private readonly awsService: AwsService,
+    private readonly gcsService: GoogleCloudStorageService,
     private readonly vaultContractService: VaultManagingService,
     private readonly blockchainService: BlockchainService,
     private readonly governanceService: GovernanceService,
@@ -97,15 +97,20 @@ export class VaultsService {
   ) {}
 
   /**
-   * Parses a CSV file from AWS S3 and extracts valid Cardano addresses.
-   * @param file_key - S3 file key
+   * Parses a CSV file from Google Cloud Storage and extracts valid Cardano addresses.
+   * @param file_key - GCS file key
    * @returns Array of valid Cardano addresses
    */
   private async parseCSVFromS3(file_key: string): Promise<string[]> {
     try {
-      const csvStream = await this.awsService.getCsv(file_key);
-      const csvData = await csvStream.data.toArray();
-      const csvString = Buffer.concat(csvData).toString();
+      const { stream } = await this.gcsService.getCsv(file_key);
+
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream) {
+        const bufferChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        chunks.push(bufferChunk);
+      }
+      const csvString = Buffer.concat(chunks).toString();
 
       return new Promise((resolve, reject) => {
         const results: string[] = [];
@@ -125,8 +130,8 @@ export class VaultsService {
           .on('error', error => reject(error));
       });
     } catch (error) {
-      console.error('Error parsing CSV from S3:', error);
-      throw new BadRequestException('Failed to parse CSV file from S3');
+      console.error('Error parsing CSV from Google Cloud Storage:', error);
+      throw new BadRequestException('Failed to parse CSV file');
     }
   }
 
@@ -207,16 +212,14 @@ export class VaultsService {
       const imgKey = data.vaultImage?.split('image/')[1];
       let vaultImg = null;
       if (imgKey) {
-        // Create a new file record that points to the same S3 object
-        vaultImg = await this.awsService.createFileRecordForVault(imgKey);
+        vaultImg = await this.gcsService.createFileRecordForVault(imgKey);
         this.logger.log(`Created new file record for vault image: ${imgKey}`);
       }
 
-      // Same for FT token image
       const ftTokenImgKey = data.ftTokenImg?.split('image/')[1];
       let ftTokenImg = null;
       if (ftTokenImgKey) {
-        ftTokenImg = await this.awsService.createFileRecordForVault(ftTokenImgKey);
+        ftTokenImg = await this.gcsService.createFileRecordForVault(ftTokenImgKey);
         this.logger.log(`Created new file record for FT token image: ${ftTokenImgKey}`);
       }
 
@@ -224,7 +227,7 @@ export class VaultsService {
       const acquirerWhitelistCsvKey = data.acquirerWhitelistCsv?.key;
       let acquirerWhitelistFile = null;
       if (acquirerWhitelistCsvKey) {
-        acquirerWhitelistFile = await this.awsService.createFileRecordForVault(acquirerWhitelistCsvKey);
+        acquirerWhitelistFile = await this.gcsService.createFileRecordForVault(acquirerWhitelistCsvKey);
         this.logger.log(`Created new file record for acquirer whitelist: ${acquirerWhitelistCsvKey}`);
       }
 

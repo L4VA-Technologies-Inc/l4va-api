@@ -20,22 +20,22 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags } from '@nestjs/swagger';
 import { Express, Response, Request } from 'express';
 
-import { AuthGuard } from '../auth/auth.guard';
+import { AuthGuard } from '../../auth/auth.guard';
 
-import { AwsService } from './aws.service';
+import { GoogleCloudStorageService } from './bucket.service';
+import { UploadImageDto } from './dto/bucket.dto';
 
 import { FileEntity } from '@/database/file.entity';
 import { ApiDoc } from '@/decorators/api-doc.decorator';
-import { AwsUploadImageDto } from '@/modules/aws_bucket/dto/aws.dto';
 
 export const mbMultiplication = 1024 * 1024;
 
 @ApiTags('files')
 @Controller('')
 @UseInterceptors(ClassSerializerInterceptor)
-export class AwsController {
-  private readonly logger = new Logger(AwsController.name);
-  constructor(private readonly awsService: AwsService) {}
+export class GoogleCloudStorageController {
+  private readonly logger = new Logger(GoogleCloudStorageController.name);
+  constructor(private readonly gcsService: GoogleCloudStorageService) {}
 
   @ApiDoc({
     summary: 'Upload image files',
@@ -53,13 +53,13 @@ export class AwsController {
     )
     file: Express.Multer.File,
     @Req() req: Request,
-    @Body() body: AwsUploadImageDto
+    @Body() body: UploadImageDto
   ): Promise<FileEntity> {
     if (!file.mimetype?.startsWith('image/')) {
       throw new BadRequestException('Only image files are allowed');
     }
     const { host } = req.headers;
-    return await this.awsService.uploadImage(file, host, body);
+    return await this.gcsService.uploadImage(file, host, body);
   }
 
   @ApiDoc({
@@ -69,10 +69,25 @@ export class AwsController {
   })
   @Get('/image/:id')
   async getImageFile(@Param('id', ParseUUIDPipe) id: string, @Res() res: Response): Promise<void> {
-    const response = await this.awsService.getImage(id);
-    res.setHeader('Content-Type', response.headers['content-type']);
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-    response.data.pipe(res);
+    try {
+      const { stream, contentType } = await this.gcsService.getImage(id);
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+
+      stream.on('error', error => {
+        this.logger.error(`Error streaming image ${id}:`, error);
+        if (!res.headersSent) {
+          res.status(500).json({ message: 'Error streaming image' });
+        }
+      });
+
+      stream.pipe(res);
+    } catch (error) {
+      this.logger.error(`Error getting image ${id}:`, error);
+      if (!res.headersSent) {
+        res.status(404).json({ message: error.message || 'Image not found' });
+      }
+    }
   }
 
   @ApiDoc({
@@ -82,10 +97,10 @@ export class AwsController {
   })
   @Get('/csv/:id')
   async getCsvFile(@Param('id', ParseUUIDPipe) id: string, @Res() res: Response): Promise<void> {
-    const response = await this.awsService.getCsv(id);
-    res.setHeader('Content-Type', response.headers['content-type']);
+    const { stream, contentType } = await this.gcsService.getCsv(id);
+    res.setHeader('Content-Type', contentType);
     res.setHeader('Cache-Control', 'public, max-age=3600');
-    response.data.pipe(res);
+    stream.pipe(res);
   }
 
   @ApiDoc({
@@ -105,6 +120,6 @@ export class AwsController {
     file: Express.Multer.File
   ): Promise<{ addresses: string[]; total: number }> {
     this.logger.log('csv file received', { fileName: file.originalname, size: file.size });
-    return await this.awsService.processWhitelistCsv(file);
+    return await this.gcsService.processWhitelistCsv(file);
   }
 }

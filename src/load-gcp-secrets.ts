@@ -11,10 +11,6 @@ export async function loadSecrets(): Promise<void> {
   const envFilePath = path.join(process.cwd(), '.env');
   const envExists = fs.existsSync(envFilePath);
 
-  console.log('NODE_ENV =', nodeEnv);
-  console.log('Credentials path before resolving:', process.env.GOOGLE_APPLICATION_CREDENTIALS);
-  console.log('.env file exists:', envExists);
-
   if (envExists) {
     const envContent = fs.readFileSync(envFilePath, 'utf8');
     const parsed = dotenv.parse(envContent);
@@ -39,9 +35,6 @@ export async function loadSecrets(): Promise<void> {
     }
   }
 
-  console.log('Resolved credentials path:', credentialsPath);
-  console.log('Credentials file exists:', fs.existsSync(credentialsPath));
-
   if (!fs.existsSync(credentialsPath)) {
     console.warn('Credentials file not found, skipping secrets load.');
     return;
@@ -60,8 +53,6 @@ export async function loadSecrets(): Promise<void> {
     }
   }
 
-  console.log('GCP_PROJECT_ID =', process.env.GCP_PROJECT_ID);
-
   if (!process.env.GCP_PROJECT_ID) {
     console.warn('GCP_PROJECT_ID not set, skipping secrets load.');
     return;
@@ -76,12 +67,9 @@ export async function loadSecrets(): Promise<void> {
     const client = new SecretManagerServiceClient();
     const secretPath = `projects/${projectId}/secrets/${secretName}/versions/latest`;
 
-    console.log('Accessing secret at:', secretPath);
-
     const [version] = await client.accessSecretVersion({ name: secretPath });
 
     const secrets = version.payload?.data?.toString() || '';
-    console.log('Secrets retrieved from GCP Secret Manager:', secrets ? '[REDACTED]' : '[EMPTY]');
 
     const parsed = dotenv.parse(secrets);
 
@@ -94,8 +82,6 @@ export async function loadSecrets(): Promise<void> {
       .map(([key, value]) => `${key}=${value}`)
       .join('\n');
     fs.writeFileSync(envFilePath, envContent, 'utf8');
-
-    console.log('Successfully merged GCP secrets into .env file');
   } catch (e) {
     console.error('Failed to load GCP secrets:', e.stack || e.message || e);
     console.warn('Falling back to .env file only');
