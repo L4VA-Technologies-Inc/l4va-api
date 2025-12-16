@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import * as process from 'process';
 
@@ -41,9 +42,33 @@ export class GoogleCloudStorageService {
     this.bucketName = bucket;
     this.bucketPrefix = prefixParts.length > 0 ? prefixParts.join('/') : '';
 
-    this.storage = new Storage({
-      keyFilename: path.resolve(process.cwd(), credentialsPath),
-    });
+    // Initialize Storage with credentials
+    const resolvedCredentialsPath = path.resolve(process.cwd(), credentialsPath);
+
+    // Check if file exists, if not try to use GOOGLE_APPLICATION_CREDENTIALS
+    if (!fs.existsSync(resolvedCredentialsPath)) {
+      this.logger.warn(
+        `Credentials file not found at ${resolvedCredentialsPath}, trying GOOGLE_APPLICATION_CREDENTIALS`
+      );
+      this.storage = new Storage();
+    } else {
+      try {
+        // Try to read credentials and pass as object
+        const credentialsContent = fs.readFileSync(resolvedCredentialsPath, 'utf8');
+        const credentials = JSON.parse(credentialsContent);
+        this.storage = new Storage({
+          credentials: credentials,
+          projectId: credentials.project_id,
+        });
+        this.logger.log('Storage initialized with credentials object');
+      } catch (error) {
+        // Fallback to keyFilename if parsing fails
+        this.logger.warn(`Failed to parse credentials, using keyFilename: ${error.message}`);
+        this.storage = new Storage({
+          keyFilename: resolvedCredentialsPath,
+        });
+      }
+    }
 
     this.logger.log(
       `Initialized Google Cloud Storage with bucket: ${this.bucketName}, prefix: ${this.bucketPrefix || 'none'}`
