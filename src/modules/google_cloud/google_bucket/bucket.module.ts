@@ -4,8 +4,8 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { AwsController } from './aws.controller';
-import { AwsService } from './aws.service';
+import { GoogleCloudStorageController } from './bucket.controller';
+import { GoogleCloudStorageService } from './bucket.service';
 
 import { FileEntity } from '@/database/file.entity';
 
@@ -23,8 +23,8 @@ import { FileEntity } from '@/database/file.entity';
       inject: [ConfigService],
     }),
   ],
-  controllers: [AwsController],
-  providers: [AwsService],
-  exports: [AwsService],
+  controllers: [GoogleCloudStorageController],
+  providers: [GoogleCloudStorageService],
+  exports: [GoogleCloudStorageService],
 })
-export class AwsModule {}
+export class GoogleCloudStorageModule {}

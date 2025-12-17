@@ -5,11 +5,14 @@ export enum ImageType {
   TICKER = 'ticker',
 }
 
-export class AwsUploadImageDto {
+export class UploadImageDto {
   @IsOptional()
   @IsEnum(ImageType)
   imageType?: ImageType;
 }
+
+// Keep alias for backward compatibility
+export const AwsUploadImageDto = UploadImageDto;
 
 interface ImageResizeParams {
   width: number;

@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { AwsModule } from '../aws_bucket/aws.module';
+import { GoogleCloudStorageModule } from '../google_cloud/google_bucket/bucket.module';
 
 import { DraftVaultsService } from './draft-vaults.service';
 import { VaultsController } from './vaults.controller';
@@ -23,7 +23,7 @@ import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockch
 
 @Module({
   imports: [
-    AwsModule,
+    GoogleCloudStorageModule,
     LifecycleModule,
     TransactionsModule,
     BlockchainModule,
