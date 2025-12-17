@@ -9,7 +9,6 @@ import {
   ValidateNested,
   IsArray,
   IsNumber,
-  IsBoolean,
 } from 'class-validator';
 
 import { MarketplaceAction, ProposalType } from '@/types/proposal.types';
@@ -232,6 +231,8 @@ export class CreateProposalReq {
 export enum ExecType {
   BUY = 'BUY',
   SELL = 'SELL',
+  UNLIST = 'UNLIST',
+  UPDATE_LISTING = 'UPDATE_LISTING',
 }
 
 export enum SellType {
@@ -243,7 +244,7 @@ export enum MethodType {
   NA = 'N/A',
   GTC = 'GTC',
 }
-export class BuyingSellOptionDto {
+export class MarketplaceActionDto {
   @ApiProperty({ description: 'Asset ID in the system' })
   @IsString()
   assetId: string;
@@ -252,51 +253,90 @@ export class BuyingSellOptionDto {
   @IsString()
   assetName: string;
 
-  @ApiProperty({ description: 'Buy or sell', enum: ExecType })
+  @ApiProperty({
+    description: 'Action type: BUY, SELL, UNLIST, or UPDATE_LISTING',
+    enum: ExecType,
+  })
   @IsEnum(ExecType)
   exec: ExecType;
 
-  @ApiProperty({ description: 'Quantity to buy/sell' })
+  // ===== SELL fields =====
+  @ApiProperty({
+    description: 'Quantity to buy/sell',
+    required: false,
+  })
+  @IsOptional()
   @IsString()
-  quantity: string;
+  quantity?: string;
 
-  @ApiProperty({ description: 'Market or List sale type', enum: SellType })
+  @ApiProperty({
+    description: 'Market or List sale type',
+    enum: SellType,
+    required: false,
+  })
+  @IsOptional()
   @IsEnum(SellType)
-  sellType: SellType;
+  sellType?: SellType;
 
-  @ApiProperty({ description: 'Duration in milliseconds' })
+  @ApiProperty({
+    description: 'Duration in milliseconds',
+    required: false,
+  })
+  @IsOptional()
   @IsNumber()
-  duration: number;
+  duration?: number;
 
-  @ApiProperty({ description: 'Is maximum quantity flag' })
-  @IsBoolean()
-  isMax: boolean;
-
-  @ApiProperty({ description: 'Method (N/A or GTC)', enum: MethodType })
+  @ApiProperty({
+    description: 'Method (N/A or GTC)',
+    enum: MethodType,
+    required: false,
+  })
+  @IsOptional()
   @IsEnum(MethodType)
-  method: MethodType;
+  method?: MethodType;
 
-  @ApiProperty({ description: 'Market platform' })
+  @ApiProperty({
+    description: 'Price in ADA (for SELL)',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  price?: string;
+
+  // ===== UNLIST / UPDATE_LISTING / BUY fields =====
+  @ApiProperty({
+    description:
+      'Transaction hash and output index (format: txHash#index) - Required for UNLIST, UPDATE_LISTING, and BUY',
+    example: 'abc123def456...#0',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  txHashIndex?: string;
+
+  // ===== UPDATE_LISTING field =====
+  @ApiProperty({
+    description: 'New price in ADA (for UPDATE_LISTING)',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  newPrice?: string;
+
+  // ===== BUY field =====
+  @ApiProperty({
+    description: 'Maximum price willing to pay in ADA (for BUY)',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  maxPrice?: string;
+
+  // ===== Common fields =====
+  @ApiProperty({
+    description: 'Market platform',
+    default: 'WayUp',
+  })
   @IsString()
   market: string;
-
-  @ApiProperty({ description: 'Price in ADA' })
-  @IsString()
-  price: string;
-}
-
-export class BuyingSellMetadataDto {
-  @ApiProperty({ description: 'List of buying/selling options' })
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => BuyingSellOptionDto)
-  buyingSellingOptions: BuyingSellOptionDto[];
-
-  @ApiProperty({ description: 'Proposal start delay in milliseconds' })
-  @IsNumber()
-  proposalStart: number;
-
-  @ApiProperty({ description: 'Allow abstain voting' })
-  @IsBoolean()
-  abstain: boolean;
 }

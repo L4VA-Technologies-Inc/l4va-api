@@ -10,7 +10,7 @@ export class ConsolidateProposalMetadataAndAddMarketplaceAction1765966368473 imp
     // Add metadata column first
     await queryRunner.query(`ALTER TABLE "proposal" ADD "metadata" jsonb`);
 
-    // Migrate existing data to metadata column
+    // Migrate existing data to metadata column, renaming buyingSellingOptions to marketplaceActions
     await queryRunner.query(`
       UPDATE "proposal" 
       SET "metadata" = jsonb_build_object(
@@ -18,7 +18,7 @@ export class ConsolidateProposalMetadataAndAddMarketplaceAction1765966368473 imp
         'nonFungibleTokens', COALESCE("non_fungible_tokens", '[]'::json),
         'distributionAssets', COALESCE("distribution_assets", '[]'::json),
         'burnAssets', COALESCE("burn_assets", '[]'::json),
-        'buyingSellingOptions', COALESCE("buying_selling_options", '[]'::json),
+        'marketplaceActions', COALESCE("buying_selling_options", '[]'::json)
       )
       WHERE "fungible_tokens" IS NOT NULL 
          OR "non_fungible_tokens" IS NOT NULL
@@ -44,7 +44,7 @@ export class ConsolidateProposalMetadataAndAddMarketplaceAction1765966368473 imp
       `ALTER TYPE "public"."proposal_proposal_type_enum" RENAME TO "proposal_proposal_type_enum_old"`
     );
     await queryRunner.query(
-      `CREATE TYPE "public"."proposal_proposal_type_enum" AS ENUM('staking', 'distribution', 'termination', 'burning', 'buy_sell', 'marketplace_action')`
+      `CREATE TYPE "public"."proposal_proposal_type_enum" AS ENUM('staking', 'distribution', 'termination', 'burning', 'buy_sell')`
     );
     await queryRunner.query(
       `ALTER TABLE "proposal" ALTER COLUMN "proposal_type" TYPE "public"."proposal_proposal_type_enum" USING "proposal_type"::"text"::"public"."proposal_proposal_type_enum"`
@@ -84,7 +84,7 @@ export class ConsolidateProposalMetadataAndAddMarketplaceAction1765966368473 imp
     await queryRunner.query(`ALTER TABLE "proposal" ADD "non_fungible_tokens" json`);
     await queryRunner.query(`ALTER TABLE "proposal" ADD "fungible_tokens" json`);
 
-    // Migrate data back from metadata
+    // Migrate data back from metadata, renaming marketplaceActions back to buying_selling_options
     await queryRunner.query(`
       UPDATE "proposal"
       SET 
@@ -92,7 +92,7 @@ export class ConsolidateProposalMetadataAndAddMarketplaceAction1765966368473 imp
         "non_fungible_tokens" = ("metadata"->>'nonFungibleTokens')::json,
         "distribution_assets" = ("metadata"->>'distributionAssets')::json,
         "burn_assets" = ("metadata"->>'burnAssets')::json,
-        "buying_selling_options" = ("metadata"->>'buyingSellingOptions')::json,
+        "buying_selling_options" = ("metadata"->>'marketplaceActions')::json,
         "termination_reason" = "metadata"->>'terminationReason'
       WHERE "metadata" IS NOT NULL
     `);

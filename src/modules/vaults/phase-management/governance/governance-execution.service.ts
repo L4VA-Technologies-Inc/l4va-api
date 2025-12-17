@@ -511,17 +511,17 @@ export class GovernanceExecutionService {
    * Groups operations by market and action type to execute in batched transactions
    */
   private async executeBuySellProposal(proposal: Proposal): Promise<boolean> {
-    if (!proposal.metadata.buyingSellingOptions || proposal.metadata.buyingSellingOptions.length === 0) {
+    if (!proposal.metadata.marketplaceActions || proposal.metadata.marketplaceActions.length === 0) {
       this.logger.warn(`BUY_SELL proposal ${proposal.id} has no buying/selling options`);
       return false;
     }
 
     this.logger.log(
-      `Executing ${proposal.metadata.buyingSellingOptions.length} buy/sell operation(s) for proposal ${proposal.id}`
+      `Executing ${proposal.metadata.marketplaceActions.length} buy/sell operation(s) for proposal ${proposal.id}`
     );
 
     // Collect all unique asset IDs to fetch from database
-    const assetIds = [...new Set(proposal.metadata.buyingSellingOptions.map(opt => opt.assetId))];
+    const assetIds = [...new Set(proposal.metadata.marketplaceActions.map(opt => opt.assetId))];
 
     // Fetch all assets from database in one query
     const assets = await this.assetRepository.find({
@@ -533,7 +533,7 @@ export class GovernanceExecutionService {
     const assetMap = new Map(assets.map(asset => [asset.id, asset]));
 
     // Group operations by market and action type for batching
-    const groupedOperations = this.groupBuySellOperations(proposal.metadata.buyingSellingOptions);
+    const groupedOperations = this.groupBuySellOperations(proposal.metadata.marketplaceActions);
 
     let hasSuccessfulOperation = false;
 

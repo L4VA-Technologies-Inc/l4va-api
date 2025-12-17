@@ -328,10 +328,10 @@ export class GovernanceService {
 
       case ProposalType.BUY_SELL:
         if (createProposalReq.metadata) {
-          proposal.metadata.buyingSellingOptions = createProposalReq.metadata.buyingSellingOptions || [];
+          proposal.metadata.marketplaceActions = createProposalReq.metadata.buyingSellingOptions || [];
           proposal.abstain = createProposalReq.metadata.abstain || false;
 
-          for (const option of proposal.metadata.buyingSellingOptions) {
+          for (const option of proposal.metadata.marketplaceActions) {
             const asset = await this.assetRepository.findOne({
               where: { id: option.assetId },
             });

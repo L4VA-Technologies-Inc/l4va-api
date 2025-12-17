@@ -2,10 +2,9 @@ import { Expose } from 'class-transformer';
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, CreateDateColumn, JoinColumn } from 'typeorm';
 
 import {
-  BuyingSellOptionDto,
+  MarketplaceActionDto,
   DistributionAssetDto,
   FungibleTokenDto,
-  MarketplaceAssetDto,
   NonFungibleTokenDto,
 } from '../modules/vaults/phase-management/governance/dto/create-proposal.req';
 import { ProposalStatus, ProposalType } from '../types/proposal.types';
@@ -77,15 +76,13 @@ export class Proposal {
     nonFungibleTokens?: NonFungibleTokenDto[];
 
     // Buy/Sell data
-    buyingSellingOptions?: BuyingSellOptionDto[];
+    marketplaceActions?: MarketplaceActionDto[];
 
     // Distribution data
     distributionAssets?: DistributionAssetDto[];
 
     // Burning data
     burnAssets?: string[];
-
-    marketplaceActions?: MarketplaceAssetDto[];
   };
 
   @Expose({ name: 'terminationDate' })

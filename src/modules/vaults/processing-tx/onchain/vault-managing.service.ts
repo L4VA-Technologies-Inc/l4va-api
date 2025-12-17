@@ -458,8 +458,10 @@ export class VaultManagingService {
 
     const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
       minAda: 4000000,
-      maxUtxos: 10,
+      maxUtxos: 2,
     });
+
+    const requiredInputs = [adminUtxos[0]];
 
     const allowedPolicies: string[] =
       Array.isArray(assetsWhitelist) && assetsWhitelist.length > 0
@@ -493,6 +495,7 @@ export class VaultManagingService {
           );
 
           adminUtxos.push(scriptUtxoHex);
+          requiredInputs.push(scriptUtxoHex);
         } else {
           this.logger.warn(`Script UTXO has zero or negative ADA amount: ${refScriptPayBackAmount}, skipping refund`);
         }
@@ -577,6 +580,7 @@ export class VaultManagingService {
           },
         },
       ],
+      requiredInputs,
       requiredSigners: [this.adminHash],
     };
 
