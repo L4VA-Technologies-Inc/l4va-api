@@ -5,6 +5,7 @@ import {
   BuyingSellOptionDto,
   DistributionAssetDto,
   FungibleTokenDto,
+  MarketplaceAssetDto,
   NonFungibleTokenDto,
 } from '../modules/vaults/phase-management/governance/dto/create-proposal.req';
 import { ProposalStatus, ProposalType } from '../types/proposal.types';
@@ -84,7 +85,7 @@ export class Proposal {
     // Burning data
     burnAssets?: string[];
 
-    marketplaceActions?: [];
+    marketplaceActions?: MarketplaceAssetDto[];
   };
 
   @Expose({ name: 'terminationDate' })

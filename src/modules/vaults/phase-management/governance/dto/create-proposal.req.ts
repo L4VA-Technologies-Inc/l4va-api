@@ -65,21 +65,61 @@ export class DistributionAssetDto {
 }
 
 export class MarketplaceAssetDto {
+  @ApiProperty({
+    description: 'Marketplace action type',
+    enum: MarketplaceAction,
+    example: MarketplaceAction.LIST,
+  })
+  @IsEnum(MarketplaceAction)
+  @IsNotEmpty()
   action: MarketplaceAction;
+
+  @ApiProperty({ description: 'Asset ID in the system' })
+  @IsString()
+  @IsNotEmpty()
   assetId: string;
+
+  @ApiProperty({ description: 'Asset name for display', required: false })
+  @IsOptional()
+  @IsString()
   assetName?: string;
 
   // For LIST and UPDATE_LISTING
+  @ApiProperty({ description: 'Price in ADA', required: false })
+  @IsOptional()
+  @IsString()
   price?: string;
+
+  @ApiProperty({ description: 'Duration in milliseconds', required: false })
+  @IsOptional()
+  @IsNumber()
   duration?: number;
+
+  @ApiProperty({ description: 'Marketplace platform', required: false })
+  @IsOptional()
+  @IsString()
   market?: string;
+
+  @ApiProperty({ description: 'Listing method (GTC or N/A)', required: false, enum: ['GTC', 'N/A'] })
+  @IsOptional()
+  @IsEnum(['GTC', 'N/A'])
   method?: 'GTC' | 'N/A';
 
   // For BUY
+  @ApiProperty({ description: 'Maximum price for buy action', required: false })
+  @IsOptional()
+  @IsString()
   maxPrice?: string;
+
+  @ApiProperty({ description: 'Quantity to buy/sell', required: false })
+  @IsOptional()
+  @IsString()
   quantity?: string;
 
   // For UNLIST
+  @ApiProperty({ description: 'Listing ID to unlist', required: false })
+  @IsOptional()
+  @IsString()
   listingId?: string;
 }
 

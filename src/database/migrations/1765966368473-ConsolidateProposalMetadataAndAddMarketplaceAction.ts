@@ -19,7 +19,6 @@ export class ConsolidateProposalMetadataAndAddMarketplaceAction1765966368473 imp
         'distributionAssets', COALESCE("distribution_assets", '[]'::json),
         'burnAssets', COALESCE("burn_assets", '[]'::json),
         'buyingSellingOptions', COALESCE("buying_selling_options", '[]'::json),
-        'terminationReason', COALESCE("termination_reason", '')
       )
       WHERE "fungible_tokens" IS NOT NULL 
          OR "non_fungible_tokens" IS NOT NULL
