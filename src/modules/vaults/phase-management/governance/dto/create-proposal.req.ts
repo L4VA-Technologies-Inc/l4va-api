@@ -12,7 +12,7 @@ import {
   IsBoolean,
 } from 'class-validator';
 
-import { ProposalType } from '@/types/proposal.types';
+import { MarketplaceAction, ProposalType } from '@/types/proposal.types';
 
 // Common FT asset class for staking
 export class FungibleTokenDto {
@@ -62,6 +62,25 @@ export class DistributionAssetDto {
   @IsOptional()
   @IsString()
   type?: string;
+}
+
+export class MarketplaceAssetDto {
+  action: MarketplaceAction;
+  assetId: string;
+  assetName?: string;
+
+  // For LIST and UPDATE_LISTING
+  price?: string;
+  duration?: number;
+  market?: string;
+  method?: 'GTC' | 'N/A';
+
+  // For BUY
+  maxPrice?: string;
+  quantity?: string;
+
+  // For UNLIST
+  listingId?: string;
 }
 
 export class CreateProposalReq {
@@ -184,7 +203,6 @@ export enum MethodType {
   NA = 'N/A',
   GTC = 'GTC',
 }
-
 export class BuyingSellOptionDto {
   @ApiProperty({ description: 'Asset ID in the system' })
   @IsString()

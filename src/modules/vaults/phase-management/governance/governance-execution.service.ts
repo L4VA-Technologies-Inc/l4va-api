@@ -295,9 +295,7 @@ export class GovernanceExecutionService {
           vaultId: true,
           status: true,
           proposalType: true,
-          buyingSellingOptions: true,
-          fungibleTokens: true,
-          distributionAssets: true,
+          metadata: true,
           vault: {
             id: true,
             execution_threshold: true,
@@ -513,17 +511,17 @@ export class GovernanceExecutionService {
    * Groups operations by market and action type to execute in batched transactions
    */
   private async executeBuySellProposal(proposal: Proposal): Promise<boolean> {
-    if (!proposal.buyingSellingOptions || proposal.buyingSellingOptions.length === 0) {
+    if (!proposal.metadata.buyingSellingOptions || proposal.metadata.buyingSellingOptions.length === 0) {
       this.logger.warn(`BUY_SELL proposal ${proposal.id} has no buying/selling options`);
       return false;
     }
 
     this.logger.log(
-      `Executing ${proposal.buyingSellingOptions.length} buy/sell operation(s) for proposal ${proposal.id}`
+      `Executing ${proposal.metadata.buyingSellingOptions.length} buy/sell operation(s) for proposal ${proposal.id}`
     );
 
     // Collect all unique asset IDs to fetch from database
-    const assetIds = [...new Set(proposal.buyingSellingOptions.map(opt => opt.assetId))];
+    const assetIds = [...new Set(proposal.metadata.buyingSellingOptions.map(opt => opt.assetId))];
 
     // Fetch all assets from database in one query
     const assets = await this.assetRepository.find({
@@ -535,7 +533,7 @@ export class GovernanceExecutionService {
     const assetMap = new Map(assets.map(asset => [asset.id, asset]));
 
     // Group operations by market and action type for batching
-    const groupedOperations = this.groupBuySellOperations(proposal.buyingSellingOptions);
+    const groupedOperations = this.groupBuySellOperations(proposal.metadata.buyingSellingOptions);
 
     let hasSuccessfulOperation = false;
 
@@ -706,7 +704,7 @@ export class GovernanceExecutionService {
 
     this.logger.log(`[MAINNET] Executing staking proposal ${proposal.id}`);
 
-    if (!proposal.fungibleTokens || proposal.fungibleTokens.length === 0) {
+    if (!proposal.metadata.fungibleTokens || proposal.metadata.fungibleTokens.length === 0) {
       this.logger.warn(`Staking proposal ${proposal.id} has no fungible tokens to stake`);
       return false;
     }
@@ -718,9 +716,9 @@ export class GovernanceExecutionService {
       // 2. Building staking transaction
       // 3. Signing and submitting to blockchain
 
-      this.logger.log(`Staking ${proposal.fungibleTokens.length} token(s) for vault ${proposal.vaultId}`);
+      this.logger.log(`Staking ${proposal.metadata.fungibleTokens.length} token(s) for vault ${proposal.vaultId}`);
 
-      for (const token of proposal.fungibleTokens) {
+      for (const token of proposal.metadata.fungibleTokens) {
         this.logger.log(`Staking ${token.amount} of token ${token.id}`);
         // Actual staking implementation here
       }
@@ -729,7 +727,7 @@ export class GovernanceExecutionService {
       this.eventEmitter.emit('proposal.staking.executed', {
         proposalId: proposal.id,
         vaultId: proposal.vaultId,
-        tokens: proposal.fungibleTokens,
+        tokens: proposal.metadata.fungibleTokens,
         network: 'mainnet',
       });
 
@@ -754,7 +752,7 @@ export class GovernanceExecutionService {
 
     this.logger.log(`[MAINNET] Executing distribution proposal ${proposal.id}`);
 
-    if (!proposal.distributionAssets || proposal.distributionAssets.length === 0) {
+    if (!proposal.metadata.distributionAssets || proposal.metadata.distributionAssets.length === 0) {
       this.logger.warn(`Distribution proposal ${proposal.id} has no assets to distribute`);
       return false;
     }
@@ -767,9 +765,11 @@ export class GovernanceExecutionService {
       // 3. Building distribution transactions
       // 4. Signing and submitting to blockchain
 
-      this.logger.log(`Distributing ${proposal.distributionAssets.length} asset(s) for vault ${proposal.vaultId}`);
+      this.logger.log(
+        `Distributing ${proposal.metadata.distributionAssets.length} asset(s) for vault ${proposal.vaultId}`
+      );
 
-      for (const asset of proposal.distributionAssets) {
+      for (const asset of proposal.metadata.distributionAssets) {
         this.logger.log(`Distributing ${asset.amount} of asset ${asset.id}`);
         // Actual distribution implementation here
       }
@@ -778,7 +778,7 @@ export class GovernanceExecutionService {
       this.eventEmitter.emit('proposal.distribution.executed', {
         proposalId: proposal.id,
         vaultId: proposal.vaultId,
-        assets: proposal.distributionAssets,
+        assets: proposal.metadata.distributionAssets,
         network: 'mainnet',
       });
 

@@ -304,17 +304,16 @@ export class GovernanceService {
     // Set type-specific fields based on proposal type
     switch (createProposalReq.type) {
       case ProposalType.STAKING:
-        proposal.fungibleTokens = createProposalReq.fts || [];
-        proposal.nonFungibleTokens = createProposalReq.nfts || [];
+        proposal.metadata.fungibleTokens = createProposalReq.fts || [];
+        proposal.metadata.nonFungibleTokens = createProposalReq.nfts || [];
         break;
 
       case ProposalType.DISTRIBUTION:
-        proposal.distributionAssets = createProposalReq.distributionAssets || [];
+        proposal.metadata.distributionAssets = createProposalReq.distributionAssets || [];
         break;
 
       case ProposalType.TERMINATION:
         if (createProposalReq.metadata) {
-          proposal.terminationReason = createProposalReq.metadata.reason;
           proposal.terminationDate = createProposalReq.metadata.terminationDate
             ? new Date(createProposalReq.metadata.terminationDate)
             : undefined;
@@ -323,16 +322,16 @@ export class GovernanceService {
 
       case ProposalType.BURNING:
         if (createProposalReq.metadata) {
-          proposal.burnAssets = createProposalReq.metadata.burnAssets || [];
+          proposal.metadata.burnAssets = createProposalReq.metadata.burnAssets || [];
         }
         break;
 
       case ProposalType.BUY_SELL:
         if (createProposalReq.metadata) {
-          proposal.buyingSellingOptions = createProposalReq.metadata.buyingSellingOptions || [];
+          proposal.metadata.buyingSellingOptions = createProposalReq.metadata.buyingSellingOptions || [];
           proposal.abstain = createProposalReq.metadata.abstain || false;
 
-          for (const option of proposal.buyingSellingOptions) {
+          for (const option of proposal.metadata.buyingSellingOptions) {
             const asset = await this.assetRepository.findOne({
               where: { id: option.assetId },
             });
@@ -465,6 +464,8 @@ export class GovernanceService {
       id: string;
       address: string;
     };
+    burnAssets?: { name: string }[];
+    distributionAssets?: { name: string }[];
   }> {
     const proposal = await this.proposalRepository.findOne({
       where: { id: proposalId },
@@ -523,9 +524,9 @@ export class GovernanceService {
     }
 
     let burnAssetsWithNames = [];
-    if (proposal.burnAssets && proposal.burnAssets.length > 0) {
+    if (proposal.metadata.burnAssets && proposal.metadata.burnAssets.length > 0) {
       const burnAssets = await this.assetRepository.find({
-        where: { id: In(proposal.burnAssets) },
+        where: { id: In(proposal.metadata.burnAssets) },
         select: ['metadata'],
       });
       burnAssetsWithNames = burnAssets.map(asset => {
@@ -538,9 +539,9 @@ export class GovernanceService {
     }
 
     let distributionAssetsWithNames = [];
-    if (proposal.distributionAssets && proposal.distributionAssets.length > 0) {
+    if (proposal.metadata.distributionAssets && proposal.metadata.distributionAssets.length > 0) {
       const distributionAssets = await this.assetRepository.find({
-        where: { id: In(proposal.distributionAssets) },
+        where: { id: In(proposal.metadata.distributionAssets) },
         select: ['metadata'],
       });
       distributionAssetsWithNames = distributionAssets.map(asset => {
@@ -553,16 +554,14 @@ export class GovernanceService {
     }
 
     return {
-      proposal: {
-        ...proposal,
-        burnAssets: burnAssetsWithNames,
-        distributionAssets: distributionAssetsWithNames,
-      },
+      proposal,
       votes,
       totals,
       canVote,
       selectedVote,
       proposer,
+      burnAssets: burnAssetsWithNames,
+      distributionAssets: distributionAssetsWithNames,
     };
   }
 

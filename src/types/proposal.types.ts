@@ -15,4 +15,12 @@ export enum ProposalType {
   TERMINATION = 'termination',
   BURNING = 'burning',
   BUY_SELL = 'buy_sell',
+  MARKETPLACE_ACTION = 'marketplace_action',
+}
+
+export enum MarketplaceAction {
+  LIST = 'list',
+  UPDATE_LISTING = 'update_listing',
+  UNLIST = 'unlist',
+  BUY = 'buy',
 }
