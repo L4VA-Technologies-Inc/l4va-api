@@ -60,3 +60,4 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 l4va-protocol-mainnet.json
 
 gcp-service-account.json
+gcp-bucket.json
