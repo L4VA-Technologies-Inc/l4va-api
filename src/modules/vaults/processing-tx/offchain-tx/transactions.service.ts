@@ -83,7 +83,7 @@ export class TransactionsService {
 
     if (transaction.type === TransactionType.acquire) {
       pendingAssets.forEach(assetItem => {
-        const assetToCreate = this.assetRepository.create({
+        assetsToCreate.push({
           transaction,
           vault: { id: transaction.vault_id } as Vault,
           type: AssetType.ADA, // Using ADA type for acquire
@@ -94,11 +94,10 @@ export class TransactionsService {
           origin_type: AssetOriginType.ACQUIRED,
           added_by: user,
         });
-        assetsToCreate.push(assetToCreate);
       });
     } else if (transaction.type === TransactionType.contribute) {
       pendingAssets.forEach(assetItem => {
-        const assetToCreate = this.assetRepository.create({
+        assetsToCreate.push({
           transaction,
           vault: { id: transaction.vault_id } as Vault,
           type: assetItem.type,
@@ -113,13 +112,11 @@ export class TransactionsService {
           name: assetItem.metadata?.onchainMetadata?.name ?? null,
           description: assetItem.metadata?.onchainMetadata?.description ?? null,
         });
-        assetsToCreate.push(assetToCreate);
       });
     }
 
     // Bulk insert all assets in a single transaction
     if (assetsToCreate.length > 0) {
-      console.log('Creating assets:', JSON.stringify(assetsToCreate));
       await this.assetRepository.save(assetsToCreate);
 
       // Clear metadata after successful asset creation
