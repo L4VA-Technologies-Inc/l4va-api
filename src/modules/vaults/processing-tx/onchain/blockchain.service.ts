@@ -5,6 +5,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 
+import { FeeTooSmallException } from './exceptions/fee-too-small.exception';
 import { UTxOInsufficientException } from './exceptions/utxo-insufficient.exception';
 import { MissingUtxoException } from './exceptions/utxo-missing.exception';
 import { ValidityIntervalException } from './exceptions/validity-interval.exception';
@@ -124,7 +125,8 @@ export class BlockchainService {
       if (
         error instanceof UTxOInsufficientException ||
         error instanceof MissingUtxoException ||
-        error instanceof VaultValidationException
+        error instanceof VaultValidationException ||
+        error instanceof FeeTooSmallException
       ) {
         throw error;
       }
@@ -177,6 +179,11 @@ export class BlockchainService {
             validityInfo.currentSlot,
             `Transaction validity window expired or not yet valid during submission. Please retry the transaction.`
           );
+        }
+
+        if (errorMessage.includes('FeeTooSmallUTxO')) {
+          this.logger.warn(`Fee too small error during submission`);
+          throw FeeTooSmallException.fromErrorMessage(errorMessage);
         }
 
         this.logger.error(`Transaction submission failed with validation error: ${errorMessage}`);
