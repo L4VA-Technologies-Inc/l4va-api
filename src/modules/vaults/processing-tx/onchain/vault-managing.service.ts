@@ -508,7 +508,7 @@ export class VaultManagingService {
 
     const input = {
       changeAddress: this.adminAddress,
-      message: `Vault ${vault.id} Update`,
+      message: `Vault ${vault.id} ${vaultStatus === SmartContractVaultStatus.SUCCESSFUL ? 'Locked' : vaultStatus === SmartContractVaultStatus.CANCELLED ? 'Failed' : 'Unknown'} Update`,
       utxos: adminUtxos,
       scriptInteractions: [
         {
@@ -548,16 +548,14 @@ export class VaultManagingService {
                 },
                 upper_bound: {
                   bound_type: new Date(
-                    vault.contribution_phase_start.getTime() + vault.contribution_duration
+                    vault.contribution_phase_start.getTime() + Number(vault.contribution_duration)
                   ).getTime(),
                   is_inclusive: true,
                 },
               },
               acquire_window: {
                 lower_bound: {
-                  bound_type: new Date(
-                    vault.contribution_phase_start.getTime() + vault.contribution_duration
-                  ).getTime(),
+                  bound_type: vault.acquire_phase_start ? vault.acquire_phase_start.getTime() : new Date().getTime(),
                   is_inclusive: true,
                 },
                 upper_bound: {

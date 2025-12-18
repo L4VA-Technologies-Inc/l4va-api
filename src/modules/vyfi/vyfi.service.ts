@@ -246,6 +246,12 @@ export class VyfiService {
     // Calculate required ADA
     const requiredLpAda = Number(claim.lovelace_amount || 0);
 
+    if (requiredLpAda < VYFI_CONSTANTS.MIN_POOL_ADA) {
+      throw new Error(
+        `Insufficient ADA for pool creation. Minimum required is ${VYFI_CONSTANTS.MIN_POOL_ADA} lovelace`
+      );
+    }
+
     // Generate metadata
     const metadataText = this.formatMetadataText(
       {
@@ -277,7 +283,7 @@ export class VyfiService {
               quantity: +claim.amount,
             },
           ],
-          lovelace: VYFI_CONSTANTS.TOTAL_REQUIRED_ADA + requiredLpAda,
+          lovelace: requiredLpAda,
         },
       ],
       metadata: {
@@ -521,6 +527,12 @@ export class VyfiService {
   //     throw new Error('No admin UTXOs found.');
   //   }
 
+  //   if (requiredLpAda < VYFI_CONSTANTS.MIN_POOL_ADA) {
+  //   throw new Error(
+  //     `Insufficient ADA for pool creation. Minimum required is ${VYFI_CONSTANTS.MIN_POOL_ADA} lovelace`
+  //   );
+  // }
+
   //   // Build combined transaction
   //   const input = {
   //     changeAddress: this.adminAddress,
@@ -562,7 +574,7 @@ export class VyfiService {
   //             quantity: +claim.amount,
   //           },
   //         ],
-  //         lovelace: VYFI_CONSTANTS.TOTAL_REQUIRED_ADA + requiredLpAda, // Use exact required amount
+  //         lovelace: requiredLpAda, // Use exact required amount
   //       },
   //       // If there's leftover ADA after LP creation, keep it in admin
   //       ...(totalDispatchAda > requiredLpAda
