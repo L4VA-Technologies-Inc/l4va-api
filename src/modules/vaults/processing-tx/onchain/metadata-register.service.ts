@@ -51,7 +51,6 @@ export type TokenMetaDatametadataInput = TokenMetadataDto;
 @Injectable()
 export class MetadataRegistryApiService {
   private readonly logger = new Logger(MetadataRegistryApiService.name);
-  private readonly apiBaseUrl: string;
   private readonly adminSKey: string;
   private readonly githubToken: string;
   private readonly repoOwner: string;
@@ -67,7 +66,6 @@ export class MetadataRegistryApiService {
   ) {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.githubToken = this.configService.get<string>('GITHUB_TOKEN');
-    this.apiBaseUrl = this.configService.get<string>('METADATA_API_URL');
     this.repoOwner = this.configService.get<string>('METADATA_REGISTRY_OWNER');
     this.repoName = this.configService.get<string>('METADATA_REGISTRY_REPO');
   }

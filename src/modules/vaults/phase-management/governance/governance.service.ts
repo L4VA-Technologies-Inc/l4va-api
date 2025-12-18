@@ -18,6 +18,7 @@ import { CreateProposalReq } from './dto/create-proposal.req';
 import { AssetBuySellDto } from './dto/get-assets.dto';
 import { GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';
+import { VoteCountingService } from './vote-counting.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
@@ -91,7 +92,8 @@ export class GovernanceService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly configService: ConfigService,
-    private readonly eventEmitter: EventEmitter2
+    private readonly eventEmitter: EventEmitter2,
+    private readonly voteCountingService: VoteCountingService
   ) {
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
 
@@ -402,12 +404,16 @@ export class GovernanceService {
         }
 
         try {
-          const { totals } = await this.getVotes(proposal.id);
-          const votes = this.calculateVotePercentages(totals, proposal.abstain);
+          const { votes: voteList, totals } = await this.getVotes(proposal.id);
+          const voteResult = this.voteCountingService.calculateResult(voteList, 0, BigInt(totals.totalVotingPower));
 
           return {
             ...baseProposal,
-            votes,
+            votes: {
+              yes: voteResult.yesVotePercent,
+              no: voteResult.noVotePercent,
+              abstain: proposal.abstain ? voteResult.abstainVotePercent : 0,
+            },
           };
         } catch (error) {
           this.logger.error(`Error fetching votes for proposal ${proposal.id}: ${error.message}`, error.stack);
@@ -417,27 +423,6 @@ export class GovernanceService {
     );
 
     return processedProposals;
-  }
-
-  private calculateVotePercentages(
-    totals: { yes: string; no: string; abstain: string; totalVotingPower: string },
-    allowAbstain: boolean
-  ): { yes: number; no: number; abstain: number } {
-    const totalVotingPower = BigInt(totals.totalVotingPower);
-
-    if (totalVotingPower === BigInt(0)) {
-      return { yes: 0, no: 0, abstain: 0 };
-    }
-
-    const yesPercentage = Number((BigInt(totals.yes) * BigInt(100)) / totalVotingPower);
-    const noPercentage = Number((BigInt(totals.no) * BigInt(100)) / totalVotingPower);
-    const abstainPercentage = allowAbstain ? Number((BigInt(totals.abstain) * BigInt(100)) / totalVotingPower) : 0;
-
-    return {
-      yes: yesPercentage,
-      no: noPercentage,
-      abstain: abstainPercentage,
-    };
   }
 
   async getProposal(
@@ -680,33 +665,27 @@ export class GovernanceService {
       throw new NotFoundException('Snapshot not found');
     }
 
-    const totalVotingPower = Object.values(snapshot.addressBalances)
-      .reduce((sum, balance) => BigInt(sum) + BigInt(balance), BigInt(0))
-      .toString();
+    const totalVotingPowerBigInt = Object.values(snapshot.addressBalances).reduce(
+      (sum, balance) => BigInt(sum) + BigInt(balance),
+      BigInt(0)
+    );
+    const totalVotingPower = totalVotingPowerBigInt.toString();
 
-    // Calculate vote totals
+    // Use vote counting service to calculate all vote totals and percentages
+    const voteResult = this.voteCountingService.calculateResult(votes, 0, totalVotingPowerBigInt);
+
     const totals = {
-      yes: '0',
-      no: '0',
-      abstain: '0',
-      totalVotingPower, // Include this in the returned totals
+      yes: voteResult.yesVotes.toString(),
+      no: voteResult.noVotes.toString(),
+      abstain: voteResult.abstainVotes.toString(),
+      totalVotingPower,
       votedPercentage: 0,
     };
 
-    votes.forEach(vote => {
-      if (vote.vote === VoteType.YES) {
-        totals.yes = (BigInt(totals.yes) + BigInt(vote.voteWeight)).toString();
-      } else if (vote.vote === VoteType.NO) {
-        totals.no = (BigInt(totals.no) + BigInt(vote.voteWeight)).toString();
-      } else if (vote.vote === VoteType.ABSTAIN) {
-        totals.abstain = (BigInt(totals.abstain) + BigInt(vote.voteWeight)).toString();
-      }
-    });
-
     // Calculate the percentage of total voting power that has voted
-    const votedVotingPower = BigInt(totals.yes) + BigInt(totals.no) + BigInt(totals.abstain);
-    if (BigInt(totalVotingPower) > 0) {
-      totals.votedPercentage = Number((votedVotingPower * BigInt(100)) / BigInt(totalVotingPower));
+    const votedVotingPower = voteResult.yesVotes + voteResult.noVotes + voteResult.abstainVotes;
+    if (totalVotingPowerBigInt > 0) {
+      totals.votedPercentage = Number((votedVotingPower * BigInt(100)) / totalVotingPowerBigInt);
     }
 
     return {
