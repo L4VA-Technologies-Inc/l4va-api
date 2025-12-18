@@ -458,7 +458,7 @@ export class VaultManagingService {
 
     const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
       minAda: 4000000,
-      maxUtxos: 5,
+      validateUtxos: false,
     });
 
     const requiredInputs = [];

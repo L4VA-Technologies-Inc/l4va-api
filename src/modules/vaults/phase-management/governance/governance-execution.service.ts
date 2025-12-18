@@ -10,6 +10,7 @@ import { ExecType } from './dto/create-proposal.req';
 
 import { Asset } from '@/database/asset.entity';
 import { Proposal } from '@/database/proposal.entity';
+import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { WayUpService } from '@/modules/wayup/wayup.service';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { VoteType } from '@/types/vote.types';
@@ -26,6 +27,7 @@ export class GovernanceExecutionService {
     private readonly assetRepository: Repository<Asset>,
     private readonly schedulerRegistry: SchedulerRegistry,
     private readonly eventEmitter: EventEmitter2,
+    private readonly assetsService: AssetsService,
     private readonly wayUpService: WayUpService,
     private readonly configService: ConfigService
   ) {
@@ -540,7 +542,8 @@ export class GovernanceExecutionService {
     // Process each market's operations
     for (const [market, operations] of Object.entries(groupedOperations)) {
       this.logger.log(
-        `Processing ${operations.sells.length} sell(s) and ${operations.buys.length} buy(s) for ${market}`
+        `Processing ${operations.sells.length} sell(s), ${operations.buys.length} buy(s), ` +
+          `${operations.unlists.length} unlist(s), and ${operations.updates.length} update(s) for ${market}`
       );
 
       // Execute all SELL operations for this market in a single transaction
@@ -576,6 +579,15 @@ export class GovernanceExecutionService {
 
             this.logger.log(`Successfully listed ${listings.length} NFT(s) on WayUp. TxHash: ${result.txHash}`);
             hasSuccessfulOperation = true;
+
+            // Update asset statuses to LISTED in database
+            try {
+              const listedAssetIds = operations.sells.map(op => op.assetId).filter(id => assetMap.has(id));
+              await this.assetsService.markAssetsAsListed(listedAssetIds);
+              this.logger.log(`Confirmed ${listedAssetIds.length} asset(s) marked as LISTED in database`);
+            } catch (statusError) {
+              this.logger.warn(`Failed to update asset statuses to LISTED: ${statusError.message}`);
+            }
 
             // Emit event for tracking
             this.eventEmitter.emit('proposal.wayup.listing.created', {
@@ -637,6 +649,7 @@ export class GovernanceExecutionService {
             const result = await this.wayUpService.buyNFT(proposal.vaultId, purchases);
 
             this.logger.log(`Successfully purchased ${purchases.length} NFT(s) on WayUp. TxHash: ${result.txHash}`);
+            this.logger.log(`Scanner will track incoming NFTs and create asset records with EXTRACTED status`);
             hasSuccessfulOperation = true;
 
             // Emit event for tracking
@@ -661,26 +674,164 @@ export class GovernanceExecutionService {
           this.logger.error(`Error executing batch buy operations on ${market}: ${error.message}`, error.stack);
         }
       }
+
+      // Execute all UNLIST operations for this market in a single transaction
+      if (operations.unlists.length > 0) {
+        try {
+          const unlistings = [];
+          const skippedUnlists = [];
+
+          for (const option of operations.unlists) {
+            const asset = assetMap.get(option.assetId);
+
+            if (!asset) {
+              this.logger.warn(`Asset not found for assetId: ${option.assetId}`);
+              skippedUnlists.push(option.assetName || option.assetId);
+              continue;
+            }
+
+            const txHashIndex = this.extractTxHashIndex(option);
+
+            if (!txHashIndex) {
+              this.logger.warn(`Cannot unlist NFT - missing txHashIndex for ${option.assetName || asset.name}`);
+              skippedUnlists.push(option.assetName || asset.name);
+              continue;
+            }
+
+            unlistings.push({
+              policyId: asset.policy_id,
+              txHashIndex,
+            });
+          }
+
+          if (unlistings.length > 0) {
+            this.logger.log(`Unlisting ${unlistings.length} NFT(s) from ${market} in a single transaction`);
+
+            const result = await this.wayUpService.unlistNFTs(proposal.vaultId, unlistings);
+
+            this.logger.log(`Successfully unlisted ${unlistings.length} NFT(s) on WayUp. TxHash: ${result.txHash}`);
+            this.logger.log(`Assets marked as EXTRACTED (returned to treasury wallet)`);
+            hasSuccessfulOperation = true;
+
+            // Update asset statuses to EXTRACTED in database
+            try {
+              const unlistedAssetIds = operations.unlists.map(op => op.assetId).filter(id => assetMap.has(id));
+              await this.assetsService.markAssetsAsUnlisted(unlistedAssetIds);
+              this.logger.log(`Confirmed ${unlistedAssetIds.length} asset(s) marked as EXTRACTED in database`);
+            } catch (statusError) {
+              this.logger.warn(`Failed to update asset statuses to EXTRACTED: ${statusError.message}`);
+            }
+
+            // Emit event for tracking
+            this.eventEmitter.emit('proposal.wayup.unlisting.completed', {
+              proposalId: proposal.id,
+              vaultId: proposal.vaultId,
+              txHash: result.txHash,
+              assetCount: unlistings.length,
+            });
+          }
+
+          if (skippedUnlists.length > 0) {
+            this.logger.warn(
+              `Skipped ${skippedUnlists.length} unlist operation(s) due to missing data: ${skippedUnlists.join(', ')}`
+            );
+          }
+        } catch (error) {
+          this.logger.error(`Error executing batch unlist operations on ${market}: ${error.message}`, error.stack);
+        }
+      }
+
+      // Execute all UPDATE_LISTING operations for this market in a single transaction
+      if (operations.updates.length > 0) {
+        try {
+          const updates = [];
+          const skippedUpdates = [];
+
+          for (const option of operations.updates) {
+            const asset = assetMap.get(option.assetId);
+
+            if (!asset) {
+              this.logger.warn(`Asset not found for assetId: ${option.assetId}`);
+              skippedUpdates.push(option.assetName || option.assetId);
+              continue;
+            }
+
+            const txHashIndex = this.extractTxHashIndex(option);
+
+            if (!txHashIndex) {
+              this.logger.warn(`Cannot update listing - missing txHashIndex for ${option.assetName || asset.name}`);
+              skippedUpdates.push(option.assetName || asset.name);
+              continue;
+            }
+
+            if (!option.price) {
+              this.logger.warn(`Cannot update listing - missing price for ${option.assetName || asset.name}`);
+              skippedUpdates.push(option.assetName || asset.name);
+              continue;
+            }
+
+            updates.push({
+              txHashIndex,
+              newPriceAda: parseFloat(option.price),
+            });
+          }
+
+          if (updates.length > 0) {
+            this.logger.log(`Updating ${updates.length} NFT listing(s) on ${market} in a single transaction`);
+
+            const result = await this.wayUpService.updateListing(proposal.vaultId, updates);
+
+            this.logger.log(`Successfully updated ${updates.length} NFT listing(s) on WayUp. TxHash: ${result.txHash}`);
+            this.logger.log(`Assets remain LISTED with updated prices`);
+            hasSuccessfulOperation = true;
+
+            // Emit event for tracking
+            this.eventEmitter.emit('proposal.wayup.listing.updated', {
+              proposalId: proposal.id,
+              vaultId: proposal.vaultId,
+              txHash: result.txHash,
+              assetCount: updates.length,
+            });
+          }
+
+          if (skippedUpdates.length > 0) {
+            this.logger.warn(
+              `Skipped ${skippedUpdates.length} update operation(s) due to missing data: ${skippedUpdates.join(', ')}`
+            );
+          }
+        } catch (error) {
+          this.logger.error(
+            `Error executing batch update listing operations on ${market}: ${error.message}`,
+            error.stack
+          );
+        }
+      }
     }
 
     return hasSuccessfulOperation;
   } /**
    * Group buy/sell operations by market and action type for batched execution
    */
-  private groupBuySellOperations(options: any[]): Record<string, { sells: any[]; buys: any[] }> {
-    const grouped: Record<string, { sells: any[]; buys: any[] }> = {};
+  private groupBuySellOperations(
+    options: any[]
+  ): Record<string, { sells: any[]; buys: any[]; unlists: any[]; updates: any[] }> {
+    const grouped: Record<string, { sells: any[]; buys: any[]; unlists: any[]; updates: any[] }> = {};
 
     for (const option of options) {
       const market = option.market || 'wayup'; // Default to wayup if not specified
 
       if (!grouped[market]) {
-        grouped[market] = { sells: [], buys: [] };
+        grouped[market] = { sells: [], buys: [], unlists: [], updates: [] };
       }
 
       if (option.exec === ExecType.SELL) {
         grouped[market].sells.push(option);
       } else if (option.exec === ExecType.BUY) {
         grouped[market].buys.push(option);
+      } else if (option.exec === ExecType.UNLIST) {
+        grouped[market].unlists.push(option);
+      } else if (option.exec === ExecType.UPDATE_LISTING) {
+        grouped[market].updates.push(option);
       }
     }
 

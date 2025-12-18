@@ -289,6 +289,45 @@ export class AssetsService {
     );
   }
 
+  async markAssetsAsListed(assetIds: string[]): Promise<void> {
+    if (assetIds.length === 0) return;
+
+    await this.assetsRepository.update(
+      {
+        id: In(assetIds),
+        status: AssetStatus.EXTRACTED, // Only extracted assets can be listed
+        deleted: false,
+      },
+      { status: AssetStatus.LISTED }
+    );
+  }
+
+  async markAssetsAsSold(assetIds: string[]): Promise<void> {
+    if (assetIds.length === 0) return;
+
+    await this.assetsRepository.update(
+      {
+        id: In(assetIds),
+        status: AssetStatus.LISTED, // Only listed assets can be sold
+        deleted: false,
+      },
+      { status: AssetStatus.SOLD }
+    );
+  }
+
+  async markAssetsAsUnlisted(assetIds: string[]): Promise<void> {
+    if (assetIds.length === 0) return;
+
+    await this.assetsRepository.update(
+      {
+        id: In(assetIds),
+        status: AssetStatus.LISTED,
+        deleted: false,
+      },
+      { status: AssetStatus.EXTRACTED }
+    );
+  }
+
   /**
    * Updates asset prices and last valuation timestamp after calculation
    * @param assets List of assets with updated price information
