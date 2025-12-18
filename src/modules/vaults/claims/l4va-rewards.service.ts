@@ -43,9 +43,9 @@ export class L4vaRewardsService {
   private readonly L4VA_DECIMALS: number;
   private readonly L4VA_MONTHLY_BUDGET: number; // 3,333,333 with decimals
 
-  // Treasury holding L4VA tokens
-  private readonly L4VA_TREASURY_ADDRESS: string;
-  private readonly L4VA_TREASURY_SKEY: string;
+  // Admin wallet (holds L4VA tokens for distribution)
+  private readonly adminAddress: string;
+  private readonly adminSKey: string;
 
   // General config
   private readonly isMainnet: boolean;
@@ -67,9 +67,9 @@ export class L4vaRewardsService {
     this.L4VA_DECIMALS = this.configService.get<number>('L4VA_DECIMALS') || 3;
     this.L4VA_MONTHLY_BUDGET = this.configService.get<number>('L4VA_MONTHLY_BUDGET');
 
-    // Treasury Config
-    this.L4VA_TREASURY_ADDRESS = this.configService.get<string>('L4VA_TREASURY_ADDRESS');
-    this.L4VA_TREASURY_SKEY = this.configService.get<string>('L4VA_TREASURY_SKEY');
+    // Admin Config (L4VA tokens distributed from admin wallet)
+    this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
+    this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
 
     // General Config
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
@@ -304,25 +304,21 @@ export class L4vaRewardsService {
 
     this.logger.log(`Total L4VA to claim: ${totalL4VA / 10 ** this.L4VA_DECIMALS} L4VA`);
 
-    // Get treasury UTXOs
-    const { utxos: treasuryUtxos } = await getUtxosExtract(
-      Address.from_bech32(this.L4VA_TREASURY_ADDRESS),
-      this.blockfrost,
-      {
-        targetAssets: [{ token: `${this.L4VA_POLICY_ID}${this.L4VA_ASSET_NAME}`, amount: totalL4VA }],
-        minAda: 2000000,
-      }
-    );
+    // Get admin wallet UTXOs with L4VA tokens
+    const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
+      targetAssets: [{ token: `${this.L4VA_POLICY_ID}${this.L4VA_ASSET_NAME}`, amount: totalL4VA }],
+      minAda: 2000000,
+    });
 
-    if (treasuryUtxos.length === 0) {
-      throw new BadRequestException('No UTXOs found in L4VA treasury wallet');
+    if (adminUtxos.length === 0) {
+      throw new BadRequestException('No UTXOs with L4VA tokens found in admin wallet');
     }
 
     // Build transaction
     const input = {
-      changeAddress: this.L4VA_TREASURY_ADDRESS,
+      changeAddress: this.adminAddress,
       message: `L4VA Rewards Claim - ${claims.length} claims`,
-      utxos: treasuryUtxos,
+      utxos: adminUtxos,
       outputs: [
         {
           address: userAddress,
@@ -341,9 +337,9 @@ export class L4vaRewardsService {
     try {
       const buildResponse = await this.blockchainService.buildTransaction(input);
 
-      // Sign with treasury key
+      // Sign with admin key
       const txToSubmit = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-      txToSubmit.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.L4VA_TREASURY_SKEY));
+      txToSubmit.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
       // Submit transaction
       const response = await this.blockchainService.submitTransaction({
