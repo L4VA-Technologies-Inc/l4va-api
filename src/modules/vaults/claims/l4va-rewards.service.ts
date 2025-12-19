@@ -6,10 +6,12 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Between, In, LessThanOrEqual, Repository } from 'typeorm';
+import { Between, In, Repository } from 'typeorm';
 
 import { Claim } from '@/database/claim.entity';
+import { Snapshot } from '@/database/snapshot.entity';
 import { Transaction } from '@/database/transaction.entity';
+import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
@@ -19,18 +21,21 @@ import { VaultStatus } from '@/types/vault.types';
 
 interface CreateL4VARewardsParams {
   vault: Vault;
-  contributorClaims: Claim[];
-  acquirerClaims: Claim[];
   totalTVL: number; // in ADA
+  snapshotId: string; // Snapshot taken at lock time
 }
 
 interface L4VAAllocation {
   totalAllocation: number; // Total L4VA over 12 months
   monthlyAmount: number; // L4VA per month
-  auAllocation: number; // 20% to vault creator
-  acAllocation: number; // 80% * AC percentage
-  viAllocation: number; // 80% * VI percentage
-  acPercentage: number; // Percentage allocated to Asset Contributors
+  creatorAllocation: number; // 20% to vault creator
+  holdersAllocation: number; // 80% split by VT holders
+}
+
+interface VTHolder {
+  address: string;
+  balance: string;
+  percentage: number;
 }
 
 @Injectable()
@@ -54,10 +59,14 @@ export class L4vaRewardsService {
   constructor(
     @InjectRepository(Claim)
     private readonly claimRepository: Repository<Claim>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
+    @InjectRepository(Snapshot)
+    private readonly snapshotRepository: Repository<Snapshot>,
     private readonly configService: ConfigService,
     private readonly blockchainService: BlockchainService
   ) {
@@ -79,16 +88,16 @@ export class L4vaRewardsService {
   }
 
   /**
-   * Create L4VA reward claims when vault locks successfully
-   * Creates 12 monthly claims for each participant (AU, AC, VI)
+   * Initialize L4VA rewards tracking for a vault
+   * Called when vault locks - stores initial snapshot and allocation info
    */
-  async createL4VARewardsClaims(params: CreateL4VARewardsParams): Promise<void> {
-    const { vault, contributorClaims, acquirerClaims, totalTVL } = params;
+  async initializeL4VARewards(params: CreateL4VARewardsParams): Promise<void> {
+    const { vault, totalTVL, snapshotId } = params;
 
-    this.logger.log(`Creating L4VA reward claims for vault ${vault.id}`);
+    this.logger.log(`Initializing L4VA rewards for vault ${vault.id}`);
 
-    // Calculate vault's share of monthly L4VA allocation
-    const allocation = await this.calculateVaultL4VAAllocation(vault.id, vault.governance_phase_start);
+    // Calculate vault's L4VA allocation
+    const allocation = await this.calculateVaultL4VAAllocation(vault.id, vault.governance_phase_start, totalTVL);
 
     if (!allocation || allocation.totalAllocation === 0) {
       this.logger.warn(`No L4VA allocation calculated for vault ${vault.id}`);
@@ -100,162 +109,199 @@ export class L4vaRewardsService {
         `(${allocation.monthlyAmount / 10 ** this.L4VA_DECIMALS} per month over 12 months)`
     );
 
-    const l4vaClaims: Partial<Claim>[] = [];
+    // Create first month claims immediately (allocation info stored in claim metadata)
+    await this.createMonthlyL4VAClaims(vault.id, 0, allocation, snapshotId);
 
-    // 1. Create claims for Vault Creator (AU) - 20% of total
-    if (vault.owner.id) {
-      const auMonthlyAmount = Math.floor(allocation.auAllocation / 12);
+    this.logger.log(`✅ Initialized L4VA rewards for vault ${vault.id}`);
+  }
 
-      for (let month = 0; month < 12; month++) {
-        const claimDate = new Date(vault.governance_phase_start);
-        claimDate.setMonth(claimDate.getMonth() + month);
+  /**
+   * Monthly cron job to create new L4VA claims based on current VT holdings
+   * Runs on the 1st of every month at midnight
+   */
+  @Cron(CronExpression.EVERY_1ST_DAY_OF_MONTH_AT_MIDNIGHT)
+  async createMonthlyL4VARewards(): Promise<void> {
+    this.logger.log('🔄 Running monthly L4VA rewards distribution...');
 
-        l4vaClaims.push({
-          user: { id: vault.owner.id } as any,
-          vault: { id: vault.id } as any,
-          type: ClaimType.L4VA,
-          amount: auMonthlyAmount,
-          status: month === 0 ? ClaimStatus.AVAILABLE : ClaimStatus.PENDING,
-          created_at: claimDate,
-          description: `L4VA Rewards - Month ${month + 1}/12 (Vault Creator)`,
-          metadata: {
-            l4va_role: 'AU',
-            month: month + 1,
-            totalAllocation: allocation.auAllocation,
-            vaultTVL: totalTVL,
-          },
-        });
-      }
+    try {
+      // Find all locked vaults
+      const lockedVaults = await this.vaultRepository.find({
+        where: { vault_status: VaultStatus.locked },
+        select: ['id', 'governance_phase_start', 'total_assets_cost_ada', 'tokens_for_acquires'],
+      });
 
-      this.logger.log(`Created 12 AU claims for vault creator ${vault.owner.id}`);
-    }
+      this.logger.log(`Checking ${lockedVaults.length} locked vaults for L4VA distribution`);
 
-    // 2. Create claims for Asset Contributors (AC)
-    if (contributorClaims.length > 0 && allocation.acAllocation > 0) {
-      // Calculate each contributor's share based on their VT tokens
-      const totalContributorVT = contributorClaims.reduce((sum, claim) => sum + Number(claim.amount), 0);
-
-      for (const contributorClaim of contributorClaims) {
-        const contributorShare = Number(contributorClaim.amount) / totalContributorVT;
-        const contributorTotalL4VA = Math.floor(allocation.acAllocation * contributorShare);
-        const monthlyAmount = Math.floor(contributorTotalL4VA / 12);
-
-        if (monthlyAmount === 0) continue; // Skip if amount too small
-
-        for (let month = 0; month < 12; month++) {
-          const claimDate = new Date(vault.governance_phase_start);
-          claimDate.setMonth(claimDate.getMonth() + month);
-
-          l4vaClaims.push({
-            user: { id: contributorClaim.user_id } as any,
-            vault: { id: vault.id } as any,
-            type: ClaimType.L4VA,
-            amount: monthlyAmount,
-            status: month === 0 ? ClaimStatus.AVAILABLE : ClaimStatus.PENDING,
-            created_at: claimDate,
-            description: `L4VA Rewards - Month ${month + 1}/12 (Asset Contributor)`,
-            metadata: {
-              l4va_role: 'AC',
-              month: month + 1,
-              totalAllocation: contributorTotalL4VA,
-              vtShare: contributorShare,
-              contributorClaimId: contributorClaim.id,
+      for (const vault of lockedVaults) {
+        try {
+          // Count existing L4VA claims for this vault
+          const existingClaims = await this.claimRepository.find({
+            where: {
+              vault: { id: vault.id },
+              type: ClaimType.L4VA,
             },
+            select: ['id', 'metadata'],
+            order: { created_at: 'ASC' },
           });
+
+          if (existingClaims.length === 0) {
+            continue; // No claims yet, vault not initialized
+          }
+
+          // Determine which month this is based on unique month numbers in claims
+          const existingMonths = new Set(existingClaims.map(c => c.metadata?.month).filter(Boolean));
+          const monthsDistributed = existingMonths.size;
+
+          // Check if all 12 months distributed
+          if (monthsDistributed >= 12) {
+            continue; // All months complete
+          }
+
+          // Check if it's time for next month
+          const vestingStartDate = new Date(vault.governance_phase_start);
+          const expectedMonth = new Date(vestingStartDate);
+          expectedMonth.setMonth(expectedMonth.getMonth() + monthsDistributed + 1);
+
+          const now = new Date();
+          if (now < expectedMonth) {
+            continue; // Not time yet
+          }
+
+          // Get allocation from first month claims metadata
+          const firstClaim = existingClaims.find(c => c.metadata?.month === 1);
+
+          if (!firstClaim?.metadata?.allocation) {
+            this.logger.warn(`No allocation metadata found for vault ${vault.id}`);
+            continue;
+          }
+
+          const allocation = firstClaim.metadata.allocation as L4VAAllocation;
+          const snapshotId = firstClaim.metadata.snapshot_id;
+
+          // Create next month's claims
+          await this.createMonthlyL4VAClaims(vault.id, monthsDistributed + 1, allocation, snapshotId);
+        } catch (error) {
+          this.logger.error(`Failed to create L4VA claims for vault ${vault.id}:`, error);
         }
       }
 
-      this.logger.log(`Created AC claims for ${contributorClaims.length} contributors`);
-    }
-
-    // 3. Create claims for Vault Investors (VI)
-    if (acquirerClaims.length > 0 && allocation.viAllocation > 0) {
-      // Calculate each investor's share based on their VT tokens
-      const totalAcquirerVT = acquirerClaims.reduce((sum, claim) => sum + Number(claim.amount), 0);
-
-      for (const acquirerClaim of acquirerClaims) {
-        const investorShare = Number(acquirerClaim.amount) / totalAcquirerVT;
-        const investorTotalL4VA = Math.floor(allocation.viAllocation * investorShare);
-        const monthlyAmount = Math.floor(investorTotalL4VA / 12);
-
-        if (monthlyAmount === 0) continue; // Skip if amount too small
-
-        for (let month = 0; month < 12; month++) {
-          const claimDate = new Date(vault.governance_phase_start);
-          claimDate.setMonth(claimDate.getMonth() + month);
-
-          l4vaClaims.push({
-            user: { id: acquirerClaim.user_id } as any,
-            vault: { id: vault.id } as any,
-            type: ClaimType.L4VA,
-            amount: monthlyAmount,
-            status: month === 0 ? ClaimStatus.AVAILABLE : ClaimStatus.PENDING,
-            created_at: claimDate,
-            description: `L4VA Rewards - Month ${month + 1}/12 (Vault Investor)`,
-            metadata: {
-              l4va_role: 'VI',
-              month: month + 1,
-              totalAllocation: investorTotalL4VA,
-              vtShare: investorShare,
-              acquirerClaimId: acquirerClaim.id,
-            },
-          });
-        }
-      }
-
-      this.logger.log(`Created VI claims for ${acquirerClaims.length} investors`);
-    }
-
-    // Save all L4VA claims
-    if (l4vaClaims.length > 0) {
-      await this.claimRepository.save(l4vaClaims);
-      this.logger.log(`✅ Created ${l4vaClaims.length} L4VA reward claims for vault ${vault.id}`);
-    } else {
-      this.logger.warn(`No L4VA claims created for vault ${vault.id}`);
+      this.logger.log('✅ Monthly L4VA rewards distribution completed');
+    } catch (error) {
+      this.logger.error('Failed to run monthly L4VA rewards distribution:', error);
+      throw error;
     }
   }
 
   /**
-   * Monthly cron job to activate next month's L4VA rewards
-   * Runs on the 1st of every month at midnight
+   * Create L4VA claims for a specific month based on current snapshot
    */
-  @Cron(CronExpression.EVERY_1ST_DAY_OF_MONTH_AT_MIDNIGHT)
-  async activateMonthlyRewards(): Promise<void> {
-    this.logger.log('🔄 Running monthly L4VA rewards activation...');
+  private async createMonthlyL4VAClaims(
+    vaultId: string,
+    monthNumber: number,
+    allocation: L4VAAllocation,
+    lockSnapshotId: string
+  ): Promise<void> {
+    this.logger.log(`Creating month ${monthNumber + 1} L4VA claims for vault ${vaultId}`);
 
-    try {
-      const now = new Date();
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      relations: ['owner'],
+    });
 
-      // Find all PENDING L4VA claims where created_at <= now
-      const pendingClaims = await this.claimRepository.find({
-        where: {
-          type: ClaimType.L4VA,
-          status: ClaimStatus.PENDING,
-          created_at: LessThanOrEqual(now),
-        },
+    if (!vault) {
+      throw new Error(`Vault ${vaultId} not found`);
+    }
+
+    // Get latest snapshot for current VT distribution
+    const latestSnapshot = await this.snapshotRepository.findOne({
+      where: { assetId: vault.asset_vault_name },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (!latestSnapshot) {
+      throw new Error(`No snapshot found for vault ${vaultId}`);
+    }
+
+    const claims: Partial<Claim>[] = [];
+
+    // 1. Create claim for vault creator (20% of monthly amount)
+    const creatorMonthlyAmount = Math.floor(allocation.creatorAllocation / 12);
+
+    claims.push({
+      user: { id: vault.owner.id } as any,
+      vault: { id: vaultId } as any,
+      type: ClaimType.L4VA,
+      amount: creatorMonthlyAmount,
+      status: ClaimStatus.AVAILABLE,
+      description: `L4VA Rewards - Month ${monthNumber + 1}/12 (Vault Creator)`,
+      metadata: {
+        l4va_role: 'AU',
+        month: monthNumber + 1,
+        snapshot_id: latestSnapshot.id,
+        ...(monthNumber === 0 && {
+          allocation, // Store allocation info in first month for reference
+          lock_snapshot_id: lockSnapshotId,
+        }),
+      },
+    });
+
+    // 2. Create claims for VT holders (80% of monthly amount, split by holdings)
+    const holdersMonthlyAmount = Math.floor(allocation.holdersAllocation / 12);
+    const vtHolders = this.parseVTHolders(latestSnapshot.addressBalances);
+
+    for (const holder of vtHolders) {
+      const holderAmount = Math.floor(holdersMonthlyAmount * holder.percentage);
+
+      if (holderAmount === 0) continue; // Skip dust amounts
+
+      // Find or create user by address
+      const user = await this.userRepository.findOne({
+        where: { address: holder.address },
+        select: ['id'],
       });
 
-      if (pendingClaims.length === 0) {
-        this.logger.log('No pending L4VA claims to activate this month');
-        return;
-      }
-
-      // Update all eligible claims to AVAILABLE
-      await this.claimRepository.update(
-        {
-          id: In(pendingClaims.map(c => c.id)),
+      claims.push({
+        user: { id: user.id } as any,
+        vault: { id: vaultId } as any,
+        type: ClaimType.L4VA,
+        amount: holderAmount,
+        status: ClaimStatus.PENDING, // On hold for now
+        description: `L4VA Rewards - Month ${monthNumber + 1}/12 (VT Holder)`,
+        metadata: {
+          l4va_role: holder.address === vault.owner.address ? 'AC/VI' : 'AC/VI',
+          month: monthNumber + 1,
+          snapshot_id: latestSnapshot.id,
+          vt_balance: holder.balance,
+          vt_percentage: holder.percentage,
         },
-        {
-          status: ClaimStatus.AVAILABLE,
-          updated_at: now,
-        }
-      );
-
-      this.logger.log(`✅ Activated ${pendingClaims.length} L4VA reward claims for this month`);
-    } catch (error) {
-      this.logger.error('Failed to activate monthly L4VA rewards:', error);
-      throw error;
+      });
     }
+
+    // Save all claims
+    if (claims.length > 0) {
+      await this.claimRepository.save(claims);
+      this.logger.log(`✅ Created ${claims.length} L4VA claims for vault ${vaultId} month ${monthNumber + 1}`);
+    }
+  }
+
+  /**
+   * Parse VT holders from snapshot address balances
+   */
+  private parseVTHolders(addressBalances: Record<string, string>): VTHolder[] {
+    const totalSupply = Object.values(addressBalances).reduce((sum, balance) => sum + BigInt(balance), BigInt(0));
+
+    if (totalSupply === BigInt(0)) {
+      return [];
+    }
+
+    return Object.entries(addressBalances)
+      .filter(([_, balance]) => BigInt(balance) > BigInt(0))
+      .map(([address, balance]) => ({
+        address,
+        balance,
+        percentage: Number((BigInt(balance) * BigInt(10000)) / totalSupply) / 10000, // 4 decimal precision
+      }))
+      .filter(holder => holder.percentage > 0);
   }
 
   /**
@@ -284,7 +330,7 @@ export class L4vaRewardsService {
         type: ClaimType.L4VA,
         status: ClaimStatus.AVAILABLE,
       },
-      relations: ['user'],
+      relations: ['user', 'vault'],
     });
 
     if (claims.length === 0) {
@@ -369,11 +415,7 @@ export class L4vaRewardsService {
         { id: In(claimIds) },
         {
           status: ClaimStatus.CLAIMED,
-          metadata: claims.map(c => ({
-            ...c.metadata,
-            claimedAt: new Date(),
-            txHash: response.txHash,
-          })) as any,
+          updated_at: new Date(),
         }
       );
 
@@ -398,7 +440,6 @@ export class L4vaRewardsService {
     totalL4VAClaimed: number;
     claimedCount: number;
   }> {
-    // Find all available L4VA claims for user
     const availableClaims = await this.claimRepository.find({
       where: {
         user: { id: userId },
@@ -418,22 +459,14 @@ export class L4vaRewardsService {
 
   /**
    * Calculate vault's L4VA allocation based on TVL share
+   * Simplified formula per Rob's feedback
    */
-  async calculateVaultL4VAAllocation(vaultId: string, lockDate: Date): Promise<L4VAAllocation | null> {
+  private async calculateVaultL4VAAllocation(
+    vaultId: string,
+    lockDate: Date,
+    vaultTVL: number
+  ): Promise<L4VAAllocation | null> {
     try {
-      // Get vault TVL
-      const vault = await this.vaultRepository.findOne({
-        where: { id: vaultId },
-        select: ['id', 'total_assets_cost_ada', 'tokens_for_acquires'],
-      });
-
-      if (!vault || !vault.total_assets_cost_ada) {
-        this.logger.warn(`Vault ${vaultId} not found or has no TVL`);
-        return null;
-      }
-
-      const vaultTVL = vault.total_assets_cost_ada;
-
       // Get TVL of all vaults locked in same 30-day window
       const windowStart = new Date(lockDate);
       windowStart.setDate(windowStart.getDate() - 30);
@@ -453,29 +486,23 @@ export class L4vaRewardsService {
         return null;
       }
 
-      // Calculate vault's share of monthly budget
+      // 1. Calculate vault's share of monthly budget
       const vaultShare = vaultTVL / totalWindowTVL;
       const totalAllocation = Math.floor(this.L4VA_MONTHLY_BUDGET * vaultShare);
+
+      // 2. 20% to creator
+      const creatorAllocation = Math.floor(totalAllocation * 0.2);
+
+      // 3. 80% to VT holders (split by snapshot)
+      const holdersAllocation = totalAllocation - creatorAllocation;
+
       const monthlyAmount = Math.floor(totalAllocation / 12);
-
-      // Split allocation: 20% AU, 80% split between AC/VI based on tokens_for_acquirers
-      const auAllocation = Math.floor(totalAllocation * 0.2);
-      const remaining = totalAllocation - auAllocation;
-
-      // tokens_for_acquirers is percentage (0-100)
-      const viPercentage = (vault.tokens_for_acquires || 0) / 100;
-      const acPercentage = 1 - viPercentage;
-
-      const viAllocation = Math.floor(remaining * viPercentage);
-      const acAllocation = remaining - viAllocation;
 
       return {
         totalAllocation,
         monthlyAmount,
-        auAllocation,
-        acAllocation,
-        viAllocation,
-        acPercentage,
+        creatorAllocation,
+        holdersAllocation,
       };
     } catch (error) {
       this.logger.error(`Error calculating L4VA allocation for vault ${vaultId}:`, error);
@@ -484,12 +511,30 @@ export class L4vaRewardsService {
   }
 
   /**
-   * Get vault's TVL share in 30-day window
+   * Handle vault termination - cancel remaining L4VA claims
    */
-  async getVaultTVLShare(vaultId: string, lockDate: Date): Promise<number> {
-    const allocation = await this.calculateVaultL4VAAllocation(vaultId, lockDate);
-    if (!allocation) return 0;
+  async handleVaultTermination(vaultId: string): Promise<void> {
+    this.logger.log(`Handling vault termination for ${vaultId} - cancelling unvested L4VA rewards`);
 
-    return allocation.totalAllocation / this.L4VA_MONTHLY_BUDGET;
+    try {
+      // Cancel all PENDING L4VA claims for this vault
+      const result = await this.claimRepository.update(
+        {
+          vault: { id: vaultId },
+          type: ClaimType.L4VA,
+          status: ClaimStatus.PENDING,
+        },
+        {
+          status: ClaimStatus.FAILED,
+          description: 'Vault terminated - unvested rewards cancelled',
+          updated_at: new Date(),
+        }
+      );
+
+      this.logger.log(`✅ Cancelled ${result.affected} unvested L4VA claims for terminated vault ${vaultId}`);
+    } catch (error) {
+      this.logger.error(`Failed to handle vault termination for ${vaultId}:`, error);
+      throw error;
+    }
   }
 }
