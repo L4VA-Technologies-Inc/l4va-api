@@ -55,6 +55,7 @@ export class MetadataRegistryApiService {
   private readonly githubToken: string;
   private readonly repoOwner: string;
   private readonly repoName: string;
+  private readonly folderName: string;
 
   constructor(
     @InjectRepository(TokenRegistry)
@@ -68,6 +69,7 @@ export class MetadataRegistryApiService {
     this.githubToken = this.configService.get<string>('GITHUB_TOKEN');
     this.repoOwner = this.configService.get<string>('METADATA_REGISTRY_OWNER');
     this.repoName = this.configService.get<string>('METADATA_REGISTRY_REPO');
+    this.folderName = this.configService.get<string>('METADATA_REGISTRY_FOLDER');
   }
 
   @Cron(CronExpression.EVERY_5_HOURS)
@@ -569,7 +571,7 @@ export class MetadataRegistryApiService {
       // 7. Get the default branch of your fork
       const { data: repo } = await octokit.repos.get({
         owner: username,
-        repo: 'cardano-token-registry',
+        repo: this.repoName,
       });
       const defaultBranch = repo.default_branch;
 
@@ -592,7 +594,7 @@ export class MetadataRegistryApiService {
       });
 
       // 10. Create/update the metadata file in your fork
-      const filePath = `registry/${metadata.subject}.json`;
+      const filePath = `${this.folderName}/${metadata.subject}.json`;
       await octokit.repos.createOrUpdateFileContents({
         owner: username,
         repo: this.repoName,
