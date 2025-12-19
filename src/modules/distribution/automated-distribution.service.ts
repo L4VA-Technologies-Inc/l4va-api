@@ -4,6 +4,8 @@ import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, IsNull, MoreThan } from 'typeorm';
 
+import { L4vaRewardsService } from '../vaults/claims/l4va-rewards.service';
+
 import { AcquirerDistributionOrchestrator } from './orchestrators/acquirer-distribution.orchestrator';
 import { ContributorDistributionOrchestrator } from './orchestrators/contributor-distribution.orchestrator';
 
@@ -27,7 +29,7 @@ import { VaultStatus, SmartContractVaultStatus } from '@/types/vault.types';
  * 2. AcquirerDistributionOrchestrator → Extract acquirer claims (if applicable)
  * 3. Register stake credential
  * 4. ContributorDistributionOrchestrator → Pay contributors
- * 5. finalizeVaultDistribution() → Create LP & snapshot
+ * 5. finalizeVaultDistribution() → Create LP & snapshot & L4VA rewards
  */
 @Injectable()
 export class AutomatedDistributionService {
@@ -45,6 +47,7 @@ export class AutomatedDistributionService {
     private readonly configService: ConfigService,
     private readonly blockchainService: BlockchainService,
     private readonly governanceService: GovernanceService,
+    private readonly l4vaRewardsService: L4vaRewardsService,
     private readonly vyfiService: VyfiService,
     private readonly acquirerOrchestrator: AcquirerDistributionOrchestrator,
     private readonly contributorOrchestrator: ContributorDistributionOrchestrator
@@ -253,7 +256,7 @@ export class AutomatedDistributionService {
     try {
       const vault = await this.vaultRepository.findOne({
         where: { id: vaultId },
-        select: ['id', 'liquidity_pool_contribution'],
+        select: ['id', 'liquidity_pool_contribution', 'governance_phase_start', 'total_assets_cost_ada'],
       });
 
       if (!vault) {
@@ -283,7 +286,17 @@ export class AutomatedDistributionService {
       );
 
       // Create governance snapshot
-      await this.governanceService.createAutomaticSnapshot(vaultId, `${script_hash}${asset_vault_name}`);
+      const snapshot = await this.governanceService.createAutomaticSnapshot(
+        vaultId,
+        `${script_hash}${asset_vault_name}`
+      );
+
+      this.l4vaRewardsService.initializeL4VARewards({
+        vaultId,
+        governancePhaseStart: vault.governance_phase_start,
+        totalTVL: vault.total_assets_cost_ada,
+        snapshotId: snapshot.id,
+      });
 
       this.logger.log(
         `Vault ${vaultId} distribution finalized successfully ` + `(LP: ${lpPercent > 0 ? 'created' : 'skipped'})`

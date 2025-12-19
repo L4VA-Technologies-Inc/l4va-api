@@ -8,6 +8,10 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, In, Repository } from 'typeorm';
 
+import { TransactionsService } from '../processing-tx/offchain-tx/transactions.service';
+
+import { ClaimsService } from './claims.service';
+
 import { Claim } from '@/database/claim.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { Transaction } from '@/database/transaction.entity';
@@ -20,7 +24,8 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';
 
 interface CreateL4VARewardsParams {
-  vault: Vault;
+  vaultId: string;
+  governancePhaseStart: Date;
   totalTVL: number; // in ADA
   snapshotId: string; // Snapshot taken at lock time
 }
@@ -68,7 +73,9 @@ export class L4vaRewardsService {
     @InjectRepository(Snapshot)
     private readonly snapshotRepository: Repository<Snapshot>,
     private readonly configService: ConfigService,
-    private readonly blockchainService: BlockchainService
+    private readonly blockchainService: BlockchainService,
+    private readonly claimsService: ClaimsService,
+    private readonly transactionsService: TransactionsService
   ) {
     // L4VA Token Config
     this.L4VA_POLICY_ID = this.configService.get<string>('L4VA_POLICY_ID');
@@ -92,27 +99,27 @@ export class L4vaRewardsService {
    * Called when vault locks - stores initial snapshot and allocation info
    */
   async initializeL4VARewards(params: CreateL4VARewardsParams): Promise<void> {
-    const { vault, totalTVL, snapshotId } = params;
+    const { vaultId, governancePhaseStart, totalTVL, snapshotId } = params;
 
-    this.logger.log(`Initializing L4VA rewards for vault ${vault.id}`);
+    this.logger.log(`Initializing L4VA rewards for vault ${vaultId}`);
 
     // Calculate vault's L4VA allocation
-    const allocation = await this.calculateVaultL4VAAllocation(vault.id, vault.governance_phase_start, totalTVL);
+    const allocation = await this.calculateVaultL4VAAllocation(vaultId, governancePhaseStart, totalTVL);
 
     if (!allocation || allocation.totalAllocation === 0) {
-      this.logger.warn(`No L4VA allocation calculated for vault ${vault.id}`);
+      this.logger.warn(`No L4VA allocation calculated for vault ${vaultId}`);
       return;
     }
 
     this.logger.log(
-      `Vault ${vault.id} L4VA allocation: ${allocation.totalAllocation / 10 ** this.L4VA_DECIMALS} L4VA ` +
+      `Vault ${vaultId} L4VA allocation: ${allocation.totalAllocation / 10 ** this.L4VA_DECIMALS} L4VA ` +
         `(${allocation.monthlyAmount / 10 ** this.L4VA_DECIMALS} per month over 12 months)`
     );
 
     // Create first month claims immediately (allocation info stored in claim metadata)
-    await this.createMonthlyL4VAClaims(vault.id, 0, allocation, snapshotId);
+    await this.createMonthlyL4VAClaims(vaultId, 0, allocation, snapshotId);
 
-    this.logger.log(`✅ Initialized L4VA rewards for vault ${vault.id}`);
+    this.logger.log(`✅ Initialized L4VA rewards for vault ${vaultId}`);
   }
 
   /**
@@ -428,6 +435,44 @@ export class L4vaRewardsService {
       };
     } catch (error) {
       this.logger.error('Failed to build/submit L4VA claim transaction:', error);
+      throw error;
+    }
+  }
+
+  async submitSignedTransaction(
+    transactionId: string,
+    claimIds: string[],
+    signedTxHex: string
+  ): Promise<{
+    success: boolean;
+    transactionId: string;
+    blockchainTxHash: string;
+  }> {
+    const internalTxExists = await this.transactionRepository.exists({
+      where: { id: transactionId },
+    });
+
+    if (!internalTxExists) {
+      throw new NotFoundException('Transaction not found');
+    }
+
+    try {
+      // Submit to blockchain
+      const submitResponse = await this.blockchainService.submitTransaction({
+        transaction: signedTxHex,
+        signatures: [],
+      });
+
+      await this.transactionsService.updateTransactionHash(transactionId, submitResponse.txHash);
+      await this.claimsService.updateClaimStatus(claimIds, ClaimStatus.CLAIMED);
+
+      return {
+        success: true,
+        transactionId: transactionId,
+        blockchainTxHash: submitResponse.txHash,
+      };
+    } catch (error) {
+      await this.transactionsService.updateTransactionStatusById(transactionId, TransactionStatus.failed);
       throw error;
     }
   }
