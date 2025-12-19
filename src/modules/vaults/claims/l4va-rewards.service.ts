@@ -1,7 +1,5 @@
-import { Buffer } from 'node:buffer';
-
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { Address, FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
+import { Address } from '@emurgo/cardano-serialization-lib-nodejs';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -312,14 +310,15 @@ export class L4vaRewardsService {
   }
 
   /**
-   * Build and submit batch L4VA claim transaction
+   * Build batch L4VA claim transaction (returns presigned tx for user to sign)
    * Allows user to claim multiple L4VA rewards in single transaction
    */
   async buildBatchL4VAClaimTransaction(
     userId: string,
     claimIds: string[]
   ): Promise<{
-    txHash: string;
+    transactionId: string;
+    presignedTx: string;
     totalL4VAClaimed: number;
     claimedCount: number;
   }> {
@@ -390,51 +389,32 @@ export class L4vaRewardsService {
     try {
       const buildResponse = await this.blockchainService.buildTransaction(input);
 
-      // Sign with admin key
-      const txToSubmit = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-      txToSubmit.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
-
-      // Submit transaction
-      const response = await this.blockchainService.submitTransaction({
-        transaction: txToSubmit.to_hex(),
+      // Create internal transaction record
+      const transaction = await this.transactionsService.createTransaction({
+        vault_id: claims[0].vault.id,
+        userId: userId,
+        type: TransactionType.claim,
+        assets: [],
+        metadata: {
+          claimIds,
+          totalL4VA,
+          claimsCount: claims.length,
+          isL4VA: true,
+        },
       });
 
-      if (!response.txHash) {
-        throw new Error('Transaction submission failed - no txHash returned');
-      }
-
-      // Create transaction records
-      await Promise.all(
-        claims.map(claim =>
-          this.transactionRepository.save({
-            user_id: userId,
-            vault_id: claim.vault.id,
-            type: TransactionType.claim,
-            status: TransactionStatus.confirmed,
-            tx_hash: response.txHash,
-            amount: claim.amount,
-          })
-        )
+      this.logger.log(
+        `✅ Built L4VA claim transaction ${transaction.id} for ${totalL4VA / 10 ** this.L4VA_DECIMALS} L4VA`
       );
-
-      // Mark claims as CLAIMED
-      await this.claimRepository.update(
-        { id: In(claimIds) },
-        {
-          status: ClaimStatus.CLAIMED,
-          updated_at: new Date(),
-        }
-      );
-
-      this.logger.log(`✅ Successfully claimed ${totalL4VA / 10 ** this.L4VA_DECIMALS} L4VA in tx ${response.txHash}`);
 
       return {
-        txHash: response.txHash,
+        transactionId: transaction.id,
+        presignedTx: buildResponse.complete,
         totalL4VAClaimed: totalL4VA,
         claimedCount: claims.length,
       };
     } catch (error) {
-      this.logger.error('Failed to build/submit L4VA claim transaction:', error);
+      this.logger.error('Failed to build L4VA claim transaction:', error);
       throw error;
     }
   }
@@ -481,7 +461,8 @@ export class L4vaRewardsService {
    * Claim all available L4VA rewards for a user
    */
   async claimAllAvailableL4VA(userId: string): Promise<{
-    txHash: string;
+    transactionId: string;
+    presignedTx: string;
     totalL4VAClaimed: number;
     claimedCount: number;
   }> {
