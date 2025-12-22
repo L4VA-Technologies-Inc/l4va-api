@@ -16,6 +16,7 @@ import { WalletOverviewDto, PaginatedWalletSummaryDto } from './dto/wallet-summa
 
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { AlertsService } from '@/modules/alerts/alerts.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 
@@ -28,18 +29,14 @@ export class TaptoolsService {
   private readonly blockfrost: BlockFrostAPI;
   private assetDetailsCache = new NodeCache({ stdTTL: 3600, checkperiod: 300 });
 
-  private readonly slackWebhookUrl = process.env.SLACK_BOT_TOKEN;
-  private readonly slackChannel = `#${process.env.SLACK_CHANNEL}`;
-  private readonly SLACK_ALERT_COOLDOWN = 3 * 60 * 60 * 1000; // 3 hours in milliseconds
-  private lastSlackAlert = new Map<string, number>();
-
   constructor(
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly assetsService: AssetsService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly alertsService: AlertsService
   ) {
     this.taptoolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
     this.blockfrost = new BlockFrostAPI({
@@ -193,6 +190,7 @@ export class TaptoolsService {
   }
 
   /**
+   * ONLY for testnet assets
    * Get the value of an asset in ADA and USD
    * @param policyId The policy ID of the asset
    * @param assetName The asset name (hex encoded)
@@ -833,126 +831,6 @@ export class TaptoolsService {
       }
 
       throw new HttpException('Failed to fetch wallet policy IDs', 500);
-    }
-  }
-
-  /**
-   * Send Slack alert with rate limiting to prevent spam
-   */
-  private async sendSlackAlert(alertType: string, data: Record<string, any>): Promise<void> {
-    try {
-      // Check if we're in cooldown period for this alert type
-      const lastAlert = this.lastSlackAlert.get(alertType) || 0;
-      const now = Date.now();
-
-      if (now - lastAlert < this.SLACK_ALERT_COOLDOWN) {
-        this.logger.error(`Slack alert for ${alertType} is in cooldown period`);
-        return;
-      }
-
-      // Don't send alerts if token is not configured
-      if (!this.slackWebhookUrl) {
-        this.logger.warn('Slack bot token not configured, skipping alert');
-        return;
-      }
-
-      const message = this.formatSlackMessage(alertType, data);
-
-      const response = await axios.post(
-        'https://slack.com/api/chat.postMessage',
-        {
-          channel: this.slackChannel,
-          text: message.text,
-          blocks: message.blocks,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${this.slackWebhookUrl}`,
-            'Content-Type': 'application/json',
-          },
-          timeout: 5000, // 5 second timeout for Slack API
-        }
-      );
-
-      if (response.data.ok) {
-        this.lastSlackAlert.set(alertType, now);
-        this.logger.log(`Slack alert sent successfully for ${alertType}`);
-      } else {
-        this.logger.error(`Failed to send Slack alert: ${response.data.error}`);
-      }
-    } catch (error) {
-      this.logger.error(`Error sending Slack alert: ${error.message}`);
-    }
-  }
-
-  /**
-   * Format Slack message with rich formatting
-   */
-  private formatSlackMessage(
-    alertType: string,
-    data: Record<string, any>
-  ): {
-    text: string;
-    blocks: any[];
-  } {
-    const timestamp = new Date().toLocaleString();
-
-    switch (alertType) {
-      case 'rate_limit':
-        return {
-          text: `🚨 Blockfrost API Rate Limit Alert`,
-          blocks: [
-            {
-              type: 'header',
-              text: {
-                type: 'plain_text',
-                text: '🚨 Blockfrost API Rate Limit Exceeded',
-              },
-            },
-            {
-              type: 'section',
-              fields: [
-                {
-                  type: 'mrkdwn',
-                  text: `*Service:* ${data.service}`,
-                },
-                {
-                  type: 'mrkdwn',
-                  text: `*Status:* ${data.status}`,
-                },
-                {
-                  type: 'mrkdwn',
-                  text: `*Endpoint:* ${data.endpoint}`,
-                },
-                {
-                  type: 'mrkdwn',
-                  text: `*Time:* ${timestamp}`,
-                },
-              ],
-            },
-            {
-              type: 'section',
-              text: {
-                type: 'mrkdwn',
-                text: `*Message:* ${data.message}\n\n_This alert is rate-limited to once every ${this.SLACK_ALERT_COOLDOWN / 1000 / 60 / 60} hours._`,
-              },
-            },
-          ],
-        };
-
-      default:
-        return {
-          text: `Alert: ${alertType}`,
-          blocks: [
-            {
-              type: 'section',
-              text: {
-                type: 'mrkdwn',
-                text: `*Alert:* ${alertType}\n*Data:* \`${JSON.stringify(data, null, 2)}\`\n*Time:* ${timestamp}`,
-              },
-            },
-          ],
-        };
     }
   }
 }

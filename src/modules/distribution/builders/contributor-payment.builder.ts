@@ -26,6 +26,7 @@ import { generate_tag_from_txhash_index, getAddressFromHash } from '@/modules/va
 export class ContributorPaymentBuilder {
   private readonly logger = new Logger(ContributorPaymentBuilder.name);
   private readonly isMainnet: boolean;
+  private readonly networkId: number;
 
   constructor(
     @InjectRepository(Asset)
@@ -34,6 +35,7 @@ export class ContributorPaymentBuilder {
     private readonly configService: ConfigService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+    this.networkId = Number(this.configService.get<string>('NETWORK_ID')) || 0;
   }
 
   /**
@@ -51,8 +53,8 @@ export class ContributorPaymentBuilder {
     }
   ): Promise<PayAdaContributionInput> {
     const PARAMETERIZED_DISPATCH_HASH = vault.dispatch_parametized_hash;
-    const DISPATCH_ADDRESS = getAddressFromHash(PARAMETERIZED_DISPATCH_HASH);
-    const SC_ADDRESS = getAddressFromHash(vault.script_hash);
+    const DISPATCH_ADDRESS = getAddressFromHash(PARAMETERIZED_DISPATCH_HASH, this.networkId);
+    const SC_ADDRESS = getAddressFromHash(vault.script_hash, this.networkId);
 
     const scriptInteractions: ScriptInteraction[] = [];
     const outputs: TransactionOutput[] = [];

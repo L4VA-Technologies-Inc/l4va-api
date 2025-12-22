@@ -7,10 +7,14 @@ import { AutomaticCancellationService } from './automatic-cancellation.service';
 import { CancellationProcessor } from './cancellation.processor';
 import { ClaimsController } from './claims.controller';
 import { ClaimsService } from './claims.service';
+import { L4vaRewardsService } from './l4va-rewards.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
+import { Snapshot } from '@/database/snapshot.entity';
 import { Transaction } from '@/database/transaction.entity';
+import { User } from '@/database/user.entity';
+import { Vault } from '@/database/vault.entity';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
 import { TransactionsModule } from '@/modules/vaults/processing-tx/offchain-tx/transactions.module';
 import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockchain.module';
@@ -24,14 +28,14 @@ import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockch
         removeOnFail: 10,
       },
     }),
-    TypeOrmModule.forFeature([Claim, Transaction, Asset]),
+    TypeOrmModule.forFeature([Claim, Transaction, Asset, User, Vault, Snapshot]),
     BlockchainModule,
     TransactionsModule,
     HttpModule,
     AssetsModule,
   ],
   controllers: [ClaimsController],
-  providers: [ClaimsService, AutomaticCancellationService, CancellationProcessor],
-  exports: [ClaimsService],
+  providers: [ClaimsService, L4vaRewardsService, AutomaticCancellationService, CancellationProcessor],
+  exports: [ClaimsService, L4vaRewardsService],
 })
 export class ClaimsModule {}
