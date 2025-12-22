@@ -5,8 +5,8 @@ export class SystemSettings {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'integer' })
-  vlrm_creator_fee: number;
+  @Column({ type: 'jsonb' })
+  data: Record<string, any>;
 
   @CreateDateColumn()
   created_at: Date;
