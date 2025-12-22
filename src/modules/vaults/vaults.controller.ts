@@ -127,6 +127,16 @@ export class VaultsController {
     });
   }
 
+  @ApiDoc({
+    summary: 'Get all vaults market statistics',
+    description: 'Get market data from CoinGecko for all vaults with locked status.',
+    status: 200,
+  })
+  @Get('market-statistics')
+  getVaultsMarketStatistics(): Promise<any> {
+    return this.statisticsService.getVaultsMarketStatistics();
+  }
+
   @ApiOperation({ summary: 'Increment view count for a vault by vault id' })
   @ApiParam({ name: 'id', description: 'Vault ID' })
   @Post(':id/view')
