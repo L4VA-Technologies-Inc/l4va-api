@@ -467,15 +467,15 @@ export class GovernanceExecutionService {
               continue;
             }
 
-            if (!option.price) {
-              this.logger.warn(`Cannot update listing - missing price for ${option.assetName || asset.name}`);
+            if (!option.newPrice) {
+              this.logger.warn(`Cannot update listing - missing new price for ${option.assetName || asset.name}`);
               skippedUpdates.push(option.assetName || asset.name);
               continue;
             }
 
             updates.push({
               txHashIndex,
-              newPriceAda: parseFloat(option.price),
+              newPriceAda: parseFloat(option.newPrice),
             });
           }
 

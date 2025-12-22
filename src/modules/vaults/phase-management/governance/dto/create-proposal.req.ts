@@ -67,7 +67,7 @@ export class MarketplaceAssetDto {
   @ApiProperty({
     description: 'Marketplace action type',
     enum: MarketplaceAction,
-    example: MarketplaceAction.LIST,
+    example: MarketplaceAction.SELL,
   })
   @IsEnum(MarketplaceAction)
   @IsNotEmpty()

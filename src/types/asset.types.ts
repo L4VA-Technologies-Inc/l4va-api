@@ -9,7 +9,7 @@ export enum AssetStatus {
   LOCKED = 'locked', // Asset is locked in the vault
   RELEASED = 'released',
   DISTRIBUTED = 'distributed',
-  EXTRACTED = 'extracted', // Asset has been extracted from the vault to the treasury wallet, and is sitting on it
+  EXTRACTED = 'extracted', // Asset has been extracted from the vault to the treasury wallet and is sitting in it
   LISTED = 'listed',
   SOLD = 'sold',
 }

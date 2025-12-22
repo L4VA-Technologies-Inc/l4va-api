@@ -19,7 +19,7 @@ export enum ProposalType {
 }
 
 export enum MarketplaceAction {
-  LIST = 'list',
+  SELL = 'sell', // Renamed from LIST to align with ExecType.SELL
   UPDATE_LISTING = 'update_listing',
   UNLIST = 'unlist',
   BUY = 'buy',

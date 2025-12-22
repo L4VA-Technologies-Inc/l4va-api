@@ -303,6 +303,9 @@ export class GovernanceService {
       snapshotId: latestSnapshot.id,
     });
 
+    // Initialize metadata object
+    proposal.metadata = {};
+
     // Set type-specific fields based on proposal type
     switch (createProposalReq.type) {
       case ProposalType.STAKING:
