@@ -13,7 +13,7 @@ export class AlertsService {
   private readonly logger = new Logger(AlertsService.name);
   private readonly slackWebhookUrl: string;
   private readonly slackChannel: string;
-  private readonly SLACK_ALERT_COOLDOWN = 3 * 60 * 60 * 1000; // 3 hours in milliseconds
+  private readonly SLACK_ALERT_COOLDOWN = 60 * 60 * 1000; // 1 hour in milliseconds
   private lastSlackAlert = new Map<string, number>();
 
   constructor(private readonly configService: ConfigService) {
