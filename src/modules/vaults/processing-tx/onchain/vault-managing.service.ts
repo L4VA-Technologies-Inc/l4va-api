@@ -461,7 +461,7 @@ export class VaultManagingService {
       validateUtxos: false,
     });
 
-    const requiredInputs = [];
+    const requiredInputs: string[] = [];
 
     const allowedPolicies: string[] =
       Array.isArray(assetsWhitelist) && assetsWhitelist.length > 0

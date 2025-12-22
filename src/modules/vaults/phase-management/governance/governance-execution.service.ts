@@ -353,7 +353,6 @@ export class GovernanceExecutionService {
             const result = await this.wayUpService.buyNFT(proposal.vaultId, purchases);
 
             this.logger.log(`Successfully purchased ${purchases.length} NFT(s) on WayUp. TxHash: ${result.txHash}`);
-            this.logger.log(`Scanner will track incoming NFTs and create asset records with EXTRACTED status`);
             hasSuccessfulOperation = true;
 
             // Emit event for tracking

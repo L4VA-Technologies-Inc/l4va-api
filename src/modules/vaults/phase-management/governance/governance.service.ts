@@ -330,7 +330,14 @@ export class GovernanceService {
 
       case ProposalType.BUY_SELL:
         if (createProposalReq.metadata) {
-          proposal.metadata.marketplaceActions = createProposalReq.metadata.buyingSellingOptions || [];
+          // Prefer the canonical `marketplaceActions` field if present, otherwise fall back to
+          // the legacy `buyingSellingOptions` field for backward compatibility.
+          const marketplaceActions =
+            createProposalReq.metadata.marketplaceActions ??
+            createProposalReq.metadata.buyingSellingOptions ??
+            [];
+
+          proposal.metadata.marketplaceActions = marketplaceActions;
           proposal.abstain = createProposalReq.metadata.abstain || false;
 
           for (const option of proposal.metadata.marketplaceActions) {
