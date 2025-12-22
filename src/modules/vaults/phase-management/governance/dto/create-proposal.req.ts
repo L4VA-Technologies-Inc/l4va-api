@@ -9,10 +9,9 @@ import {
   ValidateNested,
   IsArray,
   IsNumber,
-  IsBoolean,
 } from 'class-validator';
 
-import { ProposalType } from '@/types/proposal.types';
+import { MarketplaceAction, ProposalType } from '@/types/proposal.types';
 
 // Common FT asset class for staking
 export class FungibleTokenDto {
@@ -62,6 +61,164 @@ export class DistributionAssetDto {
   @IsOptional()
   @IsString()
   type?: string;
+}
+
+export class MarketplaceAssetDto {
+  @ApiProperty({
+    description: 'Marketplace action type',
+    enum: MarketplaceAction,
+    example: MarketplaceAction.SELL,
+  })
+  @IsEnum(MarketplaceAction)
+  @IsNotEmpty()
+  action: MarketplaceAction;
+
+  @ApiProperty({ description: 'Asset ID in the system' })
+  @IsString()
+  @IsNotEmpty()
+  assetId: string;
+
+  @ApiProperty({ description: 'Asset name for display', required: false })
+  @IsOptional()
+  @IsString()
+  assetName?: string;
+
+  // For LIST and UPDATE_LISTING
+  @ApiProperty({ description: 'Price in ADA', required: false })
+  @IsOptional()
+  @IsString()
+  price?: string;
+
+  @ApiProperty({ description: 'Duration in milliseconds', required: false })
+  @IsOptional()
+  @IsNumber()
+  duration?: number;
+
+  @ApiProperty({ description: 'Marketplace platform', required: false })
+  @IsOptional()
+  @IsString()
+  market?: string;
+
+  @ApiProperty({ description: 'Listing method (GTC or N/A)', required: false, enum: ['GTC', 'N/A'] })
+  @IsOptional()
+  @IsEnum(['GTC', 'N/A'])
+  method?: 'GTC' | 'N/A';
+
+  // For BUY
+  @ApiProperty({ description: 'Maximum price for buy action', required: false })
+  @IsOptional()
+  @IsString()
+  maxPrice?: string;
+
+  @ApiProperty({ description: 'Quantity to buy/sell', required: false })
+  @IsOptional()
+  @IsString()
+  quantity?: string;
+
+  // For UNLIST
+  @ApiProperty({ description: 'Listing ID to unlist', required: false })
+  @IsOptional()
+  @IsString()
+  listingId?: string;
+}
+
+export enum ExecType {
+  BUY = 'BUY',
+  SELL = 'SELL',
+  UNLIST = 'UNLIST',
+  UPDATE_LISTING = 'UPDATE_LISTING',
+}
+
+export enum SellType {
+  MARKET = 'Market',
+  LIST = 'List',
+}
+
+export enum MethodType {
+  NA = 'N/A',
+  GTC = 'GTC',
+}
+
+export class MarketplaceActionDto {
+  @ApiProperty({ description: 'Asset ID in the system' })
+  @IsString()
+  assetId: string;
+
+  @ApiProperty({
+    description: 'Action type: BUY, SELL, UNLIST, or UPDATE_LISTING',
+    enum: ExecType,
+  })
+  @IsEnum(ExecType)
+  exec: ExecType;
+
+  // ===== SELL fields =====
+  @ApiProperty({
+    description: 'Quantity to buy/sell',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  quantity?: string;
+
+  @ApiProperty({
+    description: 'Market or List sale type',
+    enum: SellType,
+    required: false,
+  })
+  @IsOptional()
+  @IsEnum(SellType)
+  sellType?: SellType;
+
+  @ApiProperty({
+    description: 'Duration in milliseconds',
+    required: false,
+  })
+  @IsOptional()
+  @IsNumber()
+  duration?: number;
+
+  @ApiProperty({
+    description: 'Method (N/A or GTC)',
+    enum: MethodType,
+    required: false,
+  })
+  @IsOptional()
+  @IsEnum(MethodType)
+  method?: MethodType;
+
+  @ApiProperty({
+    description: 'Price in ADA (for SELL)',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  price?: string;
+
+  // ===== UPDATE_LISTING field =====
+  @ApiProperty({
+    description: 'New price in ADA (for UPDATE_LISTING)',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  newPrice?: string;
+
+  // ===== BUY field =====
+  @ApiProperty({
+    description: 'Maximum price willing to pay in ADA (for BUY)',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  maxPrice?: string;
+
+  // ===== Common fields =====
+  @ApiProperty({
+    description: 'Market platform',
+    default: 'WayUp',
+  })
+  @IsString()
+  market: string;
 }
 
 export class CreateProposalReq {
@@ -152,6 +309,18 @@ export class CreateProposalReq {
   distributionAssets?: DistributionAssetDto[];
 
   @ApiProperty({
+    description: 'Marketplace actions for buy/sell proposals',
+    type: [MarketplaceActionDto],
+    required: false,
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => MarketplaceActionDto)
+  @Expose()
+  marketplaceActions?: MarketplaceActionDto[];
+
+  @ApiProperty({
     description: 'Proposal start time (as a string)',
     required: false,
   })
@@ -168,77 +337,4 @@ export class CreateProposalReq {
   @IsOptional()
   @Expose()
   metadata?: Record<string, any>;
-}
-
-export enum ExecType {
-  BUY = 'BUY',
-  SELL = 'SELL',
-}
-
-export enum SellType {
-  MARKET = 'Market',
-  LIST = 'List',
-}
-
-export enum MethodType {
-  NA = 'N/A',
-  GTC = 'GTC',
-}
-
-export class BuyingSellOptionDto {
-  @ApiProperty({ description: 'Asset ID in the system' })
-  @IsString()
-  assetId: string;
-
-  @ApiProperty({ description: 'Asset name for display' })
-  @IsString()
-  assetName: string;
-
-  @ApiProperty({ description: 'Buy or sell', enum: ExecType })
-  @IsEnum(ExecType)
-  exec: ExecType;
-
-  @ApiProperty({ description: 'Quantity to buy/sell' })
-  @IsString()
-  quantity: string;
-
-  @ApiProperty({ description: 'Market or List sale type', enum: SellType })
-  @IsEnum(SellType)
-  sellType: SellType;
-
-  @ApiProperty({ description: 'Duration in milliseconds' })
-  @IsNumber()
-  duration: number;
-
-  @ApiProperty({ description: 'Is maximum quantity flag' })
-  @IsBoolean()
-  isMax: boolean;
-
-  @ApiProperty({ description: 'Method (N/A or GTC)', enum: MethodType })
-  @IsEnum(MethodType)
-  method: MethodType;
-
-  @ApiProperty({ description: 'Market platform' })
-  @IsString()
-  market: string;
-
-  @ApiProperty({ description: 'Price in ADA' })
-  @IsString()
-  price: string;
-}
-
-export class BuyingSellMetadataDto {
-  @ApiProperty({ description: 'List of buying/selling options' })
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => BuyingSellOptionDto)
-  buyingSellingOptions: BuyingSellOptionDto[];
-
-  @ApiProperty({ description: 'Proposal start delay in milliseconds' })
-  @IsNumber()
-  proposalStart: number;
-
-  @ApiProperty({ description: 'Allow abstain voting' })
-  @IsBoolean()
-  abstain: boolean;
 }

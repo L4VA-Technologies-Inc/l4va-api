@@ -2,6 +2,7 @@ import { Expose } from 'class-transformer';
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, CreateDateColumn, JoinColumn } from 'typeorm';
 
 import {
+  MarketplaceActionDto,
   DistributionAssetDto,
   FungibleTokenDto,
   NonFungibleTokenDto,
@@ -67,34 +68,26 @@ export class Proposal {
   @Column({ name: 'snapshot_id', nullable: true })
   snapshotId: string;
 
-  // Add direct columns for each proposal type's specific data
-  @Expose({ name: 'fungibleTokens' })
-  @Column({ name: 'fungible_tokens', type: 'json', nullable: true })
-  fungibleTokens?: FungibleTokenDto[];
+  @Expose({ name: 'metadata' })
+  @Column({ name: 'metadata', type: 'jsonb', nullable: true })
+  metadata?: {
+    // Staking data
+    fungibleTokens?: FungibleTokenDto[];
+    nonFungibleTokens?: NonFungibleTokenDto[];
 
-  @Expose({ name: 'nonFungibleTokens' })
-  @Column({ name: 'non_fungible_tokens', type: 'json', nullable: true })
-  nonFungibleTokens?: NonFungibleTokenDto[];
+    // Buy/Sell data
+    marketplaceActions?: MarketplaceActionDto[];
 
-  @Expose({ name: 'distributionAssets' })
-  @Column({ name: 'distribution_assets', type: 'json', nullable: true })
-  distributionAssets?: DistributionAssetDto[];
+    // Distribution data
+    distributionAssets?: DistributionAssetDto[];
 
-  @Expose({ name: 'terminationReason' })
-  @Column({ name: 'termination_reason', type: 'text', nullable: true })
-  terminationReason?: string;
+    // Burning data
+    burnAssets?: string[];
+  };
 
   @Expose({ name: 'terminationDate' })
   @Column({ name: 'termination_date', nullable: true, type: 'timestamptz' })
   terminationDate?: Date;
-
-  @Expose({ name: 'burnAssets' })
-  @Column({ name: 'burn_assets', type: 'json', nullable: true })
-  burnAssets?: string[]; // Array of asset IDs to burn
-
-  @Expose({ name: 'buyingSellingOptions' })
-  @Column({ name: 'buying_selling_options', type: 'json', nullable: true })
-  buyingSellingOptions?: any[];
 
   @Expose({ name: 'abstain' })
   @Column({ name: 'abstain', type: 'boolean', nullable: true, default: false })

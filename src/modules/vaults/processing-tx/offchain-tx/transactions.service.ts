@@ -62,7 +62,6 @@ export class TransactionsService {
   async createAssets(txId: string): Promise<{ success: boolean }> {
     const transaction = await this.transactionRepository.findOne({
       where: { id: txId },
-      select: ['id', 'type', 'vault_id', 'user_id', 'metadata'],
     });
 
     if (!transaction) {

@@ -138,7 +138,7 @@ export class VaultManagingService {
     const settings = await this.systemSettingsRepository.find();
     this.VLRM_CREATOR_FEE = settings?.[0]?.data?.vlrm_creator_fee || 100;
   }
-  
+
   /**
    * Create a new vault with the specified configuration
    * @param config Vault configuration parameters
@@ -467,10 +467,10 @@ export class VaultManagingService {
 
     const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
       minAda: 4000000,
-      maxUtxos: 5,
+      validateUtxos: false,
     });
 
-    const requiredInputs = [];
+    const requiredInputs: string[] = [];
 
     const allowedPolicies: string[] =
       Array.isArray(assetsWhitelist) && assetsWhitelist.length > 0
