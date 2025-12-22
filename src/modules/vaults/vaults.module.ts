@@ -1,3 +1,4 @@
+import { HttpModule } from '@nestjs/axios';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
@@ -20,6 +21,7 @@ import { GovernanceModule } from '@/modules/vaults/phase-management/governance/g
 import { LifecycleModule } from '@/modules/vaults/phase-management/lifecycle/lifecycle.module';
 import { TransactionsModule } from '@/modules/vaults/processing-tx/offchain-tx/transactions.module';
 import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockchain.module';
+import { StatisticsService } from '@/modules/vaults/statistics/statistics.service';
 
 @Module({
   imports: [
@@ -39,8 +41,9 @@ import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockch
       TagEntity,
       ContributorWhitelistEntity,
     ]),
+    HttpModule,
   ],
-  providers: [VaultsService, DraftVaultsService],
+  providers: [VaultsService, DraftVaultsService, StatisticsService],
   controllers: [VaultsController],
   exports: [VaultsService, DraftVaultsService],
 })
