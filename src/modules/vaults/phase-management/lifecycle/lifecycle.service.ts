@@ -33,6 +33,7 @@ import {
 export class LifecycleService {
   private readonly logger = new Logger(LifecycleService.name);
   private readonly processingVaults = new Set<string>(); // Track vaults currently being processed
+  private readonly MAX_FAILED_ATTEMPTS = 3; // Maximum allowed failed attempts before skipping
 
   constructor(
     @InjectRepository(Asset)
@@ -386,11 +387,27 @@ export class LifecycleService {
         now,
       })
       .leftJoinAndSelect('vault.owner', 'owner')
+
       .leftJoinAndSelect('vault.assets_whitelist', 'assetsWhitelist')
       .leftJoinAndSelect('vault.assets', 'assets', 'assets.deleted = :deleted', { deleted: false })
       .getMany();
 
     for (const vault of contributionVaults) {
+      // Check for failed update-vault transactions
+      const failedTransactionsCount = await this.transactionsRepository.count({
+        where: {
+          vault_id: vault.id,
+          type: TransactionType.updateVault,
+          status: TransactionStatus.failed,
+        },
+      });
+
+      if (failedTransactionsCount >= this.MAX_FAILED_ATTEMPTS) {
+        this.logger.warn(
+          `Skipping vault ${vault.id} - exceeded max failed attempts (${failedTransactionsCount}/${this.MAX_FAILED_ATTEMPTS}) for update-vault transactions`
+        );
+        continue;
+      }
       try {
         this.metadataRegistryApiService.submitVaultTokenMetadata({
           vaultId: vault.id,
@@ -459,6 +476,14 @@ export class LifecycleService {
             `Vault ${vault.id} assets do not meet threshold requirements: ${JSON.stringify(thresholdViolations)}`
           );
 
+          // Check for failed transactions before attempting cancellation update
+          if (failedTransactionsCount >= this.MAX_FAILED_ATTEMPTS) {
+            this.logger.warn(
+              `Skipping vault ${vault.id} cancellation update - exceeded max failed attempts (${failedTransactionsCount}/${this.MAX_FAILED_ATTEMPTS}) for update-vault transactions`
+            );
+            continue;
+          }
+
           const response = await this.vaultManagingService.updateVaultMetadataTx({
             vault,
             vaultStatus: SmartContractVaultStatus.CANCELLED,
@@ -476,7 +501,7 @@ export class LifecycleService {
             },
           });
 
-          return;
+          continue;
         }
       }
 
@@ -588,7 +613,23 @@ export class LifecycleService {
       return;
     }
 
+    // I want to get all failed transaction for vault with type update-vault. If there is more than MAX_FAILED_ATTEMPTS. I will skip the vault processing
+
     for (const vault of acquireVaults) {
+      const failedTransactionsCount = await this.transactionsRepository.count({
+        where: {
+          vault_id: vault.id,
+          type: TransactionType.updateVault,
+          status: TransactionStatus.failed,
+        },
+      });
+
+      if (failedTransactionsCount >= this.MAX_FAILED_ATTEMPTS) {
+        this.logger.warn(
+          `Skipping vault ${vault.id} - exceeded max failed attempts (${failedTransactionsCount}/${this.MAX_FAILED_ATTEMPTS}) for update-vault transactions`
+        );
+        continue;
+      }
       try {
         this.processingVaults.add(vault.id);
         await this.executeAcquireToGovernanceTransition(vault);
