@@ -136,6 +136,7 @@ export class VaultManagingService {
     const settings = await this.systemSettingsRepository.find();
     this.VLRM_CREATOR_FEE = settings?.[0]?.data?.vlrm_creator_fee || 100;
   }
+  
   /**
    * Create a new vault with the specified configuration
    * @param config Vault configuration parameters
