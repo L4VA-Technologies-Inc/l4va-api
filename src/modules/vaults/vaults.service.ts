@@ -539,7 +539,7 @@ export class VaultsService {
 
     const publishedTx = await this.vaultContractService.submitOnChainVaultTx(signedTx, vault, userId);
 
-    vault.contract_address = getAddressFromHash(vault.script_hash);
+    vault.contract_address = getAddressFromHash(vault.script_hash, this.blockchainService.getNetworkId());
     vault.vault_status = VaultStatus.published;
     vault.publication_hash = publishedTx.txHash;
     await this.vaultsRepository.save(vault);

@@ -14,7 +14,6 @@ import { VaultTreasuryWallet } from '@/database/vaultTreasuryWallet.entity';
 import { GoogleKMSService } from '@/modules/google_cloud/google-kms.service';
 import { GoogleSecretService } from '@/modules/google_cloud/google-secret.service';
 import { generateCardanoWallet } from '@/modules/vaults/processing-tx/onchain/utils/lib';
-
 @Injectable()
 export class TreasuryWalletService {
   private readonly logger = new Logger(TreasuryWalletService.name);
@@ -78,7 +77,7 @@ export class TreasuryWalletService {
     }
 
     // Generate new Cardano wallet
-    const walletData = await generateCardanoWallet();
+    const walletData = await generateCardanoWallet(this.isMainnet);
 
     // Extract public key hash from the payment private key
     const privateKey = PrivateKey.from_bech32(walletData.privateKey);

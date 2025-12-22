@@ -123,7 +123,7 @@ export class VyfiService {
       throw new NotFoundException('Vault or dispatch script not found');
     }
 
-    const DISPATCH_ADDRESS = getAddressFromHash(claim.vault.dispatch_parametized_hash);
+    const DISPATCH_ADDRESS = getAddressFromHash(claim.vault.dispatch_parametized_hash, this.networkId);
 
     // Get dispatch UTXOs
     const dispatchUtxos = await this.blockfrost.addressesUtxos(DISPATCH_ADDRESS);
