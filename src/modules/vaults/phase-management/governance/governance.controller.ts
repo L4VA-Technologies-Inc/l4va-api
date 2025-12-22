@@ -103,6 +103,30 @@ export class GovernanceController {
     return await this.governanceService.getAssetsToBuySell(vaultId);
   }
 
+  @Get('vaults/:vaultId/assets/unlist')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Get assets available for unlisting proposals' })
+  @ApiResponse({
+    status: 200,
+    description: 'List of assets available for unlisting',
+    type: [AssetBuySellDto],
+  })
+  async getAssetsToUnlist(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<AssetBuySellDto[]> {
+    return await this.governanceService.getAssetsToUnlist(vaultId);
+  }
+
+  @Get('vaults/:vaultId/assets/update-listing')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Get assets available for updating listings' })
+  @ApiResponse({
+    status: 200,
+    description: 'List of assets available for updating listings',
+    type: [AssetBuySellDto],
+  })
+  async getAssetsToUpdateListing(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<AssetBuySellDto[]> {
+    return await this.governanceService.getAssetsToUpdateListing(vaultId);
+  }
+
   @Get('vaults/:vaultId/assets/stake')
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Get assets to stake for a vault' })

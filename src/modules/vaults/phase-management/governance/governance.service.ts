@@ -879,6 +879,46 @@ export class GovernanceService {
     }
   }
 
+  async getAssetsToUnlist(vaultId: string): Promise<AssetBuySellDto[]> {
+    try {
+      // Get all listed assets in the vault
+      const assets = await this.assetRepository.find({
+        where: [
+          { vault: { id: vaultId }, type: AssetType.NFT, status: AssetStatus.LISTED },
+          { vault: { id: vaultId }, type: AssetType.FT, status: AssetStatus.LISTED },
+        ],
+        select: ['id', 'policy_id', 'quantity', 'dex_price', 'floor_price', 'metadata', 'type'],
+      });
+
+      return plainToInstance(AssetBuySellDto, assets, {
+        excludeExtraneousValues: true,
+      });
+    } catch (error) {
+      this.logger.error(`Error getting assets to unlist for vault ${vaultId}: ${error.message}`);
+      throw new InternalServerErrorException('Error getting assets for unlisting');
+    }
+  }
+
+  async getAssetsToUpdateListing(vaultId: string): Promise<AssetBuySellDto[]> {
+    try {
+      // Get all listed assets in the vault that can have their listing updated
+      const assets = await this.assetRepository.find({
+        where: [
+          { vault: { id: vaultId }, type: AssetType.NFT, status: AssetStatus.LISTED },
+          { vault: { id: vaultId }, type: AssetType.FT, status: AssetStatus.LISTED },
+        ],
+        select: ['id', 'policy_id', 'quantity', 'dex_price', 'floor_price', 'metadata', 'type'],
+      });
+
+      return plainToInstance(AssetBuySellDto, assets, {
+        excludeExtraneousValues: true,
+      });
+    } catch (error) {
+      this.logger.error(`Error getting assets to update listing for vault ${vaultId}: ${error.message}`);
+      throw new InternalServerErrorException('Error getting assets for updating listings');
+    }
+  }
+
   async canUserCreateProposal(vaultId: string, userId: string): Promise<boolean> {
     const cacheKey = `can_create_proposal:${vaultId}:${userId}`;
 
