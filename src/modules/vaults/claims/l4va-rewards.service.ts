@@ -1,5 +1,5 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { Address } from '@emurgo/cardano-serialization-lib-nodejs';
+import { Address, FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -53,6 +53,7 @@ export class L4vaRewardsService {
 
   // Admin wallet (holds L4VA tokens for distribution)
   private readonly adminAddress: string;
+  private readonly adminHash: string;
   private readonly adminSKey: string;
 
   // General config
@@ -84,6 +85,7 @@ export class L4vaRewardsService {
     // Admin Config (L4VA tokens distributed from admin wallet)
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
+    this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
 
     // General Config
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
@@ -383,11 +385,14 @@ export class L4vaRewardsService {
           ],
         },
       ],
+      requiredSigners: [this.adminHash],
       network: this.isMainnet ? ('mainnet' as const) : ('preprod' as const),
     };
 
     try {
       const buildResponse = await this.blockchainService.buildTransaction(input);
+      const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
       // Create internal transaction record
       const transaction = await this.transactionsService.createTransaction({
@@ -409,7 +414,7 @@ export class L4vaRewardsService {
 
       return {
         transactionId: transaction.id,
-        presignedTx: buildResponse.complete,
+        presignedTx: txToSubmitOnChain.to_hex(),
         totalL4VAClaimed: totalL4VA,
         claimedCount: claims.length,
       };

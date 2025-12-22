@@ -14,6 +14,7 @@ import { VaultTreasuryWallet } from '@/database/vaultTreasuryWallet.entity';
 import { GoogleKMSService } from '@/modules/google_cloud/google-kms.service';
 import { GoogleSecretService } from '@/modules/google_cloud/google-secret.service';
 import { generateCardanoWallet } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+
 @Injectable()
 export class TreasuryWalletService {
   private readonly logger = new Logger(TreasuryWalletService.name);
