@@ -1,4 +1,17 @@
-import { Controller, Post, Body, Get, Param, Request, UseGuards, Query, Logger, ParseUUIDPipe } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  Get,
+  Param,
+  Request,
+  UseGuards,
+  Query,
+  Logger,
+  ParseUUIDPipe,
+  Delete,
+  HttpCode,
+} from '@nestjs/common';
 import { ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 
 import { ApiDoc } from '../../decorators/api-doc.decorator';
@@ -224,5 +237,21 @@ export class VaultsController {
   ): Promise<PublishBurnTransactionRes> {
     const userId = req.user.sub;
     return await this.vaultsService.publishBurnTransaction(params.id, userId, publishDto);
+  }
+
+  @ApiDoc({
+    summary: 'Delete drafted vault',
+    description: 'Deletes a drafted vault owned by the authenticated user',
+    status: 204,
+  })
+  @UseGuards(AuthGuard)
+  @Delete(':id')
+  @HttpCode(204)
+  deleteDraftedVault(
+    @Request() req: AuthRequest,
+    @Param('id', new ParseUUIDPipe()) id: string
+  ): Promise<{ success: boolean }> {
+    const userId = req.user.sub;
+    return this.vaultsService.deleteDraftedVault(userId, id);
   }
 }

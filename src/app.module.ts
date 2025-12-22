@@ -32,6 +32,7 @@ import { VaultsModule } from './modules/vaults/vaults.module';
 import { VyfiModule } from './modules/vyfi/vyfi.module';
 import { WayUpModule } from './modules/wayup/wayup.module';
 
+import { AlertsModule } from '@/modules/alerts/alerts.module';
 import { NotificationModule } from '@/modules/notification/notification.module';
 import { PresetsModule } from '@/modules/presets/presets.module';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
@@ -87,6 +88,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     }),
     JwtGlobalModule,
     AuthModule,
+    AlertsModule,
     AssetsModule,
     BlockchainModule,
     VaultsModule,

@@ -2,6 +2,7 @@ import { Expose } from 'class-transformer';
 import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
 
 import { VaultPresetType } from '../types/vault.types';
+
 import { User } from './user.entity';
 
 @Entity('vault_preset')

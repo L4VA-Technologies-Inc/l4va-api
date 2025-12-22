@@ -34,6 +34,7 @@ import {
 
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
+import { SystemSettings } from '@/database/systemSettings.entity';
 import { Vault } from '@/database/vault.entity';
 import { VaultCreationInput } from '@/modules/distribution/distribution.types';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
@@ -96,11 +97,12 @@ export class VaultManagingService {
   private readonly vaultScriptSKey: string;
   private readonly unparametizedScriptHash: string;
   private readonly blueprintTitle: string;
+  private readonly networkId: number;
   private readonly blockfrost: BlockFrostAPI;
 
   private readonly VLRM_HEX_ASSET_NAME: string;
   private readonly VLRM_POLICY_ID: string;
-  private readonly VLRM_CREATOR_FEE: number;
+  private VLRM_CREATOR_FEE: number;
   private readonly VLRM_CREATOR_FEE_ENABLED: boolean;
 
   constructor(
@@ -108,6 +110,8 @@ export class VaultManagingService {
     private readonly assetsRepository: Repository<Asset>,
     @InjectRepository(AssetsWhitelistEntity)
     private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
+    @InjectRepository(SystemSettings)
+    private readonly systemSettingsRepository: Repository<SystemSettings>,
     private readonly configService: ConfigService,
     @Inject(BlockchainService)
     private readonly blockchainService: BlockchainService,
@@ -123,11 +127,16 @@ export class VaultManagingService {
     this.unparametizedScriptHash = this.configService.get<string>('CONTRIBUTION_SCRIPT_HASH');
     this.VLRM_HEX_ASSET_NAME = this.configService.get<string>('VLRM_HEX_ASSET_NAME');
     this.VLRM_POLICY_ID = this.configService.get<string>('VLRM_POLICY_ID');
-    this.VLRM_CREATOR_FEE = this.configService.get<number>('VLRM_CREATOR_FEE');
     this.VLRM_CREATOR_FEE_ENABLED = this.configService.get<string>('VLRM_CREATOR_FEE_ENABLED') === 'true';
+    this.networkId = Number(this.configService.get<string>('NETWORK_ID')) || 0;
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
+  }
+
+  async onModuleInit(): Promise<void> {
+    const settings = await this.systemSettingsRepository.find();
+    this.VLRM_CREATOR_FEE = settings?.[0]?.data?.vlrm_creator_fee || 100;
   }
 
   /**
@@ -149,7 +158,7 @@ export class VaultManagingService {
       assets: [], // No assets needed for this transaction as it's metadata update
     });
 
-    this.scAddress = getAddressFromHash(this.scPolicyId);
+    this.scAddress = getAddressFromHash(this.scPolicyId, this.networkId);
 
     // Use the optimized function with better error handling
     const { filteredUtxos: utxoHexArray, requiredInputs } = await getUtxosExtract(
@@ -217,7 +226,7 @@ export class VaultManagingService {
       throw new Error('Failed to find script hash');
     }
 
-    const vaultAddress = getAddressFromHash(scriptHash);
+    const vaultAddress = getAddressFromHash(scriptHash, this.networkId);
 
     try {
       const input: VaultCreationInput = {
@@ -469,7 +478,7 @@ export class VaultManagingService {
         : [];
     const contract_type = vault.privacy === VaultPrivacy.private ? 0 : vault.privacy === VaultPrivacy.public ? 1 : 2;
 
-    this.scAddress = getAddressFromHash(this.scPolicyId);
+    this.scAddress = getAddressFromHash(this.scPolicyId, this.networkId);
 
     const vaultUtxo = await getVaultUtxo(this.scPolicyId, vault.asset_vault_name, this.blockfrost);
 

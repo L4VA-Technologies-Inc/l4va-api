@@ -81,7 +81,10 @@ export class ContributorDistributionOrchestrator {
     let dispatchUtxos: AddressesUtxo[] = [];
 
     if (hasDispatchFunding) {
-      const DISPATCH_ADDRESS = getAddressFromHash(vault.dispatch_parametized_hash);
+      const DISPATCH_ADDRESS = getAddressFromHash(
+        vault.dispatch_parametized_hash,
+        this.blockchainService.getNetworkId()
+      );
       try {
         dispatchUtxos = await this.blockfrost.addressesUtxos(DISPATCH_ADDRESS);
 

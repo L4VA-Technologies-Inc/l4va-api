@@ -383,8 +383,8 @@ export async function getVaultUtxo(
   }
 }
 
-export function getAddressFromHash(hash: string): string {
-  return EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(hash)))
+export function getAddressFromHash(hash: string, networkId: number): string {
+  return EnterpriseAddress.new(networkId, Credential.from_scripthash(ScriptHash.from_hex(hash)))
     .to_address()
     .to_bech32();
 }
@@ -411,7 +411,6 @@ export function getTransactionSize(txHex: string): number {
  * Vault 3 → Random Mnemonic C
  *
  * @param isMainnet Whether to generate a wallet for the mainnet or testnet.
- * @returns
  */
 export async function generateCardanoWallet(isMainnet: boolean): Promise<{
   ticker: string;

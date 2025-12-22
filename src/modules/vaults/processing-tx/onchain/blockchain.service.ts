@@ -29,6 +29,7 @@ export class BlockchainService {
   private readonly blueprintTitle: string;
   private readonly adminSKey: string;
   private readonly adminAddress: string;
+  private readonly networkId: number;
   private readonly blockfrost: BlockFrostAPI;
   private readonly anvilHeaders: {
     [key: string]: string;
@@ -43,6 +44,7 @@ export class BlockchainService {
     this.anvilApi = this.configService.get<string>('ANVIL_API_URL') + '/services';
     this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
     this.blueprintTitle = this.configService.get<string>('BLUEPRINT_TITLE');
+    this.networkId = Number(this.configService.get<string>('NETWORK_ID')) || 0;
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
@@ -50,6 +52,10 @@ export class BlockchainService {
       'x-api-key': this.configService.get<string>('ANVIL_API_KEY'),
       'Content-Type': 'application/json',
     };
+  }
+
+  getNetworkId(): number {
+    return this.networkId;
   }
 
   /**

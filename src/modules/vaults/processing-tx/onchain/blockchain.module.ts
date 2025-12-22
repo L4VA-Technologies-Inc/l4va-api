@@ -14,6 +14,7 @@ import { VaultManagingService } from './vault-managing.service';
 
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
+import { SystemSettings } from '@/database/systemSettings.entity';
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
@@ -25,7 +26,7 @@ import { Vault } from '@/database/vault.entity';
     }),
     HttpModule,
     TransactionsModule,
-    TypeOrmModule.forFeature([Vault, Transaction, AssetsWhitelistEntity, TokenRegistry, Asset]),
+    TypeOrmModule.forFeature([Vault, Transaction, AssetsWhitelistEntity, TokenRegistry, Asset, SystemSettings]),
   ],
   controllers: [BlockchainController],
   providers: [
