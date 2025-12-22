@@ -331,7 +331,7 @@ export class GovernanceService {
         }
         break;
 
-      case ProposalType.BUY_SELL:
+      case ProposalType.BUY_SELL: // Deprecated - use MARKETPLACE_ACTION instead
         if (createProposalReq.metadata) {
           // Prefer the canonical `marketplaceActions` field if present, otherwise fall back to
           // the legacy `buyingSellingOptions` field for backward compatibility.
@@ -352,6 +352,31 @@ export class GovernanceService {
           }
         }
         break;
+
+      case ProposalType.MARKETPLACE_ACTION: {
+        // Use direct marketplaceActions from request body
+        const actions = createProposalReq.marketplaceActions || [];
+        proposal.metadata.marketplaceActions = actions;
+
+        // Validate all assets exist and are in correct state
+        for (const action of actions) {
+          const asset = await this.assetRepository.findOne({
+            where: { id: action.assetId },
+          });
+
+          if (!asset) {
+            throw new BadRequestException(`Asset with ID ${action.assetId} not found`);
+          }
+
+          // For UNLIST and UPDATE_LISTING, verify asset is currently listed
+          if (action.exec === 'UNLIST' || action.exec === 'UPDATE_LISTING') {
+            if (asset.status !== 'listed') {
+              throw new BadRequestException(`Asset ${action.assetId} is not currently listed`);
+            }
+          }
+        }
+        break;
+      }
     }
 
     await this.proposalRepository.save(proposal);

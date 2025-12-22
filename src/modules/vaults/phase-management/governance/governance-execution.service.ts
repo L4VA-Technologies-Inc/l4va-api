@@ -389,15 +389,15 @@ export class GovernanceExecutionService {
 
             if (!asset) {
               this.logger.warn(`Asset not found for assetId: ${option.assetId}`);
-              skippedUnlists.push(option.assetName || option.assetId);
+              skippedUnlists.push(option.assetId);
               continue;
             }
 
-            const txHashIndex = this.extractTxHashIndex(option);
+            const txHashIndex = this.extractTxHashIndex(asset);
 
             if (!txHashIndex) {
-              this.logger.warn(`Cannot unlist NFT - missing txHashIndex for ${option.assetName || asset.name}`);
-              skippedUnlists.push(option.assetName || asset.name);
+              this.logger.warn(`Cannot unlist NFT - missing txHashIndex in asset metadata for ${asset.name}`);
+              skippedUnlists.push(asset.name || option.assetId);
               continue;
             }
 
@@ -455,21 +455,21 @@ export class GovernanceExecutionService {
 
             if (!asset) {
               this.logger.warn(`Asset not found for assetId: ${option.assetId}`);
-              skippedUpdates.push(option.assetName || option.assetId);
+              skippedUpdates.push(option.assetId);
               continue;
             }
 
-            const txHashIndex = this.extractTxHashIndex(option);
+            const txHashIndex = this.extractTxHashIndex(asset);
 
             if (!txHashIndex) {
-              this.logger.warn(`Cannot update listing - missing txHashIndex for ${option.assetName || asset.name}`);
-              skippedUpdates.push(option.assetName || asset.name);
+              this.logger.warn(`Cannot update listing - missing txHashIndex in asset metadata for ${asset.name}`);
+              skippedUpdates.push(asset.name || option.assetId);
               continue;
             }
 
             if (!option.newPrice) {
-              this.logger.warn(`Cannot update listing - missing new price for ${option.assetName || asset.name}`);
-              skippedUpdates.push(option.assetName || asset.name);
+              this.logger.warn(`Cannot update listing - missing new price for ${asset.name}`);
+              skippedUpdates.push(asset.name || option.assetId);
               continue;
             }
 
@@ -644,22 +644,20 @@ export class GovernanceExecutionService {
   }
 
   /**
-   * Extract txHashIndex from buying/selling option
-   * This should be provided in the proposal metadata or option
+   * Extract txHashIndex from asset metadata
+   * The txHashIndex is stored when an asset is listed on a marketplace
    */
-  private extractTxHashIndex(option: any): string | null {
-    // Check if txHashIndex is directly provided
-    if (option.txHashIndex) {
-      return option.txHashIndex;
+  private extractTxHashIndex(asset: any): string | null {
+    // Check asset metadata for listing information
+    if (asset.metadata?.txHashIndex) {
+      return asset.metadata.txHashIndex;
     }
 
-    // Check metadata for listing information
-    if (option.metadata?.txHashIndex) {
-      return option.metadata.txHashIndex;
+    // Legacy: check if stored directly on asset
+    if (asset.txHashIndex) {
+      return asset.txHashIndex;
     }
 
-    // For buy operations, this should be part of the proposal data
-    // If not available, we cannot proceed with the purchase
     return null;
   }
 

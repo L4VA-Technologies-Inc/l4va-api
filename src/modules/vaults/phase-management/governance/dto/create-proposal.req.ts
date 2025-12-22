@@ -122,6 +122,105 @@ export class MarketplaceAssetDto {
   listingId?: string;
 }
 
+export enum ExecType {
+  BUY = 'BUY',
+  SELL = 'SELL',
+  UNLIST = 'UNLIST',
+  UPDATE_LISTING = 'UPDATE_LISTING',
+}
+
+export enum SellType {
+  MARKET = 'Market',
+  LIST = 'List',
+}
+
+export enum MethodType {
+  NA = 'N/A',
+  GTC = 'GTC',
+}
+
+export class MarketplaceActionDto {
+  @ApiProperty({ description: 'Asset ID in the system' })
+  @IsString()
+  assetId: string;
+
+  @ApiProperty({
+    description: 'Action type: BUY, SELL, UNLIST, or UPDATE_LISTING',
+    enum: ExecType,
+  })
+  @IsEnum(ExecType)
+  exec: ExecType;
+
+  // ===== SELL fields =====
+  @ApiProperty({
+    description: 'Quantity to buy/sell',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  quantity?: string;
+
+  @ApiProperty({
+    description: 'Market or List sale type',
+    enum: SellType,
+    required: false,
+  })
+  @IsOptional()
+  @IsEnum(SellType)
+  sellType?: SellType;
+
+  @ApiProperty({
+    description: 'Duration in milliseconds',
+    required: false,
+  })
+  @IsOptional()
+  @IsNumber()
+  duration?: number;
+
+  @ApiProperty({
+    description: 'Method (N/A or GTC)',
+    enum: MethodType,
+    required: false,
+  })
+  @IsOptional()
+  @IsEnum(MethodType)
+  method?: MethodType;
+
+  @ApiProperty({
+    description: 'Price in ADA (for SELL)',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  price?: string;
+
+  // ===== UPDATE_LISTING field =====
+  @ApiProperty({
+    description: 'New price in ADA (for UPDATE_LISTING)',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  newPrice?: string;
+
+  // ===== BUY field =====
+  @ApiProperty({
+    description: 'Maximum price willing to pay in ADA (for BUY)',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  maxPrice?: string;
+
+  // ===== Common fields =====
+  @ApiProperty({
+    description: 'Market platform',
+    default: 'WayUp',
+  })
+  @IsString()
+  market: string;
+}
+
 export class CreateProposalReq {
   @ApiProperty({
     description: 'Title of the proposal',
@@ -210,6 +309,18 @@ export class CreateProposalReq {
   distributionAssets?: DistributionAssetDto[];
 
   @ApiProperty({
+    description: 'Marketplace actions for buy/sell proposals',
+    type: [MarketplaceActionDto],
+    required: false,
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => MarketplaceActionDto)
+  @Expose()
+  marketplaceActions?: MarketplaceActionDto[];
+
+  @ApiProperty({
     description: 'Proposal start time (as a string)',
     required: false,
   })
@@ -226,117 +337,4 @@ export class CreateProposalReq {
   @IsOptional()
   @Expose()
   metadata?: Record<string, any>;
-}
-
-export enum ExecType {
-  BUY = 'BUY',
-  SELL = 'SELL',
-  UNLIST = 'UNLIST',
-  UPDATE_LISTING = 'UPDATE_LISTING',
-}
-
-export enum SellType {
-  MARKET = 'Market',
-  LIST = 'List',
-}
-
-export enum MethodType {
-  NA = 'N/A',
-  GTC = 'GTC',
-}
-export class MarketplaceActionDto {
-  @ApiProperty({ description: 'Asset ID in the system' })
-  @IsString()
-  assetId: string;
-
-  @ApiProperty({ description: 'Asset name for display' })
-  @IsString()
-  assetName: string;
-
-  @ApiProperty({
-    description: 'Action type: BUY, SELL, UNLIST, or UPDATE_LISTING',
-    enum: ExecType,
-  })
-  @IsEnum(ExecType)
-  exec: ExecType;
-
-  // ===== SELL fields =====
-  @ApiProperty({
-    description: 'Quantity to buy/sell',
-    required: false,
-  })
-  @IsOptional()
-  @IsString()
-  quantity?: string;
-
-  @ApiProperty({
-    description: 'Market or List sale type',
-    enum: SellType,
-    required: false,
-  })
-  @IsOptional()
-  @IsEnum(SellType)
-  sellType?: SellType;
-
-  @ApiProperty({
-    description: 'Duration in milliseconds',
-    required: false,
-  })
-  @IsOptional()
-  @IsNumber()
-  duration?: number;
-
-  @ApiProperty({
-    description: 'Method (N/A or GTC)',
-    enum: MethodType,
-    required: false,
-  })
-  @IsOptional()
-  @IsEnum(MethodType)
-  method?: MethodType;
-
-  @ApiProperty({
-    description: 'Price in ADA (for SELL)',
-    required: false,
-  })
-  @IsOptional()
-  @IsString()
-  price?: string;
-
-  // ===== UNLIST / UPDATE_LISTING / BUY fields =====
-  @ApiProperty({
-    description:
-      'Transaction hash and output index (format: txHash#index) - Required for UNLIST, UPDATE_LISTING, and BUY',
-    example: 'abc123def456...#0',
-    required: false,
-  })
-  @IsOptional()
-  @IsString()
-  txHashIndex?: string;
-
-  // ===== UPDATE_LISTING field =====
-  @ApiProperty({
-    description: 'New price in ADA (for UPDATE_LISTING)',
-    required: false,
-  })
-  @IsOptional()
-  @IsString()
-  newPrice?: string;
-
-  // ===== BUY field =====
-  @ApiProperty({
-    description: 'Maximum price willing to pay in ADA (for BUY)',
-    required: false,
-  })
-  @IsOptional()
-  @IsString()
-  maxPrice?: string;
-
-  // ===== Common fields =====
-  @ApiProperty({
-    description: 'Market platform',
-    default: 'WayUp',
-  })
-  @IsString()
-  market: string;
 }
