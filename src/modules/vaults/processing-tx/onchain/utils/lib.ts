@@ -80,6 +80,10 @@ interface GetUtxosResult {
   totalAdaCollected?: number;
 }
 
+const CARDANO_NETWORK = process.env.CARDANO_NETWORK || 'preprod';
+const NETWORK_ID = Number(process.env.NETWORK_ID) || 0;
+const IS_MAINNET = CARDANO_NETWORK === 'mainnet';
+
 export const assetsToValue = (assets: Amount[]): Value => {
   const multiAsset = MultiAsset.new();
   const lovelace = assets.find(asset => asset.unit === 'lovelace');
@@ -384,7 +388,7 @@ export async function getVaultUtxo(
 }
 
 export function getAddressFromHash(hash: string): string {
-  return EnterpriseAddress.new(0, Credential.from_scripthash(ScriptHash.from_hex(hash)))
+  return EnterpriseAddress.new(NETWORK_ID, Credential.from_scripthash(ScriptHash.from_hex(hash)))
     .to_address()
     .to_bech32();
 }
@@ -409,11 +413,8 @@ export function getTransactionSize(txHex: string): number {
  * Vault 2 → Random Mnemonic B
  *
  * Vault 3 → Random Mnemonic C
- *
- * @param isMainnet Whether to generate a wallet for the mainnet or testnet.
- * @returns
  */
-export async function generateCardanoWallet(isMainnet: boolean): Promise<{
+export async function generateCardanoWallet(): Promise<{
   ticker: string;
   address: string;
   privateKey: string;
@@ -441,7 +442,7 @@ export async function generateCardanoWallet(isMainnet: boolean): Promise<{
 
   const publicKey = accountKey.to_public();
   const stakePublicKey = stakeKey.to_public();
-  const networkInfo = isMainnet ? NetworkInfo.mainnet() : NetworkInfo.testnet_preprod();
+  const networkInfo = IS_MAINNET ? NetworkInfo.mainnet() : NetworkInfo.testnet_preprod();
 
   const baseAddress = BaseAddress.new(
     networkInfo.network_id(),

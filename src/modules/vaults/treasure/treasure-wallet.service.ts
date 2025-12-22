@@ -77,7 +77,7 @@ export class TreasuryWalletService {
     }
 
     // Generate new Cardano wallet
-    const walletData = await generateCardanoWallet(this.isMainnet);
+    const walletData = await generateCardanoWallet();
 
     // Extract public key hash from the payment private key
     const privateKey = PrivateKey.from_bech32(walletData.privateKey);

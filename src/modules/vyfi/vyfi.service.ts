@@ -33,6 +33,7 @@ export class VyfiService {
   private readonly blockfrost: BlockFrostAPI;
   private readonly poolAddress: string;
   private readonly isMainnet: boolean;
+  private readonly networkId: number;
 
   constructor(
     @InjectRepository(Claim)
@@ -46,6 +47,7 @@ export class VyfiService {
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+    this.networkId = Number(this.configService.get<number>('NETWORK_ID')) || 0;
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
@@ -234,7 +236,7 @@ export class VyfiService {
 
     // Check if pool exists
     const poolCheck = await this.checkPool({
-      networkId: 0,
+      networkId: this.networkId,
       tokenAUnit: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
       tokenBUnit: 'lovelace',
     });
