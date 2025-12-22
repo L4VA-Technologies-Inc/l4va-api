@@ -364,10 +364,6 @@ export class L4vaRewardsService {
       minAda: 2000000,
     });
 
-    if (adminUtxos.length === 0) {
-      throw new BadRequestException('No UTXOs with L4VA tokens found in admin wallet');
-    }
-
     // Build transaction
     const input = {
       changeAddress: this.adminAddress,
