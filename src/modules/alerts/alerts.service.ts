@@ -11,13 +11,13 @@ export type SlackAlertType = 'asset_price_fetch_failed' | 'wallet_fetch_failed' 
 @Injectable()
 export class AlertsService {
   private readonly logger = new Logger(AlertsService.name);
-  private readonly slackWebhookUrl: string;
+  private readonly slackToken: string;
   private readonly slackChannel: string;
   private readonly SLACK_ALERT_COOLDOWN = 60 * 60 * 1000; // 1 hour in milliseconds
   private lastSlackAlert = new Map<string, number>();
 
   constructor(private readonly configService: ConfigService) {
-    this.slackWebhookUrl = this.configService.get<string>('SLACK_BOT_TOKEN');
+    this.slackToken = this.configService.get<string>('SLACK_BOT_TOKEN');
     this.slackChannel = `#${this.configService.get<string>('SLACK_CHANNEL')}`;
   }
 
@@ -28,8 +28,8 @@ export class AlertsService {
    */
   async sendAlert(alertType: SlackAlertType, data: SlackAlertData): Promise<void> {
     try {
-      if (!this.slackWebhookUrl) {
-        this.logger.debug('Slack webhook URL not configured, skipping alert');
+      if (!this.slackToken) {
+        this.logger.debug('Slack token not configured, skipping alert');
         return;
       }
 
@@ -45,16 +45,28 @@ export class AlertsService {
       // Format and send message
       const message = this.formatSlackMessage(alertType, data);
 
-      await axios.post(
-        this.slackWebhookUrl,
+      const response = await axios.post(
+        'https://slack.com/api/chat.postMessage',
         {
           channel: this.slackChannel,
-          ...message,
+          text: message.text,
+          blocks: message.blocks,
         },
         {
-          timeout: 5000,
+          headers: {
+            Authorization: `Bearer ${this.slackToken}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: 5000, // 5 second timeout for Slack API
         }
       );
+
+      if (response.data.ok) {
+        this.lastSlackAlert.set(alertType, now);
+        this.logger.log(`Slack alert sent successfully for ${alertType}`);
+      } else {
+        this.logger.error(`Failed to send Slack alert: ${response.data.error}`);
+      }
 
       // Update last alert time
       this.lastSlackAlert.set(alertType, now);
@@ -214,65 +226,6 @@ export class AlertsService {
             },
           ],
         };
-    }
-  }
-
-  /**
-   * Send a custom formatted alert
-   * @param title Alert title
-   * @param fields Key-value pairs for alert fields
-   */
-  async sendCustomAlert(title: string, fields: { [key: string]: string }): Promise<void> {
-    const timestamp = new Date().toLocaleString();
-
-    try {
-      if (!this.slackWebhookUrl) {
-        this.logger.debug('Slack webhook URL not configured, skipping alert');
-        return;
-      }
-
-      const blocks = [
-        {
-          type: 'header',
-          text: {
-            type: 'plain_text',
-            text: title,
-            emoji: true,
-          },
-        },
-        {
-          type: 'section',
-          fields: Object.entries(fields).map(([key, value]) => ({
-            type: 'mrkdwn',
-            text: `*${key}:*\n${value}`,
-          })),
-        },
-        {
-          type: 'context',
-          elements: [
-            {
-              type: 'mrkdwn',
-              text: `*Timestamp:* ${timestamp}`,
-            },
-          ],
-        },
-      ];
-
-      await axios.post(
-        this.slackWebhookUrl,
-        {
-          channel: this.slackChannel,
-          text: title,
-          blocks,
-        },
-        {
-          timeout: 5000,
-        }
-      );
-
-      this.logger.log(`Custom Slack alert sent: ${title}`);
-    } catch (error) {
-      this.logger.error(`Failed to send custom Slack alert: ${error.message}`);
     }
   }
 }

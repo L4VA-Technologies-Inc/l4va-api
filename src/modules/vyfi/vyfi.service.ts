@@ -47,7 +47,7 @@ export class VyfiService {
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
-    this.networkId = Number(this.configService.get<number>('NETWORK_ID')) || 0;
+    this.networkId = Number(this.configService.get<string>('NETWORK_ID')) || 0;
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });

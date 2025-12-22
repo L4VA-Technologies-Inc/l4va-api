@@ -275,7 +275,7 @@ export class L4vaRewardsService {
         status: ClaimStatus.PENDING, // On hold for now
         description: `L4VA Rewards - Month ${monthNumber + 1}/12 (VT Holder)`,
         metadata: {
-          l4va_role: holder.address === vault.owner.address ? 'AC/VI' : 'AC/VI',
+          l4va_role: 'AC/VI',
           month: monthNumber + 1,
           snapshot_id: latestSnapshot.id,
           vt_balance: holder.balance,
