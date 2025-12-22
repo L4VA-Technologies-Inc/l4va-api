@@ -68,8 +68,6 @@ export class AlertsService {
         this.logger.error(`Failed to send Slack alert: ${response.data.error}`);
       }
 
-      // Update last alert time
-      this.lastSlackAlert.set(alertType, now);
       this.logger.log(`Slack alert sent for ${alertType}`);
     } catch (error) {
       this.logger.error(`Failed to send Slack alert: ${error.message}`);

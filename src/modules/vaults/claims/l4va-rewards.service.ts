@@ -267,6 +267,15 @@ export class L4vaRewardsService {
         select: ['id'],
       });
 
+      // Skip if user doesn't exist - they need to create an account to claim
+      if (!user) {
+        this.logger.warn(
+          `Skipping L4VA claim for address ${holder.address} in vault ${vaultId} - user account not found. ` +
+            `User must create an account to claim rewards.`
+        );
+        continue;
+      }
+
       claims.push({
         user: { id: user.id } as any,
         vault: { id: vaultId } as any,
@@ -303,11 +312,19 @@ export class L4vaRewardsService {
 
     return Object.entries(addressBalances)
       .filter(([_, balance]) => BigInt(balance) > BigInt(0))
-      .map(([address, balance]) => ({
-        address,
-        balance,
-        percentage: Number((BigInt(balance) * BigInt(10000)) / totalSupply) / 10000, // 4 decimal precision
-      }))
+      .map(([address, balance]) => {
+        const balanceBigInt = BigInt(balance);
+
+        // Keep calculation in BigInt for precision
+        // Multiply by 10000 to get 4 decimal places, then convert to Number
+        const percentageBigInt = (balanceBigInt * BigInt(10000)) / totalSupply;
+
+        return {
+          address,
+          balance, // Keep as string to preserve precision
+          percentage: Number(percentageBigInt) / 10000, // Only convert final percentage
+        };
+      })
       .filter(holder => holder.percentage > 0);
   }
 

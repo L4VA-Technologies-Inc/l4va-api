@@ -291,7 +291,7 @@ export class AutomatedDistributionService {
         `${script_hash}${asset_vault_name}`
       );
 
-      this.l4vaRewardsService.initializeL4VARewards({
+      await this.l4vaRewardsService.initializeL4VARewards({
         vaultId,
         governancePhaseStart: vault.governance_phase_start,
         totalTVL: vault.total_assets_cost_ada,
