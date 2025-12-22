@@ -333,9 +333,7 @@ export class GovernanceService {
           // Prefer the canonical `marketplaceActions` field if present, otherwise fall back to
           // the legacy `buyingSellingOptions` field for backward compatibility.
           const marketplaceActions =
-            createProposalReq.metadata.marketplaceActions ??
-            createProposalReq.metadata.buyingSellingOptions ??
-            [];
+            createProposalReq.metadata.marketplaceActions ?? createProposalReq.metadata.buyingSellingOptions ?? [];
 
           proposal.metadata.marketplaceActions = marketplaceActions;
           proposal.abstain = createProposalReq.metadata.abstain || false;
