@@ -1,5 +1,4 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config/dist/config.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -8,6 +7,7 @@ import { ContributeReq } from './dto/contribute.req';
 import { Asset } from '@/database/asset.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { AssetStatus, AssetOriginType } from '@/types/asset.types';
 import { TransactionType } from '@/types/transaction.types';
@@ -15,8 +15,6 @@ import { VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class ContributionService {
-  private readonly PROTOCOL_CONTRIBUTORS_FEE: number;
-
   constructor(
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
@@ -25,10 +23,8 @@ export class ContributionService {
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
     private readonly transactionsService: TransactionsService,
-    private readonly configService: ConfigService
-  ) {
-    this.PROTOCOL_CONTRIBUTORS_FEE = this.configService.get<number>('PROTOCOL_CONTRIBUTORS_FEE');
-  }
+    private readonly systemSettingsService: SystemSettingsService
+  ) {}
 
   async contribute(
     vaultId: string,
@@ -195,7 +191,8 @@ export class ContributionService {
       type: TransactionType.contribute,
       assets: [],
       userId,
-      fee: this.PROTOCOL_CONTRIBUTORS_FEE,
+      fee: this.systemSettingsService.protocolContributorsFee,
+      metadata: contributeReq.assets,
     });
 
     return {

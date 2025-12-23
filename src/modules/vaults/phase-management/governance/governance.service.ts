@@ -15,9 +15,13 @@ import NodeCache from 'node-cache';
 import { In, IsNull, Not, Repository } from 'typeorm';
 
 import { CreateProposalReq } from './dto/create-proposal.req';
+import { CreateProposalRes } from './dto/create-proposal.res';
 import { AssetBuySellDto } from './dto/get-assets.dto';
+import { GetProposalDetailRes } from './dto/get-proposal-detail.res';
 import { GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';
+import { VoteRes } from './dto/vote.res';
+import { VoteCountingService } from './vote-counting.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
@@ -91,7 +95,8 @@ export class GovernanceService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly configService: ConfigService,
-    private readonly eventEmitter: EventEmitter2
+    private readonly eventEmitter: EventEmitter2,
+    private readonly voteCountingService: VoteCountingService
   ) {
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
 
@@ -141,7 +146,7 @@ export class GovernanceService {
       const results = await Promise.allSettled(
         lockedVaults.map(async (vault, index) => {
           if (index > 0) {
-            await new Promise(resolve => setTimeout(resolve, 5000)); //  Add delay between requests to avoid overwhelming BlockFrost
+            await new Promise(resolve => setTimeout(resolve, 1000)); //  Add delay between requests to avoid overwhelming BlockFrost
           }
           const snapshot = await this.createAutomaticSnapshot(
             vault.id,
@@ -252,20 +257,7 @@ export class GovernanceService {
     vaultId: string,
     createProposalReq: CreateProposalReq,
     userId: string
-  ): Promise<{
-    success: boolean;
-    message: string;
-    proposal: {
-      id: string;
-      vaultId: string;
-      title: string;
-      description: string;
-      creatorId: string;
-      status: ProposalStatus;
-      createdAt: Date;
-      endDate: Date;
-    };
-  }> {
+  ): Promise<CreateProposalRes> {
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
       select: ['id', 'vault_status', 'policy_id', 'asset_vault_name'],
@@ -301,20 +293,22 @@ export class GovernanceService {
       snapshotId: latestSnapshot.id,
     });
 
+    // Initialize metadata object
+    proposal.metadata = {};
+
     // Set type-specific fields based on proposal type
     switch (createProposalReq.type) {
       case ProposalType.STAKING:
-        proposal.fungibleTokens = createProposalReq.fts || [];
-        proposal.nonFungibleTokens = createProposalReq.nfts || [];
+        proposal.metadata.fungibleTokens = createProposalReq.fts || [];
+        proposal.metadata.nonFungibleTokens = createProposalReq.nfts || [];
         break;
 
       case ProposalType.DISTRIBUTION:
-        proposal.distributionAssets = createProposalReq.distributionAssets || [];
+        proposal.metadata.distributionAssets = createProposalReq.distributionAssets || [];
         break;
 
       case ProposalType.TERMINATION:
         if (createProposalReq.metadata) {
-          proposal.terminationReason = createProposalReq.metadata.reason;
           proposal.terminationDate = createProposalReq.metadata.terminationDate
             ? new Date(createProposalReq.metadata.terminationDate)
             : undefined;
@@ -323,16 +317,21 @@ export class GovernanceService {
 
       case ProposalType.BURNING:
         if (createProposalReq.metadata) {
-          proposal.burnAssets = createProposalReq.metadata.burnAssets || [];
+          proposal.metadata.burnAssets = createProposalReq.metadata.burnAssets || [];
         }
         break;
 
-      case ProposalType.BUY_SELL:
+      case ProposalType.BUY_SELL: // Deprecated - use MARKETPLACE_ACTION instead
         if (createProposalReq.metadata) {
-          proposal.buyingSellingOptions = createProposalReq.metadata.buyingSellingOptions || [];
+          // Prefer the canonical `marketplaceActions` field if present, otherwise fall back to
+          // the legacy `buyingSellingOptions` field for backward compatibility.
+          const marketplaceActions =
+            createProposalReq.metadata.marketplaceActions ?? createProposalReq.metadata.buyingSellingOptions ?? [];
+
+          proposal.metadata.marketplaceActions = marketplaceActions;
           proposal.abstain = createProposalReq.metadata.abstain || false;
 
-          for (const option of proposal.buyingSellingOptions) {
+          for (const option of proposal.metadata.marketplaceActions) {
             const asset = await this.assetRepository.findOne({
               where: { id: option.assetId },
             });
@@ -343,6 +342,31 @@ export class GovernanceService {
           }
         }
         break;
+
+      case ProposalType.MARKETPLACE_ACTION: {
+        // Use direct marketplaceActions from request body
+        const actions = createProposalReq.marketplaceActions || [];
+        proposal.metadata.marketplaceActions = actions;
+
+        // Validate all assets exist and are in correct state
+        for (const action of actions) {
+          const asset = await this.assetRepository.findOne({
+            where: { id: action.assetId },
+          });
+
+          if (!asset) {
+            throw new BadRequestException(`Asset with ID ${action.assetId} not found`);
+          }
+
+          // For UNLIST and UPDATE_LISTING, verify asset is currently listed
+          if (action.exec === 'UNLIST' || action.exec === 'UPDATE_LISTING') {
+            if (asset.status !== 'listed') {
+              throw new BadRequestException(`Asset ${action.assetId} is not currently listed`);
+            }
+          }
+        }
+        break;
+      }
     }
 
     await this.proposalRepository.save(proposal);
@@ -403,12 +427,16 @@ export class GovernanceService {
         }
 
         try {
-          const { totals } = await this.getVotes(proposal.id);
-          const votes = this.calculateVotePercentages(totals, proposal.abstain);
+          const { votes: voteList, totals } = await this.getVotes(proposal.id);
+          const voteResult = this.voteCountingService.calculateResult(voteList, 0, BigInt(totals.totalVotingPower));
 
           return {
             ...baseProposal,
-            votes,
+            votes: {
+              yes: voteResult.yesVotePercent,
+              no: voteResult.noVotePercent,
+              abstain: proposal.abstain ? voteResult.abstainVotePercent : 0,
+            },
           };
         } catch (error) {
           this.logger.error(`Error fetching votes for proposal ${proposal.id}: ${error.message}`, error.stack);
@@ -420,52 +448,7 @@ export class GovernanceService {
     return processedProposals;
   }
 
-  private calculateVotePercentages(
-    totals: { yes: string; no: string; abstain: string; totalVotingPower: string },
-    allowAbstain: boolean
-  ): { yes: number; no: number; abstain: number } {
-    const totalVotingPower = BigInt(totals.totalVotingPower);
-
-    if (totalVotingPower === BigInt(0)) {
-      return { yes: 0, no: 0, abstain: 0 };
-    }
-
-    const yesPercentage = Number((BigInt(totals.yes) * BigInt(100)) / totalVotingPower);
-    const noPercentage = Number((BigInt(totals.no) * BigInt(100)) / totalVotingPower);
-    const abstainPercentage = allowAbstain ? Number((BigInt(totals.abstain) * BigInt(100)) / totalVotingPower) : 0;
-
-    return {
-      yes: yesPercentage,
-      no: noPercentage,
-      abstain: abstainPercentage,
-    };
-  }
-
-  async getProposal(
-    proposalId: string,
-    userId: string
-  ): Promise<{
-    proposal: Proposal;
-    votes: {
-      id: string;
-      voterAddress: string;
-      voteWeight: string;
-      vote: VoteType;
-      timestamp: Date;
-    }[];
-    totals: {
-      yes: string;
-      no: string;
-      abstain: string;
-      votedPercentage: number;
-    };
-    canVote: boolean;
-    selectedVote: VoteType | null;
-    proposer: {
-      id: string;
-      address: string;
-    };
-  }> {
+  async getProposal(proposalId: string, userId: string): Promise<GetProposalDetailRes> {
     const proposal = await this.proposalRepository.findOne({
       where: { id: proposalId },
     });
@@ -523,66 +506,80 @@ export class GovernanceService {
     }
 
     let burnAssetsWithNames = [];
-    if (proposal.burnAssets && proposal.burnAssets.length > 0) {
+    if (proposal.metadata.burnAssets && proposal.metadata.burnAssets.length > 0) {
       const burnAssets = await this.assetRepository.find({
-        where: { id: In(proposal.burnAssets) },
-        select: ['metadata'],
+        where: { id: In(proposal.metadata.burnAssets) },
+        select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'image', 'name', 'metadata'],
       });
       burnAssetsWithNames = burnAssets.map(asset => {
-        let name = asset.metadata?.name;
+        let name = asset.name || asset.metadata?.name;
         if (!name) name = 'Unknown Asset';
+
+        let imageUrl = null;
+        const image = asset.image || asset.metadata?.image;
+        if (image) {
+          imageUrl = image.startsWith('ipfs://') ? image.replace('ipfs://', 'https://ipfs.io/ipfs/') : image;
+        }
+
         return {
-          name: name || 'Unknown Asset',
+          id: asset.id,
+          name,
+          imageUrl,
+          policyId: asset.policy_id,
+          assetId: asset.asset_id,
+          type: asset.type,
+          quantity: asset.quantity,
         };
       });
     }
 
     let distributionAssetsWithNames = [];
-    if (proposal.distributionAssets && proposal.distributionAssets.length > 0) {
+    if (proposal.metadata.distributionAssets && proposal.metadata.distributionAssets.length > 0) {
+      const distributionAssetIds = proposal.metadata.distributionAssets.map(da => da.id);
       const distributionAssets = await this.assetRepository.find({
-        where: { id: In(proposal.distributionAssets) },
-        select: ['metadata'],
+        where: { id: In(distributionAssetIds) },
+        select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'image', 'name', 'metadata'],
       });
+
+      // Create a map for quick lookup of distribution amounts
+      const distributionAmountMap = new Map(proposal.metadata.distributionAssets.map(da => [da.id, da.amount]));
+
       distributionAssetsWithNames = distributionAssets.map(asset => {
-        let name = asset.metadata?.name;
+        let name = asset.name || asset.metadata?.name;
         if (!name) name = 'Unknown Asset';
+
+        let imageUrl = null;
+        const image = asset.image || asset.metadata?.image;
+        if (image) {
+          imageUrl = image.startsWith('ipfs://') ? image.replace('ipfs://', 'https://ipfs.io/ipfs/') : image;
+        }
+
         return {
-          name: name || 'Unknown Asset',
+          id: asset.id,
+          name,
+          imageUrl,
+          policyId: asset.policy_id,
+          assetId: asset.asset_id,
+          type: asset.type,
+          quantity: asset.quantity,
+          amount: distributionAmountMap.get(asset.id) || 0,
         };
       });
     }
 
     return {
-      proposal: {
-        ...proposal,
-        burnAssets: burnAssetsWithNames,
-        distributionAssets: distributionAssetsWithNames,
-      },
+      proposal,
       votes,
       totals,
       canVote,
       selectedVote,
       proposer,
+      burnAssets: burnAssetsWithNames,
+      distributionAssets: distributionAssetsWithNames,
     };
   }
 
-  async vote(
-    proposalId: string,
-    voteReq: VoteReq,
-    userId: string
-  ): Promise<{
-    success: boolean;
-    message: string;
-    vote: {
-      id: string;
-      proposalId: string;
-      voterId: string;
-      voterAddress: string;
-      voteWeight: string;
-      vote: VoteType;
-      timestamp: Date;
-    };
-  }> {
+  async vote(proposalId: string, voteReq: VoteReq, userId: string): Promise<VoteRes> {
     const proposal = await this.proposalRepository.findOne({
       where: { id: proposalId },
     });
@@ -681,33 +678,27 @@ export class GovernanceService {
       throw new NotFoundException('Snapshot not found');
     }
 
-    const totalVotingPower = Object.values(snapshot.addressBalances)
-      .reduce((sum, balance) => BigInt(sum) + BigInt(balance), BigInt(0))
-      .toString();
+    const totalVotingPowerBigInt = Object.values(snapshot.addressBalances).reduce(
+      (sum, balance) => BigInt(sum) + BigInt(balance),
+      BigInt(0)
+    );
+    const totalVotingPower = totalVotingPowerBigInt.toString();
 
-    // Calculate vote totals
+    // Use vote counting service to calculate all vote totals and percentages
+    const voteResult = this.voteCountingService.calculateResult(votes, 0, totalVotingPowerBigInt);
+
     const totals = {
-      yes: '0',
-      no: '0',
-      abstain: '0',
-      totalVotingPower, // Include this in the returned totals
+      yes: voteResult.yesVotes.toString(),
+      no: voteResult.noVotes.toString(),
+      abstain: voteResult.abstainVotes.toString(),
+      totalVotingPower,
       votedPercentage: 0,
     };
 
-    votes.forEach(vote => {
-      if (vote.vote === VoteType.YES) {
-        totals.yes = (BigInt(totals.yes) + BigInt(vote.voteWeight)).toString();
-      } else if (vote.vote === VoteType.NO) {
-        totals.no = (BigInt(totals.no) + BigInt(vote.voteWeight)).toString();
-      } else if (vote.vote === VoteType.ABSTAIN) {
-        totals.abstain = (BigInt(totals.abstain) + BigInt(vote.voteWeight)).toString();
-      }
-    });
-
     // Calculate the percentage of total voting power that has voted
-    const votedVotingPower = BigInt(totals.yes) + BigInt(totals.no) + BigInt(totals.abstain);
-    if (BigInt(totalVotingPower) > 0) {
-      totals.votedPercentage = Number((votedVotingPower * BigInt(100)) / BigInt(totalVotingPower));
+    const votedVotingPower = voteResult.yesVotes + voteResult.noVotes + voteResult.abstainVotes;
+    if (totalVotingPowerBigInt > 0) {
+      totals.votedPercentage = Number((votedVotingPower * BigInt(100)) / totalVotingPowerBigInt);
     }
 
     return {
@@ -794,7 +785,11 @@ export class GovernanceService {
   async getAssetsToStake(vaultId: string): Promise<Asset[]> {
     try {
       const assets = await this.assetRepository.find({
-        where: { vault: { id: vaultId } },
+        where: {
+          vault: { id: vaultId },
+          type: In([AssetType.FT, AssetType.NFT]),
+          status: AssetStatus.LOCKED,
+        },
       });
       return assets;
     } catch (error) {
@@ -886,6 +881,74 @@ export class GovernanceService {
     } catch (error) {
       this.logger.error(`Error getting assets for buy-sell proposals for vault ${vaultId}: ${error.message}`);
       throw new InternalServerErrorException('Error getting assets for buying/selling');
+    }
+  }
+
+  async getAssetsToUnlist(vaultId: string): Promise<AssetBuySellDto[]> {
+    try {
+      // Get all listed assets in the vault
+      const assets = await this.assetRepository.find({
+        where: [
+          { vault: { id: vaultId }, type: AssetType.NFT, status: AssetStatus.LISTED },
+          { vault: { id: vaultId }, type: AssetType.FT, status: AssetStatus.LISTED },
+        ],
+        select: [
+          'id',
+          'name',
+          'policy_id',
+          'quantity',
+          'dex_price',
+          'floor_price',
+          'image',
+          'metadata',
+          'type',
+          'listing_market',
+          'listing_price',
+          'listing_tx_hash',
+          'listed_at',
+        ],
+      });
+
+      return plainToInstance(AssetBuySellDto, assets, {
+        excludeExtraneousValues: true,
+      });
+    } catch (error) {
+      this.logger.error(`Error getting assets to unlist for vault ${vaultId}: ${error.message}`);
+      throw new InternalServerErrorException('Error getting assets for unlisting');
+    }
+  }
+
+  async getAssetsToUpdateListing(vaultId: string): Promise<AssetBuySellDto[]> {
+    try {
+      // Get all listed assets in the vault that can have their listing updated
+      const assets = await this.assetRepository.find({
+        where: [
+          { vault: { id: vaultId }, type: AssetType.NFT, status: AssetStatus.LISTED },
+          { vault: { id: vaultId }, type: AssetType.FT, status: AssetStatus.LISTED },
+        ],
+        select: [
+          'id',
+          'name',
+          'policy_id',
+          'quantity',
+          'dex_price',
+          'floor_price',
+          'image',
+          'metadata',
+          'type',
+          'listing_market',
+          'listing_price',
+          'listing_tx_hash',
+          'listed_at',
+        ],
+      });
+
+      return plainToInstance(AssetBuySellDto, assets, {
+        excludeExtraneousValues: true,
+      });
+    } catch (error) {
+      this.logger.error(`Error getting assets to update listing for vault ${vaultId}: ${error.message}`);
+      throw new InternalServerErrorException('Error getting assets for updating listings');
     }
   }
 

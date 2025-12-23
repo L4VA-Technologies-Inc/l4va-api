@@ -2,20 +2,25 @@ import { HttpModule } from '@nestjs/axios';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { WayUpController } from './wayup.controller';
+import { TreasureWalletModule } from '../vaults/treasure/treasure-wallet.module';
+
 import { WayUpService } from './wayup.service';
 
+import { Asset } from '@/database/asset.entity';
 import { Vault } from '@/database/vault.entity';
 import { VaultTreasuryWallet } from '@/database/vaultTreasuryWallet.entity';
-import { GoogleKMSService } from '@/modules/google_cloud/google-kms.service';
-import { GoogleSecretService } from '@/modules/google_cloud/google-secret.service';
-import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
-import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
+import { AssetsModule } from '@/modules/vaults/assets/assets.module';
+import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockchain.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Vault, VaultTreasuryWallet]), HttpModule],
-  controllers: [WayUpController],
-  providers: [WayUpService, BlockchainService, TreasuryWalletService, GoogleKMSService, GoogleSecretService],
+  imports: [
+    TypeOrmModule.forFeature([Vault, VaultTreasuryWallet, Asset]),
+    HttpModule,
+    AssetsModule,
+    BlockchainModule,
+    TreasureWalletModule,
+  ],
+  providers: [WayUpService],
   exports: [WayUpService],
 })
 export class WayUpModule {}

@@ -12,6 +12,7 @@ import { GetProposalDetailRes } from './dto/get-proposal-detail.res';
 import { GetProposalsRes, GetProposalsResItem } from './dto/get-proposal.dto';
 import { GetVotingPowerRes } from './dto/get-voting-power.res';
 import { VoteReq } from './dto/vote.req';
+import { VoteRes } from './dto/vote.res';
 import { GovernanceService } from './governance.service';
 
 import { AuthGuard } from '@/modules/auth/auth.guard';
@@ -57,12 +58,12 @@ export class GovernanceController {
   @Post('proposals/:proposalId/vote')
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Vote on a proposal' })
-  @ApiResponse({ status: 201, description: 'Vote recorded successfully' })
+  @ApiResponse({ status: 201, description: 'Vote recorded successfully', type: VoteRes })
   async vote(
     @Req() req: AuthRequest,
     @Param('proposalId', ParseUUIDPipe) proposalId: string,
     @Body() voteReq: VoteReq
-  ) {
+  ): Promise<VoteRes> {
     const userId = req.user.sub;
     return this.governanceService.vote(proposalId, voteReq, userId);
   }
@@ -101,6 +102,30 @@ export class GovernanceController {
   })
   async getAssetsToBuySell(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<AssetBuySellDto[]> {
     return await this.governanceService.getAssetsToBuySell(vaultId);
+  }
+
+  @Get('vaults/:vaultId/assets/unlist')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Get assets available for unlisting proposals' })
+  @ApiResponse({
+    status: 200,
+    description: 'List of assets available for unlisting',
+    type: [AssetBuySellDto],
+  })
+  async getAssetsToUnlist(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<AssetBuySellDto[]> {
+    return await this.governanceService.getAssetsToUnlist(vaultId);
+  }
+
+  @Get('vaults/:vaultId/assets/update-listing')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Get assets available for updating listings' })
+  @ApiResponse({
+    status: 200,
+    description: 'List of assets available for updating listings',
+    type: [AssetBuySellDto],
+  })
+  async getAssetsToUpdateListing(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<AssetBuySellDto[]> {
+    return await this.governanceService.getAssetsToUpdateListing(vaultId);
   }
 
   @Get('vaults/:vaultId/assets/stake')

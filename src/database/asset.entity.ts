@@ -130,6 +130,22 @@ export class Asset {
   @Expose({ name: 'metadata' })
   metadata: any;
 
+  @Expose({ name: 'listingMarket' })
+  @Column({ name: 'listing_market', type: 'text', nullable: true })
+  listing_market?: string;
+
+  @Expose({ name: 'listingPrice' })
+  @Column({ name: 'listing_price', type: 'decimal', precision: 20, scale: 6, nullable: true })
+  listing_price?: number;
+
+  @Expose({ name: 'listingTxHash' })
+  @Column({ name: 'listing_tx_hash', type: 'text', nullable: true })
+  listing_tx_hash?: string;
+
+  @Expose({ name: 'listedAt' })
+  @Column({ name: 'listed_at', type: 'timestamptz', nullable: true })
+  listed_at?: Date;
+
   @Expose({ name: 'transaction' })
   @ManyToOne(() => Transaction, (transaction: Transaction) => transaction.id)
   @JoinColumn({ name: 'transaction_id' })
