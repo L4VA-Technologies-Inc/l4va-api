@@ -81,7 +81,7 @@ export class SystemSettingsService implements OnModuleInit {
   }
 
   get vlrmCreatorFeeEnabled(): boolean {
-    return this.settings.vlrm_creator_fee_enabled && this.settings.vlrm_creator_fee_enabled;
+    return this.settings.vlrm_creator_fee_enabled;
   }
 
   get protocolContributorsFee(): number {
