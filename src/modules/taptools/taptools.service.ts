@@ -548,31 +548,27 @@ export class TaptoolsService {
     try {
       const adaPriceUsd = await this.getAdaPrice();
 
-      if (this.isTestnetAddress(walletAddress)) {
-        // Get overview (cached)
-        const overview = await this.getWalletOverview(walletAddress, adaPriceUsd);
+      // Get overview (cached)
+      const overview = await this.getWalletOverview(walletAddress, adaPriceUsd);
 
-        // Get paginated assets
-        const { assets, pagination } = await this.getPaginatedAssets(
-          walletAddress,
-          page,
-          limit,
-          filter,
-          whitelistedPolicies
-        );
+      // Get paginated assets
+      const { assets, pagination } = await this.getPaginatedAssets(
+        walletAddress,
+        page,
+        limit,
+        filter,
+        whitelistedPolicies
+      );
 
-        const result = {
-          overview,
-          assets,
-          pagination,
-        };
+      const result = {
+        overview,
+        assets,
+        pagination,
+      };
 
-        return plainToInstance(PaginatedWalletSummaryDto, result, {
-          excludeExtraneousValues: true,
-        });
-      } else {
-        throw new HttpException('Only testnet addresses are supported', 400);
-      }
+      return plainToInstance(PaginatedWalletSummaryDto, result, {
+        excludeExtraneousValues: true,
+      });
     } catch (err) {
       this.logger.error('Error fetching paginated wallet summary:', err.message);
 
