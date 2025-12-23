@@ -18,6 +18,7 @@ import { ChatModule } from './modules/chat/chat.module';
 import { DexHunterModule } from './modules/dexhunter/dexhunter.module';
 import { DistributionModule } from './modules/distribution/distribution.module';
 import { JwtGlobalModule } from './modules/globals/jwt_global_module/jwt_global.module';
+import { SystemSettingsModule } from './modules/globals/system-settings';
 import { GoogleCloudModule } from './modules/google_cloud/google-cloud.module';
 import { GoogleCloudStorageModule } from './modules/google_cloud/google_bucket/bucket.module';
 import { UsersModule } from './modules/users/users.module';
@@ -73,6 +74,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
       ],
     }),
     JwtGlobalModule,
+    SystemSettingsModule,
     AuthModule,
     AlertsModule,
     AssetsModule,

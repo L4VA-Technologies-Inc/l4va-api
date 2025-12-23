@@ -1,5 +1,4 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config/dist/config.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -10,23 +9,20 @@ import { AcquireReq } from './dto/acquire.req';
 
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { TransactionType } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class AcquireService {
-  private readonly PROTOCOL_ACQUIRERS_FEE: number;
-
   constructor(
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly transactionsService: TransactionsService,
-    private readonly configService: ConfigService
-  ) {
-    this.PROTOCOL_ACQUIRERS_FEE = this.configService.get<number>('PROTOCOL_ACQUIRERS_FEE');
-  }
+    private readonly systemSettingsService: SystemSettingsService
+  ) {}
 
   async acquire(
     vaultId: string,
@@ -84,7 +80,7 @@ export class AcquireService {
       amount: acquireReq.assets.reduce((sum, asset) => sum + (asset.quantity || 0), 0),
       assets: [],
       userId,
-      fee: this.PROTOCOL_ACQUIRERS_FEE,
+      fee: this.systemSettingsService.protocolAcquiresFee,
       metadata: acquireReq.assets,
     });
 

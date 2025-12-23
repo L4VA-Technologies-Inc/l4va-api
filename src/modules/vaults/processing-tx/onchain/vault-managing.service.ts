@@ -34,9 +34,9 @@ import {
 
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
-import { SystemSettings } from '@/database/systemSettings.entity';
 import { Vault } from '@/database/vault.entity';
 import { VaultCreationInput } from '@/modules/distribution/distribution.types';
+import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -102,20 +102,17 @@ export class VaultManagingService {
 
   private readonly VLRM_HEX_ASSET_NAME: string;
   private readonly VLRM_POLICY_ID: string;
-  private VLRM_CREATOR_FEE: number;
-  private readonly VLRM_CREATOR_FEE_ENABLED: boolean;
 
   constructor(
     @InjectRepository(Asset)
     private readonly assetsRepository: Repository<Asset>,
     @InjectRepository(AssetsWhitelistEntity)
     private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
-    @InjectRepository(SystemSettings)
-    private readonly systemSettingsRepository: Repository<SystemSettings>,
     private readonly configService: ConfigService,
     @Inject(BlockchainService)
     private readonly blockchainService: BlockchainService,
-    private readonly transactionsService: TransactionsService
+    private readonly transactionsService: TransactionsService,
+    private readonly systemSettingsService: SystemSettingsService
   ) {
     this.blueprintTitle = this.configService.get<string>('BLUEPRINT_TITLE');
     this.scPolicyId = this.configService.get<string>('SC_POLICY_ID');
@@ -127,16 +124,10 @@ export class VaultManagingService {
     this.unparametizedScriptHash = this.configService.get<string>('CONTRIBUTION_SCRIPT_HASH');
     this.VLRM_HEX_ASSET_NAME = this.configService.get<string>('VLRM_HEX_ASSET_NAME');
     this.VLRM_POLICY_ID = this.configService.get<string>('VLRM_POLICY_ID');
-    this.VLRM_CREATOR_FEE_ENABLED = this.configService.get<string>('VLRM_CREATOR_FEE_ENABLED') === 'true';
     this.networkId = Number(this.configService.get<string>('NETWORK_ID')) || 0;
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
-  }
-
-  async onModuleInit(): Promise<void> {
-    const settings = await this.systemSettingsRepository.find();
-    this.VLRM_CREATOR_FEE = settings?.[0]?.data?.vlrm_creator_fee || 100;
   }
 
   /**
@@ -168,8 +159,13 @@ export class VaultManagingService {
         minAda: 2000000,
         filterByAda: 8000000,
         validateUtxos: false,
-        ...(this.VLRM_CREATOR_FEE_ENABLED && {
-          targetAssets: [{ token: `${this.VLRM_POLICY_ID}${this.VLRM_HEX_ASSET_NAME}`, amount: this.VLRM_CREATOR_FEE }],
+        ...(this.systemSettingsService.vlrmCreatorFeeEnabled && {
+          targetAssets: [
+            {
+              token: `${this.VLRM_POLICY_ID}${this.VLRM_HEX_ASSET_NAME}`,
+              amount: this.systemSettingsService.vlrmCreatorFee,
+            },
+          ],
         }),
       } // 4 ADA minimum
     );
@@ -316,7 +312,7 @@ export class VaultManagingService {
               hash: scriptHash,
             },
           },
-          ...(this.VLRM_CREATOR_FEE_ENABLED
+          ...(this.systemSettingsService.vlrmCreatorFeeEnabled
             ? [
                 {
                   address: vaultAddress,
@@ -324,7 +320,7 @@ export class VaultManagingService {
                     {
                       assetName: { name: this.VLRM_HEX_ASSET_NAME, format: 'hex' },
                       policyId: this.VLRM_POLICY_ID,
-                      quantity: this.VLRM_CREATOR_FEE,
+                      quantity: this.systemSettingsService.vlrmCreatorFee,
                     },
                   ],
                 },
@@ -643,26 +639,25 @@ export class VaultManagingService {
 
       await this.transactionsService.updateTransactionHash(signedTx.txId, result.txHash);
 
-      if (this.VLRM_CREATOR_FEE_ENABLED && this.VLRM_CREATOR_FEE > 0) {
+      if (this.systemSettingsService.vlrmCreatorFeeEnabled && this.systemSettingsService.vlrmCreatorFee > 0) {
         const vlrmAsset = this.assetsRepository.create({
           vault: { id: vault.id },
           policy_id: this.VLRM_POLICY_ID,
           asset_id: `${this.VLRM_POLICY_ID}${this.VLRM_HEX_ASSET_NAME}`,
           type: AssetType.FT,
-          quantity: this.VLRM_CREATOR_FEE,
+          quantity: this.systemSettingsService.vlrmCreatorFee,
           status: AssetStatus.PENDING,
           origin_type: AssetOriginType.FEE,
           transaction: { id: signedTx.txId },
           added_by: { id: ownerId },
           image: 'ipfs://QmdYu513Bu7nfKV5LKP6cmpZ8HHXifQLH6FTTzv3VbbqwP', // VLRM logo
-          metadata: {
-            purpose: 'vault_creation_fee',
-          },
         });
 
         await this.assetsRepository.save(vlrmAsset);
 
-        this.logger.log(`Created VLRM asset record for vault ${vault.id}: ${this.VLRM_CREATOR_FEE} tokens`);
+        this.logger.log(
+          `Created VLRM asset record for vault ${vault.id}: ${this.systemSettingsService.vlrmCreatorFee} tokens`
+        );
       }
 
       if (result.txHash) {

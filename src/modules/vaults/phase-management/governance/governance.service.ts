@@ -143,7 +143,7 @@ export class GovernanceService {
       const results = await Promise.allSettled(
         lockedVaults.map(async (vault, index) => {
           if (index > 0) {
-            await new Promise(resolve => setTimeout(resolve, 5000)); //  Add delay between requests to avoid overwhelming BlockFrost
+            await new Promise(resolve => setTimeout(resolve, 1000)); //  Add delay between requests to avoid overwhelming BlockFrost
           }
           const snapshot = await this.createAutomaticSnapshot(
             vault.id,

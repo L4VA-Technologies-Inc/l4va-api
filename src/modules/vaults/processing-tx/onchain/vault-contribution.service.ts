@@ -25,8 +25,6 @@ import { TransactionStatus } from '@/types/transaction.types';
 @Injectable()
 export class VaultContributionService {
   private readonly logger = new Logger(VaultContributionService.name);
-  private readonly FLAT_FEE: number;
-  private readonly feeAddress: string;
   private readonly adminAddress: string;
   private readonly adminHash: string;
   private readonly adminSKey: string;
@@ -44,9 +42,7 @@ export class VaultContributionService {
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
-    this.feeAddress = this.configService.get<string>('FEE_ADDRESS');
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
-    this.FLAT_FEE = Number(this.configService.get<string>('PROTOCOL_FLAT_FEE'));
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
@@ -195,20 +191,15 @@ export class VaultContributionService {
               },
             },
           },
-          // Flat Fee
-          {
-            address: this.adminAddress,
-            lovelace: this.FLAT_FEE,
-          },
           // Protocol Fee
-          // ...(transaction.fee > 0
-          //   ? [
-          //       {
-          //         address: this.feeAddress, // Fee address
-          //         lovelace: transaction.fee,
-          //       },
-          //     ]
-          //   : []),
+          ...(transaction.fee > 0
+            ? [
+                {
+                  address: this.adminAddress,
+                  lovelace: transaction.fee,
+                },
+              ]
+            : []),
         ],
         requiredSigners: [this.adminHash],
         requiredInputs, // Add the required inputs here
