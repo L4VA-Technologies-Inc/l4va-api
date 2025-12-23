@@ -254,6 +254,7 @@ export class GovernanceExecutionService {
       if (operations.sells.length > 0) {
         try {
           const listings = [];
+          const listingAssetInfos = [];
           const skippedSells = [];
 
           for (const option of operations.sells) {
@@ -268,11 +269,17 @@ export class GovernanceExecutionService {
             // Extract assetName from asset_id (format: policyId + assetName in hex)
             const policyId = asset.policy_id;
             const assetName = asset.asset_id.substring(policyId.length); // Remove policyId prefix
+            const priceAda = parseFloat(option.price);
 
             listings.push({
               policyId,
               assetName,
-              priceAda: parseFloat(option.price),
+              priceAda,
+            });
+
+            listingAssetInfos.push({
+              assetId: option.assetId,
+              price: priceAda,
             });
           }
 
@@ -284,11 +291,17 @@ export class GovernanceExecutionService {
             this.logger.log(`Successfully listed ${listings.length} NFT(s) on WayUp. TxHash: ${result.txHash}`);
             hasSuccessfulOperation = true;
 
-            // Update asset statuses to LISTED in database
+            // Update asset statuses to LISTED in database with individual listing prices
             try {
-              const listedAssetIds = operations.sells.map(op => op.assetId).filter(id => assetMap.has(id));
-              await this.assetsService.markAssetsAsListed(listedAssetIds);
-              this.logger.log(`Confirmed ${listedAssetIds.length} asset(s) marked as LISTED in database`);
+              await this.assetsService.markAssetsAsListedWithPrices(
+                listingAssetInfos.map(info => ({
+                  assetId: info.assetId,
+                  price: info.price,
+                  market,
+                  txHash: result.txHash,
+                }))
+              );
+              this.logger.log(`Confirmed ${listingAssetInfos.length} asset(s) marked as LISTED in database`);
             } catch (statusError) {
               this.logger.warn(`Failed to update asset statuses to LISTED: ${statusError.message}`);
             }

@@ -289,7 +289,14 @@ export class AssetsService {
     );
   }
 
-  async markAssetsAsListed(assetIds: string[]): Promise<void> {
+  async markAssetsAsListed(
+    assetIds: string[],
+    listingInfo?: {
+      market?: string;
+      price?: number;
+      txHash?: string;
+    }
+  ): Promise<void> {
     if (assetIds.length === 0) return;
 
     await this.assetsRepository.update(
@@ -298,7 +305,13 @@ export class AssetsService {
         status: AssetStatus.EXTRACTED, // Only extracted assets can be listed
         deleted: false,
       },
-      { status: AssetStatus.LISTED }
+      {
+        status: AssetStatus.LISTED,
+        listing_market: listingInfo?.market,
+        listing_price: listingInfo?.price,
+        listing_tx_hash: listingInfo?.txHash,
+        listed_at: new Date(),
+      }
     );
   }
 
@@ -324,7 +337,48 @@ export class AssetsService {
         status: AssetStatus.LISTED,
         deleted: false,
       },
-      { status: AssetStatus.EXTRACTED }
+      {
+        status: AssetStatus.EXTRACTED,
+        listing_market: null,
+        listing_price: null,
+        listing_tx_hash: null,
+        listed_at: null,
+      }
+    );
+  }
+
+  /**
+   * Mark multiple assets as listed with individual listing prices
+   */
+  async markAssetsAsListedWithPrices(
+    listings: Array<{
+      assetId: string;
+      price: number;
+      market: string;
+      txHash: string;
+    }>
+  ): Promise<void> {
+    if (listings.length === 0) return;
+
+    const listedAt = new Date();
+
+    await Promise.all(
+      listings.map(listing =>
+        this.assetsRepository.update(
+          {
+            id: listing.assetId,
+            status: AssetStatus.EXTRACTED,
+            deleted: false,
+          },
+          {
+            status: AssetStatus.LISTED,
+            listing_market: listing.market,
+            listing_price: listing.price,
+            listing_tx_hash: listing.txHash,
+            listed_at: listedAt,
+          }
+        )
+      )
     );
   }
 

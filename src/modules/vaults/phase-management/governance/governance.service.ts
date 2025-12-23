@@ -892,7 +892,21 @@ export class GovernanceService {
           { vault: { id: vaultId }, type: AssetType.NFT, status: AssetStatus.LISTED },
           { vault: { id: vaultId }, type: AssetType.FT, status: AssetStatus.LISTED },
         ],
-        select: ['id', 'policy_id', 'quantity', 'dex_price', 'floor_price', 'metadata', 'type'],
+        select: [
+          'id',
+          'name',
+          'policy_id',
+          'quantity',
+          'dex_price',
+          'floor_price',
+          'image',
+          'metadata',
+          'type',
+          'listing_market',
+          'listing_price',
+          'listing_tx_hash',
+          'listed_at',
+        ],
       });
 
       return plainToInstance(AssetBuySellDto, assets, {
@@ -912,7 +926,21 @@ export class GovernanceService {
           { vault: { id: vaultId }, type: AssetType.NFT, status: AssetStatus.LISTED },
           { vault: { id: vaultId }, type: AssetType.FT, status: AssetStatus.LISTED },
         ],
-        select: ['id', 'policy_id', 'quantity', 'dex_price', 'floor_price', 'metadata', 'type'],
+        select: [
+          'id',
+          'name',
+          'policy_id',
+          'quantity',
+          'dex_price',
+          'floor_price',
+          'image',
+          'metadata',
+          'type',
+          'listing_market',
+          'listing_price',
+          'listing_tx_hash',
+          'listed_at',
+        ],
       });
 
       return plainToInstance(AssetBuySellDto, assets, {
