@@ -1,7 +1,8 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { Expose } from 'class-transformer';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Expose, Type } from 'class-transformer';
 
 import { Proposal } from '@/database/proposal.entity';
+import { AssetType } from '@/types/asset.types';
 import { VoteType } from '@/types/vote.types';
 
 export class ProposalVoteDto {
@@ -54,6 +55,47 @@ export class ProposerDto {
   address: string;
 }
 
+export class ProposalAssetDto {
+  @Expose()
+  @ApiProperty({ description: 'Asset ID', example: '123e4567-e89b-12d3-a456-426614174000' })
+  id: string;
+
+  @Expose()
+  @ApiProperty({ description: 'Asset name', example: 'SpaceBud #1234' })
+  name: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Asset image URL', example: 'https://ipfs.io/ipfs/Qm...' })
+  imageUrl?: string;
+
+  @Expose()
+  @ApiPropertyOptional({
+    description: 'Policy ID',
+    example: 'd5e6bf0500378d4f0da4e8dde6becec7621cd8cbf5cbb9b87013d4cc',
+  })
+  policyId?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Asset ID on chain', example: '537061636542756431323334' })
+  assetId?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Asset type', enum: AssetType })
+  type?: AssetType;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Asset quantity', example: 1 })
+  quantity?: number;
+}
+
+export class BurnAssetDto extends ProposalAssetDto {}
+
+export class DistributionAssetDetailDto extends ProposalAssetDto {
+  @Expose()
+  @ApiProperty({ description: 'Amount to distribute', example: 1000000 })
+  amount: number;
+}
+
 export class GetProposalDetailRes {
   @Expose()
   @ApiProperty({ description: 'Proposal entity', type: Proposal })
@@ -61,10 +103,12 @@ export class GetProposalDetailRes {
 
   @Expose()
   @ApiProperty({ description: 'List of votes', type: [ProposalVoteDto] })
+  @Type(() => ProposalVoteDto)
   votes: ProposalVoteDto[];
 
   @Expose()
   @ApiProperty({ description: 'Vote totals', type: VoteTotalsDto })
+  @Type(() => VoteTotalsDto)
   totals: VoteTotalsDto;
 
   @Expose()
@@ -77,5 +121,16 @@ export class GetProposalDetailRes {
 
   @Expose()
   @ApiProperty({ description: 'Proposer information', type: ProposerDto })
+  @Type(() => ProposerDto)
   proposer: ProposerDto;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Assets to burn in this proposal', type: [BurnAssetDto] })
+  @Type(() => BurnAssetDto)
+  burnAssets?: BurnAssetDto[];
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Assets to distribute in this proposal', type: [DistributionAssetDetailDto] })
+  @Type(() => DistributionAssetDetailDto)
+  distributionAssets?: DistributionAssetDetailDto[];
 }

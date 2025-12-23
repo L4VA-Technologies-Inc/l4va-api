@@ -12,6 +12,7 @@ import { GetProposalDetailRes } from './dto/get-proposal-detail.res';
 import { GetProposalsRes, GetProposalsResItem } from './dto/get-proposal.dto';
 import { GetVotingPowerRes } from './dto/get-voting-power.res';
 import { VoteReq } from './dto/vote.req';
+import { VoteRes } from './dto/vote.res';
 import { GovernanceService } from './governance.service';
 
 import { AuthGuard } from '@/modules/auth/auth.guard';
@@ -57,12 +58,12 @@ export class GovernanceController {
   @Post('proposals/:proposalId/vote')
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Vote on a proposal' })
-  @ApiResponse({ status: 201, description: 'Vote recorded successfully' })
+  @ApiResponse({ status: 201, description: 'Vote recorded successfully', type: VoteRes })
   async vote(
     @Req() req: AuthRequest,
     @Param('proposalId', ParseUUIDPipe) proposalId: string,
     @Body() voteReq: VoteReq
-  ) {
+  ): Promise<VoteRes> {
     const userId = req.user.sub;
     return this.governanceService.vote(proposalId, voteReq, userId);
   }

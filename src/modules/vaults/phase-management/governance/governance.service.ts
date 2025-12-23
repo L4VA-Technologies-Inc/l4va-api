@@ -15,9 +15,12 @@ import NodeCache from 'node-cache';
 import { In, IsNull, Not, Repository } from 'typeorm';
 
 import { CreateProposalReq } from './dto/create-proposal.req';
+import { CreateProposalRes } from './dto/create-proposal.res';
 import { AssetBuySellDto } from './dto/get-assets.dto';
+import { GetProposalDetailRes } from './dto/get-proposal-detail.res';
 import { GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';
+import { VoteRes } from './dto/vote.res';
 import { VoteCountingService } from './vote-counting.service';
 
 import { Asset } from '@/database/asset.entity';
@@ -254,20 +257,7 @@ export class GovernanceService {
     vaultId: string,
     createProposalReq: CreateProposalReq,
     userId: string
-  ): Promise<{
-    success: boolean;
-    message: string;
-    proposal: {
-      id: string;
-      vaultId: string;
-      title: string;
-      description: string;
-      creatorId: string;
-      status: ProposalStatus;
-      createdAt: Date;
-      endDate: Date;
-    };
-  }> {
+  ): Promise<CreateProposalRes> {
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
       select: ['id', 'vault_status', 'policy_id', 'asset_vault_name'],
@@ -458,33 +448,7 @@ export class GovernanceService {
     return processedProposals;
   }
 
-  async getProposal(
-    proposalId: string,
-    userId: string
-  ): Promise<{
-    proposal: Proposal;
-    votes: {
-      id: string;
-      voterAddress: string;
-      voteWeight: string;
-      vote: VoteType;
-      timestamp: Date;
-    }[];
-    totals: {
-      yes: string;
-      no: string;
-      abstain: string;
-      votedPercentage: number;
-    };
-    canVote: boolean;
-    selectedVote: VoteType | null;
-    proposer: {
-      id: string;
-      address: string;
-    };
-    burnAssets?: { name: string }[];
-    distributionAssets?: { name: string }[];
-  }> {
+  async getProposal(proposalId: string, userId: string): Promise<GetProposalDetailRes> {
     const proposal = await this.proposalRepository.findOne({
       where: { id: proposalId },
     });
@@ -545,28 +509,60 @@ export class GovernanceService {
     if (proposal.metadata.burnAssets && proposal.metadata.burnAssets.length > 0) {
       const burnAssets = await this.assetRepository.find({
         where: { id: In(proposal.metadata.burnAssets) },
-        select: ['metadata'],
+        select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'image', 'name', 'metadata'],
       });
       burnAssetsWithNames = burnAssets.map(asset => {
-        let name = asset.metadata?.name;
+        let name = asset.name || asset.metadata?.name;
         if (!name) name = 'Unknown Asset';
+
+        let imageUrl = null;
+        const image = asset.image || asset.metadata?.image;
+        if (image) {
+          imageUrl = image.startsWith('ipfs://') ? image.replace('ipfs://', 'https://ipfs.io/ipfs/') : image;
+        }
+
         return {
-          name: name || 'Unknown Asset',
+          id: asset.id,
+          name,
+          imageUrl,
+          policyId: asset.policy_id,
+          assetId: asset.asset_id,
+          type: asset.type,
+          quantity: asset.quantity,
         };
       });
     }
 
     let distributionAssetsWithNames = [];
     if (proposal.metadata.distributionAssets && proposal.metadata.distributionAssets.length > 0) {
+      const distributionAssetIds = proposal.metadata.distributionAssets.map(da => da.id);
       const distributionAssets = await this.assetRepository.find({
-        where: { id: In(proposal.metadata.distributionAssets) },
-        select: ['metadata'],
+        where: { id: In(distributionAssetIds) },
+        select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'image', 'name', 'metadata'],
       });
+
+      // Create a map for quick lookup of distribution amounts
+      const distributionAmountMap = new Map(proposal.metadata.distributionAssets.map(da => [da.id, da.amount]));
+
       distributionAssetsWithNames = distributionAssets.map(asset => {
-        let name = asset.metadata?.name;
+        let name = asset.name || asset.metadata?.name;
         if (!name) name = 'Unknown Asset';
+
+        let imageUrl = null;
+        const image = asset.image || asset.metadata?.image;
+        if (image) {
+          imageUrl = image.startsWith('ipfs://') ? image.replace('ipfs://', 'https://ipfs.io/ipfs/') : image;
+        }
+
         return {
-          name: name || 'Unknown Asset',
+          id: asset.id,
+          name,
+          imageUrl,
+          policyId: asset.policy_id,
+          assetId: asset.asset_id,
+          type: asset.type,
+          quantity: asset.quantity,
+          amount: distributionAmountMap.get(asset.id) || 0,
         };
       });
     }
@@ -583,23 +579,7 @@ export class GovernanceService {
     };
   }
 
-  async vote(
-    proposalId: string,
-    voteReq: VoteReq,
-    userId: string
-  ): Promise<{
-    success: boolean;
-    message: string;
-    vote: {
-      id: string;
-      proposalId: string;
-      voterId: string;
-      voterAddress: string;
-      voteWeight: string;
-      vote: VoteType;
-      timestamp: Date;
-    };
-  }> {
+  async vote(proposalId: string, voteReq: VoteReq, userId: string): Promise<VoteRes> {
     const proposal = await this.proposalRepository.findOne({
       where: { id: proposalId },
     });
