@@ -345,8 +345,7 @@ export class GovernanceService {
 
       case ProposalType.MARKETPLACE_ACTION: {
         // Use direct marketplaceActions from request body
-        const actions = createProposalReq.marketplaceActions || [];
-        proposal.metadata.marketplaceActions = actions;
+        const actions: any = createProposalReq.marketplaceActions || [];
 
         // Validate all assets exist and are in correct state
         for (const action of actions) {
@@ -364,7 +363,14 @@ export class GovernanceService {
               throw new BadRequestException(`Asset ${action.assetId} is not currently listed`);
             }
           }
+
+          action.assetName = asset.name;
+          action.assetImg = asset.image;
+          action.assetPrice = asset.floor_price || asset.dex_price || 0;
         }
+
+        proposal.metadata.marketplaceActions = actions;
+
         break;
       }
     }
