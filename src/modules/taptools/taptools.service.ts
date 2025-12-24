@@ -25,9 +25,23 @@ export class TaptoolsService {
   private readonly logger = new Logger(TaptoolsService.name);
   private readonly baseUrl = 'https://openapi.taptools.io/api/v1';
   private readonly taptoolsApiKey: string;
+  private readonly isMainnet: boolean;
   private cache = new NodeCache({ stdTTL: 600 }); // cache for 10 minutes to reduce API calls for ADA price
   private readonly blockfrost: BlockFrostAPI;
   private assetDetailsCache = new NodeCache({ stdTTL: 3600, checkperiod: 300 });
+  private readonly testnetPrices = {
+    f61a534fd4484b4b58d5ff18cb77cfc9e74ad084a18c0409321c811a: 0.00526,
+    ed8145e0a4b8b54967e8f7700a5ee660196533ded8a55db620cc6a37: 0.00374,
+    '755457ffd6fffe7b20b384d002be85b54a0b3820181f19c5f9032c2e': 250.0,
+    fd948c7248ecef7654f77a0264a188dccc76bae5b73415fc51824cf3: 19000.0,
+    add6529cc60380af5d51566e32925287b5b04328332652ccac8de0a9: 36.0,
+    '4e529151fe66164ebcf52f81033eb0ec55cc012cb6c436104b30fa36': 69.0,
+    '0b89a746fd2d859e0b898544487c17d9ac94b187ea4c74fd0bfbab16': 3400.0,
+    '436ca2e51fa2887fa306e8f6aa0c8bda313dd5882202e21ae2972ac8': 115.93,
+    '0d27d4483fc9e684193466d11bc6d90a0ff1ab10a12725462197188a': 188.57,
+    '53173a3d7ae0a0015163cc55f9f1c300c7eab74da26ed9af8c052646': 100000.0,
+    '91918871f0baf335d32be00af3f0604a324b2e0728d8623c0d6e2601': 250000.0,
+  };
 
   constructor(
     @InjectRepository(Vault)
@@ -39,13 +53,11 @@ export class TaptoolsService {
     private readonly alertsService: AlertsService
   ) {
     this.taptoolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
+    this.isMainnet = this.configService.get<string>('NETWORK') === 'mainnet';
+
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
-  }
-
-  private isTestnetAddress(address: string): boolean {
-    return address.startsWith('addr_test');
   }
 
   async getAdaPrice(): Promise<number> {
@@ -190,7 +202,6 @@ export class TaptoolsService {
   }
 
   /**
-   * ONLY for testnet assets
    * Get the value of an asset in ADA and USD
    * @param policyId The policy ID of the asset
    * @param assetName The asset name (hex encoded)
@@ -200,23 +211,8 @@ export class TaptoolsService {
     try {
       const adaPrice = await this.getAdaPrice();
 
-      // Hardcoded testnet policy IDs and their prices
-      const testnetPrices: Record<string, number> = {
-        f61a534fd4484b4b58d5ff18cb77cfc9e74ad084a18c0409321c811a: 0.00526,
-        ed8145e0a4b8b54967e8f7700a5ee660196533ded8a55db620cc6a37: 0.00374,
-        '755457ffd6fffe7b20b384d002be85b54a0b3820181f19c5f9032c2e': 250.0,
-        fd948c7248ecef7654f77a0264a188dccc76bae5b73415fc51824cf3: 19000.0,
-        add6529cc60380af5d51566e32925287b5b04328332652ccac8de0a9: 36.0,
-        '4e529151fe66164ebcf52f81033eb0ec55cc012cb6c436104b30fa36': 69.0,
-        '0b89a746fd2d859e0b898544487c17d9ac94b187ea4c74fd0bfbab16': 3400.0,
-        '436ca2e51fa2887fa306e8f6aa0c8bda313dd5882202e21ae2972ac8': 115.93,
-        '0d27d4483fc9e684193466d11bc6d90a0ff1ab10a12725462197188a': 188.57,
-        '53173a3d7ae0a0015163cc55f9f1c300c7eab74da26ed9af8c052646': 100000.0,
-        '91918871f0baf335d32be00af3f0604a324b2e0728d8623c0d6e2601': 250000.0,
-      };
-
-      if (testnetPrices[policyId]) {
-        const hardcodedPriceAda = testnetPrices[policyId];
+      if (!this.isMainnet && this.testnetPrices[policyId]) {
+        const hardcodedPriceAda = this.testnetPrices[policyId];
         return {
           priceAda: hardcodedPriceAda,
           priceUsd: hardcodedPriceAda * adaPrice,
@@ -250,11 +246,7 @@ export class TaptoolsService {
 
       this.cache.set(cacheKey, result);
       return result;
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (error) {
-      // No value on Preprod
-      // console.error(`Error fetching asset value for ${policyId}.${assetName}:`, error.message);
-      // Return zero values if the asset is not found or there's an error
       const adaPrice = await this.getAdaPrice();
       return { priceAda: 91, priceUsd: 91 * adaPrice };
     }
@@ -731,6 +723,11 @@ export class TaptoolsService {
     for (const asset of pageAssets) {
       const assetDetailsResult = await this.fetchAssetDetailsFromApi(asset.unit);
 
+      const { priceAda, priceUsd } = await this.getAssetValue(
+        assetDetailsResult?.details.policy_id || asset.unit.substring(0, 56),
+        assetDetailsResult?.details.asset_name || asset.unit.substring(56)
+      );
+
       if (!assetDetailsResult) {
         throw new HttpException(`Failed to fetch asset details for ${asset.unit}`, 500);
       }
@@ -747,23 +744,16 @@ export class TaptoolsService {
         quantity: asset.quantity,
         isNft: asset.quantity === 1,
         isFungibleToken: asset.quantity > 1,
-        priceAda: 0,
-        priceUsd: 0,
-        valueAda: 0,
-        valueUsd: 0,
+        priceAda,
+        priceUsd,
+        valueAda: priceAda * asset.quantity,
+        valueUsd: priceUsd * asset.quantity,
         metadata: {
+          image: String((metadata as Record<string, unknown>)?.image || ''),
           policyId: details.policy_id,
-          fingerprint: details.fingerprint,
           decimals: details.metadata?.decimals || 0,
           description: String((metadata as Record<string, unknown>)?.description || ''),
-          image: String((metadata as Record<string, unknown>)?.image || ''),
-          mediaType: String((metadata as Record<string, unknown>)?.mediaType || ''),
-          files: Array.isArray(details.onchain_metadata?.files) ? details.onchain_metadata.files : [],
-          attributes: ((metadata as Record<string, unknown>)?.attributes as Record<string, any>) || {},
           assetName: details.asset_name,
-          mintTx: details.initial_mint_tx_hash,
-          mintQuantity: details.quantity,
-          onchainMetadata: details.onchain_metadata || {},
           fallback: false,
         },
       };

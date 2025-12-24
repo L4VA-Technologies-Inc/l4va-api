@@ -590,7 +590,7 @@ export class VaultManagingService {
     if (refScriptPayBackAmount > 0) {
       input.outputs.push({
         address: vault.owner.address, // Send back to vault owner
-        lovelace: refScriptPayBackAmount, // Refund amount (adjust based on actual collateral)
+        lovelace: refScriptPayBackAmount - 1000000, // Refund amount (adjust based on actual collateral)
       } as any);
     }
 
@@ -651,6 +651,9 @@ export class VaultManagingService {
           transaction: { id: signedTx.txId },
           added_by: { id: ownerId },
           image: 'ipfs://QmdYu513Bu7nfKV5LKP6cmpZ8HHXifQLH6FTTzv3VbbqwP', // VLRM logo
+          metadata: {
+            purpose: 'vault_creation_fee',
+          },
         });
 
         await this.assetsRepository.save(vlrmAsset);

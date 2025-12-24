@@ -9,6 +9,8 @@ import {
   BuyNFTInput,
   BuyNFTPayload,
   CombinedMarketplaceActionsInput,
+  GetCollectionAssetsQuery,
+  GetCollectionAssetsResponse,
   ListingPayload,
   MakeOfferInput,
   MakeOfferPayload,
@@ -17,6 +19,7 @@ import {
   UnlistPayload,
   UpdateListingInput,
   UpdateListingPayload,
+  WayUpAssetResult,
   WayUpTransactionInput,
 } from './wayup.types';
 
@@ -683,5 +686,107 @@ export class WayUpService {
       this.logger.error(`Failed to sign transaction for vault ${vaultId}`, error);
       throw new Error(`Failed to sign transaction: ${error.message}`);
     }
+  }
+
+  /**
+   * Get collection assets with pricing from WayUp Marketplace
+   * Retrieves NFTs from a collection with optional filtering by price, rarity, and asset name
+   *
+   * @param query - Query parameters for filtering and pagination
+   * @returns Collection assets with listing information
+   */
+  async getCollectionAssets(query: GetCollectionAssetsQuery): Promise<GetCollectionAssetsResponse> {
+    this.logger.log(`Fetching collection assets for policy ${query.policyId}`);
+
+    const baseUrl = 'https://prod.api.ada-anvil.app/marketplace/api/get-collection-assets';
+
+    // Build query parameters
+    const params = new URLSearchParams();
+    params.append('policyId', query.policyId);
+
+    if (query.limit) params.append('limit', query.limit.toString());
+    if (query.cursor) params.append('cursor', query.cursor);
+    if (query.minPrice) params.append('minPrice', query.minPrice);
+    if (query.maxPrice) params.append('maxPrice', query.maxPrice);
+    if (query.minRarity) params.append('minRarity', query.minRarity);
+    if (query.maxRarity) params.append('maxRarity', query.maxRarity);
+    if (query.orderBy) params.append('orderBy', query.orderBy);
+    if (query.term) params.append('term', query.term);
+    if (query.listingType) params.append('listingType', query.listingType);
+    if (query.saleType) params.append('saleType', query.saleType);
+    if (query.properties) {
+      query.properties.forEach(prop => {
+        params.append('properties', JSON.stringify(prop));
+      });
+    }
+
+    const requestUrl = `${baseUrl}?${params.toString()}`;
+    this.logger.debug(`Request URL: ${requestUrl}`);
+
+    try {
+      const response = await fetch(requestUrl);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`WayUp API error: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+
+      const data: GetCollectionAssetsResponse = await response.json();
+
+      this.logger.log(`Found ${data.results.length} assets for policy ${query.policyId}`);
+
+      return data;
+    } catch (error) {
+      this.logger.error(`Failed to fetch collection assets for policy ${query.policyId}`, error);
+      throw new Error(`Failed to fetch collection assets: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get NFT pricing by asset name from WayUp Marketplace
+   * Searches for specific NFTs by name within a collection
+   *
+   * @param policyId - The collection policy ID
+   * @param assetName - The asset name to search for (supports partial matching)
+   * @param options - Additional query options
+   * @returns Matching assets with their listing prices
+   */
+  async getNFTPricingByAssetName(
+    policyId: string,
+    assetName: string,
+    options?: {
+      limit?: number;
+      saleType?: 'all' | 'listedOnly' | 'bundles';
+      orderBy?: 'priceAsc' | 'priceDesc' | 'nameAsc' | 'recentlyListed';
+    }
+  ): Promise<{
+    assets: WayUpAssetResult[];
+    count: number;
+    pageState: string | null;
+  }> {
+    this.logger.log(`Searching for NFT "${assetName}" in collection ${policyId}`);
+
+    const result = await this.getCollectionAssets({
+      policyId,
+      term: assetName,
+      limit: options?.limit ?? 20,
+      saleType: options?.saleType ?? 'listedOnly',
+      orderBy: options?.orderBy ?? 'priceAsc',
+    });
+
+    // Log pricing info for found assets
+    result.results.forEach(asset => {
+      if (asset.listing) {
+        this.logger.debug(
+          `Found: ${asset.name} - Price: ${asset.listing.price / 1_000_000} ADA (${asset.listing.type})`
+        );
+      }
+    });
+
+    return {
+      assets: result.results,
+      count: result.count,
+      pageState: result.pageState,
+    };
   }
 }
