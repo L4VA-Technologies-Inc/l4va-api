@@ -141,3 +141,77 @@ export interface WayUpTransactionInput {
     priceAda: number;
   }[];
 }
+
+/**
+ * Query parameters for fetching collection assets from WayUp
+ */
+export interface GetCollectionAssetsQuery {
+  policyId: string;
+  limit?: number;
+  cursor?: string;
+  minPrice?: string; // lovelace
+  maxPrice?: string; // lovelace
+  minRarity?: string;
+  maxRarity?: string;
+  orderBy?: 'priceAsc' | 'priceDesc' | 'nameAsc' | 'idxAsc' | 'recentlyListed' | 'rarityAsc' | 'recentlyMinted';
+  term?: string; // Full-text search term (name / attributes)
+  listingType?: 'jpgstore' | 'wayup' | 'spacebudz';
+  saleType?: 'all' | 'listedOnly' | 'bundles';
+  properties?: Array<{ key: string; value: string }>;
+}
+
+/**
+ * Listing information for an asset
+ */
+export interface WayUpListing {
+  txHashIndex: string;
+  price: number; // lovelace
+  priceCurrency: string | null;
+  bundleSize: number | null;
+  isProcessing: boolean;
+  type: 'jpgstore' | 'wayup' | 'spacebudz';
+  version: 'v2' | 'v3';
+  scriptHash: string;
+}
+
+/**
+ * Collection metadata
+ */
+export interface WayUpCollection {
+  policyId: string;
+  name: string;
+  handle?: string;
+  verified: boolean;
+  image?: string;
+  banner?: string | null;
+  description?: string | null;
+  royaltyAddress?: string;
+  royaltyPct?: number;
+  socials?: Record<string, string>;
+}
+
+/**
+ * Asset result from collection query
+ */
+export interface WayUpAssetResult {
+  unit: string; // policyId.assetName (hex)
+  policyId: string;
+  assetName: string; // hex
+  name: string; // readable
+  image?: string;
+  media?: { src: string; blur?: string };
+  quantity: number;
+  attributes?: Record<string, string>;
+  rarity?: number | null;
+  listing?: WayUpListing | null;
+  collection?: WayUpCollection;
+}
+
+/**
+ * Response from get-collection-assets endpoint
+ */
+export interface GetCollectionAssetsResponse {
+  results: WayUpAssetResult[];
+  pageState: string | null;
+  count: number;
+}

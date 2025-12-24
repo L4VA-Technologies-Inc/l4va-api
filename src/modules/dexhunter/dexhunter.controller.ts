@@ -3,17 +3,8 @@ import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 
 import { DexHunterService } from './dexhunter.service';
 import { EstimateSwapResponse } from './dto/estimate-swap.dto';
-import { ExecuteSwapResponse } from './dto/execute-swap.dto';
 
 interface EstimateSwapDto {
-  tokenIn: string;
-  tokenOut: string;
-  amountIn: number;
-  slippage?: number;
-}
-
-interface ExecuteSwapDto {
-  vaultId: string;
   tokenIn: string;
   tokenOut: string;
   amountIn: number;
@@ -47,26 +38,5 @@ export class DexHunterController {
   })
   async estimateSwap(@Body() body: EstimateSwapDto): Promise<EstimateSwapResponse> {
     return this.dexHunterService.estimateSwap(body);
-  }
-
-  @Post('execute-swap')
-  @ApiOperation({ summary: 'Execute token swap using vault treasury wallet and DexHunter' })
-  @ApiResponse({
-    status: 200,
-    description: 'Swap executed successfully',
-    schema: {
-      properties: {
-        txHash: { type: 'string' },
-        estimatedOutput: { type: 'number' },
-        actualSlippage: { type: 'number' },
-      },
-    },
-  })
-  async executeSwap(@Body() body: ExecuteSwapDto): Promise<ExecuteSwapResponse> {
-    return this.dexHunterService.executeSwap(body.vaultId, {
-      tokenIn: body.tokenIn,
-      amountIn: body.amountIn,
-      slippage: body.slippage,
-    });
   }
 }
