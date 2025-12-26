@@ -635,4 +635,14 @@ export class TransactionsService {
       }
     }
   }
+
+  async countConfirmedContributions(vaultId: string): Promise<number> {
+    return this.transactionRepository.count({
+      where: {
+        vault_id: vaultId,
+        type: TransactionType.contribute,
+        status: TransactionStatus.confirmed,
+      },
+    });
+  }
 }
