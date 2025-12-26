@@ -380,8 +380,9 @@ export class MetadataRegistryApiService {
       this.logger.log(`Retrying PR #${prRecord.pr_number} for vault ${prRecord.vault_id}`);
 
       // Load vault with only necessary columns
-      const vault = await this.vaultRepository.exists({
+      const vault = await this.vaultRepository.findOne({
         where: { id: prRecord.vault_id },
+        select: ['id'],
       });
 
       if (!vault) {

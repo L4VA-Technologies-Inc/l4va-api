@@ -111,7 +111,14 @@ export class BlockchainWebhookService {
 
           // Only submit on the first confirmed contribution
           if (confirmedContributionsCount === 1) {
-            await this.metadataRegistryApiService.submitVaultTokenMetadata(transaction.vault_id);
+            try {
+              await this.metadataRegistryApiService.submitVaultTokenMetadata(transaction.vault_id);
+            } catch (metadataError) {
+              this.logger.error(
+                `WH: Failed to submit metadata for vault ${transaction.vault_id}: ${metadataError.message}`,
+                metadataError.stack
+              );
+            }
           }
         }
 
