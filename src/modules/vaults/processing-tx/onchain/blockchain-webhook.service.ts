@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { TransactionsService } from '../offchain-tx/transactions.service';
 
 import { BlockchainWebhookDto, BlockfrostTransaction, BlockfrostTransactionEvent } from './dto/webhook.dto';
+import { MetadataRegistryApiService } from './metadata-register.service';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
 
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -25,7 +26,8 @@ export class BlockchainWebhookService {
 
   constructor(
     private readonly transactionsService: TransactionsService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly metadataRegistryApiService: MetadataRegistryApiService
   ) {
     this.webhookAuthToken = this.configService.get<string>('BLOCKFROST_WEBHOOK_AUTH_TOKEN');
     this.maxEventAge = 600; // 10 minutes max age for webhook events
@@ -99,6 +101,18 @@ export class BlockchainWebhookService {
         if (transaction.type === TransactionType.contribute || transaction.type === TransactionType.acquire) {
           const lockedCount = await this.transactionsService.lockAssetsForTransaction(transaction.id);
           this.logger.log(`Locked ${lockedCount} assets for transaction ${tx.hash}`);
+        }
+
+        // Submit token metadata on first confirmed contribution
+        if (transaction.type === TransactionType.contribute && transaction.vault_id) {
+          const confirmedContributionsCount = await this.transactionsService.countConfirmedContributions(
+            transaction.vault_id
+          );
+
+          // Only submit on the first confirmed contribution
+          if (confirmedContributionsCount === 1) {
+            await this.metadataRegistryApiService.submitVaultTokenMetadata(transaction.vault_id);
+          }
         }
 
         // TODO: For extract dispatch transactions, we should mark assets as distributed

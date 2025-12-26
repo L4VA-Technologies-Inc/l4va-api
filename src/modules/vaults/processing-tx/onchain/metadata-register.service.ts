@@ -110,15 +110,45 @@ export class MetadataRegistryApiService {
 
   /**
    * Submits vault token metadata to Cardano Token Registry via GitHub PR
+   * Checks for existing PRs and token existence before submission
    * @param metadataInput Token metadata
    * @returns Submission result
    */
-  async submitVaultTokenMetadata(
-    metadataInput: TokenMetadataDto
-  ): Promise<{ success: boolean; message: string; data?: unknown }> {
+  async submitVaultTokenMetadata(vaultId: string): Promise<{ success: boolean; message: string; data?: unknown }> {
+    const vault = await this.vaultRepository
+      .createQueryBuilder('vault')
+      .leftJoin('vault.ft_token_img', 'ft_token_img')
+      .select([
+        'vault.id',
+        'vault.script_hash',
+        'vault.asset_vault_name',
+        'vault.name',
+        'vault.description',
+        'vault.vault_token_ticker',
+        'vault.ft_token_decimals',
+        'ft_token_img.file_url',
+      ])
+      .where('vault.id = :vaultId', { vaultId })
+      .getOne();
+
+    if (!vault || !vault.script_hash || !vault.asset_vault_name) {
+      this.logger.warn(`Vault ${vaultId} missing required fields for metadata submission`);
+      return { success: false, message: 'Vault missing required fields' };
+    }
+
+    const metadataInput: TokenMetadataDto = {
+      vaultId: vault.id,
+      subject: `${vault.script_hash}${vault.asset_vault_name}`,
+      name: vault.name,
+      description: vault.description || '',
+      ticker: vault.vault_token_ticker,
+      logo: vault.ft_token_img?.file_url || '',
+      decimals: vault.ft_token_decimals,
+    };
+
     const existingPR = await this.tokenRegistryRepository.findOne({
       where: {
-        vault: { id: metadataInput.vaultId },
+        vault: { id: vaultId },
         status: In([TokenRegistryStatus.PENDING, TokenRegistryStatus.MERGED]),
       },
     });
@@ -126,7 +156,7 @@ export class MetadataRegistryApiService {
     if (existingPR) {
       return { success: false, message: 'A token submission is already in progress for this vault' };
     } else {
-      this.logger.log(`No existing PR found for vault ${metadataInput.vaultId}, proceeding with submission`);
+      this.logger.log(`No existing PR found for vault ${vaultId}, proceeding with submission`);
     }
 
     const exists = await this.checkTokenExistsInRegistry(metadataInput.subject);
@@ -350,21 +380,9 @@ export class MetadataRegistryApiService {
       this.logger.log(`Retrying PR #${prRecord.pr_number} for vault ${prRecord.vault_id}`);
 
       // Load vault with only necessary columns
-      const vault = await this.vaultRepository
-        .createQueryBuilder('vault')
-        .leftJoin('vault.ft_token_img', 'ft_token_img')
-        .select([
-          'vault.id',
-          'vault.script_hash',
-          'vault.asset_vault_name',
-          'vault.name',
-          'vault.description',
-          'vault.vault_token_ticker',
-          'vault.ft_token_decimals',
-          'ft_token_img.file_url',
-        ])
-        .where('vault.id = :vaultId', { vaultId: prRecord.vault_id })
-        .getOne();
+      const vault = await this.vaultRepository.exists({
+        where: { id: prRecord.vault_id },
+      });
 
       if (!vault) {
         this.logger.error(`Cannot retry PR #${prRecord.pr_number}: vault ${prRecord.vault_id} not found`);
@@ -388,19 +406,8 @@ export class MetadataRegistryApiService {
       prRecord.status = TokenRegistryStatus.FAILED;
       await this.tokenRegistryRepository.save(prRecord);
 
-      // Create metadata from vault data (same as in lifecycle.service.ts)
-      const metadataInput: TokenMetadataDto = {
-        vaultId: vault.id,
-        subject: `${vault.script_hash}${vault.asset_vault_name}`,
-        name: vault.name,
-        description: vault.description,
-        ticker: vault.vault_token_ticker,
-        logo: vault.ft_token_img?.file_url || '',
-        decimals: vault.ft_token_decimals,
-      };
-
       // Submit using the same flow as initial submission
-      const result = await this.submitVaultTokenMetadata(metadataInput);
+      const result = await this.submitVaultTokenMetadata(prRecord.vault_id);
 
       if (result.success) {
         this.logger.log(`Successfully created retry PR for vault ${prRecord.vault_id}. Old PR: #${prRecord.pr_number}`);
