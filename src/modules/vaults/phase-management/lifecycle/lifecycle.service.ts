@@ -157,6 +157,7 @@ export class LifecycleService {
             vault: { id: data.vaultId },
             status: TokenRegistryStatus.PENDING,
           },
+          select: ['pr_number'],
         });
 
         if (pr) {
@@ -270,43 +271,6 @@ export class LifecycleService {
     }
   }
 
-  // private async queueContributionToAcquireTransition(vault: Vault, contributionEnd: Date): Promise<void> {
-  //   // Check if vault has assets before queuing transition
-  //   await this.contributionService.syncContributionTransactions(vault.id);
-  //   const assets = await this.assetsRepository.find({
-  //     where: { vault: { id: vault.id }, deleted: false },
-  //   });
-  //   const hasAssets = assets?.some(asset => !asset.deleted) || false;
-
-  //   if (!hasAssets) {
-  //     // Queue failure transition
-  //     await this.queuePhaseTransition(vault.id, VaultStatus.failed, contributionEnd);
-  //     return;
-  //   }
-
-  //   // Determine acquire phase start time based on vault configuration
-  //   let acquireStartTime: Date;
-  //   try {
-  //     if (vault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
-  //       // Start acquire phase immediately when contribution ends
-  //       acquireStartTime = contributionEnd;
-  //     } else if (vault.acquire_open_window_type === InvestmentWindowType.custom && vault.acquire_open_window_time) {
-  //       // Use custom start time, but ensure it's not before contribution ends
-  //       const customTime = new Date(vault.acquire_open_window_time);
-  //       acquireStartTime = customTime > contributionEnd ? customTime : contributionEnd;
-  //     } else {
-  //       this.logger.warn(`Vault ${vault.id} has invalid acquire window configuration`);
-  //       return;
-  //     }
-  //   } catch (error) {
-  //     this.logger.error(
-  //       `queueContributionToAcquireTransition: Failed to queue phase transition for vault ${vault.id}:`,
-  //       error
-  //     );
-  //   }
-  //   // await this.queuePhaseTransition(vault.id, VaultStatus.acquire, acquireStartTime, 'acquire_phase_start');
-  // }
-
   private async handlePublishedToContribution(): Promise<void> {
     // Handle immediate start vaults
     const immediateStartVaults = await this.vaultRepository
@@ -320,20 +284,6 @@ export class LifecycleService {
       .getMany();
 
     for (const vault of immediateStartVaults) {
-      try {
-        this.metadataRegistryApiService.submitVaultTokenMetadata({
-          vaultId: vault.id,
-          subject: `${vault.script_hash}${vault.asset_vault_name}`,
-          name: vault.name,
-          description: vault.description,
-          ticker: vault.vault_token_ticker,
-          logo: vault.ft_token_img?.file_url || '',
-          decimals: vault.ft_token_decimals,
-        });
-      } catch (error) {
-        this.logger.error('Error updating vault metadata:', error);
-      }
-
       await this.executePhaseTransition({
         vaultId: vault.id,
         newStatus: VaultStatus.contribution,
@@ -407,19 +357,6 @@ export class LifecycleService {
           `Skipping vault ${vault.id} - exceeded max failed attempts (${failedTransactionsCount}/${this.MAX_FAILED_ATTEMPTS}) for update-vault transactions`
         );
         continue;
-      }
-      try {
-        this.metadataRegistryApiService.submitVaultTokenMetadata({
-          vaultId: vault.id,
-          subject: `${vault.script_hash}${vault.asset_vault_name}`,
-          name: vault.name,
-          description: vault.description,
-          ticker: vault.vault_token_ticker,
-          logo: vault.ft_token_img?.file_url || '',
-          decimals: vault.ft_token_decimals,
-        });
-      } catch (error) {
-        this.logger.error('Error updating vault metadata:', error);
       }
 
       await this.transactionsService.syncVaultTransactions(vault.id);
@@ -641,20 +578,6 @@ export class LifecycleService {
 
   private async executeAcquireToGovernanceTransition(vault: Vault): Promise<void> {
     try {
-      try {
-        this.metadataRegistryApiService.submitVaultTokenMetadata({
-          vaultId: vault.id,
-          subject: `${vault.script_hash}${vault.asset_vault_name}`,
-          name: vault.name,
-          description: vault.description,
-          ticker: vault.vault_token_ticker,
-          logo: vault.ft_token_img?.file_url || '',
-          decimals: vault.ft_token_decimals,
-        });
-      } catch (error) {
-        this.logger.error('Error updating vault metadata:', error);
-      }
-
       // Sync transactions one more time
       await this.transactionsService.syncVaultTransactions(vault.id);
 
