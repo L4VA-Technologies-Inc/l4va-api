@@ -788,7 +788,7 @@ export class LifecycleService {
 
         if (acquirerClaims.length > 0) {
           try {
-            const minMultiplier = Math.min(...acquirerClaims.map(c => c.metadata.multiplier));
+            const minMultiplier = Math.min(...acquirerClaims.map(c => c.multiplier));
 
             for (const claim of acquirerClaims) {
               const transaction = acquisitionTransactions.find(tx => tx.id === claim.transaction.id);
