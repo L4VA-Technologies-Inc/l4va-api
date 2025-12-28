@@ -181,6 +181,7 @@ export class AcquirerDistributionOrchestrator {
 
     // Build transaction input
     const input = await this.extractionBuilder.buildExtractionInput(vault, validClaims, adminUtxos, config);
+    this.logger.debug(JSON.stringify(input));
 
     // Build and validate transaction size
     const buildResponse = await this.blockchainService.buildTransaction(input);
