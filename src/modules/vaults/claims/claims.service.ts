@@ -505,9 +505,29 @@ export class ClaimsService {
     }
 
     if (options?.metadata) {
-      // If metadata needs to be merged, fetch claims first
-      // For simplicity, we'll just set it directly here
-      updateData.metadata = options.metadata;
+      // When metadata is provided, merge it with existing metadata per claim
+      const claims = await this.claimRepository.findBy({ id: In(claimIdArray) });
+
+      if (!claims.length) {
+        return;
+      }
+
+      for (const claim of claims) {
+        claim.status = status;
+
+        if (options.distributionTxId) {
+          claim.distribution_tx_id = options.distributionTxId;
+        }
+
+        const existingMetadata = (claim as any).metadata ?? {};
+        (claim as any).metadata = {
+          ...existingMetadata,
+          ...options.metadata,
+        };
+      }
+
+      await this.claimRepository.save(claims);
+      return;
     }
 
     await this.claimRepository.update({ id: In(claimIdArray) }, updateData);
