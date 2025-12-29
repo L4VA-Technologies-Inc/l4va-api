@@ -477,11 +477,11 @@ export class ClaimsService {
   }
 
   /**
-   * Updates the status of one or more claims with optional metadata
+   * Updates the status of one or more claims with optional metadata and distribution tx
    *
    * @param claimIds - Array of claim IDs to update (can be single item)
    * @param status - The new status to set for all claims
-   * @param metadata - Optional metadata to merge with existing metadata for each claim
+   * @param options - Optional object containing metadata and/or distributionTxId
    * @returns Promise<void>
    */
   async updateClaimStatus(
@@ -498,39 +498,52 @@ export class ClaimsService {
       return;
     }
 
-    const updateData: Partial<Claim> = { status };
+    try {
+      if (options?.metadata) {
+        // If metadata is provided, we need to merge it with existing metadata for each claim
+        const existingClaims = await this.claimRepository.find({
+          where: { id: In(claimIdArray) },
+          select: ['id', 'metadata'],
+        });
 
-    if (options?.distributionTxId) {
-      updateData.distribution_tx_id = options.distributionTxId;
-    }
-
-    if (options?.metadata) {
-      // When metadata is provided, merge it with existing metadata per claim
-      const claims = await this.claimRepository.findBy({ id: In(claimIdArray) });
-
-      if (!claims.length) {
-        return;
-      }
-
-      for (const claim of claims) {
-        claim.status = status;
-
-        if (options.distributionTxId) {
-          claim.distribution_tx_id = options.distributionTxId;
+        if (!existingClaims.length) {
+          this.logger.warn(`No claims found for IDs: ${claimIdArray.join(', ')}`);
+          return;
         }
 
-        const existingMetadata = (claim as any).metadata ?? {};
-        (claim as any).metadata = {
-          ...existingMetadata,
-          ...options.metadata,
-        };
+        const updates = existingClaims.map(claim => ({
+          id: claim.id,
+          status,
+          metadata: {
+            ...(claim.metadata || {}),
+            ...options.metadata,
+          },
+          ...(options.distributionTxId && { distribution_tx_id: options.distributionTxId }),
+        }));
+
+        await this.claimRepository.save(updates);
+        this.logger.log(
+          `Updated ${existingClaims.length} claims status to ${status} with metadata` +
+            (options.distributionTxId ? ` and distribution tx ${options.distributionTxId}` : '')
+        );
+      } else {
+        // If no metadata, simple bulk update
+        const updateData: Partial<Claim> = { status };
+
+        if (options?.distributionTxId) {
+          updateData.distribution_tx_id = options.distributionTxId;
+        }
+
+        await this.claimRepository.update({ id: In(claimIdArray) }, updateData);
+        this.logger.log(
+          `Updated ${claimIdArray.length} claims status to ${status}` +
+            (options?.distributionTxId ? ` with distribution tx ${options.distributionTxId}` : '')
+        );
       }
-
-      await this.claimRepository.save(claims);
-      return;
+    } catch (error) {
+      this.logger.error(`Failed to update ${claimIdArray.length} claims status to ${status}:`, error);
+      throw error;
     }
-
-    await this.claimRepository.update({ id: In(claimIdArray) }, updateData);
   }
 
   /**

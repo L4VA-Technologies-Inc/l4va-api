@@ -47,9 +47,6 @@ export class AddDistributionTxToClaims1767008578470 implements MigrationInterfac
     await queryRunner.query(`ALTER TABLE "vaults" ALTER COLUMN "apply_params_result" DROP DEFAULT`);
     await queryRunner.query(`ALTER TABLE "vaults" ALTER COLUMN "ada_distribution" DROP DEFAULT`);
     await queryRunner.query(`ALTER TABLE "vaults" ALTER COLUMN "acquire_multiplier" DROP DEFAULT`);
-    await queryRunner.query(
-      `COMMENT ON COLUMN "claims"."distribution_tx_id" IS 'Reference to the transaction that paid out this claim'`
-    );
     await queryRunner.query(`ALTER TABLE "claims" DROP COLUMN "distribution_tx_id"`);
     await queryRunner.query(
       `ALTER TABLE "vault_tags" ADD CONSTRAINT "FK_2b3fd4667b2be7a2d7a329083cc" FOREIGN KEY ("tag_id") REFERENCES "tags"("id") ON DELETE CASCADE ON UPDATE CASCADE`
