@@ -116,10 +116,6 @@ export class AcquirerDistributionOrchestrator {
       user_id: null,
       type: TransactionType.extractDispatch,
       status: TransactionStatus.created,
-      metadata: {
-        batchSize: claims.length,
-        claimIds: claims.map(c => c.id),
-      },
     });
 
     this.logger.debug(`Processing batch extraction for ${claims.length} claims, transaction ${extractionTx.id}`);
@@ -211,7 +207,8 @@ export class AcquirerDistributionOrchestrator {
     if (confirmed) {
       await this.claimsService.updateClaimStatus(
         validClaims.map(c => c.id),
-        ClaimStatus.CLAIMED
+        ClaimStatus.CLAIMED,
+        { distributionTxId: extractionTx.id }
       );
 
       await this.assetService.markAssetsAsDistributedByTransactions(validClaims.map(c => c.transaction.id));

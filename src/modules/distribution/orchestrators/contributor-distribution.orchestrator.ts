@@ -273,7 +273,6 @@ export class ContributorDistributionOrchestrator {
       type: TransactionType.claim,
       status: TransactionStatus.created,
       metadata: {
-        batchSize: validClaims.length,
         claimIds: validClaims.map(c => c.id),
       },
     });
@@ -330,7 +329,8 @@ export class ContributorDistributionOrchestrator {
       // Update claims and transaction
       await this.claimsService.updateClaimStatus(
         validClaims.map(c => c.id),
-        ClaimStatus.CLAIMED
+        ClaimStatus.CLAIMED,
+        { distributionTxId: batchTransaction.id }
       );
       await this.transactionRepository.update({ id: batchTransaction.id }, { status: TransactionStatus.confirmed });
 

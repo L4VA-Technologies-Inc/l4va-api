@@ -286,17 +286,24 @@ export class AutomatedDistributionService {
       );
 
       // Create governance snapshot
-      const snapshot = await this.governanceService.createAutomaticSnapshot(
-        vaultId,
-        `${script_hash}${asset_vault_name}`
-      );
+      try {
+        const snapshot = await this.governanceService.createAutomaticSnapshot(
+          vaultId,
+          `${script_hash}${asset_vault_name}`
+        );
 
-      await this.l4vaRewardsService.initializeL4VARewards({
-        vaultId,
-        governancePhaseStart: vault.governance_phase_start,
-        totalTVL: vault.total_assets_cost_ada,
-        snapshotId: snapshot.id,
-      });
+        await this.l4vaRewardsService.initializeL4VARewards({
+          vaultId,
+          governancePhaseStart: vault.governance_phase_start,
+          totalTVL: vault.total_assets_cost_ada,
+          snapshotId: snapshot.id,
+        });
+      } catch (error) {
+        this.logger.error(
+          `Error creating governance snapshot or initializing L4VA rewards for vault ${vaultId}:`,
+          error
+        );
+      }
 
       this.logger.log(
         `Vault ${vaultId} distribution finalized successfully ` + `(LP: ${lpPercent > 0 ? 'created' : 'skipped'})`
