@@ -477,19 +477,21 @@ export class ClaimsService {
   }
 
   /**
-   * Updates the status of one or more claims with optional metadata
+   * Updates the status of one or more claims with optional metadata and distribution tx
    *
    * @param claimIds - Array of claim IDs to update (can be single item)
    * @param status - The new status to set for all claims
-   * @param metadata - Optional metadata to merge with existing metadata for each claim
+   * @param options - Optional object containing metadata and/or distributionTxId
    * @returns Promise<void>
    */
   async updateClaimStatus(
     claimIds: string | string[],
     status: ClaimStatus,
-    metadata?: Record<string, any>
+    options?: {
+      metadata?: Record<string, any>;
+      distributionTxId?: string;
+    }
   ): Promise<void> {
-    // Normalize input to always be an array
     const claimIdArray = Array.isArray(claimIds) ? claimIds : [claimIds];
 
     if (claimIdArray.length === 0) {
@@ -497,28 +499,46 @@ export class ClaimsService {
     }
 
     try {
-      if (metadata) {
+      if (options?.metadata) {
         // If metadata is provided, we need to merge it with existing metadata for each claim
         const existingClaims = await this.claimRepository.find({
           where: { id: In(claimIdArray) },
           select: ['id', 'metadata'],
         });
 
+        if (!existingClaims.length) {
+          this.logger.warn(`No claims found for IDs: ${claimIdArray.join(', ')}`);
+          return;
+        }
+
         const updates = existingClaims.map(claim => ({
           id: claim.id,
           status,
           metadata: {
             ...(claim.metadata || {}),
-            ...metadata,
+            ...options.metadata,
           },
+          ...(options.distributionTxId && { distribution_tx_id: options.distributionTxId }),
         }));
 
         await this.claimRepository.save(updates);
-        this.logger.log(`Updated ${claimIdArray.length} claims status to ${status} with metadata`);
+        this.logger.log(
+          `Updated ${existingClaims.length} claims status to ${status} with metadata` +
+            (options.distributionTxId ? ` and distribution tx ${options.distributionTxId}` : '')
+        );
       } else {
         // If no metadata, simple bulk update
-        await this.claimRepository.update({ id: In(claimIdArray) }, { status });
-        this.logger.log(`Updated ${claimIdArray.length} claims status to ${status}`);
+        const updateData: Partial<Claim> = { status };
+
+        if (options?.distributionTxId) {
+          updateData.distribution_tx_id = options.distributionTxId;
+        }
+
+        await this.claimRepository.update({ id: In(claimIdArray) }, updateData);
+        this.logger.log(
+          `Updated ${claimIdArray.length} claims status to ${status}` +
+            (options?.distributionTxId ? ` with distribution tx ${options.distributionTxId}` : '')
+        );
       }
     } catch (error) {
       this.logger.error(`Failed to update ${claimIdArray.length} claims status to ${status}:`, error);
@@ -617,7 +637,7 @@ export class ClaimsService {
         await this.updateClaimStatus(
           alreadyConsumedClaims.map(c => c.id),
           ClaimStatus.CLAIMED,
-          { autoMarkedReason: 'utxo_already_consumed' }
+          { metadata: { autoMarkedReason: 'utxo_already_consumed' } }
         );
 
         // Mark assets as distributed for acquirer claims
