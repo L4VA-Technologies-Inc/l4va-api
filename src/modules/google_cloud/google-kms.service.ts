@@ -97,9 +97,11 @@ export class GoogleKMSService {
     algorithm: string;
     kmsKeyName: string;
   }> {
-    if (!this.isMainnet || !this.kmsClient) {
+    if (!this.isMainnet) {
       throw new Error('KMS encryption only available on mainnet');
     }
+
+    this.ensureKmsClient();
 
     // 1. Generate data encryption key (DEK)
     const dek = crypto.randomBytes(32);
@@ -157,9 +159,11 @@ export class GoogleKMSService {
     },
     vaultId: string
   ): Promise<PrivateKey> {
-    if (!this.isMainnet || !this.kmsClient) {
+    if (!this.isMainnet) {
       throw new Error('KMS decryption only available on mainnet');
     }
+
+    this.ensureKmsClient();
 
     const keyName = this.getKeyName();
 
@@ -209,9 +213,11 @@ export class GoogleKMSService {
     algorithm: string;
     kmsKeyName: string;
   }> {
-    if (!this.isMainnet || !this.kmsClient) {
+    if (!this.isMainnet) {
       throw new Error('KMS encryption only available on mainnet');
     }
+
+    this.ensureKmsClient();
 
     // 1. Generate data encryption key (DEK)
     const dek = crypto.randomBytes(32);
@@ -268,9 +274,11 @@ export class GoogleKMSService {
     },
     vaultId: string
   ): Promise<PrivateKey> {
-    if (!this.isMainnet || !this.kmsClient) {
+    if (!this.isMainnet) {
       throw new Error('KMS decryption only available on mainnet');
     }
+
+    this.ensureKmsClient();
 
     const keyName = this.getKeyName();
 

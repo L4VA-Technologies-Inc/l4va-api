@@ -24,13 +24,7 @@ import { PublishVaultDto } from '../../dto/publish-vault.dto';
 
 import { BlockchainService } from './blockchain.service';
 import { Datum1 } from './types/type';
-import {
-  createUtxoHex,
-  generate_tag_from_txhash_index,
-  getAddressFromHash,
-  getUtxosExtract,
-  getVaultUtxo,
-} from './utils/lib';
+import { generate_tag_from_txhash_index, getAddressFromHash, getUtxosExtract, getVaultUtxo } from './utils/lib';
 
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
@@ -478,39 +472,6 @@ export class VaultManagingService {
 
     const vaultUtxo = await getVaultUtxo(this.scPolicyId, vault.asset_vault_name, this.blockfrost);
 
-    const utxoDetails = await this.blockfrost.txsUtxos(vault.publication_hash);
-
-    let refScriptPayBackAmount = 0;
-
-    if (utxoDetails && utxoDetails.outputs) {
-      // Find the output with the script address that contains the collateral
-      const scriptOutputIndex = utxoDetails.outputs.findIndex(output => output.address === this.vaultScriptAddress);
-
-      if (scriptOutputIndex !== -1) {
-        const scriptOutput = utxoDetails.outputs[scriptOutputIndex];
-        refScriptPayBackAmount = Number(scriptOutput.amount[0].quantity);
-
-        if (refScriptPayBackAmount > 0) {
-          // Create the UTXO reference for the script collateral
-          const scriptUtxoHex = createUtxoHex(
-            vault.publication_hash,
-            scriptOutputIndex,
-            Address.from_bech32(this.vaultScriptAddress),
-            [{ unit: 'lovelace', quantity: refScriptPayBackAmount }]
-          );
-
-          adminUtxos.push(scriptUtxoHex);
-          requiredInputs.push(scriptUtxoHex);
-        } else {
-          this.logger.warn(`Script UTXO has zero or negative ADA amount: ${refScriptPayBackAmount}, skipping refund`);
-        }
-      } else {
-        this.logger.warn(`No output found with vault script address ${this.vaultScriptAddress}, skipping refund`);
-      }
-    } else {
-      this.logger.warn(`Transaction ${vault.publication_hash} outputs not found, skipping script UTXO refund`);
-    }
-
     const input = {
       changeAddress: this.adminAddress,
       message: `Vault ${vault.id} ${vaultStatus === SmartContractVaultStatus.SUCCESSFUL ? 'Locked' : vaultStatus === SmartContractVaultStatus.CANCELLED ? 'Failed' : 'Unknown'} Update`,
@@ -586,13 +547,6 @@ export class VaultManagingService {
       requiredInputs,
       requiredSigners: [this.adminHash],
     };
-
-    if (refScriptPayBackAmount > 0) {
-      input.outputs.push({
-        address: vault.owner.address, // Send back to vault owner
-        lovelace: refScriptPayBackAmount - 2000000, // Refund amount (adjust based on actual collateral)
-      } as any);
-    }
 
     this.logger.debug('Vault update transaction input:', JSON.stringify(input));
     try {
