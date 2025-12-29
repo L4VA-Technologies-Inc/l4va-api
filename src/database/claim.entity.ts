@@ -68,9 +68,25 @@ export class Claim {
   @JoinColumn({ name: 'transaction_id' })
   transaction: Transaction;
 
-  @Column({ name: 'transaction_id', nullable: true })
+  @Column({
+    name: 'transaction_id',
+    nullable: true,
+    comment: 'Reference to the original contribution/acquisition transaction (used to build UTxO reference)',
+  })
   @Index()
   transaction_id: string;
+
+  @ManyToOne(() => Transaction, { nullable: true })
+  @JoinColumn({ name: 'distribution_tx_id' })
+  distribution_transaction: Transaction;
+
+  @Column({
+    name: 'distribution_tx_id',
+    nullable: true,
+    comment: 'Reference to the transaction that paid out this claim',
+  })
+  @Index()
+  distribution_tx_id: string;
 
   @Expose({ name: 'utxoToClaim' })
   get utxoToClaim(): string | null {

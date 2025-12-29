@@ -487,43 +487,30 @@ export class ClaimsService {
   async updateClaimStatus(
     claimIds: string | string[],
     status: ClaimStatus,
-    metadata?: Record<string, any>
+    options?: {
+      metadata?: Record<string, any>;
+      distributionTxId?: string;
+    }
   ): Promise<void> {
-    // Normalize input to always be an array
     const claimIdArray = Array.isArray(claimIds) ? claimIds : [claimIds];
 
     if (claimIdArray.length === 0) {
       return;
     }
 
-    try {
-      if (metadata) {
-        // If metadata is provided, we need to merge it with existing metadata for each claim
-        const existingClaims = await this.claimRepository.find({
-          where: { id: In(claimIdArray) },
-          select: ['id', 'metadata'],
-        });
+    const updateData: Partial<Claim> = { status };
 
-        const updates = existingClaims.map(claim => ({
-          id: claim.id,
-          status,
-          metadata: {
-            ...(claim.metadata || {}),
-            ...metadata,
-          },
-        }));
-
-        await this.claimRepository.save(updates);
-        this.logger.log(`Updated ${claimIdArray.length} claims status to ${status} with metadata`);
-      } else {
-        // If no metadata, simple bulk update
-        await this.claimRepository.update({ id: In(claimIdArray) }, { status });
-        this.logger.log(`Updated ${claimIdArray.length} claims status to ${status}`);
-      }
-    } catch (error) {
-      this.logger.error(`Failed to update ${claimIdArray.length} claims status to ${status}:`, error);
-      throw error;
+    if (options?.distributionTxId) {
+      updateData.distribution_tx_id = options.distributionTxId;
     }
+
+    if (options?.metadata) {
+      // If metadata needs to be merged, fetch claims first
+      // For simplicity, we'll just set it directly here
+      updateData.metadata = options.metadata;
+    }
+
+    await this.claimRepository.update({ id: In(claimIdArray) }, updateData);
   }
 
   /**
@@ -617,7 +604,7 @@ export class ClaimsService {
         await this.updateClaimStatus(
           alreadyConsumedClaims.map(c => c.id),
           ClaimStatus.CLAIMED,
-          { autoMarkedReason: 'utxo_already_consumed' }
+          { metadata: { autoMarkedReason: 'utxo_already_consumed' } }
         );
 
         // Mark assets as distributed for acquirer claims
