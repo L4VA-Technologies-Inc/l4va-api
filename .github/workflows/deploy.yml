@@ -76,7 +76,7 @@ jobs:
           docker compose up -d $NEW_CONTAINER
 
           echo "Waiting for health..."
-          until curl -sf http://127.0.0.1:$NEW_PORT/health; do
+          until curl -sf http://127.0.0.1:$NEW_PORT/api/v1/health; do
             sleep 2
           done
 
