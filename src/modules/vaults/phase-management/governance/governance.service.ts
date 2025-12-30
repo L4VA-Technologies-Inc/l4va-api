@@ -1,10 +1,10 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import {
-  Injectable,
-  NotFoundException,
   BadRequestException,
-  Logger,
+  Injectable,
   InternalServerErrorException,
+  Logger,
+  NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -148,11 +148,7 @@ export class GovernanceService {
           if (index > 0) {
             await new Promise(resolve => setTimeout(resolve, 1000)); //  Add delay between requests to avoid overwhelming BlockFrost
           }
-          const snapshot = await this.createAutomaticSnapshot(
-            vault.id,
-            `${vault.script_hash}${vault.asset_vault_name}`
-          );
-          return snapshot;
+          return await this.createAutomaticSnapshot(vault.id, `${vault.script_hash}${vault.asset_vault_name}`);
         })
       );
 
@@ -325,10 +321,8 @@ export class GovernanceService {
         if (createProposalReq.metadata) {
           // Prefer the canonical `marketplaceActions` field if present, otherwise fall back to
           // the legacy `buyingSellingOptions` field for backward compatibility.
-          const marketplaceActions =
+          proposal.metadata.marketplaceActions =
             createProposalReq.metadata.marketplaceActions ?? createProposalReq.metadata.buyingSellingOptions ?? [];
-
-          proposal.metadata.marketplaceActions = marketplaceActions;
           proposal.abstain = createProposalReq.metadata.abstain || false;
 
           for (const option of proposal.metadata.marketplaceActions) {
@@ -796,14 +790,13 @@ export class GovernanceService {
 
   async getAssetsToStake(vaultId: string): Promise<Asset[]> {
     try {
-      const assets = await this.assetRepository.find({
+      return await this.assetRepository.find({
         where: {
           vault: { id: vaultId },
           type: In([AssetType.FT, AssetType.NFT]),
           status: AssetStatus.LOCKED,
         },
       });
-      return assets;
     } catch (error) {
       this.logger.error(`Error getting assets to stake for vault ${vaultId}: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Error getting assets to stake');
@@ -815,16 +808,15 @@ export class GovernanceService {
    */
   async getAssetsToDistribute(vaultId: string): Promise<Asset[]> {
     try {
-      const assets = await this.assetRepository.find({
+      return await this.assetRepository.find({
         where: {
           vault: { id: vaultId },
           type: In([AssetType.FT, AssetType.NFT]),
           status: AssetStatus.LOCKED,
         },
         relations: ['vault'],
-        select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'dex_price', 'floor_price', 'metadata'],
+        select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'dex_price', 'floor_price', 'metadata', 'name'],
       });
-      return assets;
     } catch (error) {
       this.logger.error(`Error getting assets to stake for vault ${vaultId}: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Error getting assets to stake');
