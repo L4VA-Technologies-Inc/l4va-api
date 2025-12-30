@@ -500,6 +500,14 @@ export class Vault {
   })
   script_hash?: string;
 
+  @Expose({ name: 'scVersion' })
+  @Column({
+    name: 'sc_version',
+    type: 'varchar',
+    nullable: true,
+  })
+  sc_version?: string; // The smart contract version retrieved from configuration, used to track which smart contract version was used when publishing vaults.
+
   @Exclude()
   @Column({
     name: 'apply_params_result',
