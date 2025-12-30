@@ -84,12 +84,12 @@ export async function loadSecrets(): Promise<void> {
     const parsed = dotenv.parse(secrets);
 
     // Separate sensitive and non-sensitive secrets
-    const sensitiveSecrets: Record<string, string> = {};
+    let sensitiveSecretsCount = 0;
     const nonSensitiveSecrets: Record<string, string> = {};
 
     Object.entries(parsed).forEach(([key, value]) => {
       if (SENSITIVE_KEYS.includes(key)) {
-        sensitiveSecrets[key] = value;
+        sensitiveSecretsCount++;
       } else {
         nonSensitiveSecrets[key] = value;
       }
@@ -108,7 +108,7 @@ export async function loadSecrets(): Promise<void> {
     fs.writeFileSync(envFilePath, envContent, 'utf8');
 
     console.log(
-      `✅ Loaded ${Object.keys(parsed).length} secrets from GCP (${Object.keys(sensitiveSecrets).length} kept in memory only)`
+      `✅ Loaded ${Object.keys(parsed).length} secrets from GCP (${sensitiveSecretsCount} kept in memory only)`
     );
   } catch (e) {
     console.error('Failed to load GCP secrets:', e.stack || e.message || e);
