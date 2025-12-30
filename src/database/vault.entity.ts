@@ -500,6 +500,14 @@ export class Vault {
   })
   script_hash?: string;
 
+  @Expose({ name: 'scVersion' })
+  @Column({
+    name: 'sc_version',
+    type: 'varchar',
+    nullable: true,
+  })
+  sc_version?: string;
+
   @Exclude()
   @Column({
     name: 'apply_params_result',
