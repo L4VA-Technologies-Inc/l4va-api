@@ -221,7 +221,7 @@ export class L4vaRewardsService {
 
     // Get latest snapshot for current VT distribution
     const latestSnapshot = await this.snapshotRepository.findOne({
-      where: { assetId: vault.asset_vault_name },
+      where: { vault: { id: vaultId } },
       order: { createdAt: 'DESC' },
     });
 

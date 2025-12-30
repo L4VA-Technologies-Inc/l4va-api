@@ -5,7 +5,7 @@ import { AppService } from './app.service';
 import { ApiDoc } from './decorators/api-doc.decorator';
 
 @ApiTags('info')
-@Controller('/info')
+@Controller()
 export class AppController {
   constructor(private readonly appService: AppService) {}
 
@@ -14,8 +14,13 @@ export class AppController {
     description: 'Version has returned',
     status: 200,
   })
-  @Get()
+  @Get('info')
   apiVersion(): string {
     return this.appService.apiVersion();
+  }
+
+  @Get('health')
+  healthCheck() {
+    return { status: 'ok' };
   }
 }

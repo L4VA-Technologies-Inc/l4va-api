@@ -270,11 +270,7 @@ export class TaptoolsService {
    * @param phase The phase to filter assets by - 'contribute' for contributed assets, 'acquire' for invested assets
    * @returns Promise with the vault assets summary
    */
-  async calculateVaultAssetsValue(
-    vaultId: string,
-    phase: 'contribute' | 'acquire' = 'contribute',
-    updatePrices: boolean = true
-  ): Promise<VaultAssetsSummaryDto> {
+  async calculateVaultAssetsValue(vaultId: string, updatePrices: boolean = true): Promise<VaultAssetsSummaryDto> {
     // Get the vault to verify it exists
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
@@ -301,20 +297,12 @@ export class TaptoolsService {
 
     // Process each asset in the vault
     for (const asset of vault.assets) {
-      // Skip assets that are not in a valid status for valuation or don't match the phase
-      if (asset.status !== AssetStatus.PENDING && asset.status !== AssetStatus.LOCKED) {
-        continue;
-      }
-
       if (asset.origin_type === AssetOriginType.ACQUIRED && asset.policy_id === 'lovelace') {
         totalAcquiredAda += Number(asset.quantity);
       }
 
-      // Filter assets based on phase
-      if (
-        (phase === 'contribute' && asset.origin_type !== AssetOriginType.CONTRIBUTED) ||
-        (phase === 'acquire' && asset.origin_type !== AssetOriginType.ACQUIRED)
-      ) {
+      // Skip assets that are not in a valid status for valuation or don't match the phase
+      if (asset.status !== AssetStatus.PENDING && asset.status !== AssetStatus.LOCKED) {
         continue;
       }
 

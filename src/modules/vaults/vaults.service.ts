@@ -6,6 +6,7 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
@@ -68,6 +69,11 @@ import {
 @Injectable()
 export class VaultsService {
   private readonly logger = new Logger(VaultsService.name);
+  /**
+   * The smart contract version retrieved from configuration, used to track
+   * which smart contract version was used when publishing vaults.
+   */
+  private readonly scVersion: string;
 
   constructor(
     @InjectRepository(Vault)
@@ -93,8 +99,11 @@ export class VaultsService {
     private readonly blockchainService: BlockchainService,
     private readonly governanceService: GovernanceService,
     private readonly taptoolsService: TaptoolsService,
-    private readonly transactionsService: TransactionsService
-  ) {}
+    private readonly transactionsService: TransactionsService,
+    private readonly configService: ConfigService
+  ) {
+    this.scVersion = this.configService.get<string>('SC_VERSION') || '1.0.0'; // Current SC version
+  }
 
   /**
    * Parses a CSV file from Google Cloud Storage and extracts valid Cardano addresses.
@@ -542,6 +551,7 @@ export class VaultsService {
     vault.contract_address = getAddressFromHash(vault.script_hash, this.blockchainService.getNetworkId());
     vault.vault_status = VaultStatus.published;
     vault.publication_hash = publishedTx.txHash;
+    vault.sc_version = this.scVersion;
     await this.vaultsRepository.save(vault);
 
     await this.usersRepository.increment({ id: vault.owner.id }, 'total_vaults', 1);

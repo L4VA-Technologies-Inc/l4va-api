@@ -20,7 +20,6 @@ export async function loadSecrets(): Promise<void> {
   const shouldLoadGcpSecrets = nodeEnv === 'mainnet';
 
   if (!shouldLoadGcpSecrets) {
-    console.log('Skipping GCP secrets load because NODE_ENV !== "mainnet"');
     return;
   }
 
