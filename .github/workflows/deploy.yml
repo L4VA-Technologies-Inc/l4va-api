@@ -55,35 +55,35 @@ jobs:
 
       - name: Zero downtime deploy (blue-green)
         run: |
-        cd ~/apps
+          cd ~/apps
 
-        ACTIVE_PORT=$(grep -oP 'set \$api_port \K[0-9]+' /etc/nginx/sites-enabled/testnet.l4va.org)
+          ACTIVE_PORT=$(grep -oP 'set \$api_port \K[0-9]+' /etc/nginx/sites-enabled/testnet.l4va.org)
 
-        if [ "$ACTIVE_PORT" = "3000" ]; then
-          NEW_PORT=3001
-          NEW_CONTAINER=l4va-api-green
-          OLD_CONTAINER=l4va-api-blue
-        else
-          NEW_PORT=3000
-          NEW_CONTAINER=l4va-api-blue
-          OLD_CONTAINER=l4va-api-green
-        fi
+          if [ "$ACTIVE_PORT" = "3000" ]; then
+            NEW_PORT=3001
+            NEW_CONTAINER=l4va-api-green
+            OLD_CONTAINER=l4va-api-blue
+          else
+            NEW_PORT=3000
+            NEW_CONTAINER=l4va-api-blue
+            OLD_CONTAINER=l4va-api-green
+          fi
 
-        echo "Active port: $ACTIVE_PORT"
-        echo "Deploying to port: $NEW_PORT"
+          echo "Active port: $ACTIVE_PORT"
+          echo "Deploying to port: $NEW_PORT"
 
-        docker compose build $NEW_CONTAINER
-        docker compose up -d $NEW_CONTAINER
+          docker compose build $NEW_CONTAINER
+          docker compose up -d $NEW_CONTAINER
 
-        echo "Waiting for health..."
-        until curl -sf http://127.0.0.1:$NEW_PORT/health; do
-          sleep 2
-        done
+          echo "Waiting for health..."
+          until curl -sf http://127.0.0.1:$NEW_PORT/health; do
+            sleep 2
+          done
 
-        sudo sed -i "s/set \$api_port .*/set \$api_port $NEW_PORT;/" /etc/nginx/sites-enabled/testnet.l4va.org
-        sudo nginx -s reload
+          sudo sed -i "s/set \$api_port .*/set \$api_port $NEW_PORT;/" /etc/nginx/sites-enabled/testnet.l4va.org
+          sudo nginx -s reload
 
-        docker stop $OLD_CONTAINER || true
+          docker stop $OLD_CONTAINER || true
 
   deploy-prod:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
