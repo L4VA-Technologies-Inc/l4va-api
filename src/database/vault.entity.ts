@@ -506,7 +506,7 @@ export class Vault {
     type: 'varchar',
     nullable: true,
   })
-  sc_version?: string;
+  sc_version?: string; // The smart contract version retrieved from configuration, used to track which smart contract version was used when publishing vaults.
 
   @Exclude()
   @Column({

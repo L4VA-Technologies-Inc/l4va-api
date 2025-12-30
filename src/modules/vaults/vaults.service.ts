@@ -69,6 +69,10 @@ import {
 @Injectable()
 export class VaultsService {
   private readonly logger = new Logger(VaultsService.name);
+  /**
+   * The smart contract version retrieved from configuration, used to track
+   * which smart contract version was used when publishing vaults.
+   */
   private readonly scVersion: string;
 
   constructor(
