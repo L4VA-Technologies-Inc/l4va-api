@@ -3,7 +3,8 @@ import * as path from 'path';
 
 import * as dotenv from 'dotenv';
 
-// Define which secrets should NEVER be written to disk
+// Define sensitive secrets that this script should avoid adding or updating in .env.
+// Note: If these keys already exist in the .env file, they may still be preserved by merges.
 const SENSITIVE_KEYS = [
   'ADMIN_S_KEY',
   'VAULT_SCRIPT_SKEY',
