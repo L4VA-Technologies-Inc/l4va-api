@@ -3,6 +3,14 @@ import * as path from 'path';
 
 import * as dotenv from 'dotenv';
 
+// Define which secrets should NEVER be written to disk
+const SENSITIVE_KEYS = [
+  'ADMIN_S_KEY',
+  'VAULT_SCRIPT_SKEY',
+  'ADMIN_KEY_HASH', // Also sensitive
+  'POOL_ADDRESS', // Private key related
+];
+
 export async function loadSecrets(): Promise<void> {
   // Step 1: Load .env file first (from git repository)
   dotenv.config();
@@ -17,10 +25,11 @@ export async function loadSecrets(): Promise<void> {
     Object.assign(process.env, parsed);
   }
 
-  const shouldLoadGcpSecrets = nodeEnv === 'mainnet';
+  // Support both testnet and mainnet
+  const shouldLoadGcpSecrets = nodeEnv === 'mainnet' || nodeEnv === 'testnet';
 
   if (!shouldLoadGcpSecrets) {
-    console.log('Skipping GCP secrets load because NODE_ENV !== "mainnet"');
+    console.log(`Skipping GCP secrets load because NODE_ENV is "${nodeEnv}" (expected "mainnet" or "testnet")`);
     return;
   }
 
@@ -58,7 +67,7 @@ export async function loadSecrets(): Promise<void> {
     return;
   }
 
-  const secretName = 'mainnet';
+  const secretName = nodeEnv === 'mainnet' ? 'mainnet' : 'testnet';
   const projectId = process.env.GCP_PROJECT_ID;
 
   try {
@@ -73,15 +82,33 @@ export async function loadSecrets(): Promise<void> {
 
     const parsed = dotenv.parse(secrets);
 
+    // Separate sensitive and non-sensitive secrets
+    const sensitiveSecrets: Record<string, string> = {};
+    const nonSensitiveSecrets: Record<string, string> = {};
+
+    Object.entries(parsed).forEach(([key, value]) => {
+      if (SENSITIVE_KEYS.includes(key)) {
+        sensitiveSecrets[key] = value;
+      } else {
+        nonSensitiveSecrets[key] = value;
+      }
+    });
+
+    // Load ALL secrets into process.env (memory)
     Object.assign(process.env, parsed);
 
+    // Only write non-sensitive secrets to .env file
     const existingEnv = dotenv.parse(envExists ? fs.readFileSync(envFilePath, 'utf8') : '');
-    const mergedEnv = { ...existingEnv, ...parsed };
+    const mergedEnv = { ...existingEnv, ...nonSensitiveSecrets };
 
     const envContent = Object.entries(mergedEnv)
       .map(([key, value]) => `${key}=${value}`)
       .join('\n');
     fs.writeFileSync(envFilePath, envContent, 'utf8');
+
+    console.log(
+      `✅ Loaded ${Object.keys(parsed).length} secrets from GCP (${Object.keys(sensitiveSecrets).length} kept in memory only)`
+    );
   } catch (e) {
     console.error('Failed to load GCP secrets:', e.stack || e.message || e);
     console.warn('Falling back to .env file only');
