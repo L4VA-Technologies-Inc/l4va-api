@@ -9,7 +9,6 @@ const SENSITIVE_KEYS = [
   'ADMIN_S_KEY',
   'VAULT_SCRIPT_SKEY',
   'ADMIN_KEY_HASH', // Also sensitive
-  'POOL_ADDRESS', // Private key related
 ];
 
 export async function loadSecrets(): Promise<void> {
