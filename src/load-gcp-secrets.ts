@@ -5,11 +5,7 @@ import * as dotenv from 'dotenv';
 
 // Define sensitive secrets that this script should avoid adding or updating in .env.
 // Note: If these keys already exist in the .env file, they may still be preserved by merges.
-const SENSITIVE_KEYS = [
-  'ADMIN_S_KEY',
-  'VAULT_SCRIPT_SKEY',
-  'ADMIN_KEY_HASH', // Also sensitive
-];
+const SENSITIVE_KEYS = ['ADMIN_S_KEY', 'VAULT_SCRIPT_SKEY'];
 
 export async function loadSecrets(): Promise<void> {
   // Step 1: Load .env file first (from git repository)
@@ -99,7 +95,13 @@ export async function loadSecrets(): Promise<void> {
 
     // Only write non-sensitive secrets to .env file
     const existingEnv = dotenv.parse(envExists ? fs.readFileSync(envFilePath, 'utf8') : '');
-    const mergedEnv = { ...existingEnv, ...nonSensitiveSecrets };
+
+    // Filter out sensitive keys from existing .env to ensure they are removed from disk
+    const filteredExistingEnv = Object.fromEntries(
+      Object.entries(existingEnv).filter(([key]) => !SENSITIVE_KEYS.includes(key))
+    );
+
+    const mergedEnv = { ...filteredExistingEnv, ...nonSensitiveSecrets };
 
     const envContent = Object.entries(mergedEnv)
       .map(([key, value]) => `${key}=${value}`)
