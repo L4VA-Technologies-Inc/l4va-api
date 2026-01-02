@@ -13,6 +13,7 @@ import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
+import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
@@ -53,7 +54,8 @@ export class LifecycleService {
     private readonly treasuryWalletService: TreasuryWalletService,
     private readonly claimsService: ClaimsService,
     private readonly transactionsService: TransactionsService,
-    private readonly eventEmitter: EventEmitter2
+    private readonly eventEmitter: EventEmitter2,
+    private readonly systemSettingsService: SystemSettingsService
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -711,21 +713,34 @@ export class LifecycleService {
             lpPercent: LP_PERCENT,
           });
         try {
-          if (adjustedVtLpAmount > 0 && lpAdaAmount > 0) {
-            const lpClaimExists = await this.claimRepository.exists({
-              where: { vault: { id: vault.id }, type: ClaimType.LP },
-            });
+          const lpAdaInLovelace = Math.floor(lpAdaAmount * 1_000_000);
+          const minLpLiquidity = this.systemSettingsService.lpRecommendedMinLiquidity;
 
-            if (!lpClaimExists) {
-              await this.claimRepository.save({
-                vault: { id: vault.id },
-                type: ClaimType.LP,
-                amount: adjustedVtLpAmount,
-                status: ClaimStatus.AVAILABLE,
-                lovelace_amount: Math.floor(lpAdaAmount * 1_000_000),
+          if (adjustedVtLpAmount > 0 && lpAdaAmount > 0) {
+            // Check if LP liquidity meets minimum threshold
+            if (lpAdaInLovelace < minLpLiquidity) {
+              this.logger.warn(
+                `Skipping LP claim creation for vault ${vault.id}: ` +
+                  `LP liquidity ${lpAdaAmount} ADA (${lpAdaInLovelace} lovelace) is below ` +
+                  `recommended minimum ${minLpLiquidity / 1_000_000} ADA (${minLpLiquidity} lovelace). ` +
+                  `Pool would be too small for practical use.`
+              );
+            } else {
+              const lpClaimExists = await this.claimRepository.exists({
+                where: { vault: { id: vault.id }, type: ClaimType.LP },
               });
 
-              this.logger.log(`Created LP claim: ${adjustedVtLpAmount} VT tokens, ${lpAdaAmount} ADA`);
+              if (!lpClaimExists) {
+                await this.claimRepository.save({
+                  vault: { id: vault.id },
+                  type: ClaimType.LP,
+                  amount: adjustedVtLpAmount,
+                  status: ClaimStatus.AVAILABLE,
+                  lovelace_amount: lpAdaInLovelace,
+                });
+
+                this.logger.log(`Created LP claim: ${adjustedVtLpAmount} VT tokens, ${lpAdaAmount} ADA`);
+              }
             }
           } else {
             this.logger.log(
@@ -1027,6 +1042,24 @@ export class LifecycleService {
           `LP VT: ${lpVtAmount}, LP ADA: ${lpAdaAmount}`
       );
 
+      // Check if LP meets minimum liquidity threshold and create claim if applicable
+      const lpAdaInLovelace = Math.floor(lpAdaAmount * 1_000_000);
+      const minLpLiquidity = this.systemSettingsService.lpRecommendedMinLiquidity;
+      let shouldCreateLpClaim = false;
+
+      if (lpVtAmount > 0 && lpAdaAmount > 0) {
+        if (lpAdaInLovelace < minLpLiquidity) {
+          this.logger.warn(
+            `Skipping LP claim creation for vault ${vault.id}: ` +
+              `LP liquidity ${lpAdaAmount} ADA (${lpAdaInLovelace} lovelace) is below ` +
+              `recommended minimum ${minLpLiquidity / 1_000_000} ADA (${minLpLiquidity} lovelace). ` +
+              `Pool would be too small for practical use.`
+          );
+        } else {
+          shouldCreateLpClaim = true;
+        }
+      }
+
       // Get contribution transactions
       const contributionTransactions = await this.transactionsRepository.find({
         where: {
@@ -1158,6 +1191,29 @@ export class LifecycleService {
           `No contributor claims created for vault ${vault.id}. ` +
             `This may indicate an issue with contribution value calculations.`
         );
+      }
+
+      // Create LP claim if it meets minimum liquidity threshold
+      if (shouldCreateLpClaim) {
+        try {
+          const lpClaimExists = await this.claimRepository.exists({
+            where: { vault: { id: vault.id }, type: ClaimType.LP },
+          });
+
+          if (!lpClaimExists) {
+            await this.claimRepository.save({
+              vault: { id: vault.id },
+              type: ClaimType.LP,
+              amount: lpVtAmount,
+              status: ClaimStatus.AVAILABLE,
+              lovelace_amount: lpAdaInLovelace,
+            });
+
+            this.logger.log(`Created LP claim: ${lpVtAmount} VT tokens, ${lpAdaAmount} ADA`);
+          }
+        } catch (error) {
+          this.logger.error(`Failed to create LP claim for vault ${vault.id}:`, error);
+        }
       }
 
       // Get final claims for multiplier calculation
