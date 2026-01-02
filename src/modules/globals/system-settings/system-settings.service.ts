@@ -12,6 +12,7 @@ export interface SystemSettingsData {
   vlrm_creator_fee_enabled: boolean;
   protocol_contributors_fee: number;
   protocol_flat_fee: number;
+  lp_recommended_min_liquidity: number;
 }
 
 const DEFAULT_SETTINGS: SystemSettingsData = {
@@ -22,6 +23,7 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   protocol_acquires_fee: 5000000,
   protocol_contributors_fee: 5000000,
   protocol_flat_fee: 5000000,
+  lp_recommended_min_liquidity: 500000000, // 500 ADA
 };
 
 @Injectable()
@@ -90,6 +92,10 @@ export class SystemSettingsService implements OnModuleInit {
 
   get protocolFlatFee(): number {
     return this.settings.protocol_enabled ? this.settings.protocol_flat_fee : 0;
+  }
+
+  get lpRecommendedMinLiquidity(): number {
+    return this.settings.lp_recommended_min_liquidity;
   }
 
   async updateSettings(data: Partial<SystemSettingsData>): Promise<SystemSettingsData> {

@@ -1,2 +1,2 @@
-export * from './system-settings.module';
-export * from './system-settings.service';
+export * from "./system-settings.module";
+export * from "./system-settings.service";

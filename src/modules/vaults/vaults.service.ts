@@ -39,6 +39,8 @@ import { TagEntity } from '@/database/tag.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { transformToSnakeCase } from '@/helpers';
+import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
+import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ProposalStatus } from '@/types/proposal.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -100,7 +102,9 @@ export class VaultsService {
     private readonly governanceService: GovernanceService,
     private readonly taptoolsService: TaptoolsService,
     private readonly transactionsService: TransactionsService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly systemSettingsService: SystemSettingsService,
+    private readonly distributionCalculationService: DistributionCalculationService
   ) {
     this.scVersion = this.configService.get<string>('SC_VERSION') || '1.0.0'; // Current SC version
   }
@@ -877,13 +881,38 @@ export class VaultsService {
     const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(vaultId);
 
     const adaPrice = await this.taptoolsService.getAdaPrice();
+    const lpMinLiquidityLovelace = this.systemSettingsService.lpRecommendedMinLiquidity;
+    const lpMinLiquidityAda = lpMinLiquidityLovelace / 1_000_000;
+    const lpMinLiquidityUsd = lpMinLiquidityAda * adaPrice;
+
+    // Calculate projected LP ADA if vault reaches 100% reserve threshold
+    const requireReservedCostAda =
+      assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01);
+    const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
+    const ASSETS_OFFERED_PERCENT = vault.tokens_for_acquires * 0.01;
+    const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
+
+    let projectedLpAdaAmount = 0;
+    if (LP_PERCENT > 0 && requireReservedCostAda > 0) {
+      const { lpAdaAmount } = this.distributionCalculationService.calculateLpTokens({
+        vtSupply,
+        totalAcquiredAda: requireReservedCostAda,
+        totalContributedValueAda: assetsPrices.totalValueAda,
+        assetsOfferedPercent: ASSETS_OFFERED_PERCENT,
+        lpPercent: LP_PERCENT,
+      });
+      projectedLpAdaAmount = lpAdaAmount;
+    }
 
     const additionalData = {
       maxContributeAssets: Number(vault.max_contribute_assets),
       requireReservedCostUsd:
         assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01),
-      requireReservedCostAda:
-        assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01),
+      requireReservedCostAda,
+      lpMinLiquidityAda,
+      lpMinLiquidityUsd,
+      projectedLpAdaAmount,
+      projectedLpUsdAmount: projectedLpAdaAmount * adaPrice,
       assetsCount: lockedAssetsCount,
       assetsPrices,
       fdvAda: vault.fdv * adaPrice,
