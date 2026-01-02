@@ -43,7 +43,7 @@ import { DistributionCalculationService } from '@/modules/distribution/distribut
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ProposalStatus } from '@/types/proposal.types';
-import { TransactionStatus, TransactionType } from '@/types/transaction.types';
+import { TransactionStatus } from '@/types/transaction.types';
 import {
   ContributionWindowType,
   InvestmentWindowType,
@@ -1428,28 +1428,23 @@ export class VaultsService {
           id: userId,
         },
       },
+      select: ['id', 'asset_vault_name', 'owner', 'script_hash', 'publication_hash'],
       relations: ['assets', 'owner'],
     });
+
     if (!vault) {
       throw new Error('Vault is not found or you are not owner of this vault!');
     }
     if (vault.assets.length !== 0) {
       throw new Error('The vault cant be burned it need to extract and refound assets ');
     }
-    const transaction = await this.transactionsService.createTransaction({
-      vault_id: vaultId,
-      type: TransactionType.burn,
-      assets: [],
-    });
-    const result = await this.vaultContractService.createBurnTx({
-      assetVaultName: vault.asset_vault_name,
-      customerAddress: vault.owner.address,
-    });
 
-    return {
-      ...result,
-      txId: transaction.id,
-    };
+    return await this.vaultContractService.createBurnTx({
+      vaultId,
+      vaultOwnerAddress: vault.owner.address,
+      assetVaultName: vault.asset_vault_name,
+      publicationHash: vault.publication_hash,
+    });
   }
 
   /**
