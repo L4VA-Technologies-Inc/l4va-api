@@ -3,6 +3,7 @@ import { PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { status as GrpcStatus } from '@grpc/grpc-js';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -11,9 +12,11 @@ import { TreasuryWalletInfoDto } from './dto/treasury-wallet-info.dto';
 
 import { Vault } from '@/database/vault.entity';
 import { VaultTreasuryWallet } from '@/database/vaultTreasuryWallet.entity';
+import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { GoogleKMSService } from '@/modules/google_cloud/google-kms.service';
 import { GoogleSecretService } from '@/modules/google_cloud/google-secret.service';
 import { generateCardanoWallet } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import { VaultStatus } from '@/types/vault.types';
 @Injectable()
 export class TreasuryWalletService {
   private readonly logger = new Logger(TreasuryWalletService.name);
@@ -27,7 +30,8 @@ export class TreasuryWalletService {
     private readonly vaultRepository: Repository<Vault>,
     private readonly configService: ConfigService,
     private readonly googleKMSService: GoogleKMSService,
-    private readonly googleSecretService: GoogleSecretService
+    private readonly googleSecretService: GoogleSecretService,
+    private readonly systemSettingsService: SystemSettingsService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
 
@@ -362,6 +366,87 @@ export class TreasuryWalletService {
     } catch (error: any) {
       this.logger.error(`Failed to delete secret for vault ${vaultId}:`, error);
       throw error;
+    }
+  }
+
+  /**
+   * Check if vault has a treasury wallet
+   * Returns false if no wallet exists or on non-mainnet
+   */
+  async hasTreasuryWallet(vaultId: string): Promise<boolean> {
+    if (!this.isMainnet) {
+      return false;
+    }
+
+    const wallet = await this.treasuryWalletRepository.findOne({
+      where: { vault_id: vaultId, is_active: true },
+      select: ['id'],
+    });
+
+    return !!wallet;
+  }
+
+  /**
+   * Cron job to auto-create treasury wallets for locked vaults
+   * Runs every 6 hours to check for vaults that need treasury wallets
+   * Controlled by auto_create_treasury_wallets feature flag in system settings
+   */
+  @Cron(CronExpression.EVERY_10_MINUTES) // TODO: Change to EVERY_6_HOURS in production
+  async autoCreateMissingTreasuryWallets(): Promise<void> {
+    // Check feature flag
+    if (!this.systemSettingsService.autoCreateTreasuryWallets) {
+      this.logger.debug('Auto-create treasury wallets is disabled');
+      return;
+    }
+
+    // Only run on mainnet
+    if (!this.isMainnet) {
+      return;
+    }
+
+    this.logger.log('Starting auto-create treasury wallets cron job');
+
+    try {
+      // Find locked/governance vaults without treasury wallets
+      const vaultsNeedingWallets: Pick<Vault, 'id' | 'name' | 'vault_status'>[] = await this.vaultRepository
+        .createQueryBuilder('vault')
+        .leftJoin(VaultTreasuryWallet, 'wallet', 'wallet.vault_id = vault.id')
+        .where('vault.vault_status IN (:...statuses)', {
+          statuses: [VaultStatus.locked],
+        })
+        .andWhere('vault.deleted = :deleted', { deleted: false })
+        .andWhere('wallet.id IS NULL') // No treasury wallet exists
+        .select(['vault.id', 'vault.name', 'vault.vault_status'])
+        .getMany();
+
+      if (vaultsNeedingWallets.length === 0) {
+        this.logger.log('No vaults need treasury wallets');
+        return;
+      }
+
+      this.logger.log(`Found ${vaultsNeedingWallets.length} vault(s) without treasury wallets`);
+
+      let successCount = 0;
+      let failureCount = 0;
+
+      for (const vault of vaultsNeedingWallets) {
+        try {
+          const wallet = await this.createTreasuryWallet({ vaultId: vault.id });
+          if (wallet) {
+            this.logger.log(`✅ Created treasury wallet for vault ${vault.name} (${vault.id})`);
+            successCount++;
+          }
+        } catch (error) {
+          this.logger.error(
+            `❌ Failed to create treasury wallet for vault ${vault.name} (${vault.id}): ${error.message}`
+          );
+          failureCount++;
+        }
+      }
+
+      this.logger.log(`Auto-create treasury wallets completed: ${successCount} succeeded, ${failureCount} failed`);
+    } catch (error) {
+      this.logger.error('Auto-create treasury wallets cron job failed:', error);
     }
   }
 }

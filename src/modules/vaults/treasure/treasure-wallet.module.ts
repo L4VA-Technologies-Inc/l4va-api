@@ -13,6 +13,7 @@ import { Asset } from '@/database/asset.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { VaultTreasuryWallet } from '@/database/vaultTreasuryWallet.entity';
+import { SystemSettingsModule } from '@/modules/globals/system-settings/system-settings.module';
 import { GoogleCloudModule } from '@/modules/google_cloud/google-cloud.module';
 
 @Module({
@@ -24,6 +25,7 @@ import { GoogleCloudModule } from '@/modules/google_cloud/google-cloud.module';
     BlockchainModule,
     TransactionsModule,
     GoogleCloudModule,
+    SystemSettingsModule,
     TypeOrmModule.forFeature([Vault, Transaction, Asset, VaultTreasuryWallet]),
   ],
   providers: [TreasuryWalletService, TreasuryExtractionService],
