@@ -7,23 +7,20 @@ export class AdminGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
-    const user = request.user;
+    const authHeader = request.headers.authorization;
 
-    if (!user) {
-      throw new ForbiddenException('User not authenticated');
+    if (!authHeader) {
+      throw new ForbiddenException('Authorization header missing');
     }
 
-    const adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
+    const token = authHeader.replace('Bearer ', '');
+    const adminServiceToken = this.configService.get<string>('ADMIN_SERVICE_TOKEN');
 
-    if (!adminAddress) {
-      throw new ForbiddenException('Admin address not configured');
+    // Check if it's the service-to-service token
+    if (token === adminServiceToken) {
+      return true; // Allow Django admin access
     }
 
-    // Check if user's address matches admin address
-    if (user.address !== adminAddress) {
-      throw new ForbiddenException('Access denied: Admin privileges required');
-    }
-
-    return true;
+    return false; // Deny access for other tokens
   }
 }

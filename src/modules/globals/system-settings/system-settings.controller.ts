@@ -1,41 +1,17 @@
-import { Body, Controller, Get, Patch, Post, UseGuards } from '@nestjs/common';
+import { Controller, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { SystemSettingsResponseDto } from './dto/settings-response.dto';
-import { UpdateSystemSettingsDto } from './dto/update-settings.dto';
 import { SystemSettingsService } from './system-settings.service';
 
 import { AdminGuard } from '@/modules/auth/admin.guard';
-import { AuthGuard } from '@/modules/auth/auth.guard';
 
 @ApiTags('System Settings')
 @Controller('system-settings')
-@UseGuards(AuthGuard, AdminGuard)
+@UseGuards(AdminGuard)
 @ApiBearerAuth()
 export class SystemSettingsController {
   constructor(private readonly systemSettingsService: SystemSettingsService) {}
-
-  @Get()
-  @ApiOperation({ summary: 'Get current system settings' })
-  @ApiResponse({
-    status: 200,
-    description: 'Current system settings',
-    type: SystemSettingsResponseDto,
-  })
-  getSettings(): SystemSettingsResponseDto {
-    return this.systemSettingsService.getSettings();
-  }
-
-  @Patch()
-  @ApiOperation({ summary: 'Update system settings' })
-  @ApiResponse({
-    status: 200,
-    description: 'Updated system settings',
-    type: SystemSettingsResponseDto,
-  })
-  async updateSettings(@Body() data: UpdateSystemSettingsDto): Promise<SystemSettingsResponseDto> {
-    return await this.systemSettingsService.updateSettings(data);
-  }
 
   @Post('reload')
   @ApiOperation({
