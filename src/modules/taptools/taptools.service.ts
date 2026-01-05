@@ -336,6 +336,18 @@ export class TaptoolsService {
 
     for (const asset of assets) {
       try {
+        // Skip administrative/fee tokens - they shouldn't count toward vault value
+        if (asset.metadata?.purpose === 'vault_creation_fee') {
+          // Still include in the assets list for transparency, but don't add to totals
+          assetsWithValues.push({
+            ...asset,
+            assetName: asset.assetId,
+            valueAda: 0,
+            valueUsd: 0,
+          });
+          continue;
+        }
+
         // TODO: Test this
         if (asset.assetId === 'lovelace') {
           // Special case for ADA

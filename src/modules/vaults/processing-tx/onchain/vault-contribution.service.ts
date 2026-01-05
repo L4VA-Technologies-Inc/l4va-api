@@ -11,7 +11,9 @@ import { TransactionsService } from '../offchain-tx/transactions.service';
 
 import { BlockchainService } from './blockchain.service';
 import { SubmitTransactionDto } from './dto/transaction.dto';
+import { UtxoSpentException } from './exceptions/utxo-spent.exception';
 import { ValidityIntervalException } from './exceptions/validity-interval.exception';
+import { ValueNotConservedException } from './exceptions/value-not-conserved.exception';
 import { BuildTransactionParams, TransactionSubmitResponse } from './types/transaction-status.enum';
 import { Redeemer } from './types/type';
 import { getUtxosExtract } from './utils/lib';
@@ -263,9 +265,26 @@ export class VaultContributionService {
     } catch (error) {
       this.logger.error('Error submitting transaction', error);
       await this.transactionsService.updateTransactionStatusById(signedTx.txId, TransactionStatus.failed);
+
       if (error instanceof ValidityIntervalException) {
         throw error;
       }
+
+      if (error instanceof UtxoSpentException) {
+        throw new Error(
+          'One or more of your wallet UTXOs were already spent in another transaction. ' +
+            'Please refresh your wallet and try again.'
+        );
+      }
+
+      if (error instanceof ValueNotConservedException) {
+        throw new Error(
+          'Transaction value mismatch detected. This is likely a bug in the transaction builder. ' +
+            'Please contact support with this transaction ID: ' +
+            signedTx.txId
+        );
+      }
+
       throw new Error(`Failed to submit contribution transaction: ${error.message}`);
     }
   }

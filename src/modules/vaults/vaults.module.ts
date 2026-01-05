@@ -16,6 +16,7 @@ import { LinkEntity } from '@/database/link.entity';
 import { TagEntity } from '@/database/tag.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { DistributionModule } from '@/modules/distribution/distribution.module';
 import { GovernanceModule } from '@/modules/vaults/phase-management/governance/governance.module';
 import { LifecycleModule } from '@/modules/vaults/phase-management/lifecycle/lifecycle.module';
 import { TransactionsModule } from '@/modules/vaults/processing-tx/offchain-tx/transactions.module';
@@ -28,6 +29,7 @@ import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockch
     TransactionsModule,
     BlockchainModule,
     GovernanceModule,
+    DistributionModule,
     TypeOrmModule.forFeature([
       Vault,
       User,

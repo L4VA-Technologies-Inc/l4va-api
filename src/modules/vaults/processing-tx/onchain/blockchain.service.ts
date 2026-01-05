@@ -8,7 +8,9 @@ import { firstValueFrom } from 'rxjs';
 import { FeeTooSmallException } from './exceptions/fee-too-small.exception';
 import { UTxOInsufficientException } from './exceptions/utxo-insufficient.exception';
 import { MissingUtxoException } from './exceptions/utxo-missing.exception';
+import { UtxoSpentException } from './exceptions/utxo-spent.exception';
 import { ValidityIntervalException } from './exceptions/validity-interval.exception';
+import { ValueNotConservedException } from './exceptions/value-not-conserved.exception';
 import { VaultValidationException } from './exceptions/vault-validation.exception';
 import {
   ApplyParamsPayload,
@@ -175,31 +177,44 @@ export class BlockchainService {
       if (error.response?.status === 422 && error.response?.data?.message) {
         const errorMessage = error.response.data.message;
 
-        if (errorMessage.includes('OutsideValidityIntervalUTxO') || errorMessage.includes('ValidityInterval')) {
-          const validityInfo = this.parseValidityIntervalError(errorMessage);
-          this.logger.warn(`Validity interval error during submission: ${JSON.stringify(validityInfo)}`);
+        // Check for BadInputsUTxO error (UTXO already spent)
+        if (errorMessage.includes('BadInputsUTxO')) {
+          const utxoMatch = errorMessage.match(
+            /TxIn \(TxId \{unTxId = SafeHash "([a-f0-9]+)"\}\) \(TxIx \{unTxIx = (\d+)\}\)/
+          );
+          if (utxoMatch) {
+            const [, txHash, outputIndex] = utxoMatch;
+            throw new UtxoSpentException(txHash, parseInt(outputIndex));
+          }
+          throw new UtxoSpentException('unknown', 0, 'One or more transaction inputs have already been spent');
+        }
 
+        // Check for ValueNotConservedUTxO error
+        if (errorMessage.includes('ValueNotConservedUTxO')) {
+          const suppliedMatch = errorMessage.match(/mismatchSupplied = MaryValue \(Coin (\d+)\)/);
+          const expectedMatch = errorMessage.match(/mismatchExpected = MaryValue \(Coin (\d+)\)/);
+
+          const supplied = suppliedMatch ? `${parseInt(suppliedMatch[1]) / 1_000_000} ADA` : 'unknown';
+          const expected = expectedMatch ? `${parseInt(expectedMatch[1]) / 1_000_000} ADA` : 'unknown';
+
+          throw new ValueNotConservedException(supplied, expected);
+        }
+
+        // Existing validity interval check
+        if (errorMessage.includes('OutsideValidityIntervalUTxO')) {
+          const parsedError = this.parseValidityIntervalError(errorMessage);
           throw new ValidityIntervalException(
-            validityInfo.invalidBefore,
-            validityInfo.invalidHereafter,
-            validityInfo.currentSlot,
-            `Transaction validity window expired or not yet valid during submission. Please retry the transaction.`
+            parsedError.invalidBefore,
+            parsedError.invalidHereafter,
+            parsedError.currentSlot
           );
         }
-
-        if (errorMessage.includes('FeeTooSmallUTxO')) {
-          this.logger.warn(`Fee too small error during submission`);
-          throw FeeTooSmallException.fromErrorMessage(errorMessage);
-        }
-
-        this.logger.error(`Transaction submission failed with validation error: ${errorMessage}`);
-        throw new Error(`Transaction validation failed: ${errorMessage}`);
       }
 
       // Log the full error for debugging
       this.logger.error('Full submission error:', error);
       this.logger.error('Error submitting transaction', error.message);
-      throw new Error(`Failed to submit transaction ${error.message}`);
+      throw new Error(`Failed to submit transaction: ${error.message}`);
     }
   }
 

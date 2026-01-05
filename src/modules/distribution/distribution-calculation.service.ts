@@ -255,11 +255,6 @@ export class DistributionCalculationService {
     const adaPairMultiplier = totalAcquiredAda > 0 ? Math.floor(lpVtValue / (totalAcquiredAda * 1_000_000)) : 0;
     const adjustedVtLpAmount = adaPairMultiplier * totalAcquiredAda * 1_000_000;
 
-    this.logger.log(
-      `LP calculation: ${lpAdaAmount} ADA + ${lpVtValue} VT @ ${vtPrice} ADA/VT ` +
-        `(FDV: ${fdv}, LP%: ${lpPercent * 100}%)`
-    );
-
     return {
       lpAdaAmount,
       lpVtAmount: lpVtValue,

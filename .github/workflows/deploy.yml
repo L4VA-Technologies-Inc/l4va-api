@@ -52,6 +52,7 @@ jobs:
         run: |
           mkdir -p ~/apps/l4va-api
           cp -r $GITHUB_WORKSPACE/* ~/apps/l4va-api/
+          cp -r $GITHUB_WORKSPACE/.env ~/apps/l4va-api/.env
 
       - name: Zero downtime deploy (blue-green)
         run: |
@@ -119,6 +120,7 @@ jobs:
         run: |
           mkdir -p ~/apps/l4va-api
           cp -r $GITHUB_WORKSPACE/* ~/apps/l4va-api/
+          cp -r $GITHUB_WORKSPACE/.env ~/apps/l4va-api/.env
 
       - name: Zero downtime deploy (blue-green)
         run: |
