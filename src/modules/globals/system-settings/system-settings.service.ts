@@ -97,6 +97,7 @@ export class SystemSettingsService implements OnModuleInit {
   }
 
   get autoCreateTreasuryWallets(): boolean {
-    return this.settings.auto_create_treasury_wallets;
+    const value = this.settings.auto_create_treasury_wallets as boolean | string;
+    return value === true || value === 'true';
   }
 }
