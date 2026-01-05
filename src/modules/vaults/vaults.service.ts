@@ -893,10 +893,10 @@ export class VaultsService {
     const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
 
     let projectedLpAdaAmount = 0;
-    if (LP_PERCENT > 0 && requireReservedCostAda > 0) {
+    if (LP_PERCENT > 0 && assetsPrices.totalValueAda > 0) {
       const { lpAdaAmount } = this.distributionCalculationService.calculateLpTokens({
         vtSupply,
-        totalAcquiredAda: requireReservedCostAda,
+        totalAcquiredAda: assetsPrices.totalAcquiredAda,
         totalContributedValueAda: assetsPrices.totalValueAda,
         assetsOfferedPercent: ASSETS_OFFERED_PERCENT,
         lpPercent: LP_PERCENT,
