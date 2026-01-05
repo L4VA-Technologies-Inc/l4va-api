@@ -24,7 +24,13 @@ import { PublishVaultDto } from '../../dto/publish-vault.dto';
 
 import { BlockchainService } from './blockchain.service';
 import { Datum1 } from './types/type';
-import { generate_tag_from_txhash_index, getAddressFromHash, getUtxosExtract, getVaultUtxo } from './utils/lib';
+import {
+  createUtxoHex,
+  generate_tag_from_txhash_index,
+  getAddressFromHash,
+  getUtxosExtract,
+  getVaultUtxo,
+} from './utils/lib';
 
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
@@ -346,13 +352,24 @@ export class VaultManagingService {
     }
   }
 
-  async createBurnTx(burnConfig: { customerAddress: string; assetVaultName: string }): Promise<{
+  async createBurnTx(burnConfig: {
+    vaultId: string;
+    vaultOwnerAddress: string;
+    assetVaultName: string;
+    publicationHash: string;
+  }): Promise<{
     presignedTx: string;
+    txId: string;
   }> {
     this.logger.log(`Creating burn transaction for vault ${burnConfig.assetVaultName}`);
+    const transaction = await this.transactionsService.createTransaction({
+      vault_id: burnConfig.vaultId,
+      type: TransactionType.burn,
+      assets: [],
+    });
 
     try {
-      if (!burnConfig.customerAddress) {
+      if (!burnConfig.vaultOwnerAddress) {
         throw new BadRequestException('Customer address is required');
       }
 
@@ -360,8 +377,48 @@ export class VaultManagingService {
         throw new BadRequestException('Asset vault name is required');
       }
 
+      const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
+        minAda: 4000000,
+        validateUtxos: false,
+      });
+
+      const requiredInputs: string[] = [];
+
       // Get the vault UTXO
       const vaultUtxo = await getVaultUtxo(this.scPolicyId, burnConfig.assetVaultName, this.blockfrost);
+
+      const utxoDetails = await this.blockfrost.txsUtxos(burnConfig.publicationHash);
+
+      let refScriptPayBackAmount = 0;
+
+      if (utxoDetails && utxoDetails.outputs) {
+        // Find the output with the script address that contains the collateral
+        const scriptOutputIndex = utxoDetails.outputs.findIndex(output => output.address === this.vaultScriptAddress);
+
+        if (scriptOutputIndex !== -1) {
+          const scriptOutput = utxoDetails.outputs[scriptOutputIndex];
+          refScriptPayBackAmount = Number(scriptOutput.amount[0].quantity);
+
+          if (refScriptPayBackAmount > 0) {
+            // Create the UTXO reference for the script collateral
+            const scriptUtxoHex = createUtxoHex(
+              burnConfig.publicationHash,
+              scriptOutputIndex,
+              Address.from_bech32(this.vaultScriptAddress),
+              [{ unit: 'lovelace', quantity: refScriptPayBackAmount }]
+            );
+
+            adminUtxos.push(scriptUtxoHex);
+            requiredInputs.push(scriptUtxoHex);
+          } else {
+            this.logger.warn(`Script UTXO has zero or negative ADA amount: ${refScriptPayBackAmount}, skipping refund`);
+          }
+        } else {
+          this.logger.warn(`No output found with vault script address ${this.vaultScriptAddress}, skipping refund`);
+        }
+      } else {
+        this.logger.warn(`Transaction ${burnConfig.publicationHash} outputs not found, skipping script UTXO refund`);
+      }
 
       if (!vaultUtxo) {
         throw new NotFoundException(`Vault UTXO not found for asset name ${burnConfig.assetVaultName}`);
@@ -369,8 +426,9 @@ export class VaultManagingService {
 
       // Create transaction input
       const input = {
-        changeAddress: burnConfig.customerAddress,
+        changeAddress: burnConfig.vaultOwnerAddress,
         message: 'Vault Burn',
+        utxos: adminUtxos,
         scriptInteractions: [
           {
             purpose: 'spend',
@@ -400,20 +458,28 @@ export class VaultManagingService {
           },
         ],
         requiredSigners: [this.adminHash],
+        requiredInputs,
+        outputs: [],
       };
 
+      if (refScriptPayBackAmount > 2000000) {
+        input.outputs.push({
+          address: burnConfig.vaultOwnerAddress, // Send back to vault owner
+          lovelace: refScriptPayBackAmount - 2000000, // Refund amount (adjust based on actual collateral)
+        } as any);
+      }
+
       const buildResponse = await this.blockchainService.buildTransaction(input);
-
       const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.vaultScriptSKey));
       txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
-
-      this.logger.log(`Successfully created burn transaction for vault ${burnConfig.assetVaultName}`);
 
       return {
         presignedTx: txToSubmitOnChain.to_hex(),
+        txId: transaction.id,
       };
     } catch (error) {
-      // this.logger.error(`Failed to create burn transaction for vault ${burnConfig.assetVaultName}:`, error);
+      await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
 
       if (error instanceof NotFoundException || error instanceof BadRequestException) {
         throw error;
@@ -554,7 +620,6 @@ export class VaultManagingService {
       const buildResponse = await this.blockchainService.buildTransaction(input);
 
       const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.vaultScriptSKey));
       txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
       const response = await this.blockchainService.submitTransaction({

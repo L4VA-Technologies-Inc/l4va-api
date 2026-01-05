@@ -203,6 +203,40 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   requireReservedCostUsd: number;
 
+  @ApiProperty({ description: 'Recommended minimum liquidity for LP in ADA' })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'lpMinLiquidityAda' },
+  })
+  lpMinLiquidityAda: number;
+
+  @ApiProperty({ description: 'Recommended minimum liquidity for LP in USD' })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'lpMinLiquidityUsd' },
+  })
+  lpMinLiquidityUsd: number;
+
+  @ApiProperty({
+    description:
+      'Estimated LP liquidity in ADA if vault reaches 100% of required acquire reserve (based on vault configuration: LP%, FDV, and asset distribution)',
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'projectedLpAdaAmount' },
+  })
+  projectedLpAdaAmount: number;
+
+  @ApiProperty({
+    description:
+      'Estimated LP liquidity in USD if vault reaches 100% of required acquire reserve (based on vault configuration: LP%, FDV, and asset distribution)',
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'projectedLpUsdAmount' },
+  })
+  projectedLpUsdAmount: number;
+
   @ApiProperty({
     description: 'Indicates whether the user can create proposals for this vault',
     type: Boolean,
