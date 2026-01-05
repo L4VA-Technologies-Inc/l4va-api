@@ -13,14 +13,24 @@ export class AdminGuard implements CanActivate {
       throw new ForbiddenException('Authorization header missing');
     }
 
-    const token = authHeader.replace('Bearer ', '');
+    const token = authHeader.replace('Bearer ', '').trim();
     const adminServiceToken = this.configService.get<string>('ADMIN_SERVICE_TOKEN');
+
+    // Security check: Ensure token is configured and not empty
+    if (!adminServiceToken || adminServiceToken.trim() === '') {
+      throw new ForbiddenException('Admin service token not configured');
+    }
+
+    // Security check: Ensure provided token is not empty
+    if (!token || token === '') {
+      throw new ForbiddenException('Invalid authorization token');
+    }
 
     // Check if it's the service-to-service token
     if (token === adminServiceToken) {
       return true; // Allow Django admin access
     }
 
-    return false; // Deny access for other tokens
+    throw new ForbiddenException('Access denied: Invalid admin credentials');
   }
 }
