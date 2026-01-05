@@ -408,9 +408,9 @@ export class TreasuryWalletService {
 
     try {
       // Find locked/governance vaults without treasury wallets
-      const vaultsNeedingWallets = await this.vaultRepository
+      const vaultsNeedingWallets: Pick<Vault, 'id' | 'name' | 'vault_status'>[] = await this.vaultRepository
         .createQueryBuilder('vault')
-        .leftJoin('vault.treasury_wallet', 'wallet')
+        .leftJoin(VaultTreasuryWallet, 'wallet', 'wallet.vault_id = vault.id')
         .where('vault.vault_status IN (:...statuses)', {
           statuses: [VaultStatus.locked],
         })

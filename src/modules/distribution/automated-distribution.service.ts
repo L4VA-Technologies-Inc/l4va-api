@@ -97,7 +97,10 @@ export class AutomatedDistributionService {
    * Find locked vaults ready for distribution and initiate acquirer extractions
    */
   private async processLockedVaultsForDistribution(): Promise<void> {
-    const readyVaults = await this.vaultRepository.find({
+    const readyVaults: Pick<
+      Vault,
+      'id' | 'tokens_for_acquires' | 'dispatch_parametized_hash' | 'script_hash' | 'asset_vault_name'
+    >[] = await this.vaultRepository.find({
       where: {
         vault_status: VaultStatus.locked,
         vault_sc_status: SmartContractVaultStatus.SUCCESSFUL,
@@ -216,7 +219,9 @@ export class AutomatedDistributionService {
   /**
    * Ensure dispatch script is parameterized for vault
    */
-  private async ensureDispatchParameterized(vault: Vault): Promise<void> {
+  private async ensureDispatchParameterized(
+    vault: Pick<Vault, 'id' | 'dispatch_parametized_hash' | 'asset_vault_name' | 'script_hash'>
+  ): Promise<void> {
     if (vault.dispatch_parametized_hash) {
       return;
     }
@@ -254,7 +259,10 @@ export class AutomatedDistributionService {
     asset_vault_name: string
   ): Promise<void> {
     try {
-      const vault = await this.vaultRepository.findOne({
+      const vault: Pick<
+        Vault,
+        'id' | 'liquidity_pool_contribution' | 'governance_phase_start' | 'total_assets_cost_ada'
+      > = await this.vaultRepository.findOne({
         where: { id: vaultId },
         select: ['id', 'liquidity_pool_contribution', 'governance_phase_start', 'total_assets_cost_ada'],
       });
