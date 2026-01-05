@@ -665,7 +665,7 @@ export class VaultManagingService {
           asset_id: `${this.VLRM_POLICY_ID}${this.VLRM_HEX_ASSET_NAME}`,
           type: AssetType.FT,
           quantity: this.systemSettingsService.vlrmCreatorFee,
-          status: AssetStatus.PENDING,
+          status: AssetStatus.LOCKED,
           origin_type: AssetOriginType.FEE,
           transaction: { id: signedTx.txId },
           added_by: { id: ownerId },
