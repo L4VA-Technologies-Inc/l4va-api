@@ -462,7 +462,7 @@ export class VaultManagingService {
         outputs: [],
       };
 
-      if (refScriptPayBackAmount > 0) {
+      if (refScriptPayBackAmount > 2000000) {
         input.outputs.push({
           address: burnConfig.vaultOwnerAddress, // Send back to vault owner
           lovelace: refScriptPayBackAmount - 2000000, // Refund amount (adjust based on actual collateral)

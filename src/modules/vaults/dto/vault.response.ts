@@ -217,14 +217,20 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   lpMinLiquidityUsd: number;
 
-  @ApiProperty({ description: 'Projected LP ADA amount at 100% reserve threshold' })
+  @ApiProperty({
+    description:
+      'Estimated LP liquidity in ADA if vault reaches 100% of required acquire reserve (based on vault configuration: LP%, FDV, and asset distribution)',
+  })
   @DtoRepresent({
     transform: false,
     expose: { name: 'projectedLpAdaAmount' },
   })
   projectedLpAdaAmount: number;
 
-  @ApiProperty({ description: 'Projected LP USD amount at 100% reserve threshold' })
+  @ApiProperty({
+    description:
+      'Estimated LP liquidity in USD if vault reaches 100% of required acquire reserve (based on vault configuration: LP%, FDV, and asset distribution)',
+  })
   @DtoRepresent({
     transform: false,
     expose: { name: 'projectedLpUsdAmount' },
