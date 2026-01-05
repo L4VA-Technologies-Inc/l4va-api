@@ -13,6 +13,7 @@ export interface SystemSettingsData {
   protocol_contributors_fee: number;
   protocol_flat_fee: number;
   lp_recommended_min_liquidity: number;
+  auto_create_treasury_wallets: boolean;
 }
 
 const DEFAULT_SETTINGS: SystemSettingsData = {
@@ -24,6 +25,7 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   protocol_contributors_fee: 5000000,
   protocol_flat_fee: 5000000,
   lp_recommended_min_liquidity: 500000000, // 500 ADA
+  auto_create_treasury_wallets: false, // Disabled by default
 };
 
 @Injectable()
@@ -92,5 +94,9 @@ export class SystemSettingsService implements OnModuleInit {
 
   get lpRecommendedMinLiquidity(): number {
     return this.settings.lp_recommended_min_liquidity;
+  }
+
+  get autoCreateTreasuryWallets(): boolean {
+    return this.settings.auto_create_treasury_wallets;
   }
 }
