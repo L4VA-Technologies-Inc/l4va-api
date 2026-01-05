@@ -5,11 +5,12 @@ import { SystemSettingsResponseDto } from './dto/settings-response.dto';
 import { UpdateSystemSettingsDto } from './dto/update-settings.dto';
 import { SystemSettingsService } from './system-settings.service';
 
+import { AdminGuard } from '@/modules/auth/admin.guard';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 
 @ApiTags('System Settings')
 @Controller('system-settings')
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, AdminGuard)
 @ApiBearerAuth()
 export class SystemSettingsController {
   constructor(private readonly systemSettingsService: SystemSettingsService) {}
