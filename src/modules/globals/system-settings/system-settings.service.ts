@@ -62,10 +62,6 @@ export class SystemSettingsService implements OnModuleInit {
     return this.settings;
   }
 
-  getSettings(): SystemSettingsData {
-    return { ...this.settings };
-  }
-
   get protocolEnabled(): boolean {
     return this.settings.protocol_enabled;
   }
@@ -96,31 +92,5 @@ export class SystemSettingsService implements OnModuleInit {
 
   get lpRecommendedMinLiquidity(): number {
     return this.settings.lp_recommended_min_liquidity;
-  }
-
-  async updateSettings(data: Partial<SystemSettingsData>): Promise<SystemSettingsData> {
-    try {
-      const settingsRecord = await this.systemSettingsRepository.find();
-
-      if (settingsRecord?.[0]) {
-        settingsRecord[0].data = {
-          ...settingsRecord[0].data,
-          ...data,
-        };
-        await this.systemSettingsRepository.save(settingsRecord[0]);
-      } else {
-        const newSettings = this.systemSettingsRepository.create({
-          data: { ...DEFAULT_SETTINGS, ...data },
-        });
-        await this.systemSettingsRepository.save(newSettings);
-      }
-
-      await this.loadSettings();
-      this.logger.log('System settings updated');
-      return this.settings;
-    } catch (error) {
-      this.logger.error('Failed to update system settings:', error);
-      throw error;
-    }
   }
 }
