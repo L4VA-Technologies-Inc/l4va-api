@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { GoogleCloudStorageModule } from '../google_cloud/google_bucket/bucket.module';
+import { TaptoolsModule } from '../taptools/taptools.module';
 
 import { DraftVaultsService } from './draft-vaults.service';
 import { VaultsController } from './vaults.controller';
@@ -30,6 +31,7 @@ import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockch
     BlockchainModule,
     GovernanceModule,
     DistributionModule,
+    TaptoolsModule,
     TypeOrmModule.forFeature([
       Vault,
       User,

@@ -11,6 +11,7 @@ import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { DistributionModule } from '@/modules/distribution/distribution.module';
+import { TaptoolsModule } from '@/modules/taptools/taptools.module';
 import { ClaimsModule } from '@/modules/vaults/claims/claims.module';
 import { ContributionModule } from '@/modules/vaults/phase-management/contribution/contribution.module';
 import { LifecycleProcessor } from '@/modules/vaults/phase-management/lifecycle/lifecycle.processor';
@@ -25,6 +26,7 @@ import { TreasureWalletModule } from '@/modules/vaults/treasure/treasure-wallet.
     TransactionsModule,
     TreasureWalletModule,
     ClaimsModule,
+    TaptoolsModule,
     TypeOrmModule.forFeature([Vault, Asset, Claim, Transaction, TokenRegistry]),
     ScheduleModule.forRoot(),
     BlockchainModule,

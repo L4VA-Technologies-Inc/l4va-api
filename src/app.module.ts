@@ -21,6 +21,7 @@ import { JwtGlobalModule } from './modules/globals/jwt_global_module/jwt_global.
 import { SystemSettingsModule } from './modules/globals/system-settings';
 import { GoogleCloudModule } from './modules/google_cloud/google-cloud.module';
 import { GoogleCloudStorageModule } from './modules/google_cloud/google_bucket/bucket.module';
+import { TaptoolsModule } from './modules/taptools/taptools.module';
 import { UsersModule } from './modules/users/users.module';
 import { ClaimsModule } from './modules/vaults/claims/claims.module';
 import { AcquireModule } from './modules/vaults/phase-management/acquire/acquire.module';
@@ -88,6 +89,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     DistributionModule,
     ClaimsModule,
     VyfiModule,
+    TaptoolsModule,
     GovernanceModule,
     NotificationModule,
     ChatModule,

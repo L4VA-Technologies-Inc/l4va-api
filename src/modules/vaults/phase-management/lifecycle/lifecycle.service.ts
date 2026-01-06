@@ -18,7 +18,7 @@ import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
-import { AssetOriginType } from '@/types/asset.types';
+import { AssetOriginType, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TokenRegistryStatus } from '@/types/tokenRegistry.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -676,7 +676,8 @@ export class LifecycleService {
           const assetKey = `${asset.policy_id}:${asset.asset_id}`;
 
           try {
-            const { priceAda } = await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_id);
+            const isNFT = asset.type === AssetType.NFT;
+            const { priceAda } = await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_id, isNFT);
             const quantity = asset.quantity || 1;
             transactionValueAda += priceAda * quantity;
 
@@ -1116,7 +1117,8 @@ export class LifecycleService {
         // Calculate value of assets in this transaction
         for (const asset of txAssets) {
           try {
-            const { priceAda } = await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_id);
+            const isNFT = asset.type === AssetType.NFT;
+            const { priceAda } = await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_id, isNFT);
             const quantity = asset.quantity || 1;
             transactionValueAda += priceAda * quantity;
           } catch (error) {
