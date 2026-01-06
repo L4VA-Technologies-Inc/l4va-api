@@ -44,7 +44,10 @@ export class SystemSettingsService implements OnModuleInit {
 
   async loadSettings(): Promise<void> {
     try {
-      const settingsRecord = await this.systemSettingsRepository.find();
+      const settingsRecord = await this.systemSettingsRepository.find({
+        cache: false,
+      });
+
       if (settingsRecord?.[0]?.data) {
         this.settings = {
           ...DEFAULT_SETTINGS,
