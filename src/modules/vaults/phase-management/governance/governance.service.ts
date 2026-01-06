@@ -1,4 +1,4 @@
-import {BlockFrostAPI} from '@blockfrost/blockfrost-js';
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import {
   BadRequestException,
   Injectable,
@@ -6,35 +6,35 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import {ConfigService} from '@nestjs/config';
-import {EventEmitter2} from '@nestjs/event-emitter';
-import {Cron, CronExpression} from '@nestjs/schedule';
-import {InjectRepository} from '@nestjs/typeorm';
-import {plainToInstance} from 'class-transformer';
+import { ConfigService } from '@nestjs/config';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { InjectRepository } from '@nestjs/typeorm';
+import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
-import {In, IsNull, Not, Repository} from 'typeorm';
+import { In, IsNull, Not, Repository } from 'typeorm';
 
-import {CreateProposalReq} from './dto/create-proposal.req';
-import {CreateProposalRes} from './dto/create-proposal.res';
-import {AssetBuySellDto} from './dto/get-assets.dto';
-import {GetProposalDetailRes} from './dto/get-proposal-detail.res';
-import {GetProposalsResItem} from './dto/get-proposal.dto';
-import {VoteReq} from './dto/vote.req';
-import {VoteRes} from './dto/vote.res';
-import {VoteCountingService} from './vote-counting.service';
+import { CreateProposalReq } from './dto/create-proposal.req';
+import { CreateProposalRes } from './dto/create-proposal.res';
+import { AssetBuySellDto } from './dto/get-assets.dto';
+import { GetProposalDetailRes } from './dto/get-proposal-detail.res';
+import { GetProposalsResItem } from './dto/get-proposal.dto';
+import { VoteReq } from './dto/vote.req';
+import { VoteRes } from './dto/vote.res';
+import { VoteCountingService } from './vote-counting.service';
 
-import {Asset} from '@/database/asset.entity';
-import {Claim} from '@/database/claim.entity';
-import {Proposal} from '@/database/proposal.entity';
-import {Snapshot} from '@/database/snapshot.entity';
-import {User} from '@/database/user.entity';
-import {Vault} from '@/database/vault.entity';
-import {Vote} from '@/database/vote.entity';
-import {AssetStatus, AssetType} from '@/types/asset.types';
-import {ClaimStatus, ClaimType} from '@/types/claim.types';
-import {ProposalStatus, ProposalType} from '@/types/proposal.types';
-import {VaultStatus} from '@/types/vault.types';
-import {VoteType} from '@/types/vote.types';
+import { Asset } from '@/database/asset.entity';
+import { Claim } from '@/database/claim.entity';
+import { Proposal } from '@/database/proposal.entity';
+import { Snapshot } from '@/database/snapshot.entity';
+import { User } from '@/database/user.entity';
+import { Vault } from '@/database/vault.entity';
+import { Vote } from '@/database/vote.entity';
+import { AssetStatus, AssetType } from '@/types/asset.types';
+import { ClaimStatus, ClaimType } from '@/types/claim.types';
+import { ProposalStatus, ProposalType } from '@/types/proposal.types';
+import { VaultStatus } from '@/types/vault.types';
+import { VoteType } from '@/types/vote.types';
 
 /*
         .-""""-.
@@ -431,7 +431,7 @@ export class GovernanceService {
         }
 
         try {
-          const {votes: voteList, totals} = await this.getVotes(proposal.id);
+          const { votes: voteList, totals } = await this.getVotes(proposal.id);
           const voteResult = this.voteCountingService.calculateResult(voteList, 0, BigInt(totals.totalVotingPower));
 
           return {
