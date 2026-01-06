@@ -342,7 +342,7 @@ export class GovernanceService {
         const actions = createProposalReq.marketplaceActions || [];
 
         // Validate all assets exist and enrich with additional data
-        const enrichedActions = await Promise.all(
+        proposal.metadata.marketplaceActions = await Promise.all(
           actions.map(async action => {
             const asset = await this.assetRepository.findOne({
               where: { id: action.assetId },
@@ -368,8 +368,6 @@ export class GovernanceService {
             };
           })
         );
-
-        proposal.metadata.marketplaceActions = enrichedActions;
 
         break;
       }
@@ -415,7 +413,7 @@ export class GovernanceService {
     });
 
     // Process each proposal to add vote information
-    const processedProposals = await Promise.all(
+    return await Promise.all(
       proposals.map(async proposal => {
         const baseProposal = {
           id: proposal.id,
@@ -450,8 +448,6 @@ export class GovernanceService {
         }
       })
     );
-
-    return processedProposals;
   }
 
   async getProposal(proposalId: string, userId: string): Promise<GetProposalDetailRes> {
@@ -573,6 +569,72 @@ export class GovernanceService {
       });
     }
 
+    let fungibleTokensWithNames = [];
+    if (proposal.metadata.fungibleTokens && proposal.metadata.fungibleTokens.length > 0) {
+      const fungibleTokenIds = proposal.metadata.fungibleTokens.map(ft => ft.id);
+      const fungibleTokens = await this.assetRepository.find({
+        where: { id: In(fungibleTokenIds) },
+        select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'image', 'name', 'metadata', 'listing_market'],
+      });
+
+      const amountMap = new Map(proposal.metadata.fungibleTokens.map(ft => [ft.id, ft.amount]));
+
+      fungibleTokensWithNames = fungibleTokens.map(asset => {
+        let name = asset.name || asset.metadata?.name;
+        if (!name) name = 'Unknown Asset';
+
+        let imageUrl = null;
+        const image = asset.image || asset.metadata?.image;
+        if (image) {
+          imageUrl = image.startsWith('ipfs://') ? image.replace('ipfs://', 'https://ipfs.io/ipfs/') : image;
+        }
+
+        return {
+          id: asset.id,
+          name,
+          imageUrl,
+          policyId: asset.policy_id,
+          assetId: asset.asset_id,
+          type: asset.type,
+          quantity: asset.quantity,
+          amount: amountMap.get(asset.id),
+        };
+      });
+    }
+
+    let nonFungibleTokensWithNames = [];
+    if (proposal.metadata.nonFungibleTokens && proposal.metadata.nonFungibleTokens.length > 0) {
+      const nonFungibleTokenIds = proposal.metadata.nonFungibleTokens.map(nft => nft.id);
+      const nonFungibleTokens = await this.assetRepository.find({
+        where: { id: In(nonFungibleTokenIds) },
+        select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'image', 'name', 'metadata', 'listing_market'],
+      });
+
+      const marketMap = new Map(proposal.metadata.nonFungibleTokens.map(nft => [nft.id, nft.market]));
+
+      nonFungibleTokensWithNames = nonFungibleTokens.map(asset => {
+        let name = asset.name || asset.metadata?.name;
+        if (!name) name = 'Unknown Asset';
+
+        let imageUrl = null;
+        const image = asset.image || asset.metadata?.image;
+        if (image) {
+          imageUrl = image.startsWith('ipfs://') ? image.replace('ipfs://', 'https://ipfs.io/ipfs/') : image;
+        }
+
+        return {
+          id: asset.id,
+          name,
+          imageUrl,
+          policyId: asset.policy_id,
+          assetId: asset.asset_id,
+          type: asset.type,
+          quantity: asset.quantity,
+          market: marketMap.get(asset.id),
+        };
+      });
+    }
+
     return {
       proposal,
       votes,
@@ -582,6 +644,8 @@ export class GovernanceService {
       proposer,
       burnAssets: burnAssetsWithNames,
       distributionAssets: distributionAssetsWithNames,
+      fungibleTokens: fungibleTokensWithNames,
+      nonFungibleTokens: nonFungibleTokensWithNames,
     };
   }
 
