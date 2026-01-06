@@ -1,4 +1,4 @@
-import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
+import {BlockFrostAPI} from '@blockfrost/blockfrost-js';
 import {
   BadRequestException,
   Injectable,
@@ -6,35 +6,35 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { EventEmitter2 } from '@nestjs/event-emitter';
-import { Cron, CronExpression } from '@nestjs/schedule';
-import { InjectRepository } from '@nestjs/typeorm';
-import { plainToInstance } from 'class-transformer';
+import {ConfigService} from '@nestjs/config';
+import {EventEmitter2} from '@nestjs/event-emitter';
+import {Cron, CronExpression} from '@nestjs/schedule';
+import {InjectRepository} from '@nestjs/typeorm';
+import {plainToInstance} from 'class-transformer';
 import NodeCache from 'node-cache';
-import { In, IsNull, Not, Repository } from 'typeorm';
+import {In, IsNull, Not, Repository} from 'typeorm';
 
-import { CreateProposalReq } from './dto/create-proposal.req';
-import { CreateProposalRes } from './dto/create-proposal.res';
-import { AssetBuySellDto } from './dto/get-assets.dto';
-import { GetProposalDetailRes } from './dto/get-proposal-detail.res';
-import { GetProposalsResItem } from './dto/get-proposal.dto';
-import { VoteReq } from './dto/vote.req';
-import { VoteRes } from './dto/vote.res';
-import { VoteCountingService } from './vote-counting.service';
+import {CreateProposalReq} from './dto/create-proposal.req';
+import {CreateProposalRes} from './dto/create-proposal.res';
+import {AssetBuySellDto} from './dto/get-assets.dto';
+import {GetProposalDetailRes} from './dto/get-proposal-detail.res';
+import {GetProposalsResItem} from './dto/get-proposal.dto';
+import {VoteReq} from './dto/vote.req';
+import {VoteRes} from './dto/vote.res';
+import {VoteCountingService} from './vote-counting.service';
 
-import { Asset } from '@/database/asset.entity';
-import { Claim } from '@/database/claim.entity';
-import { Proposal } from '@/database/proposal.entity';
-import { Snapshot } from '@/database/snapshot.entity';
-import { User } from '@/database/user.entity';
-import { Vault } from '@/database/vault.entity';
-import { Vote } from '@/database/vote.entity';
-import { AssetStatus, AssetType } from '@/types/asset.types';
-import { ClaimStatus, ClaimType } from '@/types/claim.types';
-import { ProposalStatus, ProposalType } from '@/types/proposal.types';
-import { VaultStatus } from '@/types/vault.types';
-import { VoteType } from '@/types/vote.types';
+import {Asset} from '@/database/asset.entity';
+import {Claim} from '@/database/claim.entity';
+import {Proposal} from '@/database/proposal.entity';
+import {Snapshot} from '@/database/snapshot.entity';
+import {User} from '@/database/user.entity';
+import {Vault} from '@/database/vault.entity';
+import {Vote} from '@/database/vote.entity';
+import {AssetStatus, AssetType} from '@/types/asset.types';
+import {ClaimStatus, ClaimType} from '@/types/claim.types';
+import {ProposalStatus, ProposalType} from '@/types/proposal.types';
+import {VaultStatus} from '@/types/vault.types';
+import {VoteType} from '@/types/vote.types';
 
 /*
         .-""""-.
@@ -342,7 +342,7 @@ export class GovernanceService {
         const actions = createProposalReq.marketplaceActions || [];
 
         // Validate all assets exist and enrich with additional data
-        const enrichedActions = await Promise.all(
+        proposal.metadata.marketplaceActions = await Promise.all(
           actions.map(async action => {
             const asset = await this.assetRepository.findOne({
               where: { id: action.assetId },
@@ -368,8 +368,6 @@ export class GovernanceService {
             };
           })
         );
-
-        proposal.metadata.marketplaceActions = enrichedActions;
 
         break;
       }
@@ -415,7 +413,7 @@ export class GovernanceService {
     });
 
     // Process each proposal to add vote information
-    const processedProposals = await Promise.all(
+    return await Promise.all(
       proposals.map(async proposal => {
         const baseProposal = {
           id: proposal.id,
@@ -433,7 +431,7 @@ export class GovernanceService {
         }
 
         try {
-          const { votes: voteList, totals } = await this.getVotes(proposal.id);
+          const {votes: voteList, totals} = await this.getVotes(proposal.id);
           const voteResult = this.voteCountingService.calculateResult(voteList, 0, BigInt(totals.totalVotingPower));
 
           return {
@@ -450,8 +448,6 @@ export class GovernanceService {
         }
       })
     );
-
-    return processedProposals;
   }
 
   async getProposal(proposalId: string, userId: string): Promise<GetProposalDetailRes> {
@@ -573,6 +569,72 @@ export class GovernanceService {
       });
     }
 
+    let fungibleTokensWithNames = [];
+    if (proposal.metadata.fungibleTokens && proposal.metadata.fungibleTokens.length > 0) {
+      const fungibleTokenIds = proposal.metadata.fungibleTokens.map(ft => ft.id);
+      const fungibleTokens = await this.assetRepository.find({
+        where: { id: In(fungibleTokenIds) },
+        select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'image', 'name', 'metadata', 'listing_market'],
+      });
+
+      const amountMap = new Map(proposal.metadata.fungibleTokens.map(ft => [ft.id, ft.amount]));
+
+      fungibleTokensWithNames = fungibleTokens.map(asset => {
+        let name = asset.name || asset.metadata?.name;
+        if (!name) name = 'Unknown Asset';
+
+        let imageUrl = null;
+        const image = asset.image || asset.metadata?.image;
+        if (image) {
+          imageUrl = image.startsWith('ipfs://') ? image.replace('ipfs://', 'https://ipfs.io/ipfs/') : image;
+        }
+
+        return {
+          id: asset.id,
+          name,
+          imageUrl,
+          policyId: asset.policy_id,
+          assetId: asset.asset_id,
+          type: asset.type,
+          quantity: asset.quantity,
+          amount: amountMap.get(asset.id),
+        };
+      });
+    }
+
+    let nonFungibleTokensWithNames = [];
+    if (proposal.metadata.nonFungibleTokens && proposal.metadata.nonFungibleTokens.length > 0) {
+      const nonFungibleTokenIds = proposal.metadata.nonFungibleTokens.map(nft => nft.id);
+      const nonFungibleTokens = await this.assetRepository.find({
+        where: { id: In(nonFungibleTokenIds) },
+        select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'image', 'name', 'metadata', 'listing_market'],
+      });
+
+      const marketMap = new Map(proposal.metadata.nonFungibleTokens.map(nft => [nft.id, nft.market]));
+
+      nonFungibleTokensWithNames = nonFungibleTokens.map(asset => {
+        let name = asset.name || asset.metadata?.name;
+        if (!name) name = 'Unknown Asset';
+
+        let imageUrl = null;
+        const image = asset.image || asset.metadata?.image;
+        if (image) {
+          imageUrl = image.startsWith('ipfs://') ? image.replace('ipfs://', 'https://ipfs.io/ipfs/') : image;
+        }
+
+        return {
+          id: asset.id,
+          name,
+          imageUrl,
+          policyId: asset.policy_id,
+          assetId: asset.asset_id,
+          type: asset.type,
+          quantity: asset.quantity,
+          market: marketMap.get(asset.id),
+        };
+      });
+    }
+
     return {
       proposal,
       votes,
@@ -582,6 +644,8 @@ export class GovernanceService {
       proposer,
       burnAssets: burnAssetsWithNames,
       distributionAssets: distributionAssetsWithNames,
+      fungibleTokens: fungibleTokensWithNames,
+      nonFungibleTokens: nonFungibleTokensWithNames,
     };
   }
 

@@ -96,6 +96,12 @@ export class DistributionAssetDetailDto extends ProposalAssetDto {
   amount: number;
 }
 
+export class StakingTokenDto extends ProposalAssetDto {
+  @Expose()
+  @ApiPropertyOptional({ description: 'Market for staking proposal', example: 'm1' })
+  market?: string;
+}
+
 export class GetProposalDetailRes {
   @Expose()
   @ApiProperty({ description: 'Proposal entity', type: Proposal })
@@ -133,4 +139,14 @@ export class GetProposalDetailRes {
   @ApiPropertyOptional({ description: 'Assets to distribute in this proposal', type: [DistributionAssetDetailDto] })
   @Type(() => DistributionAssetDetailDto)
   distributionAssets?: DistributionAssetDetailDto[];
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Fungible tokens for staking', type: [StakingTokenDto] })
+  @Type(() => StakingTokenDto)
+  fungibleTokens?: StakingTokenDto[];
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Non-fungible tokens for staking', type: [StakingTokenDto] })
+  @Type(() => StakingTokenDto)
+  nonFungibleTokens?: StakingTokenDto[];
 }
