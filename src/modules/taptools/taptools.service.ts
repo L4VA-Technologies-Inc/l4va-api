@@ -43,12 +43,6 @@ export class TaptoolsService {
     '53173a3d7ae0a0015163cc55f9f1c300c7eab74da26ed9af8c052646': 100000.0,
     '91918871f0baf335d32be00af3f0604a324b2e0728d8623c0d6e2601': 250000.0,
   };
-  private readonly mainnetPrices = {
-    // NFT collections - fallback price 10 ADA
-    '5a2cdc6e3aa9612fe4676672f443e7efd39c309d45e7919a4bf27750': 10.0, // BossPlanetDistrict
-    '6ecee816357c3d8210b77c5504b2aa2ba23f94194bc6c759cdf7af3f': 10.0, // DogsOnTheChain
-    f456dbdd3629be1e138699419ed4f9fe0bcd70cc473b149d658f0f10: 10.0, // Cardacity
-  };
 
   constructor(
     @InjectRepository(Vault)
@@ -226,12 +220,6 @@ export class TaptoolsService {
 
       if (!this.isMainnet && this.testnetPrices[policyId]) {
         const hardcodedPriceAda = this.testnetPrices[policyId];
-        return {
-          priceAda: hardcodedPriceAda,
-          priceUsd: hardcodedPriceAda * adaPrice,
-        };
-      } else if (this.isMainnet && this.mainnetPrices[policyId]) {
-        const hardcodedPriceAda = this.mainnetPrices[policyId];
         return {
           priceAda: hardcodedPriceAda,
           priceUsd: hardcodedPriceAda * adaPrice,
