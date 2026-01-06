@@ -18,7 +18,7 @@ import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
-import { AssetOriginType } from '@/types/asset.types';
+import { AssetOriginType, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TokenRegistryStatus } from '@/types/tokenRegistry.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -203,43 +203,12 @@ export class LifecycleService {
           phaseStatus: 'launched',
         });
 
-        // Only create treasury wallet on mainnet
-        const isMainnet = process.env.CARDANO_NETWORK === 'mainnet';
-
-        if (isMainnet) {
-          try {
-            // Check if treasury wallet already exists
-            const existingWallet = await this.treasuryWalletService.getTreasuryWallet(vault.id);
-
-            if (!existingWallet) {
-              const treasuryWallet = await this.treasuryWalletService.createTreasuryWallet({
-                vaultId: vault.id,
-              });
-
-              this.logger.log(`✅ Treasury wallet created for vault ${vault.id}: ${treasuryWallet.address}`);
-
-              // Emit event for treasury wallet creation
-              this.eventEmitter.emit('treasury.wallet.created', {
-                vaultId: vault.id,
-                vaultName: vault.name,
-                treasuryAddress: treasuryWallet.address,
-                publicKeyHash: treasuryWallet.publicKeyHash,
-              });
-            } else {
-              this.logger.log(`Treasury wallet already exists for vault ${vault.id}: ${existingWallet.address}`);
-            }
-          } catch (error) {
-            this.logger.error(`Failed to create treasury wallet for vault ${vault.id}:`, error);
-
-            // ⚠️ IMPORTANT: Decide if you want to fail the vault transition or continue
-            // Option A: Fail the vault (recommended for production)
-            // throw error;
-
-            // Option B: Continue but log error (current implementation)
-            // The vault will be locked but without a treasury wallet
-          }
-        } else {
-          this.logger.log(`Skipping treasury wallet creation for vault ${vault.id} (non-mainnet environment)`);
+        try {
+          await this.treasuryWalletService.createTreasuryWallet({
+            vaultId: vault.id,
+          });
+        } catch (error) {
+          this.logger.error(`Failed to create treasury wallet for vault ${vault.id}:`, error);
         }
       }
 
@@ -317,15 +286,10 @@ export class LifecycleService {
    *
    * Validation scenarios:
    *
-   * Scenario 1: Vault has assets, policy has 1 asset, min=1, max=5 → ✅ PASS (soft requirement, within max)
-   *
-   * Scenario 2: Vault has assets, policy has 0 assets, min=1, max=5 → ✅ PASS (soft requirement ignores min)
-   *
-   * Scenario 3: Vault has assets, policy has 6 assets, min=1, max=5 → ❌ FAIL (exceeds maximum)
-   *
-   * Scenario 4: Vault has assets, policy has 1 asset, min=2, max=5 → ❌ FAIL (below required minimum)
-   *
-   *  Scenario 5: Vault has no assets, any policy → ALL THRESHOLDS ENFORCED
+   * - Scenario 1: Vault has assets, policy has 1 asset, min=1, max=5 → ✅ PASS (soft requirement, within max)
+   * - Scenario 2: Vault has assets, some specific policy has 0 assets, min=1, max=5 → ✅ PASS (soft requirement ignores min)
+   * - Scenario 3: Vault has assets, policy has 1 asset, min=2, max=5 → ❌ FAIL (below required minimum)
+   * - Scenario 4: Vault has no assets, any policy → ❌ FAIL (no contributions)
    */
   private async handleContributionToAcquire(): Promise<void> {
     const now = new Date();
@@ -363,7 +327,34 @@ export class LifecycleService {
 
       await this.transactionsService.syncVaultTransactions(vault.id);
 
-      const policyIdCounts = vault.assets.reduce(
+      // Check if vault has any contributed assets (excluding fee-type assets)
+      const contributedAssets = vault.assets.filter(asset => asset.origin_type === AssetOriginType.CONTRIBUTED);
+
+      if (contributedAssets.length === 0) {
+        this.logger.warn(`Vault ${vault.id} has no contributed assets. Failing vault.`);
+
+        const response = await this.vaultManagingService.updateVaultMetadataTx({
+          vault,
+          vaultStatus: SmartContractVaultStatus.CANCELLED,
+        });
+        await this.claimsService.createCancellationClaims(vault, 'no_contributions');
+        await this.executePhaseTransition({
+          vaultId: vault.id,
+          newStatus: VaultStatus.failed,
+          newScStatus: SmartContractVaultStatus.CANCELLED,
+          txHash: response.txHash,
+          failureReason: VaultFailureReason.NO_CONTRIBUTIONS,
+          failureDetails: {
+            message: 'No assets were contributed to the vault',
+            totalAssets: vault.assets.length,
+            contributedAssets: 0,
+          },
+        });
+
+        continue;
+      }
+
+      const policyIdCounts = contributedAssets.reduce(
         (counts, asset) => {
           if (!counts[asset.policy_id]) {
             counts[asset.policy_id] = 0;
@@ -377,8 +368,8 @@ export class LifecycleService {
       let assetsWithinThreshold = true;
       const thresholdViolations: Array<{ policyId: string; count: number; min: number; max: number }> = [];
 
-      // Check if vault has at least one asset
-      const hasAnyAssets = vault.assets.length > 0;
+      // Check if vault has at least one contributed asset (already validated above)
+      const hasAnyAssets = contributedAssets.length > 0;
 
       if (vault.assets_whitelist && vault.assets_whitelist.length > 0) {
         for (const whitelistItem of vault.assets_whitelist) {
@@ -527,8 +518,11 @@ export class LifecycleService {
     }
   }
 
-  // Acquire to Governance Transition
-
+  /**
+   * Check for vaults in Acquire phase that have reached their deadline
+   * Triggers transition to Governance phase (or failure if threshold not met)
+   * Skips vaults with too many failed update-vault transaction attempts
+   */
   private async handleAcquireToGovernance(): Promise<void> {
     const now = new Date();
 
@@ -578,6 +572,36 @@ export class LifecycleService {
     }
   }
 
+  /**
+   * Handle transition from Acquire phase to Governance phase
+   * Triggered when acquire phase ends - calculates token distribution and creates claims
+   *
+   * Flow:
+   * 1. Sync and fetch all acquire & contribute transactions
+   * 2. Calculate total ADA acquired and total value of contributed assets
+   * 3. Check if acquire threshold is met (totalAcquiredAda >= requiredThresholdAda)
+   *
+   * If threshold met (Success):
+   * - Calculate LP tokens (VT + ADA) based on LP percentage
+   * - Create LP claim if liquidity meets minimum threshold
+   * - Calculate and create acquirer claims (VT tokens based on ADA sent)
+   * - Calculate and create contributor claims (VT tokens + ADA based on asset value)
+   * - Calculate multipliers and ADA distribution ratios
+   * - Update vault metadata on-chain with status SUCCESSFUL
+   * - Transition vault to 'locked' status (governance phase)
+   * - Emit success events for notifications
+   *
+   * If threshold not met (Failure):
+   * - Update vault metadata on-chain with status CANCELLED
+   * - Create cancellation claims for refunds
+   * - Transition vault to 'failed' status
+   * - Emit failure events for notifications
+   *
+   * Pricing:
+   * - FT assets: Uses TapTools API (being replaced with DexHunter)
+   * - NFT assets: Uses TapTools API (being replaced with WayUp Marketplace)
+   * - Fallback to hardcoded prices if API fails
+   */
   private async executeAcquireToGovernanceTransition(vault: Vault): Promise<void> {
     try {
       // Sync transactions one more time
@@ -652,7 +676,8 @@ export class LifecycleService {
           const assetKey = `${asset.policy_id}:${asset.asset_id}`;
 
           try {
-            const { priceAda } = await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_id);
+            const isNFT = asset.type === AssetType.NFT;
+            const { priceAda } = await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_id, isNFT);
             const quantity = asset.quantity || 1;
             transactionValueAda += priceAda * quantity;
 
@@ -1092,7 +1117,8 @@ export class LifecycleService {
         // Calculate value of assets in this transaction
         for (const asset of txAssets) {
           try {
-            const { priceAda } = await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_id);
+            const isNFT = asset.type === AssetType.NFT;
+            const { priceAda } = await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_id, isNFT);
             const quantity = asset.quantity || 1;
             transactionValueAda += priceAda * quantity;
           } catch (error) {

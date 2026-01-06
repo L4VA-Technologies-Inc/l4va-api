@@ -19,7 +19,6 @@ import {
   UnlistPayload,
   UpdateListingInput,
   UpdateListingPayload,
-  WayUpAssetResult,
   WayUpTransactionInput,
 } from './wayup.types';
 
@@ -743,50 +742,51 @@ export class WayUpService {
   }
 
   /**
-   * Get NFT pricing by asset name from WayUp Marketplace
-   * Searches for specific NFTs by name within a collection
+   * Get the floor price for an NFT collection from WayUp Marketplace
+   * Floor price is the lowest currently listed price in the collection
    *
-   * @param policyId - The collection policy ID
-   * @param assetName - The asset name to search for (supports partial matching)
-   * @param options - Additional query options
-   * @returns Matching assets with their listing prices
+   * @param policyId - The policy ID of the NFT collection
+   * @returns Floor price in lovelace and ADA, or null if no listings exist
    */
-  async getNFTPricingByAssetName(
-    policyId: string,
-    assetName: string,
-    options?: {
-      limit?: number;
-      saleType?: 'all' | 'listedOnly' | 'bundles';
-      orderBy?: 'priceAsc' | 'priceDesc' | 'nameAsc' | 'recentlyListed';
-    }
-  ): Promise<{
-    assets: WayUpAssetResult[];
-    count: number;
-    pageState: string | null;
+  async getCollectionFloorPrice(policyId: string): Promise<{
+    floorPrice: number | null; // lovelace
+    floorPriceAda: number | null; // ADA
+    hasListings: boolean;
   }> {
-    this.logger.log(`Searching for NFT "${assetName}" in collection ${policyId}`);
+    this.logger.log(`Fetching floor price for collection: ${policyId}`);
 
-    const result = await this.getCollectionAssets({
-      policyId,
-      term: assetName,
-      limit: options?.limit ?? 20,
-      saleType: options?.saleType ?? 'listedOnly',
-      orderBy: options?.orderBy ?? 'priceAsc',
-    });
+    try {
+      // Query the collection for the cheapest listing
+      const response = await this.getCollectionAssets({
+        policyId,
+        saleType: 'listedOnly',
+        orderBy: 'priceAsc', // Sort by price ascending to get floor price first
+        limit: 1,
+      });
 
-    // Log pricing info for found assets
-    result.results.forEach(asset => {
-      if (asset.listing) {
-        this.logger.debug(
-          `Found: ${asset.name} - Price: ${asset.listing.price / 1_000_000} ADA (${asset.listing.type})`
-        );
+      if (response.results.length === 0 || !response.results[0].listing) {
+        this.logger.log(`No listings found for collection: ${policyId}`);
+        return {
+          floorPrice: null,
+          floorPriceAda: null,
+          hasListings: false,
+        };
       }
-    });
 
-    return {
-      assets: result.results,
-      count: result.count,
-      pageState: result.pageState,
-    };
+      const floorAsset = response.results[0];
+      const floorPriceLovelace = floorAsset.listing.price;
+      const floorPriceAda = floorPriceLovelace / 1_000_000;
+
+      this.logger.log(`Floor price for ${policyId}: ${floorPriceAda} ADA (${floorPriceLovelace} lovelace)`);
+
+      return {
+        floorPrice: floorPriceLovelace,
+        floorPriceAda,
+        hasListings: true,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to fetch floor price for collection ${policyId}`, error);
+      throw new Error(`Failed to fetch floor price: ${error.message}`);
+    }
   }
 }

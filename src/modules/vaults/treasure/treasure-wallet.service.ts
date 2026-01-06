@@ -3,6 +3,7 @@ import { PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { status as GrpcStatus } from '@grpc/grpc-js';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -31,7 +32,8 @@ export class TreasuryWalletService {
     private readonly configService: ConfigService,
     private readonly googleKMSService: GoogleKMSService,
     private readonly googleSecretService: GoogleSecretService,
-    private readonly systemSettingsService: SystemSettingsService
+    private readonly systemSettingsService: SystemSettingsService,
+    private readonly eventEmitter: EventEmitter2
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
 
@@ -143,6 +145,13 @@ export class TreasuryWalletService {
     });
 
     await this.treasuryWalletRepository.save(treasuryWallet);
+
+    this.eventEmitter.emit('treasury.wallet.created', {
+      vaultId: vault.id,
+      vaultName: vault.name,
+      treasuryAddress: treasuryWallet.treasury_address,
+      publicKeyHash: publicKeyHash,
+    });
 
     return {
       id: treasuryWallet.id,
@@ -391,7 +400,7 @@ export class TreasuryWalletService {
    * Runs every 6 hours to check for vaults that need treasury wallets
    * Controlled by auto_create_treasury_wallets feature flag in system settings
    */
-  @Cron(CronExpression.EVERY_10_MINUTES) // TODO: Change to EVERY_6_HOURS in production
+  @Cron(CronExpression.EVERY_6_HOURS)
   async autoCreateMissingTreasuryWallets(): Promise<void> {
     // Check feature flag
     if (!this.systemSettingsService.autoCreateTreasuryWallets) {

@@ -7,7 +7,9 @@ import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { Repository, In } from 'typeorm';
 
+import { DexHunterPricingService } from '../dexhunter/dexhunter-pricing.service';
 import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
+import { WayUpPricingService } from '../wayup/wayup-pricing.service';
 
 import { AssetValueDto, BlockfrostAssetResponseDto } from './dto/asset-value.dto';
 import { BlockfrostAddressTotalDto } from './dto/blockfrost-address.dto';
@@ -23,8 +25,7 @@ import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 @Injectable()
 export class TaptoolsService {
   private readonly logger = new Logger(TaptoolsService.name);
-  private readonly baseUrl = 'https://openapi.taptools.io/api/v1';
-  private readonly taptoolsApiKey: string;
+
   private readonly isMainnet: boolean;
   private cache = new NodeCache({ stdTTL: 600 }); // cache for 10 minutes to reduce API calls for ADA price
   private readonly blockfrost: BlockFrostAPI;
@@ -42,12 +43,6 @@ export class TaptoolsService {
     '53173a3d7ae0a0015163cc55f9f1c300c7eab74da26ed9af8c052646': 100000.0,
     '91918871f0baf335d32be00af3f0604a324b2e0728d8623c0d6e2601': 250000.0,
   };
-  private readonly mainnetPrices = {
-    // NFT collections - fallback price 10 ADA
-    '5a2cdc6e3aa9612fe4676672f443e7efd39c309d45e7919a4bf27750': 10.0, // BossPlanetDistrict
-    '6ecee816357c3d8210b77c5504b2aa2ba23f94194bc6c759cdf7af3f': 10.0, // DogsOnTheChain
-    f456dbdd3629be1e138699419ed4f9fe0bcd70cc473b149d658f0f10: 10.0, // Cardacity
-  };
 
   constructor(
     @InjectRepository(Vault)
@@ -56,9 +51,10 @@ export class TaptoolsService {
     private readonly userRepository: Repository<User>,
     private readonly assetsService: AssetsService,
     private readonly configService: ConfigService,
-    private readonly alertsService: AlertsService
+    private readonly alertsService: AlertsService,
+    private readonly dexHunterPricingService: DexHunterPricingService,
+    private readonly wayUpPricingService: WayUpPricingService
   ) {
-    this.taptoolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
     this.isMainnet = this.configService.get<string>('NETWORK') === 'mainnet';
 
     this.blockfrost = new BlockFrostAPI({
@@ -209,22 +205,21 @@ export class TaptoolsService {
 
   /**
    * Get the value of an asset in ADA and USD
+   * Uses DexHunter for fungible tokens and WayUp for NFT floor prices
    * @param policyId The policy ID of the asset
    * @param assetName The asset name (hex encoded)
    * @returns Promise with the asset value in ADA and USD
    */
-  async getAssetValue(policyId: string, assetName: string): Promise<{ priceAda: number; priceUsd: number }> {
+  async getAssetValue(
+    policyId: string,
+    assetName: string,
+    isNFT: boolean
+  ): Promise<{ priceAda: number; priceUsd: number }> {
     try {
       const adaPrice = await this.getAdaPrice();
 
       if (!this.isMainnet && this.testnetPrices[policyId]) {
         const hardcodedPriceAda = this.testnetPrices[policyId];
-        return {
-          priceAda: hardcodedPriceAda,
-          priceUsd: hardcodedPriceAda * adaPrice,
-        };
-      } else if (this.isMainnet && this.mainnetPrices[policyId]) {
-        const hardcodedPriceAda = this.mainnetPrices[policyId];
         return {
           priceAda: hardcodedPriceAda,
           priceUsd: hardcodedPriceAda * adaPrice,
@@ -236,31 +231,34 @@ export class TaptoolsService {
 
       if (cached) return cached;
 
-      const response = await axios.get(`${this.baseUrl}/token/price`, {
-        headers: {
-          'x-api-key': this.taptoolsApiKey,
-        },
-        params: {
-          policy: policyId,
-          name: assetName,
-          currency: 'usd,ada',
-        },
-      });
+      // Route to appropriate API based on asset type
+      if (isNFT) {
+        try {
+          const { floorPriceAda } = await this.wayUpPricingService.getCollectionFloorPrice(policyId);
+          if (floorPriceAda > 0) {
+            this.cache.set(cacheKey, { priceAda: floorPriceAda, priceUsd: floorPriceAda * adaPrice });
+            return { priceAda: floorPriceAda, priceUsd: floorPriceAda * adaPrice };
+          }
+        } catch (error) {
+          this.logger.warn(`WayUp floor price failed for NFT ${policyId}: ${error.message}`);
+        }
+      } else {
+        // Use DexHunter for fungible token prices
+        const tokenPriceAda = await this.dexHunterPricingService.getTokenPrice(`${policyId}${assetName}`);
 
-      if (!response.data?.data) {
-        throw new Error('Invalid response from TapTools API');
+        if (tokenPriceAda !== null && tokenPriceAda > 0) {
+          const result = {
+            priceAda: tokenPriceAda,
+            priceUsd: tokenPriceAda * adaPrice,
+          };
+          this.cache.set(cacheKey, result);
+          return result;
+        }
+
+        this.logger.warn(`DexHunter price not available for FT ${policyId}`);
       }
-
-      const result = {
-        priceAda: Number(response.data.data.ada) || 91,
-        priceUsd: Number(response.data.data.usd) || 91 * adaPrice,
-      };
-
-      this.cache.set(cacheKey, result);
-      return result;
     } catch (error) {
-      const adaPrice = await this.getAdaPrice();
-      return { priceAda: 91, priceUsd: 91 * adaPrice };
+      this.logger.error(`Failed to get asset value for ${policyId}:`, error.message);
     }
   }
 
@@ -366,7 +364,7 @@ export class TaptoolsService {
           continue;
         }
         // Get asset value in ADA
-        const assetValue = await this.getAssetValue(asset.policyId, asset.assetId);
+        const assetValue = await this.getAssetValue(asset.policyId, asset.assetId, asset.isNft);
 
         const valueAda = assetValue?.priceAda || 0;
         const valueUsd = assetValue?.priceUsd || 0;
@@ -519,7 +517,7 @@ export class TaptoolsService {
             }
 
             // Get asset value
-            const assetValue = await this.getAssetValue(asset.policyId, asset.assetId);
+            const assetValue = await this.getAssetValue(asset.policyId, asset.assetId, asset.isNft);
             const valueAda = assetValue?.priceAda || 0;
             const valueUsd = assetValue?.priceUsd || 0;
 
@@ -649,18 +647,7 @@ export class TaptoolsService {
   ): Promise<{ assets: AssetValueDto[]; pagination: PaginationMetaDto }> {
     try {
       // Get all asset units (cached)
-      const allAssetUnits = await this.getAllAssetUnits(walletAddress);
-
-      // Filter based on type
-      let filteredAssets = this.filterAssetsByType(allAssetUnits, filter);
-
-      if (whitelistedPolicies.length > 0) {
-        filteredAssets = filteredAssets.filter(asset => {
-          // Extract policy ID from unit (first 56 characters)
-          const policyId = asset.unit.substring(0, 56);
-          return whitelistedPolicies.includes(policyId);
-        });
-      }
+      const filteredAssets = await this.getFilteredUnits(walletAddress, whitelistedPolicies);
 
       // Calculate pagination
       const total = filteredAssets.length;
@@ -668,7 +655,7 @@ export class TaptoolsService {
       const offset = (page - 1) * limit;
       const pageAssets = filteredAssets.slice(offset, offset + limit);
 
-      const processedAssets = await this.processAssetsPage(pageAssets);
+      const processedAssets = await this.processAssetsPage(pageAssets, filter);
 
       const paginationData = {
         page,
@@ -690,7 +677,10 @@ export class TaptoolsService {
     }
   }
 
-  private async getAllAssetUnits(walletAddress: string): Promise<Array<{ unit: string; quantity: number }>> {
+  private async getFilteredUnits(
+    walletAddress: string,
+    whitelistedPolicies: string[]
+  ): Promise<{ unit: string; quantity: number }[]> {
     const cacheKey = `wallet_assets_${walletAddress}`;
     const cached = this.cache.get<Array<{ unit: string; quantity: number }>>(cacheKey);
 
@@ -708,37 +698,27 @@ export class TaptoolsService {
 
       // Cache for 2 minutes
       this.cache.set(cacheKey, assetUnits, 120);
-      return assetUnits;
+
+      const filteredUnits = whitelistedPolicies.length
+        ? assetUnits.filter(asset => whitelistedPolicies.includes(asset.unit.substring(0, 56)))
+        : assetUnits;
+
+      return filteredUnits;
     } catch (err) {
       this.logger.error('Error fetching all asset units:', err.message);
       throw new HttpException('Failed to fetch asset units', 500);
     }
   }
 
-  private filterAssetsByType(
-    assets: Array<{ unit: string; quantity: number }>,
+  private async processAssetsPage(
+    pageAssets: Array<{ unit: string; quantity: number }>,
     filter: 'all' | 'nfts' | 'tokens'
-  ): Array<{ unit: string; quantity: number }> {
-    if (filter === 'nfts') {
-      return assets.filter(asset => asset.quantity === 1);
-    }
-    if (filter === 'tokens') {
-      return assets.filter(asset => asset.quantity > 1);
-    }
-    return assets; // 'all'
-  }
-
-  private async processAssetsPage(pageAssets: Array<{ unit: string; quantity: number }>): Promise<AssetValueDto[]> {
+  ): Promise<AssetValueDto[]> {
     const processedAssets: AssetValueDto[] = [];
 
     // Process assets directly without batching - pagination already limits the number
     for (const asset of pageAssets) {
       const assetDetailsResult = await this.fetchAssetDetailsFromApi(asset.unit);
-
-      const { priceAda, priceUsd } = await this.getAssetValue(
-        assetDetailsResult?.details.policy_id || asset.unit.substring(0, 56),
-        assetDetailsResult?.details.asset_name || asset.unit.substring(56)
-      );
 
       if (!assetDetailsResult) {
         throw new HttpException(`Failed to fetch asset details for ${asset.unit}`, 500);
@@ -747,6 +727,21 @@ export class TaptoolsService {
       const details = assetDetailsResult.details;
       const metadata = details.onchain_metadata || details.metadata || {};
       const assetName = this.decodeAssetName(details.asset_name || asset.unit.substring(56));
+      const isNFT = this.isNFT(details);
+
+      if (filter === 'nfts' && !isNFT) {
+        continue;
+      }
+
+      if (filter === 'tokens' && isNFT) {
+        continue;
+      }
+
+      const { priceAda, priceUsd } = await this.getAssetValue(
+        assetDetailsResult?.details.policy_id || asset.unit.substring(0, 56),
+        assetDetailsResult?.details.asset_name || asset.unit.substring(56),
+        isNFT
+      );
 
       const assetData: AssetValueDto = {
         tokenId: asset.unit,
@@ -785,50 +780,40 @@ export class TaptoolsService {
    *
    * (Implement better logic to exclude FTs)
    */
-  async getWalletPolicyIds(
-    walletAddress: string,
-    excludeFTs: boolean
-  ): Promise<Array<{ policyId: string; name: string }>> {
-    try {
-      const addressInfo = await this.blockfrost.addresses(walletAddress);
 
-      const uniquePolicies = new Map<string, string>();
-
-      for (const asset of addressInfo.amount) {
-        if (asset.unit === 'lovelace' || (excludeFTs && +asset.quantity > 1)) {
-          continue;
-        }
-
-        // Extract policy ID (first 56 characters of the unit)
-        const policyId = asset.unit.substring(0, 56);
-
-        // Skip if we already have this policy ID
-        if (uniquePolicies.has(policyId)) {
-          continue;
-        }
-
-        // Extract asset name from unit (after policy ID)
-        const assetNameHex = asset.unit.substring(56);
-        const assetName = this.decodeAssetName(assetNameHex);
-
-        // Use a simple policy name based on the first asset found for this policy
-        const policyName = assetName || `Policy ${policyId.substring(0, 8)}...`;
-
-        uniquePolicies.set(policyId, policyName);
-      }
-
-      return Array.from(uniquePolicies.entries()).map(([policyId, name]) => ({
-        policyId,
-        name,
-      }));
-    } catch (error) {
-      this.logger.error(`Error fetching wallet policy IDs for ${walletAddress}:`, error.message);
-
-      if (error.response?.status_code === 404) {
-        throw new HttpException('Wallet address not found', 404);
-      }
-
-      throw new HttpException('Failed to fetch wallet policy IDs', 500);
+  /**
+   * Determine if an asset is an NFT or Fungible Token
+   * Uses multiple heuristics for accurate detection
+   * @param assetDetails Asset details from Blockfrost
+   * @returns true if NFT, false if FT
+   */
+  private isNFT(assetDetails: BlockfrostAssetResponseDto): boolean {
+    // 1. Check total quantity (most reliable)
+    if (assetDetails.quantity === '1') {
+      return true;
     }
+
+    // 2. Check for NFT metadata (CIP-25)
+    const metadata = assetDetails.onchain_metadata;
+    if (metadata) {
+      // Presence of image or files indicates NFT
+      if (metadata.image || metadata.files) {
+        return true;
+      }
+
+      // Presence of decimals indicates FT
+      if (assetDetails.metadata.decimals !== undefined) {
+        return false;
+      }
+
+      // Check for media-related fields (NFT indicators)
+      if (metadata.mediaType || metadata.attributes) {
+        return true;
+      }
+    }
+
+    // 3. Fallback: If quantity > 1, assume FT
+    const qty = parseInt(assetDetails.quantity);
+    return qty === 1;
   }
 }
