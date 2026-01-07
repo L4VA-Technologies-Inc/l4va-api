@@ -309,8 +309,8 @@ export class TaptoolsService {
             let priceAda: number | null = null;
 
             // Use hardcoded testnet prices if available
-            if (!this.isMainnet && this.testnetPrices[asset.asset_policy_id]) {
-              priceAda = this.testnetPrices[asset.asset_policy_id];
+            if (!this.isMainnet) {
+              priceAda = this.testnetPrices[asset.asset_policy_id] || 5.0;
             } else if (isNFT) {
               // Get floor price from WayUp for NFTs
               try {
