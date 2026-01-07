@@ -265,7 +265,7 @@ export class VaultsController {
     @Param('id', new ParseUUIDPipe()) id: string
   ): Promise<{ success: boolean }> {
     const userId = req.user.sub;
-    return this.vaultsService.deleteDraftedVault(userId, id);
+    return this.draftVaultsService.deleteDraftedVault(userId, id);
   }
 
   @ApiDoc({

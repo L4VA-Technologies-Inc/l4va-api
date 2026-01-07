@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { classToPlain, plainToInstance } from 'class-transformer';
 import { Repository } from 'typeorm';
@@ -337,5 +337,32 @@ export class DraftVaultsService {
       console.error(error);
       throw new BadRequestException('Failed to save draft vault');
     }
+  }
+
+  async deleteDraftedVault(userId: string, vaultId: string): Promise<{ success: boolean }> {
+    const canDelete = await this.vaultsRepository.exists({
+      where: { id: vaultId, vault_status: VaultStatus.draft, owner: { id: userId } },
+    });
+
+    if (canDelete) {
+      await this.vaultsRepository.delete(vaultId);
+      return { success: true };
+    }
+
+    const vault = await this.vaultsRepository.findOne({
+      where: { id: vaultId },
+      select: ['id', 'vault_status'],
+      relations: { owner: true },
+    });
+
+    if (!vault) {
+      throw new NotFoundException('Vault not found');
+    }
+
+    if (vault.vault_status !== VaultStatus.draft) {
+      throw new BadRequestException('Cannot delete published vault');
+    }
+
+    throw new UnauthorizedException('Vault does not belong to the user');
   }
 }
