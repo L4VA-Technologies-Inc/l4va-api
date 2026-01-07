@@ -272,8 +272,6 @@ export class TaptoolsService {
    * @param vaultIds Optional array of vault IDs to update assets for. If not provided, updates all active vaults
    */
   async updateAssetPrices(vaultIds?: string[]): Promise<void> {
-    this.logger.log('Starting asset prices update...');
-
     try {
       // Build query to get unique assets across specified vaults
       let query = this.assetRepository
