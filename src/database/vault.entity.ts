@@ -337,6 +337,45 @@ export class Vault {
   })
   total_assets_cost_ada: number;
 
+  @Expose({ name: 'lastValuationUpdate' })
+  @Transform(({ value }) => (value ? new Date(value).getTime() : null))
+  @Column({
+    name: 'last_valuation_update',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  last_valuation_update?: Date;
+
+  @Expose({ name: 'initialTotalValueAda' })
+  @Transform(({ value }) => (value ? Number(value) : null))
+  @Column({
+    name: 'initial_total_value_ada',
+    type: 'numeric',
+    nullable: true,
+    default: 0,
+  })
+  initial_total_value_ada?: number;
+
+  @Expose({ name: 'gainsAda' })
+  @Transform(({ value }) => (value ? Number(value) : null))
+  @Column({
+    name: 'gains_ada',
+    type: 'numeric',
+    nullable: true,
+    default: 0,
+  })
+  gains_ada?: number;
+
+  @Expose({ name: 'gainsUsd' })
+  @Transform(({ value }) => (value ? Number(value) : null))
+  @Column({
+    name: 'gains_usd',
+    type: 'numeric',
+    nullable: true,
+    default: 0,
+  })
+  gains_usd?: number;
+
   @Expose({ name: 'totalAcquiredValueAda' })
   @Transform(({ value }) => (value ? Number(value) : null))
   @Column({

@@ -37,7 +37,7 @@ export class Asset {
   @Column({ type: 'decimal', precision: 20, scale: 2, default: 0 })
   quantity: number;
 
-  @Expose({ name: 'floorPrice' })
+  @Expose({ name: 'floorPrice' }) // ADA floor price from marketplaces
   @Column({
     name: 'floor_price',
     type: 'decimal',
@@ -47,7 +47,7 @@ export class Asset {
   })
   floor_price?: number;
 
-  @Expose({ name: 'dexPrice' })
+  @Expose({ name: 'dexPrice' }) // ADA price from DEXs
   @Column({
     name: 'dex_price',
     type: 'decimal',
