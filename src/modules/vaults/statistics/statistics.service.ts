@@ -123,14 +123,14 @@ export class StatisticsService {
       throw new NotFoundException('Vaults are not found.');
     }
 
-    const ids = vaults.map(v => v.ticker).join(',');
+    // const ids = vaults.map(v => v.ticker).join(',');
 
     try {
       const response = await firstValueFrom(
         this.httpService.get(`${this.coinGeckoUrl}/v3/coins/markets`, {
           params: {
             vs_currency: 'usd',
-            ids: 'snek,hosky,night',
+            ids: 'snek,hosky,night,ntx,memecoin,bank,stuff,ai,ibtc,o,min,dog,',
             price_change_percentage: '1h,24h,7d,30d',
           },
           headers: {
