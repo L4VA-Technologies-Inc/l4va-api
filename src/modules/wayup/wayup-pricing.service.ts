@@ -21,8 +21,6 @@ export class WayUpPricingService {
    * @returns Collection assets with listing information
    */
   async getCollectionAssets(query: GetCollectionAssetsQuery): Promise<GetCollectionAssetsResponse> {
-    this.logger.log(`Fetching collection assets for policy ${query.policyId}`);
-
     // Build query parameters
     const params = new URLSearchParams();
     params.append('policyId', query.policyId);
@@ -72,8 +70,6 @@ export class WayUpPricingService {
     floorPriceAda: number | null; // ADA
     hasListings: boolean;
   }> {
-    this.logger.log(`Fetching floor price for collection: ${policyId}`);
-
     try {
       // Query the collection for the cheapest listing
       const response = await this.getCollectionAssets({

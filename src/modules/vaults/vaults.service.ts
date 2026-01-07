@@ -644,136 +644,6 @@ export class VaultsService {
   }
 
   /**
-   * Gets distribution of vaults by stage with TVL in both ADA and USD
-   * @returns Record of stages with percentages and TVL values
-   */
-  private async getVaultsByStageData(): Promise<
-    Record<string, { percentage: number; valueAda: string; valueUsd: string }>
-  > {
-    try {
-      // Get TVL by vault status for both currencies
-      const statusResults = await this.vaultsRepository
-        .createQueryBuilder('vault')
-        .select('vault.vault_status', 'status')
-        .addSelect('SUM(vault.total_assets_cost_ada)', 'valueAda')
-        .addSelect('SUM(vault.total_assets_cost_usd)', 'valueUsd')
-        .addSelect('COUNT(vault.id)', 'count')
-        .where('vault.deleted = :deleted', { deleted: false })
-        .andWhere('vault.vault_status IN (:...statuses)', {
-          statuses: ['contribution', 'acquire', 'locked', 'burned'],
-        })
-        .groupBy('vault.vault_status')
-        .getRawMany();
-
-      // Calculate total ADA value for percentages
-      const totalValueAda = statusResults.reduce((sum, item) => sum + Number(item.valueAda || 0), 0);
-
-      const result = {
-        contribution: { percentage: 0, valueAda: '0', valueUsd: '0' },
-        acquire: { percentage: 0, valueAda: '0', valueUsd: '0' },
-        locked: { percentage: 0, valueAda: '0', valueUsd: '0' },
-        terminated: { percentage: 0, valueAda: '0', valueUsd: '0' },
-      };
-
-      const statusMap = {
-        contribution: 'contribution',
-        acquire: 'acquire',
-        locked: 'locked',
-        burned: 'terminated',
-      };
-
-      statusResults.forEach(item => {
-        const status = statusMap[item.status] || item.status;
-        const valueAda = Number(item.valueAda || 0);
-        const valueUsd = Number(item.valueUsd || 0);
-        const percentage = totalValueAda > 0 ? (valueAda / totalValueAda) * 100 : 0;
-
-        result[status.toLowerCase()] = {
-          percentage: parseFloat(percentage.toFixed(2)),
-          valueAda,
-          valueUsd,
-        };
-      });
-
-      return result;
-    } catch (error) {
-      this.logger.error('Error calculating vaults by stage:', error);
-      // Return default object with zero values for all required statuses
-      return {
-        contribution: { percentage: 0, valueAda: '0', valueUsd: '0' },
-        acquire: { percentage: 0, valueAda: '0', valueUsd: '0' },
-        locked: { percentage: 0, valueAda: '0', valueUsd: '0' },
-        terminated: { percentage: 0, valueAda: '0', valueUsd: '0' },
-      };
-    }
-  }
-
-  /**
-   * Gets distribution of vaults by privacy type with TVL in both ADA and USD
-   * @returns Record of privacy types with percentages and TVL values
-   */
-  private async getVaultsByTypeData(): Promise<
-    Record<string, { percentage: number; valueAda: number; valueUsd: number }>
-  > {
-    try {
-      const privacyResults = await this.vaultsRepository
-        .createQueryBuilder('vault')
-        .select('vault.privacy', 'type')
-        .addSelect('SUM(vault.total_assets_cost_ada)', 'valueAda')
-        .addSelect('SUM(vault.total_assets_cost_usd)', 'valueUsd')
-        .addSelect('COUNT(vault.id)', 'count')
-        .where('vault.deleted = :deleted', { deleted: false })
-        .groupBy('vault.privacy')
-        .getRawMany();
-
-      const totalValueAda = privacyResults.reduce((sum, item) => sum + Number(item.valueAda || 0), 0);
-
-      const result = {
-        private: {
-          percentage: 0,
-          valueAda: 0,
-          valueUsd: 0,
-        },
-        public: {
-          percentage: 0,
-          valueAda: 0,
-          valueUsd: 0,
-        },
-        semiPrivate: {
-          percentage: 0,
-          valueAda: 0,
-          valueUsd: 0,
-        },
-      };
-
-      privacyResults.forEach(item => {
-        if (item.type) {
-          const type = item.type;
-          const valueAda = Number(item.valueAda || 0);
-          const valueUsd = Number(item.valueUsd || 0);
-          const percentage = parseFloat((totalValueAda > 0 ? (valueAda / totalValueAda) * 100 : 0).toFixed(2)) || 0;
-
-          const key = type === 'semi-private' ? 'semiPrivate' : type.toLowerCase();
-          result[key] = {
-            percentage,
-            valueAda,
-            valueUsd,
-          };
-        }
-      });
-
-      return result;
-    } catch (error) {
-      this.logger.error('Error calculating vaults by type:', error);
-      return {
-        private: { percentage: 0, valueAda: 0, valueUsd: 0 },
-        public: { percentage: 0, valueAda: 0, valueUsd: 0 },
-        semiPrivate: { percentage: 0, valueAda: 0, valueUsd: 0 },
-      };
-    }
-  }
-
-  /**
    * DEPRECATED FOR NOW, NOT IN USE
    * Retrieves top 5 public vaults currently in the acquire phase, sorted by total assets cost in ADA.
    * Calculates time left for the acquire phase for each vault.
@@ -1336,79 +1206,6 @@ export class VaultsService {
   }
 
   /**
-   * Calculates when the current phase ends for a vault
-   * @param vault - Vault entity
-   * @returns Date when the current phase ends
-   */
-  private calculatePhaseTime(vault: Vault): {
-    phaseStartTime: Date | null;
-    phaseEndTime: Date | null;
-  } {
-    try {
-      let phaseStartTime: Date | null = null;
-      let phaseEndTime: Date | null = null;
-
-      switch (vault.vault_status) {
-        case VaultStatus.published:
-          // For published vaults, start time is when it was published
-          phaseStartTime = vault.created_at;
-
-          // End time is when contribution phase starts
-          if (vault.contribution_open_window_type === ContributionWindowType.uponVaultLaunch) {
-            phaseEndTime = new Date(phaseStartTime.getTime() + Number(vault.contribution_duration));
-          } else if (vault.contribution_open_window_time) {
-            phaseEndTime = new Date(Number(vault.contribution_open_window_time));
-          }
-          break;
-
-        case VaultStatus.contribution:
-          // Start time is either actual contribution_phase_start or fallback to planned time
-          phaseStartTime = vault.contribution_phase_start
-            ? vault.contribution_phase_start
-            : vault.contribution_open_window_time
-              ? new Date(Number(vault.contribution_open_window_time))
-              : null;
-
-          // End time is start time + duration
-          if (phaseStartTime) {
-            phaseEndTime = new Date(phaseStartTime.getTime() + Number(vault.contribution_duration));
-          }
-          break;
-
-        case VaultStatus.acquire:
-          // Start time is either actual acquire_phase_start or fallback to planned time
-          phaseStartTime = vault.acquire_phase_start
-            ? vault.acquire_phase_start
-            : vault.acquire_open_window_time
-              ? new Date(Number(vault.acquire_open_window_time))
-              : null;
-
-          // End time is start time + duration
-          if (phaseStartTime) {
-            phaseEndTime = new Date(phaseStartTime.getTime() + Number(vault.acquire_window_duration));
-          }
-          break;
-
-        case VaultStatus.locked:
-          // Start time is when the vault was locked
-          phaseStartTime = vault.locked_at ?? null;
-          // No end time for locked vaults
-          phaseEndTime = null;
-          break;
-
-        default:
-          phaseStartTime = null;
-          phaseEndTime = null;
-      }
-
-      return { phaseStartTime, phaseEndTime };
-    } catch (error) {
-      this.logger.error(`Error calculating phase times for vault ${vault.id}:`, error);
-      return { phaseStartTime: null, phaseEndTime: null };
-    }
-  }
-
-  /**
    * Attempts to burn (liquidate) a vault, creating a burn transaction if the vault is empty and owned by the user.
    * @param vaultId - Vault ID
    * @param userId - User ID
@@ -1539,30 +1336,206 @@ export class VaultsService {
     return Math.max(safeDecimals, 0);
   }
 
-  async deleteDraftedVault(userId: string, vaultId: string): Promise<{ success: boolean }> {
-    const canDelete = await this.vaultsRepository.exists({
-      where: { id: vaultId, vault_status: VaultStatus.draft, owner: { id: userId } },
-    });
+  /**
+   * Calculates when the current phase ends for a vault
+   * @param vault - Vault entity
+   * @returns Date when the current phase ends
+   */
+  private calculatePhaseTime(vault: Vault): {
+    phaseStartTime: Date | null;
+    phaseEndTime: Date | null;
+  } {
+    try {
+      let phaseStartTime: Date | null = null;
+      let phaseEndTime: Date | null = null;
 
-    if (canDelete) {
-      await this.vaultsRepository.delete(vaultId);
-      return { success: true };
+      switch (vault.vault_status) {
+        case VaultStatus.published:
+          // For published vaults, start time is when it was published
+          phaseStartTime = vault.created_at;
+
+          // End time is when contribution phase starts
+          if (vault.contribution_open_window_type === ContributionWindowType.uponVaultLaunch) {
+            phaseEndTime = new Date(phaseStartTime.getTime() + Number(vault.contribution_duration));
+          } else if (vault.contribution_open_window_time) {
+            phaseEndTime = new Date(Number(vault.contribution_open_window_time));
+          }
+          break;
+
+        case VaultStatus.contribution:
+          // Start time is either actual contribution_phase_start or fallback to planned time
+          phaseStartTime = vault.contribution_phase_start
+            ? vault.contribution_phase_start
+            : vault.contribution_open_window_time
+              ? new Date(Number(vault.contribution_open_window_time))
+              : null;
+
+          // End time is start time + duration
+          if (phaseStartTime) {
+            phaseEndTime = new Date(phaseStartTime.getTime() + Number(vault.contribution_duration));
+          }
+          break;
+
+        case VaultStatus.acquire:
+          // Start time is either actual acquire_phase_start or fallback to planned time
+          phaseStartTime = vault.acquire_phase_start
+            ? vault.acquire_phase_start
+            : vault.acquire_open_window_time
+              ? new Date(Number(vault.acquire_open_window_time))
+              : null;
+
+          // End time is start time + duration
+          if (phaseStartTime) {
+            phaseEndTime = new Date(phaseStartTime.getTime() + Number(vault.acquire_window_duration));
+          }
+          break;
+
+        case VaultStatus.locked:
+          // Start time is when the vault was locked
+          phaseStartTime = vault.locked_at ?? null;
+          // No end time for locked vaults
+          phaseEndTime = null;
+          break;
+
+        default:
+          phaseStartTime = null;
+          phaseEndTime = null;
+      }
+
+      return { phaseStartTime, phaseEndTime };
+    } catch (error) {
+      this.logger.error(`Error calculating phase times for vault ${vault.id}:`, error);
+      return { phaseStartTime: null, phaseEndTime: null };
     }
+  }
 
-    const vault = await this.vaultsRepository.findOne({
-      where: { id: vaultId },
-      select: ['id', 'vault_status'],
-      relations: { owner: true },
-    });
+  /**
+   * Gets distribution of vaults by stage with TVL in both ADA and USD
+   * @returns Record of stages with percentages and TVL values
+   */
+  private async getVaultsByStageData(): Promise<
+    Record<string, { percentage: number; valueAda: string; valueUsd: string }>
+  > {
+    try {
+      // Get TVL by vault status for both currencies
+      const statusResults = await this.vaultsRepository
+        .createQueryBuilder('vault')
+        .select('vault.vault_status', 'status')
+        .addSelect('SUM(vault.total_assets_cost_ada)', 'valueAda')
+        .addSelect('SUM(vault.total_assets_cost_usd)', 'valueUsd')
+        .addSelect('COUNT(vault.id)', 'count')
+        .where('vault.deleted = :deleted', { deleted: false })
+        .andWhere('vault.vault_status IN (:...statuses)', {
+          statuses: ['contribution', 'acquire', 'locked', 'burned'],
+        })
+        .groupBy('vault.vault_status')
+        .getRawMany();
 
-    if (!vault) {
-      throw new NotFoundException('Vault not found');
+      // Calculate total ADA value for percentages
+      const totalValueAda = statusResults.reduce((sum, item) => sum + Number(item.valueAda || 0), 0);
+
+      const result = {
+        contribution: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        acquire: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        locked: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        terminated: { percentage: 0, valueAda: '0', valueUsd: '0' },
+      };
+
+      const statusMap = {
+        contribution: 'contribution',
+        acquire: 'acquire',
+        locked: 'locked',
+        burned: 'terminated',
+      };
+
+      statusResults.forEach(item => {
+        const status = statusMap[item.status] || item.status;
+        const valueAda = Number(item.valueAda || 0);
+        const valueUsd = Number(item.valueUsd || 0);
+        const percentage = totalValueAda > 0 ? (valueAda / totalValueAda) * 100 : 0;
+
+        result[status.toLowerCase()] = {
+          percentage: parseFloat(percentage.toFixed(2)),
+          valueAda,
+          valueUsd,
+        };
+      });
+
+      return result;
+    } catch (error) {
+      this.logger.error('Error calculating vaults by stage:', error);
+      // Return default object with zero values for all required statuses
+      return {
+        contribution: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        acquire: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        locked: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        terminated: { percentage: 0, valueAda: '0', valueUsd: '0' },
+      };
     }
+  }
 
-    if (vault.vault_status !== VaultStatus.draft) {
-      throw new BadRequestException('Cannot delete published vault');
+  /**
+   * Gets distribution of vaults by privacy type with TVL in both ADA and USD
+   * @returns Record of privacy types with percentages and TVL values
+   */
+  private async getVaultsByTypeData(): Promise<
+    Record<string, { percentage: number; valueAda: number; valueUsd: number }>
+  > {
+    try {
+      const privacyResults = await this.vaultsRepository
+        .createQueryBuilder('vault')
+        .select('vault.privacy', 'type')
+        .addSelect('SUM(vault.total_assets_cost_ada)', 'valueAda')
+        .addSelect('SUM(vault.total_assets_cost_usd)', 'valueUsd')
+        .addSelect('COUNT(vault.id)', 'count')
+        .where('vault.deleted = :deleted', { deleted: false })
+        .groupBy('vault.privacy')
+        .getRawMany();
+
+      const totalValueAda = privacyResults.reduce((sum, item) => sum + Number(item.valueAda || 0), 0);
+
+      const result = {
+        private: {
+          percentage: 0,
+          valueAda: 0,
+          valueUsd: 0,
+        },
+        public: {
+          percentage: 0,
+          valueAda: 0,
+          valueUsd: 0,
+        },
+        semiPrivate: {
+          percentage: 0,
+          valueAda: 0,
+          valueUsd: 0,
+        },
+      };
+
+      privacyResults.forEach(item => {
+        if (item.type) {
+          const type = item.type;
+          const valueAda = Number(item.valueAda || 0);
+          const valueUsd = Number(item.valueUsd || 0);
+          const percentage = parseFloat((totalValueAda > 0 ? (valueAda / totalValueAda) * 100 : 0).toFixed(2)) || 0;
+
+          const key = type === 'semi-private' ? 'semiPrivate' : type.toLowerCase();
+          result[key] = {
+            percentage,
+            valueAda,
+            valueUsd,
+          };
+        }
+      });
+
+      return result;
+    } catch (error) {
+      this.logger.error('Error calculating vaults by type:', error);
+      return {
+        private: { percentage: 0, valueAda: 0, valueUsd: 0 },
+        public: { percentage: 0, valueAda: 0, valueUsd: 0 },
+        semiPrivate: { percentage: 0, valueAda: 0, valueUsd: 0 },
+      };
     }
-
-    throw new UnauthorizedException('Vault does not belong to the user');
   }
 }

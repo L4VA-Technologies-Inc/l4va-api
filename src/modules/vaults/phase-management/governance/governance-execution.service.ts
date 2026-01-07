@@ -9,10 +9,12 @@ import { ProposalSchedulerService } from './proposal-scheduler.service';
 import { VoteCountingService } from './vote-counting.service';
 
 import { Asset } from '@/database/asset.entity';
+import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { WayUpService } from '@/modules/wayup/wayup.service';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
+import { ClaimType } from '@/types/claim.types';
 
 @Injectable()
 export class GovernanceExecutionService {
@@ -22,6 +24,8 @@ export class GovernanceExecutionService {
   constructor(
     @InjectRepository(Proposal)
     private readonly proposalRepository: Repository<Proposal>,
+    @InjectRepository(Claim)
+    private readonly claimRepository: Repository<Claim>,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
     private readonly eventEmitter: EventEmitter2,
@@ -154,19 +158,36 @@ export class GovernanceExecutionService {
       const newStatus = isSuccessful ? ProposalStatus.EXECUTED : ProposalStatus.REJECTED;
 
       const executed = await this.executeProposalActions(proposal);
+      const finalContributorClaims = await this.claimRepository.find({
+        where: {
+          vault: { id: proposal.vaultId },
+          type: ClaimType.CONTRIBUTOR,
+        },
+        relations: ['transaction', 'transaction.assets'],
+        order: { created_at: 'ASC' },
+      });
 
       if (executed) {
         await this.proposalRepository.update({ id: proposalId }, { status: newStatus });
-        // Emit event for real-time UI updates
-        this.eventEmitter.emit('proposal.executed', {
-          proposalId: proposal.id,
-          vaultId: proposal.vaultId,
-          status: newStatus,
-          yesVotePercent: voteResult.yesVotePercent,
-          executionThreshold,
-          executionDate: new Date(),
-        });
-
+        if (newStatus === ProposalStatus.EXECUTED) {
+          this.eventEmitter.emit('proposal.executed', {
+            address: proposal.vault.owner.address,
+            vaultId: proposal.vaultId,
+            vaultName: proposal.vault.name,
+            proposalName: proposal.title,
+            creatorId: proposal.creatorId,
+            tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+          });
+        } else {
+          this.eventEmitter.emit('proposal.rejected', {
+            address: proposal.vault.owner.address,
+            vaultId: proposal.vaultId,
+            vaultName: proposal.vault.name,
+            proposalName: proposal.title,
+            creatorId: proposal.creatorId,
+            tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+          });
+        }
         this.logger.log(
           `Proposal ${proposal.id}: ${newStatus} (${voteResult.yesVotePercent.toFixed(2)}% yes votes, threshold ${executionThreshold}%)`
         );
@@ -180,6 +201,15 @@ export class GovernanceExecutionService {
   }
 
   private async executeProposalActions(proposal: Proposal): Promise<boolean> {
+    const finalContributorClaims = await this.claimRepository.find({
+      where: {
+        vault: { id: proposal.vaultId },
+        type: ClaimType.CONTRIBUTOR,
+      },
+      relations: ['transaction', 'transaction.assets'],
+      order: { created_at: 'ASC' },
+    });
+
     try {
       this.logger.log(`Executing actions for proposal ${proposal.id} of type ${proposal.proposalType}`);
 
@@ -205,8 +235,25 @@ export class GovernanceExecutionService {
           this.logger.warn(`Unknown proposal type: ${proposal.proposalType}`);
           return false;
       }
+      this.eventEmitter.emit('proposal.started', {
+        address: proposal.vault.owner.address,
+        vaultId: proposal.vaultId,
+        vaultName: proposal.vault.name,
+        proposalName: proposal.title,
+        creatorId: proposal.creatorId,
+        tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+      });
+
       return true;
     } catch (error) {
+      this.eventEmitter.emit('proposal.failed', {
+        address: proposal.vault.owner.address,
+        vaultId: proposal.vaultId,
+        vaultName: proposal.vault.name,
+        proposalName: proposal.title,
+        creatorId: proposal.creatorId,
+        tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+      });
       this.logger.error(`Error executing actions for proposal ${proposal.id}: ${error.message}`, error.stack);
       return false;
     }

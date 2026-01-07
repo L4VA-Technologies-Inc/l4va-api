@@ -382,6 +382,33 @@ export class GovernanceService {
       status: proposal.status,
     });
 
+    const user = await this.userRepository.findOneBy({ id: proposal.creatorId });
+    const finalContributorClaims = await this.claimRepository.find({
+      where: {
+        vault: { id: vault.id },
+        type: ClaimType.CONTRIBUTOR,
+      },
+      relations: ['transaction', 'transaction.assets'],
+      order: { created_at: 'ASC' },
+    });
+
+    this.eventEmitter.emit('governance.proposal_created', {
+      address: user.address,
+      vaultId: vault.id,
+      vaultName: vault.name,
+      proposalName: proposal.title,
+      creatorId: proposal.creatorId,
+    });
+
+    this.eventEmitter.emit('proposal.started', {
+      address: user.address,
+      vaultId: vault.id,
+      vaultName: vault.name,
+      proposalName: proposal.title,
+      creatorId: proposal.creatorId,
+      tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+    });
+
     return {
       success: true,
       message: 'Proposal created successfully',
@@ -935,12 +962,28 @@ export class GovernanceService {
   async getAssetsToBuySell(vaultId: string): Promise<AssetBuySellDto[]> {
     try {
       // Get all assets in the vault
-      const assets = await this.assetRepository.find({
+      const assets: Pick<
+        Asset,
+        'id' | 'policy_id' | 'quantity' | 'dex_price' | 'floor_price' | 'metadata' | 'type' | 'name' | 'imageUrl'
+      >[] = await this.assetRepository.find({
         where: [
           { vault: { id: vaultId }, type: AssetType.NFT, status: AssetStatus.LOCKED },
           { vault: { id: vaultId }, type: AssetType.FT, status: AssetStatus.LOCKED },
         ],
-        select: ['id', 'policy_id', 'quantity', 'dex_price', 'floor_price', 'metadata', 'type'],
+        select: [
+          'id',
+          'policy_id',
+          'quantity',
+          'dex_price',
+          'floor_price',
+          'metadata',
+          'type',
+          'name',
+          'imageUrl',
+          'listing_market',
+          'listing_price',
+          'listing_tx_hash',
+        ],
       });
 
       return plainToInstance(AssetBuySellDto, assets, {
