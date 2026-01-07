@@ -279,6 +279,8 @@ export class TaptoolsService {
       throw new NotFoundException(`Vault with ID ${vaultId} not found`);
     }
 
+    const adaPrice = await this.getAdaPrice();
+
     // Group assets by policyId and assetId to handle quantities
     const assetMap = new Map<
       string,
@@ -293,13 +295,13 @@ export class TaptoolsService {
 
     let totalAcquiredAda = 0;
 
-    // Process each asset in the vault
+    // Group assets and track acquired ADA in one pass
     for (const asset of vault.assets) {
       if (asset.origin_type === AssetOriginType.ACQUIRED && asset.policy_id === 'lovelace') {
         totalAcquiredAda += Number(asset.quantity);
       }
 
-      // Skip assets that are not in a valid status for valuation or don't match the phase
+      // Skip assets that are not in a valid status for valuation
       if (asset.status !== AssetStatus.PENDING && asset.status !== AssetStatus.LOCKED) {
         continue;
       }
@@ -308,11 +310,7 @@ export class TaptoolsService {
       const existingAsset = assetMap.get(key);
 
       if (existingAsset) {
-        if (asset.type === AssetType.NFT) {
-          existingAsset.quantity += 1;
-        } else {
-          existingAsset.quantity += Number(asset.quantity);
-        }
+        existingAsset.quantity += asset.type === AssetType.NFT ? 1 : Number(asset.quantity);
       } else {
         assetMap.set(key, {
           policyId: asset.policy_id,
@@ -324,19 +322,15 @@ export class TaptoolsService {
       }
     }
 
-    // Convert map to array for processing
-    const assets = Array.from(assetMap.values());
-
-    // Get asset values from TapTools
+    // Calculate values for grouped assets
     const assetsWithValues = [];
     let totalValueAda = 0;
     let totalValueUsd = 0;
 
-    for (const asset of assets) {
+    for (const asset of assetMap.values()) {
       try {
-        // Skip administrative/fee tokens - they shouldn't count toward vault value
+        // Skip administrative/fee tokens
         if (asset.metadata?.purpose === 'vault_creation_fee') {
-          // Still include in the assets list for transparency, but don't add to totals
           assetsWithValues.push({
             ...asset,
             assetName: asset.assetId,
@@ -346,13 +340,8 @@ export class TaptoolsService {
           continue;
         }
 
-        // TODO: Test this
         if (asset.assetId === 'lovelace') {
-          // Special case for ADA
-
-          const adaPrice = await this.getAdaPrice();
-          const totalAdaValue = asset.quantity * 1e-6; // Convert lovelace to ADA
-
+          const totalAdaValue = asset.quantity * 1e-6;
           assetsWithValues.push({
             ...asset,
             assetName: 'ADA',
@@ -363,19 +352,16 @@ export class TaptoolsService {
           totalValueUsd += totalAdaValue * adaPrice;
           continue;
         }
-        // Get asset value in ADA
-        const assetValue = await this.getAssetValue(asset.policyId, asset.assetId, asset.isNft);
 
+        const assetValue = await this.getAssetValue(asset.policyId, asset.assetId, asset.isNft);
         const valueAda = assetValue?.priceAda || 0;
         const valueUsd = assetValue?.priceUsd || 0;
-
-        // Calculate total value for this asset
         const totalAssetValueAda = valueAda * asset.quantity;
         const totalAssetValueUsd = valueUsd * asset.quantity;
 
         assetsWithValues.push({
           ...asset,
-          assetName: asset.assetId, // Using assetId as assetName for backward compatibility
+          assetName: asset.assetId,
           valueAda: totalAssetValueAda,
           valueUsd: totalAssetValueUsd,
         });
@@ -383,7 +369,6 @@ export class TaptoolsService {
         totalValueAda += totalAssetValueAda;
         totalValueUsd += totalAssetValueUsd;
       } catch (error) {
-        // Skip assets that can't be valued
         console.warn(`Could not value asset ${asset.policyId}.${asset.assetId}:`, error.message);
       }
     }
@@ -399,8 +384,6 @@ export class TaptoolsService {
       );
       await this.userRepository.update({ id: vault.owner.id }, { tvl: totalValueAda });
     }
-
-    const adaPrice = await this.getAdaPrice();
 
     // Create and return the summary
     const summary: VaultAssetsSummaryDto = {
