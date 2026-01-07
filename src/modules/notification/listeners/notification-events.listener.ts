@@ -220,14 +220,13 @@ export class NotificationEventsListener {
     );
   }
 
-  @OnEvent('governance.proposal_created') // haven`t added
+  @OnEvent('governance.proposal_created')
   async handleProposalCreated(event: {
     address: string;
     vaultId: string;
     vaultName: string;
     proposalName: string;
     creatorId: string;
-    tokenHolderIds: string[];
   }) {
     await this.notificationService.sendNotification({
       title: 'Governance Proposal Created',
@@ -236,16 +235,110 @@ export class NotificationEventsListener {
       vaultName: event.vaultName,
       address: event.address,
     });
+  }
 
-    const otherHolders = event.tokenHolderIds.filter(id => id !== event.creatorId);
+  @OnEvent('proposal.started')
+  async handleProposalStarted(event: {
+    address: string;
+    vaultId: string;
+    vaultName: string;
+    proposalName: string;
+    creatorId: string;
+    tokenHolderIds: string[];
+  }) {
     await this.notificationService.sendBulkNotification(
       {
-        title: 'Governance Proposal Created',
-        description: `Your "${event.proposalName}" Governance Proposal for vault ${event.vaultName} has been created!`,
+        title: `New vote available for vault "${event.vaultName}"`,
+        description: `You have a new governance proposal, ${event.proposalName}, for vault ${event.vaultName}`,
         vaultId: event.vaultId,
         vaultName: event.vaultName,
+        address: event.address,
       },
-      otherHolders
+      event.tokenHolderIds
+    );
+  }
+
+  @OnEvent('voting.ending_soon') //havent added
+  async handleProposalEndingSoon(event: {
+    address: string;
+    vaultId: string;
+    vaultName: string;
+    proposalName: string;
+    creatorId: string;
+    tokenHolderIds: string[];
+  }) {
+    await this.notificationService.sendBulkNotification(
+      {
+        title: `The proposal ${event.proposalName} ending soon`,
+        description: `You have a governance proposal, ${event.proposalName}, for vault ${event.vaultName}, that ending soon`,
+        vaultId: event.vaultId,
+        vaultName: event.vaultName,
+        address: event.address,
+      },
+      event.tokenHolderIds
+    );
+  }
+
+  @OnEvent('proposal.executed')
+  async handleProposalExecuted(event: {
+    address: string;
+    vaultId: string;
+    vaultName: string;
+    proposalName: string;
+    creatorId: string;
+    tokenHolderIds: string[];
+  }) {
+    await this.notificationService.sendBulkNotification(
+      {
+        title: `The proposal ${event.proposalName} has been executed`,
+        description: `The proposal ${event.proposalName} for vault ${event.vaultName} has been executed`,
+        vaultId: event.vaultId,
+        vaultName: event.vaultName,
+        address: event.address,
+      },
+      event.tokenHolderIds
+    );
+  }
+
+  @OnEvent('proposal.rejected') //havent added
+  async handleProposalRejected(event: {
+    address: string;
+    vaultId: string;
+    vaultName: string;
+    proposalName: string;
+    creatorId: string;
+    tokenHolderIds: string[];
+  }) {
+    await this.notificationService.sendBulkNotification(
+      {
+        title: `The proposal ${event.proposalName} ending soon`,
+        description: `You have a governance proposal, ${event.proposalName}, for vault ${event.vaultName}, that ending soon`,
+        vaultId: event.vaultId,
+        vaultName: event.vaultName,
+        address: event.address,
+      },
+      event.tokenHolderIds
+    );
+  }
+
+  @OnEvent('proposal.failed')
+  async handleProposalFailed(event: {
+    address: string;
+    vaultId: string;
+    vaultName: string;
+    proposalName: string;
+    creatorId: string;
+    tokenHolderIds: string[];
+  }) {
+    await this.notificationService.sendBulkNotification(
+      {
+        title: `The proposal ${event.proposalName} has failed`,
+        description: `The proposal ${event.proposalName} for vault ${event.vaultName} has failed`,
+        vaultId: event.vaultId,
+        vaultName: event.vaultName,
+        address: event.address,
+      },
+      event.tokenHolderIds
     );
   }
 

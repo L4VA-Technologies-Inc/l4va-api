@@ -382,6 +382,33 @@ export class GovernanceService {
       status: proposal.status,
     });
 
+    const user = await this.userRepository.findOneBy({ id: proposal.creatorId });
+    const finalContributorClaims = await this.claimRepository.find({
+      where: {
+        vault: { id: vault.id },
+        type: ClaimType.CONTRIBUTOR,
+      },
+      relations: ['transaction', 'transaction.assets'],
+      order: { created_at: 'ASC' },
+    });
+
+    this.eventEmitter.emit('governance.proposal_created', {
+      address: user.address,
+      vaultId: vault.id,
+      vaultName: vault.name,
+      proposalName: proposal.title,
+      creatorId: proposal.creatorId,
+    });
+
+    this.eventEmitter.emit('proposal.started', {
+      address: user.address,
+      vaultId: vault.id,
+      vaultName: vault.name,
+      proposalName: proposal.title,
+      creatorId: proposal.creatorId,
+      tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+    });
+
     return {
       success: true,
       message: 'Proposal created successfully',
