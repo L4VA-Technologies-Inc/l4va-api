@@ -321,27 +321,6 @@ export class NotificationEventsListener {
     );
   }
 
-  @OnEvent('proposal.cancelled') //havent added
-  async handleProposalCancelld(event: {
-    address: string;
-    vaultId: string;
-    vaultName: string;
-    proposalName: string;
-    creatorId: string;
-    tokenHolderIds: string[];
-  }) {
-    await this.notificationService.sendBulkNotification(
-      {
-        title: `The proposal ${event.proposalName} ending soon`,
-        description: `You have a governance proposal, ${event.proposalName}, for vault ${event.vaultName}, that ending soon`,
-        vaultId: event.vaultId,
-        vaultName: event.vaultName,
-        address: event.address,
-      },
-      event.tokenHolderIds
-    );
-  }
-
   @OnEvent('proposal.failed')
   async handleProposalFailed(event: {
     address: string;

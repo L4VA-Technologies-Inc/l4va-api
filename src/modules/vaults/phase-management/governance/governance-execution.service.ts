@@ -158,19 +158,36 @@ export class GovernanceExecutionService {
       const newStatus = isSuccessful ? ProposalStatus.EXECUTED : ProposalStatus.REJECTED;
 
       const executed = await this.executeProposalActions(proposal);
+      const finalContributorClaims = await this.claimRepository.find({
+        where: {
+          vault: { id: proposal.vaultId },
+          type: ClaimType.CONTRIBUTOR,
+        },
+        relations: ['transaction', 'transaction.assets'],
+        order: { created_at: 'ASC' },
+      });
 
       if (executed) {
         await this.proposalRepository.update({ id: proposalId }, { status: newStatus });
-        // Emit event for real-time UI updates
-        this.eventEmitter.emit('proposal.executed', {
-          proposalId: proposal.id,
-          vaultId: proposal.vaultId,
-          status: newStatus,
-          yesVotePercent: voteResult.yesVotePercent,
-          executionThreshold,
-          executionDate: new Date(),
-        });
-
+        if (newStatus === ProposalStatus.EXECUTED) {
+          this.eventEmitter.emit('proposal.executed', {
+            address: proposal.vault.owner.address,
+            vaultId: proposal.vaultId,
+            vaultName: proposal.vault.name,
+            proposalName: proposal.title,
+            creatorId: proposal.creatorId,
+            tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+          });
+        } else {
+          this.eventEmitter.emit('proposal.rejected', {
+            address: proposal.vault.owner.address,
+            vaultId: proposal.vaultId,
+            vaultName: proposal.vault.name,
+            proposalName: proposal.title,
+            creatorId: proposal.creatorId,
+            tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+          });
+        }
         this.logger.log(
           `Proposal ${proposal.id}: ${newStatus} (${voteResult.yesVotePercent.toFixed(2)}% yes votes, threshold ${executionThreshold}%)`
         );
