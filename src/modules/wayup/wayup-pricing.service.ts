@@ -80,7 +80,6 @@ export class WayUpPricingService {
       });
 
       if (response.results.length === 0 || !response.results[0].listing) {
-        this.logger.log(`No listings found for collection: ${policyId}`);
         return {
           floorPrice: null,
           floorPriceAda: null,

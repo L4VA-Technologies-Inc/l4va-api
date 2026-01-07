@@ -22,6 +22,7 @@ import { Vault } from '@/database/vault.entity';
 import { AlertsService } from '@/modules/alerts/alerts.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
+import { VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class TaptoolsService {
@@ -307,7 +308,10 @@ export class TaptoolsService {
 
             let priceAda: number | null = null;
 
-            if (isNFT) {
+            // Use hardcoded testnet prices if available
+            if (!this.isMainnet && this.testnetPrices[asset.asset_policy_id]) {
+              priceAda = this.testnetPrices[asset.asset_policy_id];
+            } else if (isNFT) {
               // Get floor price from WayUp for NFTs
               try {
                 const { floorPriceAda } = await this.wayUpPricingService.getCollectionFloorPrice(asset.asset_policy_id);
@@ -546,11 +550,11 @@ export class TaptoolsService {
     const batchResults = await this.batchCalculateVaultAssetsValue(vaultIds);
     const adaPrice = await this.getAdaPrice();
 
-    // Get vaults with their initial values, status, and token supply
+    // Get vaults with their initial values, status, fdv, and token supply
     const vaults = await this.vaultRepository.find({
       where: { id: In(vaultIds) },
       relations: ['owner'],
-      select: ['id', 'initial_total_value_ada', 'vault_status', 'ft_token_supply', 'owner'],
+      select: ['id', 'initial_total_value_ada', 'vault_status', 'ft_token_supply', 'fdv', 'owner'],
     });
 
     const vaultMap = new Map(vaults.map(v => [v.id, v]));
@@ -560,8 +564,6 @@ export class TaptoolsService {
       const vault = vaultMap.get(vaultId);
       let gainsAda = 0;
       let gainsUsd = 0;
-      let fdv = 0;
-      let fdvTvl = 0;
 
       if (vault?.initial_total_value_ada && vault.initial_total_value_ada > 0) {
         gainsAda = summary.totalValueAda - vault.initial_total_value_ada;
@@ -574,18 +576,6 @@ export class TaptoolsService {
         }
       }
 
-      // Calculate FDV and FDV/TVL for locked vaults
-      if (vault?.vault_status === 'locked' && vault.ft_token_supply && summary.totalValueAda > 0) {
-        // Assuming we need to get the circulating supply from somewhere
-        // For now, using total supply as an approximation
-        // FDV = (Current TVL / Circulating Supply) * Total Supply
-        // If we don't have circulating supply, FDV = TVL when all tokens are circulating
-        fdv = summary.totalValueAda; // This should be refined based on actual circulating supply
-
-        // FDV/TVL ratio
-        fdvTvl = fdv / summary.totalValueAda;
-      }
-
       const updateData: any = {
         total_assets_cost_ada: summary.totalValueAda,
         total_assets_cost_usd: summary.totalValueUsd,
@@ -595,10 +585,10 @@ export class TaptoolsService {
         last_valuation_update: new Date(),
       };
 
-      // Only update FDV fields for locked vaults
-      if (vault?.vault_status === 'locked') {
-        updateData.fdv = fdv;
-        updateData.fdv_tvl = fdvTvl;
+      // Update FDV/TVL ratio for locked vaults
+      // FDV is already stored from the locking transition, we just recalculate the ratio
+      if (vault?.vault_status === VaultStatus.locked && vault.fdv && summary.totalValueAda > 0) {
+        updateData.fdv_tvl = Number((vault.fdv / summary.totalValueAda).toFixed(2));
       }
 
       return this.vaultRepository.update({ id: vaultId }, updateData);
