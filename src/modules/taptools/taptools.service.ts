@@ -764,6 +764,10 @@ export class TaptoolsService {
                 const decimals = vault.ft_token_decimals || 6; // Default to 6 if not set
                 const ftSupplySmallestUnits = Number(vault.ft_token_supply) * Math.pow(10, decimals);
 
+                // Guard against invalid or zero supply to avoid division by zero
+                if (!Number.isFinite(ftSupplySmallestUnits) || ftSupplySmallestUnits <= 0) {
+                  continue;
+                }
                 // Now both are in smallest units
                 const userShare = vtBalance / ftSupplySmallestUnits;
 
