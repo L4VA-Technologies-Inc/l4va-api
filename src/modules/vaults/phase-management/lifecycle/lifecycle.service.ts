@@ -156,10 +156,10 @@ export class LifecycleService {
 
         const pr = await this.tokenRegistryRepository.findOne({
           where: {
-            vault: { id: data.vaultId },
+            vault_id: data.vaultId,
             status: TokenRegistryStatus.PENDING,
           },
-          select: ['pr_number'],
+          select: ['id', 'pr_number'],
         });
 
         if (pr) {
