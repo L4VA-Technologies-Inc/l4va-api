@@ -263,8 +263,38 @@ export class TaptoolsService {
   }
 
   /**
+   * Helper function to process promises with controlled concurrency
+   * @param items Array of items to process
+   * @param fn Async function to execute for each item
+   * @param concurrency Maximum number of concurrent operations
+   * @param delayMs Delay in milliseconds between batches
+   */
+  private async processWithConcurrency<T, R>(
+    items: T[],
+    fn: (item: T) => Promise<R>,
+    concurrency: number = 5,
+    delayMs: number = 100
+  ): Promise<R[]> {
+    const results: R[] = [];
+
+    for (let i = 0; i < items.length; i += concurrency) {
+      const batch = items.slice(i, i + concurrency);
+      const batchResults = await Promise.all(batch.map(item => fn(item)));
+      results.push(...batchResults);
+
+      // Add delay between batches to avoid rate limiting (except for last batch)
+      if (i + concurrency < items.length) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+
+    return results;
+  }
+
+  /**
    * Update asset prices in database from DexHunter/WayUp APIs
    * Updates dex_price for FTs and floor_price for NFTs
+   * Uses controlled concurrency to avoid overwhelming external APIs
    * @param vaultIds Optional array of vault IDs to update assets for. If not provided, updates all active vaults
    */
   async updateAssetPrices(vaultIds?: string[]): Promise<void> {
@@ -284,14 +314,12 @@ export class TaptoolsService {
       const uniqueAssets = await query.getRawMany();
       this.logger.log(`Updating prices for ${uniqueAssets.length} unique assets`);
 
-      const batchSize = 50;
       let updatedCount = 0;
 
-      // Process in batches to avoid overwhelming the database
-      for (let i = 0; i < uniqueAssets.length; i += batchSize) {
-        const batch = uniqueAssets.slice(i, i + batchSize);
-
-        const updatePromises = batch.map(async asset => {
+      // Process with controlled concurrency: 5 concurrent API calls, 100ms delay between batches
+      await this.processWithConcurrency(
+        uniqueAssets,
+        async asset => {
           try {
             const isNFT = asset.asset_type === AssetType.NFT;
 
@@ -346,10 +374,10 @@ export class TaptoolsService {
               error.message
             );
           }
-        });
-
-        await Promise.all(updatePromises);
-      }
+        },
+        5, // Max 5 concurrent API calls
+        100 // 100ms delay between batches
+      );
 
       this.logger.log(`Successfully updated prices for ${updatedCount} assets`);
     } catch (error) {
