@@ -17,6 +17,7 @@ import { PaginationQueryDto, PaginationMetaDto } from './dto/pagination.dto';
 import { WalletOverviewDto, PaginatedWalletSummaryDto } from './dto/wallet-summary.dto';
 
 import { Asset } from '@/database/asset.entity';
+import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AlertsService } from '@/modules/alerts/alerts.service';
@@ -53,6 +54,8 @@ export class TaptoolsService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
+    @InjectRepository(Snapshot)
+    private readonly snapshotRepository: Repository<Snapshot>,
     private readonly assetsService: AssetsService,
     private readonly configService: ConfigService,
     private readonly alertsService: AlertsService,
@@ -536,7 +539,9 @@ export class TaptoolsService {
 
   /**
    * Update cached vault totals for multiple vaults
-   * Also calculates gains and updates user total gains
+   * Also calculates user TVL and gains based on:
+   * - For locked vaults: VT token holdings (proportional ownership)
+   * - For active vaults: Contributed asset values
    * For locked vaults, also calculates FDV and FDV/TVL ratio
    * @param vaultIds Array of vault IDs to update
    */
@@ -556,8 +561,10 @@ export class TaptoolsService {
     });
 
     const vaultMap = new Map(vaults.map(v => [v.id, v]));
+    const userTvlMap = new Map<string, number>();
     const userGainsMap = new Map<string, number>();
 
+    // Update vault totals
     const updatePromises = Array.from(batchResults.entries()).map(([vaultId, summary]) => {
       const vault = vaultMap.get(vaultId);
       let gainsAda = 0;
@@ -566,12 +573,6 @@ export class TaptoolsService {
       if (vault?.initial_total_value_ada && vault.initial_total_value_ada > 0) {
         gainsAda = summary.totalValueAda - vault.initial_total_value_ada;
         gainsUsd = gainsAda * adaPrice;
-
-        // Accumulate gains per user
-        if (vault.owner?.id) {
-          const currentUserGains = userGainsMap.get(vault.owner.id) || 0;
-          userGainsMap.set(vault.owner.id, currentUserGains + gainsAda);
-        }
       }
 
       const updateData: any = {
@@ -584,7 +585,6 @@ export class TaptoolsService {
       };
 
       // Update FDV/TVL ratio for locked vaults
-      // FDV is already stored from the locking transition, we just recalculate the ratio
       if (vault?.vault_status === VaultStatus.locked && vault.fdv && summary.totalValueAda > 0) {
         updateData.fdv_tvl = Number((vault.fdv / summary.totalValueAda).toFixed(2));
       }
@@ -594,13 +594,120 @@ export class TaptoolsService {
 
     await Promise.all(updatePromises);
 
-    // Update user gains
-    if (userGainsMap.size > 0) {
-      const userUpdatePromises = Array.from(userGainsMap.entries()).map(([userId, gains]) =>
-        this.userRepository.update({ id: userId }, { gains })
-      );
+    // Calculate user TVL and gains based on vault status
+    for (const [vaultId, summary] of batchResults.entries()) {
+      const vault = vaultMap.get(vaultId);
+      if (!vault) continue;
+
+      if (vault.vault_status === VaultStatus.locked) {
+        // For locked vaults: Calculate TVL based on VT token holdings
+        await this.calculateLockedVaultUserTvl(vault, summary.totalValueAda, userTvlMap, userGainsMap);
+      } else if (vault.vault_status === VaultStatus.contribution || vault.vault_status === VaultStatus.acquire) {
+        // For active vaults: Calculate TVL based on contributed assets
+        await this.calculateActiveVaultUserTvl(vaultId, userTvlMap);
+      }
+    }
+
+    // Update user TVL and gains
+    if (userTvlMap.size > 0 || userGainsMap.size > 0) {
+      const allUserIds = new Set([...userTvlMap.keys(), ...userGainsMap.keys()]);
+      const userUpdatePromises = Array.from(allUserIds).map(userId => {
+        const updateData: any = {};
+        if (userTvlMap.has(userId)) {
+          updateData.tvl = userTvlMap.get(userId);
+        }
+        if (userGainsMap.has(userId)) {
+          updateData.gains = userGainsMap.get(userId);
+        }
+        return this.userRepository.update({ id: userId }, updateData);
+      });
       await Promise.all(userUpdatePromises);
-      this.logger.log(`Updated gains for ${userGainsMap.size} users`);
+      this.logger.log(`Updated TVL and gains for ${allUserIds.size} users`);
+    }
+  }
+
+  /**
+   * Calculate user TVL for locked vaults based on VT token holdings
+   * Uses the latest snapshot to get VT token distribution
+   */
+  private async calculateLockedVaultUserTvl(
+    vault: Vault,
+    vaultTotalValueAda: number,
+    userTvlMap: Map<string, number>,
+    userGainsMap: Map<string, number>
+  ): Promise<void> {
+    // Get the latest snapshot for this vault
+    const latestSnapshot = await this.snapshotRepository.findOne({
+      where: { vaultId: vault.id },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (!latestSnapshot || !vault.ft_token_supply) {
+      this.logger.warn(`No snapshot or token supply found for locked vault ${vault.id}`);
+      return;
+    }
+
+    const totalSupply = Number(vault.ft_token_supply);
+    if (totalSupply === 0) return;
+
+    // Calculate TVL for each VT holder
+    const addressBalances = latestSnapshot.addressBalances;
+    for (const [address, balance] of Object.entries(addressBalances)) {
+      const vtBalance = Number(balance);
+      if (vtBalance === 0) continue;
+
+      // Calculate proportional ownership
+      const userShare = vtBalance / totalSupply;
+      const userVaultTvl = userShare * vaultTotalValueAda;
+
+      // Find user by address
+      const user = await this.userRepository.findOne({ where: { address } });
+      if (!user) continue;
+
+      // Accumulate TVL
+      const currentTvl = userTvlMap.get(user.id) || 0;
+      userTvlMap.set(user.id, currentTvl + userVaultTvl);
+
+      // Calculate gains for this vault
+      if (vault.initial_total_value_ada && vault.initial_total_value_ada > 0) {
+        const initialUserValue = userShare * vault.initial_total_value_ada;
+        const userGains = userVaultTvl - initialUserValue;
+        const currentGains = userGainsMap.get(user.id) || 0;
+        userGainsMap.set(user.id, currentGains + userGains);
+      }
+    }
+  }
+
+  /**
+   * Calculate user TVL for active vaults (contribution/acquire phases)
+   * Based on the value of assets they contributed
+   */
+  private async calculateActiveVaultUserTvl(vaultId: string, userTvlMap: Map<string, number>): Promise<void> {
+    const assets = await this.assetRepository.find({
+      where: {
+        vault: { id: vaultId },
+        status: In([AssetStatus.LOCKED, AssetStatus.DISTRIBUTED]),
+        origin_type: AssetOriginType.CONTRIBUTED,
+      },
+      select: ['added_by', 'quantity', 'dex_price', 'floor_price', 'type'],
+    });
+
+    // Group assets by contributor and calculate their value
+    const contributorValues = new Map<string, number>();
+    for (const asset of assets) {
+      if (!asset.added_by) continue;
+
+      const price = asset.type === AssetType.NFT ? asset.floor_price || 0 : asset.dex_price || 0;
+      const assetValue = Number(asset.quantity) * price;
+
+      const currentValue = contributorValues.get(asset.added_by.id) || 0;
+      contributorValues.set(asset.added_by.id, currentValue + assetValue);
+    }
+
+    // Accumulate TVL for each contributor
+    for (const [userId, value] of contributorValues.entries()) {
+      const currentTvl = userTvlMap.get(userId) || 0;
+      userTvlMap.set(userId, currentTvl + value);
     }
   }
 

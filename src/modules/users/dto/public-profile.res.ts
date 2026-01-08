@@ -83,6 +83,13 @@ export class PublicProfileRes {
   })
   totalVaults: number;
 
+  @ApiProperty({ description: 'Percentage gains/losses' })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  gains: number;
+
   @ApiProperty()
   @DtoRepresent({
     transform: false,

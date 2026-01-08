@@ -160,6 +160,12 @@ export class UsersService {
     plainedUsers.totalValueUsd = parseFloat((user.tvl * (await this.taptoolsService.getAdaPrice())).toFixed(2));
     plainedUsers.totalValueAda = user.tvl;
 
+    // Calculate gains as percentage: (gains / initial_investment) * 100
+    // initial_investment = current_value - gains
+    const gainsAda = user.gains || 0;
+    const initialInvestment = user.tvl - gainsAda;
+    plainedUsers.gains = initialInvestment > 0 ? parseFloat(((gainsAda / initialInvestment) * 100).toFixed(2)) : 0;
+
     return plainToInstance(PublicProfileRes, plainedUsers, { excludeExtraneousValues: true });
   }
 
