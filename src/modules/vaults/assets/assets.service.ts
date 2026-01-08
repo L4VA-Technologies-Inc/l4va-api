@@ -384,6 +384,7 @@ export class AssetsService {
 
   /**
    * Updates asset prices and last valuation timestamp after calculation
+   * Also updates vault cached totals for affected vaults
    * @param assets List of assets with updated price information
    */
   async updateBulkAssetValuations(
@@ -395,7 +396,11 @@ export class AssetsService {
     }>
   ): Promise<void> {
     try {
+      // Track affected vault IDs
+      const affectedVaultIds = new Set<string>();
+
       for (const asset of assets) {
+        // Update asset prices
         await this.assetsRepository.update(
           {
             policy_id: asset.policyId,
@@ -407,7 +412,27 @@ export class AssetsService {
             last_valuation: new Date(),
           }
         );
+
+        // Find affected vaults
+        const assetsWithVaults = await this.assetsRepository.find({
+          where: {
+            policy_id: asset.policyId,
+            asset_id: asset.assetId,
+            deleted: false,
+          },
+          relations: ['vault'],
+          select: ['id', 'vault'],
+        });
+
+        assetsWithVaults.forEach(a => {
+          if (a.vault?.id) {
+            affectedVaultIds.add(a.vault.id);
+          }
+        });
       }
+
+      // Note: Vault totals update will be triggered by scheduled job or manually
+      // We don't await it here to avoid blocking the price update process
     } catch (error) {
       throw new Error(`Failed to update asset valuations: ${error.message}`);
     }

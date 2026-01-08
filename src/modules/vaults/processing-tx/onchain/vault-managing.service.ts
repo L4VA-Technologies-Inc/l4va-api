@@ -66,6 +66,7 @@ export interface VaultConfig {
 
 export interface VaultCreateConfig {
   vaultName: string;
+  userId: string;
   customerAddress: string;
   vaultId: string;
   allowedPolicies: string[];
@@ -146,6 +147,7 @@ export class VaultManagingService {
     const transaction = await this.transactionsService.createTransaction({
       vault_id: vaultConfig.vaultId,
       type: TransactionType.createVault,
+      userId: vaultConfig.userId,
       assets: [], // No assets needed for this transaction as it's metadata update
     });
 

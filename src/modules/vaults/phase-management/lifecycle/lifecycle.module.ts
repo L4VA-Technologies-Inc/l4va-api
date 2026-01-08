@@ -3,6 +3,8 @@ import { Module } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { VaultValuationService } from '../vault-valuation/vault-valuation.service';
+
 import { LifecycleService } from './lifecycle.service';
 
 import { Asset } from '@/database/asset.entity';
@@ -34,7 +36,7 @@ import { TreasureWalletModule } from '@/modules/vaults/treasure/treasure-wallet.
       name: 'phaseTransition',
     }),
   ],
-  providers: [LifecycleService, LifecycleProcessor],
-  exports: [],
+  providers: [LifecycleService, LifecycleProcessor, VaultValuationService],
+  exports: [VaultValuationService],
 })
 export class LifecycleModule {}

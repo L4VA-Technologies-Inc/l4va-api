@@ -15,10 +15,12 @@ export class DexHunterPricingService {
   private readonly logger = new Logger(DexHunterPricingService.name);
   private readonly dexHunterBaseUrl: string;
   private readonly dexHunterApiKey: string;
+  private readonly isMainnet: boolean;
 
   constructor(private readonly configService: ConfigService) {
     this.dexHunterBaseUrl = this.configService.get<string>('DEXHUNTER_BASE_URL');
     this.dexHunterApiKey = this.configService.get<string>('DEXHUNTER_API_KEY');
+    this.isMainnet = this.configService.get<string>('NETWORK') === 'mainnet';
   }
 
   /**
@@ -29,6 +31,12 @@ export class DexHunterPricingService {
    * @returns Token price in ADA, or null if token not found/no liquidity
    */
   async getTokenPrice(tokenId: string): Promise<number | null> {
+    // Skip API calls for testnet - DexHunter doesn't support preprod
+    if (!this.isMainnet) {
+      this.logger.debug(`Skipping DexHunter API call for testnet token ${tokenId}`);
+      return null;
+    }
+
     try {
       const response = await fetch(`${this.dexHunterBaseUrl}/swap/averagePrice/ADA/${tokenId}`, {
         method: 'GET',

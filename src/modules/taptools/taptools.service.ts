@@ -16,11 +16,13 @@ import { BlockfrostAddressTotalDto } from './dto/blockfrost-address.dto';
 import { PaginationQueryDto, PaginationMetaDto } from './dto/pagination.dto';
 import { WalletOverviewDto, PaginatedWalletSummaryDto } from './dto/wallet-summary.dto';
 
+import { Asset } from '@/database/asset.entity';
+import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
-import { AlertsService } from '@/modules/alerts/alerts.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
+import { VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class TaptoolsService {
@@ -49,9 +51,12 @@ export class TaptoolsService {
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(Asset)
+    private readonly assetRepository: Repository<Asset>,
+    @InjectRepository(Snapshot)
+    private readonly snapshotRepository: Repository<Snapshot>,
     private readonly assetsService: AssetsService,
     private readonly configService: ConfigService,
-    private readonly alertsService: AlertsService,
     private readonly dexHunterPricingService: DexHunterPricingService,
     private readonly wayUpPricingService: WayUpPricingService
   ) {
@@ -137,20 +142,6 @@ export class TaptoolsService {
     }
   }
 
-  async getWalletAssetsQuantity(walletAddress: string, assetId: string): Promise<number> {
-    try {
-      const addressTotal = await this.blockfrost.addressesTotal(walletAddress);
-      const balances = this.calculateBalances(addressTotal);
-      return balances.get(assetId) || 0;
-    } catch (err) {
-      this.logger.error(`Error fetching asset quantity for ${assetId}:`, err.message);
-      if (err.response?.status_code === 404) {
-        throw new HttpException('Wallet address not found', 404);
-      }
-      throw new HttpException('Failed to fetch asset quantity', 500);
-    }
-  }
-
   private calculateBalances(data: BlockfrostAddressTotalDto): Map<string, number> {
     const balances = new Map<string, number>();
 
@@ -196,7 +187,26 @@ export class TaptoolsService {
   private decodeAssetName(hexName: string): string {
     try {
       if (!hexName) return 'Unknown Asset';
-      return Buffer.from(hexName, 'hex').toString('utf8');
+
+      // Decode hex to buffer
+      const buffer = Buffer.from(hexName, 'hex');
+      const decoded = buffer.toString('utf8');
+
+      // Validate UTF-8: check for replacement characters
+      if (decoded.includes('\uFFFD')) {
+        // Contains replacement character - not valid UTF-8
+        return hexName;
+      }
+
+      // Validate round-trip: re-encode and compare
+      const reEncoded = Buffer.from(decoded, 'utf8').toString('hex');
+      if (reEncoded.toLowerCase() !== hexName.toLowerCase()) {
+        // Round-trip failed - not valid UTF-8
+        return hexName;
+      }
+
+      // Valid UTF-8 string
+      return decoded;
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (error) {
       return hexName || 'Unknown Asset';
@@ -231,6 +241,15 @@ export class TaptoolsService {
 
       if (cached) return cached;
 
+      // Skip external API calls for testnet - return fallback prices
+      if (!this.isMainnet) {
+        const fallbackPrice = 5.0; // Default testnet price
+        return {
+          priceAda: fallbackPrice,
+          priceUsd: fallbackPrice * adaPrice,
+        };
+      }
+
       // Route to appropriate API based on asset type
       if (isNFT) {
         try {
@@ -263,12 +282,138 @@ export class TaptoolsService {
   }
 
   /**
+   * Helper function to process promises with controlled concurrency
+   * @param items Array of items to process
+   * @param fn Async function to execute for each item
+   * @param concurrency Maximum number of concurrent operations
+   * @param delayMs Delay in milliseconds between batches
+   */
+  private async processWithConcurrency<T, R>(
+    items: T[],
+    fn: (item: T) => Promise<R>,
+    concurrency: number = 5,
+    delayMs: number = 100
+  ): Promise<R[]> {
+    const results: R[] = [];
+
+    for (let i = 0; i < items.length; i += concurrency) {
+      const batch = items.slice(i, i + concurrency);
+      const batchResults = await Promise.all(batch.map(item => fn(item)));
+      results.push(...batchResults);
+
+      // Add delay between batches to avoid rate limiting (except for last batch)
+      if (i + concurrency < items.length) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Update asset prices in database from DexHunter/WayUp APIs
+   * Updates dex_price for FTs and floor_price for NFTs
+   * Uses controlled concurrency to avoid overwhelming external APIs
+   * @param vaultIds Optional array of vault IDs to update assets for. If not provided, updates all active vaults
+   */
+  async updateAssetPrices(vaultIds?: string[]): Promise<void> {
+    try {
+      // Build query to get unique assets across specified vaults
+      let query = this.assetRepository
+        .createQueryBuilder('asset')
+        .select(['asset.policy_id', 'asset.asset_id', 'asset.type'])
+        .where('asset.status IN (:...statuses)', { statuses: [AssetStatus.PENDING, AssetStatus.LOCKED] })
+        .andWhere('asset.deleted = false')
+        .groupBy('asset.policy_id, asset.asset_id, asset.type');
+
+      if (vaultIds && vaultIds.length > 0) {
+        query = query.andWhere('asset.vault_id IN (:...vaultIds)', { vaultIds });
+      }
+
+      const uniqueAssets = await query.getRawMany();
+      this.logger.log(`Updating prices for ${uniqueAssets.length} unique assets`);
+
+      let updatedCount = 0;
+
+      // Process with controlled concurrency: 5 concurrent API calls, 100ms delay between batches
+      await this.processWithConcurrency(
+        uniqueAssets,
+        async asset => {
+          try {
+            const isNFT = asset.asset_type === AssetType.NFT;
+
+            // Skip lovelace
+            if (asset.asset_asset_id === 'lovelace') {
+              return;
+            }
+
+            let priceAda: number | null = null;
+
+            // Use hardcoded testnet prices if available
+            if (!this.isMainnet) {
+              priceAda = this.testnetPrices[asset.asset_policy_id] || 5.0;
+            } else if (isNFT) {
+              // Get floor price from WayUp for NFTs
+              try {
+                const { floorPriceAda } = await this.wayUpPricingService.getCollectionFloorPrice(asset.asset_policy_id);
+                priceAda = floorPriceAda > 0 ? floorPriceAda : null;
+              } catch (error) {
+                this.logger.debug(`Failed to get floor price for NFT ${asset.asset_policy_id}: ${error.message}`);
+              }
+            } else {
+              // Get DEX price from DexHunter for FTs
+              try {
+                const tokenPriceAda = await this.dexHunterPricingService.getTokenPrice(
+                  `${asset.asset_policy_id}${asset.asset_asset_id}`
+                );
+                priceAda = tokenPriceAda !== null && tokenPriceAda > 0 ? tokenPriceAda : null;
+              } catch (error) {
+                this.logger.debug(`Failed to get DEX price for FT ${asset.asset_policy_id}: ${error.message}`);
+              }
+            }
+
+            if (priceAda !== null) {
+              // Update all assets with this policy_id and asset_id
+              await this.assetRepository.update(
+                {
+                  policy_id: asset.asset_policy_id,
+                  asset_id: asset.asset_asset_id,
+                  deleted: false,
+                },
+                {
+                  [isNFT ? 'floor_price' : 'dex_price']: priceAda,
+                  last_valuation: new Date(),
+                }
+              );
+              updatedCount++;
+            }
+          } catch (error) {
+            this.logger.error(
+              `Error updating price for asset ${asset.asset_policy_id}.${asset.asset_asset_id}:`,
+              error.message
+            );
+          }
+        },
+        5, // Max 5 concurrent API calls
+        100 // 100ms delay between batches
+      );
+
+      this.logger.log(`Successfully updated prices for ${updatedCount} assets`);
+    } catch (error) {
+      this.logger.error('Error in updateAssetPrices:', error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Calculate the total value of all assets in a vault
+   * Uses cached prices from database (dex_price/floor_price)
+   * Set updatePrices=true only during phase transitions to fetch fresh prices
    * @param vaultId The ID of the vault
-   * @param phase The phase to filter assets by - 'contribute' for contributed assets, 'acquire' for invested assets
+   * @param updatePrices If true, fetches fresh prices from APIs. If false, uses cached prices
    * @returns Promise with the vault assets summary
    */
-  async calculateVaultAssetsValue(vaultId: string, updatePrices: boolean = true): Promise<VaultAssetsSummaryDto> {
+  async calculateVaultAssetsValue(vaultId: string, updatePrices: boolean = false): Promise<VaultAssetsSummaryDto> {
     // Get the vault to verify it exists
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
@@ -277,6 +422,11 @@ export class TaptoolsService {
 
     if (!vault) {
       throw new NotFoundException(`Vault with ID ${vaultId} not found`);
+    }
+
+    // If updatePrices is true, fetch fresh prices first
+    if (updatePrices) {
+      await this.updateAssetPrices([vaultId]);
     }
 
     const adaPrice = await this.getAdaPrice();
@@ -289,6 +439,7 @@ export class TaptoolsService {
         assetId: string;
         quantity: number;
         isNft: boolean;
+        cachedPrice?: number;
         metadata?: Record<string, unknown>;
       }
     >();
@@ -312,11 +463,15 @@ export class TaptoolsService {
       if (existingAsset) {
         existingAsset.quantity += asset.type === AssetType.NFT ? 1 : Number(asset.quantity);
       } else {
+        // Use cached price from database (dex_price for FTs, floor_price for NFTs)
+        const cachedPrice = asset.type === AssetType.NFT ? asset.floor_price : asset.dex_price;
+
         assetMap.set(key, {
           policyId: asset.policy_id,
           assetId: asset.asset_id,
           quantity: asset.type === AssetType.NFT ? 1 : Number(asset.quantity),
           isNft: asset.type === AssetType.NFT,
+          cachedPrice: cachedPrice ? Number(cachedPrice) : undefined,
           metadata: asset.metadata || {},
         });
       }
@@ -353,9 +508,20 @@ export class TaptoolsService {
           continue;
         }
 
-        const assetValue = await this.getAssetValue(asset.policyId, asset.assetId, asset.isNft);
-        const valueAda = assetValue?.priceAda || 0;
-        const valueUsd = assetValue?.priceUsd || 0;
+        // Use cached price if available and not updating prices
+        let valueAda = 0;
+        let valueUsd = 0;
+
+        if (asset.cachedPrice !== undefined && asset.cachedPrice > 0) {
+          // Use cached price from database
+          valueAda = asset.cachedPrice;
+          valueUsd = valueAda * adaPrice;
+        } else {
+          const assetValue = await this.getAssetValue(asset.policyId, asset.assetId, asset.isNft);
+          valueAda = assetValue?.priceAda || 0;
+          valueUsd = assetValue?.priceUsd || 0;
+        }
+
         const totalAssetValueAda = valueAda * asset.quantity;
         const totalAssetValueUsd = valueUsd * asset.quantity;
 
@@ -411,8 +577,291 @@ export class TaptoolsService {
   }
 
   /**
+   * Update cached vault totals for multiple vaults
+   * Also calculates user TVL and gains based on:
+   * - For locked vaults: VT token holdings (proportional ownership)
+   * - For active vaults: Contributed asset values
+   * For locked vaults, also calculates FDV/TVL ratio
+   * @param vaultIds Array of vault IDs to update
+   */
+  async updateMultipleVaultTotals(vaultIds: string[]): Promise<void> {
+    if (vaultIds.length === 0) return;
+
+    const batchResults = await this.batchCalculateVaultAssetsValue(vaultIds);
+    const adaPrice = await this.getAdaPrice();
+
+    const vaults: Pick<
+      Vault,
+      'id' | 'initial_total_value_ada' | 'vault_status' | 'ft_token_supply' | 'fdv' | 'owner'
+    >[] = await this.vaultRepository.find({
+      where: { id: In(vaultIds) },
+      relations: ['owner'],
+      select: ['id', 'initial_total_value_ada', 'vault_status', 'ft_token_supply', 'fdv', 'owner'],
+    });
+
+    const vaultMap = new Map(vaults.map(v => [v.id, v]));
+
+    // Update vault totals
+    const updatePromises = Array.from(batchResults.entries()).map(([vaultId, summary]) => {
+      const vault = vaultMap.get(vaultId);
+      let gainsAda = 0;
+      let gainsUsd = 0;
+
+      if (vault?.initial_total_value_ada && vault.initial_total_value_ada > 0) {
+        gainsAda = summary.totalValueAda - vault.initial_total_value_ada;
+        gainsUsd = gainsAda * adaPrice;
+      }
+
+      const updateData: any = {
+        total_assets_cost_ada: summary.totalValueAda,
+        total_assets_cost_usd: summary.totalValueUsd,
+        total_acquired_value_ada: summary.totalAcquiredAda,
+        gains_ada: gainsAda,
+        gains_usd: gainsUsd,
+        last_valuation_update: new Date(),
+      };
+
+      // Update FDV/TVL ratio for locked vaults
+      if (vault?.vault_status === VaultStatus.locked && vault.fdv && summary.totalValueAda > 0.0001) {
+        updateData.fdv_tvl = Number((vault.fdv / summary.totalValueAda).toFixed(2));
+      }
+
+      return this.vaultRepository.update({ id: vaultId }, updateData);
+    });
+
+    await Promise.all(updatePromises);
+
+    // Batch fetch all data needed to identify affected users
+    const activeVaultIds = Array.from(batchResults.keys()).filter(vaultId => {
+      const vault = vaultMap.get(vaultId);
+      return vault && (vault.vault_status === VaultStatus.contribution || vault.vault_status === VaultStatus.acquire);
+    });
+
+    const lockedVaultIds = Array.from(batchResults.keys()).filter(vaultId => {
+      const vault = vaultMap.get(vaultId);
+      return vault && vault.vault_status === VaultStatus.locked;
+    });
+
+    // Batch query: Get all contributors for active vaults
+    const contributorsRaw =
+      activeVaultIds.length > 0
+        ? await this.assetRepository
+            .createQueryBuilder('asset')
+            .select(['asset.vault_id as vault_id', 'asset.added_by as added_by'])
+            .where('asset.vault_id IN (:...vaultIds)', { vaultIds: activeVaultIds })
+            .andWhere('asset.status IN (:...statuses)', { statuses: [AssetStatus.LOCKED, AssetStatus.DISTRIBUTED] })
+            .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
+            .andWhere('asset.added_by IS NOT NULL')
+            .distinct(true)
+            .getRawMany()
+        : [];
+
+    // Batch query: Get all snapshots for locked vaults (latest per vault)
+    const snapshots =
+      lockedVaultIds.length > 0
+        ? await this.snapshotRepository
+            .createQueryBuilder('snapshot')
+            .distinctOn(['snapshot.vault_id'])
+            .where('snapshot.vault_id IN (:...vaultIds)', { vaultIds: lockedVaultIds })
+            .orderBy('snapshot.vault_id', 'ASC')
+            .addOrderBy('snapshot.created_at', 'DESC')
+            .getMany()
+        : [];
+
+    // Collect all unique addresses from snapshots
+    const snapshotAddresses = new Set<string>();
+    snapshots.forEach(snapshot => {
+      if (snapshot.addressBalances) {
+        Object.keys(snapshot.addressBalances).forEach(addr => snapshotAddresses.add(addr));
+      }
+    });
+
+    // Batch query: Get all users by addresses
+    const usersByAddress =
+      snapshotAddresses.size > 0
+        ? await this.userRepository.find({
+            where: { address: In([...snapshotAddresses]) },
+            select: ['id', 'address'],
+          })
+        : [];
+
+    const addressToUserIdMap = new Map(usersByAddress.map(u => [u.address, u.id]));
+
+    // Identify affected users
+    const affectedUserIds = new Set<string>();
+
+    // Add vault owners
+    vaultMap.forEach(vault => {
+      if (vault.owner?.id) affectedUserIds.add(vault.owner.id);
+    });
+
+    // Add contributors
+    contributorsRaw.forEach(c => {
+      if (c.added_by) affectedUserIds.add(c.added_by);
+    });
+
+    // Add VT token holders
+    snapshots.forEach(snapshot => {
+      if (snapshot.addressBalances) {
+        Object.keys(snapshot.addressBalances).forEach(address => {
+          const userId = addressToUserIdMap.get(address);
+          if (userId) affectedUserIds.add(userId);
+        });
+      }
+    });
+
+    // Recalculate complete TVL and gains for all affected users from ALL their vaults
+    if (affectedUserIds.size > 0) {
+      this.logger.log(`Recalculating complete TVL and gains for ${affectedUserIds.size} affected users`);
+
+      // Batch query: Get all relevant vaults
+      const allRelevantVaults = await this.vaultRepository.find({
+        where: {
+          deleted: false,
+          vault_status: In([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked]),
+        },
+        relations: ['owner'],
+        select: ['id', 'vault_status', 'ft_token_supply', 'ft_token_decimals', 'initial_total_value_ada', 'owner'],
+      });
+
+      // Batch query: Get all vault values at once
+      const allVaultIds = allRelevantVaults.map(v => v.id);
+      const allVaultValues = await this.batchCalculateVaultAssetsValue(allVaultIds);
+
+      // Batch query: Get all snapshots for locked vaults
+      const allLockedVaultIds = allRelevantVaults.filter(v => v.vault_status === VaultStatus.locked).map(v => v.id);
+      const allSnapshots =
+        allLockedVaultIds.length > 0
+          ? await this.snapshotRepository
+              .createQueryBuilder('snapshot')
+              .distinctOn(['snapshot.vault_id'])
+              .where('snapshot.vault_id IN (:...vaultIds)', { vaultIds: allLockedVaultIds })
+              .orderBy('snapshot.vault_id', 'ASC')
+              .addOrderBy('snapshot.created_at', 'DESC')
+              .getMany()
+          : [];
+
+      const snapshotByVaultId = new Map(allSnapshots.map(s => [s.vaultId, s]));
+
+      // Batch query: Get all users with their addresses
+      const allUsers = await this.userRepository.find({
+        where: { id: In([...affectedUserIds]) },
+        select: ['id', 'address'],
+      });
+      const userMap = new Map(allUsers.map(u => [u.id, u]));
+
+      // Batch query: Get all contributed assets for all users and active vaults
+      const allActiveVaultIds = allRelevantVaults
+        .filter(v => v.vault_status === VaultStatus.contribution || v.vault_status === VaultStatus.acquire)
+        .map(v => v.id);
+
+      const allContributedAssets =
+        allActiveVaultIds.length > 0
+          ? await this.assetRepository.find({
+              where: {
+                vault: { id: In(allActiveVaultIds) },
+                added_by: { id: In([...affectedUserIds]) },
+                status: In([AssetStatus.LOCKED, AssetStatus.DISTRIBUTED]),
+                origin_type: AssetOriginType.CONTRIBUTED,
+              },
+              select: ['vault', 'added_by', 'quantity', 'dex_price', 'floor_price', 'type'],
+              relations: ['vault', 'added_by'],
+            })
+          : [];
+
+      // Group contributed assets by user and vault
+      const assetsByUserAndVault = new Map<string, Map<string, typeof allContributedAssets>>();
+      allContributedAssets.forEach(asset => {
+        const userId = asset.added_by.id;
+        const vaultId = asset.vault.id;
+
+        if (!assetsByUserAndVault.has(userId)) {
+          assetsByUserAndVault.set(userId, new Map());
+        }
+        if (!assetsByUserAndVault.get(userId).has(vaultId)) {
+          assetsByUserAndVault.get(userId).set(vaultId, []);
+        }
+        assetsByUserAndVault.get(userId).get(vaultId).push(asset);
+      });
+
+      // Calculate TVL and gains for each user
+      const userUpdates: Array<{ id: string; tvl: number; gains: number }> = [];
+
+      for (const userId of affectedUserIds) {
+        const user = userMap.get(userId);
+        if (!user) continue;
+
+        const userTvl = { tvl: 0, gains: 0 };
+
+        // Calculate from all vaults
+        for (const vault of allRelevantVaults) {
+          const summary = allVaultValues.get(vault.id);
+          if (!summary) continue;
+
+          if (vault.vault_status === VaultStatus.locked) {
+            // Get user's share from VT token holdings
+            const snapshot = snapshotByVaultId.get(vault.id);
+
+            if (snapshot?.addressBalances && vault.ft_token_supply) {
+              const vtBalance = Number(snapshot.addressBalances[user.address] || 0);
+              if (vtBalance > 0) {
+                // VT tokens in snapshot are in smallest units (e.g., 1000000 for 1 token with 6 decimals)
+                // ft_token_supply might be in human-readable units (e.g., 1 instead of 1000000)
+                // We need to normalize both to the same unit using ft_token_decimals
+                const decimals = vault.ft_token_decimals || 6; // Default to 6 if not set
+                const ftSupplySmallestUnits = Number(vault.ft_token_supply) * Math.pow(10, decimals);
+
+                // Guard against invalid or zero supply to avoid division by zero
+                if (!Number.isFinite(ftSupplySmallestUnits) || ftSupplySmallestUnits <= 0) {
+                  continue;
+                }
+                // Now both are in smallest units
+                const userShare = vtBalance / ftSupplySmallestUnits;
+
+                // Validate share is reasonable (0-100%)
+                if (userShare > 1 || userShare < 0) {
+                  continue;
+                }
+
+                const userVaultTvl = userShare * summary.totalValueAda;
+                userTvl.tvl += userVaultTvl;
+
+                // Calculate proportional gains (including negative)
+                if (vault.initial_total_value_ada !== null && vault.initial_total_value_ada !== undefined) {
+                  const initialUserValue = userShare * vault.initial_total_value_ada;
+                  const vaultGains = userVaultTvl - initialUserValue;
+                  userTvl.gains += vaultGains;
+                }
+              }
+            }
+          } else if (vault.vault_status === VaultStatus.contribution || vault.vault_status === VaultStatus.acquire) {
+            // Get contributed asset values from pre-loaded data
+            const userVaultAssets = assetsByUserAndVault.get(userId)?.get(vault.id);
+            if (userVaultAssets) {
+              for (const asset of userVaultAssets) {
+                const price = asset.type === AssetType.NFT ? asset.floor_price || 0 : asset.dex_price || 0;
+                userTvl.tvl += Number(asset.quantity) * price;
+              }
+            }
+          }
+        }
+
+        userUpdates.push({ id: userId, tvl: userTvl.tvl, gains: userTvl.gains });
+      }
+
+      // Batch update all users
+      await Promise.all(
+        userUpdates.map(update =>
+          this.userRepository.update({ id: update.id }, { tvl: update.tvl, gains: update.gains })
+        )
+      );
+    }
+  }
+
+  /**
    * Batch calculate vault assets values for multiple vaults
    * Much more efficient than calling calculateVaultAssetsValue() for each vault
+   * Uses cached prices from database (dex_price/floor_price)
    * @param vaultIds Array of vault IDs to calculate values for
    * @returns Map of vaultId -> asset summary
    */
@@ -440,7 +889,7 @@ export class TaptoolsService {
         let totalValueUsd = 0;
         let totalAcquiredAda = 0;
 
-        // Group assets by policyId and assetId
+        // Group assets by policyId and assetId with cached prices
         const assetMap = new Map<
           string,
           {
@@ -448,6 +897,7 @@ export class TaptoolsService {
             assetId: string;
             quantity: number;
             isNft: boolean;
+            cachedPrice?: number;
           }
         >();
 
@@ -477,16 +927,20 @@ export class TaptoolsService {
               existingAsset.quantity += Number(asset.quantity);
             }
           } else {
+            // Use cached price from database
+            const cachedPrice = asset.type === AssetType.NFT ? asset.floor_price : asset.dex_price;
+
             assetMap.set(key, {
               policyId: asset.policy_id,
               assetId: asset.asset_id,
               quantity: asset.type === AssetType.NFT ? 1 : Number(asset.quantity),
               isNft: asset.type === AssetType.NFT,
+              cachedPrice: cachedPrice ? Number(cachedPrice) : undefined,
             });
           }
         }
 
-        // Calculate values for all assets
+        // Calculate values for all assets using cached prices
         const assets = Array.from(assetMap.values());
 
         for (const asset of assets) {
@@ -499,13 +953,18 @@ export class TaptoolsService {
               continue;
             }
 
-            // Get asset value
-            const assetValue = await this.getAssetValue(asset.policyId, asset.assetId, asset.isNft);
-            const valueAda = assetValue?.priceAda || 0;
-            const valueUsd = assetValue?.priceUsd || 0;
+            // Use cached price if available
+            let valueAda = 0;
+
+            if (asset.cachedPrice !== undefined && asset.cachedPrice > 0) {
+              valueAda = asset.cachedPrice;
+            } else {
+              const assetValue = await this.getAssetValue(asset.policyId, asset.assetId, asset.isNft);
+              valueAda = assetValue?.priceAda || 0;
+            }
 
             totalValueAda += valueAda * asset.quantity;
-            totalValueUsd += valueUsd * asset.quantity;
+            totalValueUsd += valueAda * adaPrice * asset.quantity;
           } catch (error) {
             // Skip assets that can't be valued
             this.logger.debug(`Could not value asset ${asset.policyId}.${asset.assetId}: ${error.message}`);
@@ -757,12 +1216,6 @@ export class TaptoolsService {
 
     return processedAssets;
   }
-
-  /**
-   * Get unique policy IDs from wallet
-   *
-   * (Implement better logic to exclude FTs)
-   */
 
   /**
    * Determine if an asset is an NFT or Fungible Token

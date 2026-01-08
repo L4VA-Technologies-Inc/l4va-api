@@ -4,6 +4,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { TaptoolsController } from './taptools.controller';
 import { TaptoolsService } from './taptools.service';
 
+import { Asset } from '@/database/asset.entity';
+import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AlertsModule } from '@/modules/alerts/alerts.module';
@@ -13,7 +15,7 @@ import { WayUpPricingModule } from '@/modules/wayup/wayup-pricing.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Vault, User]),
+    TypeOrmModule.forFeature([Vault, User, Asset, Snapshot]),
     AlertsModule,
     AssetsModule,
     DexHunterPricingModule,

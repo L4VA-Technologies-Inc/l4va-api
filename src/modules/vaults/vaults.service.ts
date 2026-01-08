@@ -487,6 +487,7 @@ export class VaultsService {
           valueMethod: valueMethod,
           assetWindow,
           acquireWindow,
+          userId: finalVault.owner.id,
         });
 
       finalVault.contract_address = contractAddress;

@@ -72,7 +72,7 @@ export class User {
   total_vaults: number;
 
   @Expose({ name: 'gains' })
-  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
+  @Column({ type: 'decimal', precision: 20, scale: 2, default: 0 })
   gains: number;
 
   @Column({ name: 'deleted', type: 'boolean', nullable: false, default: false })

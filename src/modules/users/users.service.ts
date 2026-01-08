@@ -160,6 +160,32 @@ export class UsersService {
     plainedUsers.totalValueUsd = parseFloat((user.tvl * (await this.taptoolsService.getAdaPrice())).toFixed(2));
     plainedUsers.totalValueAda = user.tvl;
 
+    // Calculate gains as percentage: (gains / initial_investment) * 100
+    // initial_investment = current_value - gains
+    const gainsAda = user.gains || 0;
+    const currentTvl = user.tvl || 0;
+
+    let gainsPercentage = 0;
+
+    if (currentTvl > 0 && gainsAda !== 0) {
+      const initialInvestment = currentTvl - gainsAda;
+
+      // Handle edge cases
+      if (initialInvestment > 0) {
+        // Normal case: handles both gains and losses
+        // Example: invested 1000, now has 1200 → gains = 200, percentage = 20%
+        // Example: invested 1000, now has 800 → gains = -200, percentage = -20%
+        gainsPercentage = parseFloat(((gainsAda / initialInvestment) * 100).toFixed(2));
+      } else if (initialInvestment === 0 && gainsAda > 0) {
+        // Edge case: gains with zero initial investment (e.g., airdrops, rewards)
+        // Cap at a reasonable maximum to avoid division by zero
+        gainsPercentage = 99999.99;
+      }
+      // else: data inconsistency (initialInvestment <= 0 with losses), return 0
+    }
+
+    plainedUsers.gains = gainsPercentage;
+
     return plainToInstance(PublicProfileRes, plainedUsers, { excludeExtraneousValues: true });
   }
 
