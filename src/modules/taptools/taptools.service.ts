@@ -238,6 +238,15 @@ export class TaptoolsService {
 
       if (cached) return cached;
 
+      // Skip external API calls for testnet - return fallback prices
+      if (!this.isMainnet) {
+        const fallbackPrice = 5.0; // Default testnet price
+        return {
+          priceAda: fallbackPrice,
+          priceUsd: fallbackPrice * adaPrice,
+        };
+      }
+
       // Route to appropriate API based on asset type
       if (isNFT) {
         try {

@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 
 import { GetCollectionAssetsQuery, GetCollectionAssetsResponse } from './wayup.types';
 
@@ -10,8 +11,11 @@ import { GetCollectionAssetsQuery, GetCollectionAssetsResponse } from './wayup.t
 export class WayUpPricingService {
   private readonly logger = new Logger(WayUpPricingService.name);
   private readonly baseUrl = 'https://prod.api.ada-anvil.app/marketplace/api/get-collection-assets';
+  private readonly isMainnet: boolean;
 
-  constructor() {}
+  constructor(private readonly configService: ConfigService) {
+    this.isMainnet = this.configService.get<string>('NETWORK') === 'mainnet';
+  }
 
   /**
    * Get collection assets with pricing from WayUp Marketplace
@@ -70,6 +74,16 @@ export class WayUpPricingService {
     floorPriceAda: number | null; // ADA
     hasListings: boolean;
   }> {
+    // Skip API calls for testnet - WayUp doesn't support preprod
+    if (!this.isMainnet) {
+      this.logger.debug(`Skipping WayUp API call for testnet collection ${policyId}`);
+      return {
+        floorPrice: null,
+        floorPriceAda: null,
+        hasListings: false,
+      };
+    }
+
     try {
       // Query the collection for the cheapest listing
       const response = await this.getCollectionAssets({

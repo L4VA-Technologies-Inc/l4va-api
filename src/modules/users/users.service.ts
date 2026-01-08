@@ -163,8 +163,30 @@ export class UsersService {
     // Calculate gains as percentage: (gains / initial_investment) * 100
     // initial_investment = current_value - gains
     const gainsAda = user.gains || 0;
-    const initialInvestment = user.tvl - gainsAda;
-    plainedUsers.gains = initialInvestment > 0 ? parseFloat(((gainsAda / initialInvestment) * 100).toFixed(2)) : 0;
+    const currentTvl = user.tvl || 0;
+
+    let gainsPercentage = 0;
+
+    if (currentTvl > 0 && gainsAda !== 0) {
+      const initialInvestment = currentTvl - gainsAda;
+
+      // Handle edge cases
+      if (initialInvestment > 0) {
+        // Normal case: positive initial investment
+        gainsPercentage = parseFloat(((gainsAda / initialInvestment) * 100).toFixed(2));
+      } else if (initialInvestment === 0 && gainsAda > 0) {
+        // Edge case: 100% gains from zero investment (e.g., airdrops, rewards)
+        // Cap at a reasonable maximum
+        gainsPercentage = 99999.99;
+      } else if (gainsAda < 0) {
+        // Negative gains (losses)
+        const absoluteInitialInvestment = Math.abs(initialInvestment);
+        gainsPercentage = parseFloat(((gainsAda / absoluteInitialInvestment) * 100).toFixed(2));
+      }
+      // else: initialInvestment < 0 and gainsAda > 0 - data inconsistency, return 0
+    }
+
+    plainedUsers.gains = gainsPercentage;
 
     return plainToInstance(PublicProfileRes, plainedUsers, { excludeExtraneousValues: true });
   }
