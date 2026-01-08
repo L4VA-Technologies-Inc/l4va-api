@@ -172,18 +172,16 @@ export class UsersService {
 
       // Handle edge cases
       if (initialInvestment > 0) {
-        // Normal case: positive initial investment
+        // Normal case: handles both gains and losses
+        // Example: invested 1000, now has 1200 → gains = 200, percentage = 20%
+        // Example: invested 1000, now has 800 → gains = -200, percentage = -20%
         gainsPercentage = parseFloat(((gainsAda / initialInvestment) * 100).toFixed(2));
       } else if (initialInvestment === 0 && gainsAda > 0) {
-        // Edge case: 100% gains from zero investment (e.g., airdrops, rewards)
-        // Cap at a reasonable maximum
+        // Edge case: gains with zero initial investment (e.g., airdrops, rewards)
+        // Cap at a reasonable maximum to avoid division by zero
         gainsPercentage = 99999.99;
-      } else if (gainsAda < 0) {
-        // Negative gains (losses)
-        const absoluteInitialInvestment = Math.abs(initialInvestment);
-        gainsPercentage = parseFloat(((gainsAda / absoluteInitialInvestment) * 100).toFixed(2));
       }
-      // else: initialInvestment < 0 and gainsAda > 0 - data inconsistency, return 0
+      // else: data inconsistency (initialInvestment <= 0 with losses), return 0
     }
 
     plainedUsers.gains = gainsPercentage;
