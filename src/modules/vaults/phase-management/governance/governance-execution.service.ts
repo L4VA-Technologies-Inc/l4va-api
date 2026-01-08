@@ -13,8 +13,8 @@ import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { WayUpService } from '@/modules/wayup/wayup.service';
-import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { ClaimType } from '@/types/claim.types';
+import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 
 @Injectable()
 export class GovernanceExecutionService {
@@ -125,7 +125,9 @@ export class GovernanceExecutionService {
       const proposal = await this.proposalRepository.findOne({
         where: { id: proposalId, status: ProposalStatus.ACTIVE },
         relations: {
-          vault: true,
+          vault: {
+            owner: true,
+          },
           votes: true,
         },
         select: {
@@ -134,9 +136,15 @@ export class GovernanceExecutionService {
           status: true,
           proposalType: true,
           metadata: true,
+          title: true,
+          creatorId: true,
           vault: {
             id: true,
+            name: true,
             execution_threshold: true,
+            owner: {
+              address: true,
+            },
           },
           votes: {
             voteWeight: true,
@@ -171,18 +179,18 @@ export class GovernanceExecutionService {
         await this.proposalRepository.update({ id: proposalId }, { status: newStatus });
         if (newStatus === ProposalStatus.EXECUTED) {
           this.eventEmitter.emit('proposal.executed', {
-            address: proposal.vault.owner.address,
+            address: proposal.vault?.owner?.address || null,
             vaultId: proposal.vaultId,
-            vaultName: proposal.vault.name,
+            vaultName: proposal.vault?.name || null,
             proposalName: proposal.title,
             creatorId: proposal.creatorId,
             tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
           });
         } else {
           this.eventEmitter.emit('proposal.rejected', {
-            address: proposal.vault.owner.address,
+            address: proposal.vault?.owner?.address || null,
             vaultId: proposal.vaultId,
-            vaultName: proposal.vault.name,
+            vaultName: proposal.vault?.name || null,
             proposalName: proposal.title,
             creatorId: proposal.creatorId,
             tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
@@ -236,9 +244,9 @@ export class GovernanceExecutionService {
           return false;
       }
       this.eventEmitter.emit('proposal.started', {
-        address: proposal.vault.owner.address,
+        address: proposal.vault?.owner?.address || null,
         vaultId: proposal.vaultId,
-        vaultName: proposal.vault.name,
+        vaultName: proposal.vault?.name || null,
         proposalName: proposal.title,
         creatorId: proposal.creatorId,
         tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
@@ -247,9 +255,9 @@ export class GovernanceExecutionService {
       return true;
     } catch (error) {
       this.eventEmitter.emit('proposal.failed', {
-        address: proposal.vault.owner.address,
+        address: proposal.vault?.owner?.address || null,
         vaultId: proposal.vaultId,
-        vaultName: proposal.vault.name,
+        vaultName: proposal.vault?.name || null,
         proposalName: proposal.title,
         creatorId: proposal.creatorId,
         tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
