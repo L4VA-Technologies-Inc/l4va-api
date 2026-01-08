@@ -26,7 +26,7 @@ export class VaultValuationService {
    * Update asset prices and vault totals for active vaults every 30 minutes
    * 1. Updates asset prices from APIs (DexHunter/WayUp)
    * 2. Recalculates vault totals, gains, and FDV/TVL using new prices
-   * Only updates vaults in contribution, acquire, or governance phases
+   * Only updates vaults in contribution, acquire, or locked phases
    */
   @Cron(CronExpression.EVERY_30_MINUTES)
   async updateActiveVaultTotals(): Promise<void> {
