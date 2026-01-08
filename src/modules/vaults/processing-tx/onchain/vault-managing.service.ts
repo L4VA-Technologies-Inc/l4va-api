@@ -669,6 +669,8 @@ export class VaultManagingService {
           quantity: this.systemSettingsService.vlrmCreatorFee,
           status: AssetStatus.LOCKED,
           origin_type: AssetOriginType.FEE,
+          decimals: 4, // VLRM has 4 decimal places
+          name: 'VLRM',
           transaction: { id: signedTx.txId },
           added_by: { id: ownerId },
           image: 'ipfs://QmdYu513Bu7nfKV5LKP6cmpZ8HHXifQLH6FTTzv3VbbqwP', // VLRM logo
