@@ -187,7 +187,26 @@ export class TaptoolsService {
   private decodeAssetName(hexName: string): string {
     try {
       if (!hexName) return 'Unknown Asset';
-      return Buffer.from(hexName, 'hex').toString('utf8');
+
+      // Decode hex to buffer
+      const buffer = Buffer.from(hexName, 'hex');
+      const decoded = buffer.toString('utf8');
+
+      // Validate UTF-8: check for replacement characters
+      if (decoded.includes('\uFFFD')) {
+        // Contains replacement character - not valid UTF-8
+        return hexName;
+      }
+
+      // Validate round-trip: re-encode and compare
+      const reEncoded = Buffer.from(decoded, 'utf8').toString('hex');
+      if (reEncoded.toLowerCase() !== hexName.toLowerCase()) {
+        // Round-trip failed - not valid UTF-8
+        return hexName;
+      }
+
+      // Valid UTF-8 string
+      return decoded;
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (error) {
       return hexName || 'Unknown Asset';
