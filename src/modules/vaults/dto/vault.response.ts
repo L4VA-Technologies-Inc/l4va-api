@@ -477,6 +477,20 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   cosigningThreshold?: number;
 
+  @ApiProperty({ description: 'Gains in ADA', required: false })
+  @DtoRepresent({
+    transform: ({ value }) => (value ? Number(value) : null),
+    expose: { name: 'gainsAda' },
+  })
+  gainsAda?: number;
+
+  @ApiProperty({ description: 'Gains in USD', required: false })
+  @DtoRepresent({
+    transform: ({ value }) => (value ? Number(value) : null),
+    expose: { name: 'gainsUsd' },
+  })
+  gainsUsd?: number;
+
   @ApiProperty({ description: 'Assets whitelist', type: [AssetsWhitelistEntity], required: false })
   @DtoRepresent({
     transform: false,
