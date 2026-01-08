@@ -20,7 +20,6 @@ import { Asset } from '@/database/asset.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
-import { AlertsService } from '@/modules/alerts/alerts.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { VaultStatus } from '@/types/vault.types';
@@ -36,15 +35,15 @@ export class TaptoolsService {
   private readonly testnetPrices = {
     f61a534fd4484b4b58d5ff18cb77cfc9e74ad084a18c0409321c811a: 0.00526,
     ed8145e0a4b8b54967e8f7700a5ee660196533ded8a55db620cc6a37: 0.00374,
-    '755457ffd6fffe7b20b384d002be85b54a0b3820181f19c5f9032c2e': 250.0,
+    '755457ffd6fffe7b20b384d002be85b54a0b3820181f19c5f9032c2e': 20.0,
     fd948c7248ecef7654f77a0264a188dccc76bae5b73415fc51824cf3: 19000.0,
-    add6529cc60380af5d51566e32925287b5b04328332652ccac8de0a9: 36.0,
-    '4e529151fe66164ebcf52f81033eb0ec55cc012cb6c436104b30fa36': 69.0,
-    '0b89a746fd2d859e0b898544487c17d9ac94b187ea4c74fd0bfbab16': 3400.0,
-    '436ca2e51fa2887fa306e8f6aa0c8bda313dd5882202e21ae2972ac8': 115.93,
-    '0d27d4483fc9e684193466d11bc6d90a0ff1ab10a12725462197188a': 188.57,
-    '53173a3d7ae0a0015163cc55f9f1c300c7eab74da26ed9af8c052646': 100000.0,
-    '91918871f0baf335d32be00af3f0604a324b2e0728d8623c0d6e2601': 250000.0,
+    add6529cc60380af5d51566e32925287b5b04328332652ccac8de0a9: 16.0,
+    '4e529151fe66164ebcf52f81033eb0ec55cc012cb6c436104b30fa36': 9.0,
+    '0b89a746fd2d859e0b898544487c17d9ac94b187ea4c74fd0bfbab16': 400.0,
+    '436ca2e51fa2887fa306e8f6aa0c8bda313dd5882202e21ae2972ac8': 15.93,
+    '0d27d4483fc9e684193466d11bc6d90a0ff1ab10a12725462197188a': 88.57,
+    '53173a3d7ae0a0015163cc55f9f1c300c7eab74da26ed9af8c052646': 10000.0,
+    '91918871f0baf335d32be00af3f0604a324b2e0728d8623c0d6e2601': 25000.0,
   };
 
   constructor(
@@ -58,7 +57,6 @@ export class TaptoolsService {
     private readonly snapshotRepository: Repository<Snapshot>,
     private readonly assetsService: AssetsService,
     private readonly configService: ConfigService,
-    private readonly alertsService: AlertsService,
     private readonly dexHunterPricingService: DexHunterPricingService,
     private readonly wayUpPricingService: WayUpPricingService
   ) {
@@ -141,20 +139,6 @@ export class TaptoolsService {
       // Use fallback price instead of throwing error
       this.logger.warn(`Using fallback ADA price: ${fallbackPrice}`);
       return fallbackPrice;
-    }
-  }
-
-  async getWalletAssetsQuantity(walletAddress: string, assetId: string): Promise<number> {
-    try {
-      const addressTotal = await this.blockfrost.addressesTotal(walletAddress);
-      const balances = this.calculateBalances(addressTotal);
-      return balances.get(assetId) || 0;
-    } catch (err) {
-      this.logger.error(`Error fetching asset quantity for ${assetId}:`, err.message);
-      if (err.response?.status_code === 404) {
-        throw new HttpException('Wallet address not found', 404);
-      }
-      throw new HttpException('Failed to fetch asset quantity', 500);
     }
   }
 
@@ -486,7 +470,6 @@ export class TaptoolsService {
           valueAda = asset.cachedPrice;
           valueUsd = valueAda * adaPrice;
         } else {
-          // Fallback to API if no cached price (shouldn't happen if updateAssetPrices ran)
           const assetValue = await this.getAssetValue(asset.policyId, asset.assetId, asset.isNft);
           valueAda = assetValue?.priceAda || 0;
           valueUsd = assetValue?.priceUsd || 0;
@@ -551,27 +534,25 @@ export class TaptoolsService {
    * Also calculates user TVL and gains based on:
    * - For locked vaults: VT token holdings (proportional ownership)
    * - For active vaults: Contributed asset values
-   * For locked vaults, also calculates FDV and FDV/TVL ratio
+   * For locked vaults, also calculates FDV/TVL ratio
    * @param vaultIds Array of vault IDs to update
    */
   async updateMultipleVaultTotals(vaultIds: string[]): Promise<void> {
     if (vaultIds.length === 0) return;
 
-    this.logger.log(`Updating totals for ${vaultIds.length} vaults`);
-
     const batchResults = await this.batchCalculateVaultAssetsValue(vaultIds);
     const adaPrice = await this.getAdaPrice();
 
-    // Get vaults with their initial values, status, fdv, and token supply
-    const vaults = await this.vaultRepository.find({
+    const vaults: Pick<
+      Vault,
+      'id' | 'initial_total_value_ada' | 'vault_status' | 'ft_token_supply' | 'fdv' | 'owner'
+    >[] = await this.vaultRepository.find({
       where: { id: In(vaultIds) },
       relations: ['owner'],
       select: ['id', 'initial_total_value_ada', 'vault_status', 'ft_token_supply', 'fdv', 'owner'],
     });
 
     const vaultMap = new Map(vaults.map(v => [v.id, v]));
-    const userTvlMap = new Map<string, number>();
-    const userGainsMap = new Map<string, number>();
 
     // Update vault totals
     const updatePromises = Array.from(batchResults.entries()).map(([vaultId, summary]) => {
@@ -603,120 +584,226 @@ export class TaptoolsService {
 
     await Promise.all(updatePromises);
 
-    // Calculate user TVL and gains based on vault status
-    for (const [vaultId, summary] of batchResults.entries()) {
+    // Batch fetch all data needed to identify affected users
+    const activeVaultIds = Array.from(batchResults.keys()).filter(vaultId => {
       const vault = vaultMap.get(vaultId);
-      if (!vault) continue;
+      return vault && (vault.vault_status === VaultStatus.contribution || vault.vault_status === VaultStatus.acquire);
+    });
 
-      if (vault.vault_status === VaultStatus.locked) {
-        // For locked vaults: Calculate TVL based on VT token holdings
-        await this.calculateLockedVaultUserTvl(vault, summary.totalValueAda, userTvlMap, userGainsMap);
-      } else if (vault.vault_status === VaultStatus.contribution || vault.vault_status === VaultStatus.acquire) {
-        // For active vaults: Calculate TVL based on contributed assets
-        await this.calculateActiveVaultUserTvl(vaultId, userTvlMap);
+    const lockedVaultIds = Array.from(batchResults.keys()).filter(vaultId => {
+      const vault = vaultMap.get(vaultId);
+      return vault && vault.vault_status === VaultStatus.locked;
+    });
+
+    // Batch query: Get all contributors for active vaults
+    const contributorsRaw =
+      activeVaultIds.length > 0
+        ? await this.assetRepository
+            .createQueryBuilder('asset')
+            .select(['asset.vault_id as vault_id', 'asset.added_by as added_by'])
+            .where('asset.vault_id IN (:...vaultIds)', { vaultIds: activeVaultIds })
+            .andWhere('asset.status IN (:...statuses)', { statuses: [AssetStatus.LOCKED, AssetStatus.DISTRIBUTED] })
+            .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
+            .andWhere('asset.added_by IS NOT NULL')
+            .distinct(true)
+            .getRawMany()
+        : [];
+
+    // Batch query: Get all snapshots for locked vaults (latest per vault)
+    const snapshots =
+      lockedVaultIds.length > 0
+        ? await this.snapshotRepository
+            .createQueryBuilder('snapshot')
+            .distinctOn(['snapshot.vault_id'])
+            .where('snapshot.vault_id IN (:...vaultIds)', { vaultIds: lockedVaultIds })
+            .orderBy('snapshot.vault_id', 'ASC')
+            .addOrderBy('snapshot.created_at', 'DESC')
+            .getMany()
+        : [];
+
+    // Collect all unique addresses from snapshots
+    const snapshotAddresses = new Set<string>();
+    snapshots.forEach(snapshot => {
+      if (snapshot.addressBalances) {
+        Object.keys(snapshot.addressBalances).forEach(addr => snapshotAddresses.add(addr));
       }
-    }
+    });
 
-    // Update user TVL and gains
-    if (userTvlMap.size > 0 || userGainsMap.size > 0) {
-      const allUserIds = new Set([...userTvlMap.keys(), ...userGainsMap.keys()]);
-      const userUpdatePromises = Array.from(allUserIds).map(userId => {
-        const updateData: any = {};
-        if (userTvlMap.has(userId)) {
-          updateData.tvl = userTvlMap.get(userId);
-        }
-        if (userGainsMap.has(userId)) {
-          updateData.gains = userGainsMap.get(userId);
-        }
-        return this.userRepository.update({ id: userId }, updateData);
+    // Batch query: Get all users by addresses
+    const usersByAddress =
+      snapshotAddresses.size > 0
+        ? await this.userRepository.find({
+            where: { address: In([...snapshotAddresses]) },
+            select: ['id', 'address'],
+          })
+        : [];
+
+    const addressToUserIdMap = new Map(usersByAddress.map(u => [u.address, u.id]));
+
+    // Identify affected users
+    const affectedUserIds = new Set<string>();
+
+    // Add vault owners
+    vaultMap.forEach(vault => {
+      if (vault.owner?.id) affectedUserIds.add(vault.owner.id);
+    });
+
+    // Add contributors
+    contributorsRaw.forEach(c => {
+      if (c.added_by) affectedUserIds.add(c.added_by);
+    });
+
+    // Add VT token holders
+    snapshots.forEach(snapshot => {
+      if (snapshot.addressBalances) {
+        Object.keys(snapshot.addressBalances).forEach(address => {
+          const userId = addressToUserIdMap.get(address);
+          if (userId) affectedUserIds.add(userId);
+        });
+      }
+    });
+
+    // Recalculate complete TVL and gains for all affected users from ALL their vaults
+    if (affectedUserIds.size > 0) {
+      this.logger.log(`Recalculating complete TVL and gains for ${affectedUserIds.size} affected users`);
+
+      // Batch query: Get all relevant vaults
+      const allRelevantVaults = await this.vaultRepository.find({
+        where: {
+          deleted: false,
+          vault_status: In([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked]),
+        },
+        relations: ['owner'],
+        select: ['id', 'vault_status', 'ft_token_supply', 'ft_token_decimals', 'initial_total_value_ada', 'owner'],
       });
-      await Promise.all(userUpdatePromises);
-      this.logger.log(`Updated TVL and gains for ${allUserIds.size} users`);
-    }
-  }
 
-  /**
-   * Calculate user TVL for locked vaults based on VT token holdings
-   * Uses the latest snapshot to get VT token distribution
-   */
-  private async calculateLockedVaultUserTvl(
-    vault: Vault,
-    vaultTotalValueAda: number,
-    userTvlMap: Map<string, number>,
-    userGainsMap: Map<string, number>
-  ): Promise<void> {
-    // Get the latest snapshot for this vault
-    const latestSnapshot = await this.snapshotRepository.findOne({
-      where: { vaultId: vault.id },
-      order: { createdAt: 'DESC' },
-    });
+      // Batch query: Get all vault values at once
+      const allVaultIds = allRelevantVaults.map(v => v.id);
+      const allVaultValues = await this.batchCalculateVaultAssetsValue(allVaultIds);
 
-    if (!latestSnapshot || !vault.ft_token_supply) {
-      this.logger.warn(`No snapshot or token supply found for locked vault ${vault.id}`);
-      return;
-    }
+      // Batch query: Get all snapshots for locked vaults
+      const allLockedVaultIds = allRelevantVaults.filter(v => v.vault_status === VaultStatus.locked).map(v => v.id);
+      const allSnapshots =
+        allLockedVaultIds.length > 0
+          ? await this.snapshotRepository
+              .createQueryBuilder('snapshot')
+              .distinctOn(['snapshot.vault_id'])
+              .where('snapshot.vault_id IN (:...vaultIds)', { vaultIds: allLockedVaultIds })
+              .orderBy('snapshot.vault_id', 'ASC')
+              .addOrderBy('snapshot.created_at', 'DESC')
+              .getMany()
+          : [];
 
-    const totalSupply = Number(vault.ft_token_supply);
-    if (totalSupply === 0) return;
+      const snapshotByVaultId = new Map(allSnapshots.map(s => [s.vaultId, s]));
 
-    // Calculate TVL for each VT holder
-    const addressBalances = latestSnapshot.addressBalances;
-    for (const [address, balance] of Object.entries(addressBalances)) {
-      const vtBalance = Number(balance);
-      if (vtBalance === 0) continue;
+      // Batch query: Get all users with their addresses
+      const allUsers = await this.userRepository.find({
+        where: { id: In([...affectedUserIds]) },
+        select: ['id', 'address'],
+      });
+      const userMap = new Map(allUsers.map(u => [u.id, u]));
 
-      // Calculate proportional ownership
-      const userShare = vtBalance / totalSupply;
-      const userVaultTvl = userShare * vaultTotalValueAda;
+      // Batch query: Get all contributed assets for all users and active vaults
+      const allActiveVaultIds = allRelevantVaults
+        .filter(v => v.vault_status === VaultStatus.contribution || v.vault_status === VaultStatus.acquire)
+        .map(v => v.id);
 
-      // Find user by address
-      const user = await this.userRepository.findOne({ where: { address } });
-      if (!user) continue;
+      const allContributedAssets =
+        allActiveVaultIds.length > 0
+          ? await this.assetRepository.find({
+              where: {
+                vault: { id: In(allActiveVaultIds) },
+                added_by: { id: In([...affectedUserIds]) },
+                status: In([AssetStatus.LOCKED, AssetStatus.DISTRIBUTED]),
+                origin_type: AssetOriginType.CONTRIBUTED,
+              },
+              select: ['vault', 'added_by', 'quantity', 'dex_price', 'floor_price', 'type'],
+              relations: ['vault', 'added_by'],
+            })
+          : [];
 
-      // Accumulate TVL
-      const currentTvl = userTvlMap.get(user.id) || 0;
-      userTvlMap.set(user.id, currentTvl + userVaultTvl);
+      // Group contributed assets by user and vault
+      const assetsByUserAndVault = new Map<string, Map<string, typeof allContributedAssets>>();
+      allContributedAssets.forEach(asset => {
+        const userId = asset.added_by.id;
+        const vaultId = asset.vault.id;
 
-      // Calculate gains for this vault
-      if (vault.initial_total_value_ada && vault.initial_total_value_ada > 0) {
-        const initialUserValue = userShare * vault.initial_total_value_ada;
-        const userGains = userVaultTvl - initialUserValue;
-        const currentGains = userGainsMap.get(user.id) || 0;
-        userGainsMap.set(user.id, currentGains + userGains);
+        if (!assetsByUserAndVault.has(userId)) {
+          assetsByUserAndVault.set(userId, new Map());
+        }
+        if (!assetsByUserAndVault.get(userId).has(vaultId)) {
+          assetsByUserAndVault.get(userId).set(vaultId, []);
+        }
+        assetsByUserAndVault.get(userId).get(vaultId).push(asset);
+      });
+
+      // Calculate TVL and gains for each user
+      const userUpdates: Array<{ id: string; tvl: number; gains: number }> = [];
+
+      for (const userId of affectedUserIds) {
+        const user = userMap.get(userId);
+        if (!user) continue;
+
+        const userTvl = { tvl: 0, gains: 0 };
+
+        // Calculate from all vaults
+        for (const vault of allRelevantVaults) {
+          const summary = allVaultValues.get(vault.id);
+          if (!summary) continue;
+
+          if (vault.vault_status === VaultStatus.locked) {
+            // Get user's share from VT token holdings
+            const snapshot = snapshotByVaultId.get(vault.id);
+
+            if (snapshot?.addressBalances && vault.ft_token_supply) {
+              const vtBalance = Number(snapshot.addressBalances[user.address] || 0);
+              if (vtBalance > 0) {
+                // VT tokens in snapshot are in smallest units (e.g., 1000000 for 1 token with 6 decimals)
+                // ft_token_supply might be in human-readable units (e.g., 1 instead of 1000000)
+                // We need to normalize both to the same unit using ft_token_decimals
+                const decimals = vault.ft_token_decimals || 6; // Default to 6 if not set
+                const ftSupplySmallestUnits = Number(vault.ft_token_supply) * Math.pow(10, decimals);
+
+                // Now both are in smallest units
+                const userShare = vtBalance / ftSupplySmallestUnits;
+
+                // Validate share is reasonable (0-100%)
+                if (userShare > 1 || userShare < 0) {
+                  continue;
+                }
+
+                const userVaultTvl = userShare * summary.totalValueAda;
+                userTvl.tvl += userVaultTvl;
+
+                // Calculate proportional gains (including negative)
+                if (vault.initial_total_value_ada !== null && vault.initial_total_value_ada !== undefined) {
+                  const initialUserValue = userShare * vault.initial_total_value_ada;
+                  const vaultGains = userVaultTvl - initialUserValue;
+                  userTvl.gains += vaultGains;
+                }
+              }
+            }
+          } else if (vault.vault_status === VaultStatus.contribution || vault.vault_status === VaultStatus.acquire) {
+            // Get contributed asset values from pre-loaded data
+            const userVaultAssets = assetsByUserAndVault.get(userId)?.get(vault.id);
+            if (userVaultAssets) {
+              for (const asset of userVaultAssets) {
+                const price = asset.type === AssetType.NFT ? asset.floor_price || 0 : asset.dex_price || 0;
+                userTvl.tvl += Number(asset.quantity) * price;
+              }
+            }
+          }
+        }
+
+        userUpdates.push({ id: userId, tvl: userTvl.tvl, gains: userTvl.gains });
       }
-    }
-  }
 
-  /**
-   * Calculate user TVL for active vaults (contribution/acquire phases)
-   * Based on the value of assets they contributed
-   */
-  private async calculateActiveVaultUserTvl(vaultId: string, userTvlMap: Map<string, number>): Promise<void> {
-    const assets = await this.assetRepository.find({
-      where: {
-        vault: { id: vaultId },
-        status: In([AssetStatus.LOCKED, AssetStatus.DISTRIBUTED]),
-        origin_type: AssetOriginType.CONTRIBUTED,
-      },
-      select: ['added_by', 'quantity', 'dex_price', 'floor_price', 'type'],
-    });
-
-    // Group assets by contributor and calculate their value
-    const contributorValues = new Map<string, number>();
-    for (const asset of assets) {
-      if (!asset.added_by) continue;
-
-      const price = asset.type === AssetType.NFT ? asset.floor_price || 0 : asset.dex_price || 0;
-      const assetValue = Number(asset.quantity) * price;
-
-      const currentValue = contributorValues.get(asset.added_by.id) || 0;
-      contributorValues.set(asset.added_by.id, currentValue + assetValue);
-    }
-
-    // Accumulate TVL for each contributor
-    for (const [userId, value] of contributorValues.entries()) {
-      const currentTvl = userTvlMap.get(userId) || 0;
-      userTvlMap.set(userId, currentTvl + value);
+      // Batch update all users
+      await Promise.all(
+        userUpdates.map(update =>
+          this.userRepository.update({ id: update.id }, { tvl: update.tvl, gains: update.gains })
+        )
+      );
     }
   }
 
@@ -821,7 +908,6 @@ export class TaptoolsService {
             if (asset.cachedPrice !== undefined && asset.cachedPrice > 0) {
               valueAda = asset.cachedPrice;
             } else {
-              // Fallback to API if no cached price (shouldn't happen if updateAssetPrices ran)
               const assetValue = await this.getAssetValue(asset.policyId, asset.assetId, asset.isNft);
               valueAda = assetValue?.priceAda || 0;
             }
