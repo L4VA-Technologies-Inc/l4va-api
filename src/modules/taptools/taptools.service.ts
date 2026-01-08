@@ -575,7 +575,7 @@ export class TaptoolsService {
       };
 
       // Update FDV/TVL ratio for locked vaults
-      if (vault?.vault_status === VaultStatus.locked && vault.fdv && summary.totalValueAda > 0) {
+      if (vault?.vault_status === VaultStatus.locked && vault.fdv && summary.totalValueAda > 0.0001) {
         updateData.fdv_tvl = Number((vault.fdv / summary.totalValueAda).toFixed(2));
       }
 
