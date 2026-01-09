@@ -2,7 +2,7 @@ import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Injectable, HttpException, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import axios from 'axios';
+import axios, { AxiosInstance } from 'axios';
 import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { Repository, In } from 'typeorm';
@@ -14,6 +14,7 @@ import { WayUpPricingService } from '../wayup/wayup-pricing.service';
 import { AssetValueDto, BlockfrostAssetResponseDto } from './dto/asset-value.dto';
 import { BlockfrostAddressTotalDto } from './dto/blockfrost-address.dto';
 import { PaginationQueryDto, PaginationMetaDto } from './dto/pagination.dto';
+import { VaultTokensMarketStatsDto } from './dto/vault-tokens-market-stats.dto';
 import { WalletOverviewDto, PaginatedWalletSummaryDto } from './dto/wallet-summary.dto';
 
 import { Asset } from '@/database/asset.entity';
@@ -45,6 +46,9 @@ export class TaptoolsService {
     '53173a3d7ae0a0015163cc55f9f1c300c7eab74da26ed9af8c052646': 100000.0,
     '91918871f0baf335d32be00af3f0604a324b2e0728d8623c0d6e2601': 250000.0,
   };
+  private readonly axiosTapToolsInstance: AxiosInstance;
+  private readonly tapToolsApiKey: string;
+  private readonly tapToolsApiUrl: string;
 
   constructor(
     @InjectRepository(Vault)
@@ -61,7 +65,14 @@ export class TaptoolsService {
     private readonly wayUpPricingService: WayUpPricingService
   ) {
     this.isMainnet = this.configService.get<string>('NETWORK') === 'mainnet';
-
+    this.tapToolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
+    this.tapToolsApiUrl = this.configService.get<string>('TAPTOOLS_API_URL');
+    this.axiosTapToolsInstance = axios.create({
+      baseURL: this.tapToolsApiUrl,
+      headers: {
+        'x-api-key': this.tapToolsApiKey,
+      },
+    });
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
@@ -1251,5 +1262,41 @@ export class TaptoolsService {
     // 3. Fallback: If quantity > 1, assume FT
     const qty = parseInt(assetDetails.quantity);
     return qty === 1;
+  }
+
+  async getVaultTokensMarketStats(): Promise<VaultTokensMarketStatsDto[]> {
+    const unit = '63efb704b7396890e4d9539d030c0e667739043add65c00f96c586c056616c6f72756d';
+    try {
+      const [{ data: mcapData }, { data: priceChangeData }] = await Promise.all([
+        this.axiosTapToolsInstance.get('/token/mcap', { params: { unit } }),
+        this.axiosTapToolsInstance.get('/token/prices/chg', {
+          params: {
+            unit,
+            timeframes: '1h,24h,7d,30d',
+          },
+        }),
+      ]);
+
+      const result = {
+        unit,
+        circSupply: mcapData?.circSupply || 0,
+        fdv: mcapData?.fdv || 0,
+        mcap: mcapData?.mcap || 0,
+        price: mcapData?.price || 0,
+        ticker: mcapData?.ticker || '',
+        totalSupply: mcapData?.totalSupply || 0,
+        '1h': priceChangeData?.['1h'] || 0,
+        '24h': priceChangeData?.['24h'] || 0,
+        '7d': priceChangeData?.['7d'] || 0,
+        '30d': priceChangeData?.['30d'] || 0,
+      };
+
+      return plainToInstance(VaultTokensMarketStatsDto, [result], {
+        excludeExtraneousValues: true,
+      });
+    } catch (error) {
+      this.logger.error('Error fetching TapTools data:', error.response?.data || error.message);
+      throw new Error('Could not fetch market statistics');
+    }
   }
 }
