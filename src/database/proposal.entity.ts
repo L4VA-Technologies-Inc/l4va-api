@@ -9,6 +9,7 @@ import {
 } from '../modules/vaults/phase-management/governance/dto/create-proposal.req';
 import { ProposalStatus, ProposalType } from '../types/proposal.types';
 
+import { Snapshot } from './snapshot.entity';
 import { User } from './user.entity';
 import { Vault } from './vault.entity';
 import { Vote } from './vote.entity';
@@ -64,8 +65,13 @@ export class Proposal {
   @Column({ name: 'execution_date', nullable: true, type: 'timestamptz' })
   executionDate?: Date;
 
+  @Expose({ name: 'snapshot' })
+  @ManyToOne(() => Snapshot, snapshot => snapshot.proposals, { nullable: false, onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'snapshot_id' })
+  snapshot: Snapshot;
+
   @Expose({ name: 'snapshotId' })
-  @Column({ name: 'snapshot_id', nullable: true })
+  @Column({ name: 'snapshot_id', nullable: false, type: 'uuid' })
   snapshotId: string;
 
   @Expose({ name: 'metadata' })

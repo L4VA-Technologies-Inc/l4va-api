@@ -270,8 +270,16 @@ export class GovernanceExecutionService {
   /**
    * Execute BUY_SELL proposal actions via WayUp marketplace
    * Groups operations by market and action type to execute in batched transactions
+   * Only runs on mainnet - testnet just logs completion
    */
   private async executeBuySellProposal(proposal: Proposal): Promise<boolean> {
+    if (!this.isMainnet) {
+      this.logger.log(
+        `[TESTNET] BUY_SELL proposal ${proposal.id} marked as completed (no actual execution on testnet)`
+      );
+      return true;
+    }
+
     if (!proposal.metadata.marketplaceActions || proposal.metadata.marketplaceActions.length === 0) {
       this.logger.warn(`BUY_SELL proposal ${proposal.id} has no buying/selling options`);
       return false;

@@ -9,6 +9,7 @@ import { L4vaRewardsService } from '../vaults/claims/l4va-rewards.service';
 import { AcquirerDistributionOrchestrator } from './orchestrators/acquirer-distribution.orchestrator';
 import { ContributorDistributionOrchestrator } from './orchestrators/contributor-distribution.orchestrator';
 
+import { Claim } from '@/database/claim.entity';
 import { Vault } from '@/database/vault.entity';
 import { GovernanceService } from '@/modules/vaults/phase-management/governance/governance.service';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
@@ -44,6 +45,8 @@ export class AutomatedDistributionService {
   constructor(
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
+    @InjectRepository(Claim)
+    private readonly claimRepository: Repository<Claim>,
     private readonly configService: ConfigService,
     private readonly blockchainService: BlockchainService,
     private readonly governanceService: GovernanceService,
@@ -273,12 +276,21 @@ export class AutomatedDistributionService {
 
       const lpPercent = vault.liquidity_pool_contribution || 0;
 
-      // Create LP if LP percentage > 0
-      if (lpPercent > 0) {
+      // Check if LP claim exists for this vault
+      const lpClaim = await this.claimRepository.findOne({
+        where: { vault: { id: vaultId }, type: ClaimType.LP, status: ClaimStatus.AVAILABLE },
+      });
+
+      // Create LP if LP percentage > 0 AND LP claim exists
+      if (lpPercent > 0 && lpClaim) {
         const { withdrawalTxHash, lpCreationTxHash } =
           await this.vyfiService.createLiquidityPoolWithWithdrawal(vaultId);
         this.logger.log(
           `LP created for vault ${vaultId}. ` + `Withdrawal: ${withdrawalTxHash}, LP Creation: ${lpCreationTxHash}`
+        );
+      } else if (lpPercent > 0 && !lpClaim) {
+        this.logger.log(
+          `Vault ${vaultId} has LP contribution but no LP claim (likely ADA < 500). Skipping LP creation.`
         );
       } else {
         this.logger.log(`Vault ${vaultId} has 0% LP contribution. Skipping liquidity pool creation.`);
