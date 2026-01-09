@@ -278,7 +278,13 @@ export class TransactionsService {
     switch (filter) {
       case TransactionType.all:
         queryBuilder.andWhere('transaction.type IN (:...types)', {
-          types: [TransactionType.contribute, TransactionType.burn, TransactionType.acquire],
+          types: [
+            TransactionType.contribute,
+            TransactionType.burn,
+            TransactionType.acquire,
+            TransactionType.extractDispatch,
+            TransactionType.claim,
+          ],
         });
         break;
       case TransactionType.contribute:
@@ -294,6 +300,16 @@ export class TransactionsService {
       case TransactionType.acquire:
         queryBuilder.andWhere('transaction.type = (:type)', {
           type: TransactionType.acquire,
+        });
+        break;
+      case TransactionType.createVault:
+        queryBuilder.andWhere('transaction.type = (:type)', {
+          type: TransactionType.createVault,
+        });
+        break;
+      case TransactionType.distribution:
+        queryBuilder.andWhere('transaction.type IN (:...types)', {
+          types: [TransactionType.extractDispatch, TransactionType.claim],
         });
         break;
     }
