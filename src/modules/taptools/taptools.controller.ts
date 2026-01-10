@@ -1,5 +1,5 @@
-import { Controller, Get, UseGuards, Query, Param, Body, Post, ParseUUIDPipe } from '@nestjs/common';
-import { ApiBody, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Controller, UseGuards, Body, Post } from '@nestjs/common';
+import { ApiBody, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { ApiDoc } from '../../decorators/api-doc.decorator';
 import { AuthGuard } from '../auth/auth.guard';
@@ -24,21 +24,5 @@ export class TaptoolsController {
   @UseGuards(AuthGuard)
   async getWalletSummaryPaginated(@Body() body: PaginationQueryDto): Promise<PaginatedWalletSummaryDto> {
     return this.taptoolsService.getWalletSummaryPaginated(body);
-  }
-
-  @Get('assets/:id')
-  @ApiDoc({
-    summary: 'Get asset quantity in wallet',
-    description: 'Returns number of specified asset on wallet',
-    status: 200,
-  })
-  @ApiQuery({ name: 'address', type: String, description: 'Wallet address' })
-  @ApiResponse({ status: 404, description: 'Asset not found' })
-  @UseGuards(AuthGuard)
-  async getAssetDetails(
-    @Param('id', ParseUUIDPipe) assetId: string,
-    @Query('address') walletAddress: string
-  ): Promise<number> {
-    return this.taptoolsService.getWalletAssetsQuantity(walletAddress, assetId);
   }
 }

@@ -1,6 +1,7 @@
 import { Expose } from 'class-transformer';
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, CreateDateColumn, JoinColumn } from 'typeorm';
 
+import { Proposal } from './proposal.entity';
 import { Vault } from './vault.entity';
 import { Vote } from './vote.entity';
 
@@ -34,4 +35,8 @@ export class Snapshot {
   @Expose({ name: 'votes' })
   @OneToMany(() => Vote, vote => vote.snapshot)
   votes: Vote[];
+
+  @Expose({ name: 'proposals' })
+  @OneToMany(() => Proposal, proposal => proposal.snapshot)
+  proposals: Proposal[];
 }

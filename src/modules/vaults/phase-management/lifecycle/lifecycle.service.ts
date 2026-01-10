@@ -156,10 +156,10 @@ export class LifecycleService {
 
         const pr = await this.tokenRegistryRepository.findOne({
           where: {
-            vault: { id: data.vaultId },
+            vault_id: data.vaultId,
             status: TokenRegistryStatus.PENDING,
           },
-          select: ['pr_number'],
+          select: ['id', 'pr_number'],
         });
 
         if (pr) {
@@ -221,6 +221,12 @@ export class LifecycleService {
         vault.acquire_multiplier = data.acquire_multiplier;
         vault.fdv = data.fdv;
         vault.fdv_tvl = data.fdvTvl;
+
+        // Set initial value for gains calculation (baseline for future price changes)
+        // This is the total value of all contributed assets at the moment of locking
+        if (vault.total_assets_cost_ada && vault.total_assets_cost_ada > 0) {
+          vault.initial_total_value_ada = vault.total_assets_cost_ada;
+        }
       } else if (data.newScStatus) {
         vault.vault_sc_status = data.newScStatus;
       }
@@ -941,6 +947,14 @@ export class LifecycleService {
           return;
         }
 
+        try {
+          await this.taptoolsService.updateAssetPrices([vault.id]);
+          // Recalculate vault totals with fresh prices
+          await this.taptoolsService.updateMultipleVaultTotals([vault.id]);
+        } catch (error) {
+          this.logger.error(`Failed to update prices before locking vault ${vault.id}:`, error);
+        }
+
         await this.executePhaseTransition({
           vaultId: vault.id,
           newStatus: VaultStatus.locked,
@@ -1274,6 +1288,16 @@ export class LifecycleService {
       if (!response.txHash) {
         this.logger.error(`Failed to get txHash for vault ${vault.id} metadata update transaction`);
         throw new Error('Failed to update vault metadata');
+      }
+
+      // Update asset prices before locking to ensure accurate initial_total_value_ada
+      this.logger.log(`Updating asset prices before locking vault ${vault.id}`);
+      try {
+        await this.taptoolsService.updateAssetPrices([vault.id]);
+        // Recalculate vault totals with fresh prices
+        await this.taptoolsService.updateMultipleVaultTotals([vault.id]);
+      } catch (error) {
+        this.logger.error(`Failed to update prices before locking vault ${vault.id}:`, error);
       }
 
       // Transition to governance phase

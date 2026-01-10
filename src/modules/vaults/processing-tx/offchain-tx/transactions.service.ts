@@ -97,6 +97,14 @@ export class TransactionsService {
       });
     } else if (transaction.type === TransactionType.contribute) {
       pendingAssets.forEach(assetItem => {
+        // Decode hex asset name to readable string
+        let decodedName: string | null = null;
+        try {
+          decodedName = assetItem.assetName ? Buffer.from(assetItem.assetName, 'hex').toString('utf8') : null;
+        } catch (error) {
+          decodedName = assetItem.assetName || null;
+        }
+
         assetsToCreate.push({
           transaction,
           vault: { id: transaction.vault_id } as Vault,
@@ -109,7 +117,7 @@ export class TransactionsService {
           added_by: user,
           image: assetItem.metadata?.image ?? assetItem.metadata?.files?.[0]?.src ?? null,
           decimals: assetItem.metadata?.decimals ?? null,
-          name: assetItem.metadata?.onchainMetadata?.name ?? null,
+          name: assetItem.metadata?.onchainMetadata?.name || decodedName || null,
           description: assetItem.metadata?.onchainMetadata?.description ?? null,
         });
       });
@@ -270,7 +278,13 @@ export class TransactionsService {
     switch (filter) {
       case TransactionType.all:
         queryBuilder.andWhere('transaction.type IN (:...types)', {
-          types: [TransactionType.contribute, TransactionType.burn, TransactionType.acquire],
+          types: [
+            TransactionType.contribute,
+            TransactionType.burn,
+            TransactionType.acquire,
+            TransactionType.extractDispatch,
+            TransactionType.claim,
+          ],
         });
         break;
       case TransactionType.contribute:
@@ -286,6 +300,16 @@ export class TransactionsService {
       case TransactionType.acquire:
         queryBuilder.andWhere('transaction.type = (:type)', {
           type: TransactionType.acquire,
+        });
+        break;
+      case TransactionType.createVault:
+        queryBuilder.andWhere('transaction.type = (:type)', {
+          type: TransactionType.createVault,
+        });
+        break;
+      case TransactionType.distribution:
+        queryBuilder.andWhere('transaction.type IN (:...types)', {
+          types: [TransactionType.extractDispatch, TransactionType.claim],
         });
         break;
     }

@@ -66,6 +66,7 @@ export interface VaultConfig {
 
 export interface VaultCreateConfig {
   vaultName: string;
+  userId: string;
   customerAddress: string;
   vaultId: string;
   allowedPolicies: string[];
@@ -146,6 +147,7 @@ export class VaultManagingService {
     const transaction = await this.transactionsService.createTransaction({
       vault_id: vaultConfig.vaultId,
       type: TransactionType.createVault,
+      userId: vaultConfig.userId,
       assets: [], // No assets needed for this transaction as it's metadata update
     });
 
@@ -667,6 +669,8 @@ export class VaultManagingService {
           quantity: this.systemSettingsService.vlrmCreatorFee,
           status: AssetStatus.LOCKED,
           origin_type: AssetOriginType.FEE,
+          decimals: 4, // VLRM has 4 decimal places
+          name: 'VLRM',
           transaction: { id: signedTx.txId },
           added_by: { id: ownerId },
           image: 'ipfs://QmdYu513Bu7nfKV5LKP6cmpZ8HHXifQLH6FTTzv3VbbqwP', // VLRM logo

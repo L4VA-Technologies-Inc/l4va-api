@@ -964,7 +964,7 @@ export class GovernanceService {
       // Get all assets in the vault
       const assets: Pick<
         Asset,
-        'id' | 'policy_id' | 'quantity' | 'dex_price' | 'floor_price' | 'metadata' | 'type' | 'name' | 'imageUrl'
+        'id' | 'policy_id' | 'quantity' | 'dex_price' | 'floor_price' | 'metadata' | 'type' | 'name' | 'image'
       >[] = await this.assetRepository.find({
         where: [
           { vault: { id: vaultId }, type: AssetType.NFT, status: AssetStatus.LOCKED },
@@ -979,7 +979,7 @@ export class GovernanceService {
           'metadata',
           'type',
           'name',
-          'imageUrl',
+          'image',
           'listing_market',
           'listing_price',
           'listing_tx_hash',
