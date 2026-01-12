@@ -1,6 +1,7 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Injectable, HttpException, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import axios, { AxiosInstance } from 'axios';
 import { plainToInstance } from 'class-transformer';
@@ -8,13 +9,13 @@ import NodeCache from 'node-cache';
 import { Repository, In } from 'typeorm';
 
 import { DexHunterPricingService } from '../dexhunter/dexhunter-pricing.service';
+import { MarketService } from '../market/market.service';
 import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
 import { WayUpPricingService } from '../wayup/wayup-pricing.service';
 
 import { AssetValueDto, BlockfrostAssetResponseDto } from './dto/asset-value.dto';
 import { BlockfrostAddressTotalDto } from './dto/blockfrost-address.dto';
 import { PaginationQueryDto, PaginationMetaDto } from './dto/pagination.dto';
-import { VaultTokensMarketStatsDto } from './dto/vault-tokens-market-stats.dto';
 import { WalletOverviewDto, PaginatedWalletSummaryDto } from './dto/wallet-summary.dto';
 
 import { Asset } from '@/database/asset.entity';
@@ -62,7 +63,8 @@ export class TaptoolsService {
     private readonly assetsService: AssetsService,
     private readonly configService: ConfigService,
     private readonly dexHunterPricingService: DexHunterPricingService,
-    private readonly wayUpPricingService: WayUpPricingService
+    private readonly wayUpPricingService: WayUpPricingService,
+    private readonly marketService: MarketService
   ) {
     this.isMainnet = this.configService.get<string>('NETWORK') === 'mainnet';
     this.tapToolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
@@ -1264,39 +1266,80 @@ export class TaptoolsService {
     return qty === 1;
   }
 
-  async getVaultTokensMarketStats(): Promise<VaultTokensMarketStatsDto[]> {
-    const unit = '63efb704b7396890e4d9539d030c0e667739043add65c00f96c586c056616c6f72756d';
-    try {
-      const [{ data: mcapData }, { data: priceChangeData }] = await Promise.all([
-        this.axiosTapToolsInstance.get('/token/mcap', { params: { unit } }),
-        this.axiosTapToolsInstance.get('/token/prices/chg', {
-          params: {
-            unit,
-            timeframes: '1h,24h,7d,30d',
-          },
-        }),
-      ]);
+  @Cron(CronExpression.EVERY_2_HOURS)
+  async scheduledUpdateVaultTokensMarketStats(): Promise<void> {
+    this.logger.log('Scheduled task: Starting vault tokens market stats update');
+    await this.getVaultTokensMarketStats();
+  }
 
-      const result = {
-        unit,
-        circSupply: mcapData?.circSupply || 0,
-        fdv: mcapData?.fdv || 0,
-        mcap: mcapData?.mcap || 0,
-        price: mcapData?.price || 0,
-        ticker: mcapData?.ticker || '',
-        totalSupply: mcapData?.totalSupply || 0,
-        '1h': priceChangeData?.['1h'] || 0,
-        '24h': priceChangeData?.['24h'] || 0,
-        '7d': priceChangeData?.['7d'] || 0,
-        '30d': priceChangeData?.['30d'] || 0,
-      };
+  async getVaultTokensMarketStats(): Promise<void> {
+    const vaults = await this.vaultRepository
+      .createQueryBuilder('v')
+      .select(['v.id', 'v.policy_id', 'v.asset_vault_name'])
+      .where('v.vault_status = :status', { status: VaultStatus.locked })
+      .andWhere('v.liquidity_pool_contribution > 0')
+      .andWhere('v.policy_id IS NOT NULL')
+      .andWhere('v.asset_vault_name IS NOT NULL')
+      .getMany();
 
-      return plainToInstance(VaultTokensMarketStatsDto, [result], {
-        excludeExtraneousValues: true,
-      });
-    } catch (error) {
-      this.logger.error('Error fetching TapTools data:', error.response?.data || error.message);
-      throw new Error('Could not fetch market statistics');
+    if (!vaults || vaults.length === 0) {
+      this.logger.warn('No vault tokens found for market stats update');
+      return;
     }
+
+    this.logger.log(`Found ${vaults.length} vaults to update market stats`);
+
+    const tokensMarketData = await Promise.all(
+      vaults.map(async vault => {
+        const unit = `${vault.policy_id}${vault.asset_vault_name}`;
+
+        try {
+          const [{ data: mcapData }, { data: priceChangeData }] = await Promise.all([
+            this.axiosTapToolsInstance.get('/token/mcap', { params: { unit } }),
+            this.axiosTapToolsInstance.get('/token/prices/chg', {
+              params: {
+                unit,
+                timeframes: '1h,24h,7d,30d',
+              },
+            }),
+          ]);
+
+          const vaultUpdateData: any = {};
+
+          if (mcapData?.fdv) {
+            vaultUpdateData.fdv = mcapData.fdv;
+          }
+
+          if (mcapData?.price) {
+            vaultUpdateData.vt_price = mcapData.price;
+          }
+
+          if (Object.keys(vaultUpdateData).length > 0) {
+            await this.vaultRepository.update({ id: vault.id }, vaultUpdateData);
+          }
+
+          const marketData = {
+            vault_id: vault.id,
+            circSupply: mcapData?.circSupply || 0,
+            mcap: mcapData?.mcap || 0,
+            totalSupply: mcapData?.totalSupply || 0,
+            '1h': priceChangeData?.['1h'] || 0,
+            '24h': priceChangeData?.['24h'] || 0,
+            '7d': priceChangeData?.['7d'] || 0,
+            '30d': priceChangeData?.['30d'] || 0,
+          };
+
+          await this.marketService.upsertMarketData(marketData);
+
+          return { vault_id: vault.id, ...marketData, ...vaultUpdateData };
+        } catch (error) {
+          this.logger.error(`Error fetching TapTools data for unit ${unit}:`, error.response?.data || error.message);
+          return null;
+        }
+      })
+    );
+
+    const successfulUpdates = tokensMarketData.filter(data => data !== null).length;
+    this.logger.log(`Successfully updated market stats for ${successfulUpdates} vault tokens`);
   }
 }

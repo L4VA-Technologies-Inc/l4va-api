@@ -1,27 +1,32 @@
-import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  JoinColumn,
+  ManyToOne,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from 'typeorm';
+
+import { Vault } from './vault.entity';
 
 @Entity('markets')
 export class Market {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'varchar', length: 255, unique: true })
-  unit: string;
+  @ManyToOne(() => Vault, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'vault_id' })
+  vault: Vault;
+
+  @Column({ type: 'uuid' })
+  vault_id: string;
 
   @Column({ type: 'decimal', precision: 20, scale: 8, default: 0, name: 'circSupply' })
   circSupply: number;
 
   @Column({ type: 'decimal', precision: 20, scale: 8, default: 0 })
-  fdv: number;
-
-  @Column({ type: 'decimal', precision: 20, scale: 8, default: 0 })
   mcap: number;
-
-  @Column({ type: 'decimal', precision: 20, scale: 8, default: 0 })
-  price: number;
-
-  @Column({ type: 'varchar', length: 50 })
-  ticker: string;
 
   @Column({ type: 'decimal', precision: 20, scale: 8, default: 0, name: 'totalSupply' })
   totalSupply: number;
@@ -37,12 +42,6 @@ export class Market {
 
   @Column({ type: 'decimal', precision: 10, scale: 6, default: 0, name: '30d' })
   '30d': number;
-
-  @Column({ type: 'varchar', length: 500, nullable: true })
-  image: string;
-
-  @Column({ type: 'decimal', precision: 20, scale: 8, default: 0 })
-  tvl: number;
 
   @CreateDateColumn({ type: 'timestamptz' })
   created_at: Date;

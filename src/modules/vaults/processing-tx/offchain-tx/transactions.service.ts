@@ -14,7 +14,10 @@ import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
-import { GetTransactionsDto } from '@/modules/vaults/processing-tx/offchain-tx/dto/get-transactions.dto';
+import {
+  GetTransactionsDto,
+  GetTransactionType,
+} from '@/modules/vaults/processing-tx/offchain-tx/dto/get-transactions.dto';
 
 @Injectable()
 export class TransactionsService {
@@ -240,7 +243,7 @@ export class TransactionsService {
   }
 
   async getByUserId(id: string, query: GetTransactionsDto): Promise<TransactionsResponseDto> {
-    const { page, limit, status, period, filter = TransactionType.all, order = 'DESC', isExport = false } = query;
+    const { page, limit, status, period, filter = GetTransactionType.all, order = 'DESC', isExport = false } = query;
 
     const parsedPage = Number(page);
     const parsedLimit = Number(limit);
@@ -276,7 +279,7 @@ export class TransactionsService {
     });
 
     switch (filter) {
-      case TransactionType.all:
+      case GetTransactionType.all:
         queryBuilder.andWhere('transaction.type IN (:...types)', {
           types: [
             TransactionType.contribute,
@@ -287,27 +290,27 @@ export class TransactionsService {
           ],
         });
         break;
-      case TransactionType.contribute:
+      case GetTransactionType.contribute:
         queryBuilder.andWhere('transaction.type = (:type)', {
           type: TransactionType.contribute,
         });
         break;
-      case TransactionType.burn:
+      case GetTransactionType.burn:
         queryBuilder.andWhere('transaction.type = (:type)', {
           type: TransactionType.burn,
         });
         break;
-      case TransactionType.acquire:
+      case GetTransactionType.acquire:
         queryBuilder.andWhere('transaction.type = (:type)', {
           type: TransactionType.acquire,
         });
         break;
-      case TransactionType.createVault:
+      case GetTransactionType.createVault:
         queryBuilder.andWhere('transaction.type = (:type)', {
           type: TransactionType.createVault,
         });
         break;
-      case TransactionType.distribution:
+      case GetTransactionType.distribution:
         queryBuilder.andWhere('transaction.type IN (:...types)', {
           types: [TransactionType.extractDispatch, TransactionType.claim],
         });

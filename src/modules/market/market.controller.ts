@@ -6,7 +6,7 @@ import { ApiDoc } from '../../decorators/api-doc.decorator';
 import { GetMarketsDto } from './dto/get-markets.dto';
 import { MarketService } from './market.service';
 
-import { Market } from '@/database/market.entity';
+import { GetMarketsResponse } from '@/modules/market/dto/get-markets-response.dto';
 
 @Controller('markets')
 @ApiTags('Markets')
@@ -21,13 +21,7 @@ export class MarketController {
   })
   @ApiOperation({ summary: 'Get markets' })
   @ApiResponse({ status: 200, description: 'Returns paginated markets' })
-  async getMarkets(@Query() query: GetMarketsDto): Promise<{
-    items: Market[];
-    total: number;
-    page: number;
-    limit: number;
-    totalPages: number;
-  }> {
+  async getMarkets(@Query() query: GetMarketsDto): Promise<GetMarketsResponse> {
     return this.marketService.getMarkets(query);
   }
 }

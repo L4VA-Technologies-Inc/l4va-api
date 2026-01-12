@@ -5,7 +5,6 @@ import { IsEnum, IsNumber, IsOptional, IsString, Min } from 'class-validator';
 import { PaginationDto } from '../../vaults/dto/pagination.dto';
 
 export enum MarketSortField {
-  unit = 'unit',
   circSupply = 'circSupply',
   fdv = 'fdv',
   mcap = 'mcap',
@@ -57,16 +56,6 @@ export class GetMarketsDto extends PaginationDto {
   })
   @Expose()
   ticker?: string;
-
-  @IsString()
-  @IsOptional()
-  @ApiProperty({
-    type: String,
-    required: false,
-    description: 'Filter by unit (exact match)',
-  })
-  @Expose()
-  unit?: string;
 
   @IsNumber()
   @IsOptional()

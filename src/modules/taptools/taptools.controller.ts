@@ -34,7 +34,7 @@ export class TaptoolsController {
     status: 200,
   })
   @ApiResponse({ status: 200, type: [VaultTokensMarketStatsDto] })
-  async getVaultTokensMarketStats(): Promise<VaultTokensMarketStatsDto[]> {
+  async getVaultTokensMarketStats(): Promise<void> {
     return this.taptoolsService.getVaultTokensMarketStats();
   }
 }
