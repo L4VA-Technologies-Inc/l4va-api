@@ -30,7 +30,7 @@ import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { Vote } from '@/database/vote.entity';
-import { AssetStatus, AssetType } from '@/types/asset.types';
+import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { VaultStatus } from '@/types/vault.types';
@@ -884,7 +884,8 @@ export class GovernanceService {
       return await this.assetRepository.find({
         where: {
           vault: { id: vaultId },
-          type: In([AssetType.FT, AssetType.NFT]),
+          type: In([AssetType.FT]),
+          origin_type: AssetOriginType.CONTRIBUTED,
           status: AssetStatus.LOCKED,
         },
       });
@@ -903,6 +904,7 @@ export class GovernanceService {
         where: {
           vault: { id: vaultId },
           type: In([AssetType.FT, AssetType.NFT]),
+          origin_type: AssetOriginType.CONTRIBUTED,
           status: AssetStatus.LOCKED,
         },
         relations: ['vault'],
@@ -922,6 +924,7 @@ export class GovernanceService {
           vault: { id: vaultId },
           type: In([AssetType.NFT, AssetType.FT]),
           status: AssetStatus.LOCKED,
+          origin_type: AssetOriginType.CONTRIBUTED,
           deleted: false,
         },
         relations: ['vault'],
@@ -944,6 +947,7 @@ export class GovernanceService {
           vault: { id: vaultId },
           type: In([AssetType.NFT, AssetType.FT]),
           status: AssetStatus.LOCKED,
+          origin_type: AssetOriginType.CONTRIBUTED,
           deleted: false,
         },
         relations: ['vault'],
@@ -967,8 +971,12 @@ export class GovernanceService {
         'id' | 'policy_id' | 'quantity' | 'dex_price' | 'floor_price' | 'metadata' | 'type' | 'name' | 'image'
       >[] = await this.assetRepository.find({
         where: [
-          { vault: { id: vaultId }, type: AssetType.NFT, status: AssetStatus.LOCKED },
-          { vault: { id: vaultId }, type: AssetType.FT, status: AssetStatus.LOCKED },
+          {
+            vault: { id: vaultId },
+            type: In([AssetType.NFT, AssetType.FT]),
+            status: AssetStatus.LOCKED,
+            origin_type: AssetOriginType.CONTRIBUTED,
+          },
         ],
         select: [
           'id',
@@ -999,10 +1007,7 @@ export class GovernanceService {
     try {
       // Get all listed assets in the vault
       const assets = await this.assetRepository.find({
-        where: [
-          { vault: { id: vaultId }, type: AssetType.NFT, status: AssetStatus.LISTED },
-          { vault: { id: vaultId }, type: AssetType.FT, status: AssetStatus.LISTED },
-        ],
+        where: [{ vault: { id: vaultId }, type: In([AssetType.NFT, AssetType.FT]), status: AssetStatus.LISTED }],
         select: [
           'id',
           'name',
@@ -1033,10 +1038,7 @@ export class GovernanceService {
     try {
       // Get all listed assets in the vault that can have their listing updated
       const assets = await this.assetRepository.find({
-        where: [
-          { vault: { id: vaultId }, type: AssetType.NFT, status: AssetStatus.LISTED },
-          { vault: { id: vaultId }, type: AssetType.FT, status: AssetStatus.LISTED },
-        ],
+        where: [{ vault: { id: vaultId }, type: In([AssetType.NFT, AssetType.FT]), status: AssetStatus.LISTED }],
         select: [
           'id',
           'name',

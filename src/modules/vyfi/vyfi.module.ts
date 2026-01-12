@@ -8,9 +8,10 @@ import { BlockchainModule } from '../vaults/processing-tx/onchain/blockchain.mod
 import { VyfiService } from './vyfi.service';
 
 import { Claim } from '@/database/claim.entity';
+import { Transaction } from '@/database/transaction.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Claim]), HttpModule, ConfigModule, BlockchainModule],
+  imports: [TypeOrmModule.forFeature([Claim, Transaction]), HttpModule, ConfigModule, BlockchainModule],
   providers: [VyfiService],
   exports: [VyfiService],
 })

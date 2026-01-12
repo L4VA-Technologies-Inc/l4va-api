@@ -12,6 +12,7 @@ import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
+import { TreasuryExtractionService } from '@/modules/vaults/treasure/treasury-extraction.service';
 import { WayUpService } from '@/modules/wayup/wayup.service';
 import { ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
@@ -33,7 +34,8 @@ export class GovernanceExecutionService {
     private readonly wayUpService: WayUpService,
     private readonly configService: ConfigService,
     private readonly schedulerService: ProposalSchedulerService,
-    private readonly voteCountingService: VoteCountingService
+    private readonly voteCountingService: VoteCountingService,
+    private readonly treasuryExtractionService: TreasuryExtractionService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
   }
@@ -122,36 +124,29 @@ export class GovernanceExecutionService {
 
   async processProposal(proposalId: string): Promise<void> {
     try {
-      const proposal = await this.proposalRepository.findOne({
-        where: { id: proposalId, status: ProposalStatus.ACTIVE },
-        relations: {
-          vault: {
-            owner: true,
-          },
-          votes: true,
-        },
-        select: {
-          id: true,
-          vaultId: true,
-          status: true,
-          proposalType: true,
-          metadata: true,
-          title: true,
-          creatorId: true,
-          vault: {
-            id: true,
-            name: true,
-            execution_threshold: true,
-            owner: {
-              address: true,
-            },
-          },
-          votes: {
-            voteWeight: true,
-            vote: true,
-          },
-        },
-      });
+      const proposal = await this.proposalRepository
+        .createQueryBuilder('proposal')
+        .leftJoinAndSelect('proposal.vault', 'vault')
+        .leftJoinAndSelect('vault.owner', 'owner')
+        .leftJoinAndSelect('proposal.votes', 'votes')
+        .where('proposal.id = :proposalId', { proposalId })
+        .andWhere('proposal.status = :status', { status: ProposalStatus.ACTIVE })
+        .select([
+          'proposal.id',
+          'proposal.vaultId',
+          'proposal.status',
+          'proposal.proposalType',
+          'proposal.metadata',
+          'proposal.title',
+          'proposal.creatorId',
+          'vault.id',
+          'vault.name',
+          'vault.execution_threshold',
+          'owner.address',
+          'votes.voteWeight',
+          'votes.vote',
+        ])
+        .getOne();
 
       if (!proposal || !proposal.vault || !proposal.votes) {
         this.logger.warn(`Proposal ${proposalId} is not active or doesn't exist`);
@@ -163,9 +158,7 @@ export class GovernanceExecutionService {
       // Use vote counting service to calculate results
       const voteResult = this.voteCountingService.calculateResult(proposal.votes, executionThreshold);
       const isSuccessful = voteResult.isSuccessful;
-      const newStatus = isSuccessful ? ProposalStatus.EXECUTED : ProposalStatus.REJECTED;
 
-      const executed = await this.executeProposalActions(proposal);
       const finalContributorClaims = await this.claimRepository.find({
         where: {
           vault: { id: proposal.vaultId },
@@ -175,29 +168,42 @@ export class GovernanceExecutionService {
         order: { created_at: 'ASC' },
       });
 
-      if (executed) {
-        await this.proposalRepository.update({ id: proposalId }, { status: newStatus });
-        if (newStatus === ProposalStatus.EXECUTED) {
-          this.eventEmitter.emit('proposal.executed', {
-            address: proposal.vault?.owner?.address || null,
-            vaultId: proposal.vaultId,
-            vaultName: proposal.vault?.name || null,
-            proposalName: proposal.title,
-            creatorId: proposal.creatorId,
-            tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
-          });
-        } else {
-          this.eventEmitter.emit('proposal.rejected', {
-            address: proposal.vault?.owner?.address || null,
-            vaultId: proposal.vaultId,
-            vaultName: proposal.vault?.name || null,
-            proposalName: proposal.title,
-            creatorId: proposal.creatorId,
-            tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
-          });
-        }
+      // If proposal is not successful, reject it without executing
+      if (!isSuccessful) {
+        await this.proposalRepository.update({ id: proposalId }, { status: ProposalStatus.REJECTED });
+
+        this.eventEmitter.emit('proposal.rejected', {
+          address: proposal.vault?.owner?.address || null,
+          vaultId: proposal.vaultId,
+          vaultName: proposal.vault?.name || null,
+          proposalName: proposal.title,
+          creatorId: proposal.creatorId,
+          tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+        });
+
         this.logger.log(
-          `Proposal ${proposal.id}: ${newStatus} (${voteResult.yesVotePercent.toFixed(2)}% yes votes, threshold ${executionThreshold}%)`
+          `Proposal ${proposal.id}: REJECTED (${voteResult.yesVotePercent.toFixed(2)}% yes votes, threshold ${executionThreshold}%)`
+        );
+        return;
+      }
+
+      // Proposal is successful, execute actions
+      const executed = await this.executeProposalActions(proposal);
+
+      if (executed) {
+        await this.proposalRepository.update({ id: proposalId }, { status: ProposalStatus.EXECUTED });
+
+        this.eventEmitter.emit('proposal.executed', {
+          address: proposal.vault?.owner?.address || null,
+          vaultId: proposal.vaultId,
+          vaultName: proposal.vault?.name || null,
+          proposalName: proposal.title,
+          creatorId: proposal.creatorId,
+          tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+        });
+
+        this.logger.log(
+          `Proposal ${proposal.id}: EXECUTED (${voteResult.yesVotePercent.toFixed(2)}% yes votes, threshold ${executionThreshold}%)`
         );
       } else {
         this.logger.warn(`Proposal ${proposal.id} execution failed, status remains ACTIVE for retry`);
@@ -319,6 +325,7 @@ export class GovernanceExecutionService {
           const listings = [];
           const listingAssetInfos = [];
           const skippedSells = [];
+          const assetsToExtract = [];
 
           for (const option of operations.sells) {
             const asset = assetMap.get(option.assetId);
@@ -344,9 +351,40 @@ export class GovernanceExecutionService {
               assetId: option.assetId,
               price: priceAda,
             });
+
+            // Collect asset IDs that need to be extracted to treasury
+            assetsToExtract.push(option.assetId);
           }
 
           if (listings.length > 0) {
+            // STEP 1: Extract assets from vault to treasury wallet before listing
+            this.logger.log(
+              `Extracting ${assetsToExtract.length} asset(s) from vault to treasury wallet before listing`
+            );
+
+            try {
+              const extractionResult = await this.treasuryExtractionService.extractAssetsToTreasury({
+                vaultId: proposal.vaultId,
+                assetIds: assetsToExtract,
+              });
+
+              this.logger.log(
+                `Successfully extracted ${extractionResult.extractedAssets.length} asset(s) to treasury. TxHash: ${extractionResult.transactionId}`
+              );
+
+              // Wait a moment for the extraction transaction to be confirmed
+              await new Promise(resolve => setTimeout(resolve, 10000)); // 10 second delay
+            } catch (extractError) {
+              this.logger.error(
+                `Failed to extract assets to treasury before listing: ${extractError.message}`,
+                extractError.stack
+              );
+              throw new Error(
+                `Cannot list assets on marketplace: extraction to treasury failed. ${extractError.message}`
+              );
+            }
+
+            // STEP 2: List the extracted assets on the marketplace
             this.logger.log(`Listing ${listings.length} NFT(s) for sale on ${market} in a single transaction`);
 
             const result = await this.wayUpService.createListing(proposal.vaultId, listings);

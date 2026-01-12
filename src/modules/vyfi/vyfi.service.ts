@@ -3,7 +3,7 @@ import { Buffer } from 'buffer';
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Address, FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { HttpService } from '@nestjs/axios';
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { firstValueFrom } from 'rxjs';
@@ -13,7 +13,9 @@ import { BlockchainService } from '../vaults/processing-tx/onchain/blockchain.se
 import { getAddressFromHash, getUtxosExtract } from '../vaults/processing-tx/onchain/utils/lib';
 
 import { Claim } from '@/database/claim.entity';
+import { Transaction } from '@/database/transaction.entity';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
 // Constants for VyFi pool creation
 const VYFI_CONSTANTS = {
@@ -26,6 +28,7 @@ const VYFI_CONSTANTS = {
 
 @Injectable()
 export class VyfiService {
+  private readonly logger = new Logger(VyfiService.name);
   private readonly vyfiApiUrl = 'https://api.vyfi.io';
   private readonly adminSKey: string;
   private readonly adminAddress: string;
@@ -38,6 +41,8 @@ export class VyfiService {
   constructor(
     @InjectRepository(Claim)
     private claimRepository: Repository<Claim>,
+    @InjectRepository(Transaction)
+    private transactionRepository: Repository<Transaction>,
     private readonly httpService: HttpService,
     private readonly blockchainService: BlockchainService,
     private readonly configService: ConfigService
@@ -109,10 +114,13 @@ export class VyfiService {
 
   /**
    * Step 1: Withdraw ADA from dispatch script to admin address
+   * Handles backend restart scenarios by checking for existing withdrawal transactions
    */
   async withdrawAdaFromDispatch(vaultId: string): Promise<{
-    txHash: string;
+    txHash: string | null;
     withdrawnAmount: number;
+    skipped: boolean;
+    reason?: string;
   }> {
     const claim = await this.claimRepository.findOne({
       where: { vault: { id: vaultId }, type: ClaimType.LP, status: ClaimStatus.AVAILABLE },
@@ -123,12 +131,47 @@ export class VyfiService {
       throw new NotFoundException('Vault or dispatch script not found');
     }
 
+    // Check if withdrawal transaction already exists (backend restart scenario)
+    const existingWithdrawal = await this.transactionRepository.findOne({
+      where: {
+        vault_id: vaultId,
+        type: TransactionType.extractDispatch,
+        status: TransactionStatus.confirmed,
+        metadata: { purpose: 'lp_creation' } as any,
+      },
+      order: { created_at: 'DESC' },
+    });
+
+    if (existingWithdrawal) {
+      this.logger.log(
+        `Found existing withdrawal transaction ${existingWithdrawal.tx_hash} for vault ${vaultId}. ` +
+          `Skipping withdrawal step (backend restart scenario).`
+      );
+      return {
+        txHash: existingWithdrawal.tx_hash,
+        withdrawnAmount: existingWithdrawal.metadata?.withdrawnAmount || 0,
+        skipped: true,
+        reason: 'existing_transaction',
+      };
+    }
+
     const DISPATCH_ADDRESS = getAddressFromHash(claim.vault.dispatch_parametized_hash, this.networkId);
 
     // Get dispatch UTXOs
     const dispatchUtxos = await this.blockfrost.addressesUtxos(DISPATCH_ADDRESS);
+
+    // Check if dispatch is empty - this means withdrawal already happened or was never needed
     if (!dispatchUtxos || dispatchUtxos.length === 0) {
-      throw new Error('No UTXOs found at dispatch address');
+      this.logger.log(
+        `No UTXOs found at dispatch address for vault ${vaultId}. ` +
+          `Withdrawal already completed or not required. Skipping withdrawal step.`
+      );
+      return {
+        txHash: null,
+        withdrawnAmount: 0,
+        skipped: true,
+        reason: 'dispatch_empty',
+      };
     }
 
     // Calculate total ADA to withdraw
@@ -143,14 +186,36 @@ export class VyfiService {
       }
     }
 
+    // If no ADA in dispatch UTXOs, skip withdrawal
     if (totalDispatchAda === 0) {
-      throw new Error('No ADA available in dispatch script');
+      this.logger.log(`No ADA available in dispatch script for vault ${vaultId}. ` + `Skipping withdrawal step.`);
+      return {
+        txHash: null,
+        withdrawnAmount: 0,
+        skipped: true,
+        reason: 'no_ada',
+      };
     }
 
     // Get admin UTXOs for fees
     const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
       minAda: 2_000_000, // Just need ADA for fees
     });
+
+    // Create transaction record before submission
+    const withdrawalTx = await this.transactionRepository.save({
+      vault_id: vaultId,
+      type: TransactionType.extractDispatch,
+      status: TransactionStatus.created,
+      metadata: {
+        purpose: 'lp_creation',
+        withdrawnAmount: totalDispatchAda,
+        dispatchAddress: DISPATCH_ADDRESS,
+        adminAddress: this.adminAddress,
+      },
+    });
+
+    this.logger.log(`Created withdrawal transaction record ${withdrawalTx.id} for vault ${vaultId}`);
 
     // Build withdrawal transaction
     const input = {
@@ -212,9 +277,34 @@ export class VyfiService {
       signatures: [],
     });
 
+    // Update transaction record with tx hash
+    await this.transactionRepository.update(
+      { id: withdrawalTx.id },
+      {
+        tx_hash: submitResponse.txHash,
+        status: TransactionStatus.submitted,
+      }
+    );
+
+    this.logger.log(
+      `Successfully withdrew ${totalDispatchAda} lovelace from dispatch script. Tx: ${submitResponse.txHash}`
+    );
+
+    // Wait for confirmation
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    const confirmed = await this.blockchainService.waitForTransactionConfirmation(submitResponse.txHash);
+
+    if (confirmed) {
+      await this.transactionRepository.update({ id: withdrawalTx.id }, { status: TransactionStatus.confirmed });
+      this.logger.log(`Withdrawal transaction ${submitResponse.txHash} confirmed`);
+    } else {
+      this.logger.warn(`Withdrawal transaction ${submitResponse.txHash} not confirmed yet`);
+    }
+
     return {
       txHash: submitResponse.txHash,
       withdrawnAmount: totalDispatchAda,
+      skipped: false,
     };
   }
 
@@ -321,14 +411,20 @@ export class VyfiService {
    * Combined flow: Withdraw then create LP
    */
   async createLiquidityPoolWithWithdrawal(vaultId: string): Promise<{
-    withdrawalTxHash: string;
+    withdrawalTxHash: string | null;
     lpCreationTxHash: string;
+    withdrawalSkipped: boolean;
   }> {
     // Step 1: Withdraw ADA from dispatch
-    const { txHash: withdrawalTxHash } = await this.withdrawAdaFromDispatch(vaultId);
+    const { txHash: withdrawalTxHash, skipped } = await this.withdrawAdaFromDispatch(vaultId);
 
-    // Wait for withdrawal to confirm
-    await new Promise(resolve => setTimeout(resolve, 90000));
+    // Wait for withdrawal to confirm only if it happened
+    if (!skipped && withdrawalTxHash) {
+      this.logger.log('Waiting 90s for withdrawal confirmation before creating LP...');
+      await new Promise(resolve => setTimeout(resolve, 90000));
+    } else {
+      this.logger.log('Withdrawal skipped, proceeding directly to LP creation');
+    }
 
     // Step 2: Create LP using admin UTXOs only
     const { txHash: lpCreationTxHash } = await this.createLiquidityPoolSimple(vaultId);
@@ -336,6 +432,7 @@ export class VyfiService {
     return {
       withdrawalTxHash,
       lpCreationTxHash,
+      withdrawalSkipped: skipped,
     };
   }
 
