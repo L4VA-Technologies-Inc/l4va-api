@@ -14,7 +14,10 @@ import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
-import { GetTransactionsDto } from '@/modules/vaults/processing-tx/offchain-tx/dto/get-transactions.dto';
+import {
+  GetTransactionsDto,
+  GetTransactionType,
+} from '@/modules/vaults/processing-tx/offchain-tx/dto/get-transactions.dto';
 
 @Injectable()
 export class TransactionsService {
@@ -212,6 +215,58 @@ export class TransactionsService {
     });
   }
 
+  /**
+   * Wait for a transaction to reach a specific status by polling the database
+   * Uses the webhook-updated transaction status instead of polling the blockchain
+   *
+   * @param transactionId - The internal transaction ID to monitor
+   * @param targetStatus - The status to wait for (e.g., TransactionStatus.confirmed)
+   * @param maxWaitTime - Maximum time to wait in milliseconds (default: 2 minutes)
+   * @param checkInterval - Interval between checks in milliseconds (default: 5 seconds)
+   * @returns Promise<boolean> - true if status reached, false if timeout
+   */
+  async waitForTransactionStatus(
+    transactionId: string,
+    targetStatus: TransactionStatus,
+    maxWaitTime: number = 120000,
+    checkInterval: number = 5000
+  ): Promise<boolean> {
+    const startTime = Date.now();
+    this.logger.log(`Waiting for transaction ${transactionId} to reach status: ${targetStatus}`);
+
+    while (Date.now() - startTime < maxWaitTime) {
+      const transaction = await this.transactionRepository.findOne({
+        where: { id: transactionId },
+        select: ['id', 'status', 'tx_hash'],
+      });
+
+      if (!transaction) {
+        this.logger.warn(`Transaction ${transactionId} not found in database`);
+        return false;
+      }
+
+      if (transaction.status === targetStatus) {
+        this.logger.log(`Transaction ${transactionId} reached status: ${targetStatus}`);
+        return true;
+      }
+
+      if (transaction.status === TransactionStatus.failed) {
+        this.logger.error(`Transaction ${transactionId} failed`);
+        return false;
+      }
+
+      if (transaction.status === TransactionStatus.stuck) {
+        this.logger.error(`Transaction ${transactionId} is stuck`);
+        return false;
+      }
+
+      await new Promise(resolve => setTimeout(resolve, checkInterval));
+    }
+
+    this.logger.warn(`Transaction ${transactionId} status check timeout after ${maxWaitTime / 1000} seconds`);
+    return false;
+  }
+
   async validateTransactionExists(id: string): Promise<Transaction> {
     const transaction = await this.transactionRepository.findOne({
       where: { id },
@@ -240,7 +295,7 @@ export class TransactionsService {
   }
 
   async getByUserId(id: string, query: GetTransactionsDto): Promise<TransactionsResponseDto> {
-    const { page, limit, status, period, filter = TransactionType.all, order = 'DESC', isExport = false } = query;
+    const { page, limit, status, period, filter = GetTransactionType.all, order = 'DESC', isExport = false } = query;
 
     const parsedPage = Number(page);
     const parsedLimit = Number(limit);
@@ -276,7 +331,7 @@ export class TransactionsService {
     });
 
     switch (filter) {
-      case TransactionType.all:
+      case GetTransactionType.all:
         queryBuilder.andWhere('transaction.type IN (:...types)', {
           types: [
             TransactionType.contribute,
@@ -287,27 +342,27 @@ export class TransactionsService {
           ],
         });
         break;
-      case TransactionType.contribute:
+      case GetTransactionType.contribute:
         queryBuilder.andWhere('transaction.type = (:type)', {
           type: TransactionType.contribute,
         });
         break;
-      case TransactionType.burn:
+      case GetTransactionType.burn:
         queryBuilder.andWhere('transaction.type = (:type)', {
           type: TransactionType.burn,
         });
         break;
-      case TransactionType.acquire:
+      case GetTransactionType.acquire:
         queryBuilder.andWhere('transaction.type = (:type)', {
           type: TransactionType.acquire,
         });
         break;
-      case TransactionType.createVault:
+      case GetTransactionType.createVault:
         queryBuilder.andWhere('transaction.type = (:type)', {
           type: TransactionType.createVault,
         });
         break;
-      case TransactionType.distribution:
+      case GetTransactionType.distribution:
         queryBuilder.andWhere('transaction.type IN (:...types)', {
           types: [TransactionType.extractDispatch, TransactionType.claim],
         });

@@ -1,10 +1,12 @@
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
+import { Address } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { ExecType } from './dto/create-proposal.req';
+import { ExecType, MarketplaceActionDto } from './dto/create-proposal.req';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
 import { VoteCountingService } from './vote-counting.service';
 
@@ -12,15 +14,19 @@ import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
+import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
+import { getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { TreasuryExtractionService } from '@/modules/vaults/treasure/treasury-extraction.service';
 import { WayUpService } from '@/modules/wayup/wayup.service';
 import { ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
+import { TransactionStatus } from '@/types/transaction.types';
 
 @Injectable()
 export class GovernanceExecutionService {
   private readonly logger = new Logger(GovernanceExecutionService.name);
   private readonly isMainnet: boolean;
+  private readonly blockfrost: BlockFrostAPI;
 
   constructor(
     @InjectRepository(Proposal)
@@ -35,9 +41,13 @@ export class GovernanceExecutionService {
     private readonly configService: ConfigService,
     private readonly schedulerService: ProposalSchedulerService,
     private readonly voteCountingService: VoteCountingService,
-    private readonly treasuryExtractionService: TreasuryExtractionService
+    private readonly treasuryExtractionService: TreasuryExtractionService,
+    private readonly transactionsService: TransactionsService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+    this.blockfrost = new BlockFrostAPI({
+      projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
+    });
   }
 
   async onModuleInit(): Promise<void> {
@@ -128,6 +138,7 @@ export class GovernanceExecutionService {
         .createQueryBuilder('proposal')
         .leftJoinAndSelect('proposal.vault', 'vault')
         .leftJoinAndSelect('vault.owner', 'owner')
+        .leftJoinAndSelect('vault.treasury_wallet', 'treasury_wallet')
         .leftJoinAndSelect('proposal.votes', 'votes')
         .where('proposal.id = :proposalId', { proposalId })
         .andWhere('proposal.status = :status', { status: ProposalStatus.ACTIVE })
@@ -142,6 +153,7 @@ export class GovernanceExecutionService {
           'vault.id',
           'vault.name',
           'vault.execution_threshold',
+          'treasury_wallet.treasury_address',
           'owner.address',
           'votes.voteWeight',
           'votes.vote',
@@ -228,8 +240,11 @@ export class GovernanceExecutionService {
       this.logger.log(`Executing actions for proposal ${proposal.id} of type ${proposal.proposalType}`);
 
       switch (proposal.proposalType) {
+        case ProposalType.MARKETPLACE_ACTION:
+          return await this.executeMarketplaceProposal(proposal);
+
         case ProposalType.BUY_SELL:
-          return await this.executeBuySellProposal(proposal);
+          return await this.executeMarketplaceProposal(proposal);
 
         case ProposalType.DISTRIBUTION:
           return await this.executeDistributionProposal(proposal);
@@ -274,11 +289,11 @@ export class GovernanceExecutionService {
   }
 
   /**
-   * Execute BUY_SELL proposal actions via WayUp marketplace
-   * Groups operations by market and action type to execute in batched transactions
+   * Execute Marketplace proposal actions via WayUp marketplace
+   * Executes all marketplace operations (list, unlist, update, buy) in a single atomic transaction
    * Only runs on mainnet - testnet just logs completion
    */
-  private async executeBuySellProposal(proposal: Proposal): Promise<boolean> {
+  private async executeMarketplaceProposal(proposal: Proposal): Promise<boolean> {
     if (!this.isMainnet) {
       this.logger.log(
         `[TESTNET] BUY_SELL proposal ${proposal.id} marked as completed (no actual execution on testnet)`
@@ -287,356 +302,347 @@ export class GovernanceExecutionService {
     }
 
     if (!proposal.metadata.marketplaceActions || proposal.metadata.marketplaceActions.length === 0) {
-      this.logger.warn(`BUY_SELL proposal ${proposal.id} has no buying/selling options`);
+      this.logger.warn(`BUY_SELL proposal ${proposal.id} has no marketplace options`);
       return false;
     }
 
     this.logger.log(
-      `Executing ${proposal.metadata.marketplaceActions.length} buy/sell operation(s) for proposal ${proposal.id}`
+      `Executing ${proposal.metadata.marketplaceActions.length} market operation(s) for proposal ${proposal.id}`
     );
 
     // Collect all unique asset IDs to fetch from database
     const assetIds = [...new Set(proposal.metadata.marketplaceActions.map(opt => opt.assetId))];
 
     // Fetch all assets from database in one query
-    const assets = await this.assetRepository.find({
-      where: assetIds.map(id => ({ id })),
-      select: ['id', 'policy_id', 'asset_id', 'name'],
-    });
+    const assets: Pick<Asset, 'id' | 'policy_id' | 'asset_id' | 'name' | 'metadata' | 'listing_tx_hash'>[] =
+      await this.assetRepository.find({
+        where: assetIds.map(id => ({ id })),
+        select: ['id', 'policy_id', 'asset_id', 'name', 'metadata', 'listing_tx_hash'],
+      });
 
     // Create a map for quick asset lookup
     const assetMap = new Map(assets.map(asset => [asset.id, asset]));
-
-    // Group operations by market and action type for batching
     const groupedOperations = this.groupBuySellOperations(proposal.metadata.marketplaceActions);
 
-    let hasSuccessfulOperation = false;
+    // For now, we only support WayUp marketplace
+    const operations = groupedOperations['wayup'];
+    if (!operations) {
+      this.logger.warn(`No WayUp marketplace operations found for proposal ${proposal.id}`);
+      return false;
+    }
 
-    // Process each market's operations
-    for (const [market, operations] of Object.entries(groupedOperations)) {
+    try {
       this.logger.log(
         `Processing ${operations.sells.length} sell(s), ${operations.buys.length} buy(s), ` +
-          `${operations.unlists.length} unlist(s), and ${operations.updates.length} update(s) for ${market}`
+          `${operations.unlists.length} unlist(s), and ${operations.updates.length} update(s) for WayUp`
       );
 
-      // Execute all SELL operations for this market in a single transaction
-      if (operations.sells.length > 0) {
-        try {
-          const listings = [];
-          const listingAssetInfos = [];
-          const skippedSells = [];
-          const assetsToExtract = [];
+      // Prepare all action inputs
+      const listings: { policyId: string; assetName: string; priceAda: number }[] = [];
+      const listingAssetInfos: { assetId: string; price: number }[] = [];
+      const assetsToExtract: string[] = [];
+      const unlistings: { policyId: string; txHashIndex: string }[] = [];
+      const unlistedAssetIds: string[] = [];
+      const updates: { policyId: string; txHashIndex: string; newPriceAda: number }[] = [];
+      const updateAssetInfos: { assetId: string; newPrice: number }[] = [];
+      const purchases: { policyId: string; txHashIndex: string; priceAda: number }[] = [];
 
-          for (const option of operations.sells) {
-            const asset = assetMap.get(option.assetId);
+      const skipped: { sells: string[]; buys: string[]; unlists: string[]; updates: string[] } = {
+        sells: [],
+        buys: [],
+        unlists: [],
+        updates: [],
+      };
 
-            if (!asset) {
-              this.logger.warn(`Asset not found for assetId: ${option.assetId}`);
-              skippedSells.push(option.assetName || option.assetId);
-              continue;
-            }
-
-            // Extract assetName from asset_id (format: policyId + assetName in hex)
-            const policyId = asset.policy_id;
-            const assetName = asset.asset_id.substring(policyId.length); // Remove policyId prefix
-            const priceAda = parseFloat(option.price);
-
-            listings.push({
-              policyId,
-              assetName,
-              priceAda,
-            });
-
-            listingAssetInfos.push({
-              assetId: option.assetId,
-              price: priceAda,
-            });
-
-            // Collect asset IDs that need to be extracted to treasury
-            assetsToExtract.push(option.assetId);
-          }
-
-          if (listings.length > 0) {
-            // STEP 1: Extract assets from vault to treasury wallet before listing
-            this.logger.log(
-              `Extracting ${assetsToExtract.length} asset(s) from vault to treasury wallet before listing`
-            );
-
-            try {
-              const extractionResult = await this.treasuryExtractionService.extractAssetsToTreasury({
-                vaultId: proposal.vaultId,
-                assetIds: assetsToExtract,
-              });
-
-              this.logger.log(
-                `Successfully extracted ${extractionResult.extractedAssets.length} asset(s) to treasury. TxHash: ${extractionResult.transactionId}`
-              );
-
-              // Wait a moment for the extraction transaction to be confirmed
-              await new Promise(resolve => setTimeout(resolve, 10000)); // 10 second delay
-            } catch (extractError) {
-              this.logger.error(
-                `Failed to extract assets to treasury before listing: ${extractError.message}`,
-                extractError.stack
-              );
-              throw new Error(
-                `Cannot list assets on marketplace: extraction to treasury failed. ${extractError.message}`
-              );
-            }
-
-            // STEP 2: List the extracted assets on the marketplace
-            this.logger.log(`Listing ${listings.length} NFT(s) for sale on ${market} in a single transaction`);
-
-            const result = await this.wayUpService.createListing(proposal.vaultId, listings);
-
-            this.logger.log(`Successfully listed ${listings.length} NFT(s) on WayUp. TxHash: ${result.txHash}`);
-            hasSuccessfulOperation = true;
-
-            // Update asset statuses to LISTED in database with individual listing prices
-            try {
-              await this.assetsService.markAssetsAsListedWithPrices(
-                listingAssetInfos.map(info => ({
-                  assetId: info.assetId,
-                  price: info.price,
-                  market,
-                  txHash: result.txHash,
-                }))
-              );
-              this.logger.log(`Confirmed ${listingAssetInfos.length} asset(s) marked as LISTED in database`);
-            } catch (statusError) {
-              this.logger.warn(`Failed to update asset statuses to LISTED: ${statusError.message}`);
-            }
-
-            // Emit event for tracking
-            this.eventEmitter.emit('proposal.wayup.listing.created', {
-              proposalId: proposal.id,
-              vaultId: proposal.vaultId,
-              txHash: result.txHash,
-              assetCount: listings.length,
-              listings: listings.map((l, idx) => ({
-                assetName: operations.sells[idx].assetName || assetMap.get(operations.sells[idx].assetId)?.name,
-                priceAda: l.priceAda,
-              })),
-            });
-          }
-
-          if (skippedSells.length > 0) {
-            this.logger.warn(
-              `Skipped ${skippedSells.length} sell operation(s) due to missing asset data: ${skippedSells.join(', ')}`
-            );
-          }
-        } catch (error) {
-          this.logger.error(`Error executing batch sell operations on ${market}: ${error.message}`, error.stack);
-          // Continue with buy operations even if sell fails
+      // Process SELL operations
+      for (const option of operations.sells) {
+        const asset = assetMap.get(option.assetId);
+        if (!asset) {
+          this.logger.warn(`Asset not found for assetId: ${option.assetId}`);
+          skipped.sells.push(option.assetId);
+          continue;
         }
+
+        const policyId = asset.policy_id;
+        const assetName = asset.asset_id.substring(policyId.length);
+        const priceAda = parseFloat(option.price);
+
+        listings.push({ policyId, assetName, priceAda });
+        listingAssetInfos.push({ assetId: option.assetId, price: priceAda });
+        assetsToExtract.push(option.assetId);
       }
 
-      // Execute all BUY operations for this market in a single transaction
-      if (operations.buys.length > 0) {
-        try {
-          const purchases = [];
-          const skippedBuys = [];
-
-          for (const option of operations.buys) {
-            const asset = assetMap.get(option.assetId);
-
-            if (!asset) {
-              this.logger.warn(`Asset not found for assetId: ${option.assetId}`);
-              skippedBuys.push(option.assetName || option.assetId);
-              continue;
-            }
-
-            const txHashIndex = this.extractTxHashIndex(option);
-
-            if (!txHashIndex) {
-              this.logger.warn(`Cannot buy NFT - missing txHashIndex for ${option.assetName || asset.name}`);
-              skippedBuys.push(option.assetName || asset.name);
-              continue;
-            }
-
-            purchases.push({
-              policyId: asset.policy_id,
-              txHashIndex,
-              priceAda: parseFloat(option.price),
-            });
-          }
-
-          if (purchases.length > 0) {
-            this.logger.log(`Buying ${purchases.length} NFT(s) on ${market} in a single transaction`);
-
-            const result = await this.wayUpService.buyNFT(proposal.vaultId, purchases);
-
-            this.logger.log(`Successfully purchased ${purchases.length} NFT(s) on WayUp. TxHash: ${result.txHash}`);
-            hasSuccessfulOperation = true;
-
-            // Emit event for tracking
-            this.eventEmitter.emit('proposal.wayup.purchase.completed', {
-              proposalId: proposal.id,
-              vaultId: proposal.vaultId,
-              txHash: result.txHash,
-              assetCount: purchases.length,
-              purchases: purchases.map((p, idx) => ({
-                assetName: operations.buys[idx].assetName || assetMap.get(operations.buys[idx].assetId)?.name,
-                priceAda: p.priceAda,
-              })),
-            });
-          }
-
-          if (skippedBuys.length > 0) {
-            this.logger.warn(
-              `Skipped ${skippedBuys.length} buy operation(s) due to missing data: ${skippedBuys.join(', ')}`
-            );
-          }
-        } catch (error) {
-          this.logger.error(`Error executing batch buy operations on ${market}: ${error.message}`, error.stack);
+      // Process UNLIST operations
+      for (const option of operations.unlists) {
+        const asset = assetMap.get(option.assetId);
+        if (!asset) {
+          this.logger.warn(`Asset not found for assetId: ${option.assetId}`);
+          skipped.unlists.push(option.assetId);
+          continue;
         }
+
+        const txHashIndex = asset.listing_tx_hash;
+        if (!txHashIndex) {
+          this.logger.warn(`Cannot unlist NFT - missing listing_tx_hash for ${asset.name}`);
+          skipped.unlists.push(asset.name || option.assetId);
+          continue;
+        }
+
+        unlistings.push({ policyId: asset.policy_id, txHashIndex });
+        unlistedAssetIds.push(option.assetId);
       }
 
-      // Execute all UNLIST operations for this market in a single transaction
-      if (operations.unlists.length > 0) {
-        try {
-          const unlistings = [];
-          const skippedUnlists = [];
-
-          for (const option of operations.unlists) {
-            const asset = assetMap.get(option.assetId);
-
-            if (!asset) {
-              this.logger.warn(`Asset not found for assetId: ${option.assetId}`);
-              skippedUnlists.push(option.assetId);
-              continue;
-            }
-
-            const txHashIndex = this.extractTxHashIndex(asset);
-
-            if (!txHashIndex) {
-              this.logger.warn(`Cannot unlist NFT - missing txHashIndex in asset metadata for ${asset.name}`);
-              skippedUnlists.push(asset.name || option.assetId);
-              continue;
-            }
-
-            unlistings.push({
-              policyId: asset.policy_id,
-              txHashIndex,
-            });
-          }
-
-          if (unlistings.length > 0) {
-            this.logger.log(`Unlisting ${unlistings.length} NFT(s) from ${market} in a single transaction`);
-
-            const result = await this.wayUpService.unlistNFTs(proposal.vaultId, unlistings);
-
-            this.logger.log(`Successfully unlisted ${unlistings.length} NFT(s) on WayUp. TxHash: ${result.txHash}`);
-            this.logger.log(`Assets marked as EXTRACTED (returned to treasury wallet)`);
-            hasSuccessfulOperation = true;
-
-            // Update asset statuses to EXTRACTED in database
-            try {
-              const unlistedAssetIds = operations.unlists.map(op => op.assetId).filter(id => assetMap.has(id));
-              await this.assetsService.markAssetsAsUnlisted(unlistedAssetIds);
-              this.logger.log(`Confirmed ${unlistedAssetIds.length} asset(s) marked as EXTRACTED in database`);
-            } catch (statusError) {
-              this.logger.warn(`Failed to update asset statuses to EXTRACTED: ${statusError.message}`);
-            }
-
-            // Emit event for tracking
-            this.eventEmitter.emit('proposal.wayup.unlisting.completed', {
-              proposalId: proposal.id,
-              vaultId: proposal.vaultId,
-              txHash: result.txHash,
-              assetCount: unlistings.length,
-            });
-          }
-
-          if (skippedUnlists.length > 0) {
-            this.logger.warn(
-              `Skipped ${skippedUnlists.length} unlist operation(s) due to missing data: ${skippedUnlists.join(', ')}`
-            );
-          }
-        } catch (error) {
-          this.logger.error(`Error executing batch unlist operations on ${market}: ${error.message}`, error.stack);
+      // Process UPDATE_LISTING operations
+      for (const option of operations.updates) {
+        const asset = assetMap.get(option.assetId);
+        if (!asset) {
+          this.logger.warn(`Asset not found for assetId: ${option.assetId}`);
+          skipped.updates.push(option.assetId);
+          continue;
         }
+
+        const txHashIndex = asset.listing_tx_hash;
+        if (!txHashIndex) {
+          this.logger.warn(`Cannot update listing - missing listing_tx_hash for ${asset.name}`);
+          skipped.updates.push(asset.name || option.assetId);
+          continue;
+        }
+
+        if (!option.newPrice) {
+          this.logger.warn(`Cannot update listing - missing new price for ${asset.name}`);
+          skipped.updates.push(asset.name || option.assetId);
+          continue;
+        }
+
+        const newPriceAda = parseFloat(option.newPrice);
+        updates.push({ policyId: asset.policy_id, txHashIndex, newPriceAda });
+        updateAssetInfos.push({ assetId: option.assetId, newPrice: newPriceAda });
       }
 
-      // Execute all UPDATE_LISTING operations for this market in a single transaction
-      if (operations.updates.length > 0) {
-        try {
-          const updates = [];
-          const skippedUpdates = [];
+      // Process BUY operations
+      for (const option of operations.buys) {
+        const asset = assetMap.get(option.assetId);
+        if (!asset) {
+          this.logger.warn(`Asset not found for assetId: ${option.assetId}`);
+          skipped.buys.push(option.assetId);
+          continue;
+        }
 
-          for (const option of operations.updates) {
-            const asset = assetMap.get(option.assetId);
+        const txHashIndex = asset.listing_tx_hash;
+        if (!txHashIndex) {
+          this.logger.warn(`Cannot buy NFT - missing txHashIndex for ${option.assetId}`);
+          skipped.buys.push(option.assetId);
+          continue;
+        }
 
-            if (!asset) {
-              this.logger.warn(`Asset not found for assetId: ${option.assetId}`);
-              skippedUpdates.push(option.assetId);
-              continue;
+        purchases.push({
+          policyId: asset.policy_id,
+          txHashIndex,
+          priceAda: parseFloat(option.price),
+        });
+      }
+
+      // Log skipped operations
+      if (skipped.sells.length > 0) {
+        this.logger.warn(`Skipped ${skipped.sells.length} sell(s): ${skipped.sells.join(', ')}`);
+      }
+      if (skipped.buys.length > 0) {
+        this.logger.warn(`Skipped ${skipped.buys.length} buy(s): ${skipped.buys.join(', ')}`);
+      }
+      if (skipped.unlists.length > 0) {
+        this.logger.warn(`Skipped ${skipped.unlists.length} unlist(s): ${skipped.unlists.join(', ')}`);
+      }
+      if (skipped.updates.length > 0) {
+        this.logger.warn(`Skipped ${skipped.updates.length} update(s): ${skipped.updates.join(', ')}`);
+      }
+
+      // Check if there are any valid operations
+      const hasOperations = listings.length > 0 || unlistings.length > 0 || updates.length > 0 || purchases.length > 0;
+
+      if (!hasOperations) {
+        this.logger.warn(`No valid marketplace operations to execute for proposal ${proposal.id}`);
+        return false;
+      }
+
+      // STEP 1: Extract assets to treasury if there are listings (only for assets not already in treasury)
+      if (listings.length > 0) {
+        if (!proposal.vault.treasury_wallet?.treasury_address) {
+          throw new Error(`Treasury wallet not configured for vault ${proposal.vaultId}`);
+        }
+        const treasuryAddress = proposal.vault.treasury_wallet.treasury_address;
+
+        // Check which assets are already in the treasury wallet
+        const targetAssets = listings.map(listing => ({
+          token: listing.policyId + listing.assetName,
+          amount: 1,
+        }));
+
+        const { requiredInputs } = await getUtxosExtract(Address.from_bech32(treasuryAddress), this.blockfrost, {
+          targetAssets,
+          minAda: 0,
+          maxUtxos: 50,
+          validateUtxos: false, // Skip validation for speed
+        });
+
+        // Find which assets are already in treasury
+        const assetsInTreasury = new Set<string>();
+        if (requiredInputs && requiredInputs.length > 0) {
+          // requiredInputs contains UTXOs with target assets
+          // We need to check which target assets were found
+          this.logger.log(`Found ${requiredInputs.length} UTXO(s) in treasury containing target assets`);
+
+          // Re-fetch to check which specific assets are in treasury
+          const treasuryUtxos = await this.blockfrost.addressesUtxosAll(treasuryAddress);
+          for (const utxo of treasuryUtxos) {
+            for (const amount of utxo.amount) {
+              if (amount.unit !== 'lovelace') {
+                assetsInTreasury.add(amount.unit);
+              }
             }
+          }
+        }
 
-            const txHashIndex = this.extractTxHashIndex(asset);
+        // Filter out assets that are already in treasury
+        const assetsNeedingExtraction = assetsToExtract.filter(assetId => {
+          const asset = assetMap.get(assetId);
+          if (!asset) return false;
+          const fullAssetUnit = asset.policy_id + asset.asset_id.substring(asset.policy_id.length);
+          return !assetsInTreasury.has(fullAssetUnit);
+        });
 
-            if (!txHashIndex) {
-              this.logger.warn(`Cannot update listing - missing txHashIndex in asset metadata for ${asset.name}`);
-              skippedUpdates.push(asset.name || option.assetId);
-              continue;
-            }
+        if (assetsNeedingExtraction.length > 0) {
+          this.logger.log(
+            `Extracting ${assetsNeedingExtraction.length} asset(s) from vault to treasury wallet before listing ` +
+              `(${assetsToExtract.length - assetsNeedingExtraction.length} already in treasury)`
+          );
 
-            if (!option.newPrice) {
-              this.logger.warn(`Cannot update listing - missing new price for ${asset.name}`);
-              skippedUpdates.push(asset.name || option.assetId);
-              continue;
-            }
+          const extractionResult = await this.treasuryExtractionService.extractAssetsToTreasury({
+            vaultId: proposal.vaultId,
+            assetIds: assetsNeedingExtraction,
+            treasuryAddress,
+          });
 
-            updates.push({
-              txHashIndex,
-              newPriceAda: parseFloat(option.newPrice),
-            });
+          this.logger.log(
+            `Successfully submitted extraction for ${extractionResult.extractedAssets.length} asset(s) to treasury. TxId: ${extractionResult.transactionId}`
+          );
+
+          const confirmed = await this.transactionsService.waitForTransactionStatus(
+            extractionResult.transactionId,
+            TransactionStatus.confirmed,
+            120000
+          );
+
+          if (!confirmed) {
+            throw new Error(`Extraction transaction ${extractionResult.txHash} not confirmed within timeout`);
           }
 
-          if (updates.length > 0) {
-            this.logger.log(`Updating ${updates.length} NFT listing(s) on ${market} in a single transaction`);
-
-            const result = await this.wayUpService.updateListing(proposal.vaultId, updates);
-
-            this.logger.log(`Successfully updated ${updates.length} NFT listing(s) on WayUp. TxHash: ${result.txHash}`);
-            this.logger.log(`Assets remain LISTED with updated prices`);
-            hasSuccessfulOperation = true;
-
-            // Emit event for tracking
-            this.eventEmitter.emit('proposal.wayup.listing.updated', {
-              proposalId: proposal.id,
-              vaultId: proposal.vaultId,
-              txHash: result.txHash,
-              assetCount: updates.length,
-            });
-          }
-
-          if (skippedUpdates.length > 0) {
-            this.logger.warn(
-              `Skipped ${skippedUpdates.length} update operation(s) due to missing data: ${skippedUpdates.join(', ')}`
-            );
-          }
-        } catch (error) {
-          this.logger.error(
-            `Error executing batch update listing operations on ${market}: ${error.message}`,
-            error.stack
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        } else {
+          this.logger.log(
+            `All ${assetsToExtract.length} asset(s) for listing are already in treasury wallet, skipping extraction`
           );
         }
       }
-    }
 
-    return hasSuccessfulOperation;
-  } /**
-   * Group buy/sell operations by market and action type for batched execution
+      // STEP 2: Execute all marketplace actions in a single atomic transaction
+      this.logger.log(
+        `Executing combined marketplace actions: ${listings.length} listings, ${unlistings.length} unlistings, ` +
+          `${updates.length} updates, ${purchases.length} purchases`
+      );
+
+      const result = await this.wayUpService.executeCombinedMarketplaceActions(proposal.vaultId, {
+        listings: listings.length > 0 ? listings : undefined,
+        unlistings: unlistings.length > 0 ? unlistings : undefined,
+        updates: updates.length > 0 ? updates : undefined,
+        purchases: purchases.length > 0 ? purchases : undefined,
+      });
+
+      this.logger.log(`Combined marketplace transaction completed. TxHash: ${result.txHash}`);
+      this.logger.log(`Summary: ${JSON.stringify(result.summary)}`);
+
+      // STEP 3: Update database records
+      // Update listings
+      if (listings.length > 0) {
+        try {
+          await this.assetsService.markAssetsAsListedWithPrices(
+            listingAssetInfos.map(info => ({
+              assetId: info.assetId,
+              price: info.price,
+              market: 'wayup',
+              txHash: result.txHash,
+            }))
+          );
+          this.logger.log(`Marked ${listingAssetInfos.length} asset(s) as LISTED`);
+        } catch (statusError) {
+          this.logger.warn(`Failed to update asset statuses to LISTED: ${statusError.message}`);
+        }
+      }
+
+      // Update unlistings
+      if (unlistings.length > 0) {
+        try {
+          await this.assetsService.markAssetsAsUnlisted(unlistedAssetIds);
+          this.logger.log(`Marked ${unlistedAssetIds.length} asset(s) as EXTRACTED (unlisted)`);
+        } catch (statusError) {
+          this.logger.warn(`Failed to update asset statuses to EXTRACTED: ${statusError.message}`);
+        }
+      }
+
+      // Update listing prices
+      if (updates.length > 0) {
+        try {
+          await this.assetsService.updateListingPrices(
+            updateAssetInfos.map(info => ({
+              assetId: info.assetId,
+              newPrice: info.newPrice,
+              txHash: result.txHash,
+            }))
+          );
+          this.logger.log(`Updated listing prices for ${updateAssetInfos.length} asset(s)`);
+        } catch (statusError) {
+          this.logger.warn(`Failed to update listing prices: ${statusError.message}`);
+        }
+      }
+
+      // Emit combined event for tracking
+      this.eventEmitter.emit('proposal.wayup.combined.completed', {
+        proposalId: proposal.id,
+        vaultId: proposal.vaultId,
+        txHash: result.txHash,
+        summary: result.summary,
+      });
+
+      return true;
+    } catch (error) {
+      this.logger.error(`Error executing marketplace proposal ${proposal.id}: ${error.message}`, error.stack);
+      return false;
+    }
+  }
+
+  /**
+   * Group market operations by market and action type for batched execution
    */
-  private groupBuySellOperations(
-    options: any[]
-  ): Record<string, { sells: any[]; buys: any[]; unlists: any[]; updates: any[] }> {
-    const grouped: Record<string, { sells: any[]; buys: any[]; unlists: any[]; updates: any[] }> = {};
+  private groupBuySellOperations(options: MarketplaceActionDto[]): Record<
+    string,
+    {
+      sells: MarketplaceActionDto[];
+      buys: MarketplaceActionDto[];
+      unlists: MarketplaceActionDto[];
+      updates: MarketplaceActionDto[];
+    }
+  > {
+    const grouped: Record<
+      string,
+      {
+        sells: MarketplaceActionDto[];
+        buys: MarketplaceActionDto[];
+        unlists: MarketplaceActionDto[];
+        updates: MarketplaceActionDto[];
+      }
+    > = {};
 
     for (const option of options) {
       const market = option.market || 'wayup'; // Default to wayup if not specified
-
       if (!grouped[market]) {
         grouped[market] = { sells: [], buys: [], unlists: [], updates: [] };
       }
@@ -755,24 +761,6 @@ export class GovernanceExecutionService {
       this.logger.error(`Error executing distribution proposal ${proposal.id}: ${error.message}`, error.stack);
       throw error;
     }
-  }
-
-  /**
-   * Extract txHashIndex from asset metadata
-   * The txHashIndex is stored when an asset is listed on a marketplace
-   */
-  private extractTxHashIndex(asset: any): string | null {
-    // Check asset metadata for listing information
-    if (asset.metadata?.txHashIndex) {
-      return asset.metadata.txHashIndex;
-    }
-
-    // Legacy: check if stored directly on asset
-    if (asset.txHashIndex) {
-      return asset.txHashIndex;
-    }
-
-    return null;
   }
 
   onModuleDestroy(): void {
