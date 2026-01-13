@@ -6,10 +6,15 @@ export enum AssetType {
 
 export enum AssetStatus {
   PENDING = 'pending',
-  LOCKED = 'locked', // Asset is locked in the vault
+  /** Asset is locked in the vault */
+  LOCKED = 'locked',
+  /** Removed from vault back to user */
   RELEASED = 'released',
+  /** Status For ADA that have been sent across Contributors and LP */
   DISTRIBUTED = 'distributed',
-  EXTRACTED = 'extracted', // Asset has been extracted from the vault to the treasury wallet and is sitting in it
+  /** Asset has been moved to the treasury wallet */
+  EXTRACTED = 'extracted',
+  /** Asset is listed on marketplace */
   LISTED = 'listed',
   SOLD = 'sold',
 }
