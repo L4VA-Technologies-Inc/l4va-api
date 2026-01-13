@@ -242,7 +242,10 @@ export class GovernanceExecutionService {
       this.logger.log(`Executing actions for proposal ${proposal.id} of type ${proposal.proposalType}`);
 
       switch (proposal.proposalType) {
-        case ProposalType.MARKETPLACE_ACTION || ProposalType.BUY_SELL:
+        case ProposalType.MARKETPLACE_ACTION:
+          return await this.executeMarketplaceProposal(proposal);
+
+        case ProposalType.BUY_SELL:
           return await this.executeMarketplaceProposal(proposal);
 
         case ProposalType.DISTRIBUTION:
