@@ -14,7 +14,7 @@ import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { In, IsNull, Not, Repository } from 'typeorm';
 
-import { CreateProposalReq } from './dto/create-proposal.req';
+import { CreateProposalReq, ExecType } from './dto/create-proposal.req';
 import { CreateProposalRes } from './dto/create-proposal.res';
 import { AssetBuySellDto } from './dto/get-assets.dto';
 import { GetProposalDetailRes } from './dto/get-proposal-detail.res';
@@ -341,11 +341,12 @@ export class GovernanceService {
         // Use direct marketplaceActions from request body
         const actions = createProposalReq.marketplaceActions || [];
 
-        // Validate all assets exist and enrich with additional data
-        proposal.metadata.marketplaceActions = await Promise.all(
+        // Validate all assets exist without enriching data
+        await Promise.all(
           actions.map(async action => {
             const asset = await this.assetRepository.findOne({
               where: { id: action.assetId },
+              select: ['id', 'status'],
             });
 
             if (!asset) {
@@ -353,21 +354,16 @@ export class GovernanceService {
             }
 
             // For UNLIST and UPDATE_LISTING, verify asset is currently listed
-            if (action.exec === 'UNLIST' || action.exec === 'UPDATE_LISTING') {
+            if (action.exec === ExecType.UNLIST || action.exec === ExecType.UPDATE_LISTING) {
               if (asset.status !== 'listed') {
                 throw new BadRequestException(`Asset ${action.assetId} is not currently listed`);
               }
             }
-
-            // Return new object with enriched data instead of mutating
-            return {
-              ...action,
-              assetName: asset.name,
-              assetImg: asset.image,
-              assetPrice: asset.floor_price || asset.dex_price || 0,
-            };
           })
         );
+
+        // Store only the action data, asset details will be fetched in getProposal
+        proposal.metadata.marketplaceActions = actions;
 
         break;
       }
@@ -480,52 +476,57 @@ export class GovernanceService {
   async getProposal(proposalId: string, userId: string): Promise<GetProposalDetailRes> {
     const proposal = await this.proposalRepository.findOne({
       where: { id: proposalId },
+      relations: ['vault', 'snapshot'],
+      select: {
+        vault: {
+          id: true,
+          name: true,
+          vault_token_ticker: true,
+          vault_status: true,
+        },
+      },
     });
 
     if (!proposal) {
       throw new NotFoundException('Proposal not found');
     }
 
-    const proposer = await this.userRepository.findOne({
-      where: { id: proposal.creatorId },
-      select: ['id', 'address'],
-    });
+    // Parallelize independent queries for better performance
+    const [user, proposer, { votes, totals }] = await Promise.all([
+      this.userRepository.findOne({
+        where: { id: userId },
+        select: ['id', 'address'],
+      }),
+      this.userRepository.findOne({
+        where: { id: proposal.creatorId },
+        select: ['id', 'address'],
+      }),
+      this.getVotes(proposalId),
+    ]);
 
-    const { votes, totals } = await this.getVotes(proposalId);
-
+    // Calculate voting eligibility
     let canVote = false;
     let selectedVote: VoteType | null = null;
 
     try {
       const isActive = proposal.status === ProposalStatus.ACTIVE && new Date() <= proposal.endDate;
 
-      const user = await this.userRepository.findOne({
-        where: { id: userId },
-        select: ['id', 'address'],
-      });
+      if (user?.address && proposal.snapshot) {
+        const voteWeight = proposal.snapshot.addressBalances[user.address];
+        const hasVotingPower = voteWeight && voteWeight !== '0';
 
-      if (user && user.address) {
-        const snapshot = await this.snapshotRepository.findOne({
-          where: { id: proposal.snapshotId },
+        const existingVote = await this.voteRepository.findOne({
+          where: {
+            proposalId,
+            voterAddress: user.address,
+          },
+          select: ['vote'],
         });
 
-        if (snapshot) {
-          const voteWeight = snapshot.addressBalances[user.address];
-          const hasVotingPower = voteWeight && voteWeight !== '0';
-
-          const existingVote = await this.voteRepository.findOne({
-            where: {
-              proposalId,
-              voterAddress: user.address,
-            },
-            select: ['vote'],
-          });
-
-          if (existingVote) {
-            selectedVote = existingVote.vote;
-          } else {
-            canVote = isActive && hasVotingPower;
-          }
+        if (existingVote) {
+          selectedVote = existingVote.vote;
+        } else {
+          canVote = isActive && hasVotingPower;
         }
       }
     } catch (error) {
@@ -534,136 +535,148 @@ export class GovernanceService {
       );
     }
 
-    let burnAssetsWithNames = [];
-    if (proposal.metadata.burnAssets && proposal.metadata.burnAssets.length > 0) {
-      const burnAssets = await this.assetRepository.find({
-        where: { id: In(proposal.metadata.burnAssets) },
-        select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'image', 'name', 'metadata'],
-      });
-      burnAssetsWithNames = burnAssets.map(asset => {
-        let name = asset.name || asset.metadata?.name;
-        if (!name) name = 'Unknown Asset';
+    // Consolidate all asset IDs from metadata
+    const allAssetIds = new Set<string>();
+    const burnAssetIds = proposal.metadata?.burnAssets || [];
+    const distributionAssetIds = proposal.metadata?.distributionAssets?.map(da => da.id) || [];
+    const fungibleTokenIds = proposal.metadata?.fungibleTokens?.map(ft => ft.id) || [];
+    const nonFungibleTokenIds = proposal.metadata?.nonFungibleTokens?.map(nft => nft.id) || [];
+    const marketplaceActionIds = proposal.metadata?.marketplaceActions?.map(ma => ma.assetId) || [];
 
-        let imageUrl = null;
-        const image = asset.image || asset.metadata?.image;
-        if (image) {
-          imageUrl = image.startsWith('ipfs://') ? image.replace('ipfs://', 'https://ipfs.io/ipfs/') : image;
-        }
+    [
+      ...burnAssetIds,
+      ...distributionAssetIds,
+      ...fungibleTokenIds,
+      ...nonFungibleTokenIds,
+      ...marketplaceActionIds,
+    ].forEach(id => allAssetIds.add(id));
 
-        return {
-          id: asset.id,
-          name,
-          imageUrl,
-          policyId: asset.policy_id,
-          assetId: asset.asset_id,
-          type: asset.type,
-          quantity: asset.quantity,
-        };
-      });
-    }
+    // Fetch all assets in a single query
+    const allAssets =
+      allAssetIds.size > 0
+        ? await this.assetRepository.find({
+            where: { id: In(Array.from(allAssetIds)) },
+            select: [
+              'id',
+              'policy_id',
+              'asset_id',
+              'type',
+              'quantity',
+              'image',
+              'name',
+              'metadata',
+              'floor_price',
+              'dex_price',
+              'listing_price',
+            ],
+          })
+        : [];
 
-    let distributionAssetsWithNames = [];
-    if (proposal.metadata.distributionAssets && proposal.metadata.distributionAssets.length > 0) {
-      const distributionAssetIds = proposal.metadata.distributionAssets.map(da => da.id);
-      const distributionAssets = await this.assetRepository.find({
-        where: { id: In(distributionAssetIds) },
-        select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'image', 'name', 'metadata'],
-      });
+    // Create asset lookup map for O(1) access
+    const assetMap = new Map(allAssets.map(asset => [asset.id, asset]));
 
-      // Create a map for quick lookup of distribution amounts
-      const distributionAmountMap = new Map(proposal.metadata.distributionAssets.map(da => [da.id, da.amount]));
+    // Transform assets using direct properties and imageUrl getter
+    const burnAssetsWithNames = burnAssetIds
+      .map(id => assetMap.get(id))
+      .filter(Boolean)
+      .map(asset => ({
+        id: asset.id,
+        name: asset.name || asset.metadata?.name || 'Unknown Asset',
+        imageUrl: asset.imageUrl,
+        policyId: asset.policy_id,
+        assetId: asset.asset_id,
+        type: asset.type,
+        quantity: asset.quantity,
+      }));
 
-      distributionAssetsWithNames = distributionAssets.map(asset => {
-        let name = asset.name || asset.metadata?.name;
-        if (!name) name = 'Unknown Asset';
+    const distributionAmountMap = new Map(proposal.metadata?.distributionAssets?.map(da => [da.id, da.amount]) || []);
+    const distributionAssetsWithNames = distributionAssetIds
+      .map(id => assetMap.get(id))
+      .filter(Boolean)
+      .map(asset => ({
+        id: asset.id,
+        name: asset.name || asset.metadata?.name || 'Unknown Asset',
+        imageUrl: asset.imageUrl,
+        policyId: asset.policy_id,
+        assetId: asset.asset_id,
+        type: asset.type,
+        quantity: asset.quantity,
+        amount: distributionAmountMap.get(asset.id) || 0,
+      }));
 
-        let imageUrl = null;
-        const image = asset.image || asset.metadata?.image;
-        if (image) {
-          imageUrl = image.startsWith('ipfs://') ? image.replace('ipfs://', 'https://ipfs.io/ipfs/') : image;
-        }
+    const amountMap = new Map(proposal.metadata?.fungibleTokens?.map(ft => [ft.id, ft.amount]) || []);
+    const fungibleTokensWithNames = fungibleTokenIds
+      .map(id => assetMap.get(id))
+      .filter(Boolean)
+      .map(asset => ({
+        id: asset.id,
+        name: asset.name || asset.metadata?.name || 'Unknown Asset',
+        imageUrl: asset.imageUrl,
+        policyId: asset.policy_id,
+        assetId: asset.asset_id,
+        type: asset.type,
+        quantity: asset.quantity,
+        amount: amountMap.get(asset.id),
+      }));
 
-        return {
-          id: asset.id,
-          name,
-          imageUrl,
-          policyId: asset.policy_id,
-          assetId: asset.asset_id,
-          type: asset.type,
-          quantity: asset.quantity,
-          amount: distributionAmountMap.get(asset.id) || 0,
-        };
-      });
-    }
+    const marketMap = new Map(proposal.metadata?.nonFungibleTokens?.map(nft => [nft.id, nft.market]) || []);
+    const nonFungibleTokensWithNames = nonFungibleTokenIds
+      .map(id => assetMap.get(id))
+      .filter(Boolean)
+      .map(asset => ({
+        id: asset.id,
+        name: asset.name || asset.metadata?.name || 'Unknown Asset',
+        imageUrl: asset.imageUrl,
+        policyId: asset.policy_id,
+        assetId: asset.asset_id,
+        type: asset.type,
+        quantity: asset.quantity,
+        market: marketMap.get(asset.id),
+      }));
 
-    let fungibleTokensWithNames = [];
-    if (proposal.metadata.fungibleTokens && proposal.metadata.fungibleTokens.length > 0) {
-      const fungibleTokenIds = proposal.metadata.fungibleTokens.map(ft => ft.id);
-      const fungibleTokens = await this.assetRepository.find({
-        where: { id: In(fungibleTokenIds) },
-        select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'image', 'name', 'metadata', 'listing_market'],
-      });
+    // Transform marketplace actions with enriched asset data
+    const marketplaceActions = (proposal.metadata?.marketplaceActions || []).map(action => {
+      const asset = assetMap.get(action.assetId);
+      return {
+        ...action,
+        assetName: asset?.name || asset?.metadata?.name || 'Unknown Asset',
+        assetImg: asset?.imageUrl,
+        assetPrice: asset?.floor_price || asset?.dex_price || 0,
+        listingPrice: asset?.listing_price,
+      };
+    });
 
-      const amountMap = new Map(proposal.metadata.fungibleTokens.map(ft => [ft.id, ft.amount]));
-
-      fungibleTokensWithNames = fungibleTokens.map(asset => {
-        let name = asset.name || asset.metadata?.name;
-        if (!name) name = 'Unknown Asset';
-
-        let imageUrl = null;
-        const image = asset.image || asset.metadata?.image;
-        if (image) {
-          imageUrl = image.startsWith('ipfs://') ? image.replace('ipfs://', 'https://ipfs.io/ipfs/') : image;
-        }
-
-        return {
-          id: asset.id,
-          name,
-          imageUrl,
-          policyId: asset.policy_id,
-          assetId: asset.asset_id,
-          type: asset.type,
-          quantity: asset.quantity,
-          amount: amountMap.get(asset.id),
-        };
-      });
-    }
-
-    let nonFungibleTokensWithNames = [];
-    if (proposal.metadata.nonFungibleTokens && proposal.metadata.nonFungibleTokens.length > 0) {
-      const nonFungibleTokenIds = proposal.metadata.nonFungibleTokens.map(nft => nft.id);
-      const nonFungibleTokens = await this.assetRepository.find({
-        where: { id: In(nonFungibleTokenIds) },
-        select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'image', 'name', 'metadata', 'listing_market'],
-      });
-
-      const marketMap = new Map(proposal.metadata.nonFungibleTokens.map(nft => [nft.id, nft.market]));
-
-      nonFungibleTokensWithNames = nonFungibleTokens.map(asset => {
-        let name = asset.name || asset.metadata?.name;
-        if (!name) name = 'Unknown Asset';
-
-        let imageUrl = null;
-        const image = asset.image || asset.metadata?.image;
-        if (image) {
-          imageUrl = image.startsWith('ipfs://') ? image.replace('ipfs://', 'https://ipfs.io/ipfs/') : image;
-        }
-
-        return {
-          id: asset.id,
-          name,
-          imageUrl,
-          policyId: asset.policy_id,
-          assetId: asset.asset_id,
-          type: asset.type,
-          quantity: asset.quantity,
-          market: marketMap.get(asset.id),
-        };
-      });
-    }
+    // Map proposal entity to DTO with only needed fields
+    const proposalDto = {
+      id: proposal.id,
+      title: proposal.title,
+      description: proposal.description,
+      status: proposal.status,
+      proposalType: proposal.proposalType,
+      ipfsHash: proposal.ipfsHash,
+      externalLink: proposal.externalLink,
+      startDate: proposal.startDate,
+      endDate: proposal.endDate,
+      executionDate: proposal.executionDate,
+      terminationDate: proposal.terminationDate,
+      abstain: proposal.abstain,
+      snapshotId: proposal.snapshotId,
+      vaultId: proposal.vaultId,
+      creatorId: proposal.creatorId,
+      createdAt: proposal.createdAt,
+      metadata: proposal.metadata,
+      vault: proposal.vault
+        ? {
+            id: proposal.vault.id,
+            name: proposal.vault.name,
+            vault_token_ticker: proposal.vault.vault_token_ticker,
+            vault_status: proposal.vault.vault_status,
+          }
+        : undefined,
+    };
 
     return {
-      proposal,
+      proposal: proposalDto,
       votes,
       totals,
       canVote,
@@ -673,6 +686,7 @@ export class GovernanceService {
       distributionAssets: distributionAssetsWithNames,
       fungibleTokens: fungibleTokensWithNames,
       nonFungibleTokens: nonFungibleTokensWithNames,
+      marketplaceActions,
     };
   }
 
