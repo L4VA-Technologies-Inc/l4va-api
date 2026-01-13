@@ -1,5 +1,4 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { Address } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
@@ -15,7 +14,6 @@ import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
-import { getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { TreasuryExtractionService } from '@/modules/vaults/treasure/treasury-extraction.service';
 import { WayUpService } from '@/modules/wayup/wayup.service';
 import { ClaimType } from '@/types/claim.types';
@@ -364,7 +362,7 @@ export class GovernanceExecutionService {
         }
 
         const policyId = asset.policy_id;
-        const assetName = asset.asset_id.substring(policyId.length);
+        const assetName = asset.asset_id;
         const priceAda = parseFloat(option.price);
 
         listings.push({ policyId, assetName, priceAda });
@@ -471,27 +469,9 @@ export class GovernanceExecutionService {
         }
         const treasuryAddress = proposal.vault.treasury_wallet.treasury_address;
 
-        // Check which assets are already in the treasury wallet
-        const targetAssets = listings.map(listing => ({
-          token: listing.policyId + listing.assetName,
-          amount: 1,
-        }));
-
-        const { requiredInputs } = await getUtxosExtract(Address.from_bech32(treasuryAddress), this.blockfrost, {
-          targetAssets,
-          minAda: 0,
-          maxUtxos: 50,
-          validateUtxos: false, // Skip validation for speed
-        });
-
-        // Find which assets are already in treasury
+        // Check which assets are already in the treasury wallet by directly querying UTXOs
         const assetsInTreasury = new Set<string>();
-        if (requiredInputs && requiredInputs.length > 0) {
-          // requiredInputs contains UTXOs with target assets
-          // We need to check which target assets were found
-          this.logger.log(`Found ${requiredInputs.length} UTXO(s) in treasury containing target assets`);
-
-          // Re-fetch to check which specific assets are in treasury
+        try {
           const treasuryUtxos = await this.blockfrost.addressesUtxosAll(treasuryAddress);
           for (const utxo of treasuryUtxos) {
             for (const amount of utxo.amount) {
@@ -500,13 +480,17 @@ export class GovernanceExecutionService {
               }
             }
           }
+          this.logger.log(`Found ${assetsInTreasury.size} unique asset(s) in treasury wallet`);
+        } catch (error) {
+          // If treasury is empty or query fails, assume no assets are there
+          this.logger.log(`Treasury wallet appears empty or query failed: ${error.message}`);
         }
 
         // Filter out assets that are already in treasury
         const assetsNeedingExtraction = assetsToExtract.filter(assetId => {
           const asset = assetMap.get(assetId);
           if (!asset) return false;
-          const fullAssetUnit = asset.policy_id + asset.asset_id.substring(asset.policy_id.length);
+          const fullAssetUnit = asset.policy_id + asset.asset_id;
           return !assetsInTreasury.has(fullAssetUnit);
         });
 
