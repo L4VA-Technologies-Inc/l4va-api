@@ -525,11 +525,10 @@ export class GovernanceExecutionService {
             `Successfully submitted extraction for ${extractionResult.extractedAssets.length} asset(s) to treasury. TxId: ${extractionResult.transactionId}`
           );
 
-          // Wait for extraction transaction to be confirmed via webhook (polls database)
           const confirmed = await this.transactionsService.waitForTransactionStatus(
             extractionResult.transactionId,
             TransactionStatus.confirmed,
-            120000 // 2 minutes timeout
+            120000
           );
 
           if (!confirmed) {

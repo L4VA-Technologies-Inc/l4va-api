@@ -13,6 +13,7 @@ import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
+import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import {
   getAddressFromHash,
@@ -38,6 +39,7 @@ export class ContributorDistributionOrchestrator {
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
     private readonly blockchainService: BlockchainService,
+    private readonly transactionService: TransactionsService,
     private readonly claimsService: ClaimsService,
     private readonly paymentBuilder: ContributorPaymentBuilder,
     private readonly blockfrost: BlockFrostAPI
@@ -314,9 +316,12 @@ export class ContributorDistributionOrchestrator {
       );
 
       // Wait for confirmation
-      await new Promise(resolve => setTimeout(resolve, 1000));
 
-      const confirmed = await this.blockchainService.waitForTransactionConfirmation(response.txHash);
+      const confirmed = await this.transactionService.waitForTransactionStatus(
+        batchTransaction.id,
+        TransactionStatus.confirmed,
+        120000
+      );
 
       if (!confirmed) {
         throw new Error(`Batch payment transaction ${response.txHash} failed to confirm`);
