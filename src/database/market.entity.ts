@@ -31,17 +31,17 @@ export class Market {
   @Column({ type: 'decimal', precision: 20, scale: 8, default: 0, name: 'totalSupply' })
   totalSupply: number;
 
-  @Column({ type: 'decimal', precision: 10, scale: 6, default: 0, name: '1h' })
-  '1h': number;
+  @Column({ type: 'decimal', precision: 10, scale: 6, default: 0, name: 'price_change_1h' })
+  price_change_1h: number;
 
-  @Column({ type: 'decimal', precision: 10, scale: 6, default: 0, name: '24h' })
-  '24h': number;
+  @Column({ type: 'decimal', precision: 10, scale: 6, default: 0, name: 'price_change_24h' })
+  price_change_24h: number;
 
-  @Column({ type: 'decimal', precision: 10, scale: 6, default: 0, name: '7d' })
-  '7d': number;
+  @Column({ type: 'decimal', precision: 10, scale: 6, default: 0, name: 'price_change_7d' })
+  price_change_7d: number;
 
-  @Column({ type: 'decimal', precision: 10, scale: 6, default: 0, name: '30d' })
-  '30d': number;
+  @Column({ type: 'decimal', precision: 10, scale: 6, default: 0, name: 'price_change_30d' })
+  price_change_30d: number;
 
   @CreateDateColumn({ type: 'timestamptz' })
   created_at: Date;

@@ -1269,7 +1269,14 @@ export class TaptoolsService {
   @Cron(CronExpression.EVERY_2_HOURS)
   async scheduledUpdateVaultTokensMarketStats(): Promise<void> {
     this.logger.log('Scheduled task: Starting vault tokens market stats update');
-    await this.getVaultTokensMarketStats();
+    try {
+      await this.getVaultTokensMarketStats();
+    } catch (error) {
+      this.logger.error(
+        'Scheduled task: Failed to update vault tokens market stats',
+        error instanceof Error ? error.stack : undefined
+      );
+    }
   }
 
   async getVaultTokensMarketStats(): Promise<void> {
@@ -1304,7 +1311,7 @@ export class TaptoolsService {
             }),
           ]);
 
-          const vaultUpdateData: any = {};
+          const vaultUpdateData: Partial<Vault> = {};
 
           if (mcapData?.fdv) {
             vaultUpdateData.fdv = mcapData.fdv;
@@ -1323,10 +1330,10 @@ export class TaptoolsService {
             circSupply: mcapData?.circSupply || 0,
             mcap: mcapData?.mcap || 0,
             totalSupply: mcapData?.totalSupply || 0,
-            '1h': priceChangeData?.['1h'] || 0,
-            '24h': priceChangeData?.['24h'] || 0,
-            '7d': priceChangeData?.['7d'] || 0,
-            '30d': priceChangeData?.['30d'] || 0,
+            price_change_1h: priceChangeData?.['1h'] || 0,
+            price_change_24h: priceChangeData?.['24h'] || 0,
+            price_change_7d: priceChangeData?.['7d'] || 0,
+            price_change_30d: priceChangeData?.['30d'] || 0,
           };
 
           await this.marketService.upsertMarketData(marketData);

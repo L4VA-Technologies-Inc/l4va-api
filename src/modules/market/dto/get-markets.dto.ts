@@ -11,10 +11,10 @@ export enum MarketSortField {
   price = 'price',
   ticker = 'ticker',
   totalSupply = 'totalSupply',
-  priceChange1h = '1h',
-  priceChange24h = '24h',
-  priceChange7d = '7d',
-  priceChange30d = '30d',
+  priceChange1h = 'price_change_1h',
+  priceChange24h = 'price_change_24h',
+  priceChange7d = 'price_change_7d',
+  priceChange30d = 'price_change_30d',
   tvl = 'tvl',
   createdAt = 'created_at',
   updatedAt = 'updated_at',
@@ -52,7 +52,7 @@ export class GetMarketsDto extends PaginationDto {
   @ApiProperty({
     type: String,
     required: false,
-    description: 'Filter by ticker (exact match)',
+    description: 'Filter by ticker (case-insensitive partial match)',
   })
   @Expose()
   ticker?: string;

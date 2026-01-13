@@ -1,5 +1,5 @@
 import { Controller, Get, Query } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { ApiTags, ApiResponse } from '@nestjs/swagger';
 
 import { ApiDoc } from '../../decorators/api-doc.decorator';
 
@@ -19,7 +19,6 @@ export class MarketController {
     description: 'Returns paginated list of markets with optional sorting and filtering',
     status: 200,
   })
-  @ApiOperation({ summary: 'Get markets' })
   @ApiResponse({ status: 200, description: 'Returns paginated markets' })
   async getMarkets(@Query() query: GetMarketsDto): Promise<GetMarketsResponse> {
     return this.marketService.getMarkets(query);

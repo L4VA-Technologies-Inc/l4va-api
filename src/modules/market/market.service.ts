@@ -113,10 +113,10 @@ export class MarketService {
         circSupply: item.circSupply,
         mcap: item.mcap,
         totalSupply: item.totalSupply,
-        '1h': item['1h'],
-        '24h': item['24h'],
-        '7d': item['7d'],
-        '30d': item['30d'],
+        price_change_1h: item.price_change_1h,
+        price_change_24h: item.price_change_24h,
+        price_change_7d: item.price_change_7d,
+        price_change_30d: item.price_change_30d,
         created_at: item.created_at,
         updated_at: item.updated_at,
 
@@ -145,26 +145,20 @@ export class MarketService {
     circSupply: number;
     mcap: number;
     totalSupply: number;
-    '1h': number;
-    '24h': number;
-    '7d': number;
-    '30d': number;
+    price_change_1h: number;
+    price_change_24h: number;
+    price_change_7d: number;
+    price_change_30d: number;
   }): Promise<Market> {
     const existingMarket = await this.marketRepository.findOne({
       where: { vault_id: data.vault_id },
     });
 
     if (existingMarket) {
-      Object.assign(existingMarket, {
-        ...data,
-        vault_id: data.vault_id,
-      });
+      Object.assign(existingMarket, data);
       return await this.marketRepository.save(existingMarket);
     } else {
-      const newMarket = this.marketRepository.create({
-        ...data,
-        vault_id: data.vault_id,
-      });
+      const newMarket = this.marketRepository.create(data);
       return await this.marketRepository.save(newMarket);
     }
   }
@@ -177,10 +171,10 @@ export class MarketService {
       [MarketSortField.price]: 'price',
       [MarketSortField.ticker]: 'ticker',
       [MarketSortField.totalSupply]: 'totalSupply',
-      [MarketSortField.priceChange1h]: '1h',
-      [MarketSortField.priceChange24h]: '24h',
-      [MarketSortField.priceChange7d]: '7d',
-      [MarketSortField.priceChange30d]: '30d',
+      [MarketSortField.priceChange1h]: 'price_change_1h',
+      [MarketSortField.priceChange24h]: 'price_change_24h',
+      [MarketSortField.priceChange7d]: 'price_change_7d',
+      [MarketSortField.priceChange30d]: 'price_change_30d',
       [MarketSortField.tvl]: 'tvl',
       [MarketSortField.createdAt]: 'created_at',
       [MarketSortField.updatedAt]: 'updated_at',

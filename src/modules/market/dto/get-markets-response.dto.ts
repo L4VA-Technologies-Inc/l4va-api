@@ -7,10 +7,10 @@ export interface MarketItem {
   circSupply: number;
   mcap: number;
   totalSupply: number;
-  '1h': number;
-  '24h': number;
-  '7d': number;
-  '30d': number;
+  price_change_1h: number;
+  price_change_24h: number;
+  price_change_7d: number;
+  price_change_30d: number;
   created_at: Date;
   updated_at: Date;
   ticker: string | null;

@@ -32,19 +32,19 @@ export class VaultTokensMarketStatsDto {
 
   @ApiProperty({ description: 'Price change in 1 hour' })
   @Expose()
-  '1h': number;
+  price_change_1h: number;
 
   @ApiProperty({ description: 'Price change in 24 hours' })
   @Expose()
-  '24h': number;
+  price_change_24h: number;
 
   @ApiProperty({ description: 'Price change in 7 days' })
   @Expose()
-  '7d': number;
+  price_change_7d: number;
 
   @ApiProperty({ description: 'Price change in 30 days' })
   @Expose()
-  '30d': number;
+  price_change_30d: number;
 
   @ApiProperty({ description: 'Token image URL', required: false })
   @Expose()
