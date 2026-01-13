@@ -642,7 +642,7 @@ export class GovernanceExecutionService {
     > = {};
 
     for (const option of options) {
-      const market = option.market || 'wayup'; // Default to wayup if not specified
+      const market = (option.market || 'wayup').toLowerCase(); // Normalize to lowercase
       if (!grouped[market]) {
         grouped[market] = { sells: [], buys: [], unlists: [], updates: [] };
       }
