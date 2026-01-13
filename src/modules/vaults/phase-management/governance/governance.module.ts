@@ -3,7 +3,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { TypeOrmModule, getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { BlockchainModule } from '../../processing-tx/onchain/blockchain.module';
+import { TransactionsModule } from '../../processing-tx/offchain-tx/transactions.module';
 import { TreasureWalletModule } from '../../treasure/treasure-wallet.module';
 
 import { GovernanceExecutionService } from './governance-execution.service';
@@ -30,7 +30,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     AssetsModule,
     WayUpModule,
     TreasureWalletModule,
-    BlockchainModule,
+    TransactionsModule,
   ],
   controllers: [GovernanceController],
   providers: [

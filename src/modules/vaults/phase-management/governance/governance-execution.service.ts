@@ -1,3 +1,5 @@
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
+import { Address } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
@@ -13,16 +15,19 @@ import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
-import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
+import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
+import { getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { TreasuryExtractionService } from '@/modules/vaults/treasure/treasury-extraction.service';
 import { WayUpService } from '@/modules/wayup/wayup.service';
 import { ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
+import { TransactionStatus } from '@/types/transaction.types';
 
 @Injectable()
 export class GovernanceExecutionService {
   private readonly logger = new Logger(GovernanceExecutionService.name);
   private readonly isMainnet: boolean;
+  private readonly blockfrost: BlockFrostAPI;
 
   constructor(
     @InjectRepository(Proposal)
@@ -32,7 +37,6 @@ export class GovernanceExecutionService {
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
     @InjectRepository(Transaction)
-    private readonly transactionRepository: Repository<Transaction>,
     private readonly eventEmitter: EventEmitter2,
     private readonly assetsService: AssetsService,
     private readonly wayUpService: WayUpService,
@@ -40,9 +44,12 @@ export class GovernanceExecutionService {
     private readonly schedulerService: ProposalSchedulerService,
     private readonly voteCountingService: VoteCountingService,
     private readonly treasuryExtractionService: TreasuryExtractionService,
-    private readonly blockchainService: BlockchainService
+    private readonly transactionsService: TransactionsService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+    this.blockfrost = new BlockFrostAPI({
+      projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
+    });
   }
 
   async onModuleInit(): Promise<void> {
@@ -456,50 +463,85 @@ export class GovernanceExecutionService {
         return false;
       }
 
-      // STEP 1: Extract assets to treasury if there are listings
+      // STEP 1: Extract assets to treasury if there are listings (only for assets not already in treasury)
       if (listings.length > 0) {
         if (!proposal.vault.treasury_wallet?.treasury_address) {
           throw new Error(`Treasury wallet not configured for vault ${proposal.vaultId}`);
         }
         const treasuryAddress = proposal.vault.treasury_wallet.treasury_address;
 
-        this.logger.log(`Extracting ${assetsToExtract.length} asset(s) from vault to treasury wallet before listing`);
+        // Check which assets are already in the treasury wallet
+        const targetAssets = listings.map(listing => ({
+          token: listing.policyId + listing.assetName,
+          amount: 1,
+        }));
 
-        const extractionResult = await this.treasuryExtractionService.extractAssetsToTreasury({
-          vaultId: proposal.vaultId,
-          assetIds: assetsToExtract,
-          treasuryAddress,
+        const { requiredInputs } = await getUtxosExtract(Address.from_bech32(treasuryAddress), this.blockfrost, {
+          targetAssets,
+          minAda: 0,
+          maxUtxos: 50,
+          validateUtxos: false, // Skip validation for speed
         });
 
-        this.logger.log(
-          `Successfully submitted extraction for ${extractionResult.extractedAssets.length} asset(s) to treasury. TxId: ${extractionResult.transactionId}`
-        );
+        // Find which assets are already in treasury
+        const assetsInTreasury = new Set<string>();
+        if (requiredInputs && requiredInputs.length > 0) {
+          // requiredInputs contains UTXOs with target assets
+          // We need to check which target assets were found
+          this.logger.log(`Found ${requiredInputs.length} UTXO(s) in treasury containing target assets`);
 
-        // Get the actual blockchain transaction hash
-        const extractionTransaction = await this.transactionRepository.findOne({
-          where: { id: extractionResult.transactionId },
-          select: ['tx_hash'],
+          // Re-fetch to check which specific assets are in treasury
+          const treasuryUtxos = await this.blockfrost.addressesUtxosAll(treasuryAddress);
+          for (const utxo of treasuryUtxos) {
+            for (const amount of utxo.amount) {
+              if (amount.unit !== 'lovelace') {
+                assetsInTreasury.add(amount.unit);
+              }
+            }
+          }
+        }
+
+        // Filter out assets that are already in treasury
+        const assetsNeedingExtraction = assetsToExtract.filter(assetId => {
+          const asset = assetMap.get(assetId);
+          if (!asset) return false;
+          const fullAssetUnit = asset.policy_id + asset.asset_id.substring(asset.policy_id.length);
+          return !assetsInTreasury.has(fullAssetUnit);
         });
 
-        if (!extractionTransaction?.tx_hash) {
-          throw new Error('Extraction transaction hash not found');
+        if (assetsNeedingExtraction.length > 0) {
+          this.logger.log(
+            `Extracting ${assetsNeedingExtraction.length} asset(s) from vault to treasury wallet before listing ` +
+              `(${assetsToExtract.length - assetsNeedingExtraction.length} already in treasury)`
+          );
+
+          const extractionResult = await this.treasuryExtractionService.extractAssetsToTreasury({
+            vaultId: proposal.vaultId,
+            assetIds: assetsNeedingExtraction,
+            treasuryAddress,
+          });
+
+          this.logger.log(
+            `Successfully submitted extraction for ${extractionResult.extractedAssets.length} asset(s) to treasury. TxId: ${extractionResult.transactionId}`
+          );
+
+          // Wait for extraction transaction to be confirmed via webhook (polls database)
+          const confirmed = await this.transactionsService.waitForTransactionStatus(
+            extractionResult.transactionId,
+            TransactionStatus.confirmed,
+            120000 // 2 minutes timeout
+          );
+
+          if (!confirmed) {
+            throw new Error(`Extraction transaction ${extractionResult.txHash} not confirmed within timeout`);
+          }
+
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        } else {
+          this.logger.log(
+            `All ${assetsToExtract.length} asset(s) for listing are already in treasury wallet, skipping extraction`
+          );
         }
-
-        this.logger.log(`Extraction blockchain tx: ${extractionTransaction.tx_hash}`);
-
-        // Wait for extraction transaction to be confirmed
-        this.logger.log(`Waiting for extraction transaction ${extractionTransaction.tx_hash} to be confirmed...`);
-        const confirmed = await this.blockchainService.waitForTransactionConfirmation(
-          extractionTransaction.tx_hash,
-          120000 // 2 minutes timeout
-        );
-
-        if (!confirmed) {
-          throw new Error(`Extraction transaction ${extractionTransaction.tx_hash} not confirmed within timeout`);
-        }
-
-        this.logger.log(`Extraction confirmed. Waiting 5s for Blockfrost to index UTXOs...`);
-        await new Promise(resolve => setTimeout(resolve, 5000));
       }
 
       // STEP 2: Execute all marketplace actions in a single atomic transaction
