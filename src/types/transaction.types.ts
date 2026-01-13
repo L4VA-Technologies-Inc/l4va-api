@@ -25,5 +25,4 @@ export enum TransactionType {
   distributeLp = 'distribute-lp',
   updateVault = 'update-vault', // Vault metadata update transaction
   all = 'all',
-  distribution = 'distribution',
 }
