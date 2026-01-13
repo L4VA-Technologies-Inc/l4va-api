@@ -22,7 +22,7 @@ export class Asset {
   })
   policy_id: string;
 
-  @Expose({ name: 'assetId' })
+  @Expose({ name: 'assetId' }) // Asset name in hex
   @Column({
     name: 'asset_id',
   })
