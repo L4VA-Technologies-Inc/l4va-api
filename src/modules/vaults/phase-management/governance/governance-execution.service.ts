@@ -13,7 +13,6 @@ import { VoteCountingService } from './vote-counting.service';
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
-import { Transaction } from '@/database/transaction.entity';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
@@ -36,7 +35,6 @@ export class GovernanceExecutionService {
     private readonly claimRepository: Repository<Claim>,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
-    @InjectRepository(Transaction)
     private readonly eventEmitter: EventEmitter2,
     private readonly assetsService: AssetsService,
     private readonly wayUpService: WayUpService,
