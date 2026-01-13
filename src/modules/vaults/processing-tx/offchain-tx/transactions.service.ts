@@ -252,6 +252,11 @@ export class TransactionsService {
         return false;
       }
 
+      if (transaction.status === TransactionStatus.stuck) {
+        this.logger.error(`Transaction ${transactionId} is stuck`);
+        return false;
+      }
+
       await new Promise(resolve => setTimeout(resolve, checkInterval));
     }
 
