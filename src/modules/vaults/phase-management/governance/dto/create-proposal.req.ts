@@ -9,6 +9,7 @@ import {
   ValidateNested,
   IsArray,
   IsNumber,
+  IsNumberString,
 } from 'class-validator';
 
 import { MarketplaceAction, ProposalType } from '@/types/proposal.types';
@@ -191,7 +192,7 @@ export class MarketplaceActionDto {
     required: false,
   })
   @IsOptional()
-  @IsString()
+  @IsNumberString({}, { message: 'price must be a valid numeric string' })
   price?: string;
 
   // ===== UPDATE_LISTING field =====
@@ -200,7 +201,7 @@ export class MarketplaceActionDto {
     required: false,
   })
   @IsOptional()
-  @IsString()
+  @IsNumberString({}, { message: 'newPrice must be a valid numeric string' })
   newPrice?: string;
 
   // ===== BUY field =====
@@ -209,7 +210,7 @@ export class MarketplaceActionDto {
     required: false,
   })
   @IsOptional()
-  @IsString()
+  @IsNumberString({}, { message: 'maxPrice must be a valid numeric string' })
   maxPrice?: string;
 
   // ===== Common fields =====

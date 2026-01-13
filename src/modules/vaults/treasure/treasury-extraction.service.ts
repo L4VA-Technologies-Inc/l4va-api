@@ -17,7 +17,7 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 export interface TreasuryExtractionConfig {
   vaultId: string;
   assetIds: string[];
-  treasuryAddress?: string; // Optional per-vault treasury
+  treasuryAddress: string;
 }
 
 export interface ExtractionResult {
@@ -30,6 +30,7 @@ export interface ExtractionResult {
     contributionTxHash: string;
   }>;
   treasuryAddress: string;
+  txHash: string;
 }
 
 interface UtxoGroup {
@@ -366,6 +367,7 @@ export class TreasuryExtractionService {
       transactionId: transaction.id,
       extractedAssets: allExtractedAssets,
       treasuryAddress,
+      txHash: response.txHash,
     };
   }
 }

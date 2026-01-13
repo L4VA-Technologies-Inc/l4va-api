@@ -201,7 +201,11 @@ export class AcquirerDistributionOrchestrator {
     this.logger.log(`Batch extraction transaction ${response.txHash} submitted, waiting for confirmation...`);
 
     // Wait for confirmation
-    const confirmed = await this.blockchainService.waitForTransactionConfirmation(response.txHash);
+    const confirmed = await this.transactionService.waitForTransactionStatus(
+      extractionTx.id,
+      TransactionStatus.confirmed,
+      120000
+    );
 
     if (confirmed) {
       await this.claimsService.updateClaimStatus(

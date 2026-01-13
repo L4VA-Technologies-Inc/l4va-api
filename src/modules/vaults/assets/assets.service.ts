@@ -383,6 +383,36 @@ export class AssetsService {
   }
 
   /**
+   * Update listing prices for assets that are already listed
+   * Updates listing_price and listing_tx_hash with the new transaction
+   */
+  async updateListingPrices(
+    updates: Array<{
+      assetId: string;
+      newPrice: number;
+      txHash: string;
+    }>
+  ): Promise<void> {
+    if (updates.length === 0) return;
+
+    await Promise.all(
+      updates.map(update =>
+        this.assetsRepository.update(
+          {
+            id: update.assetId,
+            status: AssetStatus.LISTED,
+            deleted: false,
+          },
+          {
+            listing_price: update.newPrice,
+            listing_tx_hash: update.txHash,
+          }
+        )
+      )
+    );
+  }
+
+  /**
    * Updates asset prices and last valuation timestamp after calculation
    * Also updates vault cached totals for affected vaults
    * @param assets List of assets with updated price information
