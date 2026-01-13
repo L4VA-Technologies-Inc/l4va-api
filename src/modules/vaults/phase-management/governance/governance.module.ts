@@ -3,6 +3,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { TypeOrmModule, getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
+import { BlockchainModule } from '../../processing-tx/onchain/blockchain.module';
 import { TreasureWalletModule } from '../../treasure/treasure-wallet.module';
 
 import { GovernanceExecutionService } from './governance-execution.service';
@@ -16,6 +17,7 @@ import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
+import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { Vote } from '@/database/vote.entity';
@@ -24,10 +26,11 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Vault, Asset, Snapshot, Proposal, Vote, Claim, User]),
+    TypeOrmModule.forFeature([Vault, Asset, Snapshot, Proposal, Vote, Claim, User, Transaction]),
     AssetsModule,
     WayUpModule,
     TreasureWalletModule,
+    BlockchainModule,
   ],
   controllers: [GovernanceController],
   providers: [

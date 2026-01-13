@@ -17,7 +17,7 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 export interface TreasuryExtractionConfig {
   vaultId: string;
   assetIds: string[];
-  treasuryAddress?: string; // Optional per-vault treasury
+  treasuryAddress: string;
 }
 
 export interface ExtractionResult {

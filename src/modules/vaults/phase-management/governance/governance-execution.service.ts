@@ -4,14 +4,16 @@ import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { ExecType } from './dto/create-proposal.req';
+import { ExecType, MarketplaceActionDto } from './dto/create-proposal.req';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
 import { VoteCountingService } from './vote-counting.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
+import { Transaction } from '@/database/transaction.entity';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
+import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { TreasuryExtractionService } from '@/modules/vaults/treasure/treasury-extraction.service';
 import { WayUpService } from '@/modules/wayup/wayup.service';
 import { ClaimType } from '@/types/claim.types';
@@ -29,13 +31,16 @@ export class GovernanceExecutionService {
     private readonly claimRepository: Repository<Claim>,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
+    @InjectRepository(Transaction)
+    private readonly transactionRepository: Repository<Transaction>,
     private readonly eventEmitter: EventEmitter2,
     private readonly assetsService: AssetsService,
     private readonly wayUpService: WayUpService,
     private readonly configService: ConfigService,
     private readonly schedulerService: ProposalSchedulerService,
     private readonly voteCountingService: VoteCountingService,
-    private readonly treasuryExtractionService: TreasuryExtractionService
+    private readonly treasuryExtractionService: TreasuryExtractionService,
+    private readonly blockchainService: BlockchainService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
   }
@@ -128,6 +133,7 @@ export class GovernanceExecutionService {
         .createQueryBuilder('proposal')
         .leftJoinAndSelect('proposal.vault', 'vault')
         .leftJoinAndSelect('vault.owner', 'owner')
+        .leftJoinAndSelect('vault.treasury_wallet', 'treasury_wallet')
         .leftJoinAndSelect('proposal.votes', 'votes')
         .where('proposal.id = :proposalId', { proposalId })
         .andWhere('proposal.status = :status', { status: ProposalStatus.ACTIVE })
@@ -142,6 +148,7 @@ export class GovernanceExecutionService {
           'vault.id',
           'vault.name',
           'vault.execution_threshold',
+          'treasury_wallet.treasury_address',
           'owner.address',
           'votes.voteWeight',
           'votes.vote',
@@ -229,7 +236,7 @@ export class GovernanceExecutionService {
 
       switch (proposal.proposalType) {
         case ProposalType.BUY_SELL:
-          return await this.executeBuySellProposal(proposal);
+          return await this.executeMarketplaceProposal(proposal);
 
         case ProposalType.DISTRIBUTION:
           return await this.executeDistributionProposal(proposal);
@@ -274,11 +281,11 @@ export class GovernanceExecutionService {
   }
 
   /**
-   * Execute BUY_SELL proposal actions via WayUp marketplace
+   * Execute Marketplace proposal actions via WayUp marketplace
    * Groups operations by market and action type to execute in batched transactions
    * Only runs on mainnet - testnet just logs completion
    */
-  private async executeBuySellProposal(proposal: Proposal): Promise<boolean> {
+  private async executeMarketplaceProposal(proposal: Proposal): Promise<boolean> {
     if (!this.isMainnet) {
       this.logger.log(
         `[TESTNET] BUY_SELL proposal ${proposal.id} marked as completed (no actual execution on testnet)`
@@ -287,27 +294,26 @@ export class GovernanceExecutionService {
     }
 
     if (!proposal.metadata.marketplaceActions || proposal.metadata.marketplaceActions.length === 0) {
-      this.logger.warn(`BUY_SELL proposal ${proposal.id} has no buying/selling options`);
+      this.logger.warn(`BUY_SELL proposal ${proposal.id} has no marketplace options`);
       return false;
     }
 
     this.logger.log(
-      `Executing ${proposal.metadata.marketplaceActions.length} buy/sell operation(s) for proposal ${proposal.id}`
+      `Executing ${proposal.metadata.marketplaceActions.length} market operation(s) for proposal ${proposal.id}`
     );
 
     // Collect all unique asset IDs to fetch from database
     const assetIds = [...new Set(proposal.metadata.marketplaceActions.map(opt => opt.assetId))];
 
     // Fetch all assets from database in one query
-    const assets = await this.assetRepository.find({
-      where: assetIds.map(id => ({ id })),
-      select: ['id', 'policy_id', 'asset_id', 'name'],
-    });
+    const assets: Pick<Asset, 'id' | 'policy_id' | 'asset_id' | 'name' | 'metadata' | 'listing_tx_hash'>[] =
+      await this.assetRepository.find({
+        where: assetIds.map(id => ({ id })),
+        select: ['id', 'policy_id', 'asset_id', 'name', 'metadata', 'listing_tx_hash'],
+      });
 
     // Create a map for quick asset lookup
     const assetMap = new Map(assets.map(asset => [asset.id, asset]));
-
-    // Group operations by market and action type for batching
     const groupedOperations = this.groupBuySellOperations(proposal.metadata.marketplaceActions);
 
     let hasSuccessfulOperation = false;
@@ -332,7 +338,7 @@ export class GovernanceExecutionService {
 
             if (!asset) {
               this.logger.warn(`Asset not found for assetId: ${option.assetId}`);
-              skippedSells.push(option.assetName || option.assetId);
+              skippedSells.push(option.assetId);
               continue;
             }
 
@@ -362,18 +368,55 @@ export class GovernanceExecutionService {
               `Extracting ${assetsToExtract.length} asset(s) from vault to treasury wallet before listing`
             );
 
+            // Get treasury address
+            if (!proposal.vault.treasury_wallet?.treasury_address) {
+              throw new Error(`Treasury wallet not configured for vault ${proposal.vaultId}`);
+            }
+            const treasuryAddress = proposal.vault.treasury_wallet.treasury_address;
+
+            let extractionTxHash: string;
             try {
               const extractionResult = await this.treasuryExtractionService.extractAssetsToTreasury({
                 vaultId: proposal.vaultId,
                 assetIds: assetsToExtract,
+                treasuryAddress,
               });
 
               this.logger.log(
-                `Successfully extracted ${extractionResult.extractedAssets.length} asset(s) to treasury. TxHash: ${extractionResult.transactionId}`
+                `Successfully submitted extraction for ${extractionResult.extractedAssets.length} asset(s) to treasury. TxId: ${extractionResult.transactionId}`
               );
 
-              // Wait a moment for the extraction transaction to be confirmed
-              await new Promise(resolve => setTimeout(resolve, 10000)); // 10 second delay
+              // Get the actual blockchain transaction hash
+              const extractionTransaction = await this.transactionRepository.findOne({
+                where: { id: extractionResult.transactionId },
+                select: ['tx_hash'],
+              });
+
+              if (!extractionTransaction?.tx_hash) {
+                throw new Error('Extraction transaction hash not found');
+              }
+
+              extractionTxHash = extractionTransaction.tx_hash;
+              this.logger.log(`Extraction blockchain tx: ${extractionTxHash}`);
+
+              // Wait for extraction transaction to be confirmed via webhook
+              this.logger.log(`Waiting for extraction transaction ${extractionTxHash} to be confirmed...`);
+              const confirmed = await this.blockchainService.waitForTransactionConfirmation(
+                extractionTxHash,
+                120000 // 2 minutes timeout
+              );
+
+              if (!confirmed) {
+                throw new Error(`Extraction transaction ${extractionTxHash} not confirmed within timeout period`);
+              }
+
+              this.logger.log(
+                `Extraction transaction ${extractionTxHash} confirmed. Proceeding with marketplace listing.`
+              );
+
+              // Additional delay to ensure Blockfrost indexes the new UTXOs
+              this.logger.log('Waiting 5s for Blockfrost to index the new UTXOs...');
+              await new Promise(resolve => setTimeout(resolve, 5000));
             } catch (extractError) {
               this.logger.error(
                 `Failed to extract assets to treasury before listing: ${extractError.message}`,
@@ -414,7 +457,7 @@ export class GovernanceExecutionService {
               txHash: result.txHash,
               assetCount: listings.length,
               listings: listings.map((l, idx) => ({
-                assetName: operations.sells[idx].assetName || assetMap.get(operations.sells[idx].assetId)?.name,
+                assetName: assetMap.get(operations.sells[idx].assetId)?.name,
                 priceAda: l.priceAda,
               })),
             });
@@ -442,15 +485,15 @@ export class GovernanceExecutionService {
 
             if (!asset) {
               this.logger.warn(`Asset not found for assetId: ${option.assetId}`);
-              skippedBuys.push(option.assetName || option.assetId);
+              skippedBuys.push(option.assetId);
               continue;
             }
 
-            const txHashIndex = this.extractTxHashIndex(option);
+            const txHashIndex = asset.listing_tx_hash;
 
             if (!txHashIndex) {
-              this.logger.warn(`Cannot buy NFT - missing txHashIndex for ${option.assetName || asset.name}`);
-              skippedBuys.push(option.assetName || asset.name);
+              this.logger.warn(`Cannot buy NFT - missing txHashIndex for ${option.assetId}`);
+              skippedBuys.push(option.assetId);
               continue;
             }
 
@@ -476,7 +519,7 @@ export class GovernanceExecutionService {
               txHash: result.txHash,
               assetCount: purchases.length,
               purchases: purchases.map((p, idx) => ({
-                assetName: operations.buys[idx].assetName || assetMap.get(operations.buys[idx].assetId)?.name,
+                assetName: assetMap.get(operations.buys[idx].assetId)?.name,
                 priceAda: p.priceAda,
               })),
             });
@@ -507,10 +550,10 @@ export class GovernanceExecutionService {
               continue;
             }
 
-            const txHashIndex = this.extractTxHashIndex(asset);
+            const txHashIndex = asset.listing_tx_hash;
 
             if (!txHashIndex) {
-              this.logger.warn(`Cannot unlist NFT - missing txHashIndex in asset metadata for ${asset.name}`);
+              this.logger.warn(`Cannot unlist NFT - missing listing_tx_hash in asset metadata for ${asset.name}`);
               skippedUnlists.push(asset.name || option.assetId);
               continue;
             }
@@ -573,7 +616,7 @@ export class GovernanceExecutionService {
               continue;
             }
 
-            const txHashIndex = this.extractTxHashIndex(asset);
+            const txHashIndex = asset.listing_tx_hash;
 
             if (!txHashIndex) {
               this.logger.warn(`Cannot update listing - missing txHashIndex in asset metadata for ${asset.name}`);
@@ -626,17 +669,32 @@ export class GovernanceExecutionService {
     }
 
     return hasSuccessfulOperation;
-  } /**
-   * Group buy/sell operations by market and action type for batched execution
+  }
+
+  /**
+   * Group market operations by market and action type for batched execution
    */
-  private groupBuySellOperations(
-    options: any[]
-  ): Record<string, { sells: any[]; buys: any[]; unlists: any[]; updates: any[] }> {
-    const grouped: Record<string, { sells: any[]; buys: any[]; unlists: any[]; updates: any[] }> = {};
+  private groupBuySellOperations(options: MarketplaceActionDto[]): Record<
+    string,
+    {
+      sells: MarketplaceActionDto[];
+      buys: MarketplaceActionDto[];
+      unlists: MarketplaceActionDto[];
+      updates: MarketplaceActionDto[];
+    }
+  > {
+    const grouped: Record<
+      string,
+      {
+        sells: MarketplaceActionDto[];
+        buys: MarketplaceActionDto[];
+        unlists: MarketplaceActionDto[];
+        updates: MarketplaceActionDto[];
+      }
+    > = {};
 
     for (const option of options) {
       const market = option.market || 'wayup'; // Default to wayup if not specified
-
       if (!grouped[market]) {
         grouped[market] = { sells: [], buys: [], unlists: [], updates: [] };
       }
@@ -755,24 +813,6 @@ export class GovernanceExecutionService {
       this.logger.error(`Error executing distribution proposal ${proposal.id}: ${error.message}`, error.stack);
       throw error;
     }
-  }
-
-  /**
-   * Extract txHashIndex from asset metadata
-   * The txHashIndex is stored when an asset is listed on a marketplace
-   */
-  private extractTxHashIndex(asset: any): string | null {
-    // Check asset metadata for listing information
-    if (asset.metadata?.txHashIndex) {
-      return asset.metadata.txHashIndex;
-    }
-
-    // Legacy: check if stored directly on asset
-    if (asset.txHashIndex) {
-      return asset.txHashIndex;
-    }
-
-    return null;
   }
 
   onModuleDestroy(): void {
