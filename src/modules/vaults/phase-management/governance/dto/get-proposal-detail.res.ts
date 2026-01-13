@@ -1,9 +1,88 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
 
-import { Proposal } from '@/database/proposal.entity';
 import { AssetType } from '@/types/asset.types';
+import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { VoteType } from '@/types/vote.types';
+
+export class ProposalDetailDto {
+  @Expose()
+  @ApiProperty({ description: 'Proposal ID', example: '123e4567-e89b-12d3-a456-426614174000' })
+  id: string;
+
+  @Expose()
+  @ApiProperty({ description: 'Proposal title', example: 'Acquire SpaceBud Collection' })
+  title: string;
+
+  @Expose()
+  @ApiProperty({ description: 'Proposal description', example: 'Proposal to acquire 10 SpaceBuds...' })
+  description: string;
+
+  @Expose()
+  @ApiProperty({ description: 'Proposal status', enum: ProposalStatus, example: ProposalStatus.ACTIVE })
+  status: ProposalStatus;
+
+  @Expose()
+  @ApiProperty({ description: 'Proposal type', enum: ProposalType, example: ProposalType.STAKING })
+  proposalType: ProposalType;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'IPFS hash', example: 'QmXyZ...' })
+  ipfsHash?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'External link', example: 'https://example.com' })
+  externalLink?: string;
+
+  @Expose()
+  @ApiProperty({ description: 'Start date', example: '2023-08-01T10:00:00Z' })
+  startDate: Date;
+
+  @Expose()
+  @ApiProperty({ description: 'End date', example: '2023-08-15T10:00:00Z' })
+  endDate: Date;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Execution date', example: '2023-08-16T10:00:00Z' })
+  executionDate?: Date;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Termination date', example: '2023-12-31T10:00:00Z' })
+  terminationDate?: Date;
+
+  @Expose()
+  @ApiProperty({ description: 'Allow abstain votes', example: true })
+  abstain: boolean;
+
+  @Expose()
+  @ApiProperty({ description: 'Snapshot ID', example: '123e4567-e89b-12d3-a456-426614174000' })
+  snapshotId: string;
+
+  @Expose()
+  @ApiProperty({ description: 'Vault ID', example: '123e4567-e89b-12d3-a456-426614174000' })
+  vaultId: string;
+
+  @Expose()
+  @ApiProperty({ description: 'Creator ID', example: '123e4567-e89b-12d3-a456-426614174000' })
+  creatorId: string;
+
+  @Expose()
+  @ApiProperty({ description: 'Created at', example: '2023-08-01T09:00:00Z' })
+  createdAt: Date;
+
+  @Expose()
+  @ApiProperty({ description: 'Metadata associated with the proposal' })
+  metadata: any;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Vault information', type: Object })
+  vault?: {
+    id: string;
+    name: string;
+    vault_token_ticker?: string;
+    vault_status?: string;
+  };
+}
 
 export class ProposalVoteDto {
   @Expose()
@@ -102,10 +181,61 @@ export class StakingTokenDto extends ProposalAssetDto {
   market?: string;
 }
 
+export class MarketplaceActionDetailDto {
+  @Expose()
+  @ApiProperty({ description: 'Asset ID', example: '123e4567-e89b-12d3-a456-426614174000' })
+  assetId: string;
+
+  @Expose()
+  @ApiProperty({ description: 'Action type: BUY, SELL, UNLIST, or UPDATE_LISTING', example: 'SELL' })
+  exec: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Asset name', example: 'SpaceBud #1234' })
+  assetName?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Asset image URL', example: 'https://ipfs.io/ipfs/Qm...' })
+  assetImg?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Asset price (floor or dex)', example: 100 })
+  assetPrice?: number;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Current listing price', example: 120 })
+  listingPrice?: number;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Quantity to buy/sell', example: '1' })
+  quantity?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Sell type', example: 'MARKET' })
+  sellType?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Duration in milliseconds', example: 86400000 })
+  duration?: number;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Method', example: 'GTC' })
+  method?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Price in ADA', example: '100.5' })
+  price?: string;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'New price for update listing', example: '110.5' })
+  newPrice?: string;
+}
+
 export class GetProposalDetailRes {
   @Expose()
-  @ApiProperty({ description: 'Proposal entity', type: Proposal })
-  proposal: Proposal;
+  @ApiProperty({ description: 'Proposal details', type: ProposalDetailDto })
+  @Type(() => ProposalDetailDto)
+  proposal: ProposalDetailDto;
 
   @Expose()
   @ApiProperty({ description: 'List of votes', type: [ProposalVoteDto] })
@@ -149,4 +279,12 @@ export class GetProposalDetailRes {
   @ApiPropertyOptional({ description: 'Non-fungible tokens for staking', type: [StakingTokenDto] })
   @Type(() => StakingTokenDto)
   nonFungibleTokens?: StakingTokenDto[];
+
+  @Expose()
+  @ApiPropertyOptional({
+    description: 'Marketplace actions with enriched asset data',
+    type: [MarketplaceActionDetailDto],
+  })
+  @Type(() => MarketplaceActionDetailDto)
+  marketplaceActions?: MarketplaceActionDetailDto[];
 }

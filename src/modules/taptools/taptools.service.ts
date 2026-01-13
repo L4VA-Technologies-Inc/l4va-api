@@ -1280,6 +1280,10 @@ export class TaptoolsService {
   }
 
   async getVaultTokensMarketStats(): Promise<void> {
+    if (!this.isMainnet) {
+      this.logger.log('Not mainnet environment - skipping vault tokens market stats update');
+      return;
+    }
     const vaults = await this.vaultRepository
       .createQueryBuilder('v')
       .select(['v.id', 'v.policy_id', 'v.asset_vault_name'])
