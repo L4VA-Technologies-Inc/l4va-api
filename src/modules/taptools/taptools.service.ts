@@ -121,9 +121,8 @@ export class TaptoolsService {
       this.cache.set('last_known_good_ada_price', adaPrice, 86400);
 
       return adaPrice;
-    } catch (err) {
-      this.logger.warn(`Error fetching ADA price: ${err.message}`);
-
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (error) {
       try {
         const altResponse = await axios.get('https://min-api.cryptocompare.com/data/price', {
           params: {
@@ -1139,30 +1138,32 @@ export class TaptoolsService {
     const cacheKey = `wallet_assets_${walletAddress}`;
     const cached = this.cache.get<Array<{ unit: string; quantity: number }>>(cacheKey);
 
+    let assetUnits: Array<{ unit: string; quantity: number }>;
+
     if (cached) {
-      return cached;
+      assetUnits = cached;
+    } else {
+      try {
+        const addressTotal = await this.blockfrost.addressesTotal(walletAddress);
+
+        const balances = this.calculateBalances(addressTotal);
+        assetUnits = Array.from(balances.entries())
+          .filter(([unit, balance]) => unit !== 'lovelace' && balance > 0)
+          .map(([unit, quantity]) => ({ unit, quantity }));
+
+        // Cache for 2 minutes
+        this.cache.set(cacheKey, assetUnits, 120);
+      } catch (err) {
+        this.logger.error('Error fetching all asset units:', err.message);
+        throw new HttpException('Failed to fetch asset units', 500);
+      }
     }
 
-    try {
-      const addressTotal = await this.blockfrost.addressesTotal(walletAddress);
+    const filteredUnits = whitelistedPolicies.length
+      ? assetUnits.filter(asset => whitelistedPolicies.includes(asset.unit.substring(0, 56)))
+      : assetUnits;
 
-      const balances = this.calculateBalances(addressTotal);
-      const assetUnits = Array.from(balances.entries())
-        .filter(([unit, balance]) => unit !== 'lovelace' && balance > 0)
-        .map(([unit, quantity]) => ({ unit, quantity }));
-
-      // Cache for 2 minutes
-      this.cache.set(cacheKey, assetUnits, 120);
-
-      const filteredUnits = whitelistedPolicies.length
-        ? assetUnits.filter(asset => whitelistedPolicies.includes(asset.unit.substring(0, 56)))
-        : assetUnits;
-
-      return filteredUnits;
-    } catch (err) {
-      this.logger.error('Error fetching all asset units:', err.message);
-      throw new HttpException('Failed to fetch asset units', 500);
-    }
+    return filteredUnits;
   }
 
   private async processAssetsPage(
