@@ -1,5 +1,5 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import CardanoWasm, { FixedTransaction } from '@emurgo/cardano-serialization-lib-nodejs';
+import { Address, FixedTransaction } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -89,7 +89,7 @@ export class WayUpService {
 
     // Get UTXOs containing the NFTs using getUtxosExtract
     const { utxos: serializedUtxos, requiredInputs } = await getUtxosExtract(
-      CardanoWasm.Address.from_bech32(address),
+      Address.from_bech32(address),
       this.blockfrost,
       {
         targetAssets,
@@ -171,14 +171,10 @@ export class WayUpService {
     this.logger.log(`Using treasury wallet address: ${address}`);
 
     // Get UTXOs to fund the unlist transaction using getUtxosExtract
-    const { utxos: serializedUtxos } = await getUtxosExtract(
-      CardanoWasm.Address.from_bech32(address),
-      this.blockfrost,
-      {
-        minAda: 1000000,
-        maxUtxos: 10,
-      }
-    );
+    const { utxos: serializedUtxos } = await getUtxosExtract(Address.from_bech32(address), this.blockfrost, {
+      minAda: 1000000,
+      maxUtxos: 10,
+    });
 
     if (serializedUtxos.length === 0) {
       throw new Error('No UTXOs available in treasury wallet to fund unlist transaction');
@@ -253,14 +249,10 @@ export class WayUpService {
     this.logger.log(`Using treasury wallet address: ${address}`);
 
     // Get UTXOs to fund the update transaction using getUtxosExtract
-    const { utxos: serializedUtxos } = await getUtxosExtract(
-      CardanoWasm.Address.from_bech32(address),
-      this.blockfrost,
-      {
-        minAda: 1000000,
-        maxUtxos: 10,
-      }
-    );
+    const { utxos: serializedUtxos } = await getUtxosExtract(Address.from_bech32(address), this.blockfrost, {
+      minAda: 1000000,
+      maxUtxos: 10,
+    });
 
     if (serializedUtxos.length === 0) {
       throw new Error('No UTXOs available in treasury wallet to fund update transaction');
@@ -339,7 +331,7 @@ export class WayUpService {
 
     // Get UTXOs to fund the offer transaction using getUtxosExtract with targetAdaAmount
     const { utxos: serializedUtxos, totalAdaCollected } = await getUtxosExtract(
-      CardanoWasm.Address.from_bech32(address),
+      Address.from_bech32(address),
       this.blockfrost,
       {
         targetAdaAmount: totalOfferLovelace + 5_000_000, // Add 5 ADA buffer for fees
@@ -426,7 +418,7 @@ export class WayUpService {
 
     // Get UTXOs to fund the purchase transaction using getUtxosExtract with targetAdaAmount
     const { utxos: serializedUtxos, totalAdaCollected } = await getUtxosExtract(
-      CardanoWasm.Address.from_bech32(address),
+      Address.from_bech32(address),
       this.blockfrost,
       {
         targetAdaAmount: totalPurchaseLovelace + 10_000_000, // Add 10 ADA buffer for fees
@@ -569,17 +561,21 @@ export class WayUpService {
         amount: 1,
       })) ?? [];
 
+    // Determine if we need to exclude multiasset UTXOs
+    // For update/unlist operations, we should only use pure ADA UTXOs since the NFTs are already in the marketplace
+    const hasOnlyUpdateOrUnlist =
+      (targetAssets.length === 0 && // No new listings
+        (actions.updates?.length ?? 0) > 0) ||
+      (actions.unlistings?.length ?? 0) > 0;
+
     // Get UTXOs - prioritize those with target NFTs if listings exist
-    const { utxos: serializedUtxos } = await getUtxosExtract(
-      CardanoWasm.Address.from_bech32(address),
-      this.blockfrost,
-      {
-        targetAssets: targetAssets.length > 0 ? targetAssets : undefined,
-        targetAdaAmount: totalAdaNeeded > 0 ? totalAdaNeeded + 15_000_000 : undefined, // 15 ADA buffer for fees
-        minAda: 1000000,
-        maxUtxos: 25,
-      }
-    );
+    const { utxos: serializedUtxos } = await getUtxosExtract(Address.from_bech32(address), this.blockfrost, {
+      targetAssets: targetAssets.length > 0 ? targetAssets : undefined,
+      targetAdaAmount: totalAdaNeeded > 0 ? totalAdaNeeded + 15_000_000 : undefined, // 15 ADA buffer for fees
+      minAda: 1000000,
+      maxUtxos: 25,
+      excludeMultiAssets: hasOnlyUpdateOrUnlist, // Only collect pure ADA UTXOs for update/unlist operations
+    });
 
     if (serializedUtxos.length === 0) {
       throw new Error('No UTXOs available in treasury wallet to fund transaction');
