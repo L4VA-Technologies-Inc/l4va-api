@@ -4,7 +4,6 @@ import { Job, Queue } from 'bullmq';
 
 import { ClaimsService } from './claims.service';
 
-import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { ClaimStatus } from '@/types/claim.types';
 
 interface BatchCancellationJobData {
@@ -32,7 +31,6 @@ export class CancellationProcessor extends WorkerHost {
 
   constructor(
     private readonly claimsService: ClaimsService,
-    private readonly assetsService: AssetsService,
     @InjectQueue('cancellationProcessing')
     private readonly cancellationQueue: Queue
   ) {
@@ -74,12 +72,6 @@ export class CancellationProcessor extends WorkerHost {
       if (!result.success) {
         throw new Error('Failed to build batch cancellation transaction');
       }
-
-      await job.updateProgress(90);
-
-      // Update all claims status
-      await this.claimsService.updateClaimStatus(claimIds, ClaimStatus.CLAIMED);
-      await this.assetsService.releaseAssetsByClaim(claimIds);
 
       await job.updateProgress(100);
 

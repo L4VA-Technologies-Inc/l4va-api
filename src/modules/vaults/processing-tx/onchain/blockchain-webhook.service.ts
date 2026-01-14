@@ -8,6 +8,9 @@ import { BlockchainWebhookDto, BlockfrostTransaction, BlockfrostTransactionEvent
 import { MetadataRegistryApiService } from './metadata-register.service';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
 
+import { AssetsService } from '@/modules/vaults/assets/assets.service';
+import { ClaimsService } from '@/modules/vaults/claims/claims.service';
+import { ClaimStatus } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
 @Injectable()
@@ -27,7 +30,9 @@ export class BlockchainWebhookService {
   constructor(
     private readonly transactionsService: TransactionsService,
     private readonly configService: ConfigService,
-    private readonly metadataRegistryApiService: MetadataRegistryApiService
+    private readonly metadataRegistryApiService: MetadataRegistryApiService,
+    private readonly assetsService: AssetsService,
+    private readonly claimsService: ClaimsService
   ) {
     this.webhookAuthToken = this.configService.get<string>('BLOCKFROST_WEBHOOK_AUTH_TOKEN');
     this.maxEventAge = 600; // 10 minutes max age for webhook events
@@ -122,8 +127,25 @@ export class BlockchainWebhookService {
           }
         }
 
+        // Handle cancellation transactions - release assets back to contributors
+        if (transaction.type === TransactionType.cancel && transaction.metadata?.cancellationClaimIds) {
+          const claimIds = transaction.metadata.cancellationClaimIds as string[];
+          try {
+            // Release assets back to contributors
+            await this.assetsService.releaseAssetsByClaim(claimIds);
+            await this.claimsService.updateClaimStatus(claimIds, ClaimStatus.CLAIMED);
+
+            this.logger.log(`WH: Released assets for ${claimIds.length} cancellation claims`);
+            // Update claim status to CLAIMED
+          } catch (releaseError) {
+            this.logger.error(
+              `WH: Failed to release assets for cancellation tx ${tx.hash}: ${releaseError.message}`,
+              releaseError.stack
+            );
+          }
+        }
+
         // TODO: For extract dispatch transactions, we should mark assets as distributed
-        // TODO: For extract dispatch transactions, we should mark assets as RELEASED
       }
 
       this.logger.log(`WH: Transaction ${tx.hash} status updated to ${internalStatus}`);
