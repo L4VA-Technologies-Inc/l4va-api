@@ -999,7 +999,7 @@ export class TaptoolsService {
   }
 
   async getWalletSummaryPaginated(paginationQuery: PaginationQueryDto): Promise<PaginatedWalletSummaryDto> {
-    const { address: walletAddress, page, limit, filter, whitelistedPolicies } = paginationQuery;
+    const { address: walletAddress, page, limit, filter, whitelistedPolicies, search } = paginationQuery;
 
     try {
       const adaPriceUsd = await this.getAdaPrice();
@@ -1013,7 +1013,8 @@ export class TaptoolsService {
         page,
         limit,
         filter,
-        whitelistedPolicies
+        whitelistedPolicies,
+        search
       );
 
       const result = {
@@ -1097,19 +1098,23 @@ export class TaptoolsService {
     page: number,
     limit: number,
     filter: 'all' | 'nfts' | 'tokens',
-    whitelistedPolicies: string[]
+    whitelistedPolicies: string[],
+    search?: string
   ): Promise<{ assets: AssetValueDto[]; pagination: PaginationMetaDto }> {
     try {
-      // Get all asset units (cached)
-      const filteredAssets = await this.getFilteredUnits(walletAddress, whitelistedPolicies);
+      const allUnits = await this.getFilteredUnits(walletAddress, whitelistedPolicies);
 
-      // Calculate pagination
-      const total = filteredAssets.length;
+      let processedAssets = await this.processAssetsPage(allUnits, filter);
+
+      if (search) {
+        const searchLower = search.toLowerCase();
+        processedAssets = processedAssets.filter(asset => (asset.name || '').toLowerCase().includes(searchLower));
+      }
+
+      const total = processedAssets.length;
       const totalPages = Math.ceil(total / limit);
       const offset = (page - 1) * limit;
-      const pageAssets = filteredAssets.slice(offset, offset + limit);
-
-      const processedAssets = await this.processAssetsPage(pageAssets, filter);
+      const pageAssets = processedAssets.slice(offset, offset + limit);
 
       const paginationData = {
         page,
@@ -1124,7 +1129,7 @@ export class TaptoolsService {
         excludeExtraneousValues: true,
       });
 
-      return { assets: processedAssets, pagination };
+      return { assets: pageAssets, pagination };
     } catch (err) {
       this.logger.error('Error getting paginated assets:', err.message);
       throw new HttpException('Failed to fetch paginated assets', 500);
