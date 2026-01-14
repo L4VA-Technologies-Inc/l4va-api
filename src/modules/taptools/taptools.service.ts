@@ -66,7 +66,7 @@ export class TaptoolsService {
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly marketService: MarketService
   ) {
-    this.isMainnet = this.configService.get<string>('NETWORK') === 'mainnet';
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.tapToolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
     this.tapToolsApiUrl = this.configService.get<string>('TAPTOOLS_API_URL');
     this.axiosTapToolsInstance = axios.create({
