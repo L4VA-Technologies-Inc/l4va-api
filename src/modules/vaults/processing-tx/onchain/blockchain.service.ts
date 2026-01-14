@@ -28,8 +28,6 @@ export class BlockchainService {
   private readonly anvilApi: string;
   private readonly unparametizedDispatchHash: string;
   private readonly blueprintTitle: string;
-  private readonly adminSKey: string;
-  private readonly adminAddress: string;
   private readonly networkId: number;
   private readonly blockfrost: BlockFrostAPI;
   private readonly anvilHeaders: {
@@ -40,8 +38,6 @@ export class BlockchainService {
     private readonly configService: ConfigService,
     private readonly httpService: HttpService
   ) {
-    this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
-    this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.anvilApi = this.configService.get<string>('ANVIL_API_URL') + '/services';
     this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
     this.blueprintTitle = this.configService.get<string>('BLUEPRINT_TITLE');
@@ -175,6 +171,11 @@ export class BlockchainService {
     } catch (error) {
       if (error.response?.status === 422 && error.response?.data?.message) {
         const errorMessage = error.response.data.message;
+
+        // Check for FeeTooSmallUTxO error
+        if (errorMessage.includes('FeeTooSmallUTxO')) {
+          throw FeeTooSmallException.fromErrorMessage(errorMessage);
+        }
 
         // Check for BadInputsUTxO error (UTXO already spent)
         if (errorMessage.includes('BadInputsUTxO')) {

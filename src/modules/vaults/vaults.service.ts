@@ -1233,7 +1233,7 @@ export class VaultsService {
     if (!vault) {
       throw new Error('Vault is not found or you are not owner of this vault!');
     }
-    if (vault.assets.length !== 0) {
+    if (vault.assets.some(asset => asset.status !== AssetStatus.RELEASED)) {
       throw new Error('The vault cant be burned it need to extract and refound assets ');
     }
 
