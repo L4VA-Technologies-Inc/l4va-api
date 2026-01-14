@@ -3,7 +3,6 @@ import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import * as bodyParser from 'body-parser';
-import { json } from 'express';
 
 import { AppModule } from './app.module';
 import { loadSecrets } from './load-gcp-secrets';
@@ -17,15 +16,19 @@ async function bootstrap() {
     // eslint-disable-next-line no-console
     console.error('Failed to load secrets:', error.message || error);
   }
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, {
+    bodyParser: false, // Disable default body parser so we can configure it manually
+  });
 
-  // Configure raw body parser for webhook endpoint
-  app.use('/blockchain/tx-webhook', bodyParser.raw({ type: 'application/json' }));
-  // Use regular JSON parser for all other routes
-  app.use(json());
+  // Configure body parsers with increased limits for webhook endpoint
+  // Raw body parser for signature verification on webhook
+  app.use('/blockchain/tx-webhook', bodyParser.raw({ type: 'application/json', limit: '50mb' }));
+
+  // JSON body parser for all other routes with increased limit
+  app.use(bodyParser.json({ limit: '50mb' }));
+  app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 
   app.setGlobalPrefix('api');
-  app.use(bodyParser.json({ limit: '50mb' }));
   app.enableVersioning({
     type: VersioningType.URI,
     defaultVersion: '1',
