@@ -20,7 +20,7 @@ export class DexHunterPricingService {
   constructor(private readonly configService: ConfigService) {
     this.dexHunterBaseUrl = this.configService.get<string>('DEXHUNTER_BASE_URL');
     this.dexHunterApiKey = this.configService.get<string>('DEXHUNTER_API_KEY');
-    this.isMainnet = this.configService.get<string>('NETWORK') === 'mainnet';
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
   }
 
   /**
