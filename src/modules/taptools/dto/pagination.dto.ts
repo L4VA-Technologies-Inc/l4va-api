@@ -40,6 +40,11 @@ export class PaginationQueryDto {
   @IsArray()
   @IsString({ each: true })
   whitelistedPolicies?: string[] = [];
+
+  @ApiProperty({ description: 'Search by asset name' })
+  @IsString()
+  @IsOptional()
+  search?: string;
 }
 
 export class PaginationMetaDto {

@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { OnEvent } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -9,13 +10,19 @@ import { NotificationService } from '@/modules/notification/notification.service
 @Injectable()
 export class NotificationEventsListener {
   private readonly logger = new Logger(NotificationService.name);
+  private readonly emailUrl: string;
 
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-
-    private notificationService: NotificationService
-  ) {}
+    private notificationService: NotificationService,
+    private readonly configService: ConfigService
+  ) {
+    this.emailUrl =
+      this.configService.get<string>('CARDANO_NETWORK') === 'mainnet'
+        ? 'https://app.l4va.org'
+        : 'https://testnet.l4va.org';
+  }
 
   @OnEvent('vault.launched')
   async handleVaultLaunched(event: {
@@ -45,7 +52,7 @@ export class NotificationEventsListener {
       address: user.address,
       email: user.email,
       firstName: user.name,
-      vaultUrl: `https://testnet.l4va.org/vaults/${event.vault.id}`,
+      vaultUrl: `${this.emailUrl}/vaults/${event.vault.id}`,
       vaultName: event.vault.name,
       phase: event.vault.vault_status,
       phaseStatus: event.phaseStatus,
@@ -72,7 +79,7 @@ export class NotificationEventsListener {
       address: user.address,
       email: user.email,
       firstName: user.name,
-      vaultUrl: `https://testnet.l4va.org/vaults/${event.vault.id}`,
+      vaultUrl: `${this.emailUrl}/vaults/${event.vault.id}`,
       vaultName: event.vault.name,
       timeAt: new Date()
         .toLocaleString('en-GB', {
@@ -150,7 +157,7 @@ export class NotificationEventsListener {
       firstName: user.name,
       status: event.vault.vault_status,
       vaultTokenTicker: event.vault.vault_token_ticker,
-      vaultUrl: `https://testnet.l4va.org/vaults/${event.vault.id}`,
+      vaultUrl: `${this.emailUrl}/vaults/${event.vault.id}`,
       failed_at: new Date()
         .toLocaleString('en-GB', {
           day: '2-digit',
