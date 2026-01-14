@@ -1102,19 +1102,16 @@ export class TaptoolsService {
     search?: string
   ): Promise<{ assets: AssetValueDto[]; pagination: PaginationMetaDto }> {
     try {
-      const allUnits = await this.getFilteredUnits(walletAddress, whitelistedPolicies);
+      // Get all asset units (cached)
+      const filteredAssets = await this.getFilteredUnits(walletAddress, whitelistedPolicies);
 
-      let processedAssets = await this.processAssetsPage(allUnits, filter);
-
-      if (search) {
-        const searchLower = search.toLowerCase();
-        processedAssets = processedAssets.filter(asset => (asset.name || '').toLowerCase().includes(searchLower));
-      }
-
-      const total = processedAssets.length;
+      // Calculate pagination
+      const total = filteredAssets.length;
       const totalPages = Math.ceil(total / limit);
       const offset = (page - 1) * limit;
-      const pageAssets = processedAssets.slice(offset, offset + limit);
+      const pageAssets = filteredAssets.slice(offset, offset + limit);
+
+      const processedAssets = await this.processAssetsPage(pageAssets, filter, search);
 
       const paginationData = {
         page,
@@ -1129,7 +1126,7 @@ export class TaptoolsService {
         excludeExtraneousValues: true,
       });
 
-      return { assets: pageAssets, pagination };
+      return { assets: processedAssets, pagination };
     } catch (err) {
       this.logger.error('Error getting paginated assets:', err.message);
       throw new HttpException('Failed to fetch paginated assets', 500);
@@ -1173,7 +1170,8 @@ export class TaptoolsService {
 
   private async processAssetsPage(
     pageAssets: Array<{ unit: string; quantity: number }>,
-    filter: 'all' | 'nfts' | 'tokens'
+    filter: 'all' | 'nfts' | 'tokens',
+    search?: string
   ): Promise<AssetValueDto[]> {
     const processedAssets: AssetValueDto[] = [];
 
@@ -1196,6 +1194,26 @@ export class TaptoolsService {
 
       if (filter === 'tokens' && isNFT) {
         continue;
+      }
+
+      // Apply search filter
+      if (search && search.trim()) {
+        const searchLower = search.toLowerCase().trim();
+        const displayName = String((metadata as Record<string, unknown>)?.name || assetName).toLowerCase();
+        const ticker = String(details.metadata?.ticker || '').toLowerCase();
+        const policyId = details.policy_id.toLowerCase();
+        const unit = asset.unit.toLowerCase();
+
+        const matchesSearch =
+          assetName.toLowerCase().includes(searchLower) ||
+          displayName.includes(searchLower) ||
+          ticker.includes(searchLower) ||
+          policyId.includes(searchLower) ||
+          unit.includes(searchLower);
+
+        if (!matchesSearch) {
+          continue;
+        }
       }
 
       const { priceAda, priceUsd } = await this.getAssetValue(
