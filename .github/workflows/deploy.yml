@@ -53,6 +53,10 @@ jobs:
           mkdir -p ~/apps/l4va-api
           # Remove old src files to prevent stale files (e.g., renamed .js -> .ts)
           rm -rf ~/apps/l4va-api/src
+          # Install rsync if not available
+          if ! command -v rsync &> /dev/null; then
+            sudo apt-get update && sudo apt-get install -y rsync
+          fi
           # Copy all files from workspace
           rsync -a --delete --exclude 'node_modules' --exclude '.env' --exclude 'gcp-*.json' $GITHUB_WORKSPACE/ ~/apps/l4va-api/
           # Copy environment-specific files
@@ -125,6 +129,10 @@ jobs:
           mkdir -p ~/apps/l4va-api
           # Remove old src files to prevent stale files (e.g., renamed .js -> .ts)
           rm -rf ~/apps/l4va-api/src
+          # Install rsync if not available
+          if ! command -v rsync &> /dev/null; then
+            sudo apt-get update && sudo apt-get install -y rsync
+          fi
           # Copy all files from workspace
           rsync -a --delete --exclude 'node_modules' --exclude '.env' --exclude 'gcp-*.json' $GITHUB_WORKSPACE/ ~/apps/l4va-api/
           # Copy environment-specific files
