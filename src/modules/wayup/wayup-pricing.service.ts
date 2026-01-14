@@ -14,7 +14,7 @@ export class WayUpPricingService {
   private readonly isMainnet: boolean;
 
   constructor(private readonly configService: ConfigService) {
-    this.isMainnet = this.configService.get<string>('NETWORK') === 'mainnet';
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
   }
 
   /**
