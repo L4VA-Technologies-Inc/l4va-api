@@ -437,31 +437,26 @@ export class ClaimsService {
       const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
       txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
-      // Create internal transaction records for each claim
-      const internalTxs = await Promise.all(
-        claims.map(claim =>
-          this.transactionRepository.save({
-            user_id: claim.user.id,
-            vault_id: vault.id,
-            type: TransactionType.cancel,
-            status: TransactionStatus.created,
-          })
-        )
-      );
-
       const response = await this.blockchainService.submitTransaction({
         transaction: txToSubmitOnChain.to_hex(),
       });
 
       if (response.txHash) {
-        // Update all internal transactions
-        await Promise.all(
-          internalTxs.map(internalTx =>
-            this.transactionRepository.update(
-              { id: internalTx.id },
-              { tx_hash: response.txHash, status: TransactionStatus.confirmed }
-            )
-          )
+        // Store cancellation transaction for webhook tracking
+        await this.transactionRepository.save({
+          tx_hash: response.txHash,
+          type: TransactionType.cancel,
+          status: TransactionStatus.pending,
+          vault_id: vault.id,
+          metadata: {
+            cancellationClaimIds: validClaims.map(c => c.id),
+            claimCount: validClaims.length,
+            processedAt: new Date().toISOString(),
+          },
+        });
+
+        this.logger.log(
+          `Batch cancellation transaction submitted for ${validClaims.length} claims: ${response.txHash}`
         );
 
         return {

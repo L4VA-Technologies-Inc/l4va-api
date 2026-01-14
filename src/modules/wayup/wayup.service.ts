@@ -602,14 +602,45 @@ export class WayUpService {
       }));
     }
 
-    // Add unlistings if provided
+    // Add unlistings if provided (need to find output indices)
     if (actions.unlistings?.length > 0) {
-      combinedPayload.unlist = actions.unlistings;
+      const unlistsWithIndices: { policyId: string; txHashIndex: string }[] = [];
+
+      for (const unlist of actions.unlistings) {
+        try {
+          const outputIndex = await this.findListingOutputIndex(unlist.txHashIndex, unlist.policyId, unlist.assetName);
+          unlistsWithIndices.push({
+            policyId: unlist.policyId,
+            txHashIndex: `${unlist.txHashIndex}#${outputIndex}`,
+          });
+        } catch (error) {
+          this.logger.error(`Failed to find output index for unlist ${unlist.policyId}: ${error.message}`);
+          throw new Error(`Cannot unlist ${unlist.policyId}: ${error.message}`);
+        }
+      }
+
+      combinedPayload.unlist = unlistsWithIndices;
     }
 
-    // Add updates if provided
+    // Add updates if provided (need to find output indices)
     if (actions.updates?.length > 0) {
-      combinedPayload.update = actions.updates;
+      const updatesWithIndices: { policyId: string; txHashIndex: string; newPriceAda: number }[] = [];
+
+      for (const update of actions.updates) {
+        try {
+          const outputIndex = await this.findListingOutputIndex(update.txHashIndex, update.policyId, update.assetName);
+          updatesWithIndices.push({
+            policyId: update.policyId,
+            txHashIndex: `${update.txHashIndex}#${outputIndex}`,
+            newPriceAda: update.newPriceAda,
+          });
+        } catch (error) {
+          this.logger.error(`Failed to find output index for update ${update.policyId}: ${error.message}`);
+          throw new Error(`Cannot update listing for ${update.policyId}: ${error.message}`);
+        }
+      }
+
+      combinedPayload.update = updatesWithIndices;
     }
 
     // Add offers if provided
@@ -659,6 +690,43 @@ export class WayUpService {
       txHash: submitResponse.txHash,
       summary,
     };
+  }
+
+  /**
+   * Find the output index of an NFT in a listing transaction
+   * The NFT will be in an output that has a data_hash (marketplace script)
+   *
+   * @param listingTxHash - The transaction hash where the NFT was listed
+   * @param policyId - The policy ID of the NFT
+   * @param assetName - The hex-encoded asset name of the NFT
+   * @returns The output index, or throws if not found
+   */
+  private async findListingOutputIndex(listingTxHash: string, policyId: string, assetName: string): Promise<number> {
+    try {
+      this.logger.log(`Finding output index for NFT ${policyId}${assetName} in tx ${listingTxHash}`);
+
+      const txUtxos = await this.blockfrost.txsUtxos(listingTxHash);
+      const fullAssetId = policyId + assetName;
+
+      // Find the output that contains the NFT and has a data_hash (marketplace script)
+      for (let i = 0; i < txUtxos.outputs.length; i++) {
+        const output = txUtxos.outputs[i];
+
+        // Check if this output has the NFT
+        const hasNFT = output.amount.some(amt => amt.unit === fullAssetId);
+
+        // Check if this output has a data_hash (indicating it's sent to a script)
+        if (hasNFT && output.data_hash) {
+          this.logger.log(`Found NFT at output index ${i} in tx ${listingTxHash}`);
+          return i;
+        }
+      }
+
+      throw new Error(`Could not find NFT ${policyId}${assetName} in marketplace script output of tx ${listingTxHash}`);
+    } catch (error) {
+      this.logger.error(`Error finding output index for tx ${listingTxHash}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   /**

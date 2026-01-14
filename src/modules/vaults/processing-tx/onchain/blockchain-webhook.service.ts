@@ -1,6 +1,8 @@
 import { verifyWebhookSignature, SignatureVerificationError } from '@blockfrost/blockfrost-js';
 import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
+import { In, Repository } from 'typeorm';
 
 import { TransactionsService } from '../offchain-tx/transactions.service';
 
@@ -8,6 +10,9 @@ import { BlockchainWebhookDto, BlockfrostTransaction, BlockfrostTransactionEvent
 import { MetadataRegistryApiService } from './metadata-register.service';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
 
+import { Claim } from '@/database/claim.entity';
+import { AssetsService } from '@/modules/vaults/assets/assets.service';
+import { ClaimStatus } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
 @Injectable()
@@ -27,7 +32,10 @@ export class BlockchainWebhookService {
   constructor(
     private readonly transactionsService: TransactionsService,
     private readonly configService: ConfigService,
-    private readonly metadataRegistryApiService: MetadataRegistryApiService
+    private readonly metadataRegistryApiService: MetadataRegistryApiService,
+    private readonly assetsService: AssetsService,
+    @InjectRepository(Claim)
+    private readonly claimRepository: Repository<Claim>
   ) {
     this.webhookAuthToken = this.configService.get<string>('BLOCKFROST_WEBHOOK_AUTH_TOKEN');
     this.maxEventAge = 600; // 10 minutes max age for webhook events
@@ -122,8 +130,32 @@ export class BlockchainWebhookService {
           }
         }
 
+        // Handle cancellation transactions - release assets back to contributors
+        if (transaction.type === TransactionType.cancel && transaction.metadata?.cancellationClaimIds) {
+          const claimIds = transaction.metadata.cancellationClaimIds as string[];
+          try {
+            // Release assets back to contributors
+            await this.assetsService.releaseAssetsByClaim(claimIds);
+
+            // Update claim status to CLAIMED using repository
+            await this.claimRepository.update(
+              { id: In(claimIds) },
+              {
+                status: ClaimStatus.CLAIMED,
+                updated_at: new Date(),
+              }
+            );
+
+            this.logger.log(`WH: Released assets and updated status for ${claimIds.length} cancellation claims`);
+          } catch (releaseError) {
+            this.logger.error(
+              `WH: Failed to release assets for cancellation tx ${tx.hash}: ${releaseError.message}`,
+              releaseError.stack
+            );
+          }
+        }
+
         // TODO: For extract dispatch transactions, we should mark assets as distributed
-        // TODO: For extract dispatch transactions, we should mark assets as RELEASED
       }
 
       this.logger.log(`WH: Transaction ${tx.hash} status updated to ${internalStatus}`);

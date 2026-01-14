@@ -12,7 +12,8 @@ export interface NFTListingInput {
  */
 export interface UnlistInput {
   policyId: string;
-  txHashIndex: string; // Format: txHash#outputIndex
+  assetName: string; // Hex-encoded asset name
+  txHashIndex: string; // Transaction hash where the NFT was listed (will be converted to txHash#outputIndex)
 }
 
 /**
@@ -20,7 +21,8 @@ export interface UnlistInput {
  */
 export interface UpdateListingInput {
   policyId: string;
-  txHashIndex: string; // Format: txHash#outputIndex
+  assetName: string; // Hex-encoded asset name
+  txHashIndex: string; // Transaction hash where the NFT was listed (will be converted to txHash#outputIndex)
   newPriceAda: number;
 }
 

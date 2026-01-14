@@ -309,8 +309,7 @@ export class LifecycleService {
         now,
       })
       .leftJoinAndSelect('vault.owner', 'owner')
-
-      .leftJoinAndSelect('vault.assets_whitelist', 'assetsWhitelist')
+      .leftJoinAndSelect('vault.assets_whitelist', 'assets_whitelist')
       .leftJoinAndSelect('vault.assets', 'assets', 'assets.deleted = :deleted', { deleted: false })
       .getMany();
 
@@ -365,7 +364,9 @@ export class LifecycleService {
           if (!counts[asset.policy_id]) {
             counts[asset.policy_id] = 0;
           }
-          counts[asset.policy_id] += asset.quantity || 1;
+          // Ensure numeric addition by converting quantity to number
+          const quantity = Number(asset.quantity) || 1;
+          counts[asset.policy_id] += quantity;
           return counts;
         },
         {} as Record<string, number>
@@ -380,9 +381,9 @@ export class LifecycleService {
       if (vault.assets_whitelist && vault.assets_whitelist.length > 0) {
         for (const whitelistItem of vault.assets_whitelist) {
           const policyId = whitelistItem.policy_id;
-          const count = policyIdCounts[policyId] || 0;
-          const minRequired = whitelistItem.asset_count_cap_min;
-          const maxAllowed = whitelistItem.asset_count_cap_max;
+          const count = Number(policyIdCounts[policyId]) || 0;
+          const minRequired = Number(whitelistItem.asset_count_cap_min);
+          const maxAllowed = Number(whitelistItem.asset_count_cap_max);
 
           // Apply soft requirement logic:
           // If vault has assets AND min requirement is 1,

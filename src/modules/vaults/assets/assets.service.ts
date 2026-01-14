@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain } from 'class-transformer';
 import { Repository, In } from 'typeorm';
@@ -16,6 +16,8 @@ import { VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class AssetsService {
+  private readonly logger = new Logger(AssetsService.name);
+
   constructor(
     @InjectRepository(Asset)
     private readonly assetsRepository: Repository<Asset>,
@@ -188,7 +190,7 @@ export class AssetsService {
     };
   }
 
-  async releaseAssetsByClaim(claimIds: string[]): Promise<void> {
+  async releaseAssetsByClaim(claimIds: string[]): Promise<number> {
     if (claimIds.length === 0) {
       throw new BadRequestException('At least one claim ID must be provided');
     }
@@ -230,23 +232,26 @@ export class AssetsService {
 
     const assetsToRelease: string[] = [];
     for (const claim of claimsWithAssets) {
-      const asset = claim.transaction.assets[0];
+      // Process ALL assets associated with the transaction, not just the first one
+      for (const asset of claim.transaction.assets) {
+        if (!asset) {
+          continue;
+        }
 
-      if (!asset) {
-        throw new BadRequestException(`No asset associated with claim ${claim.id}`);
+        if (asset.status !== AssetStatus.LOCKED) {
+          this.logger.warn(
+            `Asset ${asset.id} for claim ${claim.id} cannot be released. Current status: ${asset.status}. Skipping.`
+          );
+          continue;
+        }
+
+        assetsToRelease.push(asset.id);
       }
-
-      if (asset.status !== AssetStatus.LOCKED) {
-        throw new BadRequestException(
-          `Asset for claim ${claim.id} cannot be released. Current status: ${asset.status}. Only locked assets can be released.`
-        );
-      }
-
-      assetsToRelease.push(asset.id);
     }
 
     if (assetsToRelease.length === 0) {
-      throw new BadRequestException('No assets eligible for release');
+      this.logger.warn(`No locked assets found for ${claimIds.length} claims to release`);
+      return 0;
     }
 
     const now = new Date();
@@ -258,6 +263,9 @@ export class AssetsService {
         updated_at: now,
       }
     );
+
+    this.logger.log(`Released ${assetsToRelease.length} assets for ${claimIds.length} cancellation claims`);
+    return assetsToRelease.length;
   }
 
   async markAssetsAsDistributedByTransactions(transactionIds: string[]): Promise<void> {

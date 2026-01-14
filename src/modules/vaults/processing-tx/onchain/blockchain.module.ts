@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { AssetsModule } from '../../assets/assets.module';
 import { TransactionsModule } from '../offchain-tx/transactions.module';
 
 import { BlockchainWebhookService } from './blockchain-webhook.service';
@@ -14,6 +15,7 @@ import { VaultManagingService } from './vault-managing.service';
 
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
+import { Claim } from '@/database/claim.entity';
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
@@ -25,7 +27,8 @@ import { Vault } from '@/database/vault.entity';
     }),
     HttpModule,
     TransactionsModule,
-    TypeOrmModule.forFeature([Vault, Transaction, AssetsWhitelistEntity, TokenRegistry, Asset]),
+    AssetsModule,
+    TypeOrmModule.forFeature([Vault, Transaction, AssetsWhitelistEntity, TokenRegistry, Asset, Claim]),
   ],
   controllers: [BlockchainController],
   providers: [
