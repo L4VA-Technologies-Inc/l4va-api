@@ -65,6 +65,8 @@ interface GetUtxosOptions {
   maxUtxos?: number;
   /** Whether to exclude UTXOs with inline datums */
   removeInlineDatums?: boolean;
+  /** Whether to exclude UTXOs that contain multiassets (only return pure ADA UTXOs) */
+  excludeMultiAssets?: boolean;
 }
 
 interface GetUtxosResult {
@@ -133,6 +135,7 @@ export const validateUtxoStillExists = async (
  * @param options.targetTokenAmount - Amount of single target token to collect - legacy support
  * @param options.targetAssets - Array of assets to collect with their required amounts
  * @param options.maxUtxos - Maximum number of UTXOs to return (default: 15)
+ * @param options.excludeMultiAssets - Only collect pure ADA UTXOs (exclude any UTXOs containing tokens/NFTs)
  *
  * @returns Promise resolving to UTXOs and optional required inputs with asset breakdown
  *
@@ -157,6 +160,12 @@ export const validateUtxoStillExists = async (
  *   ],
  *   minAda: 1000000
  * });
+ *
+ * // Get only pure ADA UTXOs (no multiassets) for fee payment
+ * const { utxos } = await getUtxosExtract(address, blockfrost, {
+ *   minAda: 1000000,
+ *   excludeMultiAssets: true
+ * });
  * ```
  */
 export const getUtxosExtract = async (
@@ -172,6 +181,7 @@ export const getUtxosExtract = async (
     removeInlineDatums = true,
     minAda = 0,
     maxUtxos = 15,
+    excludeMultiAssets = false,
   } = options;
 
   const hasTargetAssets = targetAssets.length > 0;
@@ -197,6 +207,9 @@ export const getUtxosExtract = async (
     if (minAda > 0 && adaAmount <= minAda) return false;
     // Pre-filter inline datums if needed
     if (removeInlineDatums && utxo.inline_datum === '49616e76696c2d746167') return false;
+    // Pre-filter multiassets if needed (only keep pure ADA UTXOs)
+    if (excludeMultiAssets && utxo.amount.length > 1) return false;
+    if (excludeMultiAssets && utxo.amount.length === 1 && utxo.amount[0].unit !== 'lovelace') return false;
     return true;
   });
 
