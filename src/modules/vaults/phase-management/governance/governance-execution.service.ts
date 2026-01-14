@@ -339,9 +339,9 @@ export class GovernanceExecutionService {
       const listings: { policyId: string; assetName: string; priceAda: number }[] = [];
       const listingAssetInfos: { assetId: string; price: number }[] = [];
       const assetsToExtract: string[] = [];
-      const unlistings: { policyId: string; txHashIndex: string }[] = [];
+      const unlistings: { policyId: string; assetName: string; txHashIndex: string }[] = [];
       const unlistedAssetIds: string[] = [];
-      const updates: { policyId: string; txHashIndex: string; newPriceAda: number }[] = [];
+      const updates: { policyId: string; assetName: string; txHashIndex: string; newPriceAda: number }[] = [];
       const updateAssetInfos: { assetId: string; newPrice: number }[] = [];
       const purchases: { policyId: string; txHashIndex: string; priceAda: number }[] = [];
 
@@ -386,7 +386,7 @@ export class GovernanceExecutionService {
           continue;
         }
 
-        unlistings.push({ policyId: asset.policy_id, txHashIndex });
+        unlistings.push({ policyId: asset.policy_id, assetName: asset.asset_id, txHashIndex });
         unlistedAssetIds.push(option.assetId);
       }
 
@@ -413,7 +413,7 @@ export class GovernanceExecutionService {
         }
 
         const newPriceAda = parseFloat(option.newPrice);
-        updates.push({ policyId: asset.policy_id, txHashIndex, newPriceAda });
+        updates.push({ policyId: asset.policy_id, assetName: asset.asset_id, txHashIndex, newPriceAda });
         updateAssetInfos.push({ assetId: option.assetId, newPrice: newPriceAda });
       }
 
