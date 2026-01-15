@@ -148,23 +148,69 @@ export class VaultManagingService {
     this.scAddress = getAddressFromHash(this.scPolicyId, this.networkId);
 
     // Use the optimized function with better error handling
-    const { filteredUtxos: utxoHexArray, requiredInputs } = await getUtxosExtract(
-      Address.from_bech32(vaultConfig.customerAddress),
-      this.blockfrost,
-      {
-        minAda: 2000000,
-        filterByAda: 8000000,
-        validateUtxos: false,
-        ...(this.systemSettingsService.vlrmCreatorFeeEnabled && {
-          targetAssets: [
-            {
-              token: `${this.VLRM_POLICY_ID}${this.VLRM_HEX_ASSET_NAME}`,
-              amount: this.systemSettingsService.vlrmCreatorFee,
-            },
-          ],
-        }),
-      } // 4 ADA minimum
-    );
+    let utxoHexArray: string[];
+    let requiredInputs: string[];
+
+    try {
+      const result = await getUtxosExtract(
+        Address.from_bech32(vaultConfig.customerAddress),
+        this.blockfrost,
+        {
+          minAda: 2000000,
+          filterByAda: 8000000,
+          validateUtxos: false,
+          ...(this.systemSettingsService.vlrmCreatorFeeEnabled && {
+            targetAssets: [
+              {
+                token: `${this.VLRM_POLICY_ID}${this.VLRM_HEX_ASSET_NAME}`,
+                amount: this.systemSettingsService.vlrmCreatorFee,
+              },
+            ],
+          }),
+        } // 4 ADA minimum
+      );
+      utxoHexArray = result.filteredUtxos;
+      requiredInputs = result.requiredInputs;
+    } catch (error) {
+      await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
+
+      // Check if this is an insufficient assets error
+      if (error.message && error.message.includes('Insufficient assets found')) {
+        // Check if it's specifically about VLRM tokens
+        const vlrmToken = `${this.VLRM_POLICY_ID}${this.VLRM_HEX_ASSET_NAME}`;
+        if (error.message.includes(vlrmToken)) {
+          const requiredVlrm = this.systemSettingsService.vlrmCreatorFee;
+          throw new BadRequestException(
+            `Insufficient VLRM tokens. You need ${requiredVlrm} VLRM tokens to create a vault. Please acquire more VLRM tokens and try again.`
+          );
+        }
+        // Other asset insufficiency
+        throw new BadRequestException(
+          `${error.message}. Please ensure your wallet has the required tokens and try again.`
+        );
+      }
+
+      // Check if this is an insufficient ADA error
+      if (error.message && error.message.includes('Insufficient ADA found')) {
+        throw new BadRequestException(
+          'Insufficient ADA balance. You need at least 8 ADA in your wallet to create a vault. Please add more ADA and try again.'
+        );
+      }
+
+      // For other UTXO-related errors, likely client-side issues
+      if (error.message) {
+        this.logger.error(`Failed to extract UTXOs for vault creation: ${error.message}`);
+        throw new BadRequestException(
+          `Unable to create vault: ${error.message}. Please ensure your wallet has sufficient funds and UTXOs are available.`
+        );
+      }
+
+      // Unexpected server errors
+      this.logger.error('Unexpected error during vault creation:', error);
+      throw new InternalServerErrorException(
+        'An unexpected error occurred while creating the vault. Please try again later.'
+      );
+    }
 
     // Convert hex array back to TransactionUnspentOutputs for compatibility
     const utxos = TransactionUnspentOutputs.new();
