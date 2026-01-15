@@ -299,7 +299,10 @@ export const getUtxosExtract = async (
 
     if (missingAssets.length > 0) {
       const missingDetails = missingAssets
-        .map(asset => `${asset.token}: need ${asset.required}, found ${asset.collected}`)
+        .map(asset => {
+          const shortToken = asset.token.length > 20 ? `${asset.token.slice(0, 20)}...` : asset.token;
+          return `Token ${shortToken}: required ${asset.required}, found ${asset.collected}`;
+        })
         .join('; ');
 
       throw new Error(`Insufficient assets found. Missing: ${missingDetails}`);
