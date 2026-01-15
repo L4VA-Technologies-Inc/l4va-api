@@ -138,7 +138,7 @@ export class WayUpService {
 
     // Submit the transaction
     this.logger.log('Submitting listing transaction to blockchain');
-    const submitResponse = await this.blockchainService.submitTransaction({
+    const submitResponse = await this.blockchainService.submitWayUpTransaction({
       transaction: signedTx,
     });
 
@@ -221,7 +221,7 @@ export class WayUpService {
 
     // Submit the transaction
     this.logger.log('Submitting unlist transaction to blockchain');
-    const submitResponse = await this.blockchainService.submitTransaction({
+    const submitResponse = await this.blockchainService.submitWayUpTransaction({
       transaction: signedTx,
     });
 
@@ -310,7 +310,7 @@ export class WayUpService {
 
     // Submit the transaction
     this.logger.log('Submitting update listing transaction to blockchain');
-    const submitResponse = await this.blockchainService.submitTransaction({
+    const submitResponse = await this.blockchainService.submitWayUpTransaction({
       transaction: signedTx,
     });
 
@@ -398,7 +398,7 @@ export class WayUpService {
 
     // Submit the transaction
     this.logger.log('Submitting offer transaction to blockchain');
-    const submitResponse = await this.blockchainService.submitTransaction({
+    const submitResponse = await this.blockchainService.submitWayUpTransaction({
       transaction: signedTx,
     });
 
@@ -485,7 +485,7 @@ export class WayUpService {
 
     // Submit the transaction
     this.logger.log('Submitting purchase transaction to blockchain');
-    const submitResponse = await this.blockchainService.submitTransaction({
+    const submitResponse = await this.blockchainService.submitWayUpTransaction({
       transaction: signedTx,
     });
 
@@ -717,7 +717,7 @@ export class WayUpService {
 
     // Submit the transaction
     this.logger.log('Submitting combined marketplace transaction to blockchain');
-    const submitResponse = await this.blockchainService.submitTransaction({
+    const submitResponse = await this.blockchainService.submitWayUpTransaction({
       transaction: signedTx,
     });
 
