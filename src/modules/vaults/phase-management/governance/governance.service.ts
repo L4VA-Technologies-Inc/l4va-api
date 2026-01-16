@@ -455,7 +455,7 @@ export class GovernanceService {
 
         try {
           const { votes: voteList, totals } = await this.getVotes(proposal.id);
-          const voteResult = this.voteCountingService.calculateResult(voteList, 0, BigInt(totals.totalVotingPower));
+          const voteResult = this.voteCountingService.calculateResult(voteList, 0, 0, BigInt(totals.totalVotingPower));
 
           return {
             ...baseProposal,
@@ -796,7 +796,7 @@ export class GovernanceService {
     const totalVotingPower = totalVotingPowerBigInt.toString();
 
     // Use vote counting service to calculate all vote totals and percentages
-    const voteResult = this.voteCountingService.calculateResult(votes, 0, totalVotingPowerBigInt);
+    const voteResult = this.voteCountingService.calculateResult(votes, 0, 0, totalVotingPowerBigInt);
 
     const totals = {
       yes: voteResult.yesVotes.toString(),

@@ -138,6 +138,7 @@ export class GovernanceExecutionService {
         .leftJoinAndSelect('vault.owner', 'owner')
         .leftJoinAndSelect('vault.treasury_wallet', 'treasury_wallet')
         .leftJoinAndSelect('proposal.votes', 'votes')
+        .leftJoinAndSelect('proposal.snapshot', 'snapshot')
         .where('proposal.id = :proposalId', { proposalId })
         .andWhere('proposal.status = :status', { status: ProposalStatus.ACTIVE })
         .select([
@@ -151,10 +152,12 @@ export class GovernanceExecutionService {
           'vault.id',
           'vault.name',
           'vault.execution_threshold',
+          'vault.cosigning_threshold',
           'treasury_wallet.treasury_address',
           'owner.address',
           'votes.voteWeight',
           'votes.vote',
+          'snapshot.addressBalances',
         ])
         .getOne();
 
@@ -164,9 +167,23 @@ export class GovernanceExecutionService {
       }
 
       const executionThreshold = proposal.vault.execution_threshold;
+      const participationThreshold = proposal.vault.cosigning_threshold || 0;
 
-      // Use vote counting service to calculate results
-      const voteResult = this.voteCountingService.calculateResult(proposal.votes, executionThreshold);
+      // Calculate total voting power from snapshot
+      let totalVotingPower = BigInt(0);
+      if (proposal.snapshot?.addressBalances) {
+        for (const balance of Object.values(proposal.snapshot.addressBalances)) {
+          totalVotingPower += BigInt(balance);
+        }
+      }
+
+      // Use vote counting service to calculate results with both thresholds
+      const voteResult = this.voteCountingService.calculateResult(
+        proposal.votes,
+        executionThreshold,
+        participationThreshold,
+        totalVotingPower > BigInt(0) ? totalVotingPower : undefined
+      );
       const isSuccessful = voteResult.isSuccessful;
 
       const finalContributorClaims = await this.claimRepository.find({
@@ -191,9 +208,11 @@ export class GovernanceExecutionService {
           tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
         });
 
-        this.logger.log(
-          `Proposal ${proposal.id}: REJECTED (${voteResult.yesVotePercent.toFixed(2)}% yes votes, threshold ${executionThreshold}%)`
-        );
+        const rejectionReason = !voteResult.meetsParticipationThreshold
+          ? `participation ${voteResult.participationPercent.toFixed(2)}% < required ${participationThreshold}%`
+          : `yes votes ${voteResult.yesVotePercent.toFixed(2)}% < threshold ${executionThreshold}%`;
+
+        this.logger.log(`Proposal ${proposal.id}: REJECTED (${rejectionReason})`);
         return;
       }
 
@@ -213,7 +232,7 @@ export class GovernanceExecutionService {
         });
 
         this.logger.log(
-          `Proposal ${proposal.id}: EXECUTED (${voteResult.yesVotePercent.toFixed(2)}% yes votes, threshold ${executionThreshold}%)`
+          `Proposal ${proposal.id}: EXECUTED (participation: ${voteResult.participationPercent.toFixed(2)}%, yes votes: ${voteResult.yesVotePercent.toFixed(2)}%, thresholds: ${participationThreshold}%/${executionThreshold}%)`
         );
       } else {
         this.logger.warn(`Proposal ${proposal.id} execution failed, status remains ACTIVE for retry`);
