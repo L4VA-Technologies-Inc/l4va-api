@@ -1,10 +1,12 @@
-export class FeeTooSmallException extends Error {
+import { HttpException, HttpStatus } from '@nestjs/common';
+
+export class FeeTooSmallException extends HttpException {
   constructor(
     message: string,
     public readonly suppliedFee: number,
     public readonly expectedFee: number
   ) {
-    super(message);
+    super(message, HttpStatus.BAD_REQUEST);
     this.name = 'FeeTooSmallException';
   }
 

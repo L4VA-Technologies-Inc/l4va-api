@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 
 import { FeeTooSmallException } from './exceptions/fee-too-small.exception';
+import { TxSizeExceededException } from './exceptions/tx-size-exceeded.exception';
 import { UTxOInsufficientException } from './exceptions/utxo-insufficient.exception';
 import { MissingUtxoException } from './exceptions/utxo-missing.exception';
 import { UtxoSpentException } from './exceptions/utxo-spent.exception';
@@ -120,6 +121,14 @@ export class BlockchainService {
           throw new VaultValidationException();
         }
 
+        if (
+          buildResponse.message?.includes('Maximum transaction size of') &&
+          buildResponse.message?.includes('exceeded')
+        ) {
+          this.logger.warn(`Transaction size exceeded: ${buildResponse.message}`);
+          throw TxSizeExceededException.fromErrorMessage(buildResponse.message);
+        }
+
         throw new Error('Failed to build complete transaction' + JSON.stringify(buildResponse));
       }
 
@@ -129,7 +138,8 @@ export class BlockchainService {
         error instanceof UTxOInsufficientException ||
         error instanceof MissingUtxoException ||
         error instanceof VaultValidationException ||
-        error instanceof FeeTooSmallException
+        error instanceof FeeTooSmallException ||
+        error instanceof TxSizeExceededException
       ) {
         throw error;
       }
