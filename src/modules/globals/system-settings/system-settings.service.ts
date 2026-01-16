@@ -44,6 +44,9 @@ export class SystemSettingsService implements OnModuleInit {
 
   async loadSettings(): Promise<void> {
     try {
+      // Clear the entity manager cache to ensure fresh data
+      this.systemSettingsRepository.manager.clear(SystemSettings);
+
       const settingsRecord = await this.systemSettingsRepository.find({
         cache: false,
       });
@@ -63,6 +66,7 @@ export class SystemSettingsService implements OnModuleInit {
   }
 
   async reloadSettings(): Promise<SystemSettingsData> {
+    await new Promise(resolve => setTimeout(resolve, 1500));
     await this.loadSettings();
     return this.settings;
   }
