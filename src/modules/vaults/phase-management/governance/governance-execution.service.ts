@@ -1053,6 +1053,7 @@ export class GovernanceExecutionService {
         vaultId: proposal.vaultId,
         assetIds: assetIds,
         treasuryAddress: burnWallet,
+        skipOnchain: true,
       });
 
       this.logger.log(

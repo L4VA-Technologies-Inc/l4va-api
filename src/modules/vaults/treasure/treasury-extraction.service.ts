@@ -1,5 +1,5 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
+import { Address, FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -7,6 +7,7 @@ import { In, Repository } from 'typeorm';
 
 import { TransactionsService } from '../processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from '../processing-tx/onchain/blockchain.service';
+import { getUtxosExtract } from '../processing-tx/onchain/utils/lib';
 
 import { Asset } from '@/database/asset.entity';
 import { Transaction } from '@/database/transaction.entity';
@@ -321,8 +322,14 @@ export class TreasuryExtractionService {
     const allAssetsToExtract = utxoGroups.flatMap(g => g.assetsToExtract);
     const totalLovelace = utxoGroups.reduce((sum, g) => sum + BigInt(g.lovelace), BigInt(0)).toString();
 
+    // Get admin UTXOs for transaction fees
+    const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
+      minAda: 2_000_000,
+    });
+
     const input = {
       changeAddress: this.adminAddress,
+      utxos: adminUtxos,
       message: `Admin extract ${allAssetsToExtract.length} assets from ${utxoGroups.length} UTXOs to treasury`,
       scriptInteractions,
       outputs: [
