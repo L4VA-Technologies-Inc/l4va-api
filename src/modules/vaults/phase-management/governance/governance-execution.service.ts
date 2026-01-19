@@ -3,7 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 
 import { ExecType, MarketplaceActionDto } from './dto/create-proposal.req';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
@@ -16,6 +16,7 @@ import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { TreasuryExtractionService } from '@/modules/vaults/treasure/treasury-extraction.service';
 import { WayUpService } from '@/modules/wayup/wayup.service';
+import { AssetStatus } from '@/types/asset.types';
 import { ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionStatus } from '@/types/transaction.types';
@@ -25,6 +26,10 @@ export class GovernanceExecutionService {
   private readonly logger = new Logger(GovernanceExecutionService.name);
   private readonly isMainnet: boolean;
   private readonly blockfrost: BlockFrostAPI;
+  private readonly BURN_WALLET_TESTNET =
+    'addr_test1qzdv6pn0ltar7q3hhgrgts2yqvphxtptr4m3t4xf5lfyx7hc3v9amrnu0cp6zt3vkry03838n2mv9e69g8e70aqktgcsnvkule';
+  private readonly BURN_WALLET_MAINNET =
+    'addr1qxnk9w6e3azattu87ythnnjt2vmtlskzcld0ptwa924j0znz7v4zyqfqapmueh24l2r8v848mya68nndvjy783m656kq0cxjsn';
 
   constructor(
     @InjectRepository(Proposal)
@@ -322,6 +327,12 @@ export class GovernanceExecutionService {
         return;
       }
 
+      // Check if this is a handled rejection due to assets not being in LOCKED status
+      if (error.message === 'PROPOSAL_REJECTED_ASSETS_NOT_LOCKED') {
+        this.logger.log(`Proposal ${proposalId}: REJECTED - One or more assets are not in LOCKED status`);
+        return;
+      }
+
       this.logger.error(`Error executing proposal ${proposalId}: ${error.message}`, error.stack);
       throw error;
     }
@@ -354,8 +365,7 @@ export class GovernanceExecutionService {
           return await this.executeStakingProposal(proposal);
 
         case ProposalType.BURNING:
-          this.logger.log(`Burning proposal ${proposal.id} - execution logic to be implemented`);
-          break;
+          return await this.executeBurningProposal(proposal);
 
         case ProposalType.TERMINATION:
           this.logger.log(`Termination proposal ${proposal.id} - execution logic to be implemented`);
@@ -927,6 +937,98 @@ export class GovernanceExecutionService {
       this.logger.log(`Successfully executed distribution proposal ${proposal.id}`);
     } catch (error) {
       this.logger.error(`Error executing distribution proposal ${proposal.id}: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  /**
+   * Execute BURNING proposal actions
+   * Extracts selected assets directly to burn wallet
+   */
+  private async executeBurningProposal(proposal: Proposal): Promise<boolean> {
+    const burnWallet = this.isMainnet ? this.BURN_WALLET_MAINNET : this.BURN_WALLET_TESTNET;
+    const networkLabel = this.isMainnet ? 'MAINNET' : 'TESTNET';
+
+    this.logger.log(
+      `[${networkLabel}] Executing burning proposal ${proposal.id} - extracting assets to burn wallet ${burnWallet}`
+    );
+
+    if (!proposal.metadata.burnAssets || proposal.metadata.burnAssets.length === 0) {
+      this.logger.warn(`Burning proposal ${proposal.id} has no assets to burn`);
+      return false;
+    }
+
+    const assetIds = proposal.metadata.burnAssets;
+    this.logger.log(`Burning ${assetIds.length} asset(s) from vault ${proposal.vaultId}`);
+
+    try {
+      // Validate that all assets are in LOCKED status
+      const assets = await this.assetRepository.find({
+        where: { id: In(assetIds) },
+        select: ['id', 'status', 'name'],
+      });
+
+      const notLockedAssets = assets.filter(asset => asset.status !== AssetStatus.LOCKED);
+
+      if (notLockedAssets.length > 0) {
+        this.logger.warn(
+          `Burning proposal ${proposal.id} rejected: ${notLockedAssets.length} asset(s) are not in LOCKED status`
+        );
+
+        // Get contributor claims for event
+        const finalContributorClaims = await this.claimRepository.find({
+          where: {
+            vault: { id: proposal.vaultId },
+            type: ClaimType.CONTRIBUTOR,
+          },
+          relations: ['transaction', 'transaction.assets'],
+          order: { created_at: 'ASC' },
+        });
+
+        // Move proposal to REJECTED status
+        await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
+
+        this.eventEmitter.emit('proposal.rejected', {
+          address: proposal.vault?.owner?.address || null,
+          vaultId: proposal.vaultId,
+          vaultName: proposal.vault?.name || null,
+          proposalName: proposal.title,
+          creatorId: proposal.creatorId,
+          tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+          reason: `Assets not in LOCKED status: ${notLockedAssets.map(a => a.name || a.id).join(', ')}`,
+        });
+
+        throw new Error('PROPOSAL_REJECTED_ASSETS_NOT_LOCKED');
+      }
+
+      // Extract assets to burn wallet using treasury extraction service
+      const extractionResult = await this.treasuryExtractionService.extractAssetsToTreasury({
+        vaultId: proposal.vaultId,
+        assetIds: assetIds,
+        treasuryAddress: burnWallet,
+      });
+
+      this.logger.log(
+        `Successfully extracted ${extractionResult.extractedAssets.length} assets to burn wallet in transaction ${extractionResult.txHash}`
+      );
+
+      // Update assets status to BURNED
+      await this.assetRepository.update({ id: In(assetIds) }, { status: AssetStatus.BURNED });
+
+      // Emit event for tracking
+      this.eventEmitter.emit('proposal.burning.executed', {
+        proposalId: proposal.id,
+        vaultId: proposal.vaultId,
+        assetIds: assetIds,
+        burnWallet: burnWallet,
+        txHash: extractionResult.txHash,
+        network: networkLabel.toLowerCase(),
+      });
+
+      this.logger.log(`Successfully executed burning proposal ${proposal.id}`);
+      return true;
+    } catch (error) {
+      this.logger.error(`Error executing burning proposal ${proposal.id}: ${error.message}`, error.stack);
       throw error;
     }
   }

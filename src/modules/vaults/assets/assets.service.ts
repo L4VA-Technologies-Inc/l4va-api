@@ -114,7 +114,7 @@ export class AssetsService {
         originTypes: [AssetOriginType.CONTRIBUTED, AssetOriginType.FEE],
       })
       .andWhere('asset.status IN (:...statuses)', {
-        statuses: [AssetStatus.LOCKED, AssetStatus.RELEASED],
+        statuses: [AssetStatus.LOCKED, AssetStatus.RELEASED, AssetStatus.LISTED],
       });
 
     if (search) {
@@ -151,7 +151,7 @@ export class AssetsService {
           id: vaultId,
         },
         origin_type: AssetOriginType.ACQUIRED,
-        status: In([AssetStatus.LOCKED, AssetStatus.RELEASED, AssetStatus.DISTRIBUTED, AssetStatus.LISTED]),
+        status: In([AssetStatus.LOCKED, AssetStatus.RELEASED, AssetStatus.DISTRIBUTED]),
       },
       select: {
         id: true,
