@@ -151,7 +151,7 @@ export class AssetsService {
           id: vaultId,
         },
         origin_type: AssetOriginType.ACQUIRED,
-        status: In([AssetStatus.LOCKED, AssetStatus.RELEASED, AssetStatus.DISTRIBUTED]),
+        status: In([AssetStatus.LOCKED, AssetStatus.RELEASED, AssetStatus.DISTRIBUTED, AssetStatus.LISTED]),
       },
       select: {
         id: true,

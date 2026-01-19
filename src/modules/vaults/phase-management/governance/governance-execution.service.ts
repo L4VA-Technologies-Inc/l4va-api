@@ -252,6 +252,12 @@ export class GovernanceExecutionService {
         return;
       }
 
+      // Check if this is a handled rejection due to asset already being listed
+      if (error.message === 'PROPOSAL_REJECTED_ASSET_ALREADY_LISTED') {
+        this.logger.log(`Proposal ${proposalId}: REJECTED - Asset is already listed on marketplace`);
+        return;
+      }
+
       this.logger.error(`Error processing proposal ${proposalId}: ${error.message}`, error.stack);
       throw error;
     }
@@ -394,13 +400,24 @@ export class GovernanceExecutionService {
           continue;
         }
 
-        // Check if asset is already listed (has listing_tx_hash)
+        // Check if asset is already listed (has listing_tx_hash) - reject entire proposal
         if (asset.listing_tx_hash) {
-          this.logger.warn(
-            `Asset ${asset.name || option.assetId} is already listed (tx: ${asset.listing_tx_hash}), skipping`
-          );
-          skipped.sells.push(asset.name || option.assetId);
-          continue;
+          const reason = `Asset "${asset.name || option.assetId}" is already listed on marketplace`;
+          this.logger.warn(`Marketplace proposal ${proposal.id} rejected: ${reason}`);
+
+          await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
+
+          this.eventEmitter.emit('proposal.rejected', {
+            address: proposal.vault?.owner?.address || null,
+            vaultId: proposal.vaultId,
+            vaultName: proposal.vault?.name || null,
+            proposalName: proposal.title,
+            creatorId: proposal.creatorId,
+            tokenHolderIds: [],
+            reason,
+          });
+
+          throw new Error('PROPOSAL_REJECTED_ASSET_ALREADY_LISTED');
         }
 
         const policyId = asset.policy_id;
