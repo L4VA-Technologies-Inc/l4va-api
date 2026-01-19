@@ -238,6 +238,12 @@ export class GovernanceExecutionService {
         this.logger.warn(`Proposal ${proposal.id} execution failed, status remains ACTIVE for retry`);
       }
     } catch (error) {
+      // Check if this is a handled rejection (e.g., listing not found - NFT was already bought)
+      if (error.message === 'PROPOSAL_REJECTED_LISTING_NOT_FOUND') {
+        this.logger.log(`Proposal ${proposalId}: REJECTED - Listing not found, NFT was likely already purchased`);
+        return;
+      }
+
       this.logger.error(`Error processing proposal ${proposalId}: ${error.message}`, error.stack);
       throw error;
     }
@@ -618,6 +624,31 @@ export class GovernanceExecutionService {
       return true;
     } catch (error) {
       this.logger.error(`Error executing marketplace proposal ${proposal.id}: ${error.message}`, error.stack);
+
+      // Check if the error is "Listing not found" - this happens when NFT was already bought
+      // In this case, we should reject the proposal instead of leaving it for retry
+      const errorMessage = error.message || '';
+      if (errorMessage.includes('Listing not found') || errorMessage.includes('"code":"NOT_FOUND"')) {
+        this.logger.warn(
+          `Marketplace proposal ${proposal.id} rejected: Listing not found - NFT was likely already purchased`
+        );
+
+        await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
+
+        this.eventEmitter.emit('proposal.rejected', {
+          address: proposal.vault?.owner?.address || null,
+          vaultId: proposal.vaultId,
+          vaultName: proposal.vault?.name || null,
+          proposalName: proposal.title,
+          creatorId: proposal.creatorId,
+          tokenHolderIds: [],
+          reason: 'Listing not found - NFT was likely already purchased',
+        });
+
+        // Throw a specific error so processProposal knows the proposal was already handled
+        throw new Error('PROPOSAL_REJECTED_LISTING_NOT_FOUND');
+      }
+
       return false;
     }
   }
