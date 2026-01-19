@@ -195,7 +195,7 @@ export class GovernanceExecutionService {
         order: { created_at: 'ASC' },
       });
 
-      // If proposal is not successful, reject it without executing
+      // If proposal is not successful, move to REJECTED
       if (!isSuccessful) {
         await this.proposalRepository.update({ id: proposalId }, { status: ProposalStatus.REJECTED });
 
@@ -216,11 +216,77 @@ export class GovernanceExecutionService {
         return;
       }
 
-      // Proposal is successful, execute actions
+      // Proposal vote is successful, move to PASSED status (ready for execution)
+      await this.proposalRepository.update({ id: proposalId }, { status: ProposalStatus.PASSED });
+
+      this.eventEmitter.emit('proposal.passed', {
+        address: proposal.vault?.owner?.address || null,
+        vaultId: proposal.vaultId,
+        vaultName: proposal.vault?.name || null,
+        proposalName: proposal.title,
+        creatorId: proposal.creatorId,
+        tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+      });
+
+      this.logger.log(
+        `Proposal ${proposal.id}: PASSED (participation: ${voteResult.participationPercent.toFixed(2)}%, yes votes: ${voteResult.yesVotePercent.toFixed(2)}%, thresholds: ${participationThreshold}%/${executionThreshold}%)`
+      );
+    } catch (error) {
+      this.logger.error(`Error processing proposal ${proposalId}: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  /**
+   * Execute a PASSED proposal
+   * Retrieves proposals from PASSED status and executes them
+   */
+  async executePassedProposal(proposalId: string): Promise<void> {
+    try {
+      const proposal = await this.proposalRepository
+        .createQueryBuilder('proposal')
+        .leftJoinAndSelect('proposal.vault', 'vault')
+        .leftJoinAndSelect('vault.owner', 'owner')
+        .leftJoinAndSelect('vault.treasury_wallet', 'treasury_wallet')
+        .where('proposal.id = :proposalId', { proposalId })
+        .andWhere('proposal.status = :status', { status: ProposalStatus.PASSED })
+        .select([
+          'proposal.id',
+          'proposal.vaultId',
+          'proposal.status',
+          'proposal.proposalType',
+          'proposal.metadata',
+          'proposal.title',
+          'proposal.creatorId',
+          'vault.id',
+          'vault.name',
+          'treasury_wallet.treasury_address',
+          'owner.address',
+        ])
+        .getOne();
+
+      if (!proposal) {
+        this.logger.warn(`Proposal ${proposalId} is not in PASSED status or doesn't exist`);
+        return;
+      }
+
+      const finalContributorClaims = await this.claimRepository.find({
+        where: {
+          vault: { id: proposal.vaultId },
+          type: ClaimType.CONTRIBUTOR,
+        },
+        relations: ['transaction', 'transaction.assets'],
+        order: { created_at: 'ASC' },
+      });
+
+      // Execute proposal actions
       const executed = await this.executeProposalActions(proposal);
 
       if (executed) {
-        await this.proposalRepository.update({ id: proposalId }, { status: ProposalStatus.EXECUTED });
+        await this.proposalRepository.update(
+          { id: proposalId },
+          { status: ProposalStatus.EXECUTED, executionDate: new Date() }
+        );
 
         this.eventEmitter.emit('proposal.executed', {
           address: proposal.vault?.owner?.address || null,
@@ -231,11 +297,9 @@ export class GovernanceExecutionService {
           tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
         });
 
-        this.logger.log(
-          `Proposal ${proposal.id}: EXECUTED (participation: ${voteResult.participationPercent.toFixed(2)}%, yes votes: ${voteResult.yesVotePercent.toFixed(2)}%, thresholds: ${participationThreshold}%/${executionThreshold}%)`
-        );
+        this.logger.log(`Proposal ${proposal.id}: EXECUTED successfully`);
       } else {
-        this.logger.warn(`Proposal ${proposal.id} execution failed, status remains ACTIVE for retry`);
+        this.logger.warn(`Proposal ${proposal.id} execution failed, status remains PASSED for retry`);
       }
     } catch (error) {
       // Check if this is a handled rejection (e.g., listing not found - NFT was already bought)
@@ -258,7 +322,7 @@ export class GovernanceExecutionService {
         return;
       }
 
-      this.logger.error(`Error processing proposal ${proposalId}: ${error.message}`, error.stack);
+      this.logger.error(`Error executing proposal ${proposalId}: ${error.message}`, error.stack);
       throw error;
     }
   }
