@@ -244,6 +244,14 @@ export class GovernanceExecutionService {
         return;
       }
 
+      // Check if this is a handled rejection due to no valid operations (all assets already listed/not listed)
+      if (error.message === 'PROPOSAL_REJECTED_NO_VALID_OPERATIONS') {
+        this.logger.log(
+          `Proposal ${proposalId}: REJECTED - No valid marketplace operations (assets already listed or not available)`
+        );
+        return;
+      }
+
       this.logger.error(`Error processing proposal ${proposalId}: ${error.message}`, error.stack);
       throw error;
     }
@@ -386,6 +394,15 @@ export class GovernanceExecutionService {
           continue;
         }
 
+        // Check if asset is already listed (has listing_tx_hash)
+        if (asset.listing_tx_hash) {
+          this.logger.warn(
+            `Asset ${asset.name || option.assetId} is already listed (tx: ${asset.listing_tx_hash}), skipping`
+          );
+          skipped.sells.push(asset.name || option.assetId);
+          continue;
+        }
+
         const policyId = asset.policy_id;
         const assetName = asset.asset_id;
         const priceAda = parseFloat(option.price);
@@ -483,8 +500,44 @@ export class GovernanceExecutionService {
       const hasOperations = listings.length > 0 || unlistings.length > 0 || updates.length > 0 || purchases.length > 0;
 
       if (!hasOperations) {
-        this.logger.warn(`No valid marketplace operations to execute for proposal ${proposal.id}`);
-        return false;
+        // Determine the reason for no valid operations
+        const totalSkipped =
+          skipped.sells.length + skipped.buys.length + skipped.unlists.length + skipped.updates.length;
+        let reason = 'No valid marketplace operations to execute';
+
+        if (totalSkipped > 0) {
+          const reasons: string[] = [];
+          if (skipped.sells.length > 0) {
+            reasons.push(`${skipped.sells.length} asset(s) already listed`);
+          }
+          if (skipped.unlists.length > 0) {
+            reasons.push(`${skipped.unlists.length} asset(s) not listed`);
+          }
+          if (skipped.updates.length > 0) {
+            reasons.push(`${skipped.updates.length} asset(s) not listed for update`);
+          }
+          if (skipped.buys.length > 0) {
+            reasons.push(`${skipped.buys.length} asset(s) not available for purchase`);
+          }
+          reason = `All operations skipped: ${reasons.join(', ')}`;
+        }
+
+        this.logger.warn(`Marketplace proposal ${proposal.id} rejected: ${reason}`);
+
+        await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
+
+        this.eventEmitter.emit('proposal.rejected', {
+          address: proposal.vault?.owner?.address || null,
+          vaultId: proposal.vaultId,
+          vaultName: proposal.vault?.name || null,
+          proposalName: proposal.title,
+          creatorId: proposal.creatorId,
+          tokenHolderIds: [],
+          reason,
+        });
+
+        // Throw specific error so processProposal knows the proposal was already handled
+        throw new Error('PROPOSAL_REJECTED_NO_VALID_OPERATIONS');
       }
 
       // STEP 1: Extract assets to treasury if there are listings (only for assets not already in treasury)
