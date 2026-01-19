@@ -2,6 +2,7 @@ import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
@@ -101,6 +102,37 @@ export class GovernanceExecutionService {
     this.schedulerService.scheduleExecution(payload.proposalId, payload.endDate, () =>
       this.processProposal(payload.proposalId)
     );
+  }
+
+  /**
+   * Retry execution of all PASSED proposals
+   * Runs periodically to retry proposals that are in PASSED status but not yet executed
+   */
+  @Cron(CronExpression.EVERY_5_MINUTES)
+  async retryPassedProposals(): Promise<void> {
+    try {
+      // Find all proposals in PASSED status
+      const passedProposals = await this.proposalRepository.find({
+        where: { status: ProposalStatus.PASSED },
+        select: ['id', 'title', 'vaultId'],
+      });
+
+      if (passedProposals.length === 0) {
+        return;
+      }
+
+      for (const proposal of passedProposals) {
+        try {
+          this.logger.log(`Retrying execution for PASSED proposal ${proposal.id} (${proposal.title})`);
+          await this.executePassedProposal(proposal.id);
+        } catch (error) {
+          this.logger.error(`Error retrying execution for proposal ${proposal.id}: ${error.message}`, error.stack);
+          // Continue with next proposal
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Error in retryPassedProposals: ${error.message}`, error.stack);
+    }
   }
 
   async activateProposal(proposalId: string): Promise<void> {
@@ -236,9 +268,24 @@ export class GovernanceExecutionService {
       this.logger.log(
         `Proposal ${proposal.id}: PASSED (participation: ${voteResult.participationPercent.toFixed(2)}%, yes votes: ${voteResult.yesVotePercent.toFixed(2)}%, thresholds: ${participationThreshold}%/${executionThreshold}%)`
       );
+
+      // Immediately trigger execution
+      await this.executePassedProposal(proposalId);
     } catch (error) {
       this.logger.error(`Error processing proposal ${proposalId}: ${error.message}`, error.stack);
       throw error;
+    }
+  }
+
+  @OnEvent('proposal.passed')
+  async handleProposalPassed(payload: { proposalId?: string }): Promise<void> {
+    if (payload.proposalId) {
+      // Trigger execution for the specific passed proposal
+      try {
+        await this.executePassedProposal(payload.proposalId);
+      } catch (error) {
+        this.logger.error(`Error executing passed proposal ${payload.proposalId}: ${error.message}`, error.stack);
+      }
     }
   }
 
