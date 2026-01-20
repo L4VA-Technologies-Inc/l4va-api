@@ -32,6 +32,10 @@ export class GovernanceExecutionService {
   private readonly BURN_WALLET_MAINNET =
     'addr1qxnk9w6e3azattu87ythnnjt2vmtlskzcld0ptwa924j0znz7v4zyqfqapmueh24l2r8v848mya68nndvjy783m656kq0cxjsn';
 
+  // Retry configuration constants
+  private readonly MAX_EXECUTION_RETRIES = 5;
+  private readonly RETRY_BACKOFF_MINUTES = 5; // Base backoff time in minutes
+
   constructor(
     @InjectRepository(Proposal)
     private readonly proposalRepository: Repository<Proposal>,
@@ -105,16 +109,17 @@ export class GovernanceExecutionService {
   }
 
   /**
-   * Retry execution of all PASSED proposals
+   * Retry execution of all PASSED proposals with exponential backoff
    * Runs periodically to retry proposals that are in PASSED status but not yet executed
+   * Implements retry limits and exponential backoff to prevent indefinite retries
    */
   @Cron(CronExpression.EVERY_5_MINUTES)
   async retryPassedProposals(): Promise<void> {
     try {
-      // Find all proposals in PASSED status
+      // Find all proposals in PASSED status with metadata for retry tracking
       const passedProposals = await this.proposalRepository.find({
         where: { status: ProposalStatus.PASSED },
-        select: ['id', 'title', 'vaultId'],
+        select: ['id', 'title', 'vaultId', 'metadata'],
       });
 
       if (passedProposals.length === 0) {
@@ -123,11 +128,46 @@ export class GovernanceExecutionService {
 
       for (const proposal of passedProposals) {
         try {
-          this.logger.log(`Retrying execution for PASSED proposal ${proposal.id} (${proposal.title})`);
+          const retryInfo = proposal.metadata?._executionRetry;
+          const retryCount = retryInfo?.count || 0;
+          const lastRetryAt = retryInfo?.lastAttempt ? new Date(retryInfo.lastAttempt) : null;
+
+          // Check if max retries exceeded
+          if (retryCount >= this.MAX_EXECUTION_RETRIES) {
+            continue;
+          }
+
+          // Calculate exponential backoff: base * 2^retryCount minutes
+          const backoffMinutes = this.RETRY_BACKOFF_MINUTES * Math.pow(2, retryCount);
+          const nextRetryTime = lastRetryAt ? new Date(lastRetryAt.getTime() + backoffMinutes * 60 * 1000) : new Date(); // First retry, execute immediately
+
+          // Check if enough time has passed since last retry
+          if (lastRetryAt && new Date() < nextRetryTime) {
+            this.logger.debug(
+              `Proposal ${proposal.id} is in backoff period. Next retry at ${nextRetryTime.toISOString()}`
+            );
+            continue;
+          }
+
+          this.logger.log(
+            `Retrying execution for PASSED proposal ${proposal.id} (${proposal.title}) - Attempt ${retryCount + 1}/${this.MAX_EXECUTION_RETRIES}`
+          );
+
+          // Update retry tracking in metadata before execution
+          const updatedMetadata = {
+            ...proposal.metadata,
+            _executionRetry: {
+              count: retryCount + 1,
+              lastAttempt: new Date().toISOString(),
+            },
+          };
+
+          await this.proposalRepository.update({ id: proposal.id }, { metadata: updatedMetadata });
+
           await this.executePassedProposal(proposal.id);
         } catch (error) {
           this.logger.error(`Error retrying execution for proposal ${proposal.id}: ${error.message}`, error.stack);
-          // Continue with next proposal
+          // Continue with next proposal - retry count already incremented
         }
       }
     } catch (error) {
@@ -254,7 +294,19 @@ export class GovernanceExecutionService {
       }
 
       // Proposal vote is successful, move to PASSED status (ready for execution)
-      await this.proposalRepository.update({ id: proposalId }, { status: ProposalStatus.PASSED });
+      // Reset retry counter in metadata when first moving to PASSED status
+      const updatedMetadata = {
+        ...proposal.metadata,
+        _executionRetry: {
+          count: 0,
+          lastAttempt: null,
+        },
+      };
+
+      await this.proposalRepository.update(
+        { id: proposalId },
+        { status: ProposalStatus.PASSED, metadata: updatedMetadata }
+      );
 
       this.logger.log(
         `Proposal ${proposal.id}: PASSED (participation: ${voteResult.participationPercent.toFixed(2)}%, yes votes: ${voteResult.yesVotePercent.toFixed(2)}%, thresholds: ${participationThreshold}%/${executionThreshold}%)`
