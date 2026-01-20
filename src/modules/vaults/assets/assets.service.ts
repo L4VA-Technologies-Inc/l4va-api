@@ -118,7 +118,7 @@ export class AssetsService {
       });
 
     if (search) {
-      queryBuilder = queryBuilder.andWhere('asset.metadata::text ILIKE :search', { search: `%${search}%` });
+      queryBuilder = queryBuilder.andWhere('asset.name ILIKE :search', { search: `%${search}%` });
     }
 
     const [assets, total] = await queryBuilder
