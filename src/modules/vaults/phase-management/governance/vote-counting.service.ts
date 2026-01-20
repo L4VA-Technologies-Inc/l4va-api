@@ -64,9 +64,13 @@ export class VoteCountingService {
 
     // Calculate participation percentage (all votes including abstain / total voting power)
     const participationPercent =
-      totalVotingPower && totalVotingPower > BigInt(0)
-        ? (Number(totalVotesIncludingAbstain) / Number(totalVotingPower)) * 100
-        : 100; // If no total voting power provided, assume 100% participation
+      typeof totalVotingPower === 'bigint'
+        ? totalVotingPower > BigInt(0)
+          ? (Number(totalVotesIncludingAbstain) / Number(totalVotingPower)) * 100
+          : 0 // Zero voting power means 0% participation
+        : totalVotesIncludingAbstain > BigInt(0)
+          ? 100 // If no snapshot provided but votes exist, assume 100% of participants voted
+          : 0; // No snapshot and no votes means 0% participation
 
     // Check if minimum participation threshold is met
     const meetsParticipationThreshold = participationPercent >= participationThreshold;
