@@ -256,15 +256,6 @@ export class GovernanceExecutionService {
       // Proposal vote is successful, move to PASSED status (ready for execution)
       await this.proposalRepository.update({ id: proposalId }, { status: ProposalStatus.PASSED });
 
-      this.eventEmitter.emit('proposal.passed', {
-        address: proposal.vault?.owner?.address || null,
-        vaultId: proposal.vaultId,
-        vaultName: proposal.vault?.name || null,
-        proposalName: proposal.title,
-        creatorId: proposal.creatorId,
-        tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
-      });
-
       this.logger.log(
         `Proposal ${proposal.id}: PASSED (participation: ${voteResult.participationPercent.toFixed(2)}%, yes votes: ${voteResult.yesVotePercent.toFixed(2)}%, thresholds: ${participationThreshold}%/${executionThreshold}%)`
       );
@@ -274,18 +265,6 @@ export class GovernanceExecutionService {
     } catch (error) {
       this.logger.error(`Error processing proposal ${proposalId}: ${error.message}`, error.stack);
       throw error;
-    }
-  }
-
-  @OnEvent('proposal.passed')
-  async handleProposalPassed(payload: { proposalId?: string }): Promise<void> {
-    if (payload.proposalId) {
-      // Trigger execution for the specific passed proposal
-      try {
-        await this.executePassedProposal(payload.proposalId);
-      } catch (error) {
-        this.logger.error(`Error executing passed proposal ${payload.proposalId}: ${error.message}`, error.stack);
-      }
     }
   }
 
