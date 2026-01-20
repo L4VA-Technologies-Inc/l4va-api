@@ -8,6 +8,7 @@ import { In, Repository } from 'typeorm';
 
 import { ExecType, MarketplaceActionDto } from './dto/create-proposal.req';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
+import { TerminationService } from './termination.service';
 import { VoteCountingService } from './vote-counting.service';
 
 import { Asset } from '@/database/asset.entity';
@@ -50,7 +51,8 @@ export class GovernanceExecutionService {
     private readonly schedulerService: ProposalSchedulerService,
     private readonly voteCountingService: VoteCountingService,
     private readonly treasuryExtractionService: TreasuryExtractionService,
-    private readonly transactionsService: TransactionsService
+    private readonly transactionsService: TransactionsService,
+    private readonly terminationService: TerminationService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
@@ -453,8 +455,7 @@ export class GovernanceExecutionService {
           return await this.executeBurningProposal(proposal);
 
         case ProposalType.TERMINATION:
-          this.logger.log(`Termination proposal ${proposal.id} - execution logic to be implemented`);
-          break;
+          return await this.executeTerminationProposal(proposal);
 
         default:
           this.logger.warn(`Unknown proposal type: ${proposal.proposalType}`);
@@ -1146,6 +1147,41 @@ export class GovernanceExecutionService {
     } catch (error) {
       this.logger.error(`Error executing burning proposal ${proposal.id}: ${error.message}`, error.stack);
       await this.storeExecutionError(proposal, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Execute TERMINATION proposal actions
+   * Initiates the vault termination flow:
+   * 1. NFTs burn
+   * 2. LP removal (VyFi)
+   * 3. VT burn (from LP return)
+   * 4. ADA to treasury
+   * 5. Create termination claims for VT holders
+   * 6. Users claim VT -> ADA
+   * 7. Vault NFT burn
+   */
+  private async executeTerminationProposal(proposal: Proposal): Promise<boolean> {
+    const networkLabel = this.isMainnet ? 'MAINNET' : 'TESTNET';
+
+    this.logger.log(`[${networkLabel}] Executing termination proposal ${proposal.id} for vault ${proposal.vaultId}`);
+
+    try {
+      // Initiate the termination flow via TerminationService
+      await this.terminationService.initiateTermination(proposal.vaultId, proposal.id);
+
+      // Emit event for tracking
+      this.eventEmitter.emit('proposal.termination.initiated', {
+        proposalId: proposal.id,
+        vaultId: proposal.vaultId,
+        network: networkLabel.toLowerCase(),
+      });
+
+      this.logger.log(`Successfully initiated termination for vault ${proposal.vaultId}`);
+      return true;
+    } catch (error) {
+      this.logger.error(`Error executing termination proposal ${proposal.id}: ${error.message}`, error.stack);
       throw error;
     }
   }
