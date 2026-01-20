@@ -18,6 +18,7 @@ import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
+import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 
 @Module({
@@ -28,7 +29,7 @@ import { Vault } from '@/database/vault.entity';
     HttpModule,
     TransactionsModule,
     AssetsModule,
-    TypeOrmModule.forFeature([Vault, Transaction, AssetsWhitelistEntity, TokenRegistry, Asset, Claim]),
+    TypeOrmModule.forFeature([Vault, Transaction, AssetsWhitelistEntity, TokenRegistry, Asset, Claim, User]),
   ],
   controllers: [BlockchainController],
   providers: [
