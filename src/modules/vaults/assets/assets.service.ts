@@ -114,11 +114,11 @@ export class AssetsService {
         originTypes: [AssetOriginType.CONTRIBUTED, AssetOriginType.FEE],
       })
       .andWhere('asset.status IN (:...statuses)', {
-        statuses: [AssetStatus.LOCKED, AssetStatus.RELEASED],
+        statuses: [AssetStatus.LOCKED, AssetStatus.RELEASED, AssetStatus.LISTED],
       });
 
     if (search) {
-      queryBuilder = queryBuilder.andWhere('asset.metadata::text ILIKE :search', { search: `%${search}%` });
+      queryBuilder = queryBuilder.andWhere('asset.name ILIKE :search', { search: `%${search}%` });
     }
 
     const [assets, total] = await queryBuilder

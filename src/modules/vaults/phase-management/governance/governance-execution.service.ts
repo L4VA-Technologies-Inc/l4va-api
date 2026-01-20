@@ -2,8 +2,9 @@ import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 
 import { ExecType, MarketplaceActionDto } from './dto/create-proposal.req';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
@@ -16,6 +17,7 @@ import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { TreasuryExtractionService } from '@/modules/vaults/treasure/treasury-extraction.service';
 import { WayUpService } from '@/modules/wayup/wayup.service';
+import { AssetStatus } from '@/types/asset.types';
 import { ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionStatus } from '@/types/transaction.types';
@@ -25,6 +27,14 @@ export class GovernanceExecutionService {
   private readonly logger = new Logger(GovernanceExecutionService.name);
   private readonly isMainnet: boolean;
   private readonly blockfrost: BlockFrostAPI;
+  private readonly BURN_WALLET_TESTNET =
+    'addr_test1qzdv6pn0ltar7q3hhgrgts2yqvphxtptr4m3t4xf5lfyx7hc3v9amrnu0cp6zt3vkry03838n2mv9e69g8e70aqktgcsnvkule';
+  private readonly BURN_WALLET_MAINNET =
+    'addr1qxnk9w6e3azattu87ythnnjt2vmtlskzcld0ptwa924j0znz7v4zyqfqapmueh24l2r8v848mya68nndvjy783m656kq0cxjsn';
+
+  // Retry configuration constants
+  private readonly MAX_EXECUTION_RETRIES = 5;
+  private readonly RETRY_BACKOFF_MINUTES = 5; // Base backoff time in minutes
 
   constructor(
     @InjectRepository(Proposal)
@@ -98,6 +108,73 @@ export class GovernanceExecutionService {
     );
   }
 
+  /**
+   * Retry execution of all PASSED proposals with exponential backoff
+   * Runs periodically to retry proposals that are in PASSED status but not yet executed
+   * Implements retry limits and exponential backoff to prevent indefinite retries
+   */
+  @Cron(CronExpression.EVERY_5_MINUTES)
+  async retryPassedProposals(): Promise<void> {
+    try {
+      // Find all proposals in PASSED status with metadata for retry tracking
+      const passedProposals = await this.proposalRepository.find({
+        where: { status: ProposalStatus.PASSED },
+        select: ['id', 'title', 'vaultId', 'metadata'],
+      });
+
+      if (passedProposals.length === 0) {
+        return;
+      }
+
+      for (const proposal of passedProposals) {
+        try {
+          const retryInfo = proposal.metadata?._executionRetry;
+          const retryCount = retryInfo?.count || 0;
+          const lastRetryAt = retryInfo?.lastAttempt ? new Date(retryInfo.lastAttempt) : null;
+
+          // Check if max retries exceeded
+          if (retryCount >= this.MAX_EXECUTION_RETRIES) {
+            continue;
+          }
+
+          // Calculate exponential backoff: base * 2^retryCount minutes
+          const backoffMinutes = this.RETRY_BACKOFF_MINUTES * Math.pow(2, retryCount);
+          const nextRetryTime = lastRetryAt ? new Date(lastRetryAt.getTime() + backoffMinutes * 60 * 1000) : new Date(); // First retry, execute immediately
+
+          // Check if enough time has passed since last retry
+          if (lastRetryAt && new Date() < nextRetryTime) {
+            this.logger.debug(
+              `Proposal ${proposal.id} is in backoff period. Next retry at ${nextRetryTime.toISOString()}`
+            );
+            continue;
+          }
+
+          this.logger.log(
+            `Retrying execution for PASSED proposal ${proposal.id} (${proposal.title}) - Attempt ${retryCount + 1}/${this.MAX_EXECUTION_RETRIES}`
+          );
+
+          // Update retry tracking in metadata before execution
+          const updatedMetadata = {
+            ...proposal.metadata,
+            _executionRetry: {
+              count: retryCount + 1,
+              lastAttempt: new Date().toISOString(),
+            },
+          };
+
+          await this.proposalRepository.update({ id: proposal.id }, { metadata: updatedMetadata });
+
+          await this.executePassedProposal(proposal.id);
+        } catch (error) {
+          this.logger.error(`Error retrying execution for proposal ${proposal.id}: ${error.message}`, error.stack);
+          // Continue with next proposal - retry count already incremented
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Error in retryPassedProposals: ${error.message}`, error.stack);
+    }
+  }
+
   async activateProposal(proposalId: string): Promise<void> {
     try {
       const proposal = await this.proposalRepository.findOne({
@@ -138,6 +215,7 @@ export class GovernanceExecutionService {
         .leftJoinAndSelect('vault.owner', 'owner')
         .leftJoinAndSelect('vault.treasury_wallet', 'treasury_wallet')
         .leftJoinAndSelect('proposal.votes', 'votes')
+        .leftJoinAndSelect('proposal.snapshot', 'snapshot')
         .where('proposal.id = :proposalId', { proposalId })
         .andWhere('proposal.status = :status', { status: ProposalStatus.ACTIVE })
         .select([
@@ -151,10 +229,12 @@ export class GovernanceExecutionService {
           'vault.id',
           'vault.name',
           'vault.execution_threshold',
+          'vault.cosigning_threshold',
           'treasury_wallet.treasury_address',
           'owner.address',
           'votes.voteWeight',
           'votes.vote',
+          'snapshot.addressBalances',
         ])
         .getOne();
 
@@ -164,9 +244,23 @@ export class GovernanceExecutionService {
       }
 
       const executionThreshold = proposal.vault.execution_threshold;
+      const participationThreshold = proposal.vault.cosigning_threshold || 0;
 
-      // Use vote counting service to calculate results
-      const voteResult = this.voteCountingService.calculateResult(proposal.votes, executionThreshold);
+      // Calculate total voting power from snapshot
+      let totalVotingPower = BigInt(0);
+      if (proposal.snapshot?.addressBalances) {
+        for (const balance of Object.values(proposal.snapshot.addressBalances)) {
+          totalVotingPower += BigInt(balance);
+        }
+      }
+
+      // Use vote counting service to calculate results with both thresholds
+      const voteResult = this.voteCountingService.calculateResult(
+        proposal.votes,
+        executionThreshold,
+        participationThreshold,
+        totalVotingPower > BigInt(0) ? totalVotingPower : undefined
+      );
       const isSuccessful = voteResult.isSuccessful;
 
       const finalContributorClaims = await this.claimRepository.find({
@@ -178,7 +272,7 @@ export class GovernanceExecutionService {
         order: { created_at: 'ASC' },
       });
 
-      // If proposal is not successful, reject it without executing
+      // If proposal is not successful, move to REJECTED
       if (!isSuccessful) {
         await this.proposalRepository.update({ id: proposalId }, { status: ProposalStatus.REJECTED });
 
@@ -191,17 +285,91 @@ export class GovernanceExecutionService {
           tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
         });
 
-        this.logger.log(
-          `Proposal ${proposal.id}: REJECTED (${voteResult.yesVotePercent.toFixed(2)}% yes votes, threshold ${executionThreshold}%)`
-        );
+        const rejectionReason = !voteResult.meetsParticipationThreshold
+          ? `participation ${voteResult.participationPercent.toFixed(2)}% < required ${participationThreshold}%`
+          : `yes votes ${voteResult.yesVotePercent.toFixed(2)}% < threshold ${executionThreshold}%`;
+
+        this.logger.log(`Proposal ${proposal.id}: REJECTED (${rejectionReason})`);
         return;
       }
 
-      // Proposal is successful, execute actions
+      // Proposal vote is successful, move to PASSED status (ready for execution)
+      // Reset retry counter in metadata when first moving to PASSED status
+      const updatedMetadata = {
+        ...proposal.metadata,
+        _executionRetry: {
+          count: 0,
+          lastAttempt: null,
+        },
+      };
+
+      await this.proposalRepository.update(
+        { id: proposalId },
+        { status: ProposalStatus.PASSED, metadata: updatedMetadata }
+      );
+
+      this.logger.log(
+        `Proposal ${proposal.id}: PASSED (participation: ${voteResult.participationPercent.toFixed(2)}%, yes votes: ${voteResult.yesVotePercent.toFixed(2)}%, thresholds: ${participationThreshold}%/${executionThreshold}%)`
+      );
+
+      // Immediately trigger execution
+      await this.executePassedProposal(proposalId);
+    } catch (error) {
+      this.logger.error(`Error processing proposal ${proposalId}: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  /**
+   * Execute a PASSED proposal
+   * Retrieves proposals from PASSED status and executes them
+   */
+  async executePassedProposal(proposalId: string): Promise<void> {
+    try {
+      const proposal = await this.proposalRepository
+        .createQueryBuilder('proposal')
+        .leftJoinAndSelect('proposal.vault', 'vault')
+        .leftJoinAndSelect('vault.owner', 'owner')
+        .leftJoinAndSelect('vault.treasury_wallet', 'treasury_wallet')
+        .where('proposal.id = :proposalId', { proposalId })
+        .andWhere('proposal.status = :status', { status: ProposalStatus.PASSED })
+        .select([
+          'proposal.id',
+          'proposal.vaultId',
+          'proposal.status',
+          'proposal.proposalType',
+          'proposal.metadata',
+          'proposal.title',
+          'proposal.creatorId',
+          'vault.id',
+          'vault.name',
+          'treasury_wallet.treasury_address',
+          'owner.address',
+        ])
+        .getOne();
+
+      if (!proposal) {
+        this.logger.warn(`Proposal ${proposalId} is not in PASSED status or doesn't exist`);
+        return;
+      }
+
+      const finalContributorClaims = await this.claimRepository.find({
+        where: {
+          vault: { id: proposal.vaultId },
+          type: ClaimType.CONTRIBUTOR,
+        },
+        relations: ['transaction', 'transaction.assets'],
+        order: { created_at: 'ASC' },
+      });
+
+      // Execute proposal actions
       const executed = await this.executeProposalActions(proposal);
 
       if (executed) {
-        await this.proposalRepository.update({ id: proposalId }, { status: ProposalStatus.EXECUTED });
+        await this.proposalRepository.update(
+          { id: proposalId },
+          { status: ProposalStatus.EXECUTED, executionDate: new Date() }
+        );
 
         this.eventEmitter.emit('proposal.executed', {
           address: proposal.vault?.owner?.address || null,
@@ -212,14 +380,38 @@ export class GovernanceExecutionService {
           tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
         });
 
-        this.logger.log(
-          `Proposal ${proposal.id}: EXECUTED (${voteResult.yesVotePercent.toFixed(2)}% yes votes, threshold ${executionThreshold}%)`
-        );
+        this.logger.log(`Proposal ${proposal.id}: EXECUTED successfully`);
       } else {
-        this.logger.warn(`Proposal ${proposal.id} execution failed, status remains ACTIVE for retry`);
+        this.logger.warn(`Proposal ${proposal.id} execution failed, status remains PASSED for retry`);
       }
     } catch (error) {
-      this.logger.error(`Error processing proposal ${proposalId}: ${error.message}`, error.stack);
+      // Check if this is a handled rejection (e.g., listing not found - NFT was already bought)
+      if (error.message === 'PROPOSAL_REJECTED_LISTING_NOT_FOUND') {
+        this.logger.log(`Proposal ${proposalId}: REJECTED - Listing not found, NFT was likely already purchased`);
+        return;
+      }
+
+      // Check if this is a handled rejection due to no valid operations (all assets already listed/not listed)
+      if (error.message === 'PROPOSAL_REJECTED_NO_VALID_OPERATIONS') {
+        this.logger.log(
+          `Proposal ${proposalId}: REJECTED - No valid marketplace operations (assets already listed or not available)`
+        );
+        return;
+      }
+
+      // Check if this is a handled rejection due to asset already being listed
+      if (error.message === 'PROPOSAL_REJECTED_ASSET_ALREADY_LISTED') {
+        this.logger.log(`Proposal ${proposalId}: REJECTED - Asset is already listed on marketplace`);
+        return;
+      }
+
+      // Check if this is a handled rejection due to assets not being in LOCKED status
+      if (error.message === 'PROPOSAL_REJECTED_ASSETS_NOT_LOCKED') {
+        this.logger.log(`Proposal ${proposalId}: REJECTED - One or more assets are not in LOCKED status`);
+        return;
+      }
+
+      this.logger.error(`Error executing proposal ${proposalId}: ${error.message}`, error.stack);
       throw error;
     }
   }
@@ -251,8 +443,7 @@ export class GovernanceExecutionService {
           return await this.executeStakingProposal(proposal);
 
         case ProposalType.BURNING:
-          this.logger.log(`Burning proposal ${proposal.id} - execution logic to be implemented`);
-          break;
+          return await this.executeBurningProposal(proposal);
 
         case ProposalType.TERMINATION:
           this.logger.log(`Termination proposal ${proposal.id} - execution logic to be implemented`);
@@ -361,6 +552,26 @@ export class GovernanceExecutionService {
           continue;
         }
 
+        // Check if asset is already listed (has listing_tx_hash) - reject entire proposal
+        if (asset.listing_tx_hash) {
+          const reason = `Asset "${asset.name || option.assetId}" is already listed on marketplace`;
+          this.logger.warn(`Marketplace proposal ${proposal.id} rejected: ${reason}`);
+
+          await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
+
+          this.eventEmitter.emit('proposal.rejected', {
+            address: proposal.vault?.owner?.address || null,
+            vaultId: proposal.vaultId,
+            vaultName: proposal.vault?.name || null,
+            proposalName: proposal.title,
+            creatorId: proposal.creatorId,
+            tokenHolderIds: [],
+            reason,
+          });
+
+          throw new Error('PROPOSAL_REJECTED_ASSET_ALREADY_LISTED');
+        }
+
         const policyId = asset.policy_id;
         const assetName = asset.asset_id;
         const priceAda = parseFloat(option.price);
@@ -458,8 +669,44 @@ export class GovernanceExecutionService {
       const hasOperations = listings.length > 0 || unlistings.length > 0 || updates.length > 0 || purchases.length > 0;
 
       if (!hasOperations) {
-        this.logger.warn(`No valid marketplace operations to execute for proposal ${proposal.id}`);
-        return false;
+        // Determine the reason for no valid operations
+        const totalSkipped =
+          skipped.sells.length + skipped.buys.length + skipped.unlists.length + skipped.updates.length;
+        let reason = 'No valid marketplace operations to execute';
+
+        if (totalSkipped > 0) {
+          const reasons: string[] = [];
+          if (skipped.sells.length > 0) {
+            reasons.push(`${skipped.sells.length} asset(s) already listed`);
+          }
+          if (skipped.unlists.length > 0) {
+            reasons.push(`${skipped.unlists.length} asset(s) not listed`);
+          }
+          if (skipped.updates.length > 0) {
+            reasons.push(`${skipped.updates.length} asset(s) not listed for update`);
+          }
+          if (skipped.buys.length > 0) {
+            reasons.push(`${skipped.buys.length} asset(s) not available for purchase`);
+          }
+          reason = `All operations skipped: ${reasons.join(', ')}`;
+        }
+
+        this.logger.warn(`Marketplace proposal ${proposal.id} rejected: ${reason}`);
+
+        await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
+
+        this.eventEmitter.emit('proposal.rejected', {
+          address: proposal.vault?.owner?.address || null,
+          vaultId: proposal.vaultId,
+          vaultName: proposal.vault?.name || null,
+          proposalName: proposal.title,
+          creatorId: proposal.creatorId,
+          tokenHolderIds: [],
+          reason,
+        });
+
+        // Throw specific error so processProposal knows the proposal was already handled
+        throw new Error('PROPOSAL_REJECTED_NO_VALID_OPERATIONS');
       }
 
       // STEP 1: Extract assets to treasury if there are listings (only for assets not already in treasury)
@@ -599,6 +846,31 @@ export class GovernanceExecutionService {
       return true;
     } catch (error) {
       this.logger.error(`Error executing marketplace proposal ${proposal.id}: ${error.message}`, error.stack);
+
+      // Check if the error is "Listing not found" - this happens when NFT was already bought
+      // In this case, we should reject the proposal instead of leaving it for retry
+      const errorMessage = error.message || '';
+      if (errorMessage.includes('Listing not found') || errorMessage.includes('"code":"NOT_FOUND"')) {
+        this.logger.warn(
+          `Marketplace proposal ${proposal.id} rejected: Listing not found - NFT was likely already purchased`
+        );
+
+        await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
+
+        this.eventEmitter.emit('proposal.rejected', {
+          address: proposal.vault?.owner?.address || null,
+          vaultId: proposal.vaultId,
+          vaultName: proposal.vault?.name || null,
+          proposalName: proposal.title,
+          creatorId: proposal.creatorId,
+          tokenHolderIds: [],
+          reason: 'Listing not found - NFT was likely already purchased',
+        });
+
+        // Throw a specific error so processProposal knows the proposal was already handled
+        throw new Error('PROPOSAL_REJECTED_LISTING_NOT_FOUND');
+      }
+
       return false;
     }
   }
@@ -743,6 +1015,99 @@ export class GovernanceExecutionService {
       this.logger.log(`Successfully executed distribution proposal ${proposal.id}`);
     } catch (error) {
       this.logger.error(`Error executing distribution proposal ${proposal.id}: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  /**
+   * Execute BURNING proposal actions
+   * Extracts selected assets directly to burn wallet
+   */
+  private async executeBurningProposal(proposal: Proposal): Promise<boolean> {
+    const burnWallet = this.isMainnet ? this.BURN_WALLET_MAINNET : this.BURN_WALLET_TESTNET;
+    const networkLabel = this.isMainnet ? 'MAINNET' : 'TESTNET';
+
+    this.logger.log(
+      `[${networkLabel}] Executing burning proposal ${proposal.id} - extracting assets to burn wallet ${burnWallet}`
+    );
+
+    if (!proposal.metadata.burnAssets || proposal.metadata.burnAssets.length === 0) {
+      this.logger.warn(`Burning proposal ${proposal.id} has no assets to burn`);
+      return false;
+    }
+
+    const assetIds = proposal.metadata.burnAssets;
+    this.logger.log(`Burning ${assetIds.length} asset(s) from vault ${proposal.vaultId}`);
+
+    try {
+      // Validate that all assets are in LOCKED status
+      const assets = await this.assetRepository.find({
+        where: { id: In(assetIds) },
+        select: ['id', 'status', 'name'],
+      });
+
+      const notLockedAssets = assets.filter(asset => asset.status !== AssetStatus.LOCKED);
+
+      if (notLockedAssets.length > 0) {
+        this.logger.warn(
+          `Burning proposal ${proposal.id} rejected: ${notLockedAssets.length} asset(s) are not in LOCKED status`
+        );
+
+        // Get contributor claims for event
+        const finalContributorClaims = await this.claimRepository.find({
+          where: {
+            vault: { id: proposal.vaultId },
+            type: ClaimType.CONTRIBUTOR,
+          },
+          relations: ['transaction', 'transaction.assets'],
+          order: { created_at: 'ASC' },
+        });
+
+        // Move proposal to REJECTED status
+        await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
+
+        this.eventEmitter.emit('proposal.rejected', {
+          address: proposal.vault?.owner?.address || null,
+          vaultId: proposal.vaultId,
+          vaultName: proposal.vault?.name || null,
+          proposalName: proposal.title,
+          creatorId: proposal.creatorId,
+          tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+          reason: `Assets not in LOCKED status: ${notLockedAssets.map(a => a.name || a.id).join(', ')}`,
+        });
+
+        throw new Error('PROPOSAL_REJECTED_ASSETS_NOT_LOCKED');
+      }
+
+      // Extract assets to burn wallet using treasury extraction service
+      const extractionResult = await this.treasuryExtractionService.extractAssetsToTreasury({
+        vaultId: proposal.vaultId,
+        assetIds: assetIds,
+        treasuryAddress: burnWallet,
+        skipOnchain: true,
+      });
+
+      this.logger.log(
+        `Successfully extracted ${extractionResult.extractedAssets.length} assets to burn wallet in transaction ${extractionResult.txHash}`
+      );
+
+      // Update assets status to BURNED
+      await this.assetRepository.update({ id: In(assetIds) }, { status: AssetStatus.BURNED });
+
+      // Emit event for tracking
+      this.eventEmitter.emit('proposal.burning.executed', {
+        proposalId: proposal.id,
+        vaultId: proposal.vaultId,
+        assetIds: assetIds,
+        burnWallet: burnWallet,
+        txHash: extractionResult.txHash,
+        network: networkLabel.toLowerCase(),
+      });
+
+      this.logger.log(`Successfully executed burning proposal ${proposal.id}`);
+      return true;
+    } catch (error) {
+      this.logger.error(`Error executing burning proposal ${proposal.id}: ${error.message}`, error.stack);
       throw error;
     }
   }

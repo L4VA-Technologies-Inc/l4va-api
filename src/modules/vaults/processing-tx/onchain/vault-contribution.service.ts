@@ -63,8 +63,8 @@ export class VaultContributionService {
         },
       });
 
-      if (!vault.publication_hash) {
-        throw new Error('Vault publication hash not found - vault may not be properly published');
+      if (!vault.last_update_tx_hash) {
+        throw new Error('Vault last update transaction hash not found - vault may not be properly published');
       }
 
       if (!vault.script_hash) {
@@ -73,7 +73,7 @@ export class VaultContributionService {
 
       const VAULT_ID = vault.asset_vault_name;
       const CONTRIBUTION_SCRIPT_HASH = vault.script_hash;
-      const LAST_UPDATE_TX_HASH = vault.publication_hash;
+      const LAST_UPDATE_TX_HASH = vault.last_update_tx_hash;
       const LAST_UPDATE_TX_INDEX = 0;
       const isAda = params.outputs[0].assets[0].assetName === 'lovelace';
 

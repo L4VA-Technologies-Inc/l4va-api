@@ -556,6 +556,7 @@ export class VaultsService {
     vault.contract_address = getAddressFromHash(vault.script_hash, this.blockchainService.getNetworkId());
     vault.vault_status = VaultStatus.published;
     vault.publication_hash = publishedTx.txHash;
+    vault.last_update_tx_hash = publishedTx.txHash;
     vault.sc_version = this.scVersion;
     await this.vaultsRepository.save(vault);
 

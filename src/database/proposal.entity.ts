@@ -89,6 +89,12 @@ export class Proposal {
 
     // Burning data
     burnAssets?: string[];
+
+    // Execution retry tracking
+    _executionRetry?: {
+      count: number;
+      lastAttempt: string; // ISO date string
+    };
   };
 
   @Expose({ name: 'terminationDate' })

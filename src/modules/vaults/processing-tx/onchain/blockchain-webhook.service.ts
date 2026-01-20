@@ -11,7 +11,9 @@ import { MetadataRegistryApiService } from './metadata-register.service';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
 
 import { Claim } from '@/database/claim.entity';
+import { User } from '@/database/user.entity';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
+import { AssetType } from '@/types/asset.types';
 import { ClaimStatus } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
@@ -35,7 +37,9 @@ export class BlockchainWebhookService {
     private readonly metadataRegistryApiService: MetadataRegistryApiService,
     private readonly assetsService: AssetsService,
     @InjectRepository(Claim)
-    private readonly claimRepository: Repository<Claim>
+    private readonly claimRepository: Repository<Claim>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>
   ) {
     this.webhookAuthToken = this.configService.get<string>('BLOCKFROST_WEBHOOK_AUTH_TOKEN');
     this.maxEventAge = 600; // 10 minutes max age for webhook events
@@ -147,6 +151,16 @@ export class BlockchainWebhookService {
             );
 
             this.logger.log(`WH: Released assets and updated status for ${claimIds.length} cancellation claims`);
+
+            // Update user TVL by subtracting returned asset values
+            try {
+              await this.updateUserTvlForCancellations(claimIds);
+            } catch (tvlError) {
+              this.logger.error(
+                `WH: Failed to update user TVL after cancellation: ${tvlError.message}`,
+                tvlError.stack
+              );
+            }
           } catch (releaseError) {
             this.logger.error(
               `WH: Failed to release assets for cancellation tx ${tx.hash}: ${releaseError.message}`,
@@ -175,5 +189,85 @@ export class BlockchainWebhookService {
       return this.STATUS_MAP[OnchainTransactionStatus.CONFIRMED];
     }
     return this.STATUS_MAP[OnchainTransactionStatus.PENDING];
+  }
+
+  /**
+   * Update user TVL by subtracting the value of returned assets from cancellation claims
+   * More efficient than recalculating everything - just deducts returned asset values
+   */
+  private async updateUserTvlForCancellations(claimIds: string[]): Promise<void> {
+    // Get claims with user and transaction relationships
+    const claims = await this.claimRepository.find({
+      where: { id: In(claimIds) },
+      relations: ['user', 'transaction', 'transaction.assets'],
+      select: {
+        id: true,
+        user: { id: true, tvl: true, gains: true },
+        transaction: {
+          id: true,
+          amount: true,
+          assets: {
+            id: true,
+            quantity: true,
+            dex_price: true,
+            floor_price: true,
+            type: true,
+            added_by: true,
+          },
+        },
+      },
+    });
+
+    if (claims.length === 0) return;
+
+    // Calculate value to deduct per user
+    const userDeductions = new Map<string, number>();
+
+    for (const claim of claims) {
+      const userId = claim.user.id;
+      let deductionAda = 0;
+
+      // Handle contribution returns (assets)
+      if (claim.transaction?.assets && claim.transaction.assets.length > 0) {
+        for (const asset of claim.transaction.assets) {
+          const price = asset.type === AssetType.NFT ? asset.floor_price || 0 : asset.dex_price || 0;
+          const value = Number(asset.quantity) * price;
+          deductionAda += value;
+        }
+      }
+
+      // Handle acquisition returns (ADA)
+      if (claim.transaction?.amount) {
+        // Amount is in lovelace, convert to ADA
+        deductionAda += claim.transaction.amount / 1_000_000;
+      }
+
+      if (deductionAda > 0) {
+        userDeductions.set(userId, (userDeductions.get(userId) || 0) + deductionAda);
+      }
+    }
+
+    // Batch update user TVLs
+    const updatePromises = Array.from(userDeductions.entries()).map(async ([userId, deduction]) => {
+      const user = await this.userRepository.findOne({ where: { id: userId }, select: ['id', 'tvl', 'gains'] });
+
+      if (user) {
+        const currentTvl = Number(user.tvl || 0);
+        const currentGains = Number(user.gains || 0);
+        const newTvl = Math.max(0, currentTvl - deduction); // Ensure TVL doesn't go negative
+
+        // Also adjust gains proportionally if there were gains
+        let newGains = currentGains;
+        if (currentTvl > 0 && currentGains !== 0) {
+          const gainsRatio = currentGains / currentTvl;
+          newGains = newTvl * gainsRatio;
+        }
+
+        await this.userRepository.update({ id: userId }, { tvl: newTvl, gains: newGains });
+      }
+    });
+
+    await Promise.all(updatePromises);
+    this.logger.log(`WH: Updated TVL for ${userDeductions.size} users after cancellations`);
   }
 }

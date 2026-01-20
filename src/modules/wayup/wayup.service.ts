@@ -181,26 +181,15 @@ export class WayUpService {
     const address = vault.treasury_wallet.treasury_address;
     this.logger.log(`Using treasury wallet address: ${address}`);
 
-    // Get UTXOs to fund the unlist transaction - only pure ADA UTXOs
-    const allUtxos = await this.blockfrost.addressesUtxosAll(address);
-
-    // Filter to only pure ADA UTXOs (no multiassets)
-    const pureAdaUtxos = allUtxos.filter(u => u.amount.length === 1 && u.amount[0].unit === 'lovelace');
-
-    if (pureAdaUtxos.length === 0) {
-      throw new Error('No pure ADA UTXOs available in treasury wallet to fund transaction');
-    }
-
-    // Serialize UTXOs
-    const serializedUtxos = pureAdaUtxos.slice(0, 10).map(u => {
-      const value = Value.new(BigNum.from_str(u.amount[0].quantity));
-      const txOut = TransactionOutput.new(Address.from_bech32(u.address), value);
-      const txUtxo = TransactionUnspentOutput.new(
-        TransactionInput.new(TransactionHash.from_bytes(Buffer.from(u.tx_hash, 'hex')), u.output_index),
-        txOut
-      );
-      return Buffer.from(txUtxo.to_bytes()).toString('hex');
+    // Get UTXOs to fund the unlist transaction
+    const { utxos: serializedUtxos } = await getUtxosExtract(Address.from_bech32(address), this.blockfrost, {
+      minAda: 2_000_000,
+      maxUtxos: 10,
     });
+
+    if (serializedUtxos.length === 0) {
+      throw new Error('No UTXOs available in treasury wallet to fund transaction');
+    }
 
     // Create unlist payload
     const unlistPayload: UnlistPayload = {
@@ -270,26 +259,15 @@ export class WayUpService {
     const address = vault.treasury_wallet.treasury_address;
     this.logger.log(`Using treasury wallet address: ${address}`);
 
-    // Get UTXOs to fund the update transaction - only pure ADA UTXOs
-    const allUtxos = await this.blockfrost.addressesUtxosAll(address);
-
-    // Filter to only pure ADA UTXOs (no multiassets)
-    const pureAdaUtxos = allUtxos.filter(u => u.amount.length === 1 && u.amount[0].unit === 'lovelace');
-
-    if (pureAdaUtxos.length === 0) {
-      throw new Error('No pure ADA UTXOs available in treasury wallet to fund transaction');
-    }
-
-    // Serialize UTXOs
-    const serializedUtxos = pureAdaUtxos.slice(0, 10).map(u => {
-      const value = Value.new(BigNum.from_str(u.amount[0].quantity));
-      const txOut = TransactionOutput.new(Address.from_bech32(u.address), value);
-      const txUtxo = TransactionUnspentOutput.new(
-        TransactionInput.new(TransactionHash.from_bytes(Buffer.from(u.tx_hash, 'hex')), u.output_index),
-        txOut
-      );
-      return Buffer.from(txUtxo.to_bytes()).toString('hex');
+    // Get UTXOs to fund the update transaction
+    const { utxos: serializedUtxos } = await getUtxosExtract(Address.from_bech32(address), this.blockfrost, {
+      minAda: 2_000_000,
+      maxUtxos: 10,
     });
+
+    if (serializedUtxos.length === 0) {
+      throw new Error('No UTXOs available in treasury wallet to fund transaction');
+    }
 
     // Create update payload
     const updatePayload: UpdateListingPayload = {

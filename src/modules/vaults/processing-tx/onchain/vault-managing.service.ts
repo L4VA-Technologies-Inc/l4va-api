@@ -495,23 +495,37 @@ export class VaultManagingService {
     }
   }
 
-  async updateVaultMetadataTx({
-    vault,
-    acquireMultiplier,
-    adaPairMultiplier,
-    vaultStatus,
-    adaDistribution,
-  }: {
-    vault: Vault;
+  async updateVaultMetadataTx(config: {
+    vault: Pick<
+      Vault,
+      'id' | 'asset_vault_name' | 'privacy' | 'contribution_phase_start' | 'contribution_duration' | 'value_method'
+    >;
     vaultStatus: SmartContractVaultStatus;
     acquireMultiplier?: [string, string | null, number][];
     adaPairMultiplier?: number;
     adaDistribution?: [string, string, number][];
+    asset_window?: {
+      start: number;
+      end: number;
+    };
+    acquire_window?: {
+      start: number;
+      end: number;
+    };
   }): Promise<{
     success: boolean;
     txHash: string;
     message: string;
   }> {
+    const {
+      vault,
+      vaultStatus,
+      asset_window,
+      acquire_window,
+      acquireMultiplier = [],
+      adaPairMultiplier = 0,
+      adaDistribution = [],
+    } = config;
     const transaction = await this.transactionsService.createTransaction({
       vault_id: vault.id,
       type: TransactionType.updateVault,
@@ -540,9 +554,19 @@ export class VaultManagingService {
 
     const vaultUtxo = await getVaultUtxo(this.scPolicyId, vault.asset_vault_name, this.blockfrost);
 
+    let vaultMessageStatus = '';
+    if (vaultStatus === SmartContractVaultStatus.SUCCESSFUL) {
+      vaultMessageStatus = 'Locked';
+    } else if (vaultStatus === SmartContractVaultStatus.CANCELLED) {
+      vaultMessageStatus = 'Failed';
+    } else if (vaultStatus === SmartContractVaultStatus.OPEN) {
+      vaultMessageStatus = 'Open';
+    } else {
+      vaultMessageStatus = 'Unknown';
+    }
     const input = {
       changeAddress: this.adminAddress,
-      message: `Vault ${vault.id} ${vaultStatus === SmartContractVaultStatus.SUCCESSFUL ? 'Locked' : vaultStatus === SmartContractVaultStatus.CANCELLED ? 'Failed' : 'Unknown'} Update`,
+      message: `Vault ${vault.id} ${vaultMessageStatus} Update`,
       utxos: adminUtxos,
       scriptInteractions: [
         {
@@ -577,23 +601,24 @@ export class VaultManagingService {
               // contributor_whitelist: vaultConfig.allowedContributors || [],
               asset_window: {
                 lower_bound: {
-                  bound_type: new Date(vault.contribution_phase_start).getTime(),
+                  bound_type: new Date(asset_window?.start || vault.contribution_phase_start).getTime(),
                   is_inclusive: true,
                 },
                 upper_bound: {
                   bound_type: new Date(
-                    vault.contribution_phase_start.getTime() + Number(vault.contribution_duration)
+                    (asset_window?.end ? new Date(asset_window.end) : vault.contribution_phase_start).getTime() +
+                      Number(vault.contribution_duration)
                   ).getTime(),
                   is_inclusive: true,
                 },
               },
               acquire_window: {
                 lower_bound: {
-                  bound_type: vault.acquire_phase_start ? vault.acquire_phase_start.getTime() : new Date().getTime(),
+                  bound_type: acquire_window?.start ? new Date(acquire_window.start).getTime() : new Date().getTime(),
                   is_inclusive: true,
                 },
                 upper_bound: {
-                  bound_type: new Date().getTime(), // current time
+                  bound_type: acquire_window?.end ? new Date(acquire_window.end).getTime() : new Date().getTime(),
                   is_inclusive: true,
                 },
               },

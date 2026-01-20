@@ -105,8 +105,6 @@ export class WayUpPricingService {
       const floorPriceLovelace = floorAsset.listing.price;
       const floorPriceAda = floorPriceLovelace / 1_000_000;
 
-      this.logger.log(`Floor price for ${policyId}: ${floorPriceAda} ADA (${floorPriceLovelace} lovelace)`);
-
       return {
         floorPrice: floorPriceLovelace,
         floorPriceAda,

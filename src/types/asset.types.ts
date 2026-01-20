@@ -17,6 +17,7 @@ export enum AssetStatus {
   /** Asset is listed on marketplace */
   LISTED = 'listed',
   SOLD = 'sold',
+  BURNED = 'burned',
 }
 
 export enum AssetOriginType {
