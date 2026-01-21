@@ -1144,6 +1144,409 @@ export class TerminationService {
   }
 
   /**
+   * Request a termination claim for any address holding VT
+   * This handles the case where VT was transferred to an address not in the original snapshot.
+   *
+   * Flow:
+   * 1. Verify vault is in termination claims phase
+   * 2. Check if user already has a claim for this vault
+   * 3. Verify on-chain VT balance
+   * 4. Create new claim dynamically
+   *
+   * @param vaultId - The vault being terminated
+   * @param userAddress - The address requesting a claim (must hold VT)
+   * @param userId - Optional user ID if the requester is a registered user
+   */
+  async requestTerminationClaim(
+    vaultId: string,
+    userAddress: string,
+    userId?: string
+  ): Promise<{
+    claimId: string;
+    vtBalance: string;
+    adaShare: string;
+    sharePercentage: number;
+    isNewClaim: boolean;
+  }> {
+    // Step 1: Verify vault exists and is in claims phase
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      relations: ['treasury_wallet'],
+    });
+
+    if (!vault) {
+      throw new NotFoundException(`Vault ${vaultId} not found`);
+    }
+
+    const termination = vault.termination_metadata as TerminationMetadata | undefined;
+    if (!termination) {
+      throw new Error('Vault is not in termination process');
+    }
+
+    // Only allow claim requests during claims processing phase
+    const validStatuses = [TerminationStatus.CLAIMS_CREATED, TerminationStatus.CLAIMS_PROCESSING];
+
+    if (!validStatuses.includes(termination.status)) {
+      throw new Error(
+        `Cannot request claims at this stage. Current status: ${termination.status}. ` +
+          `Claims can only be requested during CLAIMS_CREATED or CLAIMS_PROCESSING phase.`
+      );
+    }
+
+    // Step 2: Check if claim already exists for this address
+    const existingClaim = await this.claimRepository.findOne({
+      where: {
+        vault: { id: vaultId },
+        type: ClaimType.TERMINATION as any,
+        metadata: { address: userAddress } as any,
+      },
+    });
+
+    if (existingClaim) {
+      // Claim already exists - return existing claim info with updated calculation
+      const dynamicShare = await this.calculateDynamicShare(userAddress, vault);
+
+      return {
+        claimId: existingClaim.id,
+        vtBalance: dynamicShare.userVtBalance.toString(),
+        adaShare: dynamicShare.adaShare.toString(),
+        sharePercentage: dynamicShare.sharePercentage,
+        isNewClaim: false,
+      };
+    }
+
+    // Step 3: Verify user has VT balance on-chain
+    const dynamicShare = await this.calculateDynamicShare(userAddress, vault);
+
+    if (dynamicShare.userVtBalance === BigInt(0)) {
+      throw new Error(
+        `Address ${userAddress} has no VT balance for this vault. ` +
+          `You must hold vault tokens to claim termination distribution.`
+      );
+    }
+
+    // Step 4: Find or create user record
+    let user: User | null = null;
+
+    if (userId) {
+      user = await this.userRepository.findOne({ where: { id: userId } });
+    }
+
+    if (!user) {
+      // Try to find user by wallet address
+      user = await this.userRepository.findOne({
+        where: { address: userAddress },
+      });
+    }
+
+    // Step 5: Determine if ADA distribution is possible
+    const noAdaDistribution =
+      dynamicShare.treasuryBalance < BigInt(this.MIN_TOTAL_ADA_FOR_DISTRIBUTION) ||
+      dynamicShare.adaShare < BigInt(this.MIN_ADA_PER_CLAIM);
+
+    // Step 6: Create new claim
+    const newClaim = this.claimRepository.create({
+      user: user || undefined,
+      vault,
+      type: ClaimType.TERMINATION,
+      status: ClaimStatus.AVAILABLE,
+      amount: Number(dynamicShare.userVtBalance),
+      lovelace_amount: noAdaDistribution ? 0 : Number(dynamicShare.adaShare),
+      description: user
+        ? `Termination claim for ${dynamicShare.userVtBalance} VT`
+        : `Termination claim for unregistered address ${userAddress}`,
+      metadata: {
+        address: userAddress,
+        vtAmount: dynamicShare.userVtBalance.toString(),
+        adaAmount: noAdaDistribution ? '0' : dynamicShare.adaShare.toString(),
+        noAdaDistribution,
+        isTransferredVT: true, // Flag indicating this VT was transferred after snapshot
+        createdOnDemand: true,
+        createdAt: new Date().toISOString(),
+        calculationSnapshot: {
+          userVtBalance: dynamicShare.userVtBalance.toString(),
+          circulatingSupply: dynamicShare.circulatingSupply.toString(),
+          treasuryBalance: dynamicShare.treasuryBalance.toString(),
+          sharePercentage: dynamicShare.sharePercentage,
+        },
+      },
+    });
+
+    const savedClaim = await this.claimRepository.save(newClaim);
+
+    this.logger.log(
+      `Created on-demand termination claim ${savedClaim.id} for address ${userAddress} ` +
+        `(VT: ${dynamicShare.userVtBalance}, ADA share: ${dynamicShare.adaShare})`
+    );
+
+    return {
+      claimId: savedClaim.id,
+      vtBalance: dynamicShare.userVtBalance.toString(),
+      adaShare: noAdaDistribution ? '0' : dynamicShare.adaShare.toString(),
+      sharePercentage: dynamicShare.sharePercentage,
+      isNewClaim: true,
+    };
+  }
+
+  /**
+   * Get termination claim preview by address (for users who may not have a claim yet)
+   * This allows any VT holder to see what they could claim before requesting it.
+   */
+  async getTerminationPreviewByAddress(
+    vaultId: string,
+    userAddress: string
+  ): Promise<{
+    vaultId: string;
+    address: string;
+    vtBalance: string;
+    adaShare: string;
+    sharePercentage: number;
+    treasuryBalance: string;
+    circulatingSupply: string;
+    hasExistingClaim: boolean;
+    existingClaimId?: string;
+    existingClaimStatus?: ClaimStatus;
+    canClaim: boolean;
+    reason?: string;
+  }> {
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      relations: ['treasury_wallet'],
+    });
+
+    if (!vault) {
+      throw new NotFoundException(`Vault ${vaultId} not found`);
+    }
+
+    // Check termination status
+    const termination = vault.termination_metadata as TerminationMetadata | undefined;
+    if (!termination) {
+      return {
+        vaultId,
+        address: userAddress,
+        vtBalance: '0',
+        adaShare: '0',
+        sharePercentage: 0,
+        treasuryBalance: '0',
+        circulatingSupply: '0',
+        hasExistingClaim: false,
+        canClaim: false,
+        reason: 'Vault is not in termination process',
+      };
+    }
+
+    // Calculate dynamic share
+    const dynamicShare = await this.calculateDynamicShare(userAddress, vault);
+
+    // Check for existing claim
+    const existingClaim = await this.claimRepository.findOne({
+      where: {
+        vault: { id: vaultId },
+        type: ClaimType.TERMINATION as any,
+        metadata: { address: userAddress } as any,
+      },
+    });
+
+    // Determine if can claim
+    const validStatuses = [TerminationStatus.CLAIMS_CREATED, TerminationStatus.CLAIMS_PROCESSING];
+
+    let canClaim = false;
+    let reason: string | undefined;
+
+    if (!validStatuses.includes(termination.status)) {
+      reason = `Claims not available at current status: ${termination.status}`;
+    } else if (dynamicShare.userVtBalance === BigInt(0)) {
+      reason = 'No VT balance at this address';
+    } else if (existingClaim && existingClaim.status !== ClaimStatus.AVAILABLE) {
+      reason = `Claim already ${existingClaim.status}`;
+    } else {
+      canClaim = true;
+    }
+
+    return {
+      vaultId,
+      address: userAddress,
+      vtBalance: dynamicShare.userVtBalance.toString(),
+      adaShare: dynamicShare.adaShare.toString(),
+      sharePercentage: dynamicShare.sharePercentage,
+      treasuryBalance: dynamicShare.treasuryBalance.toString(),
+      circulatingSupply: dynamicShare.circulatingSupply.toString(),
+      hasExistingClaim: !!existingClaim,
+      existingClaimId: existingClaim?.id,
+      existingClaimStatus: existingClaim?.status,
+      canClaim,
+      reason,
+    };
+  }
+
+  /**
+   * Get termination status for a vault
+   */
+  async getTerminationStatus(vaultId: string): Promise<{
+    vaultId: string;
+    isTerminating: boolean;
+    status?: string;
+    proposalId?: string;
+    totalAdaForDistribution?: string;
+    treasuryBalance?: string;
+    circulatingSupply?: string;
+    claimsOpen: boolean;
+  }> {
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      relations: ['treasury_wallet'],
+    });
+
+    if (!vault) {
+      throw new NotFoundException(`Vault ${vaultId} not found`);
+    }
+
+    const termination = vault.termination_metadata as TerminationMetadata | undefined;
+
+    if (!termination) {
+      return {
+        vaultId,
+        isTerminating: false,
+        claimsOpen: false,
+      };
+    }
+
+    const claimsOpenStatuses = [TerminationStatus.CLAIMS_CREATED, TerminationStatus.CLAIMS_PROCESSING];
+    const claimsOpen = claimsOpenStatuses.includes(termination.status);
+
+    // Get treasury balance if claims are open
+    let treasuryBalance: string | undefined;
+    let circulatingSupply: string | undefined;
+
+    if (claimsOpen && vault.treasury_wallet) {
+      try {
+        const balance = await this.getTreasuryBalance(vault);
+        treasuryBalance = balance.toString();
+
+        const supply = await this.getCirculatingVtSupply(vault);
+        circulatingSupply = supply.toString();
+      } catch {
+        // Non-critical, continue without balance info
+      }
+    }
+
+    return {
+      vaultId,
+      isTerminating: true,
+      status: termination.status,
+      proposalId: termination.proposalId,
+      totalAdaForDistribution: termination.totalAdaForDistribution,
+      treasuryBalance,
+      circulatingSupply,
+      claimsOpen,
+    };
+  }
+
+  /**
+   * Get all termination claims for a user across all vaults
+   */
+  async getUserTerminationClaims(userId: string): Promise<{
+    claims: Array<{
+      claimId: string;
+      vaultId: string;
+      vaultName: string;
+      vtAmount: string;
+      adaAmount: string;
+      status: string;
+      createdAt: Date;
+    }>;
+  }> {
+    const claims = await this.claimRepository.find({
+      where: {
+        user: { id: userId },
+        type: ClaimType.TERMINATION as any,
+      },
+      relations: ['vault'],
+      order: { created_at: 'DESC' },
+    });
+
+    return {
+      claims: claims.map(claim => ({
+        claimId: claim.id,
+        vaultId: claim.vault?.id || '',
+        vaultName: claim.vault?.name || 'Unknown',
+        vtAmount: claim.metadata?.vtAmount || claim.amount?.toString() || '0',
+        adaAmount: claim.metadata?.adaAmount || claim.lovelace_amount?.toString() || '0',
+        status: claim.status,
+        createdAt: claim.created_at,
+      })),
+    };
+  }
+
+  /**
+   * Get termination claims for a user in a specific vault
+   */
+  async getUserVaultTerminationClaims(
+    vaultId: string,
+    userId: string
+  ): Promise<{
+    claims: Array<{
+      claimId: string;
+      vtAmount: string;
+      adaAmount: string;
+      status: string;
+      canClaim: boolean;
+    }>;
+  }> {
+    // Get user to find their address
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      return { claims: [] };
+    }
+
+    // Find claims by user ID or by address in metadata
+    const claims = await this.claimRepository.find({
+      where: [
+        {
+          vault: { id: vaultId },
+          user: { id: userId },
+          type: ClaimType.TERMINATION as any,
+        },
+        {
+          vault: { id: vaultId },
+          type: ClaimType.TERMINATION as any,
+          metadata: { address: user.address } as any,
+        },
+      ],
+      relations: ['vault', 'vault.treasury_wallet'],
+    });
+
+    // Deduplicate by claim ID
+    const uniqueClaims = [...new Map(claims.map(c => [c.id, c])).values()];
+
+    const result = await Promise.all(
+      uniqueClaims.map(async claim => {
+        let canClaim = claim.status === ClaimStatus.AVAILABLE;
+
+        // Check if user still has VT balance
+        if (canClaim && claim.vault && claim.metadata?.address) {
+          try {
+            const vtBalance = await this.getUserVtBalance(claim.metadata.address, claim.vault);
+            canClaim = vtBalance > BigInt(0);
+          } catch {
+            // If we can't check, assume can claim
+          }
+        }
+
+        return {
+          claimId: claim.id,
+          vtAmount: claim.metadata?.vtAmount || claim.amount?.toString() || '0',
+          adaAmount: claim.metadata?.adaAmount || claim.lovelace_amount?.toString() || '0',
+          status: claim.status,
+          canClaim,
+        };
+      })
+    );
+
+    return { claims: result };
+  }
+
+  /**
    * Send ADA from treasury to user for termination claim
    * Uses KMS-based treasury wallet signing
    */

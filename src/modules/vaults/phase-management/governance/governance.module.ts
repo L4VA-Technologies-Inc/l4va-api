@@ -12,6 +12,7 @@ import { GovernanceController } from './governance.controller';
 import { GovernanceService } from './governance.service';
 import { ProposalHealthService } from './proposal-health.service';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
+import { TerminationController } from './termination.controller';
 import { TerminationService } from './termination.service';
 import { VoteCountingService } from './vote-counting.service';
 
@@ -38,7 +39,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     BlockchainModule,
     VyfiModule,
   ],
-  controllers: [GovernanceController],
+  controllers: [GovernanceController, TerminationController],
   providers: [
     GovernanceService,
     GovernanceExecutionService,
