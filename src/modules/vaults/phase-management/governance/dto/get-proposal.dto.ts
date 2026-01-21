@@ -77,6 +77,13 @@ class BaseProposalDto {
     type: [String],
   })
   burnAssets?: string[];
+
+  @ApiProperty({
+    description: 'Execution error message if the proposal execution failed',
+    example: 'Listing not found - NFT was likely already purchased',
+    required: false,
+  })
+  executionError?: string;
 }
 
 // For active proposals with votes

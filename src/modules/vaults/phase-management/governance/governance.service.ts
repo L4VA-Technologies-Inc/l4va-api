@@ -447,6 +447,7 @@ export class GovernanceService {
           createdAt: proposal.createdAt,
           endDate: proposal.endDate.toISOString(),
           abstain: proposal.abstain,
+          executionError: proposal.metadata?.executionError?.message,
         };
 
         if (proposal.status === ProposalStatus.UPCOMING) {
