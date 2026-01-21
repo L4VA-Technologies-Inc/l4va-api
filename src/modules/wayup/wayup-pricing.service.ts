@@ -1,7 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 
 import { GetCollectionAssetsQuery, GetCollectionAssetsResponse } from './wayup.types';
+
+import { Asset } from '@/database/asset.entity';
+import { AssetsService } from '@/modules/vaults/assets/assets.service';
+import { AssetStatus } from '@/types/asset.types';
 
 /**
  * WayUp Pricing Service - Handles only pricing queries without transaction building
@@ -12,8 +19,14 @@ export class WayUpPricingService {
   private readonly logger = new Logger(WayUpPricingService.name);
   private readonly baseUrl = 'https://prod.api.ada-anvil.app/marketplace/api/get-collection-assets';
   private readonly isMainnet: boolean;
+  private isTrackingInProgress = false;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    @InjectRepository(Asset)
+    private readonly assetRepository: Repository<Asset>,
+    private readonly assetsService: AssetsService
+  ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
   }
 
@@ -113,6 +126,111 @@ export class WayUpPricingService {
     } catch (error) {
       this.logger.error(`Failed to fetch floor price for collection ${policyId}`, error);
       throw new Error(`Failed to fetch floor price: ${error.message}`);
+    }
+  }
+
+  /**
+   * Cron job that tracks NFT sales by checking if LISTED assets are still on WayUp
+   * Runs every 30 minutes
+   * Implements locking mechanism to prevent concurrent executions
+   */
+  @Cron(CronExpression.EVERY_30_MINUTES)
+  async trackNFTSales(): Promise<void> {
+    // Skip for testnet - WayUp doesn't support preprod
+    if (!this.isMainnet) {
+      this.logger.debug('Skipping NFT sale tracking for testnet');
+      return;
+    }
+
+    // Check if tracking is already in progress
+    if (this.isTrackingInProgress) {
+      this.logger.warn('NFT sale tracking is already in progress, skipping this execution');
+      return;
+    }
+
+    // Acquire lock
+    this.isTrackingInProgress = true;
+    this.logger.log('Starting NFT sale tracking cron job (lock acquired)');
+
+    try {
+      // Query all LISTED assets
+      const listedAssets = await this.assetRepository.find({
+        where: {
+          status: AssetStatus.LISTED,
+          deleted: false,
+        },
+        select: ['id', 'policy_id', 'asset_id'],
+      });
+
+      if (listedAssets.length === 0) {
+        this.logger.debug('No listed assets found to track');
+        return;
+      }
+
+      this.logger.log(`Found ${listedAssets.length} listed assets to check`);
+
+      // Group assets by policy_id for efficient querying
+      const assetsByPolicyId = new Map<string, Array<{ id: string; assetId: string }>>();
+      for (const asset of listedAssets) {
+        if (!assetsByPolicyId.has(asset.policy_id)) {
+          assetsByPolicyId.set(asset.policy_id, []);
+        }
+        assetsByPolicyId.get(asset.policy_id)!.push({
+          id: asset.id,
+          assetId: asset.asset_id,
+        });
+      }
+
+      this.logger.log(`Checking ${assetsByPolicyId.size} unique collections`);
+
+      const soldAssetIds: string[] = [];
+
+      // Check each collection
+      for (const [policyId, assets] of assetsByPolicyId) {
+        try {
+          // Get all assets from this collection that are listed on WayUp
+          const response = await this.getCollectionAssets({
+            policyId,
+            saleType: 'listedOnly',
+            limit: 100, // Adjust based on expected collection size
+          });
+
+          // Create a set of currently listed asset IDs for quick lookup
+          const currentlyListedAssetIds = new Set(
+            response.results
+              .filter(result => result.listing) // Only assets with active listings
+              .map(result => result.assetName) // assetName is the hex asset_id
+          );
+
+          // Check each of our assets
+          for (const asset of assets) {
+            // If the asset is NOT in the WayUp response, it has been sold
+            if (!currentlyListedAssetIds.has(asset.assetId)) {
+              soldAssetIds.push(asset.id);
+              this.logger.log(`Asset ${asset.assetId} from policy ${policyId} has been sold`);
+            }
+          }
+        } catch (error) {
+          this.logger.error(`Failed to check sales for collection ${policyId}: ${error.message}`);
+          // Continue with next collection
+        }
+      }
+
+      // Mark sold assets
+      if (soldAssetIds.length > 0) {
+        await this.assetsService.markAssetsAsSold(soldAssetIds);
+        this.logger.log(`Marked ${soldAssetIds.length} assets as SOLD`);
+      } else {
+        this.logger.log('No assets were sold since last check');
+      }
+
+      this.logger.log('NFT sale tracking cron job completed successfully');
+    } catch (error) {
+      this.logger.error(`NFT sale tracking cron job failed: ${error.message}`, error.stack);
+    } finally {
+      // Release lock
+      this.isTrackingInProgress = false;
+      this.logger.debug('NFT sale tracking lock released');
     }
   }
 }

@@ -568,6 +568,7 @@ export class GovernanceService {
               'floor_price',
               'dex_price',
               'listing_price',
+              'status',
             ],
           })
         : [];
@@ -634,17 +635,34 @@ export class GovernanceService {
         market: marketMap.get(asset.id),
       }));
 
-    // Transform marketplace actions with enriched asset data
+    // Transform marketplace actions with enriched asset data and WayUp URLs
     const marketplaceActions = (proposal.metadata?.marketplaceActions || []).map(action => {
       const asset = assetMap.get(action.assetId);
+      // Generate WayUp URL if asset has policy_id and asset_id
+      let wayupUrl: string | undefined;
+      if (asset?.policy_id && asset?.asset_id) {
+        wayupUrl = `https://www.wayup.io/collection/${asset.policy_id}/asset/${asset.asset_id}?tab=activity`;
+      }
+
       return {
         ...action,
         assetName: asset?.name || asset?.metadata?.name || 'Unknown Asset',
         assetImg: asset?.imageUrl,
         assetPrice: asset?.floor_price || asset?.dex_price || 0,
         listingPrice: asset?.listing_price,
+        assetStatus: asset?.status,
+        wayupUrl,
       };
     });
+
+    // Extract execution error from metadata if present
+    const executionError = proposal.metadata?.executionError
+      ? {
+          message: proposal.metadata.executionError.message,
+          timestamp: proposal.metadata.executionError.timestamp,
+          errorCode: proposal.metadata.executionError.errorCode,
+        }
+      : undefined;
 
     // Map proposal entity to DTO with only needed fields
     const proposalDto = {
@@ -665,6 +683,7 @@ export class GovernanceService {
       creatorId: proposal.creatorId,
       createdAt: proposal.createdAt,
       metadata: proposal.metadata,
+      executionError,
       vault: proposal.vault
         ? {
             id: proposal.vault.id,
@@ -675,7 +694,7 @@ export class GovernanceService {
         : undefined,
     };
 
-    return {
+    const response = {
       proposal: proposalDto,
       votes,
       totals,
@@ -688,6 +707,10 @@ export class GovernanceService {
       nonFungibleTokens: nonFungibleTokensWithNames,
       marketplaceActions,
     };
+
+    return plainToInstance(GetProposalDetailRes, response, {
+      excludeExtraneousValues: true,
+    });
   }
 
   async vote(proposalId: string, voteReq: VoteReq, userId: string): Promise<VoteRes> {

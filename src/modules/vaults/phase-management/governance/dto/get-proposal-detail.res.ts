@@ -75,6 +75,14 @@ export class ProposalDetailDto {
   metadata: any;
 
   @Expose()
+  @ApiPropertyOptional({ description: 'Execution error details if proposal failed' })
+  executionError?: {
+    message: string;
+    timestamp: string;
+    errorCode?: string;
+  };
+
+  @Expose()
   @ApiPropertyOptional({ description: 'Vault information', type: Object })
   vault?: {
     id: string;
@@ -229,6 +237,21 @@ export class MarketplaceActionDetailDto {
   @Expose()
   @ApiPropertyOptional({ description: 'New price for update listing', example: '110.5' })
   newPrice?: string;
+
+  @Expose()
+  @ApiPropertyOptional({
+    description: 'WayUp marketplace URL for this asset',
+    example:
+      'https://www.wayup.io/collection/d5e6bf0500378d4f0da4e8dde6becec7621cd8cbf5cbb9b87013d4cc/asset/537061636542756431323334?tab=activity',
+  })
+  wayupUrl?: string;
+
+  @Expose()
+  @ApiPropertyOptional({
+    description: 'Current status of the asset (e.g., LOCKED, LISTED, SOLD)',
+    example: 'SOLD',
+  })
+  assetStatus?: string;
 }
 
 export class GetProposalDetailRes {
