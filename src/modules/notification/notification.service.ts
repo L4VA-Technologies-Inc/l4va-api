@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Novu } from '@novu/api';
+import { EventsControllerTriggerResponse } from '@novu/api/models/operations';
 import { Repository } from 'typeorm';
 
 import { User } from '@/database/user.entity';
@@ -53,7 +54,7 @@ export class NotificationService {
     }
   }
 
-  async sendBulkNotification(body: INotificationBody, bulkOptions: string[]) {
+  async sendBulkNotification(body: INotificationBody, bulkOptions: string[]): Promise<void> {
     await Promise.all(
       bulkOptions.map(async item => {
         const { address } = await this.userRepository.findOneBy({ id: item });
@@ -63,7 +64,7 @@ export class NotificationService {
     );
   }
 
-  async sendFailedEmailNotification(body: IEmailNotificationBody) {
+  async sendFailedEmailNotification(body: IEmailNotificationBody): Promise<EventsControllerTriggerResponse> {
     try {
       const res = await this.novu.trigger({
         workflowId: 'failed',
@@ -87,7 +88,7 @@ export class NotificationService {
     }
   }
 
-  async sendPhaseEmailNotification(body: any) {
+  async sendPhaseEmailNotification(body: any): Promise<EventsControllerTriggerResponse> {
     try {
       const res = await this.novu.trigger({
         workflowId: 'phase',
@@ -110,7 +111,7 @@ export class NotificationService {
     }
   }
 
-  async sendLaunchEmailNotification(body: any) {
+  async sendLaunchEmailNotification(body: any): Promise<EventsControllerTriggerResponse> {
     try {
       const res = await this.novu.trigger({
         workflowId: 'created',

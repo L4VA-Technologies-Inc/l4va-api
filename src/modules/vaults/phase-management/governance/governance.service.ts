@@ -254,10 +254,11 @@ export class GovernanceService {
     createProposalReq: CreateProposalReq,
     userId: string
   ): Promise<CreateProposalRes> {
-    const vault = await this.vaultRepository.findOne({
-      where: { id: vaultId },
-      select: ['id', 'vault_status', 'policy_id', 'asset_vault_name'],
-    });
+    const vault: Pick<Vault, 'id' | 'vault_status' | 'policy_id' | 'asset_vault_name' | 'name'> =
+      await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        select: ['id', 'vault_status', 'policy_id', 'asset_vault_name', 'name'],
+      });
 
     if (!vault) {
       throw new NotFoundException('Vault not found');
@@ -447,6 +448,7 @@ export class GovernanceService {
           createdAt: proposal.createdAt,
           endDate: proposal.endDate.toISOString(),
           abstain: proposal.abstain,
+          executionError: proposal.metadata?.executionError?.message,
         };
 
         if (proposal.status === ProposalStatus.UPCOMING) {
