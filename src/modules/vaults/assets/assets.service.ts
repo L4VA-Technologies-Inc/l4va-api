@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain } from 'class-transformer';
 import { Repository, In } from 'typeorm';
@@ -9,6 +10,7 @@ import { GetContributedAssetsRes } from './dto/get-contributed-assets.res';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
+import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
@@ -23,10 +25,13 @@ export class AssetsService {
     private readonly assetsRepository: Repository<Asset>,
     @InjectRepository(Claim)
     private readonly claimsRepository: Repository<Claim>,
+    @InjectRepository(Snapshot)
+    private readonly snapshotsRepository: Repository<Snapshot>,
     @InjectRepository(Vault)
     private readonly vaultsRepository: Repository<Vault>,
     @InjectRepository(User)
-    private readonly userRepository: Repository<User>
+    private readonly userRepository: Repository<User>,
+    private readonly eventEmitter: EventEmitter2
   ) {}
 
   async addAssetToVault(userId: string, data: CreateAssetDto): Promise<Record<string, unknown>> {
@@ -326,6 +331,32 @@ export class AssetsService {
   async markAssetsAsSold(assetIds: string[]): Promise<void> {
     if (assetIds.length === 0) return;
 
+    // Fetch asset details before updating for event emission
+    const assets = await this.assetsRepository.find({
+      where: {
+        id: In(assetIds),
+        status: AssetStatus.LISTED,
+        deleted: false,
+      },
+      relations: ['vault', 'vault.owner'],
+      select: {
+        id: true,
+        name: true,
+        listing_price: true,
+        vault: {
+          id: true,
+          name: true,
+          owner: {
+            id: true,
+            address: true,
+          },
+        },
+      },
+    });
+
+    if (assets.length === 0) return;
+
+    // Update asset status
     await this.assetsRepository.update(
       {
         id: In(assetIds),
@@ -334,6 +365,55 @@ export class AssetsService {
       },
       { status: AssetStatus.SOLD }
     );
+
+    // Collect unique vault IDs from all assets
+    const vaultIds = [...new Set(assets.map(asset => asset.vault?.id).filter(Boolean))];
+
+    if (vaultIds.length === 0) return;
+
+    // Fetch latest snapshots for all vaults in one query
+    const snapshots = await this.snapshotsRepository
+      .createQueryBuilder('snapshot')
+      .select(['snapshot.id', 'snapshot.vaultId', 'snapshot.addressBalances', 'snapshot.createdAt'])
+      .where('snapshot.vaultId IN (:...vaultIds)', { vaultIds })
+      .orderBy('snapshot.createdAt', 'DESC')
+      .getMany();
+
+    // Create a map of vault_id -> latest snapshot
+    const vaultSnapshotMap = new Map<string, Snapshot>();
+    for (const snapshot of snapshots) {
+      if (!vaultSnapshotMap.has(snapshot.vaultId)) {
+        vaultSnapshotMap.set(snapshot.vaultId, snapshot);
+      }
+    }
+
+    // Emit event for each sold asset
+    for (const asset of assets) {
+      if (!asset.vault) continue;
+
+      const latestSnapshot = vaultSnapshotMap.get(asset.vault.id);
+
+      // Extract addresses from snapshot
+      const tokenHolderAddresses = latestSnapshot?.addressBalances
+        ? Object.keys(latestSnapshot.addressBalances).filter(
+            address => parseFloat(latestSnapshot.addressBalances[address]) > 0
+          )
+        : [];
+
+      this.eventEmitter.emit('asset.sold', {
+        assetId: asset.id,
+        assetName: asset.name || 'Unknown Asset',
+        salePrice: asset.listing_price || 0,
+        vaultId: asset.vault.id,
+        vaultName: asset.vault.name || 'Unknown Vault',
+        ownerAddress: asset.vault.owner?.address || null,
+        tokenHolderAddresses,
+      });
+
+      this.logger.log(
+        `Emitted asset.sold event for asset ${asset.name} (${asset.id}) in vault ${asset.vault.name} to ${tokenHolderAddresses.length} token holders`
+      );
+    }
   }
 
   async markAssetsAsUnlisted(assetIds: string[]): Promise<void> {

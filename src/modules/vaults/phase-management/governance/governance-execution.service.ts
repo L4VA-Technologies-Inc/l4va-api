@@ -325,8 +325,10 @@ export class GovernanceExecutionService {
    * Retrieves proposals from PASSED status and executes them
    */
   async executePassedProposal(proposalId: string): Promise<void> {
+    let proposal: Proposal | null = null;
+
     try {
-      const proposal = await this.proposalRepository
+      proposal = await this.proposalRepository
         .createQueryBuilder('proposal')
         .leftJoinAndSelect('proposal.vault', 'vault')
         .leftJoinAndSelect('vault.owner', 'owner')
@@ -411,6 +413,11 @@ export class GovernanceExecutionService {
         return;
       }
 
+      // Store execution error in proposal metadata
+      if (proposal) {
+        await this.storeExecutionError(proposal, error);
+      }
+
       this.logger.error(`Error executing proposal ${proposalId}: ${error.message}`, error.stack);
       throw error;
     }
@@ -464,6 +471,7 @@ export class GovernanceExecutionService {
 
       return true;
     } catch (error) {
+      // Note: storeExecutionError is handled in individual execution methods
       this.eventEmitter.emit('proposal.failed', {
         address: proposal.vault?.owner?.address || null,
         vaultId: proposal.vaultId,
@@ -871,6 +879,9 @@ export class GovernanceExecutionService {
         throw new Error('PROPOSAL_REJECTED_LISTING_NOT_FOUND');
       }
 
+      // Store execution error in proposal metadata
+      await this.storeExecutionError(proposal, error);
+
       return false;
     }
   }
@@ -962,8 +973,10 @@ export class GovernanceExecutionService {
       });
 
       this.logger.log(`Successfully executed staking proposal ${proposal.id}`);
+      return true;
     } catch (error) {
       this.logger.error(`Error executing staking proposal ${proposal.id}: ${error.message}`, error.stack);
+      await this.storeExecutionError(proposal, error);
       throw error;
     }
   }
@@ -1013,8 +1026,10 @@ export class GovernanceExecutionService {
       });
 
       this.logger.log(`Successfully executed distribution proposal ${proposal.id}`);
+      return true;
     } catch (error) {
       this.logger.error(`Error executing distribution proposal ${proposal.id}: ${error.message}`, error.stack);
+      await this.storeExecutionError(proposal, error);
       throw error;
     }
   }
@@ -1108,8 +1123,141 @@ export class GovernanceExecutionService {
       return true;
     } catch (error) {
       this.logger.error(`Error executing burning proposal ${proposal.id}: ${error.message}`, error.stack);
+      await this.storeExecutionError(proposal, error);
       throw error;
     }
+  }
+
+  /**
+   * Store execution error in proposal metadata
+   * Tracks error details including message, timestamp, error code, and attempt count
+   */
+  private async storeExecutionError(proposal: Proposal, error: Error): Promise<void> {
+    try {
+      const metadata = proposal.metadata || {};
+
+      // Categorize error and assign error code
+      const errorCode = this.categorizeError(error);
+
+      // Create execution error object
+      const executionError = {
+        message: error.message || 'Unknown error',
+        timestamp: new Date().toISOString(),
+        errorCode,
+      };
+
+      // Update proposal metadata
+      await this.proposalRepository.update(
+        { id: proposal.id },
+        {
+          metadata: {
+            ...metadata,
+            executionError,
+          },
+        }
+      );
+
+      this.logger.log(`Stored execution error for proposal ${proposal.id}: [${errorCode}] ${error.message}`);
+    } catch (metadataError) {
+      this.logger.error(
+        `Failed to store execution error for proposal ${proposal.id}: ${metadataError.message}`,
+        metadataError.stack
+      );
+    }
+  }
+
+  /**
+   * Categorize error and assign appropriate error code
+   */
+  private categorizeError(error: Error): string {
+    const errorMessage = error.message || '';
+    const errorStack = error.stack || '';
+
+    // Insufficient funds errors
+    if (
+      errorMessage.toLowerCase().includes('insufficient') ||
+      errorMessage.toLowerCase().includes('not enough ada') ||
+      errorMessage.toLowerCase().includes('utxo balance insufficient') ||
+      errorMessage.includes('MIN_UTXO')
+    ) {
+      return 'INSUFFICIENT_FUNDS';
+    }
+
+    // Asset already sold/not found errors
+    if (
+      errorMessage.includes('Listing not found') ||
+      errorMessage.includes('"code":"NOT_FOUND"') ||
+      errorMessage.toLowerCase().includes('already sold') ||
+      errorMessage.toLowerCase().includes('asset not found')
+    ) {
+      return 'ASSET_NOT_AVAILABLE';
+    }
+
+    // Asset already listed
+    if (errorMessage.includes('already listed') || errorMessage.includes('ALREADY_LISTED')) {
+      return 'ASSET_ALREADY_LISTED';
+    }
+
+    // Network/API errors
+    if (
+      errorMessage.toLowerCase().includes('network') ||
+      errorMessage.toLowerCase().includes('timeout') ||
+      errorMessage.toLowerCase().includes('fetch failed') ||
+      errorMessage.toLowerCase().includes('econnrefused') ||
+      errorMessage.toLowerCase().includes('enotfound') ||
+      errorStack.toLowerCase().includes('fetch')
+    ) {
+      return 'NETWORK_ERROR';
+    }
+
+    // Blockfrost API errors
+    if (
+      errorMessage.toLowerCase().includes('blockfrost') ||
+      errorMessage.toLowerCase().includes('api error') ||
+      errorMessage.includes('rate limit')
+    ) {
+      return 'API_ERROR';
+    }
+
+    // Transaction errors
+    if (
+      errorMessage.toLowerCase().includes('transaction') ||
+      errorMessage.toLowerCase().includes('tx ') ||
+      errorMessage.toLowerCase().includes('not confirmed') ||
+      errorMessage.toLowerCase().includes('failed to submit')
+    ) {
+      return 'TRANSACTION_ERROR';
+    }
+
+    // Treasury/Wallet errors
+    if (
+      errorMessage.toLowerCase().includes('treasury') ||
+      errorMessage.toLowerCase().includes('wallet') ||
+      errorMessage.toLowerCase().includes('address')
+    ) {
+      return 'WALLET_ERROR';
+    }
+
+    // Asset status errors
+    if (
+      errorMessage.toLowerCase().includes('not locked') ||
+      errorMessage.toLowerCase().includes('invalid status') ||
+      errorMessage.includes('ASSETS_NOT_LOCKED')
+    ) {
+      return 'INVALID_ASSET_STATUS';
+    }
+
+    // Contract/Smart contract errors
+    if (
+      errorMessage.toLowerCase().includes('script') ||
+      errorMessage.toLowerCase().includes('contract') ||
+      errorMessage.toLowerCase().includes('datum')
+    ) {
+      return 'CONTRACT_ERROR';
+    }
+
+    // Default to generic execution error
+    return 'EXECUTION_ERROR';
   }
 
   onModuleDestroy(): void {
