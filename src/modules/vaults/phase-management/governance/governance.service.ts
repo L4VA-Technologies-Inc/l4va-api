@@ -1136,8 +1136,6 @@ export class GovernanceService {
       if (cached !== undefined) {
         return cached;
       }
-    } else if (vault) {
-      this.logger.debug(`Skipping cache for proposal creation (distribution not processed): ${cacheKey}`);
     }
 
     try {
