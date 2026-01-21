@@ -19,6 +19,7 @@ import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { VaultTreasuryWallet } from '@/database/vaultTreasuryWallet.entity';
+import { VyfiService } from '@/modules/vyfi/vyfi.service';
 import { AssetStatus } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { VaultStatus } from '@/types/vault.types';
@@ -91,7 +92,8 @@ export class TerminationService {
     private readonly treasuryWalletRepository: Repository<VaultTreasuryWallet>,
     private readonly configService: ConfigService,
     private readonly blockchainService: BlockchainService,
-    private readonly eventEmitter: EventEmitter2
+    private readonly eventEmitter: EventEmitter2,
+    private readonly vyfiService: VyfiService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
@@ -288,25 +290,34 @@ export class TerminationService {
       return;
     }
 
-    // Get pool info to determine LP token unit
-    const vtUnit = `${vault.script_hash}${vault.asset_vault_name}`;
-    const poolInfo = await this.getPoolInfo(vtUnit);
+    try {
+      // Use VyfiService to remove liquidity
+      const result = await this.vyfiService.removeLiquidityForVault(vault.id);
 
-    if (!poolInfo) {
-      this.logger.warn(`Could not find pool info for vault ${vault.id}`);
-      await this.updateTerminationStatus(vault.id, TerminationStatus.ADA_IN_TREASURY);
-      return;
+      this.logger.log(`LP removal transaction submitted: ${result.txHash}`);
+
+      // Update status to awaiting return
+      await this.updateTerminationStatus(vault.id, TerminationStatus.LP_REMOVAL_AWAITING, {
+        lpRemovalTxHash: result.txHash,
+        expectedVtReturn: result.poolInfo?.reserveA?.toString(),
+        expectedAdaReturn: result.poolInfo?.reserveB?.toString(),
+      });
+    } catch (error) {
+      this.logger.error(`Failed to remove liquidity for vault ${vault.id}: ${error.message}`, error.stack);
+
+      // If pool not found, skip to claims creation (vault might not have LP)
+      if (error.message.includes('Pool not found') || error.message.includes('No LP tokens')) {
+        this.logger.log(`Skipping LP removal for vault ${vault.id}, proceeding to claims creation`);
+        await this.updateTerminationStatus(vault.id, TerminationStatus.ADA_IN_TREASURY);
+        return;
+      }
+
+      // Store error and re-throw
+      await this.updateTerminationMetadata(vault.id, {
+        error: `LP removal failed: ${error.message}`,
+      });
+      throw error;
     }
-
-    // Build remove liquidity transaction
-    const txHash = await this.buildRemoveLiquidityTx(vault, poolInfo);
-
-    // Update status to awaiting return
-    await this.updateTerminationStatus(vault.id, TerminationStatus.LP_REMOVAL_AWAITING, {
-      lpRemovalTxHash: txHash,
-      expectedVtReturn: poolInfo.reserveA?.toString(),
-      expectedAdaReturn: poolInfo.reserveB?.toString(),
-    });
   }
 
   /**
@@ -600,110 +611,6 @@ export class TerminationService {
     });
 
     this.logger.log(`Vault ${vault.id} termination complete - vault burned`);
-  }
-
-  /**
-   * Build remove liquidity transaction for VyFi
-   */
-  private async buildRemoveLiquidityTx(vault: Vault, poolInfo: any): Promise<string> {
-    // VyFi remove liquidity datum structure:
-    // d8799f{returnAddress}{d8799f{constructorIndex:1}{minTokenA}{minTokenB}}ffff
-    // Constructor index 1 = remove liquidity
-
-    const lpTokenUnit = poolInfo.lpTokenUnit;
-    const lpAmount = await this.getAdminLpBalance(lpTokenUnit);
-
-    if (lpAmount === BigInt(0)) {
-      throw new Error(`No LP tokens found in admin wallet for vault ${vault.id}`);
-    }
-
-    // Get admin UTXOs with LP tokens
-    const { utxos: adminUtxos, requiredInputs } = await getUtxosExtract(
-      Address.from_bech32(this.adminAddress),
-      this.blockfrost,
-      {
-        targetAssets: [{ token: lpTokenUnit, amount: Number(lpAmount) }],
-      }
-    );
-
-    // Build the script datum for remove liquidity
-    // For now, set min amounts to 0 (accept any return)
-    const scriptDatum = this.buildRemoveLiquidityDatum(this.adminAddress, 0, 0);
-
-    const input = {
-      changeAddress: this.adminAddress,
-      utxos: adminUtxos,
-      outputs: [
-        {
-          address: poolInfo.orderAddress,
-          assets: [
-            {
-              assetName: { name: lpTokenUnit.slice(56), format: 'hex' as const },
-              policyId: lpTokenUnit.slice(0, 56),
-              quantity: lpAmount,
-            },
-          ],
-          lovelace: 2000000, // Min ADA
-          datum: scriptDatum,
-        },
-      ],
-      requiredSigners: [this.adminHash],
-      requiredInputs,
-      validityInterval: {
-        start: true,
-        end: true,
-      },
-      network: this.isMainnet ? 'mainnet' : 'preprod',
-    };
-
-    const buildResponse = await this.blockchainService.buildTransaction(input);
-    const txToSubmit = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-    txToSubmit.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
-
-    const submitResponse = await this.blockchainService.submitTransaction({
-      transaction: txToSubmit.to_hex(),
-      signatures: [],
-    });
-
-    return submitResponse.txHash;
-  }
-
-  /**
-   * Build CBOR datum for VyFi remove liquidity
-   */
-  private buildRemoveLiquidityDatum(_returnAddress: string, _minTokenA: number, _minTokenB: number): string {
-    // This is a simplified version - actual implementation needs proper CBOR encoding
-    // Based on example: d8799f5838{addressHex}d8799f1a{minA}1b{minB}ffff
-    // TODO: Implement proper CBOR encoding for VyFi datum
-    this.logger.warn('buildRemoveLiquidityDatum: Using placeholder - implement proper CBOR encoding');
-    return '';
-  }
-
-  /**
-   * Get LP token balance in admin wallet
-   */
-  private async getAdminLpBalance(lpTokenUnit: string): Promise<bigint> {
-    const adminUtxos = await this.blockfrost.addressesUtxos(this.adminAddress);
-
-    let totalLp = BigInt(0);
-    for (const utxo of adminUtxos) {
-      const lpAmount = utxo.amount.find(a => a.unit === lpTokenUnit);
-      if (lpAmount) {
-        totalLp += BigInt(lpAmount.quantity);
-      }
-    }
-
-    return totalLp;
-  }
-
-  /**
-   * Get VyFi pool info
-   */
-  private async getPoolInfo(_vtUnit: string): Promise<any> {
-    // TODO: Call VyFi API to get pool info
-    // Returns: lpTokenUnit, orderAddress, reserveA, reserveB
-    this.logger.warn('getPoolInfo: Implement VyFi API call');
-    return null;
   }
 
   /**

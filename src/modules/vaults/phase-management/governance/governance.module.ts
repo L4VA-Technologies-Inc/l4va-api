@@ -25,6 +25,7 @@ import { Vault } from '@/database/vault.entity';
 import { VaultTreasuryWallet } from '@/database/vaultTreasuryWallet.entity';
 import { Vote } from '@/database/vote.entity';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
+import { VyfiModule } from '@/modules/vyfi/vyfi.module';
 import { WayUpModule } from '@/modules/wayup/wayup.module';
 
 @Module({
@@ -35,6 +36,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     TreasureWalletModule,
     TransactionsModule,
     BlockchainModule,
+    VyfiModule,
   ],
   controllers: [GovernanceController],
   providers: [
