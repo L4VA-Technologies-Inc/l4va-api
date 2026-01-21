@@ -42,6 +42,7 @@ export enum TerminationStatus {
   CLAIMS_PROCESSING = 'claims_processing', // Users are claiming VT -> ADA
   CLAIMS_COMPLETE = 'claims_complete', // All claims processed
   VAULT_BURNED = 'vault_burned', // Vault NFT burned, termination complete
+  TREASURY_CLEANED = 'treasury_cleaned', // Treasury wallet swept and KMS keys deleted
 }
 
 export interface TerminationMetadata {
@@ -53,6 +54,8 @@ export interface TerminationMetadata {
   vtBurnTxHash?: string;
   adaTransferTxHash?: string;
   vaultBurnTxHash?: string;
+  treasurySweepTxHash?: string;
+  sweptLovelace?: string;
   totalAdaForDistribution?: string; // In lovelace
   expectedVtReturn?: string;
   expectedAdaReturn?: string;
@@ -679,6 +682,65 @@ export class TerminationService {
         error: `Vault burn failed: ${error.message}`,
       });
       throw error;
+    }
+  }
+
+  /**
+   * Step 9: Cleanup treasury wallet - sweep remaining ADA and delete KMS keys
+   */
+  private async stepCleanupTreasuryWallet(vault: Vault): Promise<void> {
+    this.logger.log(`[Step 9] Cleaning up treasury wallet for vault ${vault.id}`);
+
+    try {
+      // Get treasury wallet
+      const treasuryWallet = await this.treasuryWalletService.getTreasuryWallet(vault.id);
+
+      if (!treasuryWallet) {
+        this.logger.warn(`No treasury wallet found for vault ${vault.id} - skipping cleanup`);
+        await this.updateTerminationStatus(vault.id, TerminationStatus.TREASURY_CLEANED);
+        return;
+      }
+
+      // Check if wallet has any remaining balance
+      const balance = await this.treasuryWalletService.getTreasuryWalletBalance(vault.id);
+
+      if (balance && balance.lovelace > 0) {
+        this.logger.log(`Treasury wallet has ${balance.lovelace} lovelace remaining - sweeping to admin wallet`);
+
+        // Sweep remaining ADA to admin wallet
+        const sweepTxHash = await this.treasuryWalletService.sweepTreasuryWallet(vault.id, this.adminAddress);
+
+        this.logger.log(`Treasury wallet swept: ${sweepTxHash}`);
+
+        await this.updateTerminationMetadata(vault.id, {
+          treasurySweepTxHash: sweepTxHash,
+          sweptLovelace: balance.lovelace.toString(),
+        });
+      } else {
+        this.logger.log(`Treasury wallet is empty - proceeding to key deletion`);
+      }
+
+      // Delete KMS encryption keys
+      await this.treasuryWalletService.deleteTreasuryWalletKeys(vault.id);
+      this.logger.log(`KMS keys deleted for treasury wallet ${treasuryWallet.id}`);
+
+      // Mark treasury wallet as deleted in database
+      await this.treasuryWalletService.markTreasuryWalletAsDeleted(vault.id);
+
+      await this.updateTerminationStatus(vault.id, TerminationStatus.TREASURY_CLEANED);
+
+      this.eventEmitter.emit('vault.treasury.cleaned', {
+        vaultId: vault.id,
+        treasuryAddress: treasuryWallet.address,
+      });
+
+      this.logger.log(`Treasury wallet cleanup complete for vault ${vault.id}`);
+    } catch (error) {
+      this.logger.error(`Failed to cleanup treasury wallet for vault ${vault.id}: ${error.message}`, error.stack);
+      await this.updateTerminationMetadata(vault.id, {
+        error: `Treasury cleanup failed: ${error.message}`,
+      });
+      // Don't throw - this is cleanup, not critical to termination
     }
   }
 
