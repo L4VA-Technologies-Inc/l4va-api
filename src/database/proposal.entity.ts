@@ -95,6 +95,13 @@ export class Proposal {
       count: number;
       lastAttempt: string; // ISO date string
     };
+
+    // Error tracking
+    executionError?: {
+      message: string;
+      timestamp: string;
+      errorCode?: string;
+    };
   };
 
   @Expose({ name: 'terminationDate' })

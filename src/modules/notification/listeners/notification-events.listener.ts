@@ -457,4 +457,30 @@ export class NotificationEventsListener {
       event.tokenHolderIds
     );
   }
+
+  @OnEvent('asset.sold')
+  async handleAssetSold(event: {
+    assetId: string;
+    assetName: string;
+    salePrice: number;
+    vaultId: string;
+    vaultName: string;
+    ownerAddress: string;
+    tokenHolderIds: string[];
+  }): Promise<void> {
+    const formattedPrice = event.salePrice
+      ? `${event.salePrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 })} ADA`
+      : 'Unknown price';
+
+    await this.notificationService.sendBulkNotification(
+      {
+        title: `Asset sold in ${event.vaultName}`,
+        description: `The asset "${event.assetName}" has been sold for ${formattedPrice} in vault ${event.vaultName}.`,
+        vaultId: event.vaultId,
+        vaultName: event.vaultName,
+        address: event.ownerAddress,
+      },
+      event.tokenHolderIds
+    );
+  }
 }
