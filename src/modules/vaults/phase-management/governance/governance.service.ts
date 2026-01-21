@@ -568,6 +568,7 @@ export class GovernanceService {
               'floor_price',
               'dex_price',
               'listing_price',
+              'status',
             ],
           })
         : [];
@@ -634,17 +635,34 @@ export class GovernanceService {
         market: marketMap.get(asset.id),
       }));
 
-    // Transform marketplace actions with enriched asset data
+    // Transform marketplace actions with enriched asset data and WayUp URLs
     const marketplaceActions = (proposal.metadata?.marketplaceActions || []).map(action => {
       const asset = assetMap.get(action.assetId);
+      // Generate WayUp URL if asset has policy_id and asset_id
+      let wayupUrl: string | undefined;
+      if (asset?.policy_id && asset?.asset_id) {
+        wayupUrl = `https://www.wayup.io/collection/${asset.policy_id}/asset/${asset.asset_id}?tab=activity`;
+      }
+
       return {
         ...action,
         assetName: asset?.name || asset?.metadata?.name || 'Unknown Asset',
         assetImg: asset?.imageUrl,
         assetPrice: asset?.floor_price || asset?.dex_price || 0,
         listingPrice: asset?.listing_price,
+        assetStatus: asset?.status,
+        wayupUrl,
       };
     });
+
+    // Extract execution error from metadata if present
+    const executionError = proposal.metadata?.executionError
+      ? {
+          message: proposal.metadata.executionError.message,
+          timestamp: proposal.metadata.executionError.timestamp,
+          errorCode: proposal.metadata.executionError.errorCode,
+        }
+      : undefined;
 
     // Map proposal entity to DTO with only needed fields
     const proposalDto = {
@@ -665,6 +683,7 @@ export class GovernanceService {
       creatorId: proposal.creatorId,
       createdAt: proposal.createdAt,
       metadata: proposal.metadata,
+      executionError,
       vault: proposal.vault
         ? {
             id: proposal.vault.id,
@@ -675,7 +694,7 @@ export class GovernanceService {
         : undefined,
     };
 
-    return {
+    const response = {
       proposal: proposalDto,
       votes,
       totals,
@@ -688,6 +707,10 @@ export class GovernanceService {
       nonFungibleTokens: nonFungibleTokensWithNames,
       marketplaceActions,
     };
+
+    return plainToInstance(GetProposalDetailRes, response, {
+      excludeExtraneousValues: true,
+    });
   }
 
   async vote(proposalId: string, voteReq: VoteReq, userId: string): Promise<VoteRes> {
@@ -825,64 +848,84 @@ export class GovernanceService {
   }
 
   async getVotingPower(vaultId: string, userId: string, action?: 'vote' | 'create_proposal'): Promise<string> {
+    // Check if distribution is processed - don't use cache during distribution
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: ['id', 'distribution_processed'],
+    });
+
+    if (!vault) {
+      throw new NotFoundException('Vault not found');
+    }
+
     const cacheKey = `voting_power:${vaultId}:${userId}:${action || 'general'}`;
 
-    // Check cache first
-    const cached = this.votingPowerCache.get<{
-      power: string;
-      error?: { type: string; message: string };
-    }>(cacheKey);
+    // Only check cache if distribution is processed
+    if (vault.distribution_processed) {
+      const cached = this.votingPowerCache.get<{
+        power: string;
+        error?: { type: string; message: string };
+      }>(cacheKey);
 
-    if (cached !== undefined) {
-      this.logger.debug(`Cache hit for voting power: ${cacheKey}`);
-      if (cached.error) {
-        // Re-throw cached error
-        if (cached.error.type === 'BadRequestException') {
-          throw new BadRequestException(cached.error.message);
-        } else if (cached.error.type === 'NotFoundException') {
-          throw new NotFoundException(cached.error.message);
+      if (cached !== undefined) {
+        this.logger.debug(`Cache hit for voting power: ${cacheKey}`);
+        if (cached.error) {
+          // Re-throw cached error
+          if (cached.error.type === 'BadRequestException') {
+            throw new BadRequestException(cached.error.message);
+          } else if (cached.error.type === 'NotFoundException') {
+            throw new NotFoundException(cached.error.message);
+          }
         }
+        return cached.power;
       }
-      return cached.power;
+    } else {
+      this.logger.debug(`Skipping cache for voting power (distribution not processed): ${cacheKey}`);
     }
 
     try {
       const power = await this._getVotingPowerUncached(vaultId, userId, action);
 
-      // Cache successful result
-      this.votingPowerCache.set(cacheKey, { power }, this.CACHE_TTL.VOTING_POWER);
+      // Cache successful result only if distribution is processed
+      if (vault.distribution_processed) {
+        this.votingPowerCache.set(cacheKey, { power }, this.CACHE_TTL.VOTING_POWER);
+      }
 
       return power;
     } catch (error) {
       let cacheTTL = this.CACHE_TTL.VOTING_POWER;
 
-      // Cache errors with longer TTL to redce repeated failed calls
+      // Cache errors with longer TTL to redce repeated failed calls (only if distribution is processed)
       if (error instanceof BadRequestException) {
         if (error.message.includes('NO_VOTING_POWER')) {
           cacheTTL = this.CACHE_TTL.NO_VOTING_POWER;
         }
 
-        this.votingPowerCache.set(
-          cacheKey,
-          {
-            power: '0',
-            error: { type: 'BadRequestException', message: error.message },
-          },
-          cacheTTL
-        );
+        if (vault.distribution_processed) {
+          this.votingPowerCache.set(
+            cacheKey,
+            {
+              power: '0',
+              error: { type: 'BadRequestException', message: error.message },
+            },
+            cacheTTL
+          );
+        }
 
         if (!error.message.includes('NO_VOTING_POWER')) {
           this.logger.warn(`Voting power check failed for ${userId} in vault ${vaultId}: ${error.message}`);
         }
       } else if (error instanceof NotFoundException) {
-        this.votingPowerCache.set(
-          cacheKey,
-          {
-            power: '0',
-            error: { type: 'NotFoundException', message: error.message },
-          },
-          cacheTTL
-        );
+        if (vault.distribution_processed) {
+          this.votingPowerCache.set(
+            cacheKey,
+            {
+              power: '0',
+              error: { type: 'NotFoundException', message: error.message },
+            },
+            cacheTTL
+          );
+        }
 
         this.logger.warn(`Voting power check failed for ${userId} in vault ${vaultId}: ${error.message}`);
       } else {
@@ -1080,28 +1123,37 @@ export class GovernanceService {
   }
 
   async canUserCreateProposal(vaultId: string, userId: string): Promise<boolean> {
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: ['id', 'vault_status', 'distribution_processed'],
+    });
+
     const cacheKey = `can_create_proposal:${vaultId}:${userId}`;
 
-    const cached = this.proposalCreationCache.get<boolean>(cacheKey);
-    if (cached !== undefined) {
-      return cached;
+    // Only check cache if distribution is processed
+    if (vault?.distribution_processed) {
+      const cached = this.proposalCreationCache.get<boolean>(cacheKey);
+      if (cached !== undefined) {
+        return cached;
+      }
     }
 
     try {
-      const vault = await this.vaultRepository.findOne({
-        where: { id: vaultId },
-        select: ['id', 'vault_status'],
-      });
-
       if (!vault || vault.vault_status !== VaultStatus.locked) {
-        this.proposalCreationCache.set(cacheKey, false, this.CACHE_TTL.CAN_CREATE_PROPOSAL);
+        if (vault?.distribution_processed) {
+          this.proposalCreationCache.set(cacheKey, false, this.CACHE_TTL.CAN_CREATE_PROPOSAL);
+        }
         return false;
       }
       await this.getVotingPower(vaultId, userId, 'create_proposal');
-      this.proposalCreationCache.set(cacheKey, true, this.CACHE_TTL.CAN_CREATE_PROPOSAL);
+      if (vault.distribution_processed) {
+        this.proposalCreationCache.set(cacheKey, true, this.CACHE_TTL.CAN_CREATE_PROPOSAL);
+      }
       return true;
     } catch {
-      this.proposalCreationCache.set(cacheKey, false, this.CACHE_TTL.CAN_CREATE_PROPOSAL);
+      if (vault?.distribution_processed) {
+        this.proposalCreationCache.set(cacheKey, false, this.CACHE_TTL.CAN_CREATE_PROPOSAL);
+      }
       return false;
     }
   }
