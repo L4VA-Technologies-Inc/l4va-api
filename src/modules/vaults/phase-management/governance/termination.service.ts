@@ -13,6 +13,7 @@ import { BlockchainService } from '../../processing-tx/onchain/blockchain.servic
 import { getUtxosExtract } from '../../processing-tx/onchain/utils/lib';
 import { VaultManagingService } from '../../processing-tx/onchain/vault-managing.service';
 import { TreasuryWalletService } from '../../treasure/treasure-wallet.service';
+import { TreasuryExtractionService } from '../../treasure/treasury-extraction.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
@@ -22,7 +23,7 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { VaultTreasuryWallet } from '@/database/vaultTreasuryWallet.entity';
 import { VyfiService } from '@/modules/vyfi/vyfi.service';
-import { AssetStatus } from '@/types/asset.types';
+import { AssetOriginType, AssetStatus } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { VaultStatus } from '@/types/vault.types';
 
@@ -105,7 +106,8 @@ export class TerminationService {
     private readonly eventEmitter: EventEmitter2,
     private readonly vyfiService: VyfiService,
     private readonly treasuryWalletService: TreasuryWalletService,
-    private readonly vaultManagingService: VaultManagingService
+    private readonly vaultManagingService: VaultManagingService,
+    private readonly treasuryExtractionService: TreasuryExtractionService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
@@ -187,6 +189,10 @@ export class TerminationService {
       }
     );
 
+    // Refresh vault object with updated termination_metadata
+    vault.vault_status = VaultStatus.terminating;
+    vault.termination_metadata = terminationMetadata;
+
     this.eventEmitter.emit('vault.termination_started', {
       vaultId,
       proposalId,
@@ -253,31 +259,73 @@ export class TerminationService {
   }
 
   /**
-   * Step 1: Burn all NFTs in the vault
+   * Step 1: Burn all locked assets in the vault (except fee assets)
+   * Extracts assets from the contribution script and sends them to the burn wallet
    */
   private async stepBurnNFTs(vault: Vault): Promise<void> {
-    this.logger.log(`[Step 1] Burning NFTs for vault ${vault.id}`);
+    this.logger.log(`[Step 1] Extracting and burning assets for vault ${vault.id}`);
 
-    // Get all NFTs in the vault
-    const nfts = await this.assetRepository.find({
+    // Get all locked assets except fee assets
+    const assetsToExtract = await this.assetRepository.find({
       where: {
         vault: { id: vault.id },
-        type: 'nft' as any,
         status: AssetStatus.LOCKED,
       },
     });
 
-    if (nfts.length === 0) {
-      this.logger.log(`No NFTs to burn for vault ${vault.id}, skipping to LP removal`);
+    // Filter out fee assets
+    const nonFeeAssets = assetsToExtract.filter(asset => asset.origin_type !== AssetOriginType.FEE);
+
+    if (nonFeeAssets.length === 0) {
+      this.logger.log(`No assets to burn for vault ${vault.id}, skipping to LP removal`);
       await this.updateTerminationStatus(vault.id, TerminationStatus.NFT_BURNED);
       return;
     }
 
-    // TODO: Implement NFT burning via TreasuryExtractionService
-    // For now, mark as burned and continue
-    this.logger.log(`Would burn ${nfts.length} NFT(s) for vault ${vault.id}`);
+    this.logger.log(
+      `Found ${nonFeeAssets.length} assets to extract and burn (excluding ${assetsToExtract.length - nonFeeAssets.length} fee assets)`
+    );
 
-    await this.updateTerminationStatus(vault.id, TerminationStatus.NFT_BURNED);
+    try {
+      // Extract assets from contribution script to burn wallet
+      const result = await this.treasuryExtractionService.extractAssetsFromVault({
+        vaultId: vault.id,
+        assetIds: nonFeeAssets.map(a => a.id),
+        treasuryAddress: this.burnWallet, // Send directly to burn wallet
+      });
+
+      this.logger.log(`Assets extracted to burn wallet: ${result.txHash}`);
+
+      // Update assets status to BURNED
+      await this.assetRepository.update({ id: In(nonFeeAssets.map(a => a.id)) }, { status: AssetStatus.BURNED });
+
+      await this.updateTerminationStatus(vault.id, TerminationStatus.NFT_BURNED, {
+        nftBurnTxHash: result.txHash,
+      });
+
+      this.eventEmitter.emit('vault.assets_burned', {
+        vaultId: vault.id,
+        txHash: result.txHash,
+        assetCount: nonFeeAssets.length,
+      });
+    } catch (error) {
+      // If extraction fails (e.g., non-mainnet, no assets in UTXOs), log and continue
+      if (error.message?.includes('non-mainnet') || error.message?.includes('only available on mainnet')) {
+        this.logger.warn(`[TESTNET] Skipping on-chain asset extraction for vault ${vault.id}`);
+
+        // Mark assets as burned in database only
+        await this.assetRepository.update({ id: In(nonFeeAssets.map(a => a.id)) }, { status: AssetStatus.BURNED });
+
+        await this.updateTerminationStatus(vault.id, TerminationStatus.NFT_BURNED);
+        return;
+      }
+
+      this.logger.error(`Failed to extract assets for vault ${vault.id}: ${error.message}`, error.stack);
+      await this.updateTerminationMetadata(vault.id, {
+        error: `Asset extraction failed: ${error.message}`,
+      });
+      throw error;
+    }
   }
 
   /**
