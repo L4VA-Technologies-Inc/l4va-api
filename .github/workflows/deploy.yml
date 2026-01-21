@@ -61,6 +61,7 @@ jobs:
           rsync -a --delete --exclude 'node_modules' --exclude '.env' --exclude 'gcp-*.json' $GITHUB_WORKSPACE/ ~/apps/l4va-api/
           # Copy environment-specific files
           cp $GITHUB_WORKSPACE/.env ~/apps/l4va-api/.env
+          cp $GITHUB_WORKSPACE/gcp-bucket.json ~/apps/l4va-api/gcp-bucket.json
 
       - name: Zero downtime deploy (blue-green)
         run: |
@@ -85,7 +86,17 @@ jobs:
           docker compose up -d $NEW_CONTAINER
 
           echo "Waiting for health..."
+          MAX_ATTEMPTS=60
+          ATTEMPT=0
           until curl -sf http://127.0.0.1:$NEW_PORT/api/v1/health; do
+            ATTEMPT=$((ATTEMPT + 1))
+            if [ $ATTEMPT -ge $MAX_ATTEMPTS ]; then
+              echo "Health check failed after $MAX_ATTEMPTS attempts"
+              echo "Container logs:"
+              docker logs $NEW_CONTAINER --tail 100
+              exit 1
+            fi
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS - waiting..."
             sleep 2
           done
 
@@ -137,6 +148,8 @@ jobs:
           rsync -a --delete --exclude 'node_modules' --exclude '.env' --exclude 'gcp-*.json' $GITHUB_WORKSPACE/ ~/apps/l4va-api/
           # Copy environment-specific files
           cp $GITHUB_WORKSPACE/.env ~/apps/l4va-api/.env
+          cp $GITHUB_WORKSPACE/gcp-service-account.json ~/apps/l4va-api/gcp-service-account.json
+          cp $GITHUB_WORKSPACE/gcp-bucket.json ~/apps/l4va-api/gcp-bucket.json
 
       - name: Zero downtime deploy (blue-green)
         run: |
@@ -161,7 +174,17 @@ jobs:
           docker compose up -d $NEW_CONTAINER
 
           echo "Waiting for health..."
+          MAX_ATTEMPTS=60
+          ATTEMPT=0
           until curl -sf http://127.0.0.1:$NEW_PORT/api/v1/health; do
+            ATTEMPT=$((ATTEMPT + 1))
+            if [ $ATTEMPT -ge $MAX_ATTEMPTS ]; then
+              echo "Health check failed after $MAX_ATTEMPTS attempts"
+              echo "Container logs:"
+              docker logs $NEW_CONTAINER --tail 100
+              exit 1
+            fi
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS - waiting..."
             sleep 2
           done
 
