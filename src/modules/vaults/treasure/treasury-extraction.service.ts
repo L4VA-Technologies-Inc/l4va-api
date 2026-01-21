@@ -79,7 +79,7 @@ export class TreasuryExtractionService {
     });
   }
 
-  async extractAssetsToTreasury(config: TreasuryExtractionConfig): Promise<ExtractionResult> {
+  async extractAssetsFromVault(config: TreasuryExtractionConfig): Promise<ExtractionResult> {
     // Skip extraction for non-mainnet environments
     const isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     if (!isMainnet && !config.skipOnchain) {

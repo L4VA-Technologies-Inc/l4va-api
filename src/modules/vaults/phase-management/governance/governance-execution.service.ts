@@ -768,7 +768,7 @@ export class GovernanceExecutionService {
               `(${assetsToExtract.length - assetsNeedingExtraction.length} already in treasury)`
           );
 
-          const extractionResult = await this.treasuryExtractionService.extractAssetsToTreasury({
+          const extractionResult = await this.treasuryExtractionService.extractAssetsFromVault({
             vaultId: proposal.vaultId,
             assetIds: assetsNeedingExtraction,
             treasuryAddress,
@@ -1118,7 +1118,7 @@ export class GovernanceExecutionService {
       }
 
       // Extract assets to burn wallet using treasury extraction service
-      const extractionResult = await this.treasuryExtractionService.extractAssetsToTreasury({
+      const extractionResult = await this.treasuryExtractionService.extractAssetsFromVault({
         vaultId: proposal.vaultId,
         assetIds: assetIds,
         treasuryAddress: burnWallet,
