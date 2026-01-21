@@ -565,6 +565,9 @@ export class GovernanceExecutionService {
           const reason = `Asset "${asset.name || option.assetId}" is already listed on marketplace`;
           this.logger.warn(`Marketplace proposal ${proposal.id} rejected: ${reason}`);
 
+          // Store execution error before rejecting so users can see the reason
+          await this.storeExecutionError(proposal, new Error(reason));
+
           await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
 
           this.eventEmitter.emit('proposal.rejected', {
@@ -700,6 +703,9 @@ export class GovernanceExecutionService {
         }
 
         this.logger.warn(`Marketplace proposal ${proposal.id} rejected: ${reason}`);
+
+        // Store execution error before rejecting so users can see the reason
+        await this.storeExecutionError(proposal, new Error(reason));
 
         await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
 
@@ -863,6 +869,12 @@ export class GovernanceExecutionService {
           `Marketplace proposal ${proposal.id} rejected: Listing not found - NFT was likely already purchased`
         );
 
+        // Store execution error before rejecting so users can see the reason
+        await this.storeExecutionError(
+          proposal,
+          new Error('Listing not found - NFT was likely already purchased or unlisted')
+        );
+
         await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
 
         this.eventEmitter.emit('proposal.rejected', {
@@ -872,7 +884,7 @@ export class GovernanceExecutionService {
           proposalName: proposal.title,
           creatorId: proposal.creatorId,
           tokenHolderIds: [],
-          reason: 'Listing not found - NFT was likely already purchased',
+          reason: 'Listing not found - NFT was likely already purchased or unlisted',
         });
 
         // Throw a specific error so processProposal knows the proposal was already handled
@@ -1064,9 +1076,13 @@ export class GovernanceExecutionService {
       const notLockedAssets = assets.filter(asset => asset.status !== AssetStatus.LOCKED);
 
       if (notLockedAssets.length > 0) {
+        const rejectionReason = `Assets not in LOCKED status: ${notLockedAssets.map(a => a.name || a.id).join(', ')}`;
         this.logger.warn(
           `Burning proposal ${proposal.id} rejected: ${notLockedAssets.length} asset(s) are not in LOCKED status`
         );
+
+        // Store execution error before rejecting so users can see the reason
+        await this.storeExecutionError(proposal, new Error(rejectionReason));
 
         // Get contributor claims for event
         const finalContributorClaims = await this.claimRepository.find({
@@ -1088,7 +1104,7 @@ export class GovernanceExecutionService {
           proposalName: proposal.title,
           creatorId: proposal.creatorId,
           tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
-          reason: `Assets not in LOCKED status: ${notLockedAssets.map(a => a.name || a.id).join(', ')}`,
+          reason: rejectionReason,
         });
 
         throw new Error('PROPOSAL_REJECTED_ASSETS_NOT_LOCKED');
