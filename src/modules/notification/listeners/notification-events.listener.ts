@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { OnEvent } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 
 import { User } from '@/database/user.entity';
 import { NotificationService } from '@/modules/notification/notification.service';
@@ -466,21 +466,32 @@ export class NotificationEventsListener {
     vaultId: string;
     vaultName: string;
     ownerAddress: string;
-    tokenHolderIds: string[];
+    tokenHolderAddresses: string[];
   }): Promise<void> {
     const formattedPrice = event.salePrice
       ? `${event.salePrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 })} ADA`
       : 'Unknown price';
 
-    await this.notificationService.sendBulkNotification(
-      {
-        title: `Asset sold in ${event.vaultName}`,
-        description: `The asset "${event.assetName}" has been sold for ${formattedPrice} in vault ${event.vaultName}.`,
-        vaultId: event.vaultId,
-        vaultName: event.vaultName,
-        address: event.ownerAddress,
-      },
-      event.tokenHolderIds
-    );
+    // Find user IDs from token holder addresses
+    if (event.tokenHolderAddresses && event.tokenHolderAddresses.length > 0) {
+      const users = await this.userRepository.find({
+        where: { address: In(event.tokenHolderAddresses) },
+        select: ['id'],
+      });
+
+      const tokenHolderIds = users.map(user => user.id);
+
+      if (tokenHolderIds.length > 0) {
+        await this.notificationService.sendBulkNotification(
+          {
+            title: `Asset sold in ${event.vaultName}`,
+            description: `The asset "${event.assetName}" has been sold for ${formattedPrice} in vault ${event.vaultName}.`,
+            vaultId: event.vaultId,
+            vaultName: event.vaultName,
+          },
+          tokenHolderIds
+        );
+      }
+    }
   }
 }
