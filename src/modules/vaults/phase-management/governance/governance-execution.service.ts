@@ -471,7 +471,17 @@ export class GovernanceExecutionService {
 
       return true;
     } catch (error) {
-      // Note: storeExecutionError is handled in individual execution methods
+      // Re-throw specific rejection errors so they can be handled properly in executePassedProposal
+      if (
+        error.message === 'PROPOSAL_REJECTED_LISTING_NOT_FOUND' ||
+        error.message === 'PROPOSAL_REJECTED_NO_VALID_OPERATIONS' ||
+        error.message === 'PROPOSAL_REJECTED_ASSET_ALREADY_LISTED' ||
+        error.message === 'PROPOSAL_REJECTED_ASSETS_NOT_LOCKED'
+      ) {
+        throw error;
+      }
+
+      // For other errors, store them and emit failure event
       this.eventEmitter.emit('proposal.failed', {
         address: proposal.vault?.owner?.address || null,
         vaultId: proposal.vaultId,
@@ -502,10 +512,6 @@ export class GovernanceExecutionService {
       this.logger.warn(`BUY_SELL proposal ${proposal.id} has no marketplace options`);
       return false;
     }
-
-    this.logger.log(
-      `Executing ${proposal.metadata.marketplaceActions.length} market operation(s) for proposal ${proposal.id}`
-    );
 
     // Collect all unique asset IDs to fetch from database
     const assetIds = [...new Set(proposal.metadata.marketplaceActions.map(opt => opt.assetId))];
@@ -1146,7 +1152,7 @@ export class GovernanceExecutionService {
 
   /**
    * Store execution error in proposal metadata
-   * Tracks error details including message, timestamp, error code, and attempt count
+   * Tracks error details including message, timestamp, error code, user-friendly message, and attempt count
    */
   private async storeExecutionError(proposal: Proposal, error: Error): Promise<void> {
     try {
@@ -1155,9 +1161,13 @@ export class GovernanceExecutionService {
       // Categorize error and assign error code
       const errorCode = this.categorizeError(error);
 
+      // Get user-friendly error message
+      const userFriendlyMessage = this.getUserFriendlyErrorMessage(errorCode);
+
       // Create execution error object
       const executionError = {
         message: error.message || 'Unknown error',
+        userFriendlyMessage,
         timestamp: new Date().toISOString(),
         errorCode,
       };
@@ -1173,13 +1183,33 @@ export class GovernanceExecutionService {
         }
       );
 
-      this.logger.log(`Stored execution error for proposal ${proposal.id}: [${errorCode}] ${error.message}`);
+      this.logger.log(`Stored execution error for proposal ${proposal.id}: [${errorCode}] ${userFriendlyMessage}`);
     } catch (metadataError) {
       this.logger.error(
         `Failed to store execution error for proposal ${proposal.id}: ${metadataError.message}`,
         metadataError.stack
       );
     }
+  }
+
+  /**
+   * Get user-friendly error message for error codes
+   */
+  private getUserFriendlyErrorMessage(errorCode: string): string {
+    const errorMessages: Record<string, string> = {
+      INSUFFICIENT_FUNDS: 'Insufficient ADA in treasury to cover transaction fees.',
+      ASSET_NOT_AVAILABLE: 'Assets no longer available or already sold.',
+      ASSET_ALREADY_LISTED: 'Assets already listed on marketplace. Unlist them first.',
+      NETWORK_ERROR: 'Network error. Will retry automatically.',
+      API_ERROR: 'External API error. Will retry automatically.',
+      TRANSACTION_ERROR: 'Transaction failed to submit. Will retry automatically.',
+      WALLET_ERROR: 'Error accessing treasury wallet. Check configuration.',
+      INVALID_ASSET_STATUS: 'Assets must be locked in vault first.',
+      CONTRACT_ERROR: 'Smart contract validation error.',
+      EXECUTION_ERROR: 'Unexpected error. Review details or contact support.',
+    };
+
+    return errorMessages[errorCode] || errorMessages.EXECUTION_ERROR;
   }
 
   /**
