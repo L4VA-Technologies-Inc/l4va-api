@@ -1,8 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsNotEmpty, IsString } from 'class-validator';
 
-import { ClaimStatus } from '@/types/claim.types';
-
 /**
  * Request DTO for requesting a new termination claim
  */
@@ -11,56 +9,6 @@ export class RequestTerminationClaimDto {
   @IsString()
   @IsNotEmpty()
   address: string;
-}
-
-/**
- * Request DTO for processing a termination claim
- */
-export class ProcessTerminationClaimDto {
-  @ApiProperty({
-    description: 'Transaction hash of user sending VT to burn wallet',
-  })
-  @IsString()
-  @IsNotEmpty()
-  vtBurnTxHash: string;
-}
-
-/**
- * Response DTO for termination claim preview
- */
-export class TerminationClaimPreviewRes {
-  @ApiProperty({ description: 'Claim ID' })
-  claimId: string;
-
-  @ApiProperty({ description: 'Original VT amount from snapshot' })
-  originalVtAmount: string;
-
-  @ApiProperty({ description: 'Current on-chain VT balance' })
-  currentVtBalance: string;
-
-  @ApiProperty({ description: 'Original ADA share from snapshot' })
-  originalAdaShare: string;
-
-  @ApiProperty({ description: 'Current calculated ADA share' })
-  currentAdaShare: string;
-
-  @ApiProperty({ description: 'Percentage share of the treasury' })
-  sharePercentage: number;
-
-  @ApiProperty({ description: 'Total treasury balance available' })
-  treasuryBalance: string;
-
-  @ApiProperty({ description: 'Total circulating VT supply' })
-  circulatingSupply: string;
-
-  @ApiProperty({ description: 'Current claim status', enum: ClaimStatus })
-  status: ClaimStatus;
-
-  @ApiProperty({ description: 'Whether the user can claim' })
-  canClaim: boolean;
-
-  @ApiPropertyOptional({ description: 'Reason if cannot claim' })
-  reason?: string;
 }
 
 /**
@@ -81,23 +29,6 @@ export class RequestTerminationClaimRes {
 
   @ApiProperty({ description: 'Whether this is a newly created claim' })
   isNewClaim: boolean;
-}
-
-/**
- * Response DTO for processing a termination claim
- */
-export class ProcessTerminationClaimRes {
-  @ApiProperty({ description: 'ADA distribution transaction hash' })
-  adaTxHash: string;
-
-  @ApiProperty({ description: 'Actual VT amount burned' })
-  actualVtBurned: string;
-
-  @ApiProperty({ description: 'ADA amount received' })
-  adaReceived: string;
-
-  @ApiProperty({ description: 'Final percentage share' })
-  sharePercentage: number;
 }
 
 /**

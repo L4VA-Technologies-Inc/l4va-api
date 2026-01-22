@@ -16,6 +16,7 @@ import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { CancellationInput } from '@/modules/distribution/distribution.types';
+import { TerminationService } from '@/modules/vaults/phase-management/governance/termination.service';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { Redeemer, Redeemer1 } from '@/modules/vaults/processing-tx/onchain/types/type';
 import {
@@ -45,7 +46,8 @@ export class ClaimsService {
     @InjectRepository(Claim)
     private claimRepository: Repository<Claim>,
     private readonly configService: ConfigService,
-    private readonly blockchainService: BlockchainService
+    private readonly blockchainService: BlockchainService,
+    private readonly terminationService: TerminationService
   ) {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
@@ -65,6 +67,50 @@ export class ClaimsService {
    * @returns Promise with an array of Claim entities
    */
   async getUserClaims(userId: string, query: GetClaimsDto): Promise<ClaimResponseDto> {
+    const page = parseInt(query?.page as string) || 1;
+    const limit = parseInt(query?.limit as string) || 10;
+    const skip = (page - 1) * limit;
+
+    if (
+      query?.type === ClaimType.TERMINATION ||
+      (Array.isArray(query?.type) && query?.type.includes(ClaimType.TERMINATION))
+    ) {
+      const terminationResult = await this.terminationService.getUserTerminationClaims(userId, skip, limit);
+
+      // Transform termination claims to match ClaimResponseItemsDto format
+      const items = terminationResult.claims.map(claim => {
+        const cleanClaim = {
+          id: claim.id,
+          type: ClaimType.TERMINATION,
+          status: claim.status as ClaimStatus,
+          amount: parseFloat(claim.metadata?.vtAmount) / 10 ** (claim.vault?.ft_token_decimals || 0),
+          adaAmount: parseFloat(claim.metadata?.adaAmount || claim.lovelace_amount?.toString() || '0') / 1_000_000,
+          multiplier: null,
+          description: null,
+          createdAt: claim.created_at,
+          updatedAt: claim.updated_at,
+          vault: {
+            id: claim.vault.id,
+            name: claim.vault.name,
+            vaultImage: claim.vault.vault_image?.file_url || null,
+            vault_token_ticker: claim.vault?.vault_token_ticker || null,
+            ft_token_decimals: claim.vault?.ft_token_decimals || null,
+          },
+        };
+
+        return plainToInstance(ClaimResponseItemsDto, cleanClaim, {
+          excludeExtraneousValues: true,
+        });
+      });
+
+      return {
+        items,
+        total: terminationResult.total,
+        page,
+        limit,
+      };
+    }
+
     const whereConditions: {
       user: { id: string };
       status?: ClaimStatus | ReturnType<typeof In>;
@@ -88,10 +134,6 @@ export class ClaimsService {
     } else if (query?.claimState === 'unclaimed') {
       whereConditions.status = In([ClaimStatus.AVAILABLE, ClaimStatus.PENDING]);
     }
-
-    const page = parseInt(query?.page as string) || 1;
-    const limit = parseInt(query?.limit as string) || 10;
-    const skip = (page - 1) * limit;
 
     const [claims, total] = await this.claimRepository.findAndCount({
       where: whereConditions,

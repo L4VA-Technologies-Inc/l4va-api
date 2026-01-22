@@ -1,14 +1,7 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
-import {
-  ProcessTerminationClaimDto,
-  ProcessTerminationClaimRes,
-  RequestTerminationClaimDto,
-  RequestTerminationClaimRes,
-  TerminationClaimPreviewRes,
-  TerminationStatusRes,
-} from './dto/termination-claim.dto';
+import { TerminationStatusRes } from './dto/termination-claim.dto';
 import { TerminationService } from './termination.service';
 
 import { AuthGuard } from '@/modules/auth/auth.guard';
@@ -36,120 +29,42 @@ export class TerminationController {
   }
 
   /**
-   * Get detailed preview for an existing claim
+   * Build termination claim transaction (send VT to admin wallet)
    */
-  @Get('claims/:claimId/preview')
+  @Post('claims/:claimId/build')
   @UseGuards(AuthGuard)
   @ApiOperation({
-    summary: 'Get termination claim preview with dynamic calculation',
+    summary: 'Build termination claim transaction',
+    description: 'Builds a transaction for user to send their VT tokens to admin wallet for termination claim',
   })
-  @ApiResponse({
-    status: 200,
-    description: 'Claim preview',
-    type: TerminationClaimPreviewRes,
-  })
-  async getTerminationClaimPreview(
-    @Param('claimId', ParseUUIDPipe) claimId: string
-  ): Promise<TerminationClaimPreviewRes> {
-    return this.terminationService.getTerminationClaimPreview(claimId);
-  }
-
-  /**
-   * Request a new termination claim for an address
-   * Creates a claim if the address holds VT but wasn't in the original snapshot
-   */
-  @Post('vaults/:vaultId/claims/request')
-  @UseGuards(OptionalAuthGuard)
-  @ApiOperation({
-    summary: 'Request termination claim for wallet address',
-    description:
-      'Creates a termination claim for any address holding VT. ' +
-      'Useful when VT was transferred to an address not in the original snapshot.',
-  })
-  @ApiResponse({
-    status: 201,
-    description: 'Claim created/found',
-    type: RequestTerminationClaimRes,
-  })
-  async requestTerminationClaim(
-    @Param('vaultId', ParseUUIDPipe) vaultId: string,
-    @Body() body: RequestTerminationClaimDto,
-    @Req() req: AuthRequest
-  ): Promise<RequestTerminationClaimRes> {
-    // Use user ID if authenticated, otherwise undefined
-    const userId = req.user?.sub;
-    return this.terminationService.requestTerminationClaim(vaultId, body.address, userId);
-  }
-
-  /**
-   * Process (execute) a termination claim
-   * User must have sent VT to burn wallet first
-   */
-  @Post('claims/:claimId/process')
-  @UseGuards(AuthGuard)
-  @ApiOperation({
-    summary: 'Process termination claim',
-    description:
-      'Executes a termination claim after user has sent VT to burn wallet. ' +
-      'Verifies the VT burn transaction and sends proportional ADA share to user.',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Claim processed',
-    type: ProcessTerminationClaimRes,
-  })
-  async processTerminationClaim(
+  @ApiResponse({ status: 200, description: 'Transaction built successfully' })
+  async buildTerminationClaim(
     @Param('claimId', ParseUUIDPipe) claimId: string,
-    @Body() body: ProcessTerminationClaimDto
-  ): Promise<ProcessTerminationClaimRes> {
-    return this.terminationService.processTerminationClaim(claimId, body.vtBurnTxHash);
+    @Req() req: AuthRequest
+  ): Promise<{ transactionId: string; presignedTx: string }> {
+    return this.terminationService.buildTerminationClaimTransaction(claimId, req.user.sub);
   }
 
   /**
-   * Get all termination claims for authenticated user across all vaults
+   * Submit signed termination claim transaction
    */
-  @Get('my-claims')
-  @UseGuards(AuthGuard)
-  @ApiOperation({ summary: 'Get all termination claims for current user' })
-  @ApiResponse({ status: 200, description: 'User termination claims' })
-  async getMyTerminationClaims(@Req() req: AuthRequest): Promise<{
-    claims: Array<{
-      claimId: string;
-      vaultId: string;
-      vaultName: string;
-      vtAmount: string;
-      adaAmount: string;
-      status: string;
-      createdAt: Date;
-    }>;
-  }> {
-    return this.terminationService.getUserTerminationClaims(req.user.sub);
-  }
-
-  /**
-   * Get termination claims for a specific vault and user
-   */
-  @Get('vaults/:vaultId/my-claims')
+  @Post('claims/:transactionId/submit')
   @UseGuards(AuthGuard)
   @ApiOperation({
-    summary: 'Get termination claims for current user in a vault',
+    summary: 'Submit signed termination claim transaction',
+    description: 'Submits the signed transaction and processes the termination claim distribution',
   })
-  @ApiResponse({
-    status: 200,
-    description: 'User termination claims for vault',
-  })
-  async getMyVaultTerminationClaims(
-    @Param('vaultId', ParseUUIDPipe) vaultId: string,
-    @Req() req: AuthRequest
+  @ApiResponse({ status: 200, description: 'Transaction submitted successfully' })
+  async submitTerminationClaim(
+    @Param('transactionId') transactionId: string,
+    @Body() body: { signedTx: string }
   ): Promise<{
-    claims: Array<{
-      claimId: string;
-      vtAmount: string;
-      adaAmount: string;
-      status: string;
-      canClaim: boolean;
-    }>;
+    success: boolean;
+    vtTxHash: string;
+    distributionTxHash: string;
+    adaReceived: string;
+    ftsReceived?: Array<{ policyId: string; assetId: string; quantity: string; name?: string }>;
   }> {
-    return this.terminationService.getUserVaultTerminationClaims(vaultId, req.user.sub);
+    return this.terminationService.submitTerminationClaimTransaction(transactionId, body.signedTx);
   }
 }

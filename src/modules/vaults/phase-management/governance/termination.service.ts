@@ -23,7 +23,7 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { VaultTreasuryWallet } from '@/database/vaultTreasuryWallet.entity';
 import { VyfiService } from '@/modules/vyfi/vyfi.service';
-import { AssetOriginType, AssetStatus } from '@/types/asset.types';
+import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { VaultStatus } from '@/types/vault.types';
 
@@ -50,6 +50,7 @@ export interface TerminationMetadata {
   status: TerminationStatus;
   proposalId: string;
   nftBurnTxHash?: string;
+  ftExtractionTxHash?: string; // FTs extracted to treasury for distribution
   lpRemovalTxHash?: string;
   lpReturnTxHash?: string;
   vtBurnTxHash?: string;
@@ -58,6 +59,7 @@ export interface TerminationMetadata {
   treasurySweepTxHash?: string;
   sweptLovelace?: string;
   totalAdaForDistribution?: string; // In lovelace
+  ftsForDistribution?: Array<{ policyId: string; assetId: string; quantity: string; name?: string }>; // FTs to distribute to VT holders
   expectedVtReturn?: string;
   expectedAdaReturn?: string;
   claimsCreatedAt?: string;
@@ -129,7 +131,7 @@ export class TerminationService {
   }
 
   /**
-   * Monitor termination progress every 5 minutes
+   * Monitor termination progress every 10 minutes
    * Checks for pending LP returns and advances termination state
    */
   @Cron(CronExpression.EVERY_10_MINUTES)
@@ -259,14 +261,15 @@ export class TerminationService {
   }
 
   /**
-   * Step 1: Burn all locked assets in the vault (except fee assets)
-   * Extracts assets from the contribution script and sends them to the burn wallet
+   * Step 1: Process locked assets in the vault (except fee assets)
+   * - NFTs: Extract to burn wallet (destroyed)
+   * - FTs: Extract to treasury wallet for distribution to VT holders
    */
   private async stepBurnNFTs(vault: Vault): Promise<void> {
-    this.logger.log(`[Step 1] Extracting and burning assets for vault ${vault.id}`);
+    this.logger.log(`[Step 1] Processing locked assets for vault ${vault.id}`);
 
     // Get all locked assets except fee assets
-    const assetsToExtract = await this.assetRepository.find({
+    const assetsToProcess = await this.assetRepository.find({
       where: {
         vault: { id: vault.id },
         status: AssetStatus.LOCKED,
@@ -274,55 +277,120 @@ export class TerminationService {
     });
 
     // Filter out fee assets
-    const nonFeeAssets = assetsToExtract.filter(asset => asset.origin_type !== AssetOriginType.FEE);
+    const nonFeeAssets = assetsToProcess.filter(asset => asset.origin_type !== AssetOriginType.FEE);
+
+    // Separate NFTs (to burn) from FTs (to distribute)
+    const nftsToburn = nonFeeAssets.filter(asset => asset.type === AssetType.NFT);
+    const ftsToDistribute = nonFeeAssets.filter(asset => asset.type === AssetType.FT);
 
     if (nonFeeAssets.length === 0) {
-      this.logger.log(`No assets to burn for vault ${vault.id}, skipping to LP removal`);
+      this.logger.log(`No assets to process for vault ${vault.id}, skipping to LP removal`);
       await this.updateTerminationStatus(vault.id, TerminationStatus.NFT_BURNED);
       return;
     }
 
     this.logger.log(
-      `Found ${nonFeeAssets.length} assets to extract and burn (excluding ${assetsToExtract.length - nonFeeAssets.length} fee assets)`
+      `Found ${nftsToburn.length} NFTs to burn and ${ftsToDistribute.length} FTs to distribute ` +
+        `(excluding ${assetsToProcess.length - nonFeeAssets.length} fee assets)`
     );
 
+    // Get treasury wallet for FT extraction
+    const treasuryWallet = await this.treasuryWalletService.getTreasuryWallet(vault.id);
+    const ftDestination = treasuryWallet?.address || this.adminAddress;
+
+    let nftBurnTxHash: string | undefined;
+    let ftExtractionTxHash: string | undefined;
+
     try {
-      // Extract assets from contribution script to burn wallet
-      const result = await this.treasuryExtractionService.extractAssetsFromVault({
-        vaultId: vault.id,
-        assetIds: nonFeeAssets.map(a => a.id),
-        treasuryAddress: this.burnWallet, // Send directly to burn wallet
-      });
+      // Step 1a: Extract NFTs to burn wallet
+      if (nftsToburn.length > 0) {
+        this.logger.log(`Extracting ${nftsToburn.length} NFTs to burn wallet`);
+        const burnResult = await this.treasuryExtractionService.extractAssetsFromVault({
+          vaultId: vault.id,
+          assetIds: nftsToburn.map(a => a.id),
+          treasuryAddress: this.burnWallet,
+        });
+        nftBurnTxHash = burnResult.txHash;
+        this.logger.log(`NFTs extracted to burn wallet: ${nftBurnTxHash}`);
 
-      this.logger.log(`Assets extracted to burn wallet: ${result.txHash}`);
+        // Update NFTs status to BURNED
+        await this.assetRepository.update({ id: In(nftsToburn.map(a => a.id)) }, { status: AssetStatus.BURNED });
+      }
 
-      // Update assets status to BURNED
-      await this.assetRepository.update({ id: In(nonFeeAssets.map(a => a.id)) }, { status: AssetStatus.BURNED });
+      // Step 1b: Extract FTs to treasury for distribution
+      if (ftsToDistribute.length > 0) {
+        this.logger.log(
+          `Extracting ${ftsToDistribute.length} FTs to treasury (${ftDestination}) for VT holder distribution`
+        );
+        const ftResult = await this.treasuryExtractionService.extractAssetsFromVault({
+          vaultId: vault.id,
+          assetIds: ftsToDistribute.map(a => a.id),
+          treasuryAddress: ftDestination,
+        });
+        ftExtractionTxHash = ftResult.txHash;
+        this.logger.log(`FTs extracted to treasury: ${ftExtractionTxHash}`);
+
+        // Update FTs status to EXTRACTED (will be distributed later)
+        await this.assetRepository.update(
+          { id: In(ftsToDistribute.map(a => a.id)) },
+          { status: AssetStatus.EXTRACTED }
+        );
+      }
+
+      // Store FT distribution info in metadata
+      const ftsForDistribution = ftsToDistribute.map(ft => ({
+        policyId: ft.policy_id,
+        assetId: ft.asset_id,
+        quantity: ft.quantity?.toString() || '1',
+        name: ft.name,
+      }));
 
       await this.updateTerminationStatus(vault.id, TerminationStatus.NFT_BURNED, {
-        nftBurnTxHash: result.txHash,
+        nftBurnTxHash,
+        ftExtractionTxHash,
+        ftsForDistribution: ftsForDistribution.length > 0 ? ftsForDistribution : undefined,
       });
 
-      this.eventEmitter.emit('vault.assets_burned', {
+      this.eventEmitter.emit('vault.assets_processed', {
         vaultId: vault.id,
-        txHash: result.txHash,
-        assetCount: nonFeeAssets.length,
+        nftBurnTxHash,
+        ftExtractionTxHash,
+        nftsBurned: nftsToburn.length,
+        ftsExtracted: ftsToDistribute.length,
       });
     } catch (error) {
       // If extraction fails (e.g., non-mainnet, no assets in UTXOs), log and continue
       if (error.message?.includes('non-mainnet') || error.message?.includes('only available on mainnet')) {
         this.logger.warn(`[TESTNET] Skipping on-chain asset extraction for vault ${vault.id}`);
 
-        // Mark assets as burned in database only
-        await this.assetRepository.update({ id: In(nonFeeAssets.map(a => a.id)) }, { status: AssetStatus.BURNED });
+        // Mark assets appropriately in database only
+        if (nftsToburn.length > 0) {
+          await this.assetRepository.update({ id: In(nftsToburn.map(a => a.id)) }, { status: AssetStatus.BURNED });
+        }
+        if (ftsToDistribute.length > 0) {
+          await this.assetRepository.update(
+            { id: In(ftsToDistribute.map(a => a.id)) },
+            { status: AssetStatus.EXTRACTED }
+          );
+        }
 
-        await this.updateTerminationStatus(vault.id, TerminationStatus.NFT_BURNED);
+        // Store FT distribution info even on testnet
+        const ftsForDistribution = ftsToDistribute.map(ft => ({
+          policyId: ft.policy_id,
+          assetId: ft.asset_id,
+          quantity: ft.quantity?.toString() || '1',
+          name: ft.name,
+        }));
+
+        await this.updateTerminationStatus(vault.id, TerminationStatus.NFT_BURNED, {
+          ftsForDistribution: ftsForDistribution.length > 0 ? ftsForDistribution : undefined,
+        });
         return;
       }
 
-      this.logger.error(`Failed to extract assets for vault ${vault.id}: ${error.message}`, error.stack);
+      this.logger.error(`Failed to process assets for vault ${vault.id}: ${error.message}`, error.stack);
       await this.updateTerminationMetadata(vault.id, {
-        error: `Asset extraction failed: ${error.message}`,
+        error: `Asset processing failed: ${error.message}`,
       });
       throw error;
     }
@@ -548,8 +616,11 @@ export class TerminationService {
 
   /**
    * Step 6: Create termination claims for all VT holders
+   * Claims include:
+   * - ADA distribution (if above threshold)
+   * - FT distribution (proportional to VT holdings)
    * If ADA amount is too small (below threshold), create VT-only claims
-   * where users just burn their VT without receiving ADA distribution
+   * where users just burn their VT without receiving ADA distribution (but still get FTs if any)
    */
   private async stepCreateClaims(vault: Vault): Promise<void> {
     this.logger.log(`[Step 6] Creating termination claims for vault ${vault.id}`);
@@ -568,6 +639,7 @@ export class TerminationService {
     }
 
     const totalAda = BigInt(termination.totalAdaForDistribution || '0');
+    const ftsForDistribution = termination.ftsForDistribution || [];
     const addressBalances = snapshot.addressBalances;
 
     // Calculate total VT supply from snapshot
@@ -588,11 +660,17 @@ export class TerminationService {
       totalAda >= BigInt(this.MIN_TOTAL_ADA_FOR_DISTRIBUTION) &&
       totalAda / BigInt(vtHolderCount) >= BigInt(this.MIN_ADA_PER_CLAIM);
 
+    const hasFtsToDistribute = ftsForDistribution.length > 0;
+
     if (!hasEnoughAdaForDistribution) {
       this.logger.warn(
         `Not enough ADA for distribution. Total: ${totalAda} lovelace, Holders: ${vtHolderCount}. ` +
           `Creating VT-burn-only claims (no ADA payout).`
       );
+    }
+
+    if (hasFtsToDistribute) {
+      this.logger.log(`Including ${ftsForDistribution.length} FT types for distribution to VT holders`);
     }
 
     // Create claims for each VT holder
@@ -602,17 +680,43 @@ export class TerminationService {
       const vtBalance = BigInt(balance);
       if (vtBalance === BigInt(0)) continue;
 
+      // Calculate proportional share (used for both ADA and FT distribution)
+      const sharePercentage = Number((vtBalance * BigInt(10000)) / totalVtSupply) / 100; // percentage with 2 decimals
+
       // Calculate proportional ADA share (0 if not enough ADA)
       const adaShare = hasEnoughAdaForDistribution ? (totalAda * vtBalance) / totalVtSupply : BigInt(0);
+
+      // Calculate proportional FT shares
+      const ftShares = ftsForDistribution
+        .map(ft => {
+          const totalFtQuantity = BigInt(ft.quantity);
+          const userFtShare = (totalFtQuantity * vtBalance) / totalVtSupply;
+          return {
+            policyId: ft.policyId,
+            assetId: ft.assetId,
+            quantity: userFtShare.toString(),
+            name: ft.name,
+          };
+        })
+        .filter(ft => BigInt(ft.quantity) > BigInt(0)); // Only include non-zero shares
 
       // Find user by address
       const user = await this.userRepository.findOne({
         where: { address },
       });
 
-      const claimDescription = hasEnoughAdaForDistribution
-        ? `Vault termination claim - Send ${vtBalance} VT to receive ${adaShare} lovelace`
-        : `Vault termination claim - Send ${vtBalance} VT to burn wallet (no ADA distribution)`;
+      // Build claim description
+      let claimDescription = `Vault termination claim - Send ${vtBalance} VT to receive:`;
+      if (hasEnoughAdaForDistribution) {
+        claimDescription += ` ${adaShare} lovelace`;
+      }
+      if (ftShares.length > 0) {
+        const ftDescriptions = ftShares.map(ft => `${ft.quantity} ${ft.name || ft.assetId}`).join(', ');
+        claimDescription += hasEnoughAdaForDistribution ? ` + ${ftDescriptions}` : ` ${ftDescriptions}`;
+      }
+      if (!hasEnoughAdaForDistribution && ftShares.length === 0) {
+        claimDescription = `Vault termination claim - Send ${vtBalance} VT to burn wallet (no distribution)`;
+      }
 
       claims.push({
         user_id: user?.id,
@@ -626,8 +730,11 @@ export class TerminationService {
           address,
           vtAmount: vtBalance.toString(),
           adaAmount: adaShare.toString(),
+          ftShares: ftShares.length > 0 ? ftShares : undefined,
+          sharePercentage,
           snapshotId: snapshot.id,
           noAdaDistribution: !hasEnoughAdaForDistribution,
+          hasFtDistribution: ftShares.length > 0,
         },
       });
     }
@@ -637,7 +744,7 @@ export class TerminationService {
 
     this.logger.log(
       `Created ${claims.length} termination claims for vault ${vault.id} ` +
-        `(ADA distribution: ${hasEnoughAdaForDistribution})`
+        `(ADA distribution: ${hasEnoughAdaForDistribution}, FT distribution: ${hasFtsToDistribute})`
     );
 
     await this.updateTerminationStatus(vault.id, TerminationStatus.CLAIMS_CREATED, {
@@ -649,6 +756,8 @@ export class TerminationService {
       claimCount: claims.length,
       totalAda: totalAda.toString(),
       hasAdaDistribution: hasEnoughAdaForDistribution,
+      hasFtDistribution: hasFtsToDistribute,
+      ftTypes: ftsForDistribution.length,
     });
   }
 
@@ -969,291 +1078,6 @@ export class TerminationService {
   }
 
   /**
-   * Process a termination claim with dynamic VT verification
-   *
-   * IMPORTANT: This now verifies the user's CURRENT on-chain VT balance
-   * and calculates their share dynamically based on:
-   * - Current VT holdings (not snapshot)
-   * - Current treasury balance (not original amount)
-   * - Current circulating VT supply (excludes burned tokens)
-   *
-   * This handles the edge case where users swap VT after claims are created.
-   */
-  async processTerminationClaim(
-    claimId: string,
-    userVtTxHash: string
-  ): Promise<{
-    adaTxHash: string;
-    actualVtBurned: string;
-    adaReceived: string;
-    sharePercentage: number;
-  }> {
-    const claim = await this.claimRepository.findOne({
-      where: {
-        id: claimId,
-        type: ClaimType.TERMINATION as any,
-        status: ClaimStatus.AVAILABLE,
-      },
-      relations: ['vault', 'vault.treasury_wallet'],
-    });
-
-    if (!claim) {
-      throw new NotFoundException(`Claim ${claimId} not found or already processed`);
-    }
-
-    const userAddress = claim.metadata?.address;
-    if (!userAddress) {
-      throw new Error('Claim missing user address');
-    }
-
-    const vault = claim.vault;
-    if (!vault) {
-      throw new Error('Claim missing vault reference');
-    }
-
-    // Step 1: Calculate dynamic share based on CURRENT on-chain state
-    this.logger.log(`Calculating dynamic share for claim ${claimId}, user: ${userAddress}`);
-
-    const dynamicShare = await this.calculateDynamicShare(userAddress, vault);
-
-    this.logger.log(
-      `Dynamic share calculation: ` +
-        `userVT=${dynamicShare.userVtBalance}, ` +
-        `circulating=${dynamicShare.circulatingSupply}, ` +
-        `treasury=${dynamicShare.treasuryBalance}, ` +
-        `adaShare=${dynamicShare.adaShare} (${dynamicShare.sharePercentage}%)`
-    );
-
-    // Step 2: Verify user actually has VT to claim
-    if (dynamicShare.userVtBalance === BigInt(0)) {
-      this.logger.warn(`User ${userAddress} has no VT balance - claim ${claimId} invalid`);
-
-      // Mark claim as invalid/expired since user sold their VT
-      await this.claimRepository.update(
-        { id: claimId },
-        {
-          status: ClaimStatus.FAILED,
-          metadata: {
-            ...claim.metadata,
-            failureReason: 'no_vt_balance',
-            checkedAt: new Date().toISOString(),
-          } as Record<string, any>,
-        }
-      );
-
-      throw new Error('No VT balance found. You may have sold or transferred your VT tokens.');
-    }
-
-    // Step 3: Verify user has sent VT to burn wallet (if txHash provided)
-    if (userVtTxHash && userVtTxHash !== 'pending') {
-      const vtBurnVerified = await this.verifyVtBurnTransaction(
-        userVtTxHash,
-        userAddress,
-        vault,
-        dynamicShare.userVtBalance
-      );
-
-      if (!vtBurnVerified.success) {
-        throw new Error(`VT burn verification failed: ${vtBurnVerified.reason}`);
-      }
-    }
-
-    // Step 4: Check if there's ADA to distribute
-    const noAdaDistribution =
-      claim.metadata?.noAdaDistribution === true ||
-      dynamicShare.treasuryBalance < BigInt(this.MIN_TOTAL_ADA_FOR_DISTRIBUTION) ||
-      dynamicShare.adaShare < BigInt(this.MIN_ADA_PER_CLAIM);
-
-    // Mark claim as pending
-    await this.claimRepository.update(
-      { id: claimId },
-      {
-        status: ClaimStatus.PENDING,
-        // Update with actual calculated amounts
-        amount: Number(dynamicShare.userVtBalance),
-        lovelace_amount: noAdaDistribution ? 0 : Number(dynamicShare.adaShare),
-        metadata: {
-          ...claim.metadata,
-          dynamicCalculation: {
-            userVtBalance: dynamicShare.userVtBalance.toString(),
-            circulatingSupply: dynamicShare.circulatingSupply.toString(),
-            treasuryBalance: dynamicShare.treasuryBalance.toString(),
-            adaShare: dynamicShare.adaShare.toString(),
-            sharePercentage: dynamicShare.sharePercentage,
-            calculatedAt: new Date().toISOString(),
-          },
-        } as Record<string, any>,
-      }
-    );
-
-    try {
-      if (noAdaDistribution) {
-        this.logger.log(`Claim ${claimId} has insufficient ADA for distribution - completing as VT-burn-only`);
-
-        await this.claimRepository.update(
-          { id: claimId },
-          {
-            status: ClaimStatus.CLAIMED,
-            description: 'VT burned - insufficient treasury for ADA distribution',
-          }
-        );
-
-        return {
-          adaTxHash: 'no_ada_distribution',
-          actualVtBurned: dynamicShare.userVtBalance.toString(),
-          adaReceived: '0',
-          sharePercentage: dynamicShare.sharePercentage,
-        };
-      }
-
-      // Step 5: Send calculated ADA share from treasury to user
-      const updatedClaim = await this.claimRepository.findOne({
-        where: { id: claimId },
-        relations: ['vault', 'vault.treasury_wallet'],
-      });
-
-      const adaTxHash = await this.sendAdaToUser(updatedClaim);
-
-      // Mark claim as completed
-      await this.claimRepository.update(
-        { id: claimId },
-        {
-          status: ClaimStatus.CLAIMED,
-          distribution_tx_id: adaTxHash,
-        }
-      );
-
-      return {
-        adaTxHash,
-        actualVtBurned: dynamicShare.userVtBalance.toString(),
-        adaReceived: dynamicShare.adaShare.toString(),
-        sharePercentage: dynamicShare.sharePercentage,
-      };
-    } catch (error) {
-      await this.claimRepository.update(
-        { id: claimId },
-        {
-          status: ClaimStatus.FAILED,
-          metadata: {
-            ...claim.metadata,
-            failureReason: error.message,
-            failedAt: new Date().toISOString(),
-          } as Record<string, any>,
-        }
-      );
-      throw error;
-    }
-  }
-
-  /**
-   * Verify that user has sent VT to burn wallet
-   */
-  private async verifyVtBurnTransaction(
-    txHash: string,
-    userAddress: string,
-    vault: Vault,
-    expectedAmount: bigint
-  ): Promise<{ success: boolean; reason?: string; actualAmount?: bigint }> {
-    try {
-      const txUtxos = await this.blockfrost.txsUtxos(txHash);
-      const vtUnit = `${vault.script_hash}${vault.asset_vault_name}`;
-
-      // Check if any output sends VT to burn wallet
-      const burnOutput = txUtxos.outputs.find(
-        output => output.address === this.burnWallet && output.amount.some(a => a.unit === vtUnit)
-      );
-
-      if (!burnOutput) {
-        return { success: false, reason: 'No VT sent to burn wallet in this transaction' };
-      }
-
-      // Verify sender is the claim owner
-      const senderInput = txUtxos.inputs.find(input => input.address === userAddress);
-      if (!senderInput) {
-        return { success: false, reason: 'Transaction not sent from claim owner address' };
-      }
-
-      // Get actual VT amount burned
-      const vtAmount = burnOutput.amount.find(a => a.unit === vtUnit);
-      const actualAmount = BigInt(vtAmount?.quantity || '0');
-
-      if (actualAmount < expectedAmount) {
-        return {
-          success: false,
-          reason: `Insufficient VT burned. Expected: ${expectedAmount}, Actual: ${actualAmount}`,
-          actualAmount,
-        };
-      }
-
-      return { success: true, actualAmount };
-    } catch (error) {
-      return { success: false, reason: `Failed to verify transaction: ${error.message}` };
-    }
-  }
-
-  /**
-   * Get current claim status with dynamic share calculation
-   * Allows users to preview their claim before executing
-   */
-  async getTerminationClaimPreview(claimId: string): Promise<{
-    claimId: string;
-    originalVtAmount: string;
-    currentVtBalance: string;
-    originalAdaShare: string;
-    currentAdaShare: string;
-    sharePercentage: number;
-    treasuryBalance: string;
-    circulatingSupply: string;
-    status: ClaimStatus;
-    canClaim: boolean;
-    reason?: string;
-  }> {
-    const claim = await this.claimRepository.findOne({
-      where: { id: claimId },
-      relations: ['vault', 'vault.treasury_wallet'],
-    });
-
-    if (!claim) {
-      throw new NotFoundException(`Claim ${claimId} not found`);
-    }
-
-    const userAddress = claim.metadata?.address;
-    if (!userAddress || !claim.vault) {
-      throw new Error('Invalid claim data');
-    }
-
-    const dynamicShare = await this.calculateDynamicShare(userAddress, claim.vault);
-
-    const canClaim =
-      claim.status === ClaimStatus.AVAILABLE &&
-      dynamicShare.userVtBalance > BigInt(0) &&
-      dynamicShare.adaShare >= BigInt(this.MIN_ADA_PER_CLAIM);
-
-    let reason: string | undefined;
-    if (claim.status !== ClaimStatus.AVAILABLE) {
-      reason = `Claim already ${claim.status}`;
-    } else if (dynamicShare.userVtBalance === BigInt(0)) {
-      reason = 'No VT balance - tokens may have been sold or transferred';
-    } else if (dynamicShare.adaShare < BigInt(this.MIN_ADA_PER_CLAIM)) {
-      reason = `ADA share (${dynamicShare.adaShare}) below minimum (${this.MIN_ADA_PER_CLAIM})`;
-    }
-
-    return {
-      claimId,
-      originalVtAmount: claim.metadata?.vtAmount || claim.amount?.toString() || '0',
-      currentVtBalance: dynamicShare.userVtBalance.toString(),
-      originalAdaShare: claim.metadata?.adaAmount || claim.lovelace_amount?.toString() || '0',
-      currentAdaShare: dynamicShare.adaShare.toString(),
-      sharePercentage: dynamicShare.sharePercentage,
-      treasuryBalance: dynamicShare.treasuryBalance.toString(),
-      circulatingSupply: dynamicShare.circulatingSupply.toString(),
-      status: claim.status,
-      canClaim,
-      reason,
-    };
-  }
-
-  /**
    * Request a termination claim for any address holding VT
    * This handles the case where VT was transferred to an address not in the original snapshot.
    *
@@ -1261,7 +1085,7 @@ export class TerminationService {
    * 1. Verify vault is in termination claims phase
    * 2. Check if user already has a claim for this vault
    * 3. Verify on-chain VT balance
-   * 4. Create new claim dynamically
+   * 4. Create new claim dynamically (includes FT distribution if any)
    *
    * @param vaultId - The vault being terminated
    * @param userAddress - The address requesting a claim (must hold VT)
@@ -1275,6 +1099,7 @@ export class TerminationService {
     claimId: string;
     vtBalance: string;
     adaShare: string;
+    ftShares?: Array<{ policyId: string; assetId: string; quantity: string; name?: string }>;
     sharePercentage: number;
     isNewClaim: boolean;
   }> {
@@ -1354,7 +1179,27 @@ export class TerminationService {
       dynamicShare.treasuryBalance < BigInt(this.MIN_TOTAL_ADA_FOR_DISTRIBUTION) ||
       dynamicShare.adaShare < BigInt(this.MIN_ADA_PER_CLAIM);
 
-    // Step 6: Create new claim
+    // Step 6: Calculate FT shares for this user (from termination metadata)
+    const terminationMeta = vault.termination_metadata as TerminationMetadata;
+    const ftsForDistribution = terminationMeta.ftsForDistribution || [];
+
+    // Calculate proportional FT shares using circulating supply
+    const ftShares = ftsForDistribution
+      .map(ft => {
+        const totalFtQuantity = BigInt(ft.quantity);
+        const userFtShare = (totalFtQuantity * dynamicShare.userVtBalance) / dynamicShare.circulatingSupply;
+        return {
+          policyId: ft.policyId,
+          assetId: ft.assetId,
+          quantity: userFtShare.toString(),
+          name: ft.name,
+        };
+      })
+      .filter(ft => BigInt(ft.quantity) > BigInt(0));
+
+    const hasFtDistribution = ftShares.length > 0;
+
+    // Step 7: Create new claim
     const newClaim = this.claimRepository.create({
       user: user || undefined,
       vault,
@@ -1369,7 +1214,9 @@ export class TerminationService {
         address: userAddress,
         vtAmount: dynamicShare.userVtBalance.toString(),
         adaAmount: noAdaDistribution ? '0' : dynamicShare.adaShare.toString(),
+        ftShares: hasFtDistribution ? ftShares : undefined,
         noAdaDistribution,
+        hasFtDistribution,
         isTransferredVT: true, // Flag indicating this VT was transferred after snapshot
         createdOnDemand: true,
         createdAt: new Date().toISOString(),
@@ -1386,106 +1233,16 @@ export class TerminationService {
 
     this.logger.log(
       `Created on-demand termination claim ${savedClaim.id} for address ${userAddress} ` +
-        `(VT: ${dynamicShare.userVtBalance}, ADA share: ${dynamicShare.adaShare})`
+        `(VT: ${dynamicShare.userVtBalance}, ADA: ${dynamicShare.adaShare}, FTs: ${ftShares.length})`
     );
 
     return {
       claimId: savedClaim.id,
       vtBalance: dynamicShare.userVtBalance.toString(),
       adaShare: noAdaDistribution ? '0' : dynamicShare.adaShare.toString(),
+      ftShares: hasFtDistribution ? ftShares : undefined,
       sharePercentage: dynamicShare.sharePercentage,
       isNewClaim: true,
-    };
-  }
-
-  /**
-   * Get termination claim preview by address (for users who may not have a claim yet)
-   * This allows any VT holder to see what they could claim before requesting it.
-   */
-  async getTerminationPreviewByAddress(
-    vaultId: string,
-    userAddress: string
-  ): Promise<{
-    vaultId: string;
-    address: string;
-    vtBalance: string;
-    adaShare: string;
-    sharePercentage: number;
-    treasuryBalance: string;
-    circulatingSupply: string;
-    hasExistingClaim: boolean;
-    existingClaimId?: string;
-    existingClaimStatus?: ClaimStatus;
-    canClaim: boolean;
-    reason?: string;
-  }> {
-    const vault = await this.vaultRepository.findOne({
-      where: { id: vaultId },
-      relations: ['treasury_wallet'],
-    });
-
-    if (!vault) {
-      throw new NotFoundException(`Vault ${vaultId} not found`);
-    }
-
-    // Check termination status
-    const termination = vault.termination_metadata as TerminationMetadata | undefined;
-    if (!termination) {
-      return {
-        vaultId,
-        address: userAddress,
-        vtBalance: '0',
-        adaShare: '0',
-        sharePercentage: 0,
-        treasuryBalance: '0',
-        circulatingSupply: '0',
-        hasExistingClaim: false,
-        canClaim: false,
-        reason: 'Vault is not in termination process',
-      };
-    }
-
-    // Calculate dynamic share
-    const dynamicShare = await this.calculateDynamicShare(userAddress, vault);
-
-    // Check for existing claim
-    const existingClaim = await this.claimRepository.findOne({
-      where: {
-        vault: { id: vaultId },
-        type: ClaimType.TERMINATION as any,
-        metadata: { address: userAddress } as any,
-      },
-    });
-
-    // Determine if can claim
-    const validStatuses = [TerminationStatus.CLAIMS_CREATED, TerminationStatus.CLAIMS_PROCESSING];
-
-    let canClaim = false;
-    let reason: string | undefined;
-
-    if (!validStatuses.includes(termination.status)) {
-      reason = `Claims not available at current status: ${termination.status}`;
-    } else if (dynamicShare.userVtBalance === BigInt(0)) {
-      reason = 'No VT balance at this address';
-    } else if (existingClaim && existingClaim.status !== ClaimStatus.AVAILABLE) {
-      reason = `Claim already ${existingClaim.status}`;
-    } else {
-      canClaim = true;
-    }
-
-    return {
-      vaultId,
-      address: userAddress,
-      vtBalance: dynamicShare.userVtBalance.toString(),
-      adaShare: dynamicShare.adaShare.toString(),
-      sharePercentage: dynamicShare.sharePercentage,
-      treasuryBalance: dynamicShare.treasuryBalance.toString(),
-      circulatingSupply: dynamicShare.circulatingSupply.toString(),
-      hasExistingClaim: !!existingClaim,
-      existingClaimId: existingClaim?.id,
-      existingClaimStatus: existingClaim?.status,
-      canClaim,
-      reason,
     };
   }
 
@@ -1555,191 +1312,344 @@ export class TerminationService {
   /**
    * Get all termination claims for a user across all vaults
    */
-  async getUserTerminationClaims(userId: string): Promise<{
-    claims: Array<{
-      claimId: string;
-      vaultId: string;
-      vaultName: string;
-      vtAmount: string;
-      adaAmount: string;
-      status: string;
-      createdAt: Date;
-    }>;
+  async getUserTerminationClaims(
+    userId: string,
+    skip: number,
+    limit = 10
+  ): Promise<{
+    claims: Pick<
+      Claim,
+      | 'id'
+      | 'amount'
+      | 'metadata'
+      | 'lovelace_amount'
+      | 'status'
+      | 'created_at'
+      | 'updated_at'
+      | 'description'
+      | 'vault'
+    >[];
+    total: number;
   }> {
-    const claims = await this.claimRepository.find({
+    const [claims, total]: [
+      Pick<
+        Claim,
+        | 'id'
+        | 'amount'
+        | 'metadata'
+        | 'lovelace_amount'
+        | 'status'
+        | 'created_at'
+        | 'updated_at'
+        | 'description'
+        | 'vault'
+      >[],
+      number,
+    ] = await this.claimRepository.findAndCount({
       where: {
         user: { id: userId },
-        type: ClaimType.TERMINATION as any,
+        type: ClaimType.TERMINATION,
       },
-      relations: ['vault'],
       order: { created_at: 'DESC' },
+      relations: ['vault', 'vault.vault_image'],
+      select: {
+        id: true,
+        amount: true,
+        lovelace_amount: true,
+        status: true,
+        created_at: true,
+        updated_at: true,
+        description: true,
+        metadata: true,
+        vault: {
+          id: true,
+          name: true,
+          vault_token_ticker: true,
+          ft_token_decimals: true,
+          vault_image: { file_url: true },
+        },
+      },
+      skip,
+      take: limit,
     });
 
     return {
-      claims: claims.map(claim => ({
-        claimId: claim.id,
-        vaultId: claim.vault?.id || '',
-        vaultName: claim.vault?.name || 'Unknown',
-        vtAmount: claim.metadata?.vtAmount || claim.amount?.toString() || '0',
-        adaAmount: claim.metadata?.adaAmount || claim.lovelace_amount?.toString() || '0',
-        status: claim.status,
-        createdAt: claim.created_at,
-      })),
+      claims,
+      total,
     };
   }
 
   /**
-   * Get termination claims for a user in a specific vault
+   * Build a single atomic transaction that:
+   * 1. Takes user's VT as input and sends to admin
+   * 2. Takes treasury UTXOs as input and sends user's share (ADA + FTs) back to user
+   * This ensures atomic swap - user gets their share only if VT is successfully sent
    */
-  async getUserVaultTerminationClaims(
-    vaultId: string,
+  async buildTerminationClaimTransaction(
+    claimId: string,
     userId: string
   ): Promise<{
-    claims: Array<{
-      claimId: string;
-      vtAmount: string;
-      adaAmount: string;
-      status: string;
-      canClaim: boolean;
-    }>;
+    transactionId: string;
+    presignedTx: string;
   }> {
-    // Get user to find their address
-    const user = await this.userRepository.findOne({ where: { id: userId } });
-    if (!user) {
-      return { claims: [] };
-    }
-
-    // Find claims by user ID or by address in metadata
-    const claims = await this.claimRepository.find({
-      where: [
-        {
-          vault: { id: vaultId },
-          user: { id: userId },
-          type: ClaimType.TERMINATION as any,
-        },
-        {
-          vault: { id: vaultId },
-          type: ClaimType.TERMINATION as any,
-          metadata: { address: user.address } as any,
-        },
-      ],
-      relations: ['vault', 'vault.treasury_wallet'],
+    const claim = await this.claimRepository.findOne({
+      where: {
+        id: claimId,
+        user: { id: userId },
+        type: ClaimType.TERMINATION,
+        status: ClaimStatus.AVAILABLE,
+      },
+      relations: ['vault', 'vault.treasury_wallet', 'user'],
     });
 
-    // Deduplicate by claim ID
-    const uniqueClaims = [...new Map(claims.map(c => [c.id, c])).values()];
+    if (!claim) {
+      throw new NotFoundException('Termination claim not found or already processed');
+    }
 
-    const result = await Promise.all(
-      uniqueClaims.map(async claim => {
-        let canClaim = claim.status === ClaimStatus.AVAILABLE;
+    const vault = claim.vault;
+    const userAddress = claim.user?.address;
+    const treasuryWallet = vault.treasury_wallet;
 
-        // Check if user still has VT balance
-        if (canClaim && claim.vault && claim.metadata?.address) {
-          try {
-            const vtBalance = await this.getUserVtBalance(claim.metadata.address, claim.vault);
-            canClaim = vtBalance > BigInt(0);
-          } catch {
-            // If we can't check, assume can claim
-          }
-        }
+    if (!userAddress) {
+      throw new Error('User address not found');
+    }
 
-        return {
-          claimId: claim.id,
-          vtAmount: claim.metadata?.vtAmount || claim.amount?.toString() || '0',
-          adaAmount: claim.metadata?.adaAmount || claim.lovelace_amount?.toString() || '0',
-          status: claim.status,
-          canClaim,
-        };
-      })
+    if (!treasuryWallet) {
+      throw new Error('Treasury wallet not found for vault');
+    }
+
+    // Calculate dynamic share based on current VT holdings
+    const dynamicShare = await this.calculateDynamicShare(userAddress, vault);
+
+    if (dynamicShare.userVtBalance === BigInt(0)) {
+      throw new Error('No VT balance found for claim');
+    }
+
+    // Check if there's ADA to distribute
+    const noAdaDistribution =
+      claim.metadata?.noAdaDistribution === true ||
+      dynamicShare.treasuryBalance < BigInt(this.MIN_TOTAL_ADA_FOR_DISTRIBUTION) ||
+      dynamicShare.adaShare < BigInt(this.MIN_ADA_PER_CLAIM);
+
+    // Get FT shares
+    const ftShares =
+      (claim.metadata?.ftShares as Array<{ policyId: string; assetId: string; quantity: string; name?: string }>) || [];
+    const hasFtDistribution = ftShares.length > 0 && ftShares.some(ft => BigInt(ft.quantity) > BigInt(0));
+
+    const hasAda = !noAdaDistribution;
+
+    if (!hasAda && !hasFtDistribution) {
+      throw new Error('No distribution available for this claim');
+    }
+
+    // Get user's UTXOs (for VT input)
+    const { utxos: userUtxos } = await getUtxosExtract(Address.from_bech32(userAddress), this.blockfrost, {
+      minAda: 2_000_000, // Min ADA for transaction
+      validateUtxos: false,
+    });
+
+    if (userUtxos.length === 0) {
+      throw new Error('No UTXOs found in user wallet');
+    }
+
+    // Calculate ADA needed for distribution output
+    const minAdaForAssets = hasFtDistribution ? BigInt(1_500_000) * BigInt(ftShares.length) : BigInt(0);
+    const adaToSend = hasAda ? dynamicShare.adaShare : minAdaForAssets;
+    const totalAdaNeeded = adaToSend + BigInt(1_000_000); // Add fee buffer
+
+    // Get treasury UTXOs
+    const { utxos: treasuryUtxos } = await getUtxosExtract(
+      Address.from_bech32(treasuryWallet.treasury_address),
+      this.blockfrost,
+      {
+        minAda: Number(totalAdaNeeded),
+        validateUtxos: false,
+      }
     );
 
-    return { claims: result };
+    if (treasuryUtxos.length === 0) {
+      throw new Error('Insufficient treasury balance for distribution');
+    }
+
+    // Generate unique transaction ID
+    const transactionId = `term_${claimId}_${Date.now()}`;
+
+    // Build outputs
+    const outputs: any[] = [
+      // Output 1: Send VT to admin wallet
+      {
+        address: this.adminAddress,
+        assets: [
+          {
+            policyId: vault.script_hash,
+            assetName: { name: vault.vault_token_ticker || 'VT', format: 'utf8' },
+            quantity: Number(dynamicShare.userVtBalance),
+          },
+        ],
+      },
+      // Output 2: Send ADA + FTs to user
+      {
+        address: userAddress,
+        lovelace: adaToSend.toString(),
+        ...(hasFtDistribution && {
+          assets: ftShares
+            .filter(ft => BigInt(ft.quantity) > BigInt(0))
+            .map(ft => ({
+              policyId: ft.policyId,
+              assetName: { name: ft.assetId, format: 'hex' },
+              quantity: Number(ft.quantity),
+            })),
+        }),
+      },
+    ];
+
+    // Combine UTXOs from both user and treasury
+    const combinedUtxos = [...userUtxos, ...treasuryUtxos];
+
+    // Build the atomic transaction
+    const buildInput = {
+      changeAddress: userAddress, // User gets change from their inputs
+      message: `Termination claim: Send VT and receive distribution`,
+      utxos: combinedUtxos,
+      outputs,
+      validityInterval: {
+        start: true,
+        end: true,
+      },
+      network: this.isMainnet ? 'mainnet' : 'preprod',
+    };
+
+    const buildResponse = await this.blockchainService.buildTransaction(buildInput);
+
+    // Store transaction data in claim metadata
+    await this.claimRepository.update(
+      { id: claimId },
+      {
+        metadata: {
+          ...claim.metadata,
+          pendingTransaction: {
+            transactionId,
+            vtAmount: dynamicShare.userVtBalance.toString(),
+            adaAmount: hasAda ? dynamicShare.adaShare.toString() : '0',
+            ftShares: hasFtDistribution ? ftShares : [],
+            treasuryAddress: treasuryWallet.treasury_address,
+            createdAt: new Date().toISOString(),
+          },
+        } as Record<string, any>,
+      }
+    );
+
+    this.logger.log(
+      `Built atomic termination claim transaction for claim ${claimId}: ` +
+        `VT: ${dynamicShare.userVtBalance}, ADA: ${hasAda ? dynamicShare.adaShare : 0}, FTs: ${ftShares.length}`
+    );
+
+    return {
+      transactionId,
+      presignedTx: buildResponse.complete,
+    };
   }
 
   /**
-   * Send ADA from treasury to user for termination claim
-   * Uses KMS-based treasury wallet signing
+   * Submit the atomic termination claim transaction
+   * The user has already signed their part (VT inputs)
+   * Now we add the treasury KMS signature and submit
    */
-  private async sendAdaToUser(claim: Claim): Promise<string> {
-    const userAddress = claim.metadata?.address;
-    const adaAmount = claim.lovelace_amount;
-    const vaultId = claim.vault?.id;
+  async submitTerminationClaimTransaction(
+    transactionId: string,
+    signedTx: string
+  ): Promise<{
+    success: boolean;
+    vtTxHash: string;
+    distributionTxHash: string;
+    adaReceived: string;
+    ftsReceived?: Array<{ policyId: string; assetId: string; quantity: string; name?: string }>;
+  }> {
+    // Find claim by transaction ID in metadata
+    const claim = await this.claimRepository
+      .createQueryBuilder('claim')
+      .where("claim.metadata->>'pendingTransaction'->>'transactionId' = :transactionId", { transactionId })
+      .andWhere('claim.type = :type', { type: ClaimType.TERMINATION })
+      .andWhere('claim.status = :status', { status: ClaimStatus.AVAILABLE })
+      .leftJoinAndSelect('claim.vault', 'vault')
+      .leftJoinAndSelect('vault.treasury_wallet', 'treasury_wallet')
+      .getOne();
 
-    if (!userAddress || !adaAmount) {
-      throw new Error('Invalid claim data: missing address or amount');
+    if (!claim) {
+      throw new NotFoundException('Termination claim transaction not found');
     }
 
-    if (!vaultId) {
-      throw new Error('Invalid claim data: missing vault reference');
-    }
-
-    // Skip if ADA amount is too small (covers min UTXO + fees)
-    if (adaAmount < this.MIN_ADA_PER_CLAIM) {
-      this.logger.warn(`Claim ${claim.id} ADA amount (${adaAmount}) below minimum (${this.MIN_ADA_PER_CLAIM})`);
-      return 'amount_below_minimum';
-    }
-
-    // Get treasury wallet
-    const treasuryWallet = claim.vault?.treasury_wallet;
-    if (!treasuryWallet) {
-      throw new Error(`No treasury wallet found for vault ${vaultId}`);
-    }
+    const vault = claim.vault;
+    const vaultId = vault.id;
 
     try {
       // Get treasury wallet private keys using KMS
       const { privateKey, stakePrivateKey } = await this.treasuryWalletService.getTreasuryWalletPrivateKey(vaultId);
 
-      // Get treasury UTXOs
-      const { utxos: treasuryUtxos } = await getUtxosExtract(
-        Address.from_bech32(treasuryWallet.treasury_address),
-        this.blockfrost,
-        {
-          minAda: adaAmount + 500_000, // Amount + fee buffer
-          validateUtxos: false,
-        }
-      );
+      // Parse the user-signed transaction
+      const txToSubmit = FixedTransaction.from_bytes(Buffer.from(signedTx, 'hex'));
 
-      if (treasuryUtxos.length === 0) {
-        throw new Error(`Insufficient treasury balance for claim ${claim.id}`);
-      }
-
-      // Build the ADA transfer transaction
-      const input = {
-        changeAddress: treasuryWallet.treasury_address,
-        message: `Termination claim payout - Vault ${vaultId}`,
-        utxos: treasuryUtxos,
-        outputs: [
-          {
-            address: userAddress,
-            lovelace: adaAmount.toString(),
-          },
-        ],
-        validityInterval: {
-          start: true,
-          end: true,
-        },
-        network: this.isMainnet ? 'mainnet' : 'preprod',
-      };
-
-      const buildResponse = await this.blockchainService.buildTransaction(input);
-      const txToSubmit = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-
-      // Sign with treasury wallet keys (KMS-decrypted)
+      // Add treasury wallet signatures
       txToSubmit.sign_and_add_vkey_signature(privateKey);
       txToSubmit.sign_and_add_vkey_signature(stakePrivateKey);
 
-      // Submit the transaction
+      // Submit the fully signed transaction
       const submitResponse = await this.blockchainService.submitTransaction({
         transaction: txToSubmit.to_hex(),
         signatures: [],
       });
 
-      this.logger.log(`Treasury payout for claim ${claim.id} submitted: ${submitResponse.txHash}`);
+      const txHash = submitResponse.txHash;
 
-      return submitResponse.txHash;
+      this.logger.log(
+        `Atomic termination claim transaction submitted for claim ${claim.id}: ${txHash} ` +
+          `(VT sent to admin + distribution sent to user in single tx)`
+      );
+
+      // Get distribution amounts from metadata
+      const pendingTx = claim.metadata?.pendingTransaction as any;
+      const adaReceived = pendingTx?.adaAmount || '0';
+      const ftsReceived = pendingTx?.ftShares || [];
+
+      // Mark claim as completed
+      await this.claimRepository.update(
+        { id: claim.id },
+        {
+          status: ClaimStatus.CLAIMED,
+          distribution_tx_id: txHash,
+          amount: Number(pendingTx?.vtAmount || 0),
+          lovelace_amount: Number(adaReceived),
+          metadata: {
+            ...claim.metadata,
+            completedTxHash: txHash,
+            completedAt: new Date().toISOString(),
+          } as Record<string, any>,
+        }
+      );
+
+      return {
+        success: true,
+        vtTxHash: txHash,
+        distributionTxHash: txHash, // Same tx for both VT and distribution
+        adaReceived,
+        ftsReceived: ftsReceived.length > 0 ? ftsReceived : undefined,
+      };
     } catch (error) {
-      this.logger.error(`Failed to send ADA to user for claim ${claim.id}: ${error.message}`, error.stack);
-      throw new Error(`Treasury payout failed: ${error.message}`);
+      // Mark claim as failed
+      await this.claimRepository.update(
+        { id: claim.id },
+        {
+          status: ClaimStatus.FAILED,
+          metadata: {
+            ...claim.metadata,
+            failureReason: error.message,
+            failedAt: new Date().toISOString(),
+          } as Record<string, any>,
+        }
+      );
+
+      this.logger.error(`Failed to submit atomic termination claim transaction: ${error.message}`, error.stack);
+      throw error;
     }
   }
 }
