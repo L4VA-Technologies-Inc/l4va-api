@@ -43,35 +43,29 @@ export class GoogleKMSService {
   constructor(private readonly configService: ConfigService) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
 
-    // Only initialize GCP KMS on mainnet
-    if (!this.isMainnet) {
-      this.logger.log('Skipping KMS initialization (non-mainnet environment)');
-      return;
-    }
-
     // Store configuration but don't create client yet (lazy initialization)
     this.projectId = this.configService.get('GCP_PROJECT_ID');
     this.locationId = this.configService.get('GCP_KMS_LOCATION');
     this.keyRingId = this.configService.get('GCP_KMS_KEYRING');
     this.keyId = this.configService.get('GCP_KMS_KEY');
 
-    this.logger.log(`KMS configuration loaded for project: ${this.projectId}`);
+    this.logger.log(
+      `KMS configuration loaded for ${this.isMainnet ? 'mainnet' : 'testnet'}, project: ${this.projectId}`
+    );
   }
 
   /**
    * Lazy initialize KMS client on first use
    */
   private ensureKmsClient(): void {
-    if (!this.isMainnet) {
-      throw new Error('KMS client not available (non-mainnet environment)');
-    }
-
     if (!this.kmsClient) {
       const credentialsPath = this.configService.get('GOOGLE_APPLICATION_CREDENTIALS');
       this.kmsClient = new KeyManagementServiceClient({
         keyFilename: credentialsPath,
       });
-      this.logger.log(`Initialized KMS client for project: ${this.projectId}`);
+      this.logger.log(
+        `Initialized KMS client for ${this.isMainnet ? 'mainnet' : 'testnet'}, project: ${this.projectId}`
+      );
     }
   }
 
@@ -97,10 +91,6 @@ export class GoogleKMSService {
     algorithm: string;
     kmsKeyName: string;
   }> {
-    if (!this.isMainnet) {
-      throw new Error('KMS encryption only available on mainnet');
-    }
-
     this.ensureKmsClient();
 
     // 1. Generate data encryption key (DEK)
@@ -120,13 +110,20 @@ export class GoogleKMSService {
     const keyName = this.getKeyName();
 
     // Use consistent AAD without timestamp
-    const aad = Buffer.from(
-      JSON.stringify({
-        vaultId: vaultId,
-        purpose: 'treasury_wallet',
-        algorithm: 'AES-256-GCM',
-      })
-    );
+    // For mainnet: keep original format for backward compatibility with existing keys
+    // For testnet: add network field for isolation
+    const aadData: any = {
+      vaultId: vaultId,
+      purpose: 'treasury_wallet',
+      algorithm: 'AES-256-GCM',
+    };
+
+    // Only add network field for testnet (mainnet keeps original format)
+    if (!this.isMainnet) {
+      aadData.network = 'testnet';
+    }
+
+    const aad = Buffer.from(JSON.stringify(aadData));
 
     const [encryptResponse] = await this.kmsClient.encrypt({
       name: keyName,
@@ -159,22 +156,24 @@ export class GoogleKMSService {
     },
     vaultId: string
   ): Promise<PrivateKey> {
-    if (!this.isMainnet) {
-      throw new Error('KMS decryption only available on mainnet');
-    }
-
     this.ensureKmsClient();
 
     const keyName = this.getKeyName();
 
     // 1. Decrypt DEK with Cloud KMS (use same AAD as encryption)
-    const aad = Buffer.from(
-      JSON.stringify({
-        vaultId: vaultId,
-        purpose: 'treasury_wallet',
-        algorithm: 'AES-256-GCM',
-      })
-    );
+    // For mainnet: use original format for backward compatibility
+    // For testnet: include network field
+    const aadData: any = {
+      vaultId: vaultId,
+      purpose: 'treasury_wallet',
+      algorithm: 'AES-256-GCM',
+    };
+
+    if (!this.isMainnet) {
+      aadData.network = 'testnet';
+    }
+
+    const aad = Buffer.from(JSON.stringify(aadData));
 
     const [decryptResponse] = await this.kmsClient.decrypt({
       name: keyName,
@@ -213,10 +212,6 @@ export class GoogleKMSService {
     algorithm: string;
     kmsKeyName: string;
   }> {
-    if (!this.isMainnet) {
-      throw new Error('KMS encryption only available on mainnet');
-    }
-
     this.ensureKmsClient();
 
     // 1. Generate data encryption key (DEK)
@@ -235,13 +230,19 @@ export class GoogleKMSService {
     // 4. Encrypt DEK with Cloud KMS
     const keyName = this.getKeyName();
 
-    const aad = Buffer.from(
-      JSON.stringify({
-        vaultId: vaultId,
-        purpose: 'treasury_wallet_stake',
-        algorithm: 'AES-256-GCM',
-      })
-    );
+    // For mainnet: keep original format for backward compatibility
+    // For testnet: add network field for isolation
+    const aadData: any = {
+      vaultId: vaultId,
+      purpose: 'treasury_wallet_stake',
+      algorithm: 'AES-256-GCM',
+    };
+
+    if (!this.isMainnet) {
+      aadData.network = 'testnet';
+    }
+
+    const aad = Buffer.from(JSON.stringify(aadData));
 
     const [encryptResponse] = await this.kmsClient.encrypt({
       name: keyName,
@@ -274,21 +275,23 @@ export class GoogleKMSService {
     },
     vaultId: string
   ): Promise<PrivateKey> {
-    if (!this.isMainnet) {
-      throw new Error('KMS decryption only available on mainnet');
-    }
-
     this.ensureKmsClient();
 
     const keyName = this.getKeyName();
 
-    const aad = Buffer.from(
-      JSON.stringify({
-        vaultId: vaultId,
-        purpose: 'treasury_wallet_stake',
-        algorithm: 'AES-256-GCM',
-      })
-    );
+    // For mainnet: use original format for backward compatibility
+    // For testnet: include network field
+    const aadData: any = {
+      vaultId: vaultId,
+      purpose: 'treasury_wallet_stake',
+      algorithm: 'AES-256-GCM',
+    };
+
+    if (!this.isMainnet) {
+      aadData.network = 'testnet';
+    }
+
+    const aad = Buffer.from(JSON.stringify(aadData));
 
     const [decryptResponse] = await this.kmsClient.decrypt({
       name: keyName,

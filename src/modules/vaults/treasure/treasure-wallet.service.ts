@@ -51,13 +51,19 @@ export class TreasuryWalletService {
   async createTreasuryWallet(dto: CreateTreasuryWalletDto): Promise<TreasuryWalletInfoDto> {
     const { vaultId } = dto;
 
-    // Skip treasury wallet creation for non-mainnet environments
-    if (!this.isMainnet) {
-      this.logger.log(`Skipping treasury wallet creation for vault ${vaultId} (non-mainnet environment)`);
+    // Check if treasury wallets are enabled for current network
+    const isEnabled = this.isMainnet
+      ? this.systemSettingsService.autoCreateTreasuryWallets
+      : this.systemSettingsService.autoCreateTreasuryWalletsTestnet;
+
+    if (!isEnabled) {
+      this.logger.log(
+        `Treasury wallets are disabled for ${this.isMainnet ? 'mainnet' : 'testnet'} (feature flag: ${isEnabled})`
+      );
       return null;
     }
 
-    this.logger.log(`Creating treasury wallet for vault ${vaultId}`);
+    this.logger.log(`Creating treasury wallet for vault ${vaultId} on ${this.isMainnet ? 'mainnet' : 'testnet'}`);
 
     // Check if vault exists
     const vault = await this.vaultRepository.findOne({
@@ -207,7 +213,11 @@ export class TreasuryWalletService {
    * Gets treasury wallet for a vault
    */
   async getTreasuryWallet(vaultId: string): Promise<TreasuryWalletInfoDto | null> {
-    if (!this.isMainnet) {
+    const isEnabled = this.isMainnet
+      ? this.systemSettingsService.autoCreateTreasuryWallets
+      : this.systemSettingsService.autoCreateTreasuryWalletsTestnet;
+
+    if (!isEnabled) {
       return null;
     }
 
@@ -382,7 +392,7 @@ export class TreasuryWalletService {
 
   /**
    * Check if vault has a treasury wallet
-   * Returns false if no wallet exists or on non-mainnet
+   * Returns false if no wallet exists or if treasury wallets are disabled for the current network
    */
   async hasTreasuryWallet(vaultId: string): Promise<boolean> {
     if (!this.isMainnet) {
@@ -402,8 +412,12 @@ export class TreasuryWalletService {
    * Used during vault termination cleanup to recover any leftover funds
    */
   async sweepTreasuryWallet(vaultId: string, destinationAddress: string): Promise<string> {
-    if (!this.isMainnet) {
-      throw new Error('Treasury wallet sweep only available on mainnet');
+    const isEnabled = this.isMainnet
+      ? this.systemSettingsService.autoCreateTreasuryWallets
+      : this.systemSettingsService.autoCreateTreasuryWalletsTestnet;
+
+    if (!isEnabled) {
+      throw new Error(`Treasury wallet sweep disabled for ${this.isMainnet ? 'mainnet' : 'testnet'}`);
     }
 
     this.logger.log(`Sweeping treasury wallet for vault ${vaultId} to ${destinationAddress}`);
@@ -502,12 +516,21 @@ export class TreasuryWalletService {
    * Called during vault termination cleanup
    */
   async deleteTreasuryWalletKeys(vaultId: string): Promise<void> {
-    if (!this.isMainnet) {
-      this.logger.log('Skipping KMS key deletion on non-mainnet');
+    // Check if treasury wallets are enabled for current network
+    const isEnabled = this.isMainnet
+      ? this.systemSettingsService.autoCreateTreasuryWallets
+      : this.systemSettingsService.autoCreateTreasuryWalletsTestnet;
+
+    if (!isEnabled) {
+      this.logger.log(
+        `Skipping KMS key deletion - treasury wallets disabled for ${this.isMainnet ? 'mainnet' : 'testnet'}`
+      );
       return;
     }
 
-    this.logger.log(`Deleting KMS keys for vault ${vaultId} treasury wallet`);
+    this.logger.log(
+      `Deleting KMS keys for vault ${vaultId} treasury wallet on ${this.isMainnet ? 'mainnet' : 'testnet'}`
+    );
 
     const wallet = await this.treasuryWalletRepository.findOne({
       where: { vault_id: vaultId },
@@ -568,14 +591,13 @@ export class TreasuryWalletService {
    */
   @Cron(CronExpression.EVERY_6_HOURS)
   async autoCreateMissingTreasuryWallets(): Promise<void> {
-    // Check feature flag
-    if (!this.systemSettingsService.autoCreateTreasuryWallets) {
-      this.logger.debug('Auto-create treasury wallets is disabled');
-      return;
-    }
+    // Check feature flag based on network
+    const isEnabled = this.isMainnet
+      ? this.systemSettingsService.autoCreateTreasuryWallets
+      : this.systemSettingsService.autoCreateTreasuryWalletsTestnet;
 
-    // Only run on mainnet
-    if (!this.isMainnet) {
+    if (!isEnabled) {
+      this.logger.debug(`Auto-create treasury wallets is disabled for ${this.isMainnet ? 'mainnet' : 'testnet'}`);
       return;
     }
 

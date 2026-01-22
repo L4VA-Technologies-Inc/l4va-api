@@ -12,32 +12,26 @@ export class GoogleSecretService {
   constructor(private readonly configService: ConfigService) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
 
-    // Only initialize GCP Secret Manager on mainnet
-    if (!this.isMainnet) {
-      this.logger.log('Skipping Secret Manager initialization (non-mainnet environment)');
-      return;
-    }
-
     // Store configuration but don't create client yet (lazy initialization)
     this.projectId = this.configService.get('GCP_PROJECT_ID');
 
-    this.logger.log(`Secret Manager configuration loaded for project: ${this.projectId}`);
+    this.logger.log(
+      `Secret Manager configuration loaded for ${this.isMainnet ? 'mainnet' : 'testnet'}, project: ${this.projectId}`
+    );
   }
 
   /**
    * Lazy initialize Secret Manager client on first use
    */
   private ensureSecretClient(): void {
-    if (!this.isMainnet) {
-      throw new Error('Secret Manager not available (non-mainnet environment)');
-    }
-
     if (!this.secretClient) {
       const credentialsPath = this.configService.get('GOOGLE_APPLICATION_CREDENTIALS');
       this.secretClient = new SecretManagerServiceClient({
         keyFilename: credentialsPath,
       });
-      this.logger.log(`Initialized Secret Manager client for project: ${this.projectId}`);
+      this.logger.log(
+        `Initialized Secret Manager client for ${this.isMainnet ? 'mainnet' : 'testnet'}, project: ${this.projectId}`
+      );
     }
   }
 
@@ -114,10 +108,12 @@ export class GoogleSecretService {
    * Store master HD wallet seed
    */
   async storeMasterSeed(mnemonic: string): Promise<string> {
-    const secretId = 'l4va-treasury-master-seed';
+    // Keep original name for mainnet backward compatibility
+    const secretId = this.isMainnet ? 'l4va-treasury-master-seed' : 'l4va-treasury-master-seed-testnet';
 
     const labels = {
       purpose: 'treasury',
+      network: this.isMainnet ? 'mainnet' : 'testnet',
       environment: process.env.NODE_ENV || 'development',
     };
 
@@ -145,6 +141,8 @@ export class GoogleSecretService {
     derivation_standard: string;
     network: string;
   }> {
-    return await this.getSecretValue('l4va-treasury-master-seed');
+    // Keep original name for mainnet backward compatibility
+    const secretId = this.isMainnet ? 'l4va-treasury-master-seed' : 'l4va-treasury-master-seed-testnet';
+    return await this.getSecretValue(secretId);
   }
 }
