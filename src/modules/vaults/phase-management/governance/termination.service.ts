@@ -486,13 +486,14 @@ export class TerminationService {
 
     const termination = vault.termination_metadata as TerminationMetadata;
     const vtUnit = `${vault.script_hash}${vault.asset_vault_name}`;
+    const vtAmountToBurn = BigInt(termination.expectedVtReturn || '0');
 
     // Get admin UTXOs containing VT
     const { utxos: adminUtxos, requiredInputs } = await getUtxosExtract(
       Address.from_bech32(this.adminAddress),
       this.blockfrost,
       {
-        targetAssets: [{ token: vtUnit, amount: Number(termination.expectedVtReturn || '0') }],
+        targetAssets: [{ token: vtUnit, amount: Number(vtAmountToBurn) }],
       }
     );
 
@@ -501,21 +502,36 @@ export class TerminationService {
       return;
     }
 
-    // Build transaction to send VT to burn wallet
+    // Build transaction to BURN VT using BurnLp redeemer (not send to burn wallet)
     const input = {
       changeAddress: this.adminAddress,
       utxos: adminUtxos,
-      outputs: [
+      message: 'Burn returned VT tokens using BurnLp redeemer',
+      scriptInteractions: [
         {
-          address: this.burnWallet,
-          assets: [
-            {
-              assetName: { name: vault.asset_vault_name, format: 'hex' as const },
-              policyId: vault.script_hash,
-              quantity: BigInt(termination.expectedVtReturn || '0'),
-            },
-          ],
-          lovelace: 2000000, // Min ADA for UTXO
+          purpose: 'mint',
+          hash: vault.script_hash,
+          redeemer: {
+            type: 'json',
+            value: 'BurnLp',
+          },
+        },
+      ],
+      mint: [
+        {
+          version: 'cip25',
+          assetName: { name: vault.asset_vault_name, format: 'hex' as const },
+          policyId: vault.script_hash,
+          type: 'plutus',
+          quantity: -Number(vtAmountToBurn), // Negative for burn
+          metadata: {},
+        },
+      ],
+      outputs: [],
+      referenceInputs: [
+        {
+          txHash: vault.last_update_tx_hash,
+          index: vault.last_update_tx_index || 0,
         },
       ],
       requiredSigners: [this.adminHash],
@@ -1361,7 +1377,7 @@ export class TerminationService {
 
   /**
    * Build a simple VT burn transaction (no distribution)
-   * User just sends their VT to burn wallet
+   * User burns their VT using BurnLp redeemer - actually destroys tokens on-chain
    */
   private async buildSimpleVtBurnTransaction(
     claim: Claim,
@@ -1396,26 +1412,36 @@ export class TerminationService {
       },
       assets: [], // No assets needed for this transaction as it's metadata update
     });
-    // Build output: Send VT to burn wallet
-    const outputs: any[] = [
-      {
-        address: this.adminAddress,
-        assets: [
-          {
-            policyId: vault.script_hash,
-            assetName: { name: vault.asset_vault_name, format: 'hex' },
-            quantity: Number(vtBalance),
-          },
-        ],
-      },
-    ];
 
-    // Build the transaction
+    // Build the transaction - burn VT using BurnLp redeemer (actually destroys tokens)
     const buildInput = {
       changeAddress: userAddress, // User gets change back
       message: `Termination claim: Burn VT`,
       utxos: userUtxos,
-      outputs,
+      outputs: [], // No outputs needed - VT is burned
+      scriptInteractions: [
+        {
+          purpose: 'mint',
+          hash: vault.script_hash,
+          redeemer: { type: 'json', value: 'BurnLp' },
+        },
+      ],
+      mint: [
+        {
+          assetName: { name: vault.asset_vault_name, format: 'hex' },
+          policyId: vault.script_hash,
+          type: 'plutus',
+          quantity: -Number(vtBalance), // Negative to burn
+          metadata: {},
+        },
+      ],
+      referenceInputs: [
+        {
+          txHash: vault.last_update_tx_hash,
+          index: vault.last_update_tx_index || 0,
+        },
+      ],
+      requiredSigners: [this.adminHash],
       validityInterval: {
         start: true,
         end: true,
@@ -1545,18 +1571,7 @@ export class TerminationService {
 
     // Build outputs
     const outputs: any[] = [
-      // Output 1: Send VT to admin wallet
-      {
-        address: this.adminAddress,
-        assets: [
-          {
-            policyId: vault.script_hash,
-            assetName: { name: vault.vault_token_ticker || 'VT', format: 'utf8' },
-            quantity: Number(dynamicShare.userVtBalance),
-          },
-        ],
-      },
-      // Output 2: Send ADA + FTs to user
+      // Output 1: Send ADA + FTs to user (VT is burned, not sent to admin)
       {
         address: userAddress,
         lovelace: adaToSend.toString(),
@@ -1575,12 +1590,35 @@ export class TerminationService {
     // Combine UTXOs from both user and treasury
     const combinedUtxos = [...userUtxos, ...treasuryUtxos];
 
-    // Build the atomic transaction
+    // Build the atomic transaction - burn VT using BurnLp redeemer and distribute ADA/FT
     const buildInput = {
       changeAddress: userAddress, // User gets change from their inputs
-      message: `Termination claim: Send VT and receive distribution`,
+      message: `Termination claim: Burn VT and receive distribution`,
       utxos: combinedUtxos,
       outputs,
+      scriptInteractions: [
+        {
+          purpose: 'mint',
+          hash: vault.script_hash,
+          redeemer: { type: 'json', value: 'BurnLp' },
+        },
+      ],
+      mint: [
+        {
+          assetName: { name: vault.asset_vault_name, format: 'hex' },
+          policyId: vault.script_hash,
+          type: 'plutus',
+          quantity: -Number(dynamicShare.userVtBalance), // Negative to burn
+          metadata: {},
+        },
+      ],
+      referenceInputs: [
+        {
+          txHash: vault.last_update_tx_hash,
+          index: vault.last_update_tx_index || 0,
+        },
+      ],
+      requiredSigners: [this.adminHash],
       validityInterval: {
         start: true,
         end: true,
