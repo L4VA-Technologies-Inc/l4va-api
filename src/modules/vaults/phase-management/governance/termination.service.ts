@@ -19,7 +19,6 @@ import { TreasuryExtractionService } from '../../treasure/treasury-extraction.se
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
-import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
@@ -58,7 +57,6 @@ export interface TerminationMetadata {
   lpReturnTxHash?: string;
   vtBurnTxHash?: string;
   adaTransferTxHash?: string;
-  vaultBurnTxHash?: string;
   treasurySweepTxHash?: string;
   sweptLovelace?: string;
   totalAdaForDistribution?: string; // In lovelace
@@ -78,8 +76,6 @@ export class TerminationService {
   private readonly adminAddress: string;
   private readonly adminSKey: string;
   private readonly adminHash: string;
-  private readonly poolAddress: string;
-  private readonly networkId: number;
 
   private readonly BURN_WALLET_TESTNET =
     'addr_test1qzdv6pn0ltar7q3hhgrgts2yqvphxtptr4m3t4xf5lfyx7hc3v9amrnu0cp6zt3vkry03838n2mv9e69g8e70aqktgcsnvkule';
@@ -94,8 +90,6 @@ export class TerminationService {
   constructor(
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
-    @InjectRepository(Proposal)
-    private readonly proposalRepository: Repository<Proposal>,
     @InjectRepository(Claim)
     private readonly claimRepository: Repository<Claim>,
     @InjectRepository(Asset)
@@ -117,8 +111,6 @@ export class TerminationService {
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
-    this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
-    this.networkId = Number(this.configService.get<string>('NETWORK_ID')) || 0;
 
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
@@ -217,8 +209,6 @@ export class TerminationService {
       return;
     }
 
-    this.logger.debug(`Processing termination step for vault ${vault.id}, status: ${termination.status}`);
-
     switch (termination.status) {
       case TerminationStatus.INITIATED:
         await this.stepBurnNFTs(vault);
@@ -254,6 +244,10 @@ export class TerminationService {
         break;
 
       case TerminationStatus.VAULT_BURNED:
+        await this.stepCleanupTreasuryWallet(vault);
+        break;
+
+      case TerminationStatus.TREASURY_CLEANED:
         this.logger.log(`Vault ${vault.id} termination complete`);
         break;
 
@@ -306,14 +300,13 @@ export class TerminationService {
     try {
       // Step 1a: Extract NFTs to burn wallet
       if (nftsToburn.length > 0) {
-        this.logger.log(`Extracting ${nftsToburn.length} NFTs to burn wallet`);
         const burnResult = await this.treasuryExtractionService.extractAssetsFromVault({
           vaultId: vault.id,
           assetIds: nftsToburn.map(a => a.id),
           treasuryAddress: this.burnWallet,
+          skipOnchain: true,
         });
         nftBurnTxHash = burnResult.txHash;
-        this.logger.log(`NFTs extracted to burn wallet: ${nftBurnTxHash}`);
 
         // Update NFTs status to BURNED
         await this.assetRepository.update({ id: In(nftsToburn.map(a => a.id)) }, { status: AssetStatus.BURNED });
@@ -328,6 +321,7 @@ export class TerminationService {
           vaultId: vault.id,
           assetIds: ftsToDistribute.map(a => a.id),
           treasuryAddress: ftDestination,
+          skipOnchain: true,
         });
         ftExtractionTxHash = ftResult.txHash;
         this.logger.log(`FTs extracted to treasury: ${ftExtractionTxHash}`);
@@ -808,12 +802,13 @@ export class TerminationService {
 
       this.logger.log(`Vault burn transaction submitted: ${submitResponse.txHash} (tx record: ${txId})`);
 
+      // Update transaction with the blockchain tx hash
+      await this.transactionsService.updateTransactionHash(txId, submitResponse.txHash);
+
       // Update vault status to burned
       await this.vaultRepository.update({ id: vault.id }, { vault_status: VaultStatus.burned });
 
-      await this.updateTerminationStatus(vault.id, TerminationStatus.VAULT_BURNED, {
-        vaultBurnTxHash: submitResponse.txHash,
-      });
+      await this.updateTerminationStatus(vault.id, TerminationStatus.VAULT_BURNED);
 
       this.eventEmitter.emit('vault.burned', {
         vaultId: vault.id,

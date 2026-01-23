@@ -772,6 +772,7 @@ export class GovernanceExecutionService {
             vaultId: proposal.vaultId,
             assetIds: assetsNeedingExtraction,
             treasuryAddress,
+            skipOnchain: false, // Listing is not supported on testnet
           });
 
           this.logger.log(
@@ -1117,12 +1118,11 @@ export class GovernanceExecutionService {
         throw new Error('PROPOSAL_REJECTED_ASSETS_NOT_LOCKED');
       }
 
-      // Extract assets to burn wallet using treasury extraction service
       const extractionResult = await this.treasuryExtractionService.extractAssetsFromVault({
         vaultId: proposal.vaultId,
         assetIds: assetIds,
         treasuryAddress: burnWallet,
-        skipOnchain: true,
+        skipOnchain: true, // Allow Burning on testnet
       });
 
       this.logger.log(
