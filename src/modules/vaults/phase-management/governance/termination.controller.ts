@@ -1,6 +1,8 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
+import { SubmitTransactionDto } from '../../processing-tx/onchain/dto/transaction.dto';
+
 import { TerminationStatusRes } from './dto/termination-claim.dto';
 import { TerminationService } from './termination.service';
 
@@ -57,7 +59,7 @@ export class TerminationController {
   @ApiResponse({ status: 200, description: 'Transaction submitted successfully' })
   async submitTerminationClaim(
     @Param('transactionId') transactionId: string,
-    @Body() body: { signedTx: string }
+    @Body() params: SubmitTransactionDto
   ): Promise<{
     success: boolean;
     vtTxHash: string;
@@ -65,6 +67,6 @@ export class TerminationController {
     adaReceived: string;
     ftsReceived?: Array<{ policyId: string; assetId: string; quantity: string; name?: string }>;
   }> {
-    return this.terminationService.submitTerminationClaimTransaction(transactionId, body.signedTx);
+    return this.terminationService.submitTerminationClaimTransaction(params);
   }
 }

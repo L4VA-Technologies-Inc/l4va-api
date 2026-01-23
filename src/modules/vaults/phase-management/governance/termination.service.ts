@@ -9,7 +9,9 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
+import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from '../../processing-tx/onchain/blockchain.service';
+import { SubmitTransactionDto } from '../../processing-tx/onchain/dto/transaction.dto';
 import { getUtxosExtract } from '../../processing-tx/onchain/utils/lib';
 import { VaultManagingService } from '../../processing-tx/onchain/vault-managing.service';
 import { TreasuryWalletService } from '../../treasure/treasure-wallet.service';
@@ -21,10 +23,10 @@ import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
-import { VaultTreasuryWallet } from '@/database/vaultTreasuryWallet.entity';
 import { VyfiService } from '@/modules/vyfi/vyfi.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';
 
 /**
@@ -101,15 +103,14 @@ export class TerminationService {
     private readonly snapshotRepository: Repository<Snapshot>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-    @InjectRepository(VaultTreasuryWallet)
-    private readonly treasuryWalletRepository: Repository<VaultTreasuryWallet>,
     private readonly configService: ConfigService,
     private readonly blockchainService: BlockchainService,
     private readonly eventEmitter: EventEmitter2,
     private readonly vyfiService: VyfiService,
     private readonly treasuryWalletService: TreasuryWalletService,
     private readonly vaultManagingService: VaultManagingService,
-    private readonly treasuryExtractionService: TreasuryExtractionService
+    private readonly treasuryExtractionService: TreasuryExtractionService,
+    private readonly transactionsService: TransactionsService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
@@ -139,7 +140,7 @@ export class TerminationService {
     try {
       // Find vaults in terminating status
       const terminatingVaults = await this.vaultRepository.find({
-        where: { vault_status: VaultStatus.terminating as any }, // Will add to enum
+        where: { vault_status: VaultStatus.terminating }, // Will add to enum
         relations: ['treasury_wallet'],
       });
 
@@ -721,7 +722,7 @@ export class TerminationService {
       claims.push({
         user_id: user?.id,
         vault: vault,
-        type: ClaimType.TERMINATION as any,
+        type: ClaimType.TERMINATION,
         status: ClaimStatus.AVAILABLE,
         amount: Number(vtBalance), // VT amount user needs to send
         lovelace_amount: Number(adaShare), // ADA amount user will receive (0 if no distribution)
@@ -770,7 +771,7 @@ export class TerminationService {
     const pendingClaims = await this.claimRepository.count({
       where: {
         vault: { id: vault.id },
-        type: ClaimType.TERMINATION as any,
+        type: ClaimType.TERMINATION,
         status: In([ClaimStatus.AVAILABLE, ClaimStatus.PENDING]),
       },
     });
@@ -858,7 +859,6 @@ export class TerminationService {
         return;
       }
 
-      // Check if wallet has any remaining balance
       const balance = await this.treasuryWalletService.getTreasuryWalletBalance(vault.id);
 
       if (balance && balance.lovelace > 0) {
@@ -1132,8 +1132,8 @@ export class TerminationService {
     const existingClaim = await this.claimRepository.findOne({
       where: {
         vault: { id: vaultId },
-        type: ClaimType.TERMINATION as any,
-        metadata: { address: userAddress } as any,
+        type: ClaimType.TERMINATION,
+        metadata: { address: userAddress },
       },
     });
 
@@ -1380,6 +1380,97 @@ export class TerminationService {
   }
 
   /**
+   * Build a simple VT burn transaction (no distribution)
+   * User just sends their VT to burn wallet
+   */
+  private async buildSimpleVtBurnTransaction(
+    claim: Claim,
+    vault: Vault,
+    userAddress: string,
+    vtBalance: bigint
+  ): Promise<{
+    transactionId: string;
+    presignedTx: string;
+  }> {
+    const { utxos: userUtxos, requiredInputs } = await getUtxosExtract(
+      Address.from_bech32(userAddress),
+      this.blockfrost,
+      {
+        targetAssets: [
+          {
+            amount: Number(vtBalance),
+            token: `${vault.script_hash}${vault.asset_vault_name}`,
+          },
+        ],
+        maxUtxos: 10,
+        validateUtxos: false,
+      }
+    );
+
+    const transaction = await this.transactionsService.createTransaction({
+      vault_id: vault.id,
+      type: TransactionType.claim,
+      userId: claim.user?.id,
+      metadata: {
+        burnOnly: true,
+      },
+      assets: [], // No assets needed for this transaction as it's metadata update
+    });
+    // Build output: Send VT to burn wallet
+    const outputs: any[] = [
+      {
+        address: this.adminAddress,
+        assets: [
+          {
+            policyId: vault.script_hash,
+            assetName: { name: vault.asset_vault_name, format: 'hex' },
+            quantity: Number(vtBalance),
+          },
+        ],
+      },
+    ];
+
+    // Build the transaction
+    const buildInput = {
+      changeAddress: userAddress, // User gets change back
+      message: `Termination claim: Burn VT`,
+      utxos: userUtxos,
+      outputs,
+      validityInterval: {
+        start: true,
+        end: true,
+      },
+      requiredInputs,
+      network: this.isMainnet ? 'mainnet' : 'preprod',
+    };
+
+    const buildResponse = await this.blockchainService.buildTransaction(buildInput);
+
+    // Store transaction data in claim metadata
+    await this.claimRepository.update(
+      { id: claim.id },
+      {
+        distribution_tx_id: transaction.id,
+        metadata: {
+          ...claim.metadata,
+          pendingTransaction: {
+            vtAmount: vtBalance.toString(),
+            adaAmount: '0',
+            ftShares: [],
+            burnOnly: true, // Flag to indicate this is a burn-only transaction
+            createdAt: new Date().toISOString(),
+          },
+        } as Record<string, any>,
+      }
+    );
+
+    return {
+      transactionId: transaction.id,
+      presignedTx: FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex')).to_hex(),
+    };
+  }
+
+  /**
    * Build a single atomic transaction that:
    * 1. Takes user's VT as input and sends to admin
    * 2. Takes treasury UTXOs as input and sends user's share (ADA + FTs) back to user
@@ -1438,8 +1529,9 @@ export class TerminationService {
 
     const hasAda = !noAdaDistribution;
 
+    // Build simple VT burn transaction (no treasury involvement)
     if (!hasAda && !hasFtDistribution) {
-      throw new Error('No distribution available for this claim');
+      return await this.buildSimpleVtBurnTransaction(claim, vault, userAddress, dynamicShare.userVtBalance);
     }
 
     // Get user's UTXOs (for VT input)
@@ -1470,9 +1562,6 @@ export class TerminationService {
     if (treasuryUtxos.length === 0) {
       throw new Error('Insufficient treasury balance for distribution');
     }
-
-    // Generate unique transaction ID
-    const transactionId = `term_${claimId}_${Date.now()}`;
 
     // Build outputs
     const outputs: any[] = [
@@ -1521,21 +1610,27 @@ export class TerminationService {
 
     const buildResponse = await this.blockchainService.buildTransaction(buildInput);
 
-    // Store transaction data in claim metadata
+    // Create transaction record
+    const transaction = await this.transactionsService.createTransaction({
+      vault_id: vault.id,
+      type: TransactionType.claim,
+      userId: userId,
+      amount: Number(dynamicShare.userVtBalance),
+      metadata: {
+        vtAmount: dynamicShare.userVtBalance.toString(),
+        adaAmount: hasAda ? dynamicShare.adaShare.toString() : '0',
+        ftShares: hasFtDistribution ? ftShares : [],
+        treasuryAddress: treasuryWallet.treasury_address,
+        burnOnly: false,
+      },
+      assets: [],
+    });
+
+    // Link transaction to claim
     await this.claimRepository.update(
       { id: claimId },
       {
-        metadata: {
-          ...claim.metadata,
-          pendingTransaction: {
-            transactionId,
-            vtAmount: dynamicShare.userVtBalance.toString(),
-            adaAmount: hasAda ? dynamicShare.adaShare.toString() : '0',
-            ftShares: hasFtDistribution ? ftShares : [],
-            treasuryAddress: treasuryWallet.treasury_address,
-            createdAt: new Date().toISOString(),
-          },
-        } as Record<string, any>,
+        distribution_tx_id: transaction.id,
       }
     );
 
@@ -1545,7 +1640,7 @@ export class TerminationService {
     );
 
     return {
-      transactionId,
+      transactionId: transaction.id,
       presignedTx: buildResponse.complete,
     };
   }
@@ -1555,25 +1650,22 @@ export class TerminationService {
    * The user has already signed their part (VT inputs)
    * Now we add the treasury KMS signature and submit
    */
-  async submitTerminationClaimTransaction(
-    transactionId: string,
-    signedTx: string
-  ): Promise<{
+  async submitTerminationClaimTransaction(params: SubmitTransactionDto): Promise<{
     success: boolean;
     vtTxHash: string;
     distributionTxHash: string;
     adaReceived: string;
     ftsReceived?: Array<{ policyId: string; assetId: string; quantity: string; name?: string }>;
   }> {
-    // Find claim by transaction ID in metadata
-    const claim = await this.claimRepository
-      .createQueryBuilder('claim')
-      .where("claim.metadata->>'pendingTransaction'->>'transactionId' = :transactionId", { transactionId })
-      .andWhere('claim.type = :type', { type: ClaimType.TERMINATION })
-      .andWhere('claim.status = :status', { status: ClaimStatus.AVAILABLE })
-      .leftJoinAndSelect('claim.vault', 'vault')
-      .leftJoinAndSelect('vault.treasury_wallet', 'treasury_wallet')
-      .getOne();
+    // Find claim by transaction ID
+    const claim = await this.claimRepository.findOne({
+      where: {
+        distribution_tx_id: params.txId,
+        type: ClaimType.TERMINATION,
+        status: ClaimStatus.AVAILABLE,
+      },
+      relations: ['vault', 'vault.treasury_wallet', 'distribution_transaction'],
+    });
 
     if (!claim) {
       throw new NotFoundException('Termination claim transaction not found');
@@ -1581,47 +1673,69 @@ export class TerminationService {
 
     const vault = claim.vault;
     const vaultId = vault.id;
+    const transaction = claim.distribution_transaction;
+
+    if (!transaction) {
+      throw new Error('No transaction found for claim');
+    }
+
+    const txMetadata = transaction.metadata;
 
     try {
-      // Get treasury wallet private keys using KMS
-      const { privateKey, stakePrivateKey } = await this.treasuryWalletService.getTreasuryWalletPrivateKey(vaultId);
+      let txHash: string;
 
-      // Parse the user-signed transaction
-      const txToSubmit = FixedTransaction.from_bytes(Buffer.from(signedTx, 'hex'));
+      // Check if this is a burn-only transaction (no distribution)
+      if (txMetadata?.burnOnly === true) {
+        // Simple burn - just submit the user-signed transaction
+        this.logger.log(`Submitting burn-only transaction for claim ${claim.id}`);
 
-      // Add treasury wallet signatures
-      txToSubmit.sign_and_add_vkey_signature(privateKey);
-      txToSubmit.sign_and_add_vkey_signature(stakePrivateKey);
+        const submitResponse = await this.blockchainService.submitTransaction({
+          transaction: params.transaction,
+          signatures: params.signatures || [],
+        });
 
-      // Submit the fully signed transaction
-      const submitResponse = await this.blockchainService.submitTransaction({
-        transaction: txToSubmit.to_hex(),
-        signatures: [],
-      });
+        txHash = submitResponse.txHash;
+      } else {
+        // Get treasury wallet private keys using KMS
+        const { privateKey, stakePrivateKey } = await this.treasuryWalletService.getTreasuryWalletPrivateKey(vaultId);
 
-      const txHash = submitResponse.txHash;
+        // Parse the user-signed transaction
+        const txToSubmit = FixedTransaction.from_bytes(Buffer.from(params.transaction, 'hex'));
 
-      this.logger.log(
-        `Atomic termination claim transaction submitted for claim ${claim.id}: ${txHash} ` +
-          `(VT sent to admin + distribution sent to user in single tx)`
-      );
+        // Add treasury wallet signatures
+        txToSubmit.sign_and_add_vkey_signature(privateKey);
+        txToSubmit.sign_and_add_vkey_signature(stakePrivateKey);
 
-      // Get distribution amounts from metadata
-      const pendingTx = claim.metadata?.pendingTransaction as any;
-      const adaReceived = pendingTx?.adaAmount || '0';
-      const ftsReceived = pendingTx?.ftShares || [];
+        // Submit the fully signed transaction
+        const submitResponse = await this.blockchainService.submitTransaction({
+          transaction: txToSubmit.to_hex(),
+          signatures: [],
+        });
+
+        txHash = submitResponse.txHash;
+
+        this.logger.log(
+          `Atomic termination claim transaction submitted for claim ${claim.id}: ${txHash} ` +
+            `(VT sent to admin + distribution sent to user in single tx)`
+        );
+      }
+
+      // Get distribution amounts from transaction metadata
+      const adaReceived = txMetadata?.adaAmount || '0';
+      const ftsReceived = txMetadata?.ftShares || [];
+
+      // Update transaction with tx hash
+      await this.transactionsService.updateTransactionHash(transaction.id, txHash);
 
       // Mark claim as completed
       await this.claimRepository.update(
         { id: claim.id },
         {
           status: ClaimStatus.CLAIMED,
-          distribution_tx_id: txHash,
-          amount: Number(pendingTx?.vtAmount || 0),
+          amount: Number(txMetadata?.vtAmount || 0),
           lovelace_amount: Number(adaReceived),
           metadata: {
             ...claim.metadata,
-            completedTxHash: txHash,
             completedAt: new Date().toISOString(),
           } as Record<string, any>,
         }
@@ -1635,20 +1749,9 @@ export class TerminationService {
         ftsReceived: ftsReceived.length > 0 ? ftsReceived : undefined,
       };
     } catch (error) {
-      // Mark claim as failed
-      await this.claimRepository.update(
-        { id: claim.id },
-        {
-          status: ClaimStatus.FAILED,
-          metadata: {
-            ...claim.metadata,
-            failureReason: error.message,
-            failedAt: new Date().toISOString(),
-          } as Record<string, any>,
-        }
-      );
-
-      this.logger.error(`Failed to submit atomic termination claim transaction: ${error.message}`, error.stack);
+      // Mark transaction and claim as failed
+      await this.transactionsService.updateTransactionStatusById(params.txId, TransactionStatus.failed);
+      this.logger.error(`Failed to submit termination claim transaction: ${error.message}`, error.stack);
       throw error;
     }
   }
