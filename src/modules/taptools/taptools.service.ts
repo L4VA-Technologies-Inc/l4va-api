@@ -1299,7 +1299,7 @@ export class TaptoolsService {
     }
     const vaults = await this.vaultRepository
       .createQueryBuilder('v')
-      .select(['v.id', 'v.policy_id', 'v.asset_vault_name'])
+      .select(['v.id', 'v.policy_id', 'v.asset_vault_name', 'v.total_assets_cost_ada'])
       .where('v.vault_status = :status', { status: VaultStatus.locked })
       .andWhere('v.liquidity_pool_contribution > 0')
       .andWhere('v.policy_id IS NOT NULL')
@@ -1351,6 +1351,7 @@ export class TaptoolsService {
             price_change_24h: priceChangeData?.['24h'] || 0,
             price_change_7d: priceChangeData?.['7d'] || 0,
             price_change_30d: priceChangeData?.['30d'] || 0,
+            tvl: vault.total_assets_cost_ada,
           };
 
           await this.marketService.upsertMarketData(marketData);

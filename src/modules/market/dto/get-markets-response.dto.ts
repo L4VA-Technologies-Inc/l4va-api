@@ -11,11 +11,13 @@ export interface MarketItem {
   price_change_24h: number;
   price_change_7d: number;
   price_change_30d: number;
+  delta: number | null;
   created_at: Date;
   updated_at: Date;
   ticker: string | null;
   price: number | null;
-  tvl: number | null;
+  tvl_ada: number | null;
+  tvl_usd: number | null;
   fdv: number | null;
   vault_image: string | null;
   token_image: string | null;

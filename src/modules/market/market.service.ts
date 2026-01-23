@@ -5,7 +5,7 @@ import { Repository } from 'typeorm';
 import { transformImageToUrl } from '../../helpers';
 
 import { GetMarketsResponse, MarketItem } from './dto/get-markets-response.dto';
-import { GetMarketsDto, MarketSortField, SortOrder } from './dto/get-markets.dto';
+import { GetMarketsDto, MarketSortField, SortOrder, TvlCurrency } from './dto/get-markets.dto';
 
 import { Market } from '@/database/market.entity';
 import { Vault } from '@/database/vault.entity';
@@ -32,6 +32,9 @@ export class MarketService {
       maxMcap,
       minTvl,
       maxTvl,
+      minDelta,
+      maxDelta,
+      tvlCurrency = TvlCurrency.ADA,
     } = query;
 
     const queryBuilder = this.marketRepository.createQueryBuilder('market');
@@ -70,12 +73,23 @@ export class MarketService {
     }
 
     if (minTvl || maxTvl) {
+      const tvlField = tvlCurrency === TvlCurrency.USD ? 'vault.total_assets_cost_usd' : 'vault.total_assets_cost_ada';
       if (minTvl && maxTvl) {
-        queryBuilder.andWhere('vault.total_assets_cost_ada BETWEEN :minTvl AND :maxTvl', { minTvl, maxTvl });
+        queryBuilder.andWhere(`${tvlField} BETWEEN :minTvl AND :maxTvl`, { minTvl, maxTvl });
       } else if (minTvl) {
-        queryBuilder.andWhere('vault.total_assets_cost_ada >= :minTvl', { minTvl });
+        queryBuilder.andWhere(`${tvlField} >= :minTvl`, { minTvl });
       } else if (maxTvl) {
-        queryBuilder.andWhere('vault.total_assets_cost_ada <= :maxTvl', { maxTvl });
+        queryBuilder.andWhere(`${tvlField} <= :maxTvl`, { maxTvl });
+      }
+    }
+
+    if (minDelta || maxDelta) {
+      if (minDelta && maxDelta) {
+        queryBuilder.andWhere('market.delta BETWEEN :minDelta AND :maxDelta', { minDelta, maxDelta });
+      } else if (minDelta) {
+        queryBuilder.andWhere('market.delta >= :minDelta', { minDelta });
+      } else if (maxDelta) {
+        queryBuilder.andWhere('market.delta <= :maxDelta', { maxDelta });
       }
     }
 
@@ -83,10 +97,12 @@ export class MarketService {
       const sortField = this.mapSortField(sortBy);
 
       if (['ticker', 'price', 'tvl', 'fdv'].includes(sortField)) {
+        const tvlField =
+          tvlCurrency === TvlCurrency.USD ? 'vault.total_assets_cost_usd' : 'vault.total_assets_cost_ada';
         const vaultFieldMap: Record<string, string> = {
           ticker: 'vault.vault_token_ticker',
           price: 'vault.vt_price',
-          tvl: 'vault.total_assets_cost_ada',
+          tvl: tvlField,
           fdv: 'vault.fdv',
         };
         queryBuilder.orderBy(vaultFieldMap[sortField], sortOrder);
@@ -117,12 +133,14 @@ export class MarketService {
         price_change_24h: item.price_change_24h,
         price_change_7d: item.price_change_7d,
         price_change_30d: item.price_change_30d,
+        delta: item.delta,
         created_at: item.created_at,
         updated_at: item.updated_at,
 
         ticker: vault?.vault_token_ticker || null,
         price: vault?.vt_price || null,
-        tvl: vault?.total_assets_cost_ada || null,
+        tvl_ada: vault?.total_assets_cost_ada || null,
+        tvl_usd: vault?.total_assets_cost_usd || null,
         fdv: vault?.fdv || null,
         vault_image: vaultImage,
         token_image: tokenImage,
@@ -149,16 +167,26 @@ export class MarketService {
     price_change_24h: number;
     price_change_7d: number;
     price_change_30d: number;
+    tvl?: number;
   }): Promise<Market> {
+    const calculateDelta = (mcap: number, tvl: number | undefined): number | null => {
+      if (!mcap || !tvl || tvl === 0) return null;
+      return (mcap / tvl) * 100;
+    };
+
+    const delta = calculateDelta(data.mcap, data.tvl);
+    const marketData = { ...data, delta };
+    delete marketData.tvl;
+
     const existingMarket = await this.marketRepository.findOne({
       where: { vault_id: data.vault_id },
     });
 
     if (existingMarket) {
-      Object.assign(existingMarket, data);
+      Object.assign(existingMarket, marketData);
       return await this.marketRepository.save(existingMarket);
     } else {
-      const newMarket = this.marketRepository.create(data);
+      const newMarket = this.marketRepository.create(marketData);
       return await this.marketRepository.save(newMarket);
     }
   }
@@ -176,6 +204,7 @@ export class MarketService {
       [MarketSortField.priceChange7d]: 'price_change_7d',
       [MarketSortField.priceChange30d]: 'price_change_30d',
       [MarketSortField.tvl]: 'tvl',
+      [MarketSortField.delta]: 'delta',
       [MarketSortField.createdAt]: 'created_at',
       [MarketSortField.updatedAt]: 'updated_at',
     };
