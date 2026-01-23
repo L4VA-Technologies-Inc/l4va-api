@@ -1,12 +1,12 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddDeltaForMarkets1769173269170 implements MigrationInterface {
-  name = 'AddDeltaForMarkets1769173269170';
+export class AddDeltaForMarkets1769183347557 implements MigrationInterface {
+  name = 'AddDeltaForMarkets1769183347557';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`ALTER TABLE "vault_tags" DROP CONSTRAINT "FK_adf9f0b047319be1ec67ac1d1eb"`);
     await queryRunner.query(`ALTER TABLE "vault_tags" DROP CONSTRAINT "FK_2b3fd4667b2be7a2d7a329083cc"`);
-    await queryRunner.query(`ALTER TABLE "markets" ADD "delta" numeric(10,2)`);
+    await queryRunner.query(`ALTER TABLE "markets" ADD "delta" numeric(12,4)`);
     await queryRunner.query(`ALTER TABLE "vaults" ALTER COLUMN "acquire_multiplier" SET DEFAULT null`);
     await queryRunner.query(`ALTER TABLE "vaults" ALTER COLUMN "ada_distribution" SET DEFAULT null`);
     await queryRunner.query(`ALTER TABLE "vaults" ALTER COLUMN "apply_params_result" SET DEFAULT null`);
