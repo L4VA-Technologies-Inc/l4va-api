@@ -25,6 +25,7 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { VyfiService } from '@/modules/vyfi/vyfi.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
+import type { TerminationClaimMetadata } from '@/types/claim-metadata.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';
@@ -681,9 +682,6 @@ export class TerminationService {
       const vtBalance = BigInt(balance);
       if (vtBalance === BigInt(0)) continue;
 
-      // Calculate proportional share (used for both ADA and FT distribution)
-      const sharePercentage = Number((vtBalance * BigInt(10000)) / totalVtSupply) / 100; // percentage with 2 decimals
-
       // Calculate proportional ADA share (0 if not enough ADA)
       const adaShare = hasEnoughAdaForDistribution ? (totalAda * vtBalance) / totalVtSupply : BigInt(0);
 
@@ -732,10 +730,7 @@ export class TerminationService {
           vtAmount: vtBalance.toString(),
           adaAmount: adaShare.toString(),
           ftShares: ftShares.length > 0 ? ftShares : undefined,
-          sharePercentage,
-          snapshotId: snapshot.id,
           noAdaDistribution: !hasEnoughAdaForDistribution,
-          hasFtDistribution: ftShares.length > 0,
         },
       });
     }
@@ -1216,16 +1211,6 @@ export class TerminationService {
         adaAmount: noAdaDistribution ? '0' : dynamicShare.adaShare.toString(),
         ftShares: hasFtDistribution ? ftShares : undefined,
         noAdaDistribution,
-        hasFtDistribution,
-        isTransferredVT: true, // Flag indicating this VT was transferred after snapshot
-        createdOnDemand: true,
-        createdAt: new Date().toISOString(),
-        calculationSnapshot: {
-          userVtBalance: dynamicShare.userVtBalance.toString(),
-          circulatingSupply: dynamicShare.circulatingSupply.toString(),
-          treasuryBalance: dynamicShare.treasuryBalance.toString(),
-          sharePercentage: dynamicShare.sharePercentage,
-        },
       },
     });
 
@@ -1517,14 +1502,14 @@ export class TerminationService {
     }
 
     // Check if there's ADA to distribute
+    const terminationMetadata = claim.metadata as TerminationClaimMetadata;
     const noAdaDistribution =
-      claim.metadata?.noAdaDistribution === true ||
+      terminationMetadata?.noAdaDistribution === true ||
       dynamicShare.treasuryBalance < BigInt(this.MIN_TOTAL_ADA_FOR_DISTRIBUTION) ||
       dynamicShare.adaShare < BigInt(this.MIN_ADA_PER_CLAIM);
 
     // Get FT shares
-    const ftShares =
-      (claim.metadata?.ftShares as Array<{ policyId: string; assetId: string; quantity: string; name?: string }>) || [];
+    const ftShares = terminationMetadata?.ftShares || [];
     const hasFtDistribution = ftShares.length > 0 && ftShares.some(ft => BigInt(ft.quantity) > BigInt(0));
 
     const hasAda = !noAdaDistribution;

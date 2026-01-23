@@ -10,6 +10,7 @@ import {
   Index,
 } from 'typeorm';
 
+import type { ClaimMetadata } from '../types/claim-metadata.types';
 import { ClaimStatus, ClaimType } from '../types/claim.types';
 
 import { Transaction } from './transaction.entity';
@@ -102,7 +103,7 @@ export class Claim {
 
   @Expose({ name: 'metadata' })
   @Column({ type: 'jsonb', nullable: true })
-  metadata: Record<string, any>;
+  metadata: ClaimMetadata;
 
   @Expose({ name: 'createdAt' })
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
@@ -113,14 +114,14 @@ export class Claim {
   updated_at: Date;
 
   @BeforeInsert()
-  setDate() {
+  setDate(): void {
     const now = new Date();
     this.created_at = now;
     this.updated_at = now;
   }
 
   @BeforeUpdate()
-  updateDate() {
+  updateDate(): void {
     this.updated_at = new Date();
   }
 }

@@ -83,8 +83,9 @@ export class ClaimsService {
           id: claim.id,
           type: ClaimType.TERMINATION,
           status: claim.status as ClaimStatus,
-          amount: parseFloat(claim.metadata?.vtAmount) / 10 ** (claim.vault?.ft_token_decimals || 0),
-          adaAmount: parseFloat(claim.metadata?.adaAmount || claim.lovelace_amount?.toString() || '0') / 1_000_000,
+          amount: parseFloat((claim.metadata as any)?.vtAmount) / 10 ** (claim.vault?.ft_token_decimals || 0),
+          adaAmount:
+            parseFloat((claim.metadata as any)?.adaAmount || claim.lovelace_amount?.toString() || '0') / 1_000_000,
           multiplier: null,
           description: null,
           createdAt: claim.created_at,
@@ -236,12 +237,10 @@ export class ClaimsService {
               id: asset.id,
               policyId: asset.policy_id,
               assetId: asset.asset_id,
-              quantity: asset.quantity,
+              quantity: asset.quantity.toString(),
               type: asset.type,
             })),
-            assetIds: txAssets.map(asset => asset.id),
             failureReason: reason,
-            originalTxHash: tx.tx_hash,
             outputIndex: 0, // Assuming contribution UTXOs are at index 0
           },
           transaction: { id: tx.id },
@@ -278,7 +277,6 @@ export class ClaimsService {
           metadata: {
             transactionType: 'acquisition',
             failureReason: reason,
-            originalTxHash: tx.tx_hash,
             outputIndex: 0,
           },
           transaction: { id: tx.id },
@@ -623,7 +621,7 @@ export class ClaimsService {
 
       try {
         const utxoDetails = await this.blockfrost.txsUtxos(originalTx.tx_hash);
-        const outputIndex = claim.metadata?.outputIndex ?? 0; // Allow configurable output index
+        const outputIndex = (claim.metadata as any)?.outputIndex ?? 0; // Allow configurable output index
         const output = utxoDetails.outputs[outputIndex];
 
         if (!output) {

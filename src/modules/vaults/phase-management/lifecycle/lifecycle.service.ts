@@ -896,12 +896,6 @@ export class LifecycleService {
               status: ClaimStatus.PENDING, // Move to active after successful Extraction
               transaction: { id: tx.id },
               lovelace_amount: contributorResult.lovelaceAmount,
-              metadata: {
-                contributedValueAda: txValueAda,
-                userTotalValueAda: userTotalValue,
-                proportionOfUserTotal: contributorResult.proportionOfUserTotal,
-                userTotalVtTokens: contributorResult.userTotalVtTokens,
-              },
             });
 
             contributorClaims.push(claim);
@@ -1204,10 +1198,6 @@ export class LifecycleService {
             status: ClaimStatus.PENDING,
             transaction: { id: tx.id },
             metadata: {
-              contributedValueAda: txValueAda,
-              userTotalValueAda: userTotalValue,
-              proportionOfUserTotal: contributorResult.proportionOfUserTotal,
-              userTotalVtTokens: contributorResult.userTotalVtTokens,
               noAcquirers: true,
             },
           });
