@@ -43,7 +43,7 @@ export class Market {
   @Column({ type: 'decimal', precision: 10, scale: 6, default: 0, name: 'price_change_30d' })
   price_change_30d: number;
 
-  @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
+  @Column({ type: 'decimal', precision: 12, scale: 4, nullable: true })
   delta: number | null;
 
   @CreateDateColumn({ type: 'timestamptz' })
