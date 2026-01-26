@@ -1,5 +1,5 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { Address, FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
+import { Address, FixedTransaction } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -34,9 +34,6 @@ export class DistributionService {
   private readonly logger = new Logger(DistributionService.name);
   private readonly isMainnet: boolean;
   private readonly blockfrost: BlockFrostAPI;
-  private readonly adminAddress: string;
-  private readonly adminSKey: string;
-  private readonly adminHash: string;
 
   // Configuration constants
   private readonly MIN_ADA_PER_RECIPIENT = 2_000_000; // 2 ADA minimum per recipient (covers min UTXO)
@@ -63,9 +60,6 @@ export class DistributionService {
     private readonly eventEmitter: EventEmitter2
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
-    this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
-    this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
-    this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
 
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
@@ -154,16 +148,12 @@ export class DistributionService {
       );
     }
 
-    // Calculate estimated ADA per holder (equal distribution)
-    const estimatedAdaPerHolder = vtHolderCount > 0 ? balance.lovelace / vtHolderCount / 1_000_000 : 0;
-
     return {
       treasuryBalance: { lovelace: balance.lovelace, lovelaceFormatted },
       vtHolderCount,
       minDistributableAda,
       maxDistributableAda: balance.lovelace / 1_000_000,
       minAdaPerHolder: this.MIN_ADA_PER_RECIPIENT / 1_000_000,
-      estimatedAdaPerHolder,
       hasTreasuryWallet: true,
       warnings,
     };
@@ -476,6 +466,7 @@ export class DistributionService {
 
       claims.push({
         user_id: recipient.userId,
+        proposal_id: proposal.id,
         vault,
         type: ClaimType.DISTRIBUTION,
         status: ClaimStatus.PENDING, // Will be updated to AVAILABLE after successful tx
@@ -623,26 +614,10 @@ export class DistributionService {
       await this.treasuryWalletService.getTreasuryWalletPrivateKey(vaultId);
     const treasuryPubKeyHash = treasuryPrivateKey.to_public().hash().to_hex();
 
-    // Get admin private key for fee payment
-    const adminPrivateKey = PrivateKey.from_bech32(this.adminSKey);
-
     // Get treasury UTXOs
     const { utxos: treasuryUtxos } = await getUtxosExtract(Address.from_bech32(treasuryAddress), this.blockfrost, {
       validateUtxos: true,
     });
-
-    if (treasuryUtxos.length === 0) {
-      throw new Error('No UTXOs available in treasury wallet');
-    }
-
-    // Get admin UTXOs for fees
-    const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
-      validateUtxos: true,
-    });
-
-    if (adminUtxos.length === 0) {
-      throw new Error('No UTXOs available in admin wallet for fees');
-    }
 
     // Build outputs for each recipient
     const outputs = claims.map(claim => {
@@ -660,10 +635,10 @@ export class DistributionService {
     // Build transaction input
     const txInput = {
       changeAddress: treasuryAddress, // Change goes back to treasury
-      utxos: [...treasuryUtxos, ...adminUtxos],
+      utxos: treasuryUtxos,
       message: `Distribution for vault ${vaultId}`,
       outputs,
-      requiredSigners: [treasuryPubKeyHash, this.adminHash],
+      requiredSigners: [treasuryPubKeyHash],
       validityInterval: {
         start: true,
         end: true,
@@ -678,7 +653,6 @@ export class DistributionService {
     const txToSubmit = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
     txToSubmit.sign_and_add_vkey_signature(treasuryPrivateKey);
     txToSubmit.sign_and_add_vkey_signature(treasuryStakeKey);
-    txToSubmit.sign_and_add_vkey_signature(adminPrivateKey);
 
     // Submit transaction
     const submitResponse = await this.blockchainService.submitTransaction({

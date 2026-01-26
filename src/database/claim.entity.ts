@@ -13,6 +13,7 @@ import {
 import type { ClaimMetadata } from '../types/claim-metadata.types';
 import { ClaimStatus, ClaimType } from '../types/claim.types';
 
+import { Proposal } from './proposal.entity';
 import { Transaction } from './transaction.entity';
 import { User } from './user.entity';
 import { Vault } from './vault.entity';
@@ -88,6 +89,18 @@ export class Claim {
   })
   @Index()
   distribution_tx_id: string;
+
+  @ManyToOne(() => Proposal, { nullable: true, onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'proposal_id' })
+  proposal: Proposal;
+
+  @Column({
+    name: 'proposal_id',
+    nullable: true,
+    comment: 'Reference to the proposal that created this claim (for distribution/termination)',
+  })
+  @Index()
+  proposal_id: string;
 
   @Expose({ name: 'utxoToClaim' })
   get utxoToClaim(): string | null {

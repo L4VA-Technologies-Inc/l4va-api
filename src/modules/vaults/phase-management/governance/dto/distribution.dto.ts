@@ -114,14 +114,6 @@ export class GetDistributionInfoRes {
   @Expose()
   minAdaPerHolder: number;
 
-  @ApiProperty({
-    description: 'Estimated ADA per holder if distributed equally',
-    example: 6.67,
-    required: false,
-  })
-  @Expose()
-  estimatedAdaPerHolder?: number;
-
   @ApiProperty({ description: 'Whether vault has a treasury wallet', example: true })
   @Expose()
   hasTreasuryWallet: boolean;
@@ -199,7 +191,6 @@ export interface DistributionInfo {
   minDistributableAda: number; // Minimum ADA needed to distribute to all holders
   maxDistributableAda: number; // Maximum ADA available in treasury
   minAdaPerHolder: number; // Minimum ~2 ADA
-  estimatedAdaPerHolder?: number; // Based on equal distribution
   hasTreasuryWallet: boolean;
   warnings: string[];
 }

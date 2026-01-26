@@ -9,6 +9,7 @@ import {
 import { DistributionMetadata } from '../modules/vaults/phase-management/governance/dto/distribution.dto';
 import { ProposalStatus, ProposalType } from '../types/proposal.types';
 
+import { Claim } from './claim.entity';
 import { Snapshot } from './snapshot.entity';
 import { User } from './user.entity';
 import { Vault } from './vault.entity';
@@ -135,6 +136,10 @@ export class Proposal {
   @Expose({ name: 'votes' })
   @OneToMany(() => Vote, vote => vote.proposal)
   votes: Vote[];
+
+  @Expose({ name: 'claims' })
+  @OneToMany(() => Claim, claim => claim.proposal)
+  claims: Claim[];
 
   @Expose({ name: 'createdAt' })
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
