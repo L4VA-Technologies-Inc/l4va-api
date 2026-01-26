@@ -614,20 +614,21 @@ export class DistributionService {
       await this.treasuryWalletService.getTreasuryWalletPrivateKey(vaultId);
     const treasuryPubKeyHash = treasuryPrivateKey.to_public().hash().to_hex();
 
-    // Get treasury UTXOs
     const { utxos: treasuryUtxos } = await getUtxosExtract(Address.from_bech32(treasuryAddress), this.blockfrost, {
-      validateUtxos: true,
+      validateUtxos: false,
     });
 
-    // Build outputs for each recipient
     const outputs = claims.map(claim => {
-      // Get recipient address from user
-      if (!claim.user?.address) {
-        throw new Error(`No recipient address found for claim ${claim.id}`);
+      // Get recipient address from metadata (supports addresses not in users table)
+      const metadata = claim.metadata as DistributionClaimMetadata;
+      const recipientAddress = metadata?.address;
+
+      if (!recipientAddress) {
+        throw new Error(`No recipient address found in metadata for claim ${claim.id}`);
       }
 
       return {
-        address: claim.user.address,
+        address: recipientAddress,
         lovelace: claim.lovelace_amount.toString(),
       };
     });
