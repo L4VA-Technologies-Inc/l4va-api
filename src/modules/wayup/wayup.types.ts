@@ -51,6 +51,7 @@ export interface ListingPayload {
   changeAddress: string;
   utxos: string[];
   collaterals?: string[];
+  message?: string;
   create: Array<{
     assets: {
       policyId: string;
@@ -67,6 +68,7 @@ export interface UnlistPayload {
   changeAddress: string;
   utxos: string[];
   collaterals?: string[];
+  message?: string;
   unlist: UnlistInput[];
 }
 
@@ -77,6 +79,7 @@ export interface UpdateListingPayload {
   changeAddress: string;
   utxos: string[];
   collaterals?: string[];
+  message?: string;
   update: UpdateListingInput[];
 }
 
@@ -87,6 +90,7 @@ export interface MakeOfferPayload {
   changeAddress: string;
   utxos: string[];
   collaterals?: string[];
+  message?: string;
   createOffer: MakeOfferInput[];
 }
 
@@ -97,6 +101,7 @@ export interface BuyNFTPayload {
   changeAddress: string;
   utxos: string[];
   collaterals?: string[];
+  message?: string;
   buy: BuyNFTInput[];
 }
 
@@ -119,6 +124,7 @@ export interface WayUpTransactionInput {
   changeAddress: string;
   utxos: string[];
   collaterals?: string[];
+  message?: string;
   create?: {
     assets: { policyId: string; assetName: string };
     priceAda: number;
