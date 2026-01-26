@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
 
+import { DistributionStatus } from '../distribution.service';
+
 import { DistributionBatchStatus } from './distribution.dto';
 
 import { AssetType } from '@/types/asset.types';
@@ -251,6 +253,35 @@ export class MarketplaceActionDetailDto {
 }
 
 /**
+ * Distribution proposal info (calculated from snapshot)
+ */
+export class DistributionInfoDto {
+  @Expose()
+  @ApiProperty({ description: 'Total ADA amount to distribute', example: 100 })
+  totalAdaAmount: number;
+
+  @Expose()
+  @ApiProperty({ description: 'Total VT holders in snapshot', example: 50 })
+  totalHolders: number;
+
+  @Expose()
+  @ApiProperty({ description: 'Holders who will receive distribution (share >= 2 ADA)', example: 45 })
+  eligibleHolders: number;
+
+  @Expose()
+  @ApiProperty({ description: 'Holders who will not receive distribution (share < 2 ADA)', example: 5 })
+  skippedHolders: number;
+
+  @Expose()
+  @ApiProperty({ description: 'Average ADA per eligible holder', example: 2.22 })
+  avgAdaPerHolder: number;
+
+  @Expose()
+  @ApiProperty({ description: 'Minimum ADA per recipient (Cardano requirement)', example: 2 })
+  minAdaPerRecipient: number;
+}
+
+/**
  * Distribution batch details for proposal response
  */
 export class DistributionBatchDetailDto {
@@ -303,7 +334,7 @@ export class DistributionStatusDto {
     description: 'Overall distribution status',
     enum: ['pending', 'in_progress', 'completed', 'partially_failed', 'failed'],
   })
-  status: 'pending' | 'in_progress' | 'completed' | 'partially_failed' | 'failed';
+  status: DistributionStatus;
 
   @Expose()
   @ApiProperty({ description: 'Total number of batches', example: 5 })
@@ -375,6 +406,14 @@ export class GetProposalDetailRes {
     example: '100000000',
   })
   distributionLovelaceAmount?: string;
+
+  @Expose()
+  @ApiPropertyOptional({
+    description: 'Distribution info calculated from snapshot (holders, amounts, etc.)',
+    type: DistributionInfoDto,
+  })
+  @Type(() => DistributionInfoDto)
+  distributionInfo?: DistributionInfoDto;
 
   @Expose()
   @ApiPropertyOptional({

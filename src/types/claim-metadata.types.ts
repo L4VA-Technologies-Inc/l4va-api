@@ -81,31 +81,14 @@ export interface LpClaimMetadata extends BaseClaimMetadata {
 /**
  * Metadata for DISTRIBUTION claims
  * Used for general token/ADA distributions to users
+ * Note: VT and ADA amounts stored in entity columns (amount, lovelace_amount)
+ * Note: Distribution tx hash available via distribution_tx_id FK to Transaction entity
  */
 export interface DistributionClaimMetadata extends BaseClaimMetadata {
-  /** Recipient wallet address */
-  address?: string;
-  /** VT amount holder has */
-  vtAmount?: string;
-  /** ADA amount being distributed (in lovelace) */
-  adaAmount?: string;
-  /** Distribution transaction hash (once completed) */
-  distributionTxHash?: string;
+  /** Recipient wallet address (required) */
+  address: string;
   /** Batch processing information */
   batchId?: string;
-  /** Output index for UTXO (recipient's position in tx outputs) */
-  outputIndex?: number;
-  /** Proposal ID this distribution is from */
-  proposalId?: string;
-  /** Retry tracking for failed distributions */
-  retryInfo?: {
-    /** Number of retry attempts */
-    attempts: number;
-    /** Last retry timestamp */
-    lastRetryAt?: string;
-    /** Last error message */
-    lastError?: string;
-  };
 }
 
 /**
@@ -179,5 +162,10 @@ export function isTerminationMetadata(metadata: unknown): metadata is Terminatio
  * Type guard to check if metadata is DistributionClaimMetadata
  */
 export function isDistributionMetadata(metadata: unknown): metadata is DistributionClaimMetadata {
-  return metadata !== null && typeof metadata === 'object' && ('vtAmount' in metadata || 'adaAmount' in metadata);
+  return (
+    metadata !== null &&
+    typeof metadata === 'object' &&
+    'address' in metadata &&
+    typeof (metadata as DistributionClaimMetadata).address === 'string'
+  );
 }

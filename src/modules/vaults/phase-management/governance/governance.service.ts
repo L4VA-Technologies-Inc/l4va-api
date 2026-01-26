@@ -604,8 +604,54 @@ export class GovernanceService {
         quantity: asset.quantity,
       }));
 
-    // Get distribution lovelace amount for DISTRIBUTION proposals
+    // Get distribution info for DISTRIBUTION proposals
     const distributionLovelaceAmount = proposal.metadata?.distributionLovelaceAmount || null;
+    let distributionInfo = null;
+
+    if (proposal.proposalType === ProposalType.DISTRIBUTION && distributionLovelaceAmount) {
+      // Calculate distribution info from snapshot
+      const snapshot = proposal.snapshot;
+      if (snapshot?.addressBalances) {
+        const totalLovelace = BigInt(distributionLovelaceAmount);
+        const minAdaPerRecipient = BigInt(2_000_000); // 2 ADA minimum
+
+        // Calculate total VT supply and eligible holders
+        const totalVtSupply = Object.values(snapshot.addressBalances).reduce(
+          (sum, balance) => sum + BigInt(balance as string),
+          BigInt(0)
+        );
+
+        let eligibleHolders = 0;
+
+        for (const balance of Object.values(snapshot.addressBalances)) {
+          const vtBalance = BigInt(balance as string);
+          if (vtBalance === BigInt(0)) continue;
+
+          // Calculate proportional share
+          const share = (totalLovelace * vtBalance) / totalVtSupply;
+          if (share >= minAdaPerRecipient) {
+            eligibleHolders++;
+          }
+        }
+
+        const totalHolders = Object.values(snapshot.addressBalances).filter(
+          b => BigInt(b as string) > BigInt(0)
+        ).length;
+        const skippedHolders = totalHolders - eligibleHolders;
+
+        // Calculate average ADA per eligible holder
+        const avgLovelacePerHolder = eligibleHolders > 0 ? Number(totalLovelace) / eligibleHolders : 0;
+
+        distributionInfo = {
+          totalAdaAmount: Number(totalLovelace) / 1_000_000,
+          totalHolders,
+          eligibleHolders,
+          skippedHolders,
+          avgAdaPerHolder: avgLovelacePerHolder / 1_000_000,
+          minAdaPerRecipient: Number(minAdaPerRecipient) / 1_000_000,
+        };
+      }
+    }
 
     const amountMap = new Map(proposal.metadata?.fungibleTokens?.map(ft => [ft.id, ft.amount]) || []);
     const fungibleTokensWithNames = fungibleTokenIds
@@ -739,6 +785,7 @@ export class GovernanceService {
       proposer,
       burnAssets: burnAssetsWithNames,
       distributionLovelaceAmount,
+      distributionInfo,
       distributionStatus,
       fungibleTokens: fungibleTokensWithNames,
       nonFungibleTokens: nonFungibleTokensWithNames,

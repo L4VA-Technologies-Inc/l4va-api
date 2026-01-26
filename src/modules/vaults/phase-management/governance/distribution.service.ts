@@ -27,6 +27,8 @@ import { DistributionClaimMetadata } from '@/types/claim-metadata.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
+export type DistributionStatus = 'pending' | 'in_progress' | 'completed' | 'partially_failed' | 'failed';
+
 @Injectable()
 export class DistributionService {
   private readonly logger = new Logger(DistributionService.name);
@@ -469,8 +471,7 @@ export class DistributionService {
 
     for (const recipient of recipients) {
       const metadata: DistributionClaimMetadata = {
-        vtAmount: recipient.vtBalance.toString(),
-        adaAmount: recipient.lovelaceShare.toString(),
+        address: recipient.address,
       };
 
       claims.push({
@@ -547,38 +548,6 @@ export class DistributionService {
         throw new Error(`No claims found for batch ${batch.batchId}`);
       }
 
-      // Skip on-chain processing for testnet (just mark as complete)
-      if (!this.isMainnet) {
-        this.logger.log(`[TESTNET] Skipping on-chain distribution for batch ${batch.batchId}`);
-
-        // Create a simulated transaction record
-        const simulatedTx = await this.transactionRepository.save({
-          type: TransactionType.distribution,
-          status: TransactionStatus.confirmed,
-          vault_id: proposal.vaultId,
-          tx_hash: `testnet-simulation-${batch.batchId}`,
-          amount: Number(batch.lovelaceAmount) / 1_000_000,
-          metadata: {
-            batchId: batch.batchId,
-            proposalId: proposal.id,
-            recipientCount: claims.length,
-            simulated: true,
-          },
-        });
-
-        // Mark claims as completed
-        await this.claimRepository.update(batch.claimIds, {
-          status: ClaimStatus.CLAIMED,
-        });
-
-        batch.status = DistributionBatchStatus.COMPLETED;
-        batch.transactionId = simulatedTx.id;
-        distribution.completedBatches++;
-        await this.proposalRepository.save(proposal);
-
-        return true;
-      }
-
       // Build and submit the distribution transaction
       const txHash = await this.buildAndSubmitDistributionTx(treasuryAddress, proposal.vaultId, claims);
 
@@ -591,7 +560,6 @@ export class DistributionService {
         amount: Number(batch.lovelaceAmount) / 1_000_000,
         metadata: {
           batchId: batch.batchId,
-          proposalId: proposal.id,
           recipientCount: claims.length,
         },
       });
@@ -600,9 +568,12 @@ export class DistributionService {
       for (let i = 0; i < claims.length; i++) {
         const claim = claims[i];
         claim.status = ClaimStatus.CLAIMED;
-        (claim.metadata as DistributionClaimMetadata).distributionTxHash = txHash;
-        (claim.metadata as DistributionClaimMetadata).outputIndex = i;
-        (claim.metadata as DistributionClaimMetadata).batchId = batch.batchId;
+        claim.distribution_tx_id = transaction.id;
+        const currentMetadata = claim.metadata as DistributionClaimMetadata;
+        claim.metadata = {
+          address: currentMetadata.address,
+          batchId: batch.batchId,
+        };
       }
       await this.claimRepository.save(claims);
 
@@ -686,9 +657,6 @@ export class DistributionService {
       };
     });
 
-    // Calculate total distribution amount
-    const totalDistribution = claims.reduce((sum, c) => sum + BigInt(c.lovelace_amount || 0), BigInt(0));
-
     // Build transaction input
     const txInput = {
       changeAddress: treasuryAddress, // Change goes back to treasury
@@ -717,11 +685,6 @@ export class DistributionService {
       transaction: txToSubmit.to_hex(),
     });
 
-    this.logger.log(
-      `Distribution transaction submitted: ${submitResponse.txHash}, ` +
-        `distributed ${Number(totalDistribution) / 1_000_000} ADA to ${claims.length} recipients`
-    );
-
     return submitResponse.txHash;
   }
 
@@ -730,7 +693,7 @@ export class DistributionService {
    * Returns batch details including txHash fetched from Transaction entity
    */
   async getDistributionStatus(proposalId: string): Promise<{
-    status: 'pending' | 'in_progress' | 'completed' | 'partially_failed' | 'failed';
+    status: DistributionStatus;
     totalBatches: number;
     completedBatches: number;
     failedBatches: number;
@@ -757,7 +720,7 @@ export class DistributionService {
     const distribution = proposal.metadata.distribution as DistributionMetadata;
     const pendingRetry = distribution.batches.filter(b => b.status === DistributionBatchStatus.RETRY_PENDING).length;
 
-    let status: 'pending' | 'in_progress' | 'completed' | 'partially_failed' | 'failed';
+    let status: DistributionStatus;
 
     if (distribution.completedBatches === distribution.batches.length) {
       status = 'completed';
