@@ -17,6 +17,7 @@ export enum VaultPresetType {
   simple = 'simple',
   contributors = 'contributors',
   acquirers = 'acquirers',
+  acquirers_50 = 'acquirers_50',
   advanced = 'advanced',
   custom = 'custom',
 }

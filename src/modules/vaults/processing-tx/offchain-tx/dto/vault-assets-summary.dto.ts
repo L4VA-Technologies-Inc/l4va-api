@@ -27,30 +27,4 @@ export class VaultAssetsSummaryDto {
 
   @ApiProperty({ description: 'Current ADA price in USD' })
   adaPrice: number;
-
-  @ApiProperty({
-    description: 'List of assets with their values',
-    type: 'array',
-    items: {
-      type: 'object',
-      properties: {
-        policyId: { type: 'string' },
-        assetName: { type: 'string' },
-        quantity: { type: 'number' },
-        valueAda: { type: 'number' },
-        valueUsd: { type: 'number' },
-        isNft: { type: 'boolean' },
-        metadata: { type: 'object' },
-      },
-    },
-  })
-  assets: Array<{
-    policyId: string;
-    assetName: string;
-    quantity: number;
-    valueAda: number;
-    valueUsd: number;
-    isNft: boolean;
-    metadata?: Record<string, any>;
-  }>;
 }

@@ -1,6 +1,6 @@
 import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 
 import { CreatePresetReq } from './dto/createPreset.req';
 
@@ -25,9 +25,17 @@ export class PresetsService {
       throw new NotFoundException('User not found');
     }
 
-    return this.presetRepository.find({
-      where: [{ user_id: IsNull() }, { user_id: userId }],
-    });
+    const order = Object.values(VaultPresetType);
+
+    const orderByCase = order.map((type, index) => `WHEN preset.type = '${type}' THEN ${index}`).join(' ');
+
+    return this.presetRepository
+      .createQueryBuilder('preset')
+      .where('preset.user_id IS NULL')
+      .orWhere('preset.user_id = :userId', { userId })
+      .orderBy(`CASE ${orderByCase} ELSE ${order.length} END`, 'ASC')
+      .addOrderBy('preset.created_at', 'DESC')
+      .getMany();
   }
 
   async createPreset(userId: string, data: CreatePresetReq): Promise<VaultPreset> {

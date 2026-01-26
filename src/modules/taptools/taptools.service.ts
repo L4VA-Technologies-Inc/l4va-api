@@ -1,12 +1,12 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { Injectable, HttpException, Logger, NotFoundException } from '@nestjs/common';
+import { HttpException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import axios, { AxiosInstance } from 'axios';
 import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
-import { Repository, In } from 'typeorm';
+import { In, Repository } from 'typeorm';
 
 import { DexHunterPricingService } from '../dexhunter/dexhunter-pricing.service';
 import { MarketService } from '../market/market.service';
@@ -15,8 +15,8 @@ import { WayUpPricingService } from '../wayup/wayup-pricing.service';
 
 import { AssetValueDto, BlockfrostAssetResponseDto } from './dto/asset-value.dto';
 import { BlockfrostAddressTotalDto } from './dto/blockfrost-address.dto';
-import { PaginationQueryDto, PaginationMetaDto } from './dto/pagination.dto';
-import { WalletOverviewDto, PaginatedWalletSummaryDto } from './dto/wallet-summary.dto';
+import { PaginationMetaDto, PaginationQueryDto } from './dto/pagination.dto';
+import { PaginatedWalletSummaryDto, WalletOverviewDto } from './dto/wallet-summary.dto';
 
 import { Asset } from '@/database/asset.entity';
 import { Snapshot } from '@/database/snapshot.entity';
@@ -564,7 +564,7 @@ export class TaptoolsService {
     }
 
     // Create and return the summary
-    const summary: VaultAssetsSummaryDto = {
+    return {
       totalValueAda: +totalValueAda.toFixed(6),
       totalValueUsd: +totalValueUsd.toFixed(2),
       totalAssets: assetsWithValues.length,
@@ -574,18 +574,7 @@ export class TaptoolsService {
       totalAcquiredAda,
       totalAcquiredUsd: totalAcquiredAda * adaPrice,
       adaPrice,
-      assets: assetsWithValues.map(asset => ({
-        policyId: asset.policyId,
-        assetName: asset.assetId, // Using assetId as assetName for backward compatibility
-        quantity: asset.quantity,
-        valueAda: asset.valueAda,
-        valueUsd: asset.valueUsd,
-        isNft: asset.isNft,
-        metadata: asset.metadata,
-      })),
     };
-
-    return summary;
   }
 
   /**
@@ -1310,7 +1299,7 @@ export class TaptoolsService {
     }
     const vaults = await this.vaultRepository
       .createQueryBuilder('v')
-      .select(['v.id', 'v.policy_id', 'v.asset_vault_name'])
+      .select(['v.id', 'v.policy_id', 'v.asset_vault_name', 'v.total_assets_cost_ada'])
       .where('v.vault_status = :status', { status: VaultStatus.locked })
       .andWhere('v.liquidity_pool_contribution > 0')
       .andWhere('v.policy_id IS NOT NULL')
@@ -1362,6 +1351,7 @@ export class TaptoolsService {
             price_change_24h: priceChangeData?.['24h'] || 0,
             price_change_7d: priceChangeData?.['7d'] || 0,
             price_change_30d: priceChangeData?.['30d'] || 0,
+            tvl: vault.total_assets_cost_ada,
           };
 
           await this.marketService.upsertMarketData(marketData);

@@ -4,6 +4,11 @@ import { IsEnum, IsNumber, IsOptional, IsString, Min } from 'class-validator';
 
 import { PaginationDto } from '../../vaults/dto/pagination.dto';
 
+export enum TvlCurrency {
+  ADA = 'ada',
+  USD = 'usd',
+}
+
 export enum MarketSortField {
   circSupply = 'circSupply',
   fdv = 'fdv',
@@ -16,6 +21,7 @@ export enum MarketSortField {
   priceChange7d = 'price_change_7d',
   priceChange30d = 'price_change_30d',
   tvl = 'tvl',
+  delta = 'delta',
   createdAt = 'created_at',
   updatedAt = 'updated_at',
 }
@@ -128,4 +134,39 @@ export class GetMarketsDto extends PaginationDto {
   })
   @Expose()
   maxTvl?: number;
+
+  @IsNumber()
+  @IsOptional()
+  @Type(() => Number)
+  @Min(0)
+  @ApiProperty({
+    type: Number,
+    required: false,
+    description: 'Minimum Mkt Cap / TVL (%)',
+  })
+  @Expose()
+  minDelta?: number;
+
+  @IsNumber()
+  @IsOptional()
+  @Type(() => Number)
+  @Min(0)
+  @ApiProperty({
+    type: Number,
+    required: false,
+    description: 'Maximum Mkt Cap / TVL (%)',
+  })
+  @Expose()
+  maxDelta?: number;
+
+  @IsEnum(TvlCurrency)
+  @IsOptional()
+  @ApiProperty({
+    enum: TvlCurrency,
+    required: false,
+    default: TvlCurrency.ADA,
+    description: 'Currency for TVL filtering and sorting (ada or usd)',
+  })
+  @Expose()
+  tvlCurrency?: TvlCurrency = TvlCurrency.ADA;
 }
