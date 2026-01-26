@@ -6,6 +6,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
+import { DistributionService } from './distribution.service';
 import { ExecType, MarketplaceActionDto } from './dto/create-proposal.req';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
 import { TerminationService } from './termination.service';
@@ -52,7 +53,8 @@ export class GovernanceExecutionService {
     private readonly voteCountingService: VoteCountingService,
     private readonly treasuryExtractionService: TreasuryExtractionService,
     private readonly transactionsService: TransactionsService,
-    private readonly terminationService: TerminationService
+    private readonly terminationService: TerminationService,
+    private readonly distributionService: DistributionService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
@@ -114,6 +116,7 @@ export class GovernanceExecutionService {
    * Retry execution of all PASSED proposals with exponential backoff
    * Runs periodically to retry proposals that are in PASSED status but not yet executed
    * Implements retry limits and exponential backoff to prevent indefinite retries
+   * Also handles distribution batch retries for DISTRIBUTION proposals
    */
   @Cron(CronExpression.EVERY_5_MINUTES)
   async retryPassedProposals(): Promise<void> {
@@ -121,7 +124,7 @@ export class GovernanceExecutionService {
       // Find all proposals in PASSED status with metadata for retry tracking
       const passedProposals = await this.proposalRepository.find({
         where: { status: ProposalStatus.PASSED },
-        select: ['id', 'title', 'vaultId', 'metadata'],
+        select: ['id', 'title', 'vaultId', 'metadata', 'proposalType'],
       });
 
       if (passedProposals.length === 0) {
@@ -130,6 +133,36 @@ export class GovernanceExecutionService {
 
       for (const proposal of passedProposals) {
         try {
+          // Special handling for DISTRIBUTION proposals with pending batch retries
+          if (proposal.proposalType === ProposalType.DISTRIBUTION && proposal.metadata?.distribution?.batches) {
+            const hasPendingRetries = proposal.metadata.distribution.batches.some(
+              (b: any) => b.status === 'retry_pending'
+            );
+
+            if (hasPendingRetries) {
+              this.logger.log(`Retrying pending distribution batches for proposal ${proposal.id}`);
+              const result = await this.distributionService.retryFailedBatches(proposal.id);
+
+              if (result.retriedCount > 0) {
+                this.logger.log(
+                  `Retried ${result.retriedCount} batches for proposal ${proposal.id}: ` +
+                    `${result.successCount} succeeded, ${result.stillFailedCount} still failed`
+                );
+
+                // Check if all batches are now complete
+                const status = await this.distributionService.getDistributionStatus(proposal.id);
+                if (status.status === 'completed') {
+                  await this.proposalRepository.update(
+                    { id: proposal.id },
+                    { status: ProposalStatus.EXECUTED, executionDate: new Date() }
+                  );
+                  this.logger.log(`Distribution proposal ${proposal.id} fully completed, marked as EXECUTED`);
+                }
+              }
+              continue; // Skip normal retry logic for distribution proposals with pending batches
+            }
+          }
+
           const retryInfo = proposal.metadata?._executionRetry;
           const retryCount = retryInfo?.count || 0;
           const lastRetryAt = retryInfo?.lastAttempt ? new Date(retryInfo.lastAttempt) : null;
@@ -1003,50 +1036,61 @@ export class GovernanceExecutionService {
 
   /**
    * Execute DISTRIBUTION proposal actions
-   * Only runs on mainnet - testnet just logs completion
+   * Distributes ADA from treasury wallet to VT holders proportionally
+   * Uses batched transactions to handle large numbers of recipients
    */
   private async executeDistributionProposal(proposal: Proposal): Promise<boolean> {
-    if (!this.isMainnet) {
-      this.logger.log(
-        `[TESTNET] Distribution proposal ${proposal.id} marked as completed (no actual execution on testnet)`
-      );
-      return true;
-    }
+    const networkLabel = this.isMainnet ? 'MAINNET' : 'TESTNET';
+    this.logger.log(`[${networkLabel}] Executing distribution proposal ${proposal.id}`);
 
-    this.logger.log(`[MAINNET] Executing distribution proposal ${proposal.id}`);
-
-    if (!proposal.metadata.distributionAssets || proposal.metadata.distributionAssets.length === 0) {
-      this.logger.warn(`Distribution proposal ${proposal.id} has no assets to distribute`);
+    if (!proposal.metadata.distributionLovelaceAmount) {
+      this.logger.warn(`Distribution proposal ${proposal.id} has no lovelace amount to distribute`);
       return false;
     }
 
     try {
-      // TODO: Implement actual distribution logic
-      // This would involve:
-      // 1. Getting vault holders/snapshot
-      // 2. Calculating distribution amounts per holder
-      // 3. Building distribution transactions
-      // 4. Signing and submitting to blockchain
+      // Execute the distribution via DistributionService
+      const success = await this.distributionService.executeDistribution(proposal);
 
-      this.logger.log(
-        `Distributing ${proposal.metadata.distributionAssets.length} asset(s) for vault ${proposal.vaultId}`
-      );
+      if (success) {
+        this.logger.log(`Successfully executed distribution proposal ${proposal.id}`);
+      } else {
+        // Check if there are pending retries
+        const status = await this.distributionService.getDistributionStatus(proposal.id);
 
-      for (const asset of proposal.metadata.distributionAssets) {
-        this.logger.log(`Distributing ${asset.amount} of asset ${asset.id}`);
-        // Actual distribution implementation here
+        if (status.pendingRetry > 0) {
+          this.logger.warn(
+            `Distribution proposal ${proposal.id} has ${status.pendingRetry} batches pending retry. ` +
+              `Will be retried automatically.`
+          );
+          // Don't fail the proposal if there are pending retries
+          return true;
+        }
+
+        if (status.failedBatches > 0 && status.completedBatches > 0) {
+          // Partial success - some batches completed
+          this.logger.warn(
+            `Distribution proposal ${proposal.id} partially completed: ` +
+              `${status.completedBatches}/${status.totalBatches} batches succeeded, ` +
+              `${status.failedBatches} failed after max retries`
+          );
+
+          // Emit partial completion event
+          this.eventEmitter.emit('proposal.distribution.partial', {
+            proposalId: proposal.id,
+            vaultId: proposal.vaultId,
+            completedBatches: status.completedBatches,
+            failedBatches: status.failedBatches,
+            totalDistributed: status.totalDistributed,
+            network: networkLabel.toLowerCase(),
+          });
+
+          // Consider partial success as overall success
+          return true;
+        }
       }
 
-      // Emit event for tracking
-      this.eventEmitter.emit('proposal.distribution.executed', {
-        proposalId: proposal.id,
-        vaultId: proposal.vaultId,
-        assets: proposal.metadata.distributionAssets,
-        network: 'mainnet',
-      });
-
-      this.logger.log(`Successfully executed distribution proposal ${proposal.id}`);
-      return true;
+      return success;
     } catch (error) {
       this.logger.error(`Error executing distribution proposal ${proposal.id}: ${error.message}`, error.stack);
       await this.storeExecutionError(proposal, error);

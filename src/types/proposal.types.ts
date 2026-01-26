@@ -1,8 +1,13 @@
 export enum ProposalStatus {
+  /** Proposal is created but not yet active */
   UPCOMING = 'upcoming',
+  /** Proposal is currently active and open for voting */
   ACTIVE = 'active',
+  /** Proposal has met the required votes and is approved for execution */
   PASSED = 'passed',
+  /** Proposal has not met the required votes and is rejected */
   REJECTED = 'rejected',
+  /** Proposal has been executed (all actions completed) */
   EXECUTED = 'executed',
 }
 

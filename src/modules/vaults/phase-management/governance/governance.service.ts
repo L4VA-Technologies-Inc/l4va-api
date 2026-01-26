@@ -14,6 +14,7 @@ import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { In, IsNull, Not, Repository } from 'typeorm';
 
+import { DistributionService } from './distribution.service';
 import { CreateProposalReq, ExecType } from './dto/create-proposal.req';
 import { CreateProposalRes } from './dto/create-proposal.res';
 import { AssetBuySellDto } from './dto/get-assets.dto';
@@ -96,7 +97,8 @@ export class GovernanceService {
     private readonly userRepository: Repository<User>,
     private readonly configService: ConfigService,
     private readonly eventEmitter: EventEmitter2,
-    private readonly voteCountingService: VoteCountingService
+    private readonly voteCountingService: VoteCountingService,
+    private readonly distributionService: DistributionService
   ) {
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
 
@@ -300,9 +302,24 @@ export class GovernanceService {
         proposal.metadata.nonFungibleTokens = createProposalReq.nfts || [];
         break;
 
-      case ProposalType.DISTRIBUTION:
-        proposal.metadata.distributionAssets = createProposalReq.distributionAssets || [];
+      case ProposalType.DISTRIBUTION: {
+        const lovelaceAmount = createProposalReq.distributionLovelaceAmount;
+
+        if (!lovelaceAmount || lovelaceAmount <= 0) {
+          throw new BadRequestException('Distribution lovelace amount is required and must be greater than 0');
+        }
+
+        // Validate distribution using DistributionService
+        const validation = await this.distributionService.validateDistribution(vaultId, lovelaceAmount.toString());
+
+        if (!validation.valid) {
+          throw new BadRequestException(validation.errors.join('; '));
+        }
+
+        // Store the lovelace amount in metadata
+        proposal.metadata.distributionLovelaceAmount = lovelaceAmount.toString();
         break;
+      }
 
       case ProposalType.TERMINATION:
         if (createProposalReq.metadata) {
@@ -540,18 +557,13 @@ export class GovernanceService {
     // Consolidate all asset IDs from metadata
     const allAssetIds = new Set<string>();
     const burnAssetIds = proposal.metadata?.burnAssets || [];
-    const distributionAssetIds = proposal.metadata?.distributionAssets?.map(da => da.id) || [];
     const fungibleTokenIds = proposal.metadata?.fungibleTokens?.map(ft => ft.id) || [];
     const nonFungibleTokenIds = proposal.metadata?.nonFungibleTokens?.map(nft => nft.id) || [];
     const marketplaceActionIds = proposal.metadata?.marketplaceActions?.map(ma => ma.assetId) || [];
 
-    [
-      ...burnAssetIds,
-      ...distributionAssetIds,
-      ...fungibleTokenIds,
-      ...nonFungibleTokenIds,
-      ...marketplaceActionIds,
-    ].forEach(id => allAssetIds.add(id));
+    [...burnAssetIds, ...fungibleTokenIds, ...nonFungibleTokenIds, ...marketplaceActionIds].forEach(id =>
+      allAssetIds.add(id)
+    );
 
     // Fetch all assets in a single query
     const allAssets =
@@ -592,20 +604,8 @@ export class GovernanceService {
         quantity: asset.quantity,
       }));
 
-    const distributionAmountMap = new Map(proposal.metadata?.distributionAssets?.map(da => [da.id, da.amount]) || []);
-    const distributionAssetsWithNames = distributionAssetIds
-      .map(id => assetMap.get(id))
-      .filter(Boolean)
-      .map(asset => ({
-        id: asset.id,
-        name: asset.name || asset.metadata?.name || 'Unknown Asset',
-        imageUrl: asset.imageUrl,
-        policyId: asset.policy_id,
-        assetId: asset.asset_id,
-        type: asset.type,
-        quantity: asset.quantity,
-        amount: distributionAmountMap.get(asset.id) || 0,
-      }));
+    // Get distribution lovelace amount for DISTRIBUTION proposals
+    const distributionLovelaceAmount = proposal.metadata?.distributionLovelaceAmount || null;
 
     const amountMap = new Map(proposal.metadata?.fungibleTokens?.map(ft => [ft.id, ft.amount]) || []);
     const fungibleTokensWithNames = fungibleTokenIds
@@ -657,6 +657,40 @@ export class GovernanceService {
       };
     });
 
+    // Get distribution status for DISTRIBUTION proposals that have started execution
+    let distributionStatus = null;
+    if (
+      proposal.proposalType === ProposalType.DISTRIBUTION &&
+      proposal.metadata?.distribution &&
+      (proposal.status === ProposalStatus.PASSED || proposal.status === ProposalStatus.EXECUTED)
+    ) {
+      try {
+        const status = await this.distributionService.getDistributionStatus(proposalId);
+        distributionStatus = {
+          status: status.status,
+          totalBatches: status.totalBatches,
+          completedBatches: status.completedBatches,
+          failedBatches: status.failedBatches,
+          pendingRetry: status.pendingRetry,
+          totalDistributed: status.totalDistributed,
+          totalRecipients: proposal.metadata.distribution.totalRecipients || 0,
+          batches: status.batches.map(b => ({
+            batchId: b.batchId,
+            batchNumber: b.batchNumber,
+            totalBatches: b.totalBatches,
+            recipientCount: b.recipientCount,
+            lovelaceAmount: b.lovelaceAmount,
+            status: b.status,
+            txHash: b.txHash,
+            retryCount: b.retryCount,
+            error: b.error,
+          })),
+        };
+      } catch (error) {
+        this.logger.warn(`Failed to get distribution status for proposal ${proposalId}: ${error.message}`);
+      }
+    }
+
     // Extract execution error from metadata if present
     const executionError = proposal.metadata?.executionError
       ? {
@@ -704,7 +738,8 @@ export class GovernanceService {
       selectedVote,
       proposer,
       burnAssets: burnAssetsWithNames,
-      distributionAssets: distributionAssetsWithNames,
+      distributionLovelaceAmount,
+      distributionStatus,
       fungibleTokens: fungibleTokensWithNames,
       nonFungibleTokens: nonFungibleTokensWithNames,
       marketplaceActions,
@@ -947,27 +982,6 @@ export class GovernanceService {
           origin_type: AssetOriginType.CONTRIBUTED,
           status: AssetStatus.LOCKED,
         },
-      });
-    } catch (error) {
-      this.logger.error(`Error getting assets to stake for vault ${vaultId}: ${error.message}`, error.stack);
-      throw new InternalServerErrorException('Error getting assets to stake');
-    }
-  }
-
-  /**
-   *  Distribute: Should not allow to distribute NFTs.
-   */
-  async getAssetsToDistribute(vaultId: string): Promise<Asset[]> {
-    try {
-      return await this.assetRepository.find({
-        where: {
-          vault: { id: vaultId },
-          type: In([AssetType.FT, AssetType.NFT]),
-          origin_type: AssetOriginType.CONTRIBUTED,
-          status: AssetStatus.LOCKED,
-        },
-        relations: ['vault'],
-        select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'dex_price', 'floor_price', 'metadata', 'name'],
       });
     } catch (error) {
       this.logger.error(`Error getting assets to stake for vault ${vaultId}: ${error.message}`, error.stack);

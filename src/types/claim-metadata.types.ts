@@ -83,16 +83,29 @@ export interface LpClaimMetadata extends BaseClaimMetadata {
  * Used for general token/ADA distributions to users
  */
 export interface DistributionClaimMetadata extends BaseClaimMetadata {
-  /** VT amount in distribution */
+  /** Recipient wallet address */
+  address?: string;
+  /** VT amount holder has */
   vtAmount?: string;
-  /** ADA amount in distribution */
+  /** ADA amount being distributed (in lovelace) */
   adaAmount?: string;
-  /** Distribution transaction hash */
+  /** Distribution transaction hash (once completed) */
   distributionTxHash?: string;
   /** Batch processing information */
   batchId?: string;
-  /** Output index for UTXO */
+  /** Output index for UTXO (recipient's position in tx outputs) */
   outputIndex?: number;
+  /** Proposal ID this distribution is from */
+  proposalId?: string;
+  /** Retry tracking for failed distributions */
+  retryInfo?: {
+    /** Number of retry attempts */
+    attempts: number;
+    /** Last retry timestamp */
+    lastRetryAt?: string;
+    /** Last error message */
+    lastError?: string;
+  };
 }
 
 /**

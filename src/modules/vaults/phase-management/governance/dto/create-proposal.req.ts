@@ -38,32 +38,6 @@ export class NonFungibleTokenDto {
   market: string;
 }
 
-export class DistributionAssetDto {
-  @ApiProperty({ description: 'Asset ID' })
-  @IsString()
-  @IsNotEmpty()
-  id: string;
-
-  @ApiProperty({ description: 'Amount to distribute' })
-  @IsNotEmpty()
-  amount: number;
-
-  @ApiProperty({ description: 'Policy ID', required: false })
-  @IsOptional()
-  @IsString()
-  policyId?: string;
-
-  @ApiProperty({ description: 'Asset ID', required: false })
-  @IsOptional()
-  @IsString()
-  assetId?: string;
-
-  @ApiProperty({ description: 'Asset type', required: false })
-  @IsOptional()
-  @IsString()
-  type?: string;
-}
-
 export class MarketplaceAssetDto {
   @ApiProperty({
     description: 'Marketplace action type',
@@ -298,16 +272,14 @@ export class CreateProposalReq {
   nfts?: NonFungibleTokenDto[];
 
   @ApiProperty({
-    description: 'Assets for distribution proposal',
-    type: [DistributionAssetDto],
+    description: 'Amount to distribute in lovelace for distribution proposals (1 ADA = 1,000,000 lovelace)',
+    example: 100000000,
     required: false,
   })
   @IsOptional()
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => DistributionAssetDto)
+  @IsNumber()
   @Expose()
-  distributionAssets?: DistributionAssetDto[];
+  distributionLovelaceAmount?: number;
 
   @ApiProperty({
     description: 'Marketplace actions for buy/sell proposals',

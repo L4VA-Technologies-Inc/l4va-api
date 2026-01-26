@@ -23,6 +23,7 @@ export enum TransactionType {
   stake = 'stake',
   extractLp = 'extract-lp',
   distributeLp = 'distribute-lp',
+  distribution = 'distribution', // ADA distribution from treasury to VT holders
   updateVault = 'update-vault', // Vault metadata update transaction
   all = 'all',
 }

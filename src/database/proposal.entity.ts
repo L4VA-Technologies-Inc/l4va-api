@@ -3,10 +3,10 @@ import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, CreateDat
 
 import {
   MarketplaceActionDto,
-  DistributionAssetDto,
   FungibleTokenDto,
   NonFungibleTokenDto,
 } from '../modules/vaults/phase-management/governance/dto/create-proposal.req';
+import { DistributionMetadata } from '../modules/vaults/phase-management/governance/dto/distribution.dto';
 import { ProposalStatus, ProposalType } from '../types/proposal.types';
 
 import { Snapshot } from './snapshot.entity';
@@ -84,8 +84,11 @@ export class Proposal {
     // Buy/Sell data
     marketplaceActions?: MarketplaceActionDto[];
 
-    // Distribution data
-    distributionAssets?: DistributionAssetDto[];
+    // Distribution data - total lovelace amount to distribute
+    distributionLovelaceAmount?: string;
+
+    // Distribution execution tracking (for ADA distributions)
+    distribution?: DistributionMetadata;
 
     // Burning data
     burnAssets?: string[];

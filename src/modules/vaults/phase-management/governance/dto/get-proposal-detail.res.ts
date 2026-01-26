@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
 
+import { DistributionBatchStatus } from './distribution.dto';
+
 import { AssetType } from '@/types/asset.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { VoteType } from '@/types/vote.types';
@@ -177,12 +179,6 @@ export class ProposalAssetDto {
 
 export class BurnAssetDto extends ProposalAssetDto {}
 
-export class DistributionAssetDetailDto extends ProposalAssetDto {
-  @Expose()
-  @ApiProperty({ description: 'Amount to distribute', example: 1000000 })
-  amount: number;
-}
-
 export class StakingTokenDto extends ProposalAssetDto {
   @Expose()
   @ApiPropertyOptional({ description: 'Market for staking proposal', example: 'm1' })
@@ -254,6 +250,91 @@ export class MarketplaceActionDetailDto {
   assetStatus?: string;
 }
 
+/**
+ * Distribution batch details for proposal response
+ */
+export class DistributionBatchDetailDto {
+  @Expose()
+  @ApiProperty({ description: 'Unique batch identifier' })
+  batchId: string;
+
+  @Expose()
+  @ApiProperty({ description: 'Batch number in sequence', example: 1 })
+  batchNumber: number;
+
+  @Expose()
+  @ApiProperty({ description: 'Total number of batches', example: 5 })
+  totalBatches: number;
+
+  @Expose()
+  @ApiProperty({ description: 'Number of recipients in this batch', example: 40 })
+  recipientCount: number;
+
+  @Expose()
+  @ApiProperty({ description: 'Total lovelace amount in this batch' })
+  lovelaceAmount: string;
+
+  @Expose()
+  @ApiProperty({
+    description: 'Batch processing status',
+    enum: DistributionBatchStatus,
+  })
+  status: DistributionBatchStatus;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Transaction hash if submitted' })
+  txHash?: string;
+
+  @Expose()
+  @ApiProperty({ description: 'Number of retry attempts', example: 0 })
+  retryCount: number;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Error message if failed' })
+  error?: string;
+}
+
+/**
+ * Distribution execution status for proposal response
+ */
+export class DistributionStatusDto {
+  @Expose()
+  @ApiProperty({
+    description: 'Overall distribution status',
+    enum: ['pending', 'in_progress', 'completed', 'partially_failed', 'failed'],
+  })
+  status: 'pending' | 'in_progress' | 'completed' | 'partially_failed' | 'failed';
+
+  @Expose()
+  @ApiProperty({ description: 'Total number of batches', example: 5 })
+  totalBatches: number;
+
+  @Expose()
+  @ApiProperty({ description: 'Number of completed batches', example: 3 })
+  completedBatches: number;
+
+  @Expose()
+  @ApiProperty({ description: 'Number of failed batches', example: 1 })
+  failedBatches: number;
+
+  @Expose()
+  @ApiProperty({ description: 'Number of batches pending retry', example: 1 })
+  pendingRetry: number;
+
+  @Expose()
+  @ApiProperty({ description: 'Total lovelace actually distributed so far' })
+  totalDistributed: string;
+
+  @Expose()
+  @ApiProperty({ description: 'Total recipients receiving distribution' })
+  totalRecipients: number;
+
+  @Expose()
+  @ApiProperty({ description: 'Individual batch details', type: [DistributionBatchDetailDto] })
+  @Type(() => DistributionBatchDetailDto)
+  batches: DistributionBatchDetailDto[];
+}
+
 export class GetProposalDetailRes {
   @Expose()
   @ApiProperty({ description: 'Proposal details', type: ProposalDetailDto })
@@ -289,9 +370,19 @@ export class GetProposalDetailRes {
   burnAssets?: BurnAssetDto[];
 
   @Expose()
-  @ApiPropertyOptional({ description: 'Assets to distribute in this proposal', type: [DistributionAssetDetailDto] })
-  @Type(() => DistributionAssetDetailDto)
-  distributionAssets?: DistributionAssetDetailDto[];
+  @ApiPropertyOptional({
+    description: 'Lovelace amount to distribute for DISTRIBUTION proposals (as string)',
+    example: '100000000',
+  })
+  distributionLovelaceAmount?: string;
+
+  @Expose()
+  @ApiPropertyOptional({
+    description: 'Distribution execution status (only for DISTRIBUTION proposals that have started execution)',
+    type: DistributionStatusDto,
+  })
+  @Type(() => DistributionStatusDto)
+  distributionStatus?: DistributionStatusDto;
 
   @Expose()
   @ApiPropertyOptional({ description: 'Fungible tokens for staking', type: [StakingTokenDto] })

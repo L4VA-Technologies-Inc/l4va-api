@@ -7,6 +7,7 @@ import { TransactionsModule } from '../../processing-tx/offchain-tx/transactions
 import { BlockchainModule } from '../../processing-tx/onchain/blockchain.module';
 import { TreasureWalletModule } from '../../treasure/treasure-wallet.module';
 
+import { DistributionService } from './distribution.service';
 import { GovernanceExecutionService } from './governance-execution.service';
 import { GovernanceController } from './governance.controller';
 import { GovernanceService } from './governance.service';
@@ -46,6 +47,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     ProposalSchedulerService,
     VoteCountingService,
     TerminationService,
+    DistributionService,
     {
       provide: ProposalHealthService,
       useFactory: (
@@ -59,6 +61,6 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
       inject: [getRepositoryToken(Proposal), EventEmitter2, ProposalSchedulerService, GovernanceExecutionService],
     },
   ],
-  exports: [GovernanceService, GovernanceExecutionService, TerminationService],
+  exports: [GovernanceService, GovernanceExecutionService, TerminationService, DistributionService],
 })
 export class GovernanceModule {}
