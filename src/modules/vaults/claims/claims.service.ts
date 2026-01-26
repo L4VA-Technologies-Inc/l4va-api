@@ -124,7 +124,7 @@ export class ClaimsService {
 
     if (query?.type) {
       if (query.type === ClaimType.DISTRIBUTION) {
-        whereConditions.type = In([ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER]);
+        whereConditions.type = In([ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER, ClaimType.DISTRIBUTION]);
       } else {
         whereConditions.type = query.type as ClaimType;
       }
