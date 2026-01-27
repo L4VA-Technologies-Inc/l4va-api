@@ -591,10 +591,7 @@ export class TreasuryWalletService {
    */
   @Cron(CronExpression.EVERY_6_HOURS)
   async autoCreateMissingTreasuryWallets(): Promise<void> {
-    // Check feature flag based on network
-    const isEnabled = this.isMainnet
-      ? this.systemSettingsService.autoCreateTreasuryWallets
-      : this.systemSettingsService.autoCreateTreasuryWalletsTestnet;
+    const isEnabled = this.systemSettingsService.autoCreateTreasuryWallets;
 
     if (!isEnabled) {
       this.logger.debug(`Auto-create treasury wallets is disabled for ${this.isMainnet ? 'mainnet' : 'testnet'}`);

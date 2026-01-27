@@ -27,7 +27,7 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   protocol_flat_fee: 5000000,
   lp_recommended_min_liquidity: 500000000, // 500 ADA
   auto_create_treasury_wallets: false, // Disabled by default for mainnet
-  auto_create_treasury_wallets_testnet: true, // Disabled by default for testnet
+  auto_create_treasury_wallets_testnet: false, // Disabled by default for testnet
 };
 
 @Injectable()
