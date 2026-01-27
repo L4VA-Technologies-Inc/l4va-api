@@ -23,6 +23,7 @@ import { DraftVaultsService } from './draft-vaults.service';
 import { BuildBurnTransactionRes } from './dto/build-burn-transaction.res';
 import { CreateVaultRes } from './dto/create-vault.res';
 import { CreateVaultReq } from './dto/createVault.req';
+import { GetVaultActivityDto } from './dto/get-vault-activity.dto';
 import { GetVaultParamDto } from './dto/get-vault-param.dto';
 import { GetVaultTransactionsDto } from './dto/get-vault-transactions.dto';
 import { VaultStatisticsResponse } from './dto/get-vaults-statistics.dto';
@@ -270,5 +271,18 @@ export class VaultsController {
     @Param('id', new ParseUUIDPipe()) id: string
   ): Promise<GetVTStatisticRes> {
     return this.statisticsService.getVaultTokenStatistics(id);
+  }
+
+  @ApiDoc({
+    summary: 'Get vault activity',
+    description: 'Returns paginated vault transaction activity (createVault, contribute, acquire, updateVault)',
+    status: 200,
+  })
+  @Get('activity/:id')
+  async getVaultActivityById(
+    @Param() params: GetVaultParamDto,
+    @Query() query: GetVaultActivityDto
+  ): Promise<PaginatedResponseDto<Transaction>> {
+    return this.vaultsService.getVaultActivityById(params.id, query.page, query.limit, query.sortOrder);
   }
 }

@@ -36,6 +36,7 @@ import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.enti
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
 import { TagEntity } from '@/database/tag.entity';
+import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { transformToSnakeCase } from '@/helpers';
@@ -43,7 +44,7 @@ import { DistributionCalculationService } from '@/modules/distribution/distribut
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ProposalStatus } from '@/types/proposal.types';
-import { TransactionStatus } from '@/types/transaction.types';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import {
   ContributionWindowType,
   InvestmentWindowType,
@@ -96,6 +97,8 @@ export class VaultsService {
     private readonly contributorWhitelistRepository: Repository<ContributorWhitelistEntity>,
     @InjectRepository(Asset)
     private readonly assetsRepository: Repository<Asset>,
+    @InjectRepository(Transaction)
+    private readonly transactionRepository: Repository<Transaction>,
     private readonly gcsService: GoogleCloudStorageService,
     private readonly vaultContractService: VaultManagingService,
     private readonly blockchainService: BlockchainService,
@@ -1541,5 +1544,43 @@ export class VaultsService {
         semiPrivate: { percentage: 0, valueAda: 0, valueUsd: 0 },
       };
     }
+  }
+
+  async getVaultActivityById(
+    vault_id: string,
+    page: number = 1,
+    limit: number = 10,
+    sortOrder: SortOrder = SortOrder.DESC
+  ): Promise<PaginatedResponseDto<Transaction>> {
+    const queryBuilder = this.transactionRepository
+      .createQueryBuilder('t')
+      .leftJoinAndSelect('t.user', 'user')
+      .leftJoinAndSelect('t.assets', 'assets')
+      .where('t.vault_id = :vault_id', { vault_id })
+      .andWhere('t.type IN (:...types)', {
+        types: [
+          TransactionType.createVault,
+          TransactionType.contribute,
+          TransactionType.acquire,
+          TransactionType.updateVault,
+        ],
+      })
+      .andWhere('t.status = :status', { status: TransactionStatus.confirmed })
+      .orderBy('t.created_at', sortOrder);
+
+    const total = await queryBuilder.getCount();
+
+    const transactions = await queryBuilder
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getMany();
+
+    return {
+      items: transactions,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 }
