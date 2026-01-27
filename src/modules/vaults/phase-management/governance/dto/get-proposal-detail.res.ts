@@ -87,12 +87,14 @@ export class ProposalDetailDto {
   };
 
   @Expose()
-  @ApiPropertyOptional({ description: 'Vault information', type: Object })
+  @ApiPropertyOptional({ description: 'Vault information including termination configuration', type: Object })
   vault?: {
     id: string;
     name: string;
     vault_token_ticker?: string;
     vault_status?: string;
+    termination_type?: string;
+    terminationMetadata?: any; // Includes status, txHashes, etc.
   };
 }
 

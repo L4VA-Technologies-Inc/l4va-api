@@ -502,6 +502,8 @@ export class GovernanceService {
           name: true,
           vault_token_ticker: true,
           vault_status: true,
+          termination_type: true,
+          termination_metadata: true,
         },
       },
     });
@@ -772,6 +774,8 @@ export class GovernanceService {
             name: proposal.vault.name,
             vault_token_ticker: proposal.vault.vault_token_ticker,
             vault_status: proposal.vault.vault_status,
+            termination_type: proposal.vault.termination_type,
+            terminationMetadata: proposal.vault.termination_metadata, // Includes status, txHashes, etc.
           }
         : undefined,
     };
