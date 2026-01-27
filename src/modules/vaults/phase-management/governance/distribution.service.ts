@@ -244,7 +244,11 @@ export class DistributionService {
    * Execute distribution proposal - creates claims and processes batches
    */
   async executeDistribution(proposal: Proposal): Promise<boolean> {
-    this.logger.log(`Starting distribution execution for proposal ${proposal.id}`);
+    if (!proposal.snapshotId) {
+      throw new Error(
+        `CRITICAL BUG: proposal.snapshotId is undefined for proposal ${proposal.id}. This usually means snapshotId was not selected when loading the proposal.`
+      );
+    }
 
     const vault = await this.vaultRepository.findOne({
       where: { id: proposal.vaultId },
@@ -254,7 +258,6 @@ export class DistributionService {
       throw new Error(`Vault ${proposal.vaultId} not found`);
     }
 
-    // Get snapshot from proposal
     const snapshot = await this.snapshotRepository.findOne({
       where: { id: proposal.snapshotId },
     });
@@ -416,16 +419,15 @@ export class DistributionService {
       return recipients;
     }
 
-    // Calculate proportional share for each holder
+    const eligibleAddresses: { address: string; vtBalance: bigint; lovelaceShare: bigint }[] = [];
+
     for (const [address, balance] of Object.entries(addressBalances)) {
       const vtBalance = BigInt(balance);
 
       if (vtBalance === BigInt(0)) continue;
 
-      // Calculate proportional lovelace share
       const lovelaceShare = (totalLovelace * vtBalance) / totalVtSupply;
 
-      // Skip if share is below minimum
       if (lovelaceShare < BigInt(this.MIN_ADA_PER_RECIPIENT)) {
         this.logger.warn(
           `Skipping address ${address} - share ${lovelaceShare} below minimum ${this.MIN_ADA_PER_RECIPIENT}`
@@ -433,16 +435,27 @@ export class DistributionService {
         continue;
       }
 
-      // Find user by address
-      const user = await this.userRepository.findOne({
-        where: { address },
-      });
+      eligibleAddresses.push({ address, vtBalance, lovelaceShare });
+    }
 
+    if (eligibleAddresses.length === 0) {
+      return recipients;
+    }
+
+    const addresses = eligibleAddresses.map(e => e.address);
+    const users = await this.userRepository.find({
+      where: { address: In(addresses) },
+      select: ['id', 'address'],
+    });
+
+    const addressToUserIdMap = new Map(users.map(u => [u.address, u.id]));
+
+    for (const { address, vtBalance, lovelaceShare } of eligibleAddresses) {
       recipients.push({
         address,
         vtBalance,
         lovelaceShare,
-        userId: user?.id,
+        userId: addressToUserIdMap.get(address),
       });
     }
 
@@ -532,7 +545,6 @@ export class DistributionService {
       // Get claims for this batch
       const claims = await this.claimRepository.find({
         where: { id: In(batch.claimIds) },
-        relations: ['user'],
       });
 
       if (claims.length === 0) {

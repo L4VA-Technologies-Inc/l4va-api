@@ -256,6 +256,7 @@ export class GovernanceExecutionService {
         .select([
           'proposal.id',
           'proposal.vaultId',
+          'proposal.snapshotId',
           'proposal.status',
           'proposal.proposalType',
           'proposal.metadata',
@@ -373,6 +374,7 @@ export class GovernanceExecutionService {
         .select([
           'proposal.id',
           'proposal.vaultId',
+          'proposal.snapshotId',
           'proposal.status',
           'proposal.proposalType',
           'proposal.metadata',
