@@ -40,6 +40,7 @@ export class DistributionService {
   private readonly MAX_RECIPIENTS_PER_BATCH = 40; // Safe limit for transaction size (~16KB)
   private readonly MAX_RETRY_ATTEMPTS = 3;
   private readonly BATCH_RETRY_DELAY_MS = 60_000; // 1 minute between retries
+  private readonly FEE_RESERVE_PER_BATCH = 2_000_000; // 2 ADA buffer per batch (tx fees + min UTxO + safety margin)
 
   constructor(
     @InjectRepository(Vault)
@@ -140,6 +141,12 @@ export class DistributionService {
     const minDistributableLovelace = BigInt(vtHolderCount) * BigInt(this.MIN_ADA_PER_RECIPIENT);
     const minDistributableAda = Number(minDistributableLovelace) / 1_000_000;
 
+    // Calculate fee reserve based on estimated batch count
+    const estimatedBatches = Math.ceil(vtHolderCount / this.MAX_RECIPIENTS_PER_BATCH);
+    const totalFeeReserve = estimatedBatches * this.FEE_RESERVE_PER_BATCH;
+    const maxDistributableLovelace = Math.max(0, balance.lovelace - totalFeeReserve);
+    const maxDistributableAda = maxDistributableLovelace / 1_000_000;
+
     // Check if treasury has enough for minimum distribution
     if (balance.lovelace < Number(minDistributableLovelace) && vtHolderCount > 0) {
       warnings.push(
@@ -148,11 +155,18 @@ export class DistributionService {
       );
     }
 
+    // Add warning if trying to distribute close to full balance
+    if (vtHolderCount > 0 && totalFeeReserve > 0) {
+      warnings.push(
+        `Transaction fees: ~${(totalFeeReserve / 1_000_000).toFixed(2)} ADA reserved for ${estimatedBatches} batch${estimatedBatches > 1 ? 'es' : ''}`
+      );
+    }
+
     return {
       treasuryBalance: { lovelace: balance.lovelace, lovelaceFormatted },
       vtHolderCount,
       minDistributableAda,
-      maxDistributableAda: balance.lovelace / 1_000_000,
+      maxDistributableAda,
       minAdaPerHolder: this.MIN_ADA_PER_RECIPIENT / 1_000_000,
       hasTreasuryWallet: true,
       warnings,
@@ -190,10 +204,12 @@ export class DistributionService {
       return { valid: false, errors, warnings };
     }
 
-    // Check if amount exceeds treasury balance
-    if (amount > BigInt(info.treasuryBalance.lovelace)) {
+    // Check if amount exceeds max distributable (treasury balance minus fee reserve)
+    const maxDistributableLovelace = BigInt(Math.floor(info.maxDistributableAda * 1_000_000));
+    if (amount > maxDistributableLovelace) {
       errors.push(
-        `Distribution amount (${Number(amount) / 1_000_000} ADA) exceeds treasury balance (${info.treasuryBalance.lovelaceFormatted} ADA)`
+        `Distribution amount (${Number(amount) / 1_000_000} ADA) exceeds max distributable (${info.maxDistributableAda.toFixed(6)} ADA). ` +
+          `Treasury balance is ${info.treasuryBalance.lovelaceFormatted} ADA minus fee reserve.`
       );
     }
 
@@ -555,15 +571,18 @@ export class DistributionService {
       const txHash = await this.buildAndSubmitDistributionTx(treasuryAddress, proposal.vaultId, claims);
 
       // Create transaction record
+      // Convert lovelace to ADA for the amount field (must be integer if column is bigint)
+      const amountInAda = Math.floor(Number(batch.lovelaceAmount) / 1_000_000);
       const transaction = await this.transactionRepository.save({
         type: TransactionType.distribution,
         status: TransactionStatus.submitted,
         vault_id: proposal.vaultId,
         tx_hash: txHash,
-        amount: Number(batch.lovelaceAmount) / 1_000_000,
+        amount: amountInAda,
         metadata: {
           batchId: batch.batchId,
           recipientCount: claims.length,
+          lovelaceAmount: batch.lovelaceAmount, // Store exact lovelace amount in metadata
         },
       });
 

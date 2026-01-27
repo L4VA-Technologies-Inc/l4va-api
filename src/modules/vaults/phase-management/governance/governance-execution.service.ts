@@ -421,7 +421,7 @@ export class GovernanceExecutionService {
 
         this.logger.log(`Proposal ${proposal.id}: EXECUTED successfully`);
       } else {
-        this.logger.warn(`Proposal ${proposal.id} execution failed, status remains PASSED for retry`);
+        this.logger.warn(`Proposal ${proposal.id} execution failed, status remains PASSED for automatic retry`);
       }
     } catch (error) {
       // Check if this is a handled rejection (e.g., listing not found - NFT was already bought)
@@ -471,8 +471,6 @@ export class GovernanceExecutionService {
     });
 
     try {
-      this.logger.log(`Executing actions for proposal ${proposal.id} of type ${proposal.proposalType}`);
-
       switch (proposal.proposalType) {
         case ProposalType.MARKETPLACE_ACTION:
           return await this.executeMarketplaceProposal(proposal);
