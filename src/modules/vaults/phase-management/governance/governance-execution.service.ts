@@ -113,6 +113,43 @@ export class GovernanceExecutionService {
   }
 
   /**
+   * Handle termination completion event
+   * Marks the termination proposal as EXECUTED after all steps are complete
+   */
+  @OnEvent('proposal.termination.completed')
+  async handleTerminationCompleted(payload: { proposalId: string; vaultId: string }): Promise<void> {
+    try {
+      const proposal = await this.proposalRepository.findOne({
+        where: { id: payload.proposalId },
+        select: ['id', 'status'],
+      });
+
+      if (!proposal) {
+        this.logger.warn(`Proposal ${payload.proposalId} not found for termination completion`);
+        return;
+      }
+
+      // Mark proposal as EXECUTED now that all termination steps are complete
+      await this.proposalRepository.update(
+        { id: payload.proposalId },
+        {
+          status: ProposalStatus.EXECUTED,
+          executionDate: new Date(),
+        }
+      );
+
+      this.logger.log(
+        `Proposal ${payload.proposalId}: EXECUTED successfully (termination complete for vault ${payload.vaultId})`
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to mark termination proposal ${payload.proposalId} as executed: ${error.message}`,
+        error.stack
+      );
+    }
+  }
+
+  /**
    * Retry execution of all PASSED proposals with exponential backoff
    * Runs periodically to retry proposals that are in PASSED status but not yet executed
    * Implements retry limits and exponential backoff to prevent indefinite retries
@@ -1205,6 +1242,10 @@ export class GovernanceExecutionService {
    * 5. Create termination claims for VT holders
    * 6. Users claim VT -> ADA
    * 7. Vault NFT burn
+   * 8. Treasury cleanup
+   *
+   * Note: Returns false to keep proposal in PASSED status during the multi-step process.
+   * Proposal will be marked as EXECUTED only after step 9 completes via event listener.
    */
   private async executeTerminationProposal(proposal: Proposal): Promise<boolean> {
     const networkLabel = this.isMainnet ? 'MAINNET' : 'TESTNET';
@@ -1223,7 +1264,10 @@ export class GovernanceExecutionService {
       });
 
       this.logger.log(`Successfully initiated termination for vault ${proposal.vaultId}`);
-      return true;
+
+      // Return false to keep proposal in PASSED status during the multi-step termination process
+      // It will be marked as EXECUTED after treasury cleanup completes
+      return false;
     } catch (error) {
       this.logger.error(`Error executing termination proposal ${proposal.id}: ${error.message}`, error.stack);
       throw error;

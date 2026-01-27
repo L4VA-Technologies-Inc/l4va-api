@@ -933,10 +933,23 @@ export class TerminationService {
 
       await this.updateTerminationStatus(vault.id, TerminationStatus.TREASURY_CLEANED);
 
+      // Get the proposal ID from termination metadata to mark it as executed
+      const terminationMeta = vault.termination_metadata as TerminationMetadata;
+      const proposalId = terminationMeta?.proposalId;
+
       this.eventEmitter.emit('vault.treasury.cleaned', {
         vaultId: vault.id,
         treasuryAddress: treasuryWallet.address,
       });
+
+      // Emit event to mark termination proposal as EXECUTED (now that all steps are complete)
+      if (proposalId) {
+        this.eventEmitter.emit('proposal.termination.completed', {
+          proposalId,
+          vaultId: vault.id,
+        });
+        this.logger.log(`Termination complete for vault ${vault.id} - marking proposal ${proposalId} as EXECUTED`);
+      }
 
       this.logger.log(`Treasury wallet cleanup complete for vault ${vault.id}`);
     } catch (error) {
