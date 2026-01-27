@@ -1428,6 +1428,7 @@ export class TerminationService {
       ],
       mint: [
         {
+          version: 'cip25',
           assetName: { name: vault.asset_vault_name, format: 'hex' },
           policyId: vault.script_hash,
           type: 'plutus',
@@ -1451,6 +1452,8 @@ export class TerminationService {
     };
 
     const buildResponse = await this.blockchainService.buildTransaction(buildInput);
+    const txToSubmit = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+    txToSubmit.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
     // Store transaction data in claim metadata
     await this.claimRepository.update(
@@ -1472,7 +1475,7 @@ export class TerminationService {
 
     return {
       transactionId: transaction.id,
-      presignedTx: FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex')).to_hex(),
+      presignedTx: txToSubmit.to_hex(),
     };
   }
 
@@ -1605,6 +1608,7 @@ export class TerminationService {
       ],
       mint: [
         {
+          version: 'cip25',
           assetName: { name: vault.asset_vault_name, format: 'hex' },
           policyId: vault.script_hash,
           type: 'plutus',
