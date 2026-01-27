@@ -124,14 +124,6 @@ export type ClaimMetadata =
   | BaseClaimMetadata;
 
 /**
- * Type guard to check if metadata is ContributorClaimMetadata
- * Note: ContributorClaimMetadata is now minimal, check claim.type for CONTRIBUTOR instead
- */
-export function isContributorMetadata(metadata: unknown): metadata is ContributorClaimMetadata {
-  return metadata !== null && typeof metadata === 'object';
-}
-
-/**
  * Type guard to check if metadata is CancellationClaimMetadata
  */
 export function isCancellationMetadata(metadata: unknown): metadata is CancellationClaimMetadata {
