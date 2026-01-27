@@ -14,8 +14,10 @@ import { GetClaimsDto } from './dto/get-claims.dto';
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
+import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { CancellationInput } from '@/modules/distribution/distribution.types';
+import { TerminationService } from '@/modules/vaults/phase-management/governance/termination.service';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { Redeemer, Redeemer1 } from '@/modules/vaults/processing-tx/onchain/types/type';
 import {
@@ -44,8 +46,13 @@ export class ClaimsService {
     private readonly assetsRepository: Repository<Asset>,
     @InjectRepository(Claim)
     private claimRepository: Repository<Claim>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
+    @InjectRepository(Vault)
+    private readonly vaultRepository: Repository<Vault>,
     private readonly configService: ConfigService,
-    private readonly blockchainService: BlockchainService
+    private readonly blockchainService: BlockchainService,
+    private readonly terminationService: TerminationService
   ) {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
@@ -65,6 +72,54 @@ export class ClaimsService {
    * @returns Promise with an array of Claim entities
    */
   async getUserClaims(userId: string, query: GetClaimsDto): Promise<ClaimResponseDto> {
+    const page = parseInt(query?.page as string) || 1;
+    const limit = parseInt(query?.limit as string) || 10;
+    const skip = (page - 1) * limit;
+
+    if (
+      query?.type === ClaimType.TERMINATION ||
+      (Array.isArray(query?.type) && query?.type.includes(ClaimType.TERMINATION))
+    ) {
+      // Auto-create termination claims if user holds VT in terminating vaults
+      await this.autoCreateTerminationClaims(userId);
+
+      const terminationResult = await this.terminationService.getUserTerminationClaims(userId, skip, limit);
+
+      // Transform termination claims to match ClaimResponseItemsDto format
+      const items = terminationResult.claims.map(claim => {
+        const cleanClaim = {
+          id: claim.id,
+          type: ClaimType.TERMINATION,
+          status: claim.status as ClaimStatus,
+          amount: parseFloat((claim.metadata as any)?.vtAmount) / 10 ** (claim.vault?.ft_token_decimals || 0),
+          adaAmount:
+            parseFloat((claim.metadata as any)?.adaAmount || claim.lovelace_amount?.toString() || '0') / 1_000_000,
+          multiplier: null,
+          description: null,
+          createdAt: claim.created_at,
+          updatedAt: claim.updated_at,
+          vault: {
+            id: claim.vault.id,
+            name: claim.vault.name,
+            vaultImage: claim.vault.vault_image?.file_url || null,
+            vault_token_ticker: claim.vault?.vault_token_ticker || null,
+            ft_token_decimals: claim.vault?.ft_token_decimals || null,
+          },
+        };
+
+        return plainToInstance(ClaimResponseItemsDto, cleanClaim, {
+          excludeExtraneousValues: true,
+        });
+      });
+
+      return {
+        items,
+        total: terminationResult.total,
+        page,
+        limit,
+      };
+    }
+
     const whereConditions: {
       user: { id: string };
       status?: ClaimStatus | ReturnType<typeof In>;
@@ -77,7 +132,7 @@ export class ClaimsService {
 
     if (query?.type) {
       if (query.type === ClaimType.DISTRIBUTION) {
-        whereConditions.type = In([ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER]);
+        whereConditions.type = In([ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER, ClaimType.DISTRIBUTION]);
       } else {
         whereConditions.type = query.type as ClaimType;
       }
@@ -88,10 +143,6 @@ export class ClaimsService {
     } else if (query?.claimState === 'unclaimed') {
       whereConditions.status = In([ClaimStatus.AVAILABLE, ClaimStatus.PENDING]);
     }
-
-    const page = parseInt(query?.page as string) || 1;
-    const limit = parseInt(query?.limit as string) || 10;
-    const skip = (page - 1) * limit;
 
     const [claims, total] = await this.claimRepository.findAndCount({
       where: whereConditions,
@@ -132,6 +183,63 @@ export class ClaimsService {
     });
 
     return { items, total, page, limit };
+  }
+
+  /**
+   * Auto-create termination claims for user if they hold VT in terminating vaults
+   * This handles cases where VT was transferred after the initial snapshot
+   */
+  private async autoCreateTerminationClaims(userId: string): Promise<void> {
+    try {
+      // Get user address
+      const user = await this.userRepository.findOne({
+        where: { id: userId },
+        select: ['id', 'address'],
+      });
+
+      if (!user?.address) {
+        return;
+      }
+
+      // Get all vaults that have termination metadata (are in termination process)
+      const terminatingVaults: Pick<
+        Vault,
+        'id' | 'name' | 'script_hash' | 'asset_vault_name' | 'termination_metadata'
+      >[] = await this.vaultRepository
+        .createQueryBuilder('vault')
+        .where('vault.termination_metadata IS NOT NULL')
+        .andWhere("vault.termination_metadata->>'status' IN (:...statuses)", {
+          statuses: ['claims_created', 'claims_processing'],
+        })
+        .select(['vault.id', 'vault.name', 'vault.script_hash', 'vault.asset_vault_name', 'vault.termination_metadata'])
+        .getMany();
+
+      // For each vault, check if user holds VT and create/update claim if needed
+      for (const vault of terminatingVaults) {
+        try {
+          // This method will:
+          // 1. Check user's current VT balance
+          // 2. If balance > 0 and no unclaimed claim exists, create new claim
+          // 3. If unclaimed claim exists but amount changed, update it
+          // 4. If claimed but user has more VT now, create additional claim
+          const result = await this.terminationService.requestTerminationClaim(vault.id, user.address, userId);
+
+          if (result.isNewClaim) {
+            this.logger.log(`Auto-created termination claim for user ${userId} in vault ${vault.id}`);
+          } else {
+            this.logger.log(`Verified existing termination claim for user ${userId} in vault ${vault.id}`);
+          }
+        } catch (error) {
+          // If user doesn't hold VT or other error, just skip silently
+          if (!error.message?.includes('No VT balance found')) {
+            this.logger.debug(`Could not auto-create claim for vault ${vault.id}: ${error.message}`);
+          }
+        }
+      }
+    } catch (error) {
+      // Log but don't throw - this is a background operation
+      this.logger.error(`Error auto-creating termination claims for user ${userId}:`, error.stack);
+    }
   }
 
   async createCancellationClaims(vault: Vault, reason: string): Promise<void> {
@@ -194,12 +302,10 @@ export class ClaimsService {
               id: asset.id,
               policyId: asset.policy_id,
               assetId: asset.asset_id,
-              quantity: asset.quantity,
+              quantity: asset.quantity.toString(),
               type: asset.type,
             })),
-            assetIds: txAssets.map(asset => asset.id),
             failureReason: reason,
-            originalTxHash: tx.tx_hash,
             outputIndex: 0, // Assuming contribution UTXOs are at index 0
           },
           transaction: { id: tx.id },
@@ -236,7 +342,6 @@ export class ClaimsService {
           metadata: {
             transactionType: 'acquisition',
             failureReason: reason,
-            originalTxHash: tx.tx_hash,
             outputIndex: 0,
           },
           transaction: { id: tx.id },
@@ -581,7 +686,7 @@ export class ClaimsService {
 
       try {
         const utxoDetails = await this.blockfrost.txsUtxos(originalTx.tx_hash);
-        const outputIndex = claim.metadata?.outputIndex ?? 0; // Allow configurable output index
+        const outputIndex = (claim.metadata as any)?.outputIndex ?? 0; // Allow configurable output index
         const output = utxoDetails.outputs[outputIndex];
 
         if (!output) {

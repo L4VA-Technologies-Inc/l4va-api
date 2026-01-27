@@ -1,11 +1,12 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
+import { DistributionService } from './distribution.service';
 import { CreateProposalReq } from './dto/create-proposal.req';
 import { CreateProposalRes } from './dto/create-proposal.res';
 import { CreateSnapshotVaultParamDto, CreateSnapshotAssetParamDto } from './dto/create-snapshot-param.dto';
 import { CreateSnapshotRes } from './dto/create-snapshot.res';
-import { GetAssetsToDistributeRes } from './dto/get-assets-to-distribute.res';
+import { GetDistributionInfoRes } from './dto/distribution.dto';
 import { GetAssetsToStakeRes } from './dto/get-assets-to-stake.res';
 import { AssetBuySellDto } from './dto/get-assets.dto';
 import { GetProposalDetailRes } from './dto/get-proposal-detail.res';
@@ -22,14 +23,17 @@ import { OptionalAuthGuard } from '@/modules/auth/optional-auth.guard';
 @ApiTags('Governance')
 @Controller('governance')
 export class GovernanceController {
-  constructor(private readonly governanceService: GovernanceService) {}
+  constructor(
+    private readonly governanceService: GovernanceService,
+    private readonly distributionService: DistributionService
+  ) {}
 
   @Post('vaults/:vaultId/proposals')
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Create a new proposal' })
   @ApiResponse({ status: 201, description: 'Proposal created successfully', type: CreateProposalRes })
   async createProposal(
-    @Req() req,
+    @Req() req: AuthRequest,
     @Param('vaultId', ParseUUIDPipe) vaultId: string,
     @Body() data: CreateProposalReq
   ): Promise<CreateProposalRes> {
@@ -139,11 +143,13 @@ export class GovernanceController {
 
   @Get('vaults/:vaultId/assets/distribute')
   @UseGuards(AuthGuard)
-  @ApiOperation({ summary: 'Get assets to distribute for a vault' })
-  @ApiResponse({ status: 200, description: 'List of assets to distribute', type: GetAssetsToDistributeRes })
-  async getAssetsToDistribute(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<GetAssetsToDistributeRes> {
-    const assets = await this.governanceService.getAssetsToDistribute(vaultId);
-    return { assets };
+  @ApiOperation({
+    summary: 'Get distribution info for a vault',
+    description: 'Returns treasury balance, VT holder count, and distribution limits for UI',
+  })
+  @ApiResponse({ status: 200, description: 'Distribution info', type: GetDistributionInfoRes })
+  async getDistributionInfo(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<GetDistributionInfoRes> {
+    return this.distributionService.getDistributionInfo(vaultId);
   }
 
   @Get('vaults/:vaultId/assets/terminate')

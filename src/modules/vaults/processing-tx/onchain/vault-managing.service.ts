@@ -89,7 +89,6 @@ export class VaultManagingService {
   private readonly adminSKey: string;
   private readonly adminAddress: string;
   private readonly vaultScriptAddress: string;
-  private readonly vaultScriptSKey: string;
   private readonly unparametizedScriptHash: string;
   private readonly blueprintTitle: string;
   private readonly networkId: number;
@@ -115,7 +114,6 @@ export class VaultManagingService {
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.vaultScriptAddress = this.configService.get<string>('VAULT_SCRIPT_ADDRESS');
-    this.vaultScriptSKey = this.configService.get<string>('VAULT_SCRIPT_SKEY');
     this.unparametizedScriptHash = this.configService.get<string>('CONTRIBUTION_SCRIPT_HASH');
     this.VLRM_HEX_ASSET_NAME = this.configService.get<string>('VLRM_HEX_ASSET_NAME');
     this.VLRM_POLICY_ID = this.configService.get<string>('VLRM_POLICY_ID');
@@ -473,7 +471,6 @@ export class VaultManagingService {
 
       const buildResponse = await this.blockchainService.buildTransaction(input);
       const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.vaultScriptSKey));
       txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
       return {

@@ -113,6 +113,314 @@ export class VyfiService {
   }
 
   /**
+   * Get pool info by token pair
+   * Returns pool data including order address, LP token unit, and reserves
+   */
+  async getPoolByTokens(
+    tokenAUnit: string,
+    tokenBUnit: string = 'lovelace'
+  ): Promise<{
+    poolId: string;
+    orderAddress: string;
+    lpTokenUnit: string;
+    reserveA: string;
+    reserveB: string;
+    tokenAUnit: string;
+    tokenBUnit: string;
+  } | null> {
+    try {
+      const poolCheck = await this.checkPool({
+        networkId: this.networkId,
+        tokenAUnit,
+        tokenBUnit,
+      });
+
+      if (!poolCheck.exists || !poolCheck.data) {
+        return null;
+      }
+
+      const poolData = poolCheck.data;
+      return {
+        poolId: poolData.poolId || poolData.id,
+        orderAddress: poolData.orderAddress || poolData.order_address,
+        lpTokenUnit: poolData.lpTokenUnit || poolData.lp_token_unit,
+        reserveA: poolData.reserveA || poolData.reserve_a || '0',
+        reserveB: poolData.reserveB || poolData.reserve_b || '0',
+        tokenAUnit: poolData.tokenAUnit || poolData.token_a_unit || tokenAUnit,
+        tokenBUnit: poolData.tokenBUnit || poolData.token_b_unit || tokenBUnit,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to get pool by tokens: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Build CBOR datum for VyFi remove liquidity
+   *
+   * Datum structure (based on VyFi specification):
+   * - Outer constructor (0): Contains return address
+   * - Inner constructor (1 for remove liq): Contains minTokenA and minTokenB
+   *
+   * Example from cardanoscan:
+   * d8799f5838{address_bytes}d87a9f1a{minA}1b{minB}ffffff
+   *
+   * @param returnAddress - Bech32 address where tokens should be returned
+   * @param minTokenA - Minimum amount of tokenA to receive (0 for no slippage protection)
+   * @param minTokenB - Minimum amount of tokenB/ADA to receive (0 for no slippage protection)
+   */
+  buildRemoveLiquidityDatum(returnAddress: string, minTokenA: number = 0, minTokenB: number = 0): string {
+    // Convert bech32 address to raw bytes
+    const addressObj = Address.from_bech32(returnAddress);
+    const addressBytes = addressObj.to_bytes();
+
+    // Build CBOR datum manually
+    // Structure: Constructor 0 [ addressBytes, Constructor 1 [ minTokenA, minTokenB ] ]
+
+    let datum = '';
+
+    // Start outer constructor 0 with indefinite array
+    datum += 'd8799f'; // Tag 121 (constructor 0) + 9f (indefinite array start)
+
+    // Add address as byte string
+    const addrHex = Buffer.from(addressBytes).toString('hex');
+    const addrLength = addressBytes.length;
+
+    if (addrLength <= 23) {
+      // Short byte string (length in single byte)
+      datum += (0x40 + addrLength).toString(16).padStart(2, '0');
+    } else if (addrLength <= 255) {
+      // Byte string with 1-byte length
+      datum += '58' + addrLength.toString(16).padStart(2, '0');
+    } else {
+      // Byte string with 2-byte length
+      datum += '59' + addrLength.toString(16).padStart(4, '0');
+    }
+    datum += addrHex;
+
+    // Inner constructor 1 (remove liquidity action) with indefinite array
+    datum += 'd87a9f'; // Tag 122 (constructor 1) + 9f (indefinite array start)
+
+    // Add minTokenA as unsigned integer
+    if (minTokenA === 0) {
+      datum += '00';
+    } else if (minTokenA <= 23) {
+      datum += minTokenA.toString(16).padStart(2, '0');
+    } else if (minTokenA <= 255) {
+      datum += '18' + minTokenA.toString(16).padStart(2, '0');
+    } else if (minTokenA <= 65535) {
+      datum += '19' + minTokenA.toString(16).padStart(4, '0');
+    } else if (minTokenA <= 4294967295) {
+      datum += '1a' + minTokenA.toString(16).padStart(8, '0');
+    } else {
+      datum += '1b' + BigInt(minTokenA).toString(16).padStart(16, '0');
+    }
+
+    // Add minTokenB as unsigned integer
+    if (minTokenB === 0) {
+      datum += '00';
+    } else if (minTokenB <= 23) {
+      datum += minTokenB.toString(16).padStart(2, '0');
+    } else if (minTokenB <= 255) {
+      datum += '18' + minTokenB.toString(16).padStart(2, '0');
+    } else if (minTokenB <= 65535) {
+      datum += '19' + minTokenB.toString(16).padStart(4, '0');
+    } else if (minTokenB <= 4294967295) {
+      datum += '1a' + minTokenB.toString(16).padStart(8, '0');
+    } else {
+      datum += '1b' + BigInt(minTokenB).toString(16).padStart(16, '0');
+    }
+
+    // Close inner constructor (indefinite array end)
+    datum += 'ff';
+
+    // Close outer constructor (indefinite array end)
+    datum += 'ff';
+
+    return datum;
+  }
+
+  /**
+   * Remove liquidity from VyFi pool
+   *
+   * Sends LP tokens to the pool's order address with a remove liquidity datum.
+   * VyFi will process the order and return tokenA (VT) + tokenB (ADA) to the specified return address.
+   *
+   * @param lpTokenUnit - Full unit of LP token (policyId + assetName)
+   * @param lpAmount - Amount of LP tokens to remove
+   * @param orderAddress - VyFi pool order address to send LP tokens to
+   * @param returnAddress - Address where VT + ADA should be returned (defaults to admin)
+   * @param minTokenA - Minimum VT to receive (0 = no slippage protection)
+   * @param minTokenB - Minimum ADA to receive (0 = no slippage protection)
+   */
+  async removeLiquidity({
+    lpTokenUnit,
+    lpAmount,
+    orderAddress,
+    returnAddress,
+    minTokenA = 0,
+    minTokenB = 0,
+  }: {
+    lpTokenUnit: string;
+    lpAmount: bigint;
+    orderAddress: string;
+    returnAddress?: string;
+    minTokenA?: number;
+    minTokenB?: number;
+  }): Promise<{ txHash: string }> {
+    const effectiveReturnAddress = returnAddress || this.adminAddress;
+
+    this.logger.log(`Removing liquidity: ${lpAmount} LP tokens`);
+    this.logger.log(`LP Token Unit: ${lpTokenUnit}`);
+    this.logger.log(`Order Address: ${orderAddress}`);
+    this.logger.log(`Return Address: ${effectiveReturnAddress}`);
+
+    // Parse LP token unit into policy ID and asset name
+    const lpPolicyId = lpTokenUnit.slice(0, 56);
+    const lpAssetName = lpTokenUnit.slice(56);
+
+    // Get admin UTXOs containing LP tokens
+    const { utxos: adminUtxos, requiredInputs } = await getUtxosExtract(
+      Address.from_bech32(this.adminAddress),
+      this.blockfrost,
+      {
+        targetAssets: [{ token: lpTokenUnit, amount: Number(lpAmount) }],
+      }
+    );
+
+    if (adminUtxos.length === 0) {
+      throw new Error(`No UTXOs found with LP tokens in admin wallet`);
+    }
+
+    // Build the remove liquidity datum
+    const datumHex = this.buildRemoveLiquidityDatum(effectiveReturnAddress, minTokenA, minTokenB);
+    this.logger.log(`Remove liquidity datum: ${datumHex}`);
+
+    // Build the transaction
+    const input = {
+      changeAddress: this.adminAddress,
+      utxos: adminUtxos,
+      outputs: [
+        {
+          address: orderAddress,
+          assets: [
+            {
+              assetName: { name: lpAssetName, format: 'hex' as const },
+              policyId: lpPolicyId,
+              quantity: lpAmount,
+            },
+          ],
+          datum: {
+            type: 'inline' as const,
+            value: datumHex,
+          },
+        },
+      ],
+      requiredSigners: [this.adminHash],
+      requiredInputs,
+      validityInterval: {
+        start: true,
+        end: true,
+      },
+      metadata: {
+        [674]: 'VyFi: LP Remove Liquidity Order Request',
+      },
+      network: this.isMainnet ? 'mainnet' : 'preprod',
+    };
+
+    this.logger.debug(JSON.stringify(input));
+
+    const buildResponse = await this.blockchainService.buildTransaction(input);
+    this.logger.debug(JSON.stringify(buildResponse));
+
+    const txToSubmit = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+    txToSubmit.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+
+    const submitResponse = await this.blockchainService.submitTransaction({
+      transaction: txToSubmit.to_hex(),
+      signatures: [],
+    });
+
+    this.logger.log(`Remove liquidity transaction submitted: ${submitResponse.txHash}`);
+
+    return {
+      txHash: submitResponse.txHash,
+    };
+  }
+
+  /**
+   * Remove liquidity for a vault by looking up pool info
+   *
+   * @param vaultId - The vault ID to remove liquidity for
+   * @param minTokenA - Minimum VT to receive (optional)
+   * @param minTokenB - Minimum ADA to receive (optional)
+   */
+  async removeLiquidityForVault(
+    vaultId: string,
+    minTokenA: number = 0,
+    minTokenB: number = 0
+  ): Promise<{
+    txHash: string;
+    lpAmount: string;
+    poolInfo: any;
+  }> {
+    // Get the LP claim for this vault
+    const lpClaim = await this.claimRepository.findOne({
+      where: {
+        vault: { id: vaultId },
+        type: ClaimType.LP,
+        status: ClaimStatus.CLAIMED,
+      },
+      relations: ['vault'],
+    });
+
+    if (!lpClaim) {
+      throw new NotFoundException(`No claimed LP tokens found for vault ${vaultId}`);
+    }
+
+    // Get pool info by token pair
+    const vtUnit = `${lpClaim.vault.script_hash}${lpClaim.vault.asset_vault_name}`;
+    const poolInfo = await this.getPoolByTokens(vtUnit);
+
+    if (!poolInfo) {
+      throw new Error(`Pool not found for vault token ${vtUnit}`);
+    }
+
+    // Get LP token balance in admin wallet
+    const adminUtxos = await this.blockfrost.addressesUtxos(this.adminAddress);
+    let lpBalance = BigInt(0);
+
+    for (const utxo of adminUtxos) {
+      const lpAmount = utxo.amount.find(a => a.unit === poolInfo.lpTokenUnit);
+      if (lpAmount) {
+        lpBalance += BigInt(lpAmount.quantity);
+      }
+    }
+
+    if (lpBalance === BigInt(0)) {
+      throw new Error(`No LP tokens found in admin wallet for pool ${poolInfo.poolId}`);
+    }
+
+    this.logger.log(`Found ${lpBalance} LP tokens for vault ${vaultId}`);
+
+    // Execute remove liquidity
+    const result = await this.removeLiquidity({
+      lpTokenUnit: poolInfo.lpTokenUnit,
+      lpAmount: lpBalance,
+      orderAddress: poolInfo.orderAddress,
+      returnAddress: this.adminAddress,
+      minTokenA,
+      minTokenB,
+    });
+
+    return {
+      txHash: result.txHash,
+      lpAmount: lpBalance.toString(),
+      poolInfo,
+    };
+  }
+
+  /**
    * Step 1: Withdraw ADA from dispatch script to admin address
    * Handles backend restart scenarios by checking for existing withdrawal transactions
    */

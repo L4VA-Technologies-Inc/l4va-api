@@ -57,6 +57,7 @@ export enum VaultStatus {
   failed = 'failed',
   burned = 'burned',
   govern = 'govern',
+  terminating = 'terminating',
 }
 
 // Mapping for smart contract vault status

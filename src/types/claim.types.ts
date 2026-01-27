@@ -13,4 +13,5 @@ export enum ClaimType {
   FINAL_DISTRIBUTION = 'final_distribution',
   CANCELLATION = 'cancellation',
   DISTRIBUTION = 'distribution',
+  TERMINATION = 'termination',
 }
