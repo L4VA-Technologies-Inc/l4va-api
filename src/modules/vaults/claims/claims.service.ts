@@ -14,6 +14,7 @@ import { GetClaimsDto } from './dto/get-claims.dto';
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
+import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { CancellationInput } from '@/modules/distribution/distribution.types';
 import { TerminationService } from '@/modules/vaults/phase-management/governance/termination.service';
@@ -45,6 +46,10 @@ export class ClaimsService {
     private readonly assetsRepository: Repository<Asset>,
     @InjectRepository(Claim)
     private claimRepository: Repository<Claim>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
+    @InjectRepository(Vault)
+    private readonly vaultRepository: Repository<Vault>,
     private readonly configService: ConfigService,
     private readonly blockchainService: BlockchainService,
     private readonly terminationService: TerminationService
@@ -75,6 +80,9 @@ export class ClaimsService {
       query?.type === ClaimType.TERMINATION ||
       (Array.isArray(query?.type) && query?.type.includes(ClaimType.TERMINATION))
     ) {
+      // Auto-create termination claims if user holds VT in terminating vaults
+      await this.autoCreateTerminationClaims(userId);
+
       const terminationResult = await this.terminationService.getUserTerminationClaims(userId, skip, limit);
 
       // Transform termination claims to match ClaimResponseItemsDto format
@@ -175,6 +183,63 @@ export class ClaimsService {
     });
 
     return { items, total, page, limit };
+  }
+
+  /**
+   * Auto-create termination claims for user if they hold VT in terminating vaults
+   * This handles cases where VT was transferred after the initial snapshot
+   */
+  private async autoCreateTerminationClaims(userId: string): Promise<void> {
+    try {
+      // Get user address
+      const user = await this.userRepository.findOne({
+        where: { id: userId },
+        select: ['id', 'address'],
+      });
+
+      if (!user?.address) {
+        return;
+      }
+
+      // Get all vaults that have termination metadata (are in termination process)
+      const terminatingVaults: Pick<
+        Vault,
+        'id' | 'name' | 'script_hash' | 'asset_vault_name' | 'termination_metadata'
+      >[] = await this.vaultRepository
+        .createQueryBuilder('vault')
+        .where('vault.termination_metadata IS NOT NULL')
+        .andWhere("vault.termination_metadata->>'status' IN (:...statuses)", {
+          statuses: ['claims_created', 'claims_processing'],
+        })
+        .select(['vault.id', 'vault.name', 'vault.script_hash', 'vault.asset_vault_name', 'vault.termination_metadata'])
+        .getMany();
+
+      // For each vault, check if user holds VT and create/update claim if needed
+      for (const vault of terminatingVaults) {
+        try {
+          // This method will:
+          // 1. Check user's current VT balance
+          // 2. If balance > 0 and no unclaimed claim exists, create new claim
+          // 3. If unclaimed claim exists but amount changed, update it
+          // 4. If claimed but user has more VT now, create additional claim
+          const result = await this.terminationService.requestTerminationClaim(vault.id, user.address, userId);
+
+          if (result.isNewClaim) {
+            this.logger.log(`Auto-created termination claim for user ${userId} in vault ${vault.id}`);
+          } else {
+            this.logger.log(`Verified existing termination claim for user ${userId} in vault ${vault.id}`);
+          }
+        } catch (error) {
+          // If user doesn't hold VT or other error, just skip silently
+          if (!error.message?.includes('No VT balance found')) {
+            this.logger.debug(`Could not auto-create claim for vault ${vault.id}: ${error.message}`);
+          }
+        }
+      }
+    } catch (error) {
+      // Log but don't throw - this is a background operation
+      this.logger.error(`Error auto-creating termination claims for user ${userId}:`, error.stack);
+    }
   }
 
   async createCancellationClaims(vault: Vault, reason: string): Promise<void> {

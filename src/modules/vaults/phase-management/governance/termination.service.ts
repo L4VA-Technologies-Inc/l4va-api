@@ -7,6 +7,7 @@ import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
+import NodeCache from 'node-cache';
 import { In, Repository } from 'typeorm';
 
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
@@ -86,7 +87,12 @@ export class TerminationService {
   private readonly MIN_ADA_PER_CLAIM = 2_000_000;
   // Minimum total ADA to justify treasury distribution (10 ADA)
   private readonly MIN_TOTAL_ADA_FOR_DISTRIBUTION = 10_000_000;
+  // Minimum ADA to justify sweeping treasury wallet (5 ADA - below this, tx fees consume too much)
+  private readonly MIN_ADA_FOR_SWEEP = 5_000_000;
   private readonly DUST_THRESHOLD = 100;
+
+  // Cache to prevent duplicate claim creation within a short time window
+  private readonly claimCreationCache: NodeCache;
 
   constructor(
     @InjectRepository(Vault)
@@ -116,6 +122,13 @@ export class TerminationService {
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
+
+    // Cache claim creation attempts for 5 minutes to prevent duplicates
+    this.claimCreationCache = new NodeCache({
+      stdTTL: 300, // 5 minutes
+      checkperiod: 60,
+      useClones: false,
+    });
   }
 
   /**
@@ -129,7 +142,7 @@ export class TerminationService {
    * Monitor termination progress every 10 minutes
    * Checks for pending LP returns and advances termination state
    */
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Cron(CronExpression.EVERY_10_MINUTES)
   async monitorTerminations(): Promise<void> {
     try {
       // Find vaults in terminating status
@@ -850,13 +863,16 @@ export class TerminationService {
         txHash: submitResponse.txHash,
       });
 
-      this.logger.log(`Vault ${vault.id} termination complete - vault burned`);
+      this.logger.log(`Vault ${vault.id} burned successfully - proceeding to treasury cleanup`);
+
+      await this.stepCleanupTreasuryWallet(vault);
     } catch (error) {
       // Handle case where vault UTXO is not found (already burned)
       if (error.message?.includes('not found') || error.status === 404) {
         this.logger.warn(`Vault UTXO not found for ${vault.asset_vault_name} - may already be burned`);
         await this.vaultRepository.update({ id: vault.id }, { vault_status: VaultStatus.burned });
         await this.updateTerminationStatus(vault.id, TerminationStatus.VAULT_BURNED);
+        await this.stepCleanupTreasuryWallet(vault);
         return;
       }
 
@@ -887,17 +903,23 @@ export class TerminationService {
       const balance = await this.treasuryWalletService.getTreasuryWalletBalance(vault.id);
 
       if (balance && balance.lovelace > 0) {
-        this.logger.log(`Treasury wallet has ${balance.lovelace} lovelace remaining - sweeping to admin wallet`);
+        if (balance.lovelace >= this.MIN_ADA_FOR_SWEEP) {
+          this.logger.log(
+            `Treasury wallet has ${balance.lovelace} lovelace (${balance.lovelace / 1_000_000} ADA) remaining - sweeping to admin wallet`
+          );
 
-        // Sweep remaining ADA to admin wallet
-        const sweepTxHash = await this.treasuryWalletService.sweepTreasuryWallet(vault.id, this.adminAddress);
+          // Sweep remaining ADA to admin wallet
+          const sweepTxHash = await this.treasuryWalletService.sweepTreasuryWallet(vault.id, this.adminAddress);
 
-        this.logger.log(`Treasury wallet swept: ${sweepTxHash}`);
-
-        await this.updateTerminationMetadata(vault.id, {
-          treasurySweepTxHash: sweepTxHash,
-          sweptLovelace: balance.lovelace.toString(),
-        });
+          await this.updateTerminationMetadata(vault.id, {
+            treasurySweepTxHash: sweepTxHash,
+            sweptLovelace: balance.lovelace.toString(),
+          });
+        } else {
+          this.logger.log(
+            `Treasury wallet has ${balance.lovelace} lovelace (${balance.lovelace / 1_000_000} ADA) - below sweep threshold (${this.MIN_ADA_FOR_SWEEP / 1_000_000} ADA), skipping sweep`
+          );
+        }
       } else {
         this.logger.log(`Treasury wallet is empty - proceeding to key deletion`);
       }
@@ -1128,6 +1150,30 @@ export class TerminationService {
     sharePercentage: number;
     isNewClaim: boolean;
   }> {
+    // Check cache first to prevent duplicate claim creation within 30 seconds
+    const cacheKey = `${vaultId}:${userAddress}`;
+    const cachedClaimId = this.claimCreationCache.get<string>(cacheKey);
+
+    if (cachedClaimId) {
+      // Return cached claim info - this prevents creating duplicates
+      const cachedClaim = await this.claimRepository.findOne({
+        where: { id: cachedClaimId },
+        select: ['id', 'amount', 'lovelace_amount', 'metadata'],
+      });
+
+      if (cachedClaim) {
+        const metadata = cachedClaim.metadata as any;
+        return {
+          claimId: cachedClaim.id,
+          vtBalance: metadata.vtAmount || cachedClaim.amount,
+          adaShare: metadata.adaShare || cachedClaim.lovelace_amount?.toString() || '0',
+          ftShares: metadata.ftShares,
+          sharePercentage: metadata.sharePercentage || 0,
+          isNewClaim: false,
+        };
+      }
+    }
+
     // Step 1: Verify vault exists and is in claims phase
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
@@ -1153,29 +1199,44 @@ export class TerminationService {
       );
     }
 
-    // Step 2: Check if claim already exists for this address
-    const existingClaim = await this.claimRepository.findOne({
-      where: {
-        vault: { id: vaultId },
-        type: ClaimType.TERMINATION,
-        metadata: { address: userAddress },
-      },
-    });
+    // Step 2: Check for existing UNCLAIMED claims (AVAILABLE or PENDING)
+    // If user already claimed, they can get a new claim if they received more VT
+    let existingClaim: Claim | null = null;
 
-    if (existingClaim) {
-      // Claim already exists - return existing claim info with updated calculation
-      const dynamicShare = await this.calculateDynamicShare(userAddress, vault);
-
-      return {
-        claimId: existingClaim.id,
-        vtBalance: dynamicShare.userVtBalance.toString(),
-        adaShare: dynamicShare.adaShare.toString(),
-        sharePercentage: dynamicShare.sharePercentage,
-        isNewClaim: false,
-      };
+    if (userId) {
+      existingClaim = await this.claimRepository.findOne({
+        where: {
+          user: { id: userId },
+          vault: { id: vaultId },
+          type: ClaimType.TERMINATION,
+          status: In([ClaimStatus.AVAILABLE, ClaimStatus.PENDING]),
+        },
+      });
     }
 
-    // Step 3: Verify user has VT balance on-chain
+    // If no userId or no claim found, try to find by address (for unregistered users)
+    if (!existingClaim) {
+      existingClaim = await this.claimRepository.findOne({
+        where: {
+          vault: { id: vaultId },
+          type: ClaimType.TERMINATION,
+          status: In([ClaimStatus.AVAILABLE, ClaimStatus.PENDING]),
+        },
+      });
+
+      // Filter by address in metadata (manual filter since we can't easily query JSON)
+      const allUnclaimedClaims = await this.claimRepository.find({
+        where: {
+          vault: { id: vaultId },
+          type: ClaimType.TERMINATION,
+          status: In([ClaimStatus.AVAILABLE, ClaimStatus.PENDING]),
+        },
+      });
+
+      existingClaim = allUnclaimedClaims.find(claim => (claim.metadata as any)?.address === userAddress) || null;
+    }
+
+    // Step 3: Verify user's current VT balance on-chain
     const dynamicShare = await this.calculateDynamicShare(userAddress, vault);
 
     if (dynamicShare.userVtBalance === BigInt(0)) {
@@ -1183,6 +1244,71 @@ export class TerminationService {
         `Address ${userAddress} has no VT balance for this vault. ` +
           `You must hold vault tokens to claim termination distribution.`
       );
+    }
+
+    if (existingClaim) {
+      // Unclaimed claim exists - verify and update if amount changed
+      const existingVtAmount = (existingClaim.metadata as any)?.vtAmount;
+
+      if (existingVtAmount !== dynamicShare.userVtBalance.toString()) {
+        // VT balance changed - update the claim
+        this.logger.log(
+          `Updating termination claim ${existingClaim.id} for user ${userId || userAddress} ` +
+            `VT: ${existingVtAmount} -> ${dynamicShare.userVtBalance}`
+        );
+
+        // Recalculate distributions
+        const noAdaDistribution =
+          dynamicShare.treasuryBalance < BigInt(this.MIN_TOTAL_ADA_FOR_DISTRIBUTION) ||
+          dynamicShare.adaShare < BigInt(this.MIN_ADA_PER_CLAIM);
+
+        const terminationMeta = vault.termination_metadata as TerminationMetadata;
+        const ftsForDistribution = terminationMeta.ftsForDistribution || [];
+
+        const ftShares = ftsForDistribution
+          .map(ft => {
+            const totalFtQuantity = BigInt(ft.quantity);
+            const userFtShare = (totalFtQuantity * dynamicShare.userVtBalance) / dynamicShare.circulatingSupply;
+            return {
+              policyId: ft.policyId,
+              assetId: ft.assetId,
+              quantity: userFtShare.toString(),
+              name: ft.name,
+            };
+          })
+          .filter(ft => BigInt(ft.quantity) > BigInt(0));
+
+        const hasFtDistribution = ftShares.length > 0;
+
+        // Update claim
+        await this.claimRepository.update(
+          { id: existingClaim.id },
+          {
+            amount: Number(dynamicShare.userVtBalance),
+            lovelace_amount: noAdaDistribution ? 0 : Number(dynamicShare.adaShare),
+            metadata: {
+              address: userAddress,
+              vtAmount: dynamicShare.userVtBalance.toString(),
+              adaAmount: noAdaDistribution ? '0' : dynamicShare.adaShare.toString(),
+              ftShares: hasFtDistribution ? ftShares : undefined,
+              noAdaDistribution,
+              updatedAt: new Date().toISOString(),
+            } as Record<string, any>,
+          }
+        );
+      }
+
+      // Cache the existing claim to prevent duplicate creation attempts
+      this.claimCreationCache.set(cacheKey, existingClaim.id);
+
+      return {
+        claimId: existingClaim.id,
+        vtBalance: dynamicShare.userVtBalance.toString(),
+        adaShare: dynamicShare.adaShare.toString(),
+        ftShares: (existingClaim.metadata as any)?.ftShares,
+        sharePercentage: dynamicShare.sharePercentage,
+        isNewClaim: false,
+      };
     }
 
     // Step 4: Find or create user record
@@ -1245,6 +1371,9 @@ export class TerminationService {
     });
 
     const savedClaim = await this.claimRepository.save(newClaim);
+
+    // Cache the claim ID to prevent duplicates within 30 seconds
+    this.claimCreationCache.set(cacheKey, savedClaim.id);
 
     this.logger.log(
       `Created on-demand termination claim ${savedClaim.id} for address ${userAddress} ` +
