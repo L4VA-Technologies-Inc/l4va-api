@@ -86,6 +86,7 @@ export class TerminationService {
   private readonly MIN_ADA_PER_CLAIM = 2_000_000;
   // Minimum total ADA to justify treasury distribution (10 ADA)
   private readonly MIN_TOTAL_ADA_FOR_DISTRIBUTION = 10_000_000;
+  private readonly DUST_THRESHOLD = 100;
 
   constructor(
     @InjectRepository(Vault)
@@ -128,7 +129,7 @@ export class TerminationService {
    * Monitor termination progress every 10 minutes
    * Checks for pending LP returns and advances termination state
    */
-  @Cron(CronExpression.EVERY_10_MINUTES)
+  @Cron(CronExpression.EVERY_MINUTE)
   async monitorTerminations(): Promise<void> {
     try {
       // Find vaults in terminating status
@@ -769,28 +770,46 @@ export class TerminationService {
 
   /**
    * Step 7: Check if all claims have been processed
+   * Verifies that the actual circulating VT supply is zero (all VT has been burned)
+   * This handles cases where VT was transferred to new addresses after the snapshot
    */
   private async stepCheckClaimsComplete(vault: Vault): Promise<void> {
     this.logger.debug(`[Step 7] Checking claims completion for vault ${vault.id}`);
 
-    const pendingClaims = await this.claimRepository.count({
-      where: {
-        vault: { id: vault.id },
-        type: ClaimType.TERMINATION,
-        status: In([ClaimStatus.AVAILABLE, ClaimStatus.PENDING]),
-      },
-    });
+    try {
+      // Check actual on-chain VT circulation instead of just claim status
+      const circulatingSupply = await this.getCirculatingVtSupply(vault);
+      const circulatingSupplyNum = Number(circulatingSupply);
 
-    if (pendingClaims === 0) {
-      this.logger.log(`All termination claims processed for vault ${vault.id}`);
-      await this.updateTerminationStatus(vault.id, TerminationStatus.CLAIMS_COMPLETE);
-    } else {
-      this.logger.debug(`${pendingClaims} claims still pending for vault ${vault.id}`);
-      // Ensure status is CLAIMS_PROCESSING
-      const termination = vault.termination_metadata as TerminationMetadata;
-      if (termination.status === TerminationStatus.CLAIMS_CREATED) {
-        await this.updateTerminationStatus(vault.id, TerminationStatus.CLAIMS_PROCESSING);
+      if (circulatingSupplyNum <= this.DUST_THRESHOLD) {
+        this.logger.log(
+          `All VT has been burned for vault ${vault.id}. Circulating supply: ${circulatingSupply} (${circulatingSupplyNum / 1_000_000} VT)`
+        );
+        await this.updateTerminationStatus(vault.id, TerminationStatus.CLAIMS_COMPLETE);
+      } else {
+        // Count claims that haven't been processed yet
+        const pendingClaims = await this.claimRepository.count({
+          where: {
+            vault: { id: vault.id },
+            type: ClaimType.TERMINATION,
+            status: In([ClaimStatus.AVAILABLE, ClaimStatus.PENDING]),
+          },
+        });
+
+        this.logger.debug(
+          `Termination in progress for vault ${vault.id}: ` +
+            `${pendingClaims} pending claims, ` +
+            `${circulatingSupplyNum / 1_000_000} VT still circulating`
+        );
+
+        // Ensure status is CLAIMS_PROCESSING
+        const termination = vault.termination_metadata as TerminationMetadata;
+        if (termination.status === TerminationStatus.CLAIMS_CREATED) {
+          await this.updateTerminationStatus(vault.id, TerminationStatus.CLAIMS_PROCESSING);
+        }
       }
+    } catch (error) {
+      this.logger.error(`Error checking claims completion for vault ${vault.id}: ${error.message}`, error.stack);
     }
   }
 
