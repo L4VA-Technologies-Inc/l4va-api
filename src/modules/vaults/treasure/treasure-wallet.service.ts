@@ -608,7 +608,6 @@ export class TreasuryWalletService {
         .where('vault.vault_status IN (:...statuses)', {
           statuses: [VaultStatus.locked],
         })
-        .andWhere('vault.id = :vaultId', { vaultId: 'ba57af98-891c-4d26-a2a9-8cca3dac8c29' })
         .andWhere('vault.deleted = :deleted', { deleted: false })
         .andWhere('wallet.id IS NULL') // No treasury wallet exists
         .select(['vault.id', 'vault.name', 'vault.vault_status'])
