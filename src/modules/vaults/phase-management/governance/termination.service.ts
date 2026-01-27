@@ -1448,7 +1448,7 @@ export class TerminationService {
 
     const savedClaim = await this.claimRepository.save(newClaim);
 
-    // Cache the claim ID to prevent duplicates within 30 seconds
+    // Cache the claim ID to prevent duplicates within 5 minutes
     this.claimCreationCache.set(cacheKey, savedClaim.id);
 
     this.logger.log(
