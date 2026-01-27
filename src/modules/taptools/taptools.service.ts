@@ -563,6 +563,26 @@ export class TaptoolsService {
       await this.userRepository.update({ id: vault.owner.id }, { tvl: totalValueAda });
     }
 
+    // Group assets by policy ID for progress bars
+    const assetsByPolicyMap = new Map<string, { policyId: string; quantity: number }>();
+
+    for (const asset of assetsWithValues) {
+      // Skip lovelace and fee tokens from policy grouping
+      if (asset.assetId === 'lovelace' || asset.assetId === 'ADA' || asset.metadata?.purpose === 'vault_creation_fee') {
+        continue;
+      }
+
+      const existing = assetsByPolicyMap.get(asset.policyId);
+      if (existing) {
+        existing.quantity += asset.quantity;
+      } else {
+        assetsByPolicyMap.set(asset.policyId, {
+          policyId: asset.policyId,
+          quantity: asset.quantity,
+        });
+      }
+    }
+
     // Create and return the summary
     return {
       totalValueAda: +totalValueAda.toFixed(6),
@@ -574,6 +594,7 @@ export class TaptoolsService {
       totalAcquiredAda,
       totalAcquiredUsd: totalAcquiredAda * adaPrice,
       adaPrice,
+      assetsByPolicy: Array.from(assetsByPolicyMap.values()),
     };
   }
 
