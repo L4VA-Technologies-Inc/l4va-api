@@ -26,6 +26,7 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { VaultTreasuryWallet } from '@/database/vaultTreasuryWallet.entity';
 import { Vote } from '@/database/vote.entity';
+import { RedisModule } from '@/modules/redis/redis.module';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
 import { VyfiModule } from '@/modules/vyfi/vyfi.module';
 import { WayUpModule } from '@/modules/wayup/wayup.module';
@@ -33,6 +34,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
 @Module({
   imports: [
     TypeOrmModule.forFeature([Vault, Asset, Snapshot, Proposal, Vote, Claim, User, Transaction, VaultTreasuryWallet]),
+    RedisModule,
     AssetsModule,
     WayUpModule,
     TreasureWalletModule,

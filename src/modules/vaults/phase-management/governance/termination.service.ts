@@ -2,11 +2,12 @@ import { Buffer } from 'buffer';
 
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Address, FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
+import Redis from 'ioredis';
 import NodeCache from 'node-cache';
 import { In, Repository } from 'typeorm';
 
@@ -23,6 +24,7 @@ import { Claim } from '@/database/claim.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { REDIS_CLIENT } from '@/modules/redis/redis.module';
 import { VyfiService } from '@/modules/vyfi/vyfi.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import type { TerminationClaimMetadata } from '@/types/claim-metadata.types';
@@ -93,6 +95,8 @@ export class TerminationService {
 
   // Cache to prevent duplicate claim creation within a short time window
   private readonly claimCreationCache: NodeCache;
+  // Cache treasury balance checks to reduce blockchain calls
+  private readonly treasuryBalanceCache: NodeCache;
 
   constructor(
     @InjectRepository(Vault)
@@ -112,7 +116,8 @@ export class TerminationService {
     private readonly treasuryWalletService: TreasuryWalletService,
     private readonly vaultManagingService: VaultManagingService,
     private readonly treasuryExtractionService: TreasuryExtractionService,
-    private readonly transactionsService: TransactionsService
+    private readonly transactionsService: TransactionsService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
@@ -129,6 +134,13 @@ export class TerminationService {
       checkperiod: 60,
       useClones: false,
     });
+
+    // Cache treasury balance for 2 minutes
+    this.treasuryBalanceCache = new NodeCache({
+      stdTTL: 120, // 2 minutes
+      checkperiod: 60,
+      useClones: false,
+    });
   }
 
   /**
@@ -139,11 +151,47 @@ export class TerminationService {
   }
 
   /**
+   * Acquire a distributed lock using Redis
+   * Uses Redis SET NX EX for atomic lock acquisition with TTL
+   */
+  private async acquireLock(lockKey: string, ttlSeconds: number): Promise<boolean> {
+    try {
+      // SET NX EX: Set if Not eXists with EXpiration
+      // Returns 'OK' if lock acquired, null if already exists
+      const result = await this.redis.set(lockKey, '1', 'EX', ttlSeconds, 'NX');
+      return result === 'OK';
+    } catch (error) {
+      this.logger.error(`Failed to acquire lock ${lockKey}: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Release a distributed lock
+   */
+  private async releaseLock(lockKey: string): Promise<void> {
+    try {
+      await this.redis.del(lockKey);
+    } catch (error) {
+      this.logger.warn(`Failed to release lock ${lockKey}: ${error.message}`);
+    }
+  }
+
+  /**
    * Monitor termination progress every 10 minutes
    * Checks for pending LP returns and advances termination state
+   * Uses distributed locking to prevent multiple instances from processing simultaneously
    */
   @Cron(CronExpression.EVERY_10_MINUTES)
   async monitorTerminations(): Promise<void> {
+    const lockKey = 'termination:monitor:lock';
+    const acquired = await this.acquireLock(lockKey, 540); // 9 min TTL (in seconds)
+
+    if (!acquired) {
+      this.logger.debug('Another instance is processing terminations, skipping');
+      return;
+    }
+
     try {
       // Find vaults in terminating status
       const terminatingVaults = await this.vaultRepository.find({
@@ -166,6 +214,8 @@ export class TerminationService {
       }
     } catch (error) {
       this.logger.error(`Error in termination monitor: ${error.message}`, error.stack);
+    } finally {
+      await this.releaseLock(lockKey);
     }
   }
 
@@ -1071,11 +1121,19 @@ export class TerminationService {
 
   /**
    * Get current treasury balance available for distribution
+   * Cached for 2 minutes to reduce blockchain API calls
    */
   private async getTreasuryBalance(vault: Vault): Promise<bigint> {
     const treasuryWallet = vault.treasury_wallet;
     if (!treasuryWallet) {
       return BigInt(0);
+    }
+
+    // Check cache first
+    const cacheKey = `treasury:${vault.id}`;
+    const cached = this.treasuryBalanceCache.get<string>(cacheKey);
+    if (cached !== undefined) {
+      return BigInt(cached);
     }
 
     try {
@@ -1087,7 +1145,12 @@ export class TerminationService {
 
       // Reserve some ADA for transaction fees (1 ADA)
       const reserved = BigInt(1_000_000);
-      return totalAda > reserved ? totalAda - reserved : BigInt(0);
+      const balance = totalAda > reserved ? totalAda - reserved : BigInt(0);
+
+      // Cache the result
+      this.treasuryBalanceCache.set(cacheKey, balance.toString());
+
+      return balance;
     } catch (error) {
       this.logger.error(`Failed to get treasury balance for vault ${vault.id}: ${error.message}`);
       return BigInt(0);
