@@ -159,11 +159,20 @@ export class VyfiService {
    * Build CBOR datum for VyFi remove liquidity
    *
    * Datum structure (based on VyFi specification):
-   * - Outer constructor (0): Contains return address
-   * - Inner constructor (1 for remove liq): Contains minTokenA and minTokenB
+   * - Outer constructor (0): Contains return address + action
+   * - Inner constructor (1): Remove liquidity action
+   *   - Contains constructor (0) with minTokenA and minTokenB
    *
-   * Example from cardanoscan:
-   * d8799f5838{address_bytes}d87a9f1a{minA}1b{minB}ffffff
+   * Correct structure:
+   * Constructor 0 [
+   *   address_bytes,
+   *   Constructor 1 [
+   *     Constructor 0 [ minTokenA, minTokenB ]
+   *   ]
+   * ]
+   *
+   * Example from VyFi:
+   * d8799f5838{address}d87a9fd8799f1a{minA}1b{minB}ffffff
    *
    * @param returnAddress - Bech32 address where tokens should be returned
    * @param minTokenA - Minimum amount of tokenA to receive (0 for no slippage protection)
@@ -175,7 +184,7 @@ export class VyfiService {
     const addressBytes = addressObj.to_bytes();
 
     // Build CBOR datum manually
-    // Structure: Constructor 0 [ addressBytes, Constructor 1 [ minTokenA, minTokenB ] ]
+    // Structure: Constructor 0 [ addressBytes, Constructor 1 [ Constructor 0 [ minTokenA, minTokenB ] ] ]
 
     let datum = '';
 
@@ -200,6 +209,9 @@ export class VyfiService {
 
     // Inner constructor 1 (remove liquidity action) with indefinite array
     datum += 'd87a9f'; // Tag 122 (constructor 1) + 9f (indefinite array start)
+
+    // Nested constructor 0 for min amounts (this was missing!)
+    datum += 'd8799f'; // Tag 121 (constructor 0) + 9f (indefinite array start)
 
     // Add minTokenA as unsigned integer
     if (minTokenA === 0) {
@@ -231,10 +243,13 @@ export class VyfiService {
       datum += '1b' + BigInt(minTokenB).toString(16).padStart(16, '0');
     }
 
-    // Close inner constructor (indefinite array end)
+    // Close nested constructor 0 (min amounts)
     datum += 'ff';
 
-    // Close outer constructor (indefinite array end)
+    // Close inner constructor 1 (action)
+    datum += 'ff';
+
+    // Close outer constructor 0
     datum += 'ff';
 
     return datum;
@@ -248,7 +263,6 @@ export class VyfiService {
    *
    * @param lpTokenUnit - Full unit of LP token (policyId + assetName)
    * @param lpAmount - Amount of LP tokens to remove
-   * @param orderAddress - VyFi pool order address to send LP tokens to
    * @param returnAddress - Address where VT + ADA should be returned (defaults to admin)
    * @param minTokenA - Minimum VT to receive (0 = no slippage protection)
    * @param minTokenB - Minimum ADA to receive (0 = no slippage protection)
@@ -256,14 +270,12 @@ export class VyfiService {
   async removeLiquidity({
     lpTokenUnit,
     lpAmount,
-    orderAddress,
     returnAddress,
     minTokenA = 0,
     minTokenB = 0,
   }: {
     lpTokenUnit: string;
-    lpAmount: bigint;
-    orderAddress: string;
+    lpAmount: number;
     returnAddress?: string;
     minTokenA?: number;
     minTokenB?: number;
@@ -272,7 +284,7 @@ export class VyfiService {
 
     this.logger.log(`Removing liquidity: ${lpAmount} LP tokens`);
     this.logger.log(`LP Token Unit: ${lpTokenUnit}`);
-    this.logger.log(`Order Address: ${orderAddress}`);
+    this.logger.log(`Pool Address: ${this.poolAddress}`);
     this.logger.log(`Return Address: ${effectiveReturnAddress}`);
 
     // Parse LP token unit into policy ID and asset name
@@ -302,7 +314,7 @@ export class VyfiService {
       utxos: adminUtxos,
       outputs: [
         {
-          address: orderAddress,
+          address: this.poolAddress,
           assets: [
             {
               assetName: { name: lpAssetName, format: 'hex' as const },
@@ -406,8 +418,7 @@ export class VyfiService {
     // Execute remove liquidity
     const result = await this.removeLiquidity({
       lpTokenUnit: poolInfo.lpTokenUnit,
-      lpAmount: lpBalance,
-      orderAddress: poolInfo.orderAddress,
+      lpAmount: Number(lpBalance),
       returnAddress: this.adminAddress,
       minTokenA,
       minTokenB,
