@@ -16,11 +16,18 @@ import { GoogleCloudStorageService } from '../google_cloud/google_bucket/bucket.
 import { TaptoolsService } from '../taptools/taptools.service';
 
 import { CreateVaultReq } from './dto/createVault.req';
+import { VaultActivityFilter } from './dto/get-vault-activity.dto';
 import { VaultStatisticsResponse } from './dto/get-vaults-statistics.dto';
 import { GetVaultsDto, SortOrder, TVLCurrency, VaultFilter } from './dto/get-vaults.dto';
 import { IncrementViewCountRes } from './dto/increment-view-count.res';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { PublishVaultDto } from './dto/publish-vault.dto';
+import {
+  ActivityType,
+  ProposalActivityEvent,
+  TransactionActivityEvent,
+  VaultActivityItem,
+} from './dto/vault-activity.dto';
 import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
 import { GovernanceService } from './phase-management/governance/governance.service';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
@@ -35,6 +42,7 @@ import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
+import { Proposal } from '@/database/proposal.entity';
 import { TagEntity } from '@/database/tag.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
@@ -99,6 +107,8 @@ export class VaultsService {
     private readonly assetsRepository: Repository<Asset>,
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
+    @InjectRepository(Proposal)
+    private readonly proposalRepository: Repository<Proposal>,
     private readonly gcsService: GoogleCloudStorageService,
     private readonly vaultContractService: VaultManagingService,
     private readonly blockchainService: BlockchainService,
@@ -1550,37 +1560,137 @@ export class VaultsService {
     vault_id: string,
     page: number = 1,
     limit: number = 10,
-    sortOrder: SortOrder = SortOrder.DESC
-  ): Promise<PaginatedResponseDto<Transaction>> {
-    const queryBuilder = this.transactionRepository
-      .createQueryBuilder('t')
-      .leftJoinAndSelect('t.user', 'user')
-      .leftJoinAndSelect('t.assets', 'assets')
-      .where('t.vault_id = :vault_id', { vault_id })
-      .andWhere('t.type IN (:...types)', {
-        types: [
+    sortOrder: SortOrder = SortOrder.DESC,
+    filter: VaultActivityFilter = VaultActivityFilter.ALL,
+    isExport: boolean = false
+  ): Promise<PaginatedResponseDto<VaultActivityItem>> {
+    const vaultExists = await this.vaultsRepository.exists({
+      where: { id: vault_id },
+    });
+
+    if (!vaultExists) {
+      throw new NotFoundException('Vault not found');
+    }
+
+    const allActivities: VaultActivityItem[] = [];
+
+    const shouldFetchTransactions = filter !== VaultActivityFilter.GOVERNANCE;
+    const shouldFetchProposals = filter === VaultActivityFilter.ALL || filter === VaultActivityFilter.GOVERNANCE;
+
+    if (shouldFetchTransactions) {
+      const transactionTypes: TransactionType[] = [];
+
+      if (filter === VaultActivityFilter.ALL) {
+        transactionTypes.push(
           TransactionType.createVault,
           TransactionType.contribute,
           TransactionType.acquire,
-          TransactionType.updateVault,
-        ],
-      })
-      .andWhere('t.status = :status', { status: TransactionStatus.confirmed })
-      .orderBy('t.created_at', sortOrder);
+          TransactionType.updateVault
+        );
+      } else if (filter === VaultActivityFilter.CONTRIBUTE) {
+        transactionTypes.push(TransactionType.contribute);
+      } else if (filter === VaultActivityFilter.ACQUIRE) {
+        transactionTypes.push(TransactionType.acquire);
+      }
 
-    const total = await queryBuilder.getCount();
+      if (transactionTypes.length > 0) {
+        const transactions = await this.transactionRepository
+          .createQueryBuilder('t')
+          .leftJoinAndSelect('t.user', 'user')
+          .leftJoinAndSelect('t.assets', 'assets')
+          .where('t.vault_id = :vault_id', { vault_id })
+          .andWhere('t.type IN (:...types)', { types: transactionTypes })
+          .andWhere('t.status = :status', { status: TransactionStatus.confirmed })
+          .getMany();
 
-    const transactions = await queryBuilder
-      .skip((page - 1) * limit)
-      .take(limit)
-      .getMany();
+        const transactionEvents: TransactionActivityEvent[] = transactions.map(tx => ({
+          ...tx,
+          activityType: ActivityType.TRANSACTION,
+        }));
+
+        allActivities.push(...transactionEvents);
+      }
+    }
+
+    if (shouldFetchProposals) {
+      const proposalEvents = await this.getProposalsActivity(vault_id);
+      allActivities.push(...proposalEvents);
+    }
+
+    allActivities.sort((a, b) => {
+      const dateA = new Date(a.created_at).getTime();
+      const dateB = new Date(b.created_at).getTime();
+      return sortOrder === SortOrder.DESC ? dateB - dateA : dateA - dateB;
+    });
+
+    const total = allActivities.length;
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + limit;
+    const paginatedItems = isExport ? allActivities : allActivities.slice(startIndex, endIndex);
 
     return {
-      items: transactions,
+      items: paginatedItems,
       total,
       page,
       limit,
       totalPages: Math.ceil(total / limit),
     };
+  }
+
+  private async getProposalsActivity(vault_id: string): Promise<ProposalActivityEvent[]> {
+    const proposals = await this.proposalRepository.find({
+      where: { vaultId: vault_id },
+      order: { createdAt: 'DESC' },
+    });
+
+    const events: ProposalActivityEvent[] = [];
+
+    for (const proposal of proposals) {
+      const createdAt = new Date(proposal.createdAt);
+      const startDate = new Date(proposal.startDate);
+      const endDate = new Date(proposal.endDate);
+
+      events.push({
+        id: `${proposal.id}_created`,
+        activityType: ActivityType.PROPOSAL_CREATED,
+        proposalId: proposal.id,
+        title: proposal.title,
+        description: proposal.description,
+        status: proposal.status,
+        creatorId: proposal.creatorId,
+        created_at: createdAt,
+        executionError: proposal.metadata?.executionError?.message,
+      });
+
+      if (startDate >= createdAt) {
+        events.push({
+          id: `${proposal.id}_started`,
+          activityType: ActivityType.PROPOSAL_STARTED,
+          proposalId: proposal.id,
+          title: proposal.title,
+          description: proposal.description,
+          status: proposal.status,
+          creatorId: proposal.creatorId,
+          created_at: startDate,
+          executionError: proposal.metadata?.executionError?.message,
+        });
+      }
+
+      if (endDate > createdAt) {
+        events.push({
+          id: `${proposal.id}_ended`,
+          activityType: ActivityType.PROPOSAL_ENDED,
+          proposalId: proposal.id,
+          title: proposal.title,
+          description: proposal.description,
+          status: proposal.status,
+          creatorId: proposal.creatorId,
+          created_at: endDate,
+          executionError: proposal.metadata?.executionError?.message,
+        });
+      }
+    }
+
+    return events;
   }
 }
