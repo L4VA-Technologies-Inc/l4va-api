@@ -84,7 +84,14 @@ export class ContributorPaymentBuilder {
 
       const userAddress = claim.user.address;
       const datumTag = generate_tag_from_txhash_index(originalTx.tx_hash, 0);
-      const vaultTokenQuantity = Number(claim.amount);
+
+      // Calculate vault token quantity based on multipliers and actual UTXO assets
+      // This matches the smart contract's loop_throught_assets calculation
+      const vaultTokenQuantity = this.calculateVaultTokenQuantity(
+        contribOutput.amount,
+        vault.acquire_multiplier,
+        vault.script_hash
+      );
 
       // Add script interaction for spending the contribution UTXO
       scriptInteractions.push({
@@ -347,5 +354,77 @@ export class ContributorPaymentBuilder {
     }
 
     return contribOutput;
+  }
+
+  /**
+   * Calculate vault token quantity based on UTXO assets and acquire multipliers
+   * This matches the smart contract's loop_throught_assets calculation
+   *
+   * @param utxoAmounts - The amounts from the contribution UTXO
+   * @param acquireMultiplier - The vault's acquire_multiplier array
+   * @param vaultPolicyId - The vault's policy ID (to exclude receipt token)
+   * @returns The calculated vault token quantity
+   */
+  private calculateVaultTokenQuantity(
+    utxoAmounts: Array<{ unit: string; quantity: string }>,
+    acquireMultiplier: Array<[string, string | null, number]> | undefined,
+    vaultPolicyId: string
+  ): number {
+    if (!acquireMultiplier || acquireMultiplier.length === 0) {
+      this.logger.warn('calculateVaultTokenQuantity: No acquire multipliers found');
+      return 0;
+    }
+
+    let totalVtAmount = 0;
+    const receiptUnit = vaultPolicyId + '72656365697074'; // "receipt" in hex
+
+    for (const amount of utxoAmounts) {
+      // Skip lovelace and receipt token
+      if (amount.unit === 'lovelace' || amount.unit === receiptUnit) {
+        continue;
+      }
+
+      // Parse unit into policyId and assetName
+      const policyId = amount.unit.substring(0, 56);
+      const assetName = amount.unit.substring(56);
+      const quantity = Number(amount.quantity);
+
+      // Find matching multiplier
+      const multiplier = this.findMultiplier(acquireMultiplier, policyId, assetName);
+
+      if (multiplier > 0) {
+        totalVtAmount += multiplier * quantity;
+        this.logger.debug(
+          `calculateVaultTokenQuantity: Asset ${policyId}.${assetName} qty=${quantity} mult=${multiplier} => +${multiplier * quantity} VT`
+        );
+      }
+    }
+
+    this.logger.debug(`calculateVaultTokenQuantity: Total VT = ${totalVtAmount}`);
+    return totalVtAmount;
+  }
+
+  /**
+   * Find the multiplier for a given asset from the acquire_multiplier array
+   * Matches the smart contract's multiplier_given_asset logic
+   */
+  private findMultiplier(
+    multipliers: Array<[string, string | null, number]>,
+    policyId: string,
+    assetName: string
+  ): number {
+    for (const [mPolicyId, mAssetName, mult] of multipliers) {
+      if (mPolicyId === policyId) {
+        // If assetName is null/undefined, match any asset from this policy
+        if (mAssetName === null || mAssetName === undefined || mAssetName === '') {
+          return mult;
+        }
+        // Otherwise, must match exact asset name
+        if (mAssetName === assetName) {
+          return mult;
+        }
+      }
+    }
+    return 0;
   }
 }

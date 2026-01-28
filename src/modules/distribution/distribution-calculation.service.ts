@@ -284,9 +284,15 @@ export class DistributionCalculationService {
 
       claim.transaction.assets.forEach((asset, index) => {
         const vtShare = baseVtShare + (index < vtRemainder ? 1 : 0);
-        acquireMultiplier.push([asset.policy_id, asset.asset_id, vtShare]);
+        // Divide by asset quantity to get per-unit multiplier
+        // Smart contract calculates: expected = multiplier * quantity_on_utxo
+        const assetQuantity = Number(asset.quantity) || 1;
+        const vtSharePerUnit = Math.floor(vtShare / assetQuantity);
+        acquireMultiplier.push([asset.policy_id, asset.asset_id, vtSharePerUnit]);
+
         const adaShare = baseAdaShare + (index < adaRemainder ? 1 : 0);
-        adaDistribution.push([asset.policy_id, asset.asset_id, adaShare]);
+        const adaSharePerUnit = Math.floor(adaShare / assetQuantity);
+        adaDistribution.push([asset.policy_id, asset.asset_id, adaSharePerUnit]);
       });
     }
 
