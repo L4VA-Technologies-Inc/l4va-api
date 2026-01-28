@@ -26,6 +26,7 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { VaultTreasuryWallet } from '@/database/vaultTreasuryWallet.entity';
 import { Vote } from '@/database/vote.entity';
+import { DexHunterModule } from '@/modules/dexhunter/dexhunter.module';
 import { RedisModule } from '@/modules/redis/redis.module';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
 import { VyfiModule } from '@/modules/vyfi/vyfi.module';
@@ -40,6 +41,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     TreasureWalletModule,
     TransactionsModule,
     BlockchainModule,
+    DexHunterModule,
     VyfiModule,
   ],
   controllers: [GovernanceController, TerminationController],

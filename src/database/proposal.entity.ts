@@ -94,6 +94,15 @@ export class Proposal {
     // Burning data
     burnAssets?: string[];
 
+    // Swap execution results (for DexHunter swaps)
+    swapResults?: Array<{
+      assetId: string;
+      txHash: string;
+      estimatedOutput: number;
+      actualOutput?: number;
+      actualSlippage?: number;
+    }>;
+
     // Execution retry tracking
     _executionRetry?: {
       count: number;

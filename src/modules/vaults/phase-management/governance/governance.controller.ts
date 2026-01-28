@@ -171,4 +171,12 @@ export class GovernanceController {
   async getAssetsToBurn(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<AssetBuySellDto[]> {
     return this.governanceService.getAssetsToBurn(vaultId);
   }
+
+  @Get('vaults/:vaultId/swappable-assets')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Get fungible tokens available for swapping via DexHunter' })
+  @ApiResponse({ status: 200, description: 'List of swappable FT assets with current prices' })
+  async getSwappableAssets(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<any[]> {
+    return this.governanceService.getSwappableAssets(vaultId);
+  }
 }

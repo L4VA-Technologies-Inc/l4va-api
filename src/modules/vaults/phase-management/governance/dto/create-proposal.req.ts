@@ -194,6 +194,16 @@ export class MarketplaceActionDto {
   })
   @IsString()
   market: string;
+
+  // ===== SWAP field (for DexHunter FT swaps) =====
+  @ApiProperty({
+    description: 'Slippage tolerance percentage (0.5-5%) for token swaps via DexHunter',
+    required: false,
+    example: 0.5,
+  })
+  @IsOptional()
+  @IsNumber()
+  slippage?: number;
 }
 
 export class CreateProposalReq {

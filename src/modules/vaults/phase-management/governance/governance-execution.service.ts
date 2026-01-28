@@ -15,6 +15,8 @@ import { VoteCountingService } from './vote-counting.service';
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
+import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
+import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { TreasuryExtractionService } from '@/modules/vaults/treasure/treasury-extraction.service';
@@ -54,7 +56,9 @@ export class GovernanceExecutionService {
     private readonly treasuryExtractionService: TreasuryExtractionService,
     private readonly transactionsService: TransactionsService,
     private readonly terminationService: TerminationService,
-    private readonly distributionService: DistributionService
+    private readonly distributionService: DistributionService,
+    private readonly dexHunterService: DexHunterService,
+    private readonly dexHunterPricingService: DexHunterPricingService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
@@ -567,21 +571,31 @@ export class GovernanceExecutionService {
   }
 
   /**
-   * Execute Marketplace proposal actions via WayUp marketplace
-   * Executes all marketplace operations (list, unlist, update, buy) in a single atomic transaction
+   * Execute Marketplace proposal actions via WayUp marketplace or DexHunter swap
+   * Executes all marketplace operations (list, unlist, update, buy) in a single atomic transaction for WayUp
+   * Executes FT token swaps via DexHunter for token swaps
    * Only runs on mainnet - testnet just logs completion
    */
   private async executeMarketplaceProposal(proposal: Proposal): Promise<boolean> {
+    if (!proposal.metadata.marketplaceActions || proposal.metadata.marketplaceActions.length === 0) {
+      this.logger.warn(`Marketplace proposal ${proposal.id} has no marketplace options`);
+      return false;
+    }
+
+    // Check which market this proposal uses
+    const market = proposal.metadata.marketplaceActions[0]?.market;
+
+    // Handle DexHunter FT swaps
+    if (market === 'DexHunter') {
+      return this.executeDexHunterSwapProposal(proposal);
+    }
+
+    // Handle WayUp NFT marketplace (existing logic)
     if (!this.isMainnet) {
       this.logger.log(
         `[TESTNET] BUY_SELL proposal ${proposal.id} marked as completed (no actual execution on testnet)`
       );
       return true;
-    }
-
-    if (!proposal.metadata.marketplaceActions || proposal.metadata.marketplaceActions.length === 0) {
-      this.logger.warn(`BUY_SELL proposal ${proposal.id} has no marketplace options`);
-      return false;
     }
 
     // Collect all unique asset IDs to fetch from database
@@ -972,6 +986,119 @@ export class GovernanceExecutionService {
       // Store execution error in proposal metadata
       await this.storeExecutionError(proposal, error);
 
+      return false;
+    }
+  }
+
+  /**
+   * Execute DexHunter FT swap proposal
+   * Swaps fungible tokens to ADA via DexHunter DEX aggregator
+   * Only runs on mainnet - testnet bypasses execution
+   */
+  private async executeDexHunterSwapProposal(proposal: Proposal): Promise<boolean> {
+    // Testnet bypass - DexHunter doesn't support testnet
+    if (!this.isMainnet) {
+      this.logger.log(
+        `[TESTNET] DexHunter swap proposal ${proposal.id} marked as completed (no actual execution on testnet)`
+      );
+      return true;
+    }
+
+    const actions = proposal.metadata.marketplaceActions || [];
+    this.logger.log(`Executing DexHunter swap proposal ${proposal.id} with ${actions.length} token(s)`);
+
+    try {
+      // Fetch all FT assets from database
+      const assetIds = [...new Set(actions.map(opt => opt.assetId))];
+      const assets = await this.assetRepository.find({
+        where: assetIds.map(id => ({ id })),
+        select: ['id', 'policy_id', 'asset_id', 'name', 'quantity', 'type'],
+      });
+
+      const assetMap = new Map(assets.map(asset => [asset.id, asset]));
+
+      // Extract FT assets to treasury wallet
+      if (!proposal.vault.treasury_wallet?.treasury_address) {
+        throw new Error(`Treasury wallet not configured for vault ${proposal.vaultId}`);
+      }
+
+      this.logger.log(`Extracting ${assetIds.length} FT asset(s) to treasury wallet before swap`);
+      const extractionResult = await this.treasuryExtractionService.extractAssetsFromVault({
+        vaultId: proposal.vaultId,
+        assetIds,
+        treasuryAddress: proposal.vault.treasury_wallet.treasury_address,
+        skipOnchain: false,
+      });
+
+      this.logger.log(`Extraction transaction submitted: ${extractionResult.txHash}`);
+
+      // Wait for extraction confirmation
+      const confirmed = await this.transactionsService.waitForTransactionStatus(
+        extractionResult.transactionId,
+        TransactionStatus.confirmed,
+        120000
+      );
+
+      if (!confirmed) {
+        throw new Error(`Extraction transaction ${extractionResult.txHash} not confirmed within timeout`);
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 5000)); // Wait for blockchain sync
+
+      // Execute swaps sequentially for each token
+      const swapResults: Array<{ assetId: string; txHash: string; estimatedOutput: number }> = [];
+
+      for (const action of actions) {
+        const asset = assetMap.get(action.assetId);
+        if (!asset) {
+          this.logger.warn(`Asset ${action.assetId} not found, skipping swap`);
+          continue;
+        }
+
+        const tokenIn = asset.policy_id + asset.asset_id;
+        const amountIn = action.quantity || asset.quantity.toString();
+        const slippage = action.slippage || 0.5;
+
+        this.logger.log(`Swapping ${amountIn} of ${asset.name} (${tokenIn}) with ${slippage}% slippage`);
+
+        const swapResult = await this.dexHunterService.executeSwap(proposal.vaultId, {
+          tokenIn,
+          amountIn: parseFloat(amountIn),
+          slippage,
+        });
+
+        this.logger.log(`Swap completed: ${swapResult.txHash}, output: ${swapResult.estimatedOutput} ADA`);
+
+        swapResults.push({
+          assetId: action.assetId,
+          txHash: swapResult.txHash,
+          estimatedOutput: swapResult.estimatedOutput,
+        });
+
+        // Update asset quantity in database
+        const swappedAmount = parseFloat(amountIn);
+        await this.assetRepository.update(
+          { id: action.assetId },
+          {
+            quantity: asset.quantity - swappedAmount,
+            status: asset.quantity - swappedAmount === 0 ? AssetStatus.EXTRACTED : asset.status,
+          }
+        );
+      }
+
+      // Store swap results in proposal metadata
+      if (!proposal.metadata.swapResults) {
+        proposal.metadata.swapResults = [];
+      }
+      proposal.metadata.swapResults = swapResults;
+      await this.proposalRepository.save(proposal);
+
+      this.logger.log(`DexHunter swap proposal ${proposal.id} completed successfully with ${swapResults.length} swaps`);
+
+      return true;
+    } catch (error) {
+      this.logger.error(`Error executing DexHunter swap proposal ${proposal.id}: ${error.message}`, error.stack);
+      await this.storeExecutionError(proposal, error);
       return false;
     }
   }
