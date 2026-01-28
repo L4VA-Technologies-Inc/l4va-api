@@ -33,6 +33,7 @@ import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { PublishBurnTransactionRes } from './dto/publish-burn-transaction.res';
 import { PublishVaultDto } from './dto/publish-vault.dto';
 import { SaveDraftReq } from './dto/saveDraft.req';
+import { VaultActivityItem } from './dto/vault-activity.dto';
 import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { VaultsService } from './vaults.service';
@@ -275,14 +276,15 @@ export class VaultsController {
 
   @ApiDoc({
     summary: 'Get vault activity',
-    description: 'Returns paginated vault transaction activity (createVault, contribute, acquire, updateVault)',
+    description:
+      'Returns paginated vault activity including transactions (createVault, contribute, acquire, updateVault) and proposal events (created, started, ended). Supports filtering by activity type.',
     status: 200,
   })
   @Get('activity/:id')
   async getVaultActivityById(
     @Param() params: GetVaultParamDto,
     @Query() query: GetVaultActivityDto
-  ): Promise<PaginatedResponseDto<Transaction>> {
-    return this.vaultsService.getVaultActivityById(params.id, query.page, query.limit, query.sortOrder);
+  ): Promise<PaginatedResponseDto<VaultActivityItem>> {
+    return this.vaultsService.getVaultActivityById(params.id, query.page, query.limit, query.sortOrder, query.filter);
   }
 }
