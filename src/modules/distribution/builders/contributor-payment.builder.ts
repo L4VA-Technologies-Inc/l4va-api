@@ -371,7 +371,6 @@ export class ContributorPaymentBuilder {
     vaultPolicyId: string
   ): number {
     if (!acquireMultiplier || acquireMultiplier.length === 0) {
-      this.logger.warn('calculateVaultTokenQuantity: No acquire multipliers found');
       return 0;
     }
 
@@ -394,13 +393,9 @@ export class ContributorPaymentBuilder {
 
       if (multiplier > 0) {
         totalVtAmount += multiplier * quantity;
-        this.logger.debug(
-          `calculateVaultTokenQuantity: Asset ${policyId}.${assetName} qty=${quantity} mult=${multiplier} => +${multiplier * quantity} VT`
-        );
       }
     }
 
-    this.logger.debug(`calculateVaultTokenQuantity: Total VT = ${totalVtAmount}`);
     return totalVtAmount;
   }
 

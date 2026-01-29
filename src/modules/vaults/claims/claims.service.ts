@@ -37,7 +37,7 @@ export class ClaimsService {
   private readonly adminHash: string;
   private readonly isMainnet: boolean;
   private blockfrost: BlockFrostAPI;
-  private readonly MAX_TX_SIZE = 15900;
+  private readonly MAX_TX_SIZE = 16360;
 
   constructor(
     @InjectRepository(Transaction)

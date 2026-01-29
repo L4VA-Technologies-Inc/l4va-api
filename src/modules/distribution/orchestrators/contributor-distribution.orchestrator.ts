@@ -1,12 +1,7 @@
 import { Buffer } from 'node:buffer';
 
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import {
-  Address,
-  FixedTransaction,
-  PrivateKey,
-  TransactionUnspentOutput,
-} from '@emurgo/cardano-serialization-lib-nodejs';
+import { Address, FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
@@ -36,7 +31,7 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 @Injectable()
 export class ContributorDistributionOrchestrator {
   private readonly logger = new Logger(ContributorDistributionOrchestrator.name);
-  private readonly MAX_TX_SIZE = 16300;
+  private readonly MAX_TX_SIZE = 16360;
   private readonly MAX_BATCH_SIZE = 15;
 
   constructor(
@@ -289,26 +284,14 @@ export class ContributorDistributionOrchestrator {
 
     while (utxoRetryCount <= MAX_UTXO_RETRIES) {
       try {
-        // Get admin UTXOs
-        let { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(config.adminAddress), this.blockfrost, {
+        // Get admin UTXOs (pass excludeUtxoRefs to filter known spent UTXOs)
+        const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(config.adminAddress), this.blockfrost, {
           minAda: 4_000_000,
+          excludeUtxoRefs: excludedUtxos.size > 0 ? excludedUtxos : undefined,
         });
 
-        // Filter out any previously identified spent UTXOs
         if (excludedUtxos.size > 0) {
-          const originalCount = adminUtxos.length;
-          adminUtxos = adminUtxos.filter(utxoHex => {
-            // Parse the UTXO to get its reference
-            const utxoRef = this.extractUtxoReference(utxoHex);
-            const isExcluded = excludedUtxos.has(utxoRef);
-            if (isExcluded) {
-              this.logger.debug(`Excluding spent UTXO: ${utxoRef}`);
-            }
-            return !isExcluded;
-          });
-          this.logger.log(
-            `Filtered admin UTXOs: ${originalCount} -> ${adminUtxos.length} (excluded ${excludedUtxos.size} spent)`
-          );
+          this.logger.log(`Fetched admin UTXOs with ${excludedUtxos.size} excluded refs`);
         }
 
         if (adminUtxos.length === 0) {
@@ -411,22 +394,6 @@ export class ContributorDistributionOrchestrator {
 
         throw error;
       }
-    }
-  }
-
-  /**
-   * Extract UTXO reference (txHash#index) from hex-encoded UTXO
-   */
-  private extractUtxoReference(utxoHex: string): string {
-    try {
-      const utxo = TransactionUnspentOutput.from_hex(utxoHex);
-      const input = utxo.input();
-      const txHash = input.transaction_id().to_hex();
-      const index = input.index();
-      return `${txHash}#${index}`;
-    } catch {
-      // If we can't parse, return empty string (won't match anything)
-      return '';
     }
   }
 
