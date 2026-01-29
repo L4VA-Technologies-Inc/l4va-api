@@ -1676,6 +1676,7 @@ export class VaultsService {
     });
 
     const events: ProposalActivityEvent[] = [];
+    const now = new Date();
 
     for (const proposal of proposals) {
       const createdAt = new Date(proposal.createdAt);
@@ -1694,7 +1695,7 @@ export class VaultsService {
         executionError: proposal.metadata?.executionError?.message,
       });
 
-      if (startDate >= createdAt) {
+      if (startDate < now) {
         events.push({
           id: `${proposal.id}_started`,
           activityType: ActivityType.PROPOSAL_STARTED,
@@ -1708,7 +1709,7 @@ export class VaultsService {
         });
       }
 
-      if (endDate > createdAt) {
+      if (endDate < now) {
         events.push({
           id: `${proposal.id}_ended`,
           activityType: ActivityType.PROPOSAL_ENDED,
