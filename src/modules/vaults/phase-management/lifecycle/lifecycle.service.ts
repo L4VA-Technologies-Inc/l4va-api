@@ -924,10 +924,37 @@ export class LifecycleService {
         const finalContributorClaims = finalClaims.filter(cl => cl.type === ClaimType.CONTRIBUTOR);
         const finalAcquirerClaims = finalClaims.filter(cl => cl.type === ClaimType.ACQUIRER);
 
-        const { acquireMultiplier, adaDistribution } = this.distributionCalculationService.calculateAcquireMultipliers({
-          contributorsClaims: finalContributorClaims,
-          acquirerClaims: finalAcquirerClaims,
-        });
+        const { acquireMultiplier, adaDistribution, recalculatedClaimAmounts, recalculatedLovelaceAmounts } =
+          this.distributionCalculationService.calculateAcquireMultipliers({
+            contributorsClaims: finalContributorClaims,
+            acquirerClaims: finalAcquirerClaims,
+          });
+
+        // Update contributor claim amounts to match smart contract calculation (qty × multiplier)
+        // This ensures the transaction validation will pass
+        if (recalculatedClaimAmounts.size > 0) {
+          const claimsToUpdate = [];
+          for (const claim of finalContributorClaims) {
+            const recalculatedVt = recalculatedClaimAmounts.get(claim.id);
+            const recalculatedLovelace = recalculatedLovelaceAmounts.get(claim.id);
+            if (recalculatedVt !== undefined && recalculatedVt !== claim.amount) {
+              this.logger.debug(
+                `Updating claim ${claim.id} amount from ${claim.amount} to ${recalculatedVt} (diff: ${claim.amount - recalculatedVt})`
+              );
+              claim.amount = recalculatedVt;
+              if (recalculatedLovelace !== undefined) {
+                claim.lovelace_amount = recalculatedLovelace;
+              }
+              claimsToUpdate.push(claim);
+            }
+          }
+          if (claimsToUpdate.length > 0) {
+            await this.claimRepository.save(claimsToUpdate);
+            this.logger.log(
+              `Updated ${claimsToUpdate.length} contributor claim amounts to match multiplier calculation`
+            );
+          }
+        }
 
         const response = await this.vaultManagingService.updateVaultMetadataTx({
           vault,
@@ -1258,10 +1285,35 @@ export class LifecycleService {
       });
 
       // Calculate acquire multipliers (only contributors, no acquirers)
-      const { acquireMultiplier } = this.distributionCalculationService.calculateAcquireMultipliers({
-        contributorsClaims: finalContributorClaims,
-        acquirerClaims: [], // No acquirers
-      });
+      const { acquireMultiplier, recalculatedClaimAmounts, recalculatedLovelaceAmounts } =
+        this.distributionCalculationService.calculateAcquireMultipliers({
+          contributorsClaims: finalContributorClaims,
+          acquirerClaims: [], // No acquirers
+        });
+
+      // Update contributor claim amounts to match smart contract calculation (qty × multiplier)
+      // This ensures the transaction validation will pass
+      if (recalculatedClaimAmounts.size > 0) {
+        const claimsToUpdate = [];
+        for (const claim of finalContributorClaims) {
+          const recalculatedVt = recalculatedClaimAmounts.get(claim.id);
+          const recalculatedLovelace = recalculatedLovelaceAmounts.get(claim.id);
+          if (recalculatedVt !== undefined && recalculatedVt !== claim.amount) {
+            this.logger.debug(
+              `Updating claim ${claim.id} amount from ${claim.amount} to ${recalculatedVt} (diff: ${claim.amount - recalculatedVt})`
+            );
+            claim.amount = recalculatedVt;
+            if (recalculatedLovelace !== undefined) {
+              claim.lovelace_amount = recalculatedLovelace;
+            }
+            claimsToUpdate.push(claim);
+          }
+        }
+        if (claimsToUpdate.length > 0) {
+          await this.claimRepository.save(claimsToUpdate);
+          this.logger.log(`Updated ${claimsToUpdate.length} contributor claim amounts to match multiplier calculation`);
+        }
+      }
 
       this.logger.log(
         `Calculated acquire multipliers for ${finalContributorClaims.length} contributors ` + `(no acquirers)`

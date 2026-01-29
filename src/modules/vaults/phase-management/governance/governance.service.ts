@@ -1032,8 +1032,6 @@ export class GovernanceService {
         }
         return cached.power;
       }
-    } else {
-      this.logger.debug(`Skipping cache for voting power (distribution not processed): ${cacheKey}`);
     }
 
     try {
@@ -1064,10 +1062,6 @@ export class GovernanceService {
             cacheTTL
           );
         }
-
-        if (!error.message.includes('NO_VOTING_POWER')) {
-          this.logger.warn(`Voting power check failed for ${userId} in vault ${vaultId}: ${error.message}`);
-        }
       } else if (error instanceof NotFoundException) {
         if (vault.distribution_processed) {
           this.votingPowerCache.set(
@@ -1079,8 +1073,6 @@ export class GovernanceService {
             cacheTTL
           );
         }
-
-        this.logger.warn(`Voting power check failed for ${userId} in vault ${vaultId}: ${error.message}`);
       } else {
         this.logger.error(`Unexpected error in voting power check for ${userId} in vault ${vaultId}:`, error);
       }
