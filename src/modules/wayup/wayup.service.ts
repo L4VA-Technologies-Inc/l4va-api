@@ -145,9 +145,10 @@ export class WayUpService {
     // Create transaction record
     const transaction = await this.transactionsService.createTransaction({
       vault_id: vaultId,
-      type: TransactionType.listing,
+      type: TransactionType.wayup,
       assets: [],
       metadata: {
+        operation: 'listing',
         listings,
         listingCount: listings.length,
       },
@@ -201,9 +202,10 @@ export class WayUpService {
     // Create transaction record
     const transaction = await this.transactionsService.createTransaction({
       vault_id: vaultId,
-      type: TransactionType.unlisting,
+      type: TransactionType.wayup,
       assets: [],
       metadata: {
+        operation: 'unlisting',
         unlistings,
         unlistingCount: unlistings.length,
       },
@@ -300,9 +302,10 @@ export class WayUpService {
     // Create transaction record
     const transaction = await this.transactionsService.createTransaction({
       vault_id: vaultId,
-      type: TransactionType.updateListing,
+      type: TransactionType.wayup,
       assets: [],
       metadata: {
+        operation: 'updateListing',
         updates,
         updateCount: updates.length,
       },
@@ -399,9 +402,10 @@ export class WayUpService {
     // Create transaction record
     const transaction = await this.transactionsService.createTransaction({
       vault_id: vaultId,
-      type: TransactionType.offer,
+      type: TransactionType.wayup,
       assets: [],
       metadata: {
+        operation: 'offer',
         offers,
         offerCount: offers.length,
       },
@@ -521,9 +525,10 @@ export class WayUpService {
     // Create transaction record
     const transaction = await this.transactionsService.createTransaction({
       vault_id: vaultId,
-      type: TransactionType.purchase,
+      type: TransactionType.wayup,
       assets: [],
       metadata: {
+        operation: 'purchase',
         purchases,
         purchaseCount: purchases.length,
       },
@@ -659,216 +664,253 @@ export class WayUpService {
       throw new Error('At least one marketplace action must be provided');
     }
 
-    // Validate minimum prices for listings
-    if (actions.listings?.length > 0) {
-      const invalidPrices = actions.listings.filter(l => l.priceAda < this.MIN_PRICE_ADA);
-      if (invalidPrices.length > 0) {
-        throw new Error(`All listings must have a minimum price of ${this.MIN_PRICE_ADA} ADA`);
-      }
-    }
-
-    // Validate minimum prices for updates
-    if (actions.updates?.length > 0) {
-      const invalidPrices = actions.updates.filter(u => u.newPriceAda < this.MIN_PRICE_ADA);
-      if (invalidPrices.length > 0) {
-        throw new Error(`All updated listings must have a minimum price of ${this.MIN_PRICE_ADA} ADA`);
-      }
-    }
-
-    // Validate minimum prices for offers
-    if (actions.offers?.length > 0) {
-      const invalidOffers = actions.offers.filter(o => o.priceAda < this.MIN_PRICE_ADA);
-      if (invalidOffers.length > 0) {
-        throw new Error(`All offers must be at least ${this.MIN_PRICE_ADA} ADA`);
-      }
-    }
-
-    // Validate minimum prices for purchases
-    if (actions.purchases?.length > 0) {
-      const invalidPrices = actions.purchases.filter(p => p.priceAda < this.MIN_PRICE_ADA);
-      if (invalidPrices.length > 0) {
-        throw new Error(`All NFT purchases must be at least ${this.MIN_PRICE_ADA} ADA`);
-      }
-    }
-
-    // Get vault and verify treasury wallet exists
-    const vault = await this.vaultRepository.findOne({
-      where: { id: vaultId },
-      relations: ['treasury_wallet'],
-    });
-
-    if (!vault) {
-      throw new Error(`Vault ${vaultId} not found`);
-    }
-
-    if (!vault.treasury_wallet) {
-      throw new Error(`Treasury wallet not found for vault ${vaultId}`);
-    }
-
-    const treasuryAddress = vault.treasury_wallet.treasury_address;
-    this.logger.log(`Using treasury wallet address: ${treasuryAddress}`);
-    this.logger.log(`Using admin wallet for fees: ${this.adminAddress}`);
-
-    // Collect target NFTs for listings if any
-    const targetAssets =
-      actions.listings?.map(listing => ({
-        token: listing.policyId + listing.assetName,
-        amount: 1,
-      })) ?? [];
-
-    // Calculate total ADA needed from treasury for offers and purchases
-    const offerAmount = (actions.offers?.reduce((sum, o) => sum + o.priceAda, 0) ?? 0) * 1_000_000;
-    const purchaseAmount = (actions.purchases?.reduce((sum, p) => sum + p.priceAda, 0) ?? 0) * 1_000_000;
-    const totalTreasuryAda = offerAmount + purchaseAmount;
-
-    let treasuryUtxos: string[] = [];
-    let needsTreasuryUtxos = false;
-
-    // Get treasury UTXOs if we need NFTs or ADA for offers/purchases
-    if (targetAssets.length > 0 || totalTreasuryAda > 0) {
-      needsTreasuryUtxos = true;
-      const result = await getUtxosExtract(Address.from_bech32(treasuryAddress), this.blockfrost, {
-        targetAssets: targetAssets.length > 0 ? targetAssets : undefined,
-        targetAdaAmount: totalTreasuryAda > 0 ? totalTreasuryAda : undefined,
-        minAda: 0,
-        maxUtxos: 20,
-      });
-      treasuryUtxos = result.utxos;
-
-      if (treasuryUtxos.length === 0) {
-        throw new Error('Required assets not found in treasury wallet');
-      }
-    }
-
-    // Get admin UTXOs for transaction fees
-    const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
-      minAda: 2_000_000,
-      maxUtxos: 5,
-    });
-
-    if (adminUtxos.length === 0) {
-      throw new Error('Insufficient funds in admin wallet for transaction fees');
-    }
-
-    // Combine UTXOs from both wallets
-    const combinedUtxos = needsTreasuryUtxos ? [...treasuryUtxos, ...adminUtxos] : adminUtxos;
-
-    // Build action summary for message
-    const actionParts: string[] = [];
-    if (actions.listings?.length) actionParts.push(`listing ${actions.listings.length} NFT(s)`);
-    if (actions.unlistings?.length) actionParts.push(`unlisting ${actions.unlistings.length}`);
-    if (actions.updates?.length) actionParts.push(`updating ${actions.updates.length}`);
-    if (actions.offers?.length) actionParts.push(`offering on ${actions.offers.length}`);
-    if (actions.purchases?.length) actionParts.push(`buying ${actions.purchases.length}`);
-
-    // Build combined payload
-    const combinedPayload: WayUpTransactionInput = {
-      changeAddress: this.adminAddress,
-      utxos: combinedUtxos,
-      message: `Combined WayUp actions: ${actionParts.join(', ')}`,
-    };
-
-    // Add listings if provided
-    if (actions.listings?.length > 0) {
-      combinedPayload.create = actions.listings.map(listing => ({
-        assets: {
-          policyId: listing.policyId,
-          assetName: listing.assetName,
+    // Create transaction record
+    const transaction = await this.transactionsService.createTransaction({
+      vault_id: vaultId,
+      type: TransactionType.wayup,
+      assets: [],
+      metadata: {
+        operation: 'combined',
+        summary: {
+          listedCount: actions.listings?.length ?? 0,
+          unlistedCount: actions.unlistings?.length ?? 0,
+          updatedCount: actions.updates?.length ?? 0,
+          offersCount: actions.offers?.length ?? 0,
+          purchasedCount: actions.purchases?.length ?? 0,
         },
-        priceAda: listing.priceAda,
-      }));
-    }
-
-    // Add unlistings if provided (need to find output indices)
-    if (actions.unlistings?.length > 0) {
-      const unlistsWithIndices: { policyId: string; txHashIndex: string }[] = [];
-
-      for (const unlist of actions.unlistings) {
-        try {
-          const outputIndex = await this.findListingOutputIndex(unlist.txHashIndex, unlist.policyId, unlist.assetName);
-          unlistsWithIndices.push({
-            policyId: unlist.policyId,
-            txHashIndex: `${unlist.txHashIndex}#${outputIndex}`,
-          });
-        } catch (error) {
-          this.logger.error(`Failed to find output index for unlist ${unlist.policyId}: ${error.message}`);
-          throw new Error(`Cannot unlist ${unlist.policyId}: ${error.message}`);
-        }
-      }
-
-      combinedPayload.unlist = unlistsWithIndices;
-    }
-
-    // Add updates if provided (need to find output indices)
-    if (actions.updates?.length > 0) {
-      const updatesWithIndices: { policyId: string; txHashIndex: string; newPriceAda: number }[] = [];
-
-      for (const update of actions.updates) {
-        try {
-          const outputIndex = await this.findListingOutputIndex(update.txHashIndex, update.policyId, update.assetName);
-          updatesWithIndices.push({
-            policyId: update.policyId,
-            txHashIndex: `${update.txHashIndex}#${outputIndex}`,
-            newPriceAda: update.newPriceAda,
-          });
-        } catch (error) {
-          this.logger.error(`Failed to find output index for update ${update.policyId}: ${error.message}`);
-          throw new Error(`Cannot update listing for ${update.policyId}: ${error.message}`);
-        }
-      }
-
-      combinedPayload.update = updatesWithIndices;
-    }
-
-    // Add offers if provided
-    if (actions.offers?.length > 0) {
-      combinedPayload.createOffer = actions.offers;
-    }
-
-    // Add purchases if provided
-    if (actions.purchases?.length > 0) {
-      combinedPayload.buy = actions.purchases;
-    }
-
-    this.logger.log(
-      `Building combined transaction: ` +
-        `${actions.listings?.length ?? 0} listings, ` +
-        `${actions.unlistings?.length ?? 0} unlistings, ` +
-        `${actions.updates?.length ?? 0} updates, ` +
-        `${actions.offers?.length ?? 0} offers, ` +
-        `${actions.purchases?.length ?? 0} purchases`
-    );
-
-    // Build the transaction
-    const buildResponse = await this.blockchainService.buildWayUpTransaction(combinedPayload);
-
-    // Sign the transaction with appropriate keys
-    // If we used treasury UTXOs, sign with both wallets; otherwise just admin
-    const signedTx = needsTreasuryUtxos
-      ? await this.signTransactionWithBothWallets(vaultId, buildResponse.transactions[0])
-      : await this.signTransactionWithAdmin(buildResponse.transactions[0]);
-
-    // Submit the transaction
-    this.logger.log('Submitting combined marketplace transaction to blockchain');
-    const submitResponse = await this.blockchainService.submitTransaction({
-      transaction: signedTx,
+      },
     });
 
-    const summary = {
-      listedCount: actions.listings?.length ?? 0,
-      unlistedCount: actions.unlistings?.length ?? 0,
-      updatedCount: actions.updates?.length ?? 0,
-      offersCount: actions.offers?.length ?? 0,
-      purchasedCount: actions.purchases?.length ?? 0,
-    };
+    try {
+      // Validate minimum prices for listings
+      if (actions.listings?.length > 0) {
+        const invalidPrices = actions.listings.filter(l => l.priceAda < this.MIN_PRICE_ADA);
+        if (invalidPrices.length > 0) {
+          throw new Error(`All listings must have a minimum price of ${this.MIN_PRICE_ADA} ADA`);
+        }
+      }
 
-    this.logger.log(`Combined marketplace transaction completed successfully. TxHash: ${submitResponse.txHash}`);
-    this.logger.log(`Summary: ${JSON.stringify(summary)}`);
+      // Validate minimum prices for updates
+      if (actions.updates?.length > 0) {
+        const invalidPrices = actions.updates.filter(u => u.newPriceAda < this.MIN_PRICE_ADA);
+        if (invalidPrices.length > 0) {
+          throw new Error(`All updated listings must have a minimum price of ${this.MIN_PRICE_ADA} ADA`);
+        }
+      }
 
-    return {
-      txHash: submitResponse.txHash,
-      summary,
-    };
+      // Validate minimum prices for offers
+      if (actions.offers?.length > 0) {
+        const invalidOffers = actions.offers.filter(o => o.priceAda < this.MIN_PRICE_ADA);
+        if (invalidOffers.length > 0) {
+          throw new Error(`All offers must be at least ${this.MIN_PRICE_ADA} ADA`);
+        }
+      }
+
+      // Validate minimum prices for purchases
+      if (actions.purchases?.length > 0) {
+        const invalidPrices = actions.purchases.filter(p => p.priceAda < this.MIN_PRICE_ADA);
+        if (invalidPrices.length > 0) {
+          throw new Error(`All NFT purchases must be at least ${this.MIN_PRICE_ADA} ADA`);
+        }
+      }
+
+      // Get vault and verify treasury wallet exists
+      const vault = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        relations: ['treasury_wallet'],
+      });
+
+      if (!vault) {
+        throw new Error(`Vault ${vaultId} not found`);
+      }
+
+      if (!vault.treasury_wallet) {
+        throw new Error(`Treasury wallet not found for vault ${vaultId}`);
+      }
+
+      const treasuryAddress = vault.treasury_wallet.treasury_address;
+      this.logger.log(`Using treasury wallet address: ${treasuryAddress}`);
+      this.logger.log(`Using admin wallet for fees: ${this.adminAddress}`);
+
+      // Collect target NFTs for listings if any
+      const targetAssets =
+        actions.listings?.map(listing => ({
+          token: listing.policyId + listing.assetName,
+          amount: 1,
+        })) ?? [];
+
+      // Calculate total ADA needed from treasury for offers and purchases
+      const offerAmount = (actions.offers?.reduce((sum, o) => sum + o.priceAda, 0) ?? 0) * 1_000_000;
+      const purchaseAmount = (actions.purchases?.reduce((sum, p) => sum + p.priceAda, 0) ?? 0) * 1_000_000;
+      const totalTreasuryAda = offerAmount + purchaseAmount;
+
+      let treasuryUtxos: string[] = [];
+      let needsTreasuryUtxos = false;
+
+      // Get treasury UTXOs if we need NFTs or ADA for offers/purchases
+      if (targetAssets.length > 0 || totalTreasuryAda > 0) {
+        needsTreasuryUtxos = true;
+        const result = await getUtxosExtract(Address.from_bech32(treasuryAddress), this.blockfrost, {
+          targetAssets: targetAssets.length > 0 ? targetAssets : undefined,
+          targetAdaAmount: totalTreasuryAda > 0 ? totalTreasuryAda : undefined,
+          minAda: 0,
+          maxUtxos: 20,
+        });
+        treasuryUtxos = result.utxos;
+
+        if (treasuryUtxos.length === 0) {
+          throw new Error('Required assets not found in treasury wallet');
+        }
+      }
+
+      // Get admin UTXOs for transaction fees
+      const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
+        minAda: 2_000_000,
+        maxUtxos: 5,
+      });
+
+      if (adminUtxos.length === 0) {
+        throw new Error('Insufficient funds in admin wallet for transaction fees');
+      }
+
+      // Combine UTXOs from both wallets
+      const combinedUtxos = needsTreasuryUtxos ? [...treasuryUtxos, ...adminUtxos] : adminUtxos;
+
+      // Build action summary for message
+      const actionParts: string[] = [];
+      if (actions.listings?.length) actionParts.push(`listing ${actions.listings.length} NFT(s)`);
+      if (actions.unlistings?.length) actionParts.push(`unlisting ${actions.unlistings.length}`);
+      if (actions.updates?.length) actionParts.push(`updating ${actions.updates.length}`);
+      if (actions.offers?.length) actionParts.push(`offering on ${actions.offers.length}`);
+      if (actions.purchases?.length) actionParts.push(`buying ${actions.purchases.length}`);
+
+      // Build combined payload
+      const combinedPayload: WayUpTransactionInput = {
+        changeAddress: this.adminAddress,
+        utxos: combinedUtxos,
+        message: `Combined WayUp actions: ${actionParts.join(', ')}`,
+      };
+
+      // Add listings if provided
+      if (actions.listings?.length > 0) {
+        combinedPayload.create = actions.listings.map(listing => ({
+          assets: {
+            policyId: listing.policyId,
+            assetName: listing.assetName,
+          },
+          priceAda: listing.priceAda,
+        }));
+      }
+
+      // Add unlistings if provided (need to find output indices)
+      if (actions.unlistings?.length > 0) {
+        const unlistsWithIndices: { policyId: string; txHashIndex: string }[] = [];
+
+        for (const unlist of actions.unlistings) {
+          try {
+            const outputIndex = await this.findListingOutputIndex(
+              unlist.txHashIndex,
+              unlist.policyId,
+              unlist.assetName
+            );
+            unlistsWithIndices.push({
+              policyId: unlist.policyId,
+              txHashIndex: `${unlist.txHashIndex}#${outputIndex}`,
+            });
+          } catch (error) {
+            this.logger.error(`Failed to find output index for unlist ${unlist.policyId}: ${error.message}`);
+            throw new Error(`Cannot unlist ${unlist.policyId}: ${error.message}`);
+          }
+        }
+
+        combinedPayload.unlist = unlistsWithIndices;
+      }
+
+      // Add updates if provided (need to find output indices)
+      if (actions.updates?.length > 0) {
+        const updatesWithIndices: { policyId: string; txHashIndex: string; newPriceAda: number }[] = [];
+
+        for (const update of actions.updates) {
+          try {
+            const outputIndex = await this.findListingOutputIndex(
+              update.txHashIndex,
+              update.policyId,
+              update.assetName
+            );
+            updatesWithIndices.push({
+              policyId: update.policyId,
+              txHashIndex: `${update.txHashIndex}#${outputIndex}`,
+              newPriceAda: update.newPriceAda,
+            });
+          } catch (error) {
+            this.logger.error(`Failed to find output index for update ${update.policyId}: ${error.message}`);
+            throw new Error(`Cannot update listing for ${update.policyId}: ${error.message}`);
+          }
+        }
+
+        combinedPayload.update = updatesWithIndices;
+      }
+
+      // Add offers if provided
+      if (actions.offers?.length > 0) {
+        combinedPayload.createOffer = actions.offers;
+      }
+
+      // Add purchases if provided
+      if (actions.purchases?.length > 0) {
+        combinedPayload.buy = actions.purchases;
+      }
+
+      this.logger.log(
+        `Building combined transaction: ` +
+          `${actions.listings?.length ?? 0} listings, ` +
+          `${actions.unlistings?.length ?? 0} unlistings, ` +
+          `${actions.updates?.length ?? 0} updates, ` +
+          `${actions.offers?.length ?? 0} offers, ` +
+          `${actions.purchases?.length ?? 0} purchases`
+      );
+
+      // Build the transaction
+      const buildResponse = await this.blockchainService.buildWayUpTransaction(combinedPayload);
+
+      // Sign the transaction with appropriate keys
+      // If we used treasury UTXOs, sign with both wallets; otherwise just admin
+      const signedTx = needsTreasuryUtxos
+        ? await this.signTransactionWithBothWallets(vaultId, buildResponse.transactions[0])
+        : await this.signTransactionWithAdmin(buildResponse.transactions[0]);
+
+      // Submit the transaction
+      this.logger.log('Submitting combined marketplace transaction to blockchain');
+      const submitResponse = await this.blockchainService.submitTransaction({
+        transaction: signedTx,
+      });
+
+      const summary = {
+        listedCount: actions.listings?.length ?? 0,
+        unlistedCount: actions.unlistings?.length ?? 0,
+        updatedCount: actions.updates?.length ?? 0,
+        offersCount: actions.offers?.length ?? 0,
+        purchasedCount: actions.purchases?.length ?? 0,
+      };
+
+      // Update transaction with hash and status
+      await this.transactionsService.updateTransactionHash(transaction.id, submitResponse.txHash, {
+        executedActions: summary,
+      });
+      await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.submitted);
+
+      this.logger.log(`Combined marketplace transaction completed successfully. TxHash: ${submitResponse.txHash}`);
+      this.logger.log(`Summary: ${JSON.stringify(summary)}`);
+
+      return {
+        txHash: submitResponse.txHash,
+        summary,
+      };
+    } catch (error) {
+      this.logger.error('Failed to execute combined marketplace actions', error);
+      await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
+      throw error;
+    }
   }
 
   /**

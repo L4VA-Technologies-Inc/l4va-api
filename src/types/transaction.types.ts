@@ -28,15 +28,7 @@ export enum TransactionType {
   distribution = 'distribution',
   /** Vault metadata update transaction */
   updateVault = 'update-vault',
-  /** Asset listing on marketplace */
-  listing = 'listing',
-  /** Asset sale on marketplace */
-  unlisting = 'unlisting',
-  /** NFT marketplace price update */
-  updateListing = 'update-listing',
-  /** NFT marketplace offer/bid */
-  offer = 'offer',
-  /** NFT marketplace purchase */
-  purchase = 'purchase',
+  /** WayUp marketplace transaction (listing, unlisting, update, offer, purchase) */
+  wayup = 'wayup',
   all = 'all',
 }
