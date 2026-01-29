@@ -16,14 +16,27 @@ export enum TransactionType {
   extract = 'extract',
   extractDispatch = 'extract-dispatch',
   cancel = 'cancel',
-  acquire = 'acquire', // Contains only lovelace (ADA)
+  /** Contains only lovelace (ADA) */
+  acquire = 'acquire',
   investment = 'investment',
   burn = 'burn',
   swap = 'swap',
   stake = 'stake',
   extractLp = 'extract-lp',
   distributeLp = 'distribute-lp',
-  distribution = 'distribution', // ADA distribution from treasury to VT holders
-  updateVault = 'update-vault', // Vault metadata update transaction
+  /** ADA distribution from treasury to VT holders */
+  distribution = 'distribution',
+  /** Vault metadata update transaction */
+  updateVault = 'update-vault',
+  /** Asset listing on marketplace */
+  listing = 'listing',
+  /** Asset sale on marketplace */
+  unlisting = 'unlisting',
+  /** NFT marketplace price update */
+  updateListing = 'update-listing',
+  /** NFT marketplace offer/bid */
+  offer = 'offer',
+  /** NFT marketplace purchase */
+  purchase = 'purchase',
   all = 'all',
 }

@@ -12,6 +12,7 @@ import { DexHunterService } from './dexhunter.service';
 
 import { Vault } from '@/database/vault.entity';
 import { VaultTreasuryWallet } from '@/database/vaultTreasuryWallet.entity';
+import { TransactionsModule } from '@/modules/vaults/processing-tx/offchain-tx/transactions.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { VaultTreasuryWallet } from '@/database/vaultTreasuryWallet.entity';
     AssetsModule,
     BlockchainModule,
     TreasureWalletModule,
+    TransactionsModule,
     HttpModule,
   ],
   controllers: [DexHunterController],
