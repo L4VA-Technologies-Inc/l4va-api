@@ -195,6 +195,7 @@ export class ContributorDistributionOrchestrator {
         this.logger.debug(`Testing batch size ${testBatchSize}...`);
 
         const input = await this.paymentBuilder.buildPaymentInput(vault, testClaims, adminUtxos, dispatchUtxos, config);
+        this.logger.debug(JSON.stringify(input));
 
         const buildResponse = await this.blockchainService.buildTransaction(input);
         const txSize = getTransactionSize(buildResponse.complete);
