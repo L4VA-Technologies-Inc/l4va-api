@@ -277,7 +277,7 @@ export class VaultsController {
   @ApiDoc({
     summary: 'Get vault activity',
     description:
-      'Returns paginated vault activity including transactions (createVault, contribute, acquire, updateVault) and proposal events (created, started, ended). Supports filtering by activity type.',
+      'Returns paginated vault activity including transactions (createVault, contribute, acquire, updateVault), proposal events (created, started, ended), and phase transitions. Supports filtering by activity type.',
     status: 200,
   })
   @Get('activity/:id')
@@ -285,6 +285,13 @@ export class VaultsController {
     @Param() params: GetVaultParamDto,
     @Query() query: GetVaultActivityDto
   ): Promise<PaginatedResponseDto<VaultActivityItem>> {
-    return this.vaultsService.getVaultActivityById(params.id, query.page, query.limit, query.sortOrder, query.filter);
+    return this.vaultsService.getVaultActivityById(
+      params.id,
+      query.page,
+      query.limit,
+      query.sortOrder,
+      query.filter,
+      query.isExport
+    );
   }
 }
