@@ -24,6 +24,7 @@ import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { PublishVaultDto } from './dto/publish-vault.dto';
 import {
   ActivityType,
+  PhaseTransitionEvent,
   ProposalActivityEvent,
   TransactionActivityEvent,
   VaultActivityItem,
@@ -1564,11 +1565,12 @@ export class VaultsService {
     filter: VaultActivityFilter = VaultActivityFilter.ALL,
     isExport: boolean = false
   ): Promise<PaginatedResponseDto<VaultActivityItem>> {
-    const vaultExists = await this.vaultsRepository.exists({
+    const vault = await this.vaultsRepository.findOne({
       where: { id: vault_id },
+      select: ['id', 'contribution_phase_start', 'acquire_phase_start', 'locked_at', 'vault_status', 'created_at'],
     });
 
-    if (!vaultExists) {
+    if (!vault) {
       throw new NotFoundException('Vault not found');
     }
 
@@ -1581,12 +1583,7 @@ export class VaultsService {
       const transactionTypes: TransactionType[] = [];
 
       if (filter === VaultActivityFilter.ALL) {
-        transactionTypes.push(
-          TransactionType.createVault,
-          TransactionType.contribute,
-          TransactionType.acquire,
-          TransactionType.updateVault
-        );
+        transactionTypes.push(TransactionType.createVault, TransactionType.contribute, TransactionType.acquire);
       } else if (filter === VaultActivityFilter.CONTRIBUTE) {
         transactionTypes.push(TransactionType.contribute);
       } else if (filter === VaultActivityFilter.ACQUIRE) {
@@ -1609,6 +1606,41 @@ export class VaultsService {
         }));
 
         allActivities.push(...transactionEvents);
+      }
+    }
+
+    if (filter === VaultActivityFilter.ALL) {
+      if (vault.contribution_phase_start) {
+        const contributionPhaseEvent: PhaseTransitionEvent = {
+          id: `${vault.id}_contribution_phase`,
+          activityType: ActivityType.PHASE_TRANSITION,
+          vaultId: vault.id,
+          phase: VaultStatus.contribution,
+          created_at: vault.contribution_phase_start,
+        };
+        allActivities.push(contributionPhaseEvent);
+      }
+
+      if (vault.acquire_phase_start) {
+        const acquirePhaseEvent: PhaseTransitionEvent = {
+          id: `${vault.id}_acquire_phase`,
+          activityType: ActivityType.PHASE_TRANSITION,
+          vaultId: vault.id,
+          phase: VaultStatus.acquire,
+          created_at: vault.acquire_phase_start,
+        };
+        allActivities.push(acquirePhaseEvent);
+      }
+
+      if (vault.locked_at) {
+        const lockedPhaseEvent: PhaseTransitionEvent = {
+          id: `${vault.id}_locked_phase`,
+          activityType: ActivityType.PHASE_TRANSITION,
+          vaultId: vault.id,
+          phase: VaultStatus.locked,
+          created_at: vault.locked_at,
+        };
+        allActivities.push(lockedPhaseEvent);
       }
     }
 
