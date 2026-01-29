@@ -934,17 +934,26 @@ export class LifecycleService {
 
         // Update contributor claim amounts to match smart contract calculation (qty × multiplier)
         // This ensures the transaction validation will pass
-        if (recalculatedClaimAmounts.size > 0) {
+        if (recalculatedClaimAmounts.size > 0 || recalculatedLovelaceAmounts.size > 0) {
           const claimsToUpdate = [];
           for (const claim of finalContributorClaims) {
             const recalculatedVt = recalculatedClaimAmounts.get(claim.id);
             const recalculatedLovelace = recalculatedLovelaceAmounts.get(claim.id);
-            if (recalculatedVt !== undefined && recalculatedVt !== claim.amount) {
-              this.logger.debug(
-                `Updating claim ${claim.id} amount from ${claim.amount} to ${recalculatedVt} (diff: ${claim.amount - recalculatedVt})`
-              );
-              claim.amount = recalculatedVt;
-              if (recalculatedLovelace !== undefined) {
+            const vtNeedsUpdate = recalculatedVt !== undefined && recalculatedVt !== claim.amount;
+            const lovelaceNeedsUpdate =
+              recalculatedLovelace !== undefined && recalculatedLovelace !== claim.lovelace_amount;
+
+            if (vtNeedsUpdate || lovelaceNeedsUpdate) {
+              if (vtNeedsUpdate) {
+                this.logger.debug(
+                  `Updating claim ${claim.id} VT amount from ${claim.amount} to ${recalculatedVt} (diff: ${claim.amount - recalculatedVt})`
+                );
+                claim.amount = recalculatedVt;
+              }
+              if (lovelaceNeedsUpdate) {
+                this.logger.debug(
+                  `Updating claim ${claim.id} lovelace from ${claim.lovelace_amount} to ${recalculatedLovelace} (diff: ${claim.lovelace_amount - recalculatedLovelace})`
+                );
                 claim.lovelace_amount = recalculatedLovelace;
               }
               claimsToUpdate.push(claim);
@@ -1296,17 +1305,26 @@ export class LifecycleService {
 
       // Update contributor claim amounts to match smart contract calculation (qty × multiplier)
       // This ensures the transaction validation will pass
-      if (recalculatedClaimAmounts.size > 0) {
+      if (recalculatedClaimAmounts.size > 0 || recalculatedLovelaceAmounts.size > 0) {
         const claimsToUpdate = [];
         for (const claim of finalContributorClaims) {
           const recalculatedVt = recalculatedClaimAmounts.get(claim.id);
           const recalculatedLovelace = recalculatedLovelaceAmounts.get(claim.id);
-          if (recalculatedVt !== undefined && recalculatedVt !== claim.amount) {
-            this.logger.debug(
-              `Updating claim ${claim.id} amount from ${claim.amount} to ${recalculatedVt} (diff: ${claim.amount - recalculatedVt})`
-            );
-            claim.amount = recalculatedVt;
-            if (recalculatedLovelace !== undefined) {
+          const vtNeedsUpdate = recalculatedVt !== undefined && recalculatedVt !== claim.amount;
+          const lovelaceNeedsUpdate =
+            recalculatedLovelace !== undefined && recalculatedLovelace !== claim.lovelace_amount;
+
+          if (vtNeedsUpdate || lovelaceNeedsUpdate) {
+            if (vtNeedsUpdate) {
+              this.logger.debug(
+                `Updating claim ${claim.id} VT amount from ${claim.amount} to ${recalculatedVt} (diff: ${claim.amount - recalculatedVt})`
+              );
+              claim.amount = recalculatedVt;
+            }
+            if (lovelaceNeedsUpdate) {
+              this.logger.debug(
+                `Updating claim ${claim.id} lovelace_amount from ${claim.lovelace_amount} to ${recalculatedLovelace} (diff: ${claim.lovelace_amount - recalculatedLovelace})`
+              );
               claim.lovelace_amount = recalculatedLovelace;
             }
             claimsToUpdate.push(claim);
