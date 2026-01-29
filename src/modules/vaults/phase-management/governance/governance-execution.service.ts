@@ -984,6 +984,7 @@ export class GovernanceExecutionService {
    * Execute DexHunter FT swap proposal
    * Swaps fungible tokens to ADA via DexHunter DEX aggregator
    * Only runs on mainnet - testnet bypasses execution
+   * Handles idempotency and assets already in treasury wallet
    */
   private async executeDexHunterSwapProposal(proposal: Proposal): Promise<boolean> {
     // Testnet bypass - DexHunter doesn't support testnet
@@ -1006,35 +1007,77 @@ export class GovernanceExecutionService {
 
       const assetMap = new Map(assets.map(asset => [asset.id, asset]));
 
-      // Extract FT assets to treasury wallet
+      // Verify treasury wallet exists
       if (!proposal.vault.treasury_wallet?.treasury_address) {
         throw new Error(`Treasury wallet not configured for vault ${proposal.vaultId}`);
       }
 
-      const extractionResult = await this.treasuryExtractionService.extractAssetsFromVault({
-        vaultId: proposal.vaultId,
-        assetIds,
-        treasuryAddress: proposal.vault.treasury_wallet.treasury_address,
-        isBurn: false,
-        skipOnchain: false,
-      });
+      const treasuryAddress = proposal.vault.treasury_wallet.treasury_address;
 
-      // Wait for extraction confirmation
-      const confirmed = await this.transactionsService.waitForTransactionStatus(
-        extractionResult.transactionId,
-        TransactionStatus.confirmed
-      );
+      // Check which assets are already in treasury wallet
+      this.logger.log(`Checking treasury wallet ${treasuryAddress} for existing assets`);
+      const treasuryAddressInfo = await this.blockfrost.addresses(treasuryAddress);
+      const tokensInTreasury = new Set<string>();
 
-      if (!confirmed) {
-        throw new Error(`Extraction transaction ${extractionResult.txHash} not confirmed within timeout`);
+      for (const amount of treasuryAddressInfo.amount) {
+        if (amount.unit !== 'lovelace') {
+          tokensInTreasury.add(amount.unit);
+        }
       }
 
-      await new Promise(resolve => setTimeout(resolve, 5000)); // Wait for blockchain sync
+      // Filter assets that need extraction (not already in treasury)
+      const assetsNeedingExtraction = assets.filter(asset => {
+        const tokenUnit = asset.policy_id + asset.asset_id;
+        return !tokensInTreasury.has(tokenUnit);
+      });
+
+      // Extract assets that are not yet in treasury wallet
+      if (assetsNeedingExtraction.length > 0) {
+        this.logger.log(
+          `Extracting ${assetsNeedingExtraction.length} assets to treasury (${assets.length - assetsNeedingExtraction.length} already there)`
+        );
+
+        const extractionResult = await this.treasuryExtractionService.extractAssetsFromVault({
+          vaultId: proposal.vaultId,
+          assetIds: assetsNeedingExtraction.map(a => a.id),
+          treasuryAddress,
+          isBurn: false,
+          skipOnchain: false,
+        });
+
+        // Wait for extraction confirmation
+        const confirmed = await this.transactionsService.waitForTransactionStatus(
+          extractionResult.transactionId,
+          TransactionStatus.confirmed
+        );
+
+        if (!confirmed) {
+          throw new Error(`Extraction transaction ${extractionResult.txHash} not confirmed within timeout`);
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 5000)); // Wait for blockchain sync
+      } else {
+        this.logger.log('All assets already in treasury wallet, skipping extraction');
+      }
+
+      // Initialize swap results array if not exists
+      if (!proposal.metadata.swapResults) {
+        proposal.metadata.swapResults = [];
+      }
 
       // Execute swaps sequentially for each token
-      const swapResults: Array<{ assetId: string; txHash: string; estimatedOutput: number }> = [];
+      const swapResults: Array<{ assetId: string; txHash: string; estimatedOutput: number }> = [
+        ...proposal.metadata.swapResults,
+      ];
 
       for (const action of actions) {
+        // Check if this asset was already swapped (idempotency)
+        const alreadySwapped = swapResults.some(r => r.assetId === action.assetId);
+        if (alreadySwapped) {
+          this.logger.log(`Asset ${action.assetId} already swapped, skipping`);
+          continue;
+        }
+
         const asset = assetMap.get(action.assetId);
         if (!asset) {
           this.logger.warn(`Asset ${action.assetId} not found, skipping swap`);
@@ -1070,14 +1113,11 @@ export class GovernanceExecutionService {
             status: asset.quantity - swappedAmount === 0 ? AssetStatus.EXTRACTED : asset.status,
           }
         );
-      }
 
-      // Store swap results in proposal metadata
-      if (!proposal.metadata.swapResults) {
-        proposal.metadata.swapResults = [];
+        // Save progress after each swap for idempotency
+        proposal.metadata.swapResults = swapResults;
+        await this.proposalRepository.save(proposal);
       }
-      proposal.metadata.swapResults = swapResults;
-      await this.proposalRepository.save(proposal);
 
       this.logger.log(`DexHunter swap proposal ${proposal.id} completed successfully with ${swapResults.length} swaps`);
 
