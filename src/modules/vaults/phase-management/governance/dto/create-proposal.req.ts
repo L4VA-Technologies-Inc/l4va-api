@@ -194,6 +194,32 @@ export class MarketplaceActionDto {
   })
   @IsString()
   market: string;
+
+  // ===== SWAP field (for DexHunter FT swaps) =====
+  @ApiProperty({
+    description: 'Slippage tolerance percentage (0.5-5%) for token swaps via DexHunter',
+    required: false,
+    example: 0.5,
+  })
+  @IsOptional()
+  @IsNumber()
+  slippage?: number;
+
+  @ApiProperty({
+    description: 'Use market price at execution time (true) or custom limit price (false)',
+    required: false,
+    default: true,
+  })
+  @IsOptional()
+  useMarketPrice?: boolean;
+
+  @ApiProperty({
+    description: 'Custom limit price in ADA per token (used when useMarketPrice is false)',
+    required: false,
+  })
+  @IsOptional()
+  @IsNumber()
+  customPriceAda?: number;
 }
 
 export class CreateProposalReq {

@@ -37,7 +37,7 @@ export class DistributionService {
 
   // Configuration constants
   private readonly MIN_ADA_PER_RECIPIENT = 2_000_000; // 2 ADA minimum per recipient (covers min UTXO)
-  private readonly MAX_RECIPIENTS_PER_BATCH = 40; // Safe limit for transaction size (~16KB)
+  private readonly MAX_RECIPIENTS_PER_BATCH = 200; // Cardano tx limit: 200-250 outputs fit in 16KB (research: 217 outputs = 14KB)
   private readonly MAX_RETRY_ATTEMPTS = 3;
   private readonly BATCH_RETRY_DELAY_MS = 60_000; // 1 minute between retries
   private readonly FEE_RESERVE_PER_BATCH = 2_000_000; // 2 ADA buffer per batch (tx fees + min UTxO + safety margin)

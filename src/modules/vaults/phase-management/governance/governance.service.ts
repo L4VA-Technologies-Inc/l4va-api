@@ -31,6 +31,7 @@ import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { Vote } from '@/database/vote.entity';
+import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
@@ -98,7 +99,8 @@ export class GovernanceService {
     private readonly configService: ConfigService,
     private readonly eventEmitter: EventEmitter2,
     private readonly voteCountingService: VoteCountingService,
-    private readonly distributionService: DistributionService
+    private readonly distributionService: DistributionService,
+    private readonly dexHunterPricingService: DexHunterPricingService
   ) {
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
 
@@ -359,22 +361,81 @@ export class GovernanceService {
         // Use direct marketplaceActions from request body
         const actions = createProposalReq.marketplaceActions || [];
 
-        // Validate all assets exist without enriching data
+        // Validate that all actions use the same market (no mixing DexHunter and WayUp)
+        const markets = new Set(actions.map(a => a.market));
+        if (markets.size > 1) {
+          throw new BadRequestException(
+            'Cannot mix different markets in same proposal. Use either DexHunter or WayUp, not both.'
+          );
+        }
+
+        const market = actions[0]?.market;
+
+        // Validate all assets exist and handle market-specific validation
         await Promise.all(
           actions.map(async action => {
-            const asset = await this.assetRepository.findOne({
-              where: { id: action.assetId },
-              select: ['id', 'status'],
-            });
+            const asset: Pick<Asset, 'id' | 'status' | 'type' | 'policy_id' | 'asset_id' | 'quantity'> =
+              await this.assetRepository.findOne({
+                where: { id: action.assetId },
+                select: ['id', 'status', 'type', 'policy_id', 'asset_id', 'quantity'],
+              });
 
             if (!asset) {
               throw new BadRequestException(`Asset with ID ${action.assetId} not found`);
             }
 
-            // For UNLIST and UPDATE_LISTING, verify asset is currently listed
-            if (action.exec === ExecType.UNLIST || action.exec === ExecType.UPDATE_LISTING) {
-              if (asset.status !== 'listed') {
-                throw new BadRequestException(`Asset ${action.assetId} is not currently listed`);
+            // DexHunter swap validation (FT tokens only)
+            if (market === 'DexHunter') {
+              // Validate it's a fungible token
+              if (asset.type !== AssetType.FT) {
+                throw new BadRequestException(
+                  `DexHunter swaps only support fungible tokens. Asset ${action.assetId} is not an FT.`
+                );
+              }
+
+              // Validate quantity
+              const swapQuantity = parseFloat(action.quantity || '0');
+              if (swapQuantity <= 0 || swapQuantity > asset.quantity) {
+                throw new BadRequestException(
+                  `Invalid swap quantity for asset ${action.assetId}. Must be between 1 and ${asset.quantity}.`
+                );
+              }
+
+              // Validate slippage
+              const slippage = action.slippage || 0.5;
+              if (slippage < 0.5 || slippage > 5) {
+                throw new BadRequestException(`Slippage must be between 0.5% and 5%. Got ${slippage}%`);
+              }
+
+              // Validate custom price if not using market price
+              if (action.useMarketPrice === false) {
+                const customPrice = action.customPriceAda;
+                if (!customPrice || customPrice <= 0) {
+                  throw new BadRequestException(
+                    `Custom price must be greater than 0 when not using market price. Got ${customPrice}`
+                  );
+                }
+              } else {
+                // Fetch token price for estimated output (when using market price)
+                try {
+                  const tokenId = asset.policy_id + asset.asset_id;
+                  const price = await this.dexHunterPricingService.getTokenPrice(tokenId);
+                  if (price) {
+                    const estimatedAda = swapQuantity * price * (1 - slippage / 100);
+                    this.logger.log(`Swap estimate for ${action.assetId}: ~${estimatedAda} ADA`);
+                  }
+                } catch (error) {
+                  this.logger.warn(`Failed to fetch price for token ${action.assetId}: ${error.message}`);
+                }
+              }
+            }
+            // WayUp marketplace validation (NFTs)
+            else if (market === 'WayUp') {
+              // For UNLIST and UPDATE_LISTING, verify asset is currently listed
+              if (action.exec === ExecType.UNLIST || action.exec === ExecType.UPDATE_LISTING) {
+                if (asset.status !== 'listed') {
+                  throw new BadRequestException(`Asset ${action.assetId} is not currently listed`);
+                }
               }
             }
           })
@@ -688,9 +749,13 @@ export class GovernanceService {
     // Transform marketplace actions with enriched asset data and WayUp URLs
     const marketplaceActions = (proposal.metadata?.marketplaceActions || []).map(action => {
       const asset = assetMap.get(action.assetId);
-      // Generate WayUp URL if asset has policy_id and asset_id
+
+      // Check if this is a DexHunter swap action (has slippage field)
+      const isSwapAction = action.slippage !== undefined || action.market === 'DexHunter';
+
+      // Generate WayUp URL only for non-swap actions (NFT marketplace actions)
       let wayupUrl: string | undefined;
-      if (asset?.policy_id && asset?.asset_id) {
+      if (!isSwapAction && asset?.policy_id && asset?.asset_id) {
         wayupUrl = `https://www.wayup.io/collection/${asset.policy_id}/asset/${asset.asset_id}?tab=activity`;
       }
 
@@ -1087,7 +1152,7 @@ export class GovernanceService {
     }
   }
 
-  async getAssetsToBuySell(vaultId: string): Promise<AssetBuySellDto[]> {
+  async getAssetsToList(vaultId: string): Promise<AssetBuySellDto[]> {
     try {
       // Get all assets in the vault
       const assets: Pick<
@@ -1097,7 +1162,7 @@ export class GovernanceService {
         where: [
           {
             vault: { id: vaultId },
-            type: In([AssetType.NFT, AssetType.FT]),
+            type: In([AssetType.NFT]),
             status: AssetStatus.LOCKED,
             origin_type: AssetOriginType.CONTRIBUTED,
           },
@@ -1223,6 +1288,67 @@ export class GovernanceService {
       }
       return false;
     }
+  }
+
+  /**
+   * Get fungible tokens available for swapping via DexHunter
+   * Returns FT assets with current prices and estimated ADA values
+   */
+  async getSwappableAssets(vaultId: string): Promise<
+    {
+      id: string;
+      policyId: string;
+      assetId: string;
+      unit: string;
+      name: string;
+      image: any;
+      quantity: number;
+      currentPriceAda: number;
+      estimatedAdaValue: number;
+      lastPriceUpdate: string;
+    }[]
+  > {
+    // Query all FT assets for this vault with quantity > 0
+    const ftAssets = await this.assetRepository.find({
+      where: {
+        vault: { id: vaultId },
+        type: AssetType.FT,
+      },
+      relations: ['vault'],
+    });
+
+    // Filter assets with available quantity
+    const availableAssets = ftAssets.filter(asset => asset.quantity > 0);
+
+    if (availableAssets.length === 0) {
+      return [];
+    }
+
+    // Build token IDs for price fetching
+    const tokenIds = availableAssets.map(asset => asset.policy_id + asset.asset_id);
+
+    // Batch fetch prices from DexHunter
+    const priceMap = await this.dexHunterPricingService.getTokenPrices(tokenIds);
+
+    // Map assets with pricing data
+    return availableAssets.map(asset => {
+      const tokenId = asset.policy_id + asset.asset_id;
+      const currentPriceAda = priceMap.get(tokenId) || asset.dex_price || null;
+      const estimatedAdaValue = currentPriceAda ? asset.quantity * currentPriceAda : null;
+
+      return {
+        id: asset.id,
+        policyId: asset.policy_id,
+        assetId: asset.asset_id,
+        unit: tokenId, // Full token identifier for DexHunter
+        name: asset.name,
+        image: asset.metadata?.image || null,
+        quantity: asset.quantity,
+        currentPriceAda,
+        estimatedAdaValue,
+        lastPriceUpdate: new Date().toISOString(),
+      };
+    });
   }
 
   private async _getVotingPowerUncached(
