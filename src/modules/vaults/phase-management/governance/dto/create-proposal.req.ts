@@ -204,6 +204,22 @@ export class MarketplaceActionDto {
   @IsOptional()
   @IsNumber()
   slippage?: number;
+
+  @ApiProperty({
+    description: 'Use market price at execution time (true) or custom limit price (false)',
+    required: false,
+    default: true,
+  })
+  @IsOptional()
+  useMarketPrice?: boolean;
+
+  @ApiProperty({
+    description: 'Custom limit price in ADA per token (used when useMarketPrice is false)',
+    required: false,
+  })
+  @IsOptional()
+  @IsNumber()
+  customPriceAda?: number;
 }
 
 export class CreateProposalReq {

@@ -19,6 +19,10 @@ export interface TreasuryExtractionConfig {
   vaultId: string;
   assetIds: string[];
   treasuryAddress: string;
+  /** Flag indicating if the extraction is for burning assets
+   * If true, no extra ADA output is created for fees
+   */
+  isBurn: boolean;
   /** Manual flag whether to skip on-chain extraction (for testing) */
   skipOnchain: boolean; // Temprorary flag to skip on-chain extraction (for testing)
 }
@@ -354,6 +358,13 @@ export class TreasuryExtractionService {
       },
       network: this.configService.get<string>('CARDANO_NETWORK'),
     };
+
+    if (!config.isBurn) {
+      input.outputs.push({
+        address: treasuryAddress,
+        lovelace: 5_000_000,
+      } as any);
+    }
 
     const buildResponse = await this.blockchainService.buildTransaction(input);
 

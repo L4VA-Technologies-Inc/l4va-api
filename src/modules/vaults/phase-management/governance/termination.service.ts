@@ -369,6 +369,7 @@ export class TerminationService {
           assetIds: nftsToburn.map(a => a.id),
           treasuryAddress: this.burnWallet,
           skipOnchain: true,
+          isBurn: true,
         });
         nftBurnTxHash = burnResult.txHash;
 
@@ -386,6 +387,7 @@ export class TerminationService {
           assetIds: ftsToDistribute.map(a => a.id),
           treasuryAddress: ftDestination,
           skipOnchain: true,
+          isBurn: false,
         });
         ftExtractionTxHash = ftResult.txHash;
         this.logger.log(`FTs extracted to treasury: ${ftExtractionTxHash}`);

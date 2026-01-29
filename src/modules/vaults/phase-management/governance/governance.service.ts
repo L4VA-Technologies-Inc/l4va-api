@@ -407,16 +407,26 @@ export class GovernanceService {
                 throw new BadRequestException(`Slippage must be between 0.5% and 5%. Got ${slippage}%`);
               }
 
-              // Fetch token price for estimated output (optional, for enrichment)
-              try {
-                const tokenId = asset.policy_id + asset.asset_id;
-                const price = await this.dexHunterPricingService.getTokenPrice(tokenId);
-                if (price) {
-                  const estimatedAda = swapQuantity * price * (1 - slippage / 100);
-                  this.logger.log(`Swap estimate for ${action.assetId}: ~${estimatedAda} ADA`);
+              // Validate custom price if not using market price
+              if (action.useMarketPrice === false) {
+                const customPrice = action.customPriceAda;
+                if (!customPrice || customPrice <= 0) {
+                  throw new BadRequestException(
+                    `Custom price must be greater than 0 when not using market price. Got ${customPrice}`
+                  );
                 }
-              } catch (error) {
-                this.logger.warn(`Failed to fetch price for token ${action.assetId}: ${error.message}`);
+              } else {
+                // Fetch token price for estimated output (when using market price)
+                try {
+                  const tokenId = asset.policy_id + asset.asset_id;
+                  const price = await this.dexHunterPricingService.getTokenPrice(tokenId);
+                  if (price) {
+                    const estimatedAda = swapQuantity * price * (1 - slippage / 100);
+                    this.logger.log(`Swap estimate for ${action.assetId}: ~${estimatedAda} ADA`);
+                  }
+                } catch (error) {
+                  this.logger.warn(`Failed to fetch price for token ${action.assetId}: ${error.message}`);
+                }
               }
             }
             // WayUp marketplace validation (NFTs)
@@ -739,9 +749,13 @@ export class GovernanceService {
     // Transform marketplace actions with enriched asset data and WayUp URLs
     const marketplaceActions = (proposal.metadata?.marketplaceActions || []).map(action => {
       const asset = assetMap.get(action.assetId);
-      // Generate WayUp URL if asset has policy_id and asset_id
+
+      // Check if this is a DexHunter swap action (has slippage field)
+      const isSwapAction = action.slippage !== undefined || action.market === 'DexHunter';
+
+      // Generate WayUp URL only for non-swap actions (NFT marketplace actions)
       let wayupUrl: string | undefined;
-      if (asset?.policy_id && asset?.asset_id) {
+      if (!isSwapAction && asset?.policy_id && asset?.asset_id) {
         wayupUrl = `https://www.wayup.io/collection/${asset.policy_id}/asset/${asset.asset_id}?tab=activity`;
       }
 
@@ -1138,7 +1152,7 @@ export class GovernanceService {
     }
   }
 
-  async getAssetsToBuySell(vaultId: string): Promise<AssetBuySellDto[]> {
+  async getAssetsToList(vaultId: string): Promise<AssetBuySellDto[]> {
     try {
       // Get all assets in the vault
       const assets: Pick<
@@ -1148,7 +1162,7 @@ export class GovernanceService {
         where: [
           {
             vault: { id: vaultId },
-            type: In([AssetType.NFT, AssetType.FT]),
+            type: In([AssetType.NFT]),
             status: AssetStatus.LOCKED,
             origin_type: AssetOriginType.CONTRIBUTED,
           },
@@ -1280,9 +1294,20 @@ export class GovernanceService {
    * Get fungible tokens available for swapping via DexHunter
    * Returns FT assets with current prices and estimated ADA values
    */
-  async getSwappableAssets(vaultId: string): Promise<any[]> {
-    this.logger.log(`Fetching swappable FT assets for vault ${vaultId}`);
-
+  async getSwappableAssets(vaultId: string): Promise<
+    {
+      id: string;
+      policyId: string;
+      assetId: string;
+      unit: string;
+      name: string;
+      image: any;
+      quantity: number;
+      currentPriceAda: number;
+      estimatedAdaValue: number;
+      lastPriceUpdate: string;
+    }[]
+  > {
     // Query all FT assets for this vault with quantity > 0
     const ftAssets = await this.assetRepository.find({
       where: {
@@ -1308,13 +1333,14 @@ export class GovernanceService {
     // Map assets with pricing data
     return availableAssets.map(asset => {
       const tokenId = asset.policy_id + asset.asset_id;
-      const currentPriceAda = priceMap.get(tokenId) || null;
+      const currentPriceAda = priceMap.get(tokenId) || asset.dex_price || null;
       const estimatedAdaValue = currentPriceAda ? asset.quantity * currentPriceAda : null;
 
       return {
         id: asset.id,
         policyId: asset.policy_id,
         assetId: asset.asset_id,
+        unit: tokenId, // Full token identifier for DexHunter
         name: asset.name,
         image: asset.metadata?.image || null,
         quantity: asset.quantity,

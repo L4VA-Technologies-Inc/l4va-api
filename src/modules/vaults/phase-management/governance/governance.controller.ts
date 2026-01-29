@@ -104,8 +104,8 @@ export class GovernanceController {
     description: 'List of assets available for trading',
     type: [AssetBuySellDto],
   })
-  async getAssetsToBuySell(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<AssetBuySellDto[]> {
-    return await this.governanceService.getAssetsToBuySell(vaultId);
+  async getAssetsToList(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<AssetBuySellDto[]> {
+    return await this.governanceService.getAssetsToList(vaultId);
   }
 
   @Get('vaults/:vaultId/assets/unlist')

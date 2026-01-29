@@ -135,7 +135,6 @@ export class DexHunterService {
     this.logger.log(`Estimated output: ${estimate.totalOutput} ADA`);
 
     // Step 2: Build swap transaction using DexHunter API
-    this.logger.log('Building swap transaction...');
     const swapResponse = await fetch(`${this.dexHunterBaseUrl}/swap/build`, {
       method: 'POST',
       headers: {
@@ -165,7 +164,6 @@ export class DexHunterService {
 
     this.logger.log('Swap transaction built successfully');
 
-    // Step 3: Sign the transaction with treasury wallet private key
     // Step 3: Sign the transaction with BOTH keys
     this.logger.log('Signing transaction with treasury wallet...');
     const { privateKey, stakePrivateKey } = await this.treasuryWalletService.getTreasuryWalletPrivateKey(vaultId);

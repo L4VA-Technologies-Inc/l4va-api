@@ -535,18 +535,7 @@ export class GovernanceExecutionService {
           this.logger.warn(`Unknown proposal type: ${proposal.proposalType}`);
           return false;
       }
-      this.eventEmitter.emit('proposal.started', {
-        address: proposal.vault?.owner?.address || null,
-        vaultId: proposal.vaultId,
-        vaultName: proposal.vault?.name || null,
-        proposalName: proposal.title,
-        creatorId: proposal.creatorId,
-        tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
-      });
-
-      return true;
     } catch (error) {
-      // Re-throw specific rejection errors so they can be handled properly in executePassedProposal
       if (
         error.message === 'PROPOSAL_REJECTED_LISTING_NOT_FOUND' ||
         error.message === 'PROPOSAL_REJECTED_NO_VALID_OPERATIONS' ||
@@ -856,6 +845,7 @@ export class GovernanceExecutionService {
             vaultId: proposal.vaultId,
             assetIds: assetsNeedingExtraction,
             treasuryAddress,
+            isBurn: false,
             skipOnchain: false, // Listing is not supported on testnet
           });
 
@@ -1005,7 +995,6 @@ export class GovernanceExecutionService {
     }
 
     const actions = proposal.metadata.marketplaceActions || [];
-    this.logger.log(`Executing DexHunter swap proposal ${proposal.id} with ${actions.length} token(s)`);
 
     try {
       // Fetch all FT assets from database
@@ -1022,21 +1011,18 @@ export class GovernanceExecutionService {
         throw new Error(`Treasury wallet not configured for vault ${proposal.vaultId}`);
       }
 
-      this.logger.log(`Extracting ${assetIds.length} FT asset(s) to treasury wallet before swap`);
       const extractionResult = await this.treasuryExtractionService.extractAssetsFromVault({
         vaultId: proposal.vaultId,
         assetIds,
         treasuryAddress: proposal.vault.treasury_wallet.treasury_address,
+        isBurn: false,
         skipOnchain: false,
       });
-
-      this.logger.log(`Extraction transaction submitted: ${extractionResult.txHash}`);
 
       // Wait for extraction confirmation
       const confirmed = await this.transactionsService.waitForTransactionStatus(
         extractionResult.transactionId,
-        TransactionStatus.confirmed,
-        120000
+        TransactionStatus.confirmed
       );
 
       if (!confirmed) {
@@ -1331,6 +1317,7 @@ export class GovernanceExecutionService {
         assetIds: assetIds,
         treasuryAddress: burnWallet,
         skipOnchain: true, // Allow Burning on testnet
+        isBurn: true,
       });
 
       this.logger.log(
