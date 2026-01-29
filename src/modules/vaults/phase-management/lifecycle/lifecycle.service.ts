@@ -126,6 +126,7 @@ export class LifecycleService {
     newScStatus?: SmartContractVaultStatus;
     txHash?: string;
     acquire_multiplier?: [string, string, number][];
+    ada_distribution?: [string, string, number][];
     ada_pair_multiplier?: number;
     vtPrice?: number;
     fdv?: number;
@@ -219,6 +220,7 @@ export class LifecycleService {
         vault.ada_pair_multiplier = data.ada_pair_multiplier;
         vault.vt_price = data.vtPrice;
         vault.acquire_multiplier = data.acquire_multiplier;
+        vault.ada_distribution = data.ada_distribution;
         vault.fdv = data.fdv;
         vault.fdv_tvl = data.fdvTvl;
 
@@ -984,6 +986,7 @@ export class LifecycleService {
           newScStatus: SmartContractVaultStatus.SUCCESSFUL,
           txHash: response.txHash,
           acquire_multiplier: acquireMultiplier,
+          ada_distribution: adaDistribution,
           ada_pair_multiplier: adaPairMultiplier,
           vtPrice,
           fdv,
@@ -1351,6 +1354,7 @@ export class LifecycleService {
         newScStatus: SmartContractVaultStatus.SUCCESSFUL,
         txHash: response.txHash,
         acquire_multiplier: acquireMultiplier,
+        ada_distribution: [], // No ADA distribution (no acquirers)
         ada_pair_multiplier: adaPairMultiplier,
         vtPrice,
         fdv,
