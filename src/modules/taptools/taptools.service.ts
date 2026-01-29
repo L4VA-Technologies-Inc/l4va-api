@@ -637,7 +637,6 @@ export class TaptoolsService {
       const updateData: any = {
         total_assets_cost_ada: summary.totalValueAda,
         total_assets_cost_usd: summary.totalValueUsd,
-        total_acquired_value_ada: summary.totalAcquiredAda,
         gains_ada: gainsAda,
         gains_usd: gainsUsd,
         last_valuation_update: new Date(),
