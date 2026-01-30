@@ -524,6 +524,7 @@ export class GovernanceService {
           creatorId: proposal.creatorId,
           status: proposal.status,
           createdAt: proposal.createdAt,
+          startDate: proposal.startDate.toISOString(),
           endDate: proposal.endDate.toISOString(),
           abstain: proposal.abstain,
           executionError: proposal.metadata?.executionError?.message,
