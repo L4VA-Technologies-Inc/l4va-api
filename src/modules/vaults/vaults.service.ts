@@ -1066,6 +1066,7 @@ export class VaultsService {
             VaultStatus.contribution,
             VaultStatus.acquire,
             VaultStatus.locked,
+            VaultStatus.terminating,
             VaultStatus.burned,
           ];
 
