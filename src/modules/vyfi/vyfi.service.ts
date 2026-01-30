@@ -58,6 +58,11 @@ export class VyfiService {
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
+
+    // Warn if POOL_ADDRESS is not configured (required for LP creation)
+    if (!this.poolAddress) {
+      this.logger.warn('POOL_ADDRESS environment variable is not set - LP creation will fail');
+    }
   }
 
   async checkPool({
@@ -717,6 +722,13 @@ export class VyfiService {
 
     if (poolCheck.exists) {
       throw new Error('Pool already exists');
+    }
+
+    // Validate pool address is configured
+    if (!this.poolAddress) {
+      throw new Error(
+        'POOL_ADDRESS environment variable is not configured. Cannot create VyFi liquidity pool without target address.'
+      );
     }
 
     // Calculate required ADA
