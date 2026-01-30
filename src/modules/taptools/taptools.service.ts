@@ -569,9 +569,7 @@ export class TaptoolsService {
     let treasuryAdaValue = 0;
 
     try {
-      if (!this.treasuryWalletService) {
-        this.logger.debug('TreasuryWalletService not available, skipping treasury balance');
-      } else {
+      if (this.treasuryWalletService) {
         const treasuryBalance = await this.treasuryWalletService.getTreasuryWalletBalance(vault.id);
 
         if (treasuryBalance) {
@@ -1036,9 +1034,7 @@ export class TaptoolsService {
         let treasuryAdaValue = 0;
 
         try {
-          if (!this.treasuryWalletService) {
-            this.logger.debug('TreasuryWalletService not available, skipping treasury balance');
-          } else {
+          if (this.treasuryWalletService) {
             const treasuryBalance = await this.treasuryWalletService.getTreasuryWalletBalance(vault.id);
 
             if (treasuryBalance) {
