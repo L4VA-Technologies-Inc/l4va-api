@@ -126,6 +126,7 @@ export class LifecycleService {
     newScStatus?: SmartContractVaultStatus;
     txHash?: string;
     acquire_multiplier?: [string, string, number][];
+    ada_distribution?: [string, string, number][];
     ada_pair_multiplier?: number;
     vtPrice?: number;
     fdv?: number;
@@ -219,6 +220,7 @@ export class LifecycleService {
         vault.ada_pair_multiplier = data.ada_pair_multiplier;
         vault.vt_price = data.vtPrice;
         vault.acquire_multiplier = data.acquire_multiplier;
+        vault.ada_distribution = data.ada_distribution;
         vault.fdv = data.fdv;
         vault.fdv_tvl = data.fdvTvl;
 
@@ -896,12 +898,6 @@ export class LifecycleService {
               status: ClaimStatus.PENDING, // Move to active after successful Extraction
               transaction: { id: tx.id },
               lovelace_amount: contributorResult.lovelaceAmount,
-              metadata: {
-                contributedValueAda: txValueAda,
-                userTotalValueAda: userTotalValue,
-                proportionOfUserTotal: contributorResult.proportionOfUserTotal,
-                userTotalVtTokens: contributorResult.userTotalVtTokens,
-              },
             });
 
             contributorClaims.push(claim);
@@ -930,10 +926,46 @@ export class LifecycleService {
         const finalContributorClaims = finalClaims.filter(cl => cl.type === ClaimType.CONTRIBUTOR);
         const finalAcquirerClaims = finalClaims.filter(cl => cl.type === ClaimType.ACQUIRER);
 
-        const { acquireMultiplier, adaDistribution } = this.distributionCalculationService.calculateAcquireMultipliers({
-          contributorsClaims: finalContributorClaims,
-          acquirerClaims: finalAcquirerClaims,
-        });
+        const { acquireMultiplier, adaDistribution, recalculatedClaimAmounts, recalculatedLovelaceAmounts } =
+          this.distributionCalculationService.calculateAcquireMultipliers({
+            contributorsClaims: finalContributorClaims,
+            acquirerClaims: finalAcquirerClaims,
+          });
+
+        // Update contributor claim amounts to match smart contract calculation (qty × multiplier)
+        // This ensures the transaction validation will pass
+        if (recalculatedClaimAmounts.size > 0 || recalculatedLovelaceAmounts.size > 0) {
+          const claimsToUpdate = [];
+          for (const claim of finalContributorClaims) {
+            const recalculatedVt = recalculatedClaimAmounts.get(claim.id);
+            const recalculatedLovelace = recalculatedLovelaceAmounts.get(claim.id);
+            const vtNeedsUpdate = recalculatedVt !== undefined && recalculatedVt !== claim.amount;
+            const lovelaceNeedsUpdate =
+              recalculatedLovelace !== undefined && recalculatedLovelace !== claim.lovelace_amount;
+
+            if (vtNeedsUpdate || lovelaceNeedsUpdate) {
+              if (vtNeedsUpdate) {
+                this.logger.debug(
+                  `Updating claim ${claim.id} VT amount from ${claim.amount} to ${recalculatedVt} (diff: ${claim.amount - recalculatedVt})`
+                );
+                claim.amount = recalculatedVt;
+              }
+              if (lovelaceNeedsUpdate) {
+                this.logger.debug(
+                  `Updating claim ${claim.id} lovelace from ${claim.lovelace_amount} to ${recalculatedLovelace} (diff: ${claim.lovelace_amount - recalculatedLovelace})`
+                );
+                claim.lovelace_amount = recalculatedLovelace;
+              }
+              claimsToUpdate.push(claim);
+            }
+          }
+          if (claimsToUpdate.length > 0) {
+            await this.claimRepository.save(claimsToUpdate);
+            this.logger.log(
+              `Updated ${claimsToUpdate.length} contributor claim amounts to match multiplier calculation`
+            );
+          }
+        }
 
         const response = await this.vaultManagingService.updateVaultMetadataTx({
           vault,
@@ -963,6 +995,7 @@ export class LifecycleService {
           newScStatus: SmartContractVaultStatus.SUCCESSFUL,
           txHash: response.txHash,
           acquire_multiplier: acquireMultiplier,
+          ada_distribution: adaDistribution,
           ada_pair_multiplier: adaPairMultiplier,
           vtPrice,
           fdv,
@@ -1204,10 +1237,6 @@ export class LifecycleService {
             status: ClaimStatus.PENDING,
             transaction: { id: tx.id },
             metadata: {
-              contributedValueAda: txValueAda,
-              userTotalValueAda: userTotalValue,
-              proportionOfUserTotal: contributorResult.proportionOfUserTotal,
-              userTotalVtTokens: contributorResult.userTotalVtTokens,
               noAcquirers: true,
             },
           });
@@ -1268,10 +1297,44 @@ export class LifecycleService {
       });
 
       // Calculate acquire multipliers (only contributors, no acquirers)
-      const { acquireMultiplier } = this.distributionCalculationService.calculateAcquireMultipliers({
-        contributorsClaims: finalContributorClaims,
-        acquirerClaims: [], // No acquirers
-      });
+      const { acquireMultiplier, recalculatedClaimAmounts, recalculatedLovelaceAmounts } =
+        this.distributionCalculationService.calculateAcquireMultipliers({
+          contributorsClaims: finalContributorClaims,
+          acquirerClaims: [], // No acquirers
+        });
+
+      // Update contributor claim amounts to match smart contract calculation (qty × multiplier)
+      // This ensures the transaction validation will pass
+      if (recalculatedClaimAmounts.size > 0 || recalculatedLovelaceAmounts.size > 0) {
+        const claimsToUpdate = [];
+        for (const claim of finalContributorClaims) {
+          const recalculatedVt = recalculatedClaimAmounts.get(claim.id);
+          const recalculatedLovelace = recalculatedLovelaceAmounts.get(claim.id);
+          const vtNeedsUpdate = recalculatedVt !== undefined && recalculatedVt !== claim.amount;
+          const lovelaceNeedsUpdate =
+            recalculatedLovelace !== undefined && recalculatedLovelace !== claim.lovelace_amount;
+
+          if (vtNeedsUpdate || lovelaceNeedsUpdate) {
+            if (vtNeedsUpdate) {
+              this.logger.debug(
+                `Updating claim ${claim.id} VT amount from ${claim.amount} to ${recalculatedVt} (diff: ${claim.amount - recalculatedVt})`
+              );
+              claim.amount = recalculatedVt;
+            }
+            if (lovelaceNeedsUpdate) {
+              this.logger.debug(
+                `Updating claim ${claim.id} lovelace_amount from ${claim.lovelace_amount} to ${recalculatedLovelace} (diff: ${claim.lovelace_amount - recalculatedLovelace})`
+              );
+              claim.lovelace_amount = recalculatedLovelace;
+            }
+            claimsToUpdate.push(claim);
+          }
+        }
+        if (claimsToUpdate.length > 0) {
+          await this.claimRepository.save(claimsToUpdate);
+          this.logger.log(`Updated ${claimsToUpdate.length} contributor claim amounts to match multiplier calculation`);
+        }
+      }
 
       this.logger.log(
         `Calculated acquire multipliers for ${finalContributorClaims.length} contributors ` + `(no acquirers)`
@@ -1309,6 +1372,7 @@ export class LifecycleService {
         newScStatus: SmartContractVaultStatus.SUCCESSFUL,
         txHash: response.txHash,
         acquire_multiplier: acquireMultiplier,
+        ada_distribution: [], // No ADA distribution (no acquirers)
         ada_pair_multiplier: adaPairMultiplier,
         vtPrice,
         fdv,

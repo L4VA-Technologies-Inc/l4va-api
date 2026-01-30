@@ -1,5 +1,5 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { HttpException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { HttpException, Inject, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -23,6 +23,7 @@ import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
+import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { VaultStatus } from '@/types/vault.types';
 
@@ -64,7 +65,8 @@ export class TaptoolsService {
     private readonly configService: ConfigService,
     private readonly dexHunterPricingService: DexHunterPricingService,
     private readonly wayUpPricingService: WayUpPricingService,
-    private readonly marketService: MarketService
+    private readonly marketService: MarketService,
+    @Optional() @Inject('TreasuryWalletService') private readonly treasuryWalletService?: TreasuryWalletService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.tapToolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
@@ -563,6 +565,62 @@ export class TaptoolsService {
       await this.userRepository.update({ id: vault.owner.id }, { tvl: totalValueAda });
     }
 
+    // Add treasury wallet balance to protocol TVL (if exists)
+    let treasuryAdaValue = 0;
+
+    try {
+      if (this.treasuryWalletService) {
+        const treasuryBalance = await this.treasuryWalletService.getTreasuryWalletBalance(vault.id);
+
+        if (treasuryBalance) {
+          // Add ADA from treasury
+          treasuryAdaValue = treasuryBalance.lovelace * 1e-6;
+          totalValueAda += treasuryAdaValue;
+          totalValueUsd += treasuryAdaValue * adaPrice;
+
+          // Value treasury assets (NFTs and FTs)
+          for (const asset of treasuryBalance.assets) {
+            try {
+              // Determine if asset is NFT by quantity (1 = NFT, >1 = FT)
+              const isNft = asset.quantity === '1';
+              const quantity = Number(asset.quantity);
+
+              const assetValue = await this.getAssetValue(asset.policyId, asset.assetName, isNft);
+              const valueAda = assetValue?.priceAda || 0;
+
+              totalValueAda += valueAda * quantity;
+              totalValueUsd += valueAda * adaPrice * quantity;
+            } catch (error) {
+              this.logger.debug(`Could not value treasury asset ${asset.unit}: ${error.message}`);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      // Treasury wallet doesn't exist or error fetching - continue without it
+      this.logger.debug(`No treasury wallet for vault ${vault.id}: ${error.message}`);
+    }
+
+    // Group assets by policy ID for progress bars
+    const assetsByPolicyMap = new Map<string, { policyId: string; quantity: number }>();
+
+    for (const asset of assetsWithValues) {
+      // Skip lovelace and fee tokens from policy grouping
+      if (asset.assetId === 'lovelace' || asset.assetId === 'ADA' || asset.metadata?.purpose === 'vault_creation_fee') {
+        continue;
+      }
+
+      const existing = assetsByPolicyMap.get(asset.policyId);
+      if (existing) {
+        existing.quantity += asset.quantity;
+      } else {
+        assetsByPolicyMap.set(asset.policyId, {
+          policyId: asset.policyId,
+          quantity: asset.quantity,
+        });
+      }
+    }
+
     // Create and return the summary
     return {
       totalValueAda: +totalValueAda.toFixed(6),
@@ -574,6 +632,7 @@ export class TaptoolsService {
       totalAcquiredAda,
       totalAcquiredUsd: totalAcquiredAda * adaPrice,
       adaPrice,
+      assetsByPolicy: Array.from(assetsByPolicyMap.values()),
     };
   }
 
@@ -616,7 +675,6 @@ export class TaptoolsService {
       const updateData: any = {
         total_assets_cost_ada: summary.totalValueAda,
         total_assets_cost_usd: summary.totalValueUsd,
-        total_acquired_value_ada: summary.totalAcquiredAda,
         gains_ada: gainsAda,
         gains_usd: gainsUsd,
         last_valuation_update: new Date(),
@@ -970,6 +1028,43 @@ export class TaptoolsService {
             // Skip assets that can't be valued
             this.logger.debug(`Could not value asset ${asset.policyId}.${asset.assetId}: ${error.message}`);
           }
+        }
+
+        // Add treasury wallet balance to protocol TVL (if exists)
+        let treasuryAdaValue = 0;
+
+        try {
+          if (this.treasuryWalletService) {
+            const treasuryBalance = await this.treasuryWalletService.getTreasuryWalletBalance(vault.id);
+
+            if (treasuryBalance) {
+              // Add ADA from treasury
+              treasuryAdaValue = treasuryBalance.lovelace * 1e-6;
+              totalValueAda += treasuryAdaValue;
+              totalValueUsd += treasuryAdaValue * adaPrice;
+
+              // Value treasury assets (NFTs and FTs)
+              for (const asset of treasuryBalance.assets) {
+                try {
+                  // THIS IS WRONG
+                  // Determine if asset is NFT by quantity (1 = NFT, >1 = FT)
+                  const isNft = asset.quantity === '1';
+                  const quantity = Number(asset.quantity);
+
+                  const assetValue = await this.getAssetValue(asset.policyId, asset.assetName, isNft);
+                  const valueAda = assetValue?.priceAda || 0;
+
+                  totalValueAda += valueAda * quantity;
+                  totalValueUsd += valueAda * adaPrice * quantity;
+                } catch (error) {
+                  this.logger.debug(`Could not value treasury asset ${asset.unit}: ${error.message}`);
+                }
+              }
+            }
+          }
+        } catch (error) {
+          // Treasury wallet doesn't exist or error fetching - continue without it
+          this.logger.debug(`No treasury wallet for vault ${vault.id}: ${error.message}`);
         }
 
         resultMap.set(vault.id, {

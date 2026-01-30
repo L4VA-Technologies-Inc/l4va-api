@@ -280,6 +280,7 @@ export class L4vaRewardsService {
       metadata: {
         l4va_role: 'AU',
         month: monthNumber + 1,
+        totalMonths: 12,
         snapshot_id: latestSnapshot.id,
       },
     });
@@ -313,6 +314,9 @@ export class L4vaRewardsService {
         metadata: {
           l4va_role: 'AC/VI',
           month: monthNumber + 1,
+          totalMonths: 12,
+          vtAmount: holder.balance,
+          vtPercentage: holder.percentage,
           snapshot_id: latestSnapshot.id,
         },
       });

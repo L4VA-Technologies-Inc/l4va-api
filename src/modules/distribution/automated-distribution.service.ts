@@ -4,8 +4,6 @@ import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, IsNull, MoreThan } from 'typeorm';
 
-import { L4vaRewardsService } from '../vaults/claims/l4va-rewards.service';
-
 import { AcquirerDistributionOrchestrator } from './orchestrators/acquirer-distribution.orchestrator';
 import { ContributorDistributionOrchestrator } from './orchestrators/contributor-distribution.orchestrator';
 
@@ -30,7 +28,7 @@ import { VaultStatus, SmartContractVaultStatus } from '@/types/vault.types';
  * 2. AcquirerDistributionOrchestrator → Extract acquirer claims (if applicable)
  * 3. Register stake credential
  * 4. ContributorDistributionOrchestrator → Pay contributors
- * 5. finalizeVaultDistribution() → Create LP & snapshot & L4VA rewards
+ * 5. finalizeVaultDistribution() → Create LP & snapshot
  */
 @Injectable()
 export class AutomatedDistributionService {
@@ -50,7 +48,6 @@ export class AutomatedDistributionService {
     private readonly configService: ConfigService,
     private readonly blockchainService: BlockchainService,
     private readonly governanceService: GovernanceService,
-    private readonly l4vaRewardsService: L4vaRewardsService,
     private readonly vyfiService: VyfiService,
     private readonly acquirerOrchestrator: AcquirerDistributionOrchestrator,
     private readonly contributorOrchestrator: ContributorDistributionOrchestrator
@@ -153,6 +150,7 @@ export class AutomatedDistributionService {
         'vault.dispatch_preloaded_script',
         'vault.tokens_for_acquires',
         'vault.last_update_tx_hash',
+        'vault.acquire_multiplier',
       ])
       .leftJoin(
         'claims',

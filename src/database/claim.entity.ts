@@ -10,8 +10,10 @@ import {
   Index,
 } from 'typeorm';
 
+import type { ClaimMetadata } from '../types/claim-metadata.types';
 import { ClaimStatus, ClaimType } from '../types/claim.types';
 
+import { Proposal } from './proposal.entity';
 import { Transaction } from './transaction.entity';
 import { User } from './user.entity';
 import { Vault } from './vault.entity';
@@ -88,6 +90,18 @@ export class Claim {
   @Index()
   distribution_tx_id: string;
 
+  @ManyToOne(() => Proposal, { nullable: true, onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'proposal_id' })
+  proposal: Proposal;
+
+  @Column({
+    name: 'proposal_id',
+    nullable: true,
+    comment: 'Reference to the proposal that created this claim (for distribution/termination)',
+  })
+  @Index()
+  proposal_id: string;
+
   @Expose({ name: 'utxoToClaim' })
   get utxoToClaim(): string | null {
     if (this.transaction?.tx_hash && this.transaction?.tx_index) {
@@ -102,7 +116,7 @@ export class Claim {
 
   @Expose({ name: 'metadata' })
   @Column({ type: 'jsonb', nullable: true })
-  metadata: Record<string, any>;
+  metadata: ClaimMetadata;
 
   @Expose({ name: 'createdAt' })
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
@@ -113,14 +127,14 @@ export class Claim {
   updated_at: Date;
 
   @BeforeInsert()
-  setDate() {
+  setDate(): void {
     const now = new Date();
     this.created_at = now;
     this.updated_at = now;
   }
 
   @BeforeUpdate()
-  updateDate() {
+  updateDate(): void {
     this.updated_at = new Date();
   }
 }

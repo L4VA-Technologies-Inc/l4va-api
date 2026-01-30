@@ -67,6 +67,8 @@ interface GetUtxosOptions {
   removeInlineDatums?: boolean;
   /** Whether to exclude UTXOs that contain multiassets (only return pure ADA UTXOs) */
   excludeMultiAssets?: boolean;
+  /** Set of UTXO references to exclude (format: "txHash#index") - useful for filtering known spent UTXOs */
+  excludeUtxoRefs?: Set<string> | string[];
 }
 
 interface GetUtxosResult {
@@ -136,6 +138,7 @@ export const validateUtxoStillExists = async (
  * @param options.targetAssets - Array of assets to collect with their required amounts
  * @param options.maxUtxos - Maximum number of UTXOs to return (default: 15)
  * @param options.excludeMultiAssets - Only collect pure ADA UTXOs (exclude any UTXOs containing tokens/NFTs)
+ * @param options.excludeUtxoRefs - Set or array of UTXO refs ("txHash#index") to exclude (for filtering spent UTXOs)
  *
  * @returns Promise resolving to UTXOs and optional required inputs with asset breakdown
  *
@@ -166,6 +169,13 @@ export const validateUtxoStillExists = async (
  *   minAda: 1000000,
  *   excludeMultiAssets: true
  * });
+ *
+ * // Exclude known spent UTXOs (retry scenario after MissingUtxoException)
+ * const excludedUtxos = new Set(['abc123...#0', 'def456...#2']);
+ * const { utxos } = await getUtxosExtract(address, blockfrost, {
+ *   minAda: 2000000,
+ *   excludeUtxoRefs: excludedUtxos
+ * });
  * ```
  */
 export const getUtxosExtract = async (
@@ -182,7 +192,15 @@ export const getUtxosExtract = async (
     minAda = 0,
     maxUtxos = 15,
     excludeMultiAssets = false,
+    excludeUtxoRefs,
   } = options;
+
+  // Convert excludeUtxoRefs to Set for O(1) lookups
+  const excludedRefs: Set<string> = excludeUtxoRefs
+    ? excludeUtxoRefs instanceof Set
+      ? excludeUtxoRefs
+      : new Set(excludeUtxoRefs)
+    : new Set();
 
   const hasTargetAssets = targetAssets.length > 0;
   const hasTargetAda = targetAdaAmount !== undefined && targetAdaAmount > 0;
@@ -202,6 +220,11 @@ export const getUtxosExtract = async (
 
   // Initial filtering before sorting to reduce unnecessary comparisons
   const preFilteredUtxos = utxos.filter(utxo => {
+    // Filter out explicitly excluded UTXO references (known spent UTXOs)
+    if (excludedRefs.size > 0) {
+      const utxoRef = `${utxo.tx_hash}#${utxo.output_index}`;
+      if (excludedRefs.has(utxoRef)) return false;
+    }
     const adaAmount = Number(utxo.amount[0].quantity);
     // Pre-filter by minimum ADA if specified
     if (minAda > 0 && adaAmount <= minAda) return false;

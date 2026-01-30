@@ -16,11 +16,19 @@ import { GoogleCloudStorageService } from '../google_cloud/google_bucket/bucket.
 import { TaptoolsService } from '../taptools/taptools.service';
 
 import { CreateVaultReq } from './dto/createVault.req';
+import { VaultActivityFilter } from './dto/get-vault-activity.dto';
 import { VaultStatisticsResponse } from './dto/get-vaults-statistics.dto';
 import { GetVaultsDto, SortOrder, TVLCurrency, VaultFilter } from './dto/get-vaults.dto';
 import { IncrementViewCountRes } from './dto/increment-view-count.res';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { PublishVaultDto } from './dto/publish-vault.dto';
+import {
+  ActivityType,
+  PhaseTransitionEvent,
+  ProposalActivityEvent,
+  TransactionActivityEvent,
+  VaultActivityItem,
+} from './dto/vault-activity.dto';
 import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
 import { GovernanceService } from './phase-management/governance/governance.service';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
@@ -35,7 +43,9 @@ import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.entity';
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
+import { Proposal } from '@/database/proposal.entity';
 import { TagEntity } from '@/database/tag.entity';
+import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { transformToSnakeCase } from '@/helpers';
@@ -43,7 +53,7 @@ import { DistributionCalculationService } from '@/modules/distribution/distribut
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ProposalStatus } from '@/types/proposal.types';
-import { TransactionStatus } from '@/types/transaction.types';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import {
   ContributionWindowType,
   InvestmentWindowType,
@@ -96,6 +106,10 @@ export class VaultsService {
     private readonly contributorWhitelistRepository: Repository<ContributorWhitelistEntity>,
     @InjectRepository(Asset)
     private readonly assetsRepository: Repository<Asset>,
+    @InjectRepository(Transaction)
+    private readonly transactionRepository: Repository<Transaction>,
+    @InjectRepository(Proposal)
+    private readonly proposalRepository: Repository<Proposal>,
     private readonly gcsService: GoogleCloudStorageService,
     private readonly vaultContractService: VaultManagingService,
     private readonly blockchainService: BlockchainService,
@@ -1052,6 +1066,7 @@ export class VaultsService {
             VaultStatus.contribution,
             VaultStatus.acquire,
             VaultStatus.locked,
+            VaultStatus.terminating,
             VaultStatus.burned,
           ];
 
@@ -1541,5 +1556,175 @@ export class VaultsService {
         semiPrivate: { percentage: 0, valueAda: 0, valueUsd: 0 },
       };
     }
+  }
+
+  async getVaultActivityById(
+    vault_id: string,
+    page: number = 1,
+    limit: number = 10,
+    sortOrder: SortOrder = SortOrder.DESC,
+    filter: VaultActivityFilter = VaultActivityFilter.ALL,
+    isExport: boolean = false
+  ): Promise<PaginatedResponseDto<VaultActivityItem>> {
+    const vault = await this.vaultsRepository.findOne({
+      where: { id: vault_id },
+      select: ['id', 'contribution_phase_start', 'acquire_phase_start', 'locked_at', 'vault_status', 'created_at'],
+    });
+
+    if (!vault) {
+      throw new NotFoundException('Vault not found');
+    }
+
+    const allActivities: VaultActivityItem[] = [];
+
+    const shouldFetchTransactions = filter !== VaultActivityFilter.GOVERNANCE;
+    const shouldFetchProposals = filter === VaultActivityFilter.ALL || filter === VaultActivityFilter.GOVERNANCE;
+
+    if (shouldFetchTransactions) {
+      const transactionTypes: TransactionType[] = [];
+
+      if (filter === VaultActivityFilter.ALL) {
+        transactionTypes.push(TransactionType.createVault, TransactionType.contribute, TransactionType.acquire);
+      } else if (filter === VaultActivityFilter.CONTRIBUTE) {
+        transactionTypes.push(TransactionType.contribute);
+      } else if (filter === VaultActivityFilter.ACQUIRE) {
+        transactionTypes.push(TransactionType.acquire);
+      }
+
+      if (transactionTypes.length > 0) {
+        const transactions = await this.transactionRepository
+          .createQueryBuilder('t')
+          .leftJoinAndSelect('t.user', 'user')
+          .leftJoinAndSelect('t.assets', 'assets')
+          .where('t.vault_id = :vault_id', { vault_id })
+          .andWhere('t.type IN (:...types)', { types: transactionTypes })
+          .andWhere('t.status = :status', { status: TransactionStatus.confirmed })
+          .getMany();
+
+        const transactionEvents: TransactionActivityEvent[] = transactions.map(tx => ({
+          ...tx,
+          activityType: ActivityType.TRANSACTION,
+        }));
+
+        allActivities.push(...transactionEvents);
+      }
+    }
+
+    if (filter === VaultActivityFilter.ALL) {
+      if (vault.contribution_phase_start) {
+        const contributionPhaseEvent: PhaseTransitionEvent = {
+          id: `${vault.id}_contribution_phase`,
+          activityType: ActivityType.PHASE_TRANSITION,
+          vaultId: vault.id,
+          phase: VaultStatus.contribution,
+          created_at: vault.contribution_phase_start,
+        };
+        allActivities.push(contributionPhaseEvent);
+      }
+
+      if (vault.acquire_phase_start) {
+        const acquirePhaseEvent: PhaseTransitionEvent = {
+          id: `${vault.id}_acquire_phase`,
+          activityType: ActivityType.PHASE_TRANSITION,
+          vaultId: vault.id,
+          phase: VaultStatus.acquire,
+          created_at: vault.acquire_phase_start,
+        };
+        allActivities.push(acquirePhaseEvent);
+      }
+
+      if (vault.locked_at) {
+        const lockedPhaseEvent: PhaseTransitionEvent = {
+          id: `${vault.id}_locked_phase`,
+          activityType: ActivityType.PHASE_TRANSITION,
+          vaultId: vault.id,
+          phase: VaultStatus.locked,
+          created_at: vault.locked_at,
+        };
+        allActivities.push(lockedPhaseEvent);
+      }
+    }
+
+    if (shouldFetchProposals) {
+      const proposalEvents = await this.getProposalsActivity(vault_id);
+      allActivities.push(...proposalEvents);
+    }
+
+    allActivities.sort((a, b) => {
+      const dateA = new Date(a.created_at).getTime();
+      const dateB = new Date(b.created_at).getTime();
+      return sortOrder === SortOrder.DESC ? dateB - dateA : dateA - dateB;
+    });
+
+    const total = allActivities.length;
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + limit;
+    const paginatedItems = isExport ? allActivities : allActivities.slice(startIndex, endIndex);
+
+    return {
+      items: paginatedItems,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  private async getProposalsActivity(vault_id: string): Promise<ProposalActivityEvent[]> {
+    const proposals = await this.proposalRepository.find({
+      where: { vaultId: vault_id },
+      order: { createdAt: 'DESC' },
+    });
+
+    const events: ProposalActivityEvent[] = [];
+    const now = new Date();
+
+    for (const proposal of proposals) {
+      const createdAt = new Date(proposal.createdAt);
+      const startDate = new Date(proposal.startDate);
+      const endDate = new Date(proposal.endDate);
+
+      events.push({
+        id: `${proposal.id}_created`,
+        activityType: ActivityType.PROPOSAL_CREATED,
+        proposalId: proposal.id,
+        title: proposal.title,
+        description: proposal.description,
+        status: proposal.status,
+        creatorId: proposal.creatorId,
+        created_at: createdAt,
+        executionError: proposal.metadata?.executionError?.message,
+      });
+
+      if (startDate < now) {
+        events.push({
+          id: `${proposal.id}_started`,
+          activityType: ActivityType.PROPOSAL_STARTED,
+          proposalId: proposal.id,
+          title: proposal.title,
+          description: proposal.description,
+          status: proposal.status,
+          creatorId: proposal.creatorId,
+          created_at: startDate,
+          executionError: proposal.metadata?.executionError?.message,
+        });
+      }
+
+      if (endDate < now) {
+        events.push({
+          id: `${proposal.id}_ended`,
+          activityType: ActivityType.PROPOSAL_ENDED,
+          proposalId: proposal.id,
+          title: proposal.title,
+          description: proposal.description,
+          status: proposal.status,
+          creatorId: proposal.creatorId,
+          created_at: endDate,
+          executionError: proposal.metadata?.executionError?.message,
+        });
+      }
+    }
+
+    return events;
   }
 }

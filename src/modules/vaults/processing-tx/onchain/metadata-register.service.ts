@@ -56,6 +56,7 @@ export class MetadataRegistryApiService {
   private readonly repoOwner: string;
   private readonly repoName: string;
   private readonly folderName: string;
+  private readonly network: string;
 
   constructor(
     @InjectRepository(TokenRegistry)
@@ -70,6 +71,7 @@ export class MetadataRegistryApiService {
     this.repoOwner = this.configService.get<string>('METADATA_REGISTRY_OWNER');
     this.repoName = this.configService.get<string>('METADATA_REGISTRY_REPO');
     this.folderName = this.configService.get<string>('METADATA_REGISTRY_FOLDER');
+    this.network = this.configService.get<string>('NETWORK', 'mainnet');
   }
 
   @Cron(CronExpression.EVERY_5_HOURS)
@@ -172,7 +174,8 @@ export class MetadataRegistryApiService {
       const ticker = metadataInput.ticker
         ? this.signMetadataField(metadataInput.subject, 0, metadataInput.ticker)
         : undefined;
-      const url = metadataInput.url ? this.signMetadataField(metadataInput.subject, 0, metadataInput.url) : undefined;
+      const vaultUrl = this.getVaultUrl(vaultId);
+      const url = this.signMetadataField(metadataInput.subject, 0, vaultUrl);
       // const policy = metadataInput.policy ? metadataInput.policy : undefined; // The base16-encoded CBOR "policy": "82018201828200581cf950845fdf374bba64605f96a9d5940890cc2bb92c4b5b55139cc00982051a09bde472",
       const decimals = metadataInput.decimals
         ? this.signMetadataField(metadataInput.subject, 0, metadataInput.decimals)
@@ -493,6 +496,14 @@ export class MetadataRegistryApiService {
     }
 
     return true;
+  }
+
+  /**
+   * Gets the vault URL based on the network environment
+   */
+  private getVaultUrl(vaultId: string): string {
+    const baseUrl = this.network === 'mainnet' ? 'https://app.l4va.org' : 'https://testnet.l4va.org';
+    return `${baseUrl}/vaults/${vaultId}`;
   }
 
   /**

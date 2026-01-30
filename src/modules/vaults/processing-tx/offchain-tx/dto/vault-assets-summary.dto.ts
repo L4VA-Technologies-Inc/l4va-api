@@ -1,5 +1,13 @@
 import { ApiProperty } from '@nestjs/swagger';
 
+export class AssetsByPolicyDto {
+  @ApiProperty({ description: 'Policy ID' })
+  policyId: string;
+
+  @ApiProperty({ description: 'Total quantity for this policy' })
+  quantity: number;
+}
+
 export class VaultAssetsSummaryDto {
   @ApiProperty({ description: 'Total value of all assets in ADA' })
   totalValueAda: number;
@@ -27,4 +35,7 @@ export class VaultAssetsSummaryDto {
 
   @ApiProperty({ description: 'Current ADA price in USD' })
   adaPrice: number;
+
+  @ApiProperty({ description: 'Assets grouped by policy ID for progress bars', type: [AssetsByPolicyDto] })
+  assetsByPolicy: AssetsByPolicyDto[];
 }

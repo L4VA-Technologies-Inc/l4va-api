@@ -1,5 +1,5 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
+import { Address, FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { status as GrpcStatus } from '@grpc/grpc-js';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -16,7 +16,8 @@ import { VaultTreasuryWallet } from '@/database/vaultTreasuryWallet.entity';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { GoogleKMSService } from '@/modules/google_cloud/google-kms.service';
 import { GoogleSecretService } from '@/modules/google_cloud/google-secret.service';
-import { generateCardanoWallet } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
+import { generateCardanoWallet, getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { VaultStatus } from '@/types/vault.types';
 @Injectable()
 export class TreasuryWalletService {
@@ -33,7 +34,8 @@ export class TreasuryWalletService {
     private readonly googleKMSService: GoogleKMSService,
     private readonly googleSecretService: GoogleSecretService,
     private readonly systemSettingsService: SystemSettingsService,
-    private readonly eventEmitter: EventEmitter2
+    private readonly eventEmitter: EventEmitter2,
+    private readonly blockchainService: BlockchainService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
 
@@ -49,13 +51,19 @@ export class TreasuryWalletService {
   async createTreasuryWallet(dto: CreateTreasuryWalletDto): Promise<TreasuryWalletInfoDto> {
     const { vaultId } = dto;
 
-    // Skip treasury wallet creation for non-mainnet environments
-    if (!this.isMainnet) {
-      this.logger.log(`Skipping treasury wallet creation for vault ${vaultId} (non-mainnet environment)`);
+    // Check if treasury wallets are enabled for current network
+    const isEnabled = this.isMainnet
+      ? this.systemSettingsService.autoCreateTreasuryWallets
+      : this.systemSettingsService.autoCreateTreasuryWalletsTestnet;
+
+    if (!isEnabled) {
+      this.logger.log(
+        `Treasury wallets are disabled for ${this.isMainnet ? 'mainnet' : 'testnet'} (feature flag: ${isEnabled})`
+      );
       return null;
     }
 
-    this.logger.log(`Creating treasury wallet for vault ${vaultId}`);
+    this.logger.log(`Creating treasury wallet for vault ${vaultId} on ${this.isMainnet ? 'mainnet' : 'testnet'}`);
 
     // Check if vault exists
     const vault = await this.vaultRepository.findOne({
@@ -205,7 +213,11 @@ export class TreasuryWalletService {
    * Gets treasury wallet for a vault
    */
   async getTreasuryWallet(vaultId: string): Promise<TreasuryWalletInfoDto | null> {
-    if (!this.isMainnet) {
+    const isEnabled = this.isMainnet
+      ? this.systemSettingsService.autoCreateTreasuryWallets
+      : this.systemSettingsService.autoCreateTreasuryWalletsTestnet;
+
+    if (!isEnabled) {
       return null;
     }
 
@@ -380,7 +392,7 @@ export class TreasuryWalletService {
 
   /**
    * Check if vault has a treasury wallet
-   * Returns false if no wallet exists or on non-mainnet
+   * Returns false if no wallet exists or if treasury wallets are disabled for the current network
    */
   async hasTreasuryWallet(vaultId: string): Promise<boolean> {
     if (!this.isMainnet) {
@@ -396,20 +408,193 @@ export class TreasuryWalletService {
   }
 
   /**
+   * Sweep all remaining ADA from treasury wallet to destination address
+   * Used during vault termination cleanup to recover any leftover funds
+   */
+  async sweepTreasuryWallet(vaultId: string, destinationAddress: string): Promise<string> {
+    const isEnabled = this.isMainnet
+      ? this.systemSettingsService.autoCreateTreasuryWallets
+      : this.systemSettingsService.autoCreateTreasuryWalletsTestnet;
+
+    if (!isEnabled) {
+      throw new Error(`Treasury wallet sweep disabled for ${this.isMainnet ? 'mainnet' : 'testnet'}`);
+    }
+
+    this.logger.log(`Sweeping treasury wallet for vault ${vaultId} to ${destinationAddress}`);
+
+    const wallet = await this.treasuryWalletRepository.findOne({
+      where: { vault_id: vaultId },
+    });
+
+    if (!wallet) {
+      throw new Error(`Treasury wallet not found for vault ${vaultId}`);
+    }
+
+    // Get wallet balance to check if sweep is worthwhile
+    const balance = await this.getTreasuryWalletBalance(vaultId);
+
+    if (balance.lovelace <= 1_000_000) {
+      // Less than 1 ADA, not worth sweeping
+      this.logger.warn(`Treasury wallet has only ${balance.lovelace} lovelace - too small to sweep`);
+      return null;
+    }
+
+    // Get wallet UTXOs using the standard utility
+    const { utxos: walletUtxos } = await getUtxosExtract(
+      Address.from_bech32(wallet.treasury_address),
+      this.blockfrost,
+      {
+        validateUtxos: true,
+      }
+    );
+
+    if (walletUtxos.length === 0) {
+      throw new Error(`Treasury wallet has no UTXOs to sweep`);
+    }
+
+    // Get decrypted keys for signing
+    const { privateKey, stakePrivateKey } = await this.getTreasuryWalletPrivateKey(vaultId);
+    const publicKey = privateKey.to_public();
+    const publicKeyHash = publicKey.hash().to_hex();
+
+    // Build outputs - include any native assets if present
+    const outputs: any[] = [];
+
+    if (balance.assets.length > 0) {
+      // If there are native assets, we need to send them along with ADA
+      const assets = balance.assets.map(asset => ({
+        policyId: asset.policyId,
+        assetName: { name: asset.assetName, format: 'hex' as const },
+        quantity: parseInt(asset.quantity),
+      }));
+
+      outputs.push({
+        address: destinationAddress,
+        lovelace: balance.lovelace.toString(),
+        assets,
+      });
+    } else {
+      // Pure ADA sweep - let the builder calculate fee
+      outputs.push({
+        address: destinationAddress,
+        lovelace: balance.lovelace.toString(),
+      });
+    }
+
+    // Build transaction using blockchainService
+    const input = {
+      changeAddress: destinationAddress,
+      utxos: walletUtxos,
+      message: `Sweep treasury wallet for vault ${vaultId}`,
+      outputs,
+      requiredSigners: [publicKeyHash],
+      validityInterval: {
+        start: true,
+        end: true,
+      },
+      network: this.configService.get<string>('CARDANO_NETWORK'),
+    };
+
+    const buildResponse = await this.blockchainService.buildTransaction(input);
+
+    // Sign with treasury wallet keys
+    const txToSubmit = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+    txToSubmit.sign_and_add_vkey_signature(privateKey);
+    txToSubmit.sign_and_add_vkey_signature(stakePrivateKey);
+
+    // Submit transaction
+    const submitResponse = await this.blockchainService.submitTransaction({
+      transaction: txToSubmit.to_hex(),
+    });
+
+    this.logger.log(`Treasury wallet swept successfully: ${submitResponse.txHash}`);
+    return submitResponse.txHash;
+  }
+
+  /**
+   * Delete KMS encryption keys for treasury wallet
+   * Called during vault termination cleanup
+   */
+  async deleteTreasuryWalletKeys(vaultId: string): Promise<void> {
+    // Check if treasury wallets are enabled for current network
+    const isEnabled = this.isMainnet
+      ? this.systemSettingsService.autoCreateTreasuryWallets
+      : this.systemSettingsService.autoCreateTreasuryWalletsTestnet;
+
+    if (!isEnabled) {
+      this.logger.log(
+        `Skipping KMS key deletion - treasury wallets disabled for ${this.isMainnet ? 'mainnet' : 'testnet'}`
+      );
+      return;
+    }
+
+    this.logger.log(
+      `Deleting KMS keys for vault ${vaultId} treasury wallet on ${this.isMainnet ? 'mainnet' : 'testnet'}`
+    );
+
+    const wallet = await this.treasuryWalletRepository.findOne({
+      where: { vault_id: vaultId },
+    });
+
+    if (!wallet) {
+      throw new Error(`Treasury wallet not found for vault ${vaultId}`);
+    }
+
+    try {
+      // Delete secret from Secret Manager (contains mnemonic)
+      await this.deleteVaultSecret(vaultId);
+      this.logger.log(`Deleted secret for vault ${vaultId}`);
+    } catch (error: any) {
+      // If secret doesn't exist, that's fine
+      if (error.code !== 5 && !error.message?.includes('not found')) {
+        this.logger.error(`Failed to delete secret for vault ${vaultId}:`, error);
+        throw error;
+      }
+    }
+
+    this.logger.log(`KMS keys deleted for vault ${vaultId}`);
+  }
+
+  /**
+   * Mark treasury wallet as deleted in database
+   * Does not actually delete the record, just marks it as inactive
+   */
+  async markTreasuryWalletAsDeleted(vaultId: string): Promise<void> {
+    const wallet = await this.treasuryWalletRepository.findOne({
+      where: { vault_id: vaultId },
+    });
+
+    if (!wallet) {
+      throw new Error(`Treasury wallet not found for vault ${vaultId}`);
+    }
+
+    wallet.is_active = false;
+    wallet.metadata = {
+      ...wallet.metadata,
+      deletedAt: new Date().toISOString(),
+      deletionReason: 'vault_terminated',
+    };
+
+    // Clear encrypted keys from database for security
+    wallet.encrypted_private_key = null;
+    wallet.encrypted_stake_private_key = null;
+
+    await this.treasuryWalletRepository.save(wallet);
+
+    this.logger.log(`Marked treasury wallet as deleted for vault ${vaultId}`);
+  }
+
+  /**
    * Cron job to auto-create treasury wallets for locked vaults
    * Runs every 6 hours to check for vaults that need treasury wallets
    * Controlled by auto_create_treasury_wallets feature flag in system settings
    */
   @Cron(CronExpression.EVERY_6_HOURS)
   async autoCreateMissingTreasuryWallets(): Promise<void> {
-    // Check feature flag
-    if (!this.systemSettingsService.autoCreateTreasuryWallets) {
-      this.logger.debug('Auto-create treasury wallets is disabled');
-      return;
-    }
+    const isEnabled = this.systemSettingsService.autoCreateTreasuryWallets;
 
-    // Only run on mainnet
-    if (!this.isMainnet) {
+    if (!isEnabled) {
+      this.logger.debug(`Auto-create treasury wallets is disabled for ${this.isMainnet ? 'mainnet' : 'testnet'}`);
       return;
     }
 

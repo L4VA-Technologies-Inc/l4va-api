@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 
-import { DistributionAssetDto, FungibleTokenDto, NonFungibleTokenDto } from './create-proposal.req';
+import { FungibleTokenDto, NonFungibleTokenDto } from './create-proposal.req';
 
 import { ProposalStatus } from '@/types/proposal.types';
 
@@ -61,8 +61,12 @@ class BaseProposalDto {
   @ApiProperty({ required: false, type: [NonFungibleTokenDto] })
   nonFungibleTokens?: NonFungibleTokenDto[];
 
-  @ApiProperty({ required: false, type: [DistributionAssetDto] })
-  distributionAssets?: DistributionAssetDto[];
+  @ApiProperty({
+    description: 'Lovelace amount to distribute for DISTRIBUTION proposals',
+    example: '100000000',
+    required: false,
+  })
+  distributionLovelaceAmount?: string;
 
   @ApiProperty({ required: false })
   terminationReason?: string;

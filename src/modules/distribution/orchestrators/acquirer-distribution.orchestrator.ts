@@ -26,7 +26,7 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 @Injectable()
 export class AcquirerDistributionOrchestrator {
   private readonly logger = new Logger(AcquirerDistributionOrchestrator.name);
-  private readonly MAX_TX_SIZE = 15900;
+  private readonly MAX_TX_SIZE = 16360;
   private readonly MAX_BATCH_SIZE = 30;
 
   constructor(

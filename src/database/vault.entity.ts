@@ -704,4 +704,27 @@ export class Vault {
     actualAda?: number;
     [key: string]: any;
   };
+
+  @Expose({ name: 'terminationMetadata' })
+  @Column({
+    name: 'termination_metadata',
+    type: 'jsonb',
+    nullable: true,
+  })
+  termination_metadata?: {
+    status: string;
+    proposalId: string;
+    nftBurnTxHash?: string;
+    lpRemovalTxHash?: string;
+    lpReturnTxHash?: string;
+    vtBurnTxHash?: string;
+    adaTransferTxHash?: string;
+    vaultBurnTxHash?: string;
+    totalAdaForDistribution?: string;
+    expectedVtReturn?: string;
+    expectedAdaReturn?: string;
+    claimsCreatedAt?: string;
+    lastCheckedAt?: string;
+    error?: string;
+  };
 }

@@ -96,6 +96,10 @@ interface AcquireMultiplierResult {
   acquireMultiplier: [string, string, number][];
   /** Array of [policyId, assetName, adaAmount] for each asset */
   adaDistribution: [string, string, number][];
+  /** Map of claim ID to recalculated VT amount (qty × multiplier) for smart contract consistency */
+  recalculatedClaimAmounts: Map<string, number>;
+  /** Map of claim ID to recalculated lovelace amount (qty × ada_multiplier) for smart contract consistency */
+  recalculatedLovelaceAmounts: Map<string, number>;
 }
 
 /**
@@ -270,6 +274,8 @@ export class DistributionCalculationService {
 
     const acquireMultiplier = [];
     const adaDistribution = [];
+    const recalculatedClaimAmounts = new Map<string, number>();
+    const recalculatedLovelaceAmounts = new Map<string, number>();
 
     for (const claim of contributorsClaims) {
       const contributorLovelaceAmount = claim?.lovelace_amount || 0;
@@ -282,18 +288,40 @@ export class DistributionCalculationService {
       const baseAdaShare = Math.floor(contributorLovelaceAmount / claim.transaction.assets.length);
       const adaRemainder = contributorLovelaceAmount - baseAdaShare * claim.transaction.assets.length;
 
+      // Track recalculated amounts for this claim (qty × multiplier)
+      let recalculatedVtAmount = 0;
+      let recalculatedLovelace = 0;
+
       claim.transaction.assets.forEach((asset, index) => {
         const vtShare = baseVtShare + (index < vtRemainder ? 1 : 0);
-        acquireMultiplier.push([asset.policy_id, asset.asset_id, vtShare]);
+        // Divide by asset quantity to get per-unit multiplier
+        // Smart contract calculates: expected = multiplier * quantity_on_utxo
+        const assetQuantity = Number(asset.quantity) || 1;
+        const vtSharePerUnit = Math.floor(vtShare / assetQuantity);
+        acquireMultiplier.push([asset.policy_id, asset.asset_id, vtSharePerUnit]);
+
+        // Recalculate VT amount using the same formula as smart contract: qty × multiplier
+        recalculatedVtAmount += assetQuantity * vtSharePerUnit;
+
         const adaShare = baseAdaShare + (index < adaRemainder ? 1 : 0);
-        adaDistribution.push([asset.policy_id, asset.asset_id, adaShare]);
+        const adaSharePerUnit = Math.floor(adaShare / assetQuantity);
+        adaDistribution.push([asset.policy_id, asset.asset_id, adaSharePerUnit]);
+
+        // Recalculate lovelace amount using the same formula as smart contract
+        recalculatedLovelace += assetQuantity * adaSharePerUnit;
       });
+
+      // Store the recalculated amounts (these will match smart contract validation exactly)
+      recalculatedClaimAmounts.set(claim.id, recalculatedVtAmount);
+      recalculatedLovelaceAmounts.set(claim.id, recalculatedLovelace);
     }
 
     if (!acquirerClaims || acquirerClaims.length === 0) {
       return {
         acquireMultiplier,
         adaDistribution,
+        recalculatedClaimAmounts,
+        recalculatedLovelaceAmounts,
       };
     }
 
@@ -305,6 +333,8 @@ export class DistributionCalculationService {
     return {
       acquireMultiplier,
       adaDistribution,
+      recalculatedClaimAmounts,
+      recalculatedLovelaceAmounts,
     };
   }
 

@@ -19,7 +19,12 @@ export interface TreasuryExtractionConfig {
   vaultId: string;
   assetIds: string[];
   treasuryAddress: string;
-  skipOnchain?: boolean;
+  /** Flag indicating if the extraction is for burning assets
+   * If true, no extra ADA output is created for fees
+   */
+  isBurn: boolean;
+  /** Manual flag whether to skip on-chain extraction (for testing) */
+  skipOnchain: boolean; // Temprorary flag to skip on-chain extraction (for testing)
 }
 
 export interface ExtractionResult {
@@ -58,6 +63,7 @@ export class TreasuryExtractionService {
   private readonly adminSKey: string;
   private readonly adminHash: string;
   private readonly blockfrost: BlockFrostAPI;
+  private readonly isMainnet: boolean;
 
   constructor(
     @InjectRepository(Asset)
@@ -73,16 +79,16 @@ export class TreasuryExtractionService {
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
 
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
   }
 
-  async extractAssetsToTreasury(config: TreasuryExtractionConfig): Promise<ExtractionResult> {
+  async extractAssetsFromVault(config: TreasuryExtractionConfig): Promise<ExtractionResult> {
     // Skip extraction for non-mainnet environments
-    const isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
-    if (!isMainnet && !config.skipOnchain) {
+    if (!this.isMainnet && !config.skipOnchain) {
       this.logger.log(`Skipping asset extraction for vault ${config.vaultId} (non-mainnet environment)`);
       throw new BadRequestException('Treasury extraction is only available on mainnet');
     }
@@ -352,6 +358,13 @@ export class TreasuryExtractionService {
       },
       network: this.configService.get<string>('CARDANO_NETWORK'),
     };
+
+    if (!config.isBurn) {
+      input.outputs.push({
+        address: treasuryAddress,
+        lovelace: 5_000_000,
+      } as any);
+    }
 
     const buildResponse = await this.blockchainService.buildTransaction(input);
 

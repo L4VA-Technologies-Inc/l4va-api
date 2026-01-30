@@ -23,6 +23,7 @@ import { DraftVaultsService } from './draft-vaults.service';
 import { BuildBurnTransactionRes } from './dto/build-burn-transaction.res';
 import { CreateVaultRes } from './dto/create-vault.res';
 import { CreateVaultReq } from './dto/createVault.req';
+import { GetVaultActivityDto } from './dto/get-vault-activity.dto';
 import { GetVaultParamDto } from './dto/get-vault-param.dto';
 import { GetVaultTransactionsDto } from './dto/get-vault-transactions.dto';
 import { VaultStatisticsResponse } from './dto/get-vaults-statistics.dto';
@@ -32,6 +33,7 @@ import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { PublishBurnTransactionRes } from './dto/publish-burn-transaction.res';
 import { PublishVaultDto } from './dto/publish-vault.dto';
 import { SaveDraftReq } from './dto/saveDraft.req';
+import { VaultActivityItem } from './dto/vault-activity.dto';
 import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { VaultsService } from './vaults.service';
@@ -270,5 +272,26 @@ export class VaultsController {
     @Param('id', new ParseUUIDPipe()) id: string
   ): Promise<GetVTStatisticRes> {
     return this.statisticsService.getVaultTokenStatistics(id);
+  }
+
+  @ApiDoc({
+    summary: 'Get vault activity',
+    description:
+      'Returns paginated vault activity including transactions (createVault, contribute, acquire, updateVault), proposal events (created, started, ended), and phase transitions. Supports filtering by activity type.',
+    status: 200,
+  })
+  @Get('activity/:id')
+  async getVaultActivityById(
+    @Param() params: GetVaultParamDto,
+    @Query() query: GetVaultActivityDto
+  ): Promise<PaginatedResponseDto<VaultActivityItem>> {
+    return this.vaultsService.getVaultActivityById(
+      params.id,
+      query.page,
+      query.limit,
+      query.sortOrder,
+      query.filter,
+      query.isExport
+    );
   }
 }

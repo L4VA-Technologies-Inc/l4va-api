@@ -15,6 +15,7 @@ import { Vault } from '@/database/vault.entity';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
+import { MissingUtxoException } from '@/modules/vaults/processing-tx/onchain/exceptions/utxo-missing.exception';
 import {
   getAddressFromHash,
   getTransactionSize,
@@ -30,7 +31,7 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 @Injectable()
 export class ContributorDistributionOrchestrator {
   private readonly logger = new Logger(ContributorDistributionOrchestrator.name);
-  private readonly MAX_TX_SIZE = 15900;
+  private readonly MAX_TX_SIZE = 16360;
   private readonly MAX_BATCH_SIZE = 15;
 
   constructor(
@@ -236,6 +237,7 @@ export class ContributorDistributionOrchestrator {
 
   /**
    * Process a batch of payments in a single transaction
+   * Includes retry logic for spent UTXOs
    */
   private async processBatchedPayments(
     vault: Vault,
@@ -276,82 +278,122 @@ export class ContributorDistributionOrchestrator {
       },
     });
 
-    try {
-      // Get admin UTXOs
-      const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(config.adminAddress), this.blockfrost, {
-        minAda: 4_000_000,
-      });
+    const MAX_UTXO_RETRIES = 3;
+    let utxoRetryCount = 0;
+    const excludedUtxos: Set<string> = new Set();
 
-      // Build transaction
-      const input = await this.paymentBuilder.buildPaymentInput(vault, validClaims, adminUtxos, dispatchUtxos, config);
+    while (utxoRetryCount <= MAX_UTXO_RETRIES) {
+      try {
+        // Get admin UTXOs (pass excludeUtxoRefs to filter known spent UTXOs)
+        const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(config.adminAddress), this.blockfrost, {
+          minAda: 4_000_000,
+          excludeUtxoRefs: excludedUtxos.size > 0 ? excludedUtxos : undefined,
+        });
 
-      const buildResponse = await this.blockchainService.buildTransaction(input);
-      const txSize = getTransactionSize(buildResponse.complete);
-
-      this.logger.log(`Batch payment transaction built: ${txSize} bytes (${(txSize / 1024).toFixed(2)} KB)`);
-
-      if (txSize > this.MAX_TX_SIZE) {
-        throw new Error(
-          `Transaction size ${txSize} exceeds limit of ${this.MAX_TX_SIZE}, ` +
-            `this should not happen after batch size determination`
-        );
-      }
-
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      // Sign and submit
-      const txToSubmit = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-      txToSubmit.sign_and_add_vkey_signature(PrivateKey.from_bech32(config.adminSKey));
-
-      const response = await this.blockchainService.submitTransaction({
-        transaction: txToSubmit.to_hex(),
-        signatures: [],
-      });
-
-      this.logger.log(`Batch payment transaction submitted: ${response.txHash}`);
-
-      await this.transactionRepository.update(
-        { id: batchTransaction.id },
-        { tx_hash: response.txHash, status: TransactionStatus.submitted }
-      );
-
-      // Wait for confirmation
-
-      const confirmed = await this.transactionService.waitForTransactionStatus(
-        batchTransaction.id,
-        TransactionStatus.confirmed,
-        120000
-      );
-
-      if (!confirmed) {
-        throw new Error(`Batch payment transaction ${response.txHash} failed to confirm`);
-      }
-
-      // Update claims and transaction
-      await this.claimsService.updateClaimStatus(
-        validClaims.map(c => c.id),
-        ClaimStatus.CLAIMED,
-        { distributionTxId: batchTransaction.id }
-      );
-      await this.transactionRepository.update({ id: batchTransaction.id }, { status: TransactionStatus.confirmed });
-
-      this.logger.log(
-        `Successfully processed batch payment for ${validClaims.length} claims ` + `with tx: ${response.txHash}`
-      );
-    } catch (error) {
-      this.logger.error(`Failed to process batched payments:`, error);
-
-      await this.transactionRepository.update(
-        { id: batchTransaction.id },
-        {
-          status: TransactionStatus.failed,
-          metadata: {
-            error: error.message,
-          },
+        if (excludedUtxos.size > 0) {
+          this.logger.log(`Fetched admin UTXOs with ${excludedUtxos.size} excluded refs`);
         }
-      );
 
-      throw error;
+        if (adminUtxos.length === 0) {
+          throw new Error('No valid admin UTXOs available after filtering spent UTXOs');
+        }
+
+        // Build transaction
+        const input = await this.paymentBuilder.buildPaymentInput(
+          vault,
+          validClaims,
+          adminUtxos,
+          dispatchUtxos,
+          config
+        );
+
+        const buildResponse = await this.blockchainService.buildTransaction(input);
+        const txSize = getTransactionSize(buildResponse.complete);
+
+        this.logger.log(`Batch payment transaction built: ${txSize} bytes (${(txSize / 1024).toFixed(2)} KB)`);
+
+        if (txSize > this.MAX_TX_SIZE) {
+          throw new Error(
+            `Transaction size ${txSize} exceeds limit of ${this.MAX_TX_SIZE}, ` +
+              `this should not happen after batch size determination`
+          );
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // Sign and submit
+        const txToSubmit = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+        txToSubmit.sign_and_add_vkey_signature(PrivateKey.from_bech32(config.adminSKey));
+
+        const response = await this.blockchainService.submitTransaction({
+          transaction: txToSubmit.to_hex(),
+          signatures: [],
+        });
+
+        this.logger.log(`Batch payment transaction submitted: ${response.txHash}`);
+
+        await this.transactionRepository.update(
+          { id: batchTransaction.id },
+          { tx_hash: response.txHash, status: TransactionStatus.submitted }
+        );
+
+        // Wait for confirmation
+        const confirmed = await this.transactionService.waitForTransactionStatus(
+          batchTransaction.id,
+          TransactionStatus.confirmed,
+          120000
+        );
+
+        if (!confirmed) {
+          throw new Error(`Batch payment transaction ${response.txHash} failed to confirm`);
+        }
+
+        // Update claims and transaction
+        await this.claimsService.updateClaimStatus(
+          validClaims.map(c => c.id),
+          ClaimStatus.CLAIMED,
+          { distributionTxId: batchTransaction.id }
+        );
+        await this.transactionRepository.update({ id: batchTransaction.id }, { status: TransactionStatus.confirmed });
+
+        this.logger.log(
+          `Successfully processed batch payment for ${validClaims.length} claims ` + `with tx: ${response.txHash}`
+        );
+
+        // Success - exit the retry loop
+        return;
+      } catch (error) {
+        // Check if this is a MissingUtxoException and we can retry
+        if (error instanceof MissingUtxoException && error.fullTxHash && utxoRetryCount < MAX_UTXO_RETRIES) {
+          const spentUtxoRef = error.getUtxoReference();
+          this.logger.warn(
+            `Detected spent admin UTXO: ${spentUtxoRef}, ` +
+              `removing from pool and retrying (attempt ${utxoRetryCount + 1}/${MAX_UTXO_RETRIES})`
+          );
+          excludedUtxos.add(spentUtxoRef);
+          utxoRetryCount++;
+
+          // Small delay before retry
+          await new Promise(resolve => setTimeout(resolve, 500));
+          continue;
+        }
+
+        // Non-retryable error or max retries reached
+        this.logger.error(`Failed to process batched payments:`, error);
+
+        await this.transactionRepository.update(
+          { id: batchTransaction.id },
+          {
+            status: TransactionStatus.failed,
+            metadata: {
+              error: error.message,
+              excludedUtxos: Array.from(excludedUtxos),
+            },
+          }
+        );
+
+        throw error;
+      }
     }
   }
 

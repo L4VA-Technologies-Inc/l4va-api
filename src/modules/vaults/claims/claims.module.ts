@@ -16,6 +16,7 @@ import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
+import { GovernanceModule } from '@/modules/vaults/phase-management/governance/governance.module';
 import { TransactionsModule } from '@/modules/vaults/processing-tx/offchain-tx/transactions.module';
 import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockchain.module';
 
@@ -33,6 +34,7 @@ import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockch
     TransactionsModule,
     HttpModule,
     AssetsModule,
+    GovernanceModule,
   ],
   controllers: [ClaimsController],
   providers: [ClaimsService, L4vaRewardsService, AutomaticCancellationService, CancellationProcessor],
