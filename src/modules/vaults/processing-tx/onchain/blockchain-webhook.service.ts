@@ -115,24 +115,9 @@ export class BlockchainWebhookService {
           this.logger.log(`Locked ${lockedCount} assets for transaction ${tx.hash}`);
         }
 
-        // Submit token metadata on first confirmed contribution
-        if (transaction.type === TransactionType.contribute && transaction.vault_id) {
-          const confirmedContributionsCount = await this.transactionsService.countConfirmedContributions(
-            transaction.vault_id
-          );
-
-          // Only submit on the first confirmed contribution
-          if (confirmedContributionsCount === 1) {
-            try {
-              await this.metadataRegistryApiService.submitVaultTokenMetadata(transaction.vault_id);
-            } catch (metadataError) {
-              this.logger.error(
-                `WH: Failed to submit metadata for vault ${transaction.vault_id}: ${metadataError.message}`,
-                metadataError.stack
-              );
-            }
-          }
-        }
+        // NOTE: Token metadata PR submission has been moved to lifecycle.service.ts
+        // after decimals are finalized (post-multiplier calculation in governance transition)
+        // This ensures the PR contains accurate decimal information
 
         // Handle cancellation transactions - release assets back to contributors
         if (transaction.type === TransactionType.cancel && transaction.metadata?.cancellationClaimIds) {
