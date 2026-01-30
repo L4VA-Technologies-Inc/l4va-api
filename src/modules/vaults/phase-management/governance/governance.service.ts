@@ -118,15 +118,9 @@ export class GovernanceService {
       checkperiod: 300,
       useClones: false,
     });
-
-    // this.snapshotCache = new NodeCache({
-    //   stdTTL: this.CACHE_TTL.SNAPSHOT_DATA,
-    //   checkperiod: 600,
-    //   useClones: false,
-    // });
   }
 
-  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  @Cron(CronExpression.EVERY_3_HOURS)
   async createDailySnapshots(): Promise<void> {
     this.logger.log('Starting daily snapshot creation');
 
@@ -136,6 +130,7 @@ export class GovernanceService {
           vault_status: VaultStatus.locked,
           asset_vault_name: Not(IsNull()),
           script_hash: Not(IsNull()),
+          distribution_processed: true,
         },
         select: ['id', 'asset_vault_name', 'script_hash'],
       });
