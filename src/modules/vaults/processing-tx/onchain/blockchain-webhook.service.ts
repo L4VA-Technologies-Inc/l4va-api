@@ -7,15 +7,16 @@ import { In, Repository } from 'typeorm';
 import { TransactionsService } from '../offchain-tx/transactions.service';
 
 import { BlockchainWebhookDto, BlockfrostTransaction, BlockfrostTransactionEvent } from './dto/webhook.dto';
-import { MetadataRegistryApiService } from './metadata-register.service';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
 
 import { Claim } from '@/database/claim.entity';
 import { User } from '@/database/user.entity';
+import { Vault } from '@/database/vault.entity';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { AssetType } from '@/types/asset.types';
 import { ClaimStatus } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
+import { ContributionWindowType, VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class BlockchainWebhookService {
@@ -34,12 +35,13 @@ export class BlockchainWebhookService {
   constructor(
     private readonly transactionsService: TransactionsService,
     private readonly configService: ConfigService,
-    private readonly metadataRegistryApiService: MetadataRegistryApiService,
     private readonly assetsService: AssetsService,
     @InjectRepository(Claim)
     private readonly claimRepository: Repository<Claim>,
     @InjectRepository(User)
-    private readonly userRepository: Repository<User>
+    private readonly userRepository: Repository<User>,
+    @InjectRepository(Vault)
+    private readonly vaultRepository: Repository<Vault>
   ) {
     this.webhookAuthToken = this.configService.get<string>('BLOCKFROST_WEBHOOK_AUTH_TOKEN');
     this.maxEventAge = 600; // 10 minutes max age for webhook events
@@ -118,6 +120,11 @@ export class BlockchainWebhookService {
         // NOTE: Token metadata PR submission has been moved to lifecycle.service.ts
         // after decimals are finalized (post-multiplier calculation in governance transition)
         // This ensures the PR contains accurate decimal information
+
+        // Handle createVault confirmation - immediately transition to contribution if uponVaultLaunch
+        if (transaction.type === TransactionType.createVault && transaction.vault_id) {
+          await this.handleCreateVaultConfirmation(transaction.vault_id);
+        }
 
         // Handle cancellation transactions - release assets back to contributors
         if (transaction.type === TransactionType.cancel && transaction.metadata?.cancellationClaimIds) {
@@ -254,5 +261,45 @@ export class BlockchainWebhookService {
 
     await Promise.all(updatePromises);
     this.logger.log(`WH: Updated TVL for ${userDeductions.size} users after cancellations`);
+  }
+
+  /**
+   * Handle createVault transaction confirmation
+   * Immediately transitions vault to contribution phase if it has ContributionWindowType.uponVaultLaunch
+   * This provides faster response than waiting for the cron job
+   */
+  private async handleCreateVaultConfirmation(vaultId: string): Promise<void> {
+    try {
+      const vault = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        select: ['id', 'vault_status', 'contribution_open_window_type', 'name'],
+      });
+
+      if (!vault) {
+        this.logger.warn(`WH: Vault ${vaultId} not found for createVault confirmation`);
+        return;
+      }
+
+      // Only transition if vault is published and has uponVaultLaunch type
+      if (
+        vault.vault_status === VaultStatus.published &&
+        vault.contribution_open_window_type === ContributionWindowType.uponVaultLaunch
+      ) {
+        await this.vaultRepository.update(
+          { id: vaultId },
+          {
+            vault_status: VaultStatus.contribution,
+            contribution_phase_start: new Date(),
+          }
+        );
+
+        this.logger.log(
+          `WH: Vault "${vault.name}" (${vaultId}) transitioned to contribution phase on createVault confirmation`
+        );
+      }
+    } catch (error) {
+      this.logger.error(`WH: Failed to handle createVault confirmation for vault ${vaultId}: ${error.message}`);
+      // Don't throw - the cron job will handle it as fallback
+    }
   }
 }
