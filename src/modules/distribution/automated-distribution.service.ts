@@ -1,11 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Cron } from '@nestjs/schedule';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, IsNull, MoreThan } from 'typeorm';
 
 import { AcquirerDistributionOrchestrator } from './orchestrators/acquirer-distribution.orchestrator';
-import { ContributorDistributionOrchestrator } from './orchestrators/contributor-distribution.orchestrator';
+import {
+  ContributorDistributionOrchestrator,
+  InsufficientUtxosException,
+} from './orchestrators/contributor-distribution.orchestrator';
 
 import { Claim } from '@/database/claim.entity';
 import { Vault } from '@/database/vault.entity';
@@ -62,7 +65,12 @@ export class AutomatedDistributionService {
   /**
    * Get configuration object for orchestrators
    */
-  private getConfig() {
+  private getConfig(): {
+    adminAddress: string;
+    adminHash: string;
+    adminSKey: string;
+    unparametizedDispatchHash: string;
+  } {
     return {
       adminAddress: this.adminAddress,
       adminHash: this.adminHash,
@@ -71,7 +79,7 @@ export class AutomatedDistributionService {
     };
   }
 
-  @Cron('0 */15 * * * *')
+  @Cron(CronExpression.EVERY_10_MINUTES)
   async processVaultDistributions(): Promise<void> {
     if (this.isRunning) {
       this.logger.warn('Distribution process already running, skipping this execution');
@@ -210,6 +218,15 @@ export class AutomatedDistributionService {
           await this.finalizeVaultDistribution(vault.id, vault.script_hash, vault.asset_vault_name);
         }
       } catch (error) {
+        // Handle insufficient UTXOs - stop processing this vault and wait for next cron cycle
+        if (error instanceof InsufficientUtxosException) {
+          this.logger.warn(
+            `Vault ${vault.id} has insufficient UTXOs. Skipping remaining processing. ` +
+              `Will retry in next cron cycle (10 minutes).`
+          );
+          continue;
+        }
+
         this.logger.error(`Error processing vault ${vault.id} for contributor payments:`, error);
       }
     }
