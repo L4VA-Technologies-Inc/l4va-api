@@ -1194,13 +1194,14 @@ export class TaptoolsService {
       // Get all asset units (cached)
       const filteredAssets = await this.getFilteredUnits(walletAddress, whitelistedPolicies);
 
-      // Calculate pagination
-      const total = filteredAssets.length;
+      // Process all assets to apply NFT/Token and search filters
+      const allProcessedAssets = await this.processAssetsPage(filteredAssets, filter, search);
+
+      // Calculate pagination AFTER filtering
+      const total = allProcessedAssets.length;
       const totalPages = Math.ceil(total / limit);
       const offset = (page - 1) * limit;
-      const pageAssets = filteredAssets.slice(offset, offset + limit);
-
-      const processedAssets = await this.processAssetsPage(pageAssets, filter, search);
+      const pageAssets = allProcessedAssets.slice(offset, offset + limit);
 
       const paginationData = {
         page,
@@ -1215,7 +1216,7 @@ export class TaptoolsService {
         excludeExtraneousValues: true,
       });
 
-      return { assets: processedAssets, pagination };
+      return { assets: pageAssets, pagination };
     } catch (err) {
       this.logger.error('Error getting paginated assets:', err.message);
       throw new HttpException('Failed to fetch paginated assets', 500);
@@ -1317,8 +1318,8 @@ export class TaptoolsService {
         displayName: String((metadata as Record<string, unknown>)?.name || assetName),
         ticker: String(details.metadata?.ticker || ''),
         quantity: asset.quantity,
-        isNft: asset.quantity === 1,
-        isFungibleToken: asset.quantity > 1,
+        isNft: isNFT,
+        isFungibleToken: !isNFT,
         priceAda,
         priceUsd,
         valueAda: priceAda * asset.quantity,
@@ -1350,32 +1351,32 @@ export class TaptoolsService {
    * @returns true if NFT, false if FT
    */
   private isNFT(assetDetails: BlockfrostAssetResponseDto): boolean {
-    // 1. Check total quantity (most reliable)
+    // 1. Check for decimals first (strongest FT indicator)
+    if (assetDetails.metadata?.decimals !== undefined) {
+      return false;
+    }
+
+    // 2. Check total quantity (most reliable for NFTs)
     if (assetDetails.quantity === '1') {
       return true;
     }
 
-    // 2. Check for NFT metadata (CIP-25)
+    // 3. If quantity > 1, it's a fungible token
+    const qty = parseInt(assetDetails.quantity);
+    if (qty > 1) {
+      return false;
+    }
+
+    // 4. Check for NFT-specific metadata (CIP-25)
     const metadata = assetDetails.onchain_metadata;
     if (metadata) {
-      // Presence of image or files indicates NFT
-      if (metadata.image || metadata.files) {
-        return true;
-      }
-
-      // Presence of decimals indicates FT
-      if (assetDetails.metadata.decimals !== undefined) {
-        return false;
-      }
-
-      // Check for media-related fields (NFT indicators)
-      if (metadata.mediaType || metadata.attributes) {
+      // Check for NFT-specific fields (attributes, mediaType, files)
+      if (metadata.attributes || metadata.mediaType || metadata.files) {
         return true;
       }
     }
 
-    // 3. Fallback: If quantity > 1, assume FT
-    const qty = parseInt(assetDetails.quantity);
+    // 5. Fallback: assume NFT if quantity is 1
     return qty === 1;
   }
 
