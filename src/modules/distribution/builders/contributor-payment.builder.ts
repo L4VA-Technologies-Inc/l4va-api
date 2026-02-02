@@ -27,6 +27,8 @@ export class ContributorPaymentBuilder {
   private readonly logger = new Logger(ContributorPaymentBuilder.name);
   private readonly isMainnet: boolean;
   private readonly networkId: number;
+  /** Minimum ADA payment threshold: any positive amount  Smart contract accepts even small amounts like 4,000 lovelace (0.004 ADA) */
+  private readonly MIN_ADA_PAYMENT = 4000;
 
   constructor(
     @InjectRepository(Asset)
@@ -61,10 +63,6 @@ export class ContributorPaymentBuilder {
     const mintAssets: { vaultTokenQuantity: number; receiptBurn: number }[] = [];
 
     const hasDispatchFunding = dispatchUtxos.length > 0;
-    // Minimum ADA payment threshold: any positive amount
-    // Only exclude claims with exactly 0 lovelace allocation
-    // Smart contract accepts even small amounts like 4,000 lovelace (0.004 ADA)
-    const MIN_ADA_PAYMENT = 1;
     let totalPaymentAmount = 0;
     let currentOutputIndex = 0;
 
@@ -73,8 +71,7 @@ export class ContributorPaymentBuilder {
       const { transaction: originalTx, lovelace_amount } = claim;
 
       // Only count lovelace amounts above minimum threshold in total payment
-      // Amounts below MIN_ADA_PAYMENT cannot satisfy minimum UTXO requirements
-      if (hasDispatchFunding && Number(lovelace_amount) >= MIN_ADA_PAYMENT) {
+      if (hasDispatchFunding && Number(lovelace_amount) >= this.MIN_ADA_PAYMENT) {
         totalPaymentAmount += Number(lovelace_amount);
       }
 
@@ -126,8 +123,7 @@ export class ContributorPaymentBuilder {
 
       // Add ADA payment and datum only if dispatch funding exists AND amount meets minimum threshold
       // If lovelace_amount is below MIN_ADA_PAYMENT, treat it as if there's no dispatch funding
-      // This prevents creating outputs that violate Cardano's minimum UTXO requirement
-      const hasActualPayment = hasDispatchFunding && Number(lovelace_amount) >= MIN_ADA_PAYMENT;
+      const hasActualPayment = hasDispatchFunding && Number(lovelace_amount) >= this.MIN_ADA_PAYMENT;
 
       if (hasActualPayment) {
         userOutput.lovelace = Number(lovelace_amount);
