@@ -407,6 +407,13 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   fdvTvl: number;
 
+  @ApiProperty({ description: 'Vault Token (VT) price in ADA', required: false })
+  @DtoRepresent({
+    transform: ({ value }) => (value ? Number(value) : null),
+    expose: { name: 'vtPrice' },
+  })
+  vtPrice?: number;
+
   @ApiProperty({ description: 'VT gains' })
   @DtoRepresent({
     transform: false,
