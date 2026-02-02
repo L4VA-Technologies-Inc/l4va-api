@@ -25,6 +25,16 @@ import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
 /**
+ * Exception thrown when UTXO retries are exhausted and we need to wait for the next cycle
+ */
+export class InsufficientUtxosException extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InsufficientUtxosException';
+  }
+}
+
+/**
  * Orchestrates contributor payment workflow
  * Handles batch size determination, payment processing, and confirmation
  */
@@ -148,6 +158,15 @@ export class ContributorDistributionOrchestrator {
           await new Promise(resolve => setTimeout(resolve, 1000));
         }
       } catch (error) {
+        // If we have insufficient UTXOs, stop processing this vault entirely
+        if (error instanceof InsufficientUtxosException) {
+          this.logger.warn(
+            `Stopping vault ${vault.id} processing due to insufficient UTXOs. ` +
+              `Will retry in next cron cycle. Processed ${processedCount}/${claims.length} claims.`
+          );
+          throw error; // Re-throw to stop vault processing
+        }
+
         this.logger.error(`Failed to process payment batch ${batchNumber}:`, error);
 
         const failedClaim = claims[processedCount];
@@ -159,6 +178,15 @@ export class ContributorDistributionOrchestrator {
           await this.processBatchedPayments(vault, [failedClaim], dispatchUtxos, config);
           processedCount += 1;
         } catch (singleError) {
+          // If single claim also fails with insufficient UTXOs, stop processing
+          if (singleError instanceof InsufficientUtxosException) {
+            this.logger.warn(
+              `Stopping vault ${vault.id} processing due to insufficient UTXOs on single claim retry. ` +
+                `Will retry in next cron cycle. Processed ${processedCount}/${claims.length} claims.`
+            );
+            throw singleError;
+          }
+
           this.logger.error(`Failed to process single claim ${failedClaim.id}:`, singleError);
           processedCount += 1;
         }
@@ -378,7 +406,32 @@ export class ContributorDistributionOrchestrator {
           continue;
         }
 
-        // Non-retryable error or max retries reached
+        // Max retries reached for UTXO errors - throw special exception to stop vault processing
+        if (error instanceof MissingUtxoException) {
+          this.logger.error(
+            `Exhausted UTXO retries (${MAX_UTXO_RETRIES}) for vault ${vault.id}. ` +
+              `Excluded ${excludedUtxos.size} UTXOs. Stopping vault processing, will retry in next cron cycle.`
+          );
+
+          await this.transactionRepository.update(
+            { id: batchTransaction.id },
+            {
+              status: TransactionStatus.failed,
+              metadata: {
+                error: 'Insufficient valid UTXOs after retries',
+                excludedUtxos: Array.from(excludedUtxos),
+                retriesExhausted: true,
+              } as any,
+            }
+          );
+
+          throw new InsufficientUtxosException(
+            `Insufficient valid UTXOs for vault ${vault.id} after ${MAX_UTXO_RETRIES} retries. ` +
+              `${excludedUtxos.size} UTXOs excluded. Wait for blockchain sync or new UTXOs.`
+          );
+        }
+
+        // Non-retryable error
         this.logger.error(`Failed to process batched payments:`, error);
 
         await this.transactionRepository.update(
@@ -388,7 +441,7 @@ export class ContributorDistributionOrchestrator {
             metadata: {
               error: error.message,
               excludedUtxos: Array.from(excludedUtxos),
-            },
+            } as any,
           }
         );
 
