@@ -570,10 +570,10 @@ export class TreasuryWalletService {
 
   /**
    * Cron job to auto-create treasury wallets for locked vaults
-   * Runs every 6 hours to check for vaults that need treasury wallets
+   * Schedule controlled by TREASURY_WALLET_CRON env variable (defaults to every 6 hours)
    * Controlled by auto_create_treasury_wallets feature flag in system settings
    */
-  @Cron(CronExpression.EVERY_6_HOURS)
+  @Cron(process.env.TREASURY_WALLET_CRON || CronExpression.EVERY_6_HOURS)
   async autoCreateMissingTreasuryWallets(): Promise<void> {
     const isEnabled = this.systemSettingsService.autoCreateTreasuryWallets;
 
