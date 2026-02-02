@@ -290,8 +290,13 @@ export class TaptoolsService {
 
         this.logger.warn(`DexHunter price not available for FT ${policyId}`);
       }
+
+      // Return fallback price if no price found
+      return { priceAda: 0, priceUsd: 0 };
     } catch (error) {
       this.logger.error(`Failed to get asset value for ${policyId}:`, error.message);
+      // Return fallback price on error
+      return { priceAda: 0, priceUsd: 0 };
     }
   }
 

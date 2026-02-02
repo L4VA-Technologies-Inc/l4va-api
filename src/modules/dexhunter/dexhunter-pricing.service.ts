@@ -58,8 +58,6 @@ export class DexHunterPricingService {
       const data = await response.json();
 
       const priceAda = data.price_ba;
-      this.logger.debug(`Token ${tokenId} price: ${priceAda} ADA`);
-
       return priceAda;
     } catch (error) {
       this.logger.error(`Failed to fetch token price for ${tokenId}`, error);
