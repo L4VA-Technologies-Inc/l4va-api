@@ -61,6 +61,10 @@ export class ContributorPaymentBuilder {
     const mintAssets: { vaultTokenQuantity: number; receiptBurn: number }[] = [];
 
     const hasDispatchFunding = dispatchUtxos.length > 0;
+    // Minimum ADA payment threshold: any positive amount
+    // Only exclude claims with exactly 0 lovelace allocation
+    // Smart contract accepts even small amounts like 4,000 lovelace (0.004 ADA)
+    const MIN_ADA_PAYMENT = 1;
     let totalPaymentAmount = 0;
     let currentOutputIndex = 0;
 
@@ -68,7 +72,9 @@ export class ContributorPaymentBuilder {
     for (const claim of claims) {
       const { transaction: originalTx, lovelace_amount } = claim;
 
-      if (hasDispatchFunding) {
+      // Only count lovelace amounts above minimum threshold in total payment
+      // Amounts below MIN_ADA_PAYMENT cannot satisfy minimum UTXO requirements
+      if (hasDispatchFunding && Number(lovelace_amount) >= MIN_ADA_PAYMENT) {
         totalPaymentAmount += Number(lovelace_amount);
       }
 
@@ -118,8 +124,12 @@ export class ContributorPaymentBuilder {
         address: userAddress,
       };
 
-      // Add ADA payment and datum only if dispatch funding exists
-      if (hasDispatchFunding) {
+      // Add ADA payment and datum only if dispatch funding exists AND amount meets minimum threshold
+      // If lovelace_amount is below MIN_ADA_PAYMENT, treat it as if there's no dispatch funding
+      // This prevents creating outputs that violate Cardano's minimum UTXO requirement
+      const hasActualPayment = hasDispatchFunding && Number(lovelace_amount) >= MIN_ADA_PAYMENT;
+
+      if (hasActualPayment) {
         userOutput.lovelace = Number(lovelace_amount);
         userOutput.datum = {
           type: 'inline',
@@ -188,8 +198,8 @@ export class ContributorPaymentBuilder {
       currentOutputIndex += 2;
     }
 
-    // Handle dispatch UTXOs only if they exist
-    if (hasDispatchFunding) {
+    // Handle dispatch UTXOs only if they exist AND we have actual payments to make
+    if (hasDispatchFunding && totalPaymentAmount > 0) {
       const { selectedUtxos, totalAmount } = selectDispatchUtxos(dispatchUtxos, totalPaymentAmount);
 
       if (selectedUtxos.length === 0 || totalAmount < totalPaymentAmount) {
