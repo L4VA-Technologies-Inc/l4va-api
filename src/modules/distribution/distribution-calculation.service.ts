@@ -338,6 +338,113 @@ export class DistributionCalculationService {
     };
   }
 
+  /**
+   * Calculate optimal decimals for vault tokens based on token supply and multipliers.
+   *
+   * The decimals need to ensure:
+   * 1. vtSupply * 10^decimals fits in JavaScript's safe integer range
+   * 2. Multiplier calculations don't overflow (upper bound)
+   * 3. Multipliers don't underflow to 0 (lower bound) - by increasing decimals
+   * 4. Sufficient precision for token distributions
+   *
+   * Key insight for underflow prevention:
+   * - If minMultiplier = 0.74 with 6 decimals, it floors to 0 (bad!)
+   * - Increasing to 7 decimals: 0.74 * 10 = 7.4, floors to 7 (good!)
+   * - Extra decimals needed = ceil(-log10(minMultiplier))
+   *
+   * @param tokenSupply - The token supply (not scaled by decimals)
+   * @param maxMultiplier - Optional maximum multiplier value from acquire_multiplier array
+   * @param minMultiplier - Optional minimum multiplier value (to prevent underflow to 0)
+   * @returns Optimal number of decimals (0-8)
+   */
+  calculateOptimalDecimals(tokenSupply: number, maxMultiplier?: number, minMultiplier?: number): number {
+    const MAX_SAFE = Number.MAX_SAFE_INTEGER; // 9,007,199,254,740,991
+    const MIN_VALID_MULTIPLIER = 1; // Minimum multiplier to ensure users get tokens
+    const MAX_DECIMALS = 8; // Absolute maximum decimals allowed
+
+    // Calculate max safe decimals based on token supply alone
+    const maxSafeDecimalsFromSupply = Math.floor(Math.log10(MAX_SAFE / tokenSupply));
+
+    // If we have multiplier data, also consider that for overflow prevention
+    let maxSafeDecimalsFromMultiplier = 15; // Default to high value if no multiplier
+    if (maxMultiplier && maxMultiplier > 0) {
+      // Multipliers are stored as integers representing the ratio
+      // We need to ensure qty * multiplier fits in safe range
+      // Assume max quantity per asset is ~1000 (conservative for NFTs)
+      const assumedMaxQuantity = 1000;
+      maxSafeDecimalsFromMultiplier = Math.floor(Math.log10(MAX_SAFE / (maxMultiplier * assumedMaxQuantity)));
+    }
+
+    // Calculate minimum decimals needed to prevent underflow (multiplier < 1 flooring to 0)
+    let minDecimalsForUnderflow = 0;
+    if (minMultiplier !== undefined && minMultiplier > 0 && minMultiplier < MIN_VALID_MULTIPLIER) {
+      // We need to increase decimals so that minMultiplier * 10^extraDecimals >= 1
+      // extraDecimals >= -log10(minMultiplier)
+      // Example: minMultiplier = 0.74 → extraDecimals >= 0.13 → need 1 extra decimal
+      // Example: minMultiplier = 0.01 → extraDecimals >= 2 → need 2 extra decimals
+      const extraDecimalsNeeded = Math.ceil(-Math.log10(minMultiplier));
+      minDecimalsForUnderflow = extraDecimalsNeeded;
+
+      this.logger.warn(
+        `Multiplier underflow detected: minMultiplier=${minMultiplier.toFixed(4)}. ` +
+          `Increasing decimals by ${extraDecimalsNeeded} to prevent 0 token distributions.`
+      );
+    }
+
+    // Take the minimum of overflow constraints
+    const maxSafeDecimals = Math.min(maxSafeDecimalsFromSupply, maxSafeDecimalsFromMultiplier);
+
+    // Determine target decimals based on token supply tiers
+    let targetDecimals: number;
+    if (tokenSupply >= 900_000_000_000) {
+      targetDecimals = 1;
+    } else if (tokenSupply >= 90_000_000_000) {
+      targetDecimals = 1;
+    } else if (tokenSupply >= 9_000_000_000) {
+      targetDecimals = 2;
+    } else if (tokenSupply >= 900_000_000) {
+      targetDecimals = 3;
+    } else if (tokenSupply >= 90_000_000) {
+      targetDecimals = 4;
+    } else if (tokenSupply >= 9_000_000) {
+      targetDecimals = 5;
+    } else if (tokenSupply >= 1_000_000) {
+      targetDecimals = 6;
+    } else {
+      targetDecimals = 6;
+    }
+
+    // Apply underflow prevention: increase decimals if needed
+    const decimalsWithUnderflowPrevention = Math.max(targetDecimals, targetDecimals + minDecimalsForUnderflow);
+
+    // Apply overflow safety: cap at max safe decimals
+    const finalDecimals = Math.min(decimalsWithUnderflowPrevention, maxSafeDecimals, MAX_DECIMALS);
+
+    // Check if we couldn't prevent underflow due to overflow constraints
+    if (minDecimalsForUnderflow > 0 && finalDecimals < targetDecimals + minDecimalsForUnderflow) {
+      this.logger.error(
+        `CRITICAL: Cannot fully prevent multiplier underflow! ` +
+          `Need ${targetDecimals + minDecimalsForUnderflow} decimals but capped at ${finalDecimals} for overflow safety. ` +
+          `minMultiplier: ${minMultiplier?.toFixed(4)}, maxMultiplier: ${maxMultiplier || 'N/A'}, tokenSupply: ${tokenSupply}. ` +
+          `Some users may receive 0 tokens. Consider reducing token supply.`
+      );
+    }
+
+    if (finalDecimals < targetDecimals) {
+      this.logger.warn(
+        `Token supply ${tokenSupply}: target decimals ${targetDecimals} reduced to ${finalDecimals} for overflow safety ` +
+          `(maxMultiplier: ${maxMultiplier || 'N/A'})`
+      );
+    } else if (finalDecimals > targetDecimals) {
+      this.logger.log(
+        `Token supply ${tokenSupply}: decimals increased from ${targetDecimals} to ${finalDecimals} to prevent underflow ` +
+          `(minMultiplier: ${minMultiplier?.toFixed(4)})`
+      );
+    }
+
+    return Math.max(finalDecimals, 0);
+  }
+
   private round25(amount: number): number {
     return Math.round(amount * 1e25) / 1e25;
   }

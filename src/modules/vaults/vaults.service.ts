@@ -508,7 +508,11 @@ export class VaultsService {
       finalVault.asset_vault_name = vaultAssetName;
       finalVault.script_hash = scriptHash;
       finalVault.apply_params_result = applyParamsResult;
-      finalVault.ft_token_decimals = this.calculateOptimalDecimals(finalVault.ft_token_supply || 1_000_000);
+      // Set initial decimals based on token supply only
+      // Final decimals will be recalculated after multipliers are known in lifecycle.service.ts
+      finalVault.ft_token_decimals = this.distributionCalculationService.calculateOptimalDecimals(
+        finalVault.ft_token_supply || 1_000_000
+      );
 
       await this.vaultsRepository.save(finalVault);
 
@@ -1320,39 +1324,6 @@ export class VaultsService {
     }
 
     return { success: true };
-  }
-
-  private calculateOptimalDecimals(tokenSupply: number): number {
-    const maxSafeDecimals = Math.floor(Math.log10(Number.MAX_SAFE_INTEGER / tokenSupply));
-
-    let targetDecimals: number;
-    if (tokenSupply >= 900_000_000_000) {
-      targetDecimals = 1;
-    } else if (tokenSupply >= 90_000_000_000) {
-      targetDecimals = 1;
-    } else if (tokenSupply >= 9_000_000_000) {
-      targetDecimals = 2;
-    } else if (tokenSupply >= 900_000_000) {
-      targetDecimals = 3;
-    } else if (tokenSupply >= 90_000_000) {
-      targetDecimals = 4;
-    } else if (tokenSupply >= 9_000_000) {
-      targetDecimals = 5;
-    } else if (tokenSupply >= 1_000_000) {
-      targetDecimals = 6;
-    } else {
-      targetDecimals = 6;
-    }
-
-    const safeDecimals = Math.min(targetDecimals, maxSafeDecimals);
-
-    if (safeDecimals < targetDecimals) {
-      this.logger.warn(
-        `Token supply ${tokenSupply}: target decimals ${targetDecimals} reduced to ${safeDecimals} for safety`
-      );
-    }
-
-    return Math.max(safeDecimals, 0);
   }
 
   /**
