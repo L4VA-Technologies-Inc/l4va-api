@@ -12,6 +12,7 @@ import { AddressesUtxo, BatchSizeResult } from '../distribution.types';
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { AlertsService } from '@/modules/alerts/alerts.service';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
@@ -53,7 +54,8 @@ export class ContributorDistributionOrchestrator {
     private readonly transactionService: TransactionsService,
     private readonly claimsService: ClaimsService,
     private readonly paymentBuilder: ContributorPaymentBuilder,
-    private readonly blockfrost: BlockFrostAPI
+    private readonly blockfrost: BlockFrostAPI,
+    private readonly alertsService: AlertsService
   ) {}
 
   /**
@@ -323,6 +325,14 @@ export class ContributorDistributionOrchestrator {
         }
 
         if (adminUtxos.length === 0) {
+          // Send Slack alert for critical UTXO exhaustion
+          await this.alertsService.sendAlert('admin_utxos_exhausted', {
+            vaultId: vault.id,
+            excludedUtxosCount: excludedUtxos.size,
+            excludedUtxos: Array.from(excludedUtxos),
+            claimCount: validClaims.length,
+            retryAttempt: utxoRetryCount,
+          });
           throw new Error('No valid admin UTXOs available after filtering spent UTXOs');
         }
 

@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { AlertsModule } from '../alerts/alerts.module';
 import { TransactionsModule } from '../vaults/processing-tx/offchain-tx/transactions.module';
 
 import { AutomatedDistributionService } from './automated-distribution.service';
@@ -35,6 +36,7 @@ import { VyfiModule } from '@/modules/vyfi/vyfi.module';
     ClaimsModule,
     VyfiModule,
     TransactionsModule,
+    AlertsModule,
   ],
   providers: [
     DistributionCalculationService,

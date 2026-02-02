@@ -6,7 +6,12 @@ export interface SlackAlertData {
   [key: string]: any;
 }
 
-export type SlackAlertType = 'asset_price_fetch_failed' | 'wallet_fetch_failed' | 'general_error' | string;
+export type SlackAlertType =
+  | 'asset_price_fetch_failed'
+  | 'wallet_fetch_failed'
+  | 'general_error'
+  | 'admin_utxos_exhausted'
+  | string;
 
 @Injectable()
 export class AlertsService {
@@ -152,6 +157,65 @@ export class AlertsService {
                 {
                   type: 'mrkdwn',
                   text: `*Timestamp:*\n${timestamp}`,
+                },
+              ],
+            },
+          ],
+        };
+
+      case 'admin_utxos_exhausted':
+        return {
+          text: `🚨 Admin UTXOs Exhausted - Distribution Blocked`,
+          blocks: [
+            {
+              type: 'header',
+              text: {
+                type: 'plain_text',
+                text: '🚨 Admin UTXOs Exhausted',
+                emoji: true,
+              },
+            },
+            {
+              type: 'section',
+              fields: [
+                {
+                  type: 'mrkdwn',
+                  text: `*Vault ID:*\n\`${data.vaultId}\``,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Excluded UTXOs:*\n${data.excludedUtxosCount}`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Claims Pending:*\n${data.claimCount}`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Retry Attempt:*\n${data.retryAttempt + 1}/3`,
+                },
+              ],
+            },
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text:
+                  `*⚠️ Action Required:*\n` +
+                  `No valid admin UTXOs available after filtering spent UTXOs. ` +
+                  `The distribution system cannot process contributor payments.\n\n` +
+                  `*Next Steps:*\n` +
+                  `• Check admin wallet for sufficient UTXOs\n` +
+                  `• Wait for pending transactions to confirm\n` +
+                  `• System will retry in next cron cycle (10 minutes)`,
+              },
+            },
+            {
+              type: 'context',
+              elements: [
+                {
+                  type: 'mrkdwn',
+                  text: `*Timestamp:* ${timestamp}`,
                 },
               ],
             },

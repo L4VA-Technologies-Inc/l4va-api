@@ -52,14 +52,9 @@ export class TreasuryWalletService {
     const { vaultId } = dto;
 
     // Check if treasury wallets are enabled for current network
-    const isEnabled = this.isMainnet
-      ? this.systemSettingsService.autoCreateTreasuryWallets
-      : this.systemSettingsService.autoCreateTreasuryWalletsTestnet;
-
-    if (!isEnabled) {
-      this.logger.log(
-        `Treasury wallets are disabled for ${this.isMainnet ? 'mainnet' : 'testnet'} (feature flag: ${isEnabled})`
-      );
+    // On testnet, check if feature is enabled. On mainnet, always allow sweep.
+    if (!this.isMainnet && !this.systemSettingsService.autoCreateTreasuryWalletsTestnet) {
+      this.logger.log(`Treasury wallets are disabled for ${this.isMainnet ? 'mainnet' : 'testnet'} `);
       return null;
     }
 
@@ -213,11 +208,7 @@ export class TreasuryWalletService {
    * Gets treasury wallet for a vault
    */
   async getTreasuryWallet(vaultId: string): Promise<TreasuryWalletInfoDto | null> {
-    const isEnabled = this.isMainnet
-      ? this.systemSettingsService.autoCreateTreasuryWallets
-      : this.systemSettingsService.autoCreateTreasuryWalletsTestnet;
-
-    if (!isEnabled) {
+    if (!this.isMainnet && !this.systemSettingsService.autoCreateTreasuryWalletsTestnet) {
       return null;
     }
 
@@ -412,12 +403,9 @@ export class TreasuryWalletService {
    * Used during vault termination cleanup to recover any leftover funds
    */
   async sweepTreasuryWallet(vaultId: string, destinationAddress: string): Promise<string> {
-    const isEnabled = this.isMainnet
-      ? this.systemSettingsService.autoCreateTreasuryWallets
-      : this.systemSettingsService.autoCreateTreasuryWalletsTestnet;
-
-    if (!isEnabled) {
-      throw new Error(`Treasury wallet sweep disabled for ${this.isMainnet ? 'mainnet' : 'testnet'}`);
+    // On testnet, check if feature is enabled. On mainnet, always allow sweep.
+    if (!this.isMainnet && !this.systemSettingsService.autoCreateTreasuryWalletsTestnet) {
+      throw new Error(`Treasury wallet sweep disabled for testnet`);
     }
 
     this.logger.log(`Sweeping treasury wallet for vault ${vaultId} to ${destinationAddress}`);
@@ -517,11 +505,7 @@ export class TreasuryWalletService {
    */
   async deleteTreasuryWalletKeys(vaultId: string): Promise<void> {
     // Check if treasury wallets are enabled for current network
-    const isEnabled = this.isMainnet
-      ? this.systemSettingsService.autoCreateTreasuryWallets
-      : this.systemSettingsService.autoCreateTreasuryWalletsTestnet;
-
-    if (!isEnabled) {
+    if (!this.isMainnet && !this.systemSettingsService.autoCreateTreasuryWalletsTestnet) {
       this.logger.log(
         `Skipping KMS key deletion - treasury wallets disabled for ${this.isMainnet ? 'mainnet' : 'testnet'}`
       );
@@ -586,10 +570,10 @@ export class TreasuryWalletService {
 
   /**
    * Cron job to auto-create treasury wallets for locked vaults
-   * Runs every 6 hours to check for vaults that need treasury wallets
+   * Schedule controlled by TREASURY_WALLET_CRON env variable (defaults to every 6 hours)
    * Controlled by auto_create_treasury_wallets feature flag in system settings
    */
-  @Cron(CronExpression.EVERY_6_HOURS)
+  @Cron(process.env.TREASURY_WALLET_CRON || CronExpression.EVERY_6_HOURS)
   async autoCreateMissingTreasuryWallets(): Promise<void> {
     const isEnabled = this.systemSettingsService.autoCreateTreasuryWallets;
 
