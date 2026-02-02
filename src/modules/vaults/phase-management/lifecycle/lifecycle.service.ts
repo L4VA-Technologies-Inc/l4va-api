@@ -967,6 +967,40 @@ export class LifecycleService {
           }
         }
 
+        // Recalculate optimal decimals now that we have final multiplier values
+        // This ensures we don't hit floating point precision issues
+        const maxMultiplier = Math.max(...acquireMultiplier.map(m => m[2]), 0);
+        const minMultiplier = Math.min(...acquireMultiplier.map(m => m[2]).filter(m => m > 0), Infinity);
+        const maxAdaDistribution = Math.max(...adaDistribution.map(d => d[2]), 0);
+        const minAdaDistribution = Math.min(...adaDistribution.map(d => d[2]).filter(d => d > 0), Infinity);
+        const maxValue = Math.max(maxMultiplier, maxAdaDistribution);
+        const minValue = Math.min(
+          minMultiplier === Infinity ? 1 : minMultiplier,
+          minAdaDistribution === Infinity ? 1 : minAdaDistribution
+        );
+
+        this.logger.log(
+          `Vault ${vault.id} multiplier stats: ` +
+            `maxMultiplier=${maxMultiplier}, minMultiplier=${minMultiplier === Infinity ? 'N/A' : minMultiplier}, ` +
+            `maxAdaDist=${maxAdaDistribution}, minAdaDist=${minAdaDistribution === Infinity ? 'N/A' : minAdaDistribution}`
+        );
+
+        const optimalDecimals = this.distributionCalculationService.calculateOptimalDecimals(
+          vault.ft_token_supply || 1_000_000,
+          maxValue,
+          minValue
+        );
+
+        // Update vault decimals if they changed
+        if (optimalDecimals !== vault.ft_token_decimals) {
+          this.logger.log(
+            `Updating vault ${vault.id} decimals from ${vault.ft_token_decimals} to ${optimalDecimals} ` +
+              `(maxMultiplier: ${maxMultiplier}, maxAdaDistribution: ${maxAdaDistribution})`
+          );
+          vault.ft_token_decimals = optimalDecimals;
+          await this.vaultRepository.update(vault.id, { ft_token_decimals: optimalDecimals });
+        }
+
         const response = await this.vaultManagingService.updateVaultMetadataTx({
           vault,
           acquireMultiplier,
@@ -986,6 +1020,20 @@ export class LifecycleService {
           await this.taptoolsService.updateMultipleVaultTotals([vault.id]);
         } catch (error) {
           this.logger.error(`Failed to update prices before locking vault ${vault.id}:`, error);
+        }
+
+        // Submit token metadata PR now that decimals are finalized
+        try {
+          this.logger.log(
+            `Submitting token metadata PR for vault ${vault.id} with finalized decimals: ${optimalDecimals}`
+          );
+          await this.metadataRegistryApiService.submitVaultTokenMetadata(vault.id);
+        } catch (metadataError) {
+          this.logger.error(
+            `Failed to submit token metadata for vault ${vault.id}: ${metadataError.message}`,
+            metadataError.stack
+          );
+          // Don't fail the transition - PR submission is non-critical
         }
 
         await this.executePhaseTransition({
@@ -1340,6 +1388,32 @@ export class LifecycleService {
         `Calculated acquire multipliers for ${finalContributorClaims.length} contributors ` + `(no acquirers)`
       );
 
+      // Recalculate optimal decimals now that we have final multiplier values
+      // This ensures we don't hit floating point precision issues
+      const maxMultiplier = Math.max(...acquireMultiplier.map(m => m[2]), 0);
+      const minMultiplier = Math.min(...acquireMultiplier.map(m => m[2]).filter(m => m > 0), Infinity);
+
+      this.logger.log(
+        `Vault ${vault.id} multiplier stats (no acquirers): ` +
+          `maxMultiplier=${maxMultiplier}, minMultiplier=${minMultiplier === Infinity ? 'N/A' : minMultiplier}`
+      );
+
+      const optimalDecimals = this.distributionCalculationService.calculateOptimalDecimals(
+        vault.ft_token_supply || 1_000_000,
+        maxMultiplier,
+        minMultiplier === Infinity ? undefined : minMultiplier
+      );
+
+      // Update vault decimals if they changed
+      if (optimalDecimals !== vault.ft_token_decimals) {
+        this.logger.log(
+          `Updating vault ${vault.id} decimals from ${vault.ft_token_decimals} to ${optimalDecimals} ` +
+            `(maxMultiplier: ${maxMultiplier}, no acquirers scenario)`
+        );
+        vault.ft_token_decimals = optimalDecimals;
+        await this.vaultRepository.update(vault.id, { ft_token_decimals: optimalDecimals });
+      }
+
       // Update vault metadata and transition to governance
       const response = await this.vaultManagingService.updateVaultMetadataTx({
         vault,
@@ -1362,6 +1436,20 @@ export class LifecycleService {
         await this.taptoolsService.updateMultipleVaultTotals([vault.id]);
       } catch (error) {
         this.logger.error(`Failed to update prices before locking vault ${vault.id}:`, error);
+      }
+
+      // Submit token metadata PR now that decimals are finalized
+      try {
+        this.logger.log(
+          `Submitting token metadata PR for vault ${vault.id} with finalized decimals: ${optimalDecimals}`
+        );
+        await this.metadataRegistryApiService.submitVaultTokenMetadata(vault.id);
+      } catch (metadataError) {
+        this.logger.error(
+          `Failed to submit token metadata for vault ${vault.id}: ${metadataError.message}`,
+          metadataError.stack
+        );
+        // Don't fail the transition - PR submission is non-critical
       }
 
       // Transition to governance phase
