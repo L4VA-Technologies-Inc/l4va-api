@@ -18,6 +18,57 @@ import { Transaction } from '@/database/transaction.entity';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
+// VyFi API Response Types
+/**
+ * Pool configuration stored as stringified JSON in VyFiPoolData.json field
+ * Parse with: JSON.parse(poolData.json) as VyFiPoolConfig
+ */
+export interface VyFiPoolConfig {
+  bAsset: {
+    tokenName: string;
+    currencySymbol: string;
+  };
+  mainNFT: {
+    tokenName: string;
+    currencySymbol: string;
+  };
+  operatorToken: {
+    tokenName: string;
+    currencySymbol: string;
+  };
+  lpTokenName: {
+    unTokenName: string;
+  };
+  aAsset: {
+    tokenName: string;
+    currencySymbol: string;
+  };
+  feesSettings: {
+    barFee: number;
+    processFee: number;
+    liqFee: number;
+  };
+  stakeKey: string;
+}
+
+/**
+ * VyFi pool data returned by /lp endpoint
+ */
+export interface VyFiPoolData {
+  unitsPair: string;
+  poolValidatorUtxoAddress: string;
+  'lpPolicyId-assetId': string;
+  json: string; // Stringified VyFiPoolConfig
+  pair: string;
+  isLive: boolean;
+  orderValidatorUtxoAddress: string;
+  tokenAQuantity: number;
+  tokenAQuantityBarFee: number;
+  tokenBQuantity: number;
+  tokenBQuantityBarFee: number;
+  lpQuantity: number;
+}
+
 // Constants for VyFi pool creation
 const VYFI_CONSTANTS = {
   PROCESSING_FEE: 1_900_000, // 1.9 ADA in lovelace
@@ -76,7 +127,7 @@ export class VyfiService {
   }): Promise<
     | {
         exists: boolean;
-        data: any;
+        data: VyFiPoolData[];
         error?: undefined;
       }
     | {
@@ -121,7 +172,7 @@ export class VyfiService {
 
   /**
    * Get pool info by token pair
-   * Returns pool data including order address, LP token unit, and reserves
+   * Returns pool data including order validator address, LP token unit, and reserves
    */
   async getPoolByTokens(
     tokenAUnit: string,
@@ -146,15 +197,25 @@ export class VyfiService {
         return null;
       }
 
-      const poolData = poolCheck.data;
+      // VyFi API returns an array, get the first pool
+      const poolData: VyFiPoolData | undefined = Array.isArray(poolCheck.data) ? poolCheck.data[0] : poolCheck.data;
+
+      if (!poolData) {
+        return null;
+      }
+
+      // Extract LP token policy and asset from "policyId-assetId" format
+      const lpTokenParts = poolData['lpPolicyId-assetId']?.split('-') || [];
+      const lpTokenUnit = lpTokenParts.length === 2 ? `${lpTokenParts[0]}${lpTokenParts[1]}` : '';
+
       return {
-        poolId: poolData.poolId || poolData.id,
-        orderAddress: poolData.orderAddress || poolData.order_address,
-        lpTokenUnit: poolData.lpTokenUnit || poolData.lp_token_unit,
-        reserveA: poolData.reserveA || poolData.reserve_a || '0',
-        reserveB: poolData.reserveB || poolData.reserve_b || '0',
-        tokenAUnit: poolData.tokenAUnit || poolData.token_a_unit || tokenAUnit,
-        tokenBUnit: poolData.tokenBUnit || poolData.token_b_unit || tokenBUnit,
+        poolId: poolData.unitsPair || '',
+        orderAddress: poolData.orderValidatorUtxoAddress, // Critical: Use orderValidatorUtxoAddress for LP removal
+        lpTokenUnit: lpTokenUnit,
+        reserveA: poolData.tokenAQuantity?.toString() || '0',
+        reserveB: poolData.tokenBQuantity?.toString() || '0',
+        tokenAUnit: tokenAUnit,
+        tokenBUnit: tokenBUnit,
       };
     } catch (error) {
       this.logger.error(`Failed to get pool by tokens: ${error.message}`);

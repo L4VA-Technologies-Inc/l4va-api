@@ -128,4 +128,5 @@ export enum VaultFailureReason {
   NO_CONTRIBUTIONS = 'no_contributions',
   NO_CONFIRMED_TRANSACTIONS = 'no_confirmed_transactions',
   MANUAL_CANCELLATION = 'manual_cancellation',
+  INSUFFICIENT_LP_LIQUIDITY = 'insufficient_lp_liquidity',
 }

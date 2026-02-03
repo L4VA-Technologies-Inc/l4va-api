@@ -44,7 +44,7 @@ export class Market {
   price_change_30d: number;
 
   @Column({ type: 'decimal', precision: 12, scale: 4, nullable: true })
-  delta: number | null;
+  delta: number | null; // Mkt Cap / TVL (%)
 
   @CreateDateColumn({ type: 'timestamptz' })
   created_at: Date;

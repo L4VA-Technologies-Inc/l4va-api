@@ -442,6 +442,7 @@ export class DistributionCalculationService {
       );
     }
 
+    // Database constraint requires decimals between 0 and 9, never return less than 0
     return Math.max(finalDecimals, 0);
   }
 

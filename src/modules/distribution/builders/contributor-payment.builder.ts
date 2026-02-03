@@ -286,7 +286,7 @@ export class ContributorPaymentBuilder {
 
     return {
       changeAddress: config.adminAddress,
-      message: `Batch payment for ${claims.length} contributors`,
+      message: `Claim vault tokens and rewards (${claims.length})`,
       utxos: adminUtxos,
       preloadedScripts: hasDispatchFunding ? [vault.dispatch_preloaded_script.preloadedScript] : [],
       scriptInteractions,

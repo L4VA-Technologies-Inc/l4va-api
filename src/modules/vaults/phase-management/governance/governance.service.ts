@@ -32,6 +32,7 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { Vote } from '@/database/vote.entity';
 import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
+import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
@@ -100,7 +101,8 @@ export class GovernanceService {
     private readonly eventEmitter: EventEmitter2,
     private readonly voteCountingService: VoteCountingService,
     private readonly distributionService: DistributionService,
-    private readonly dexHunterPricingService: DexHunterPricingService
+    private readonly dexHunterPricingService: DexHunterPricingService,
+    private readonly dexHunterService: DexHunterService
   ) {
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
 
@@ -402,6 +404,51 @@ export class GovernanceService {
                 throw new BadRequestException(`Slippage must be between 0.5% and 5%. Got ${slippage}%`);
               }
 
+              // Validate that swap pool exists and amount is sufficient by calling estimate endpoint
+              try {
+                const tokenId = asset.policy_id + asset.asset_id;
+                await this.dexHunterService.estimateSwap({
+                  tokenIn: tokenId,
+                  tokenOut: 'ADA',
+                  amountIn: swapQuantity,
+                  slippage,
+                });
+                this.logger.log(`Swap pool verified for ${action.assetId} with quantity ${swapQuantity}`);
+              } catch (error) {
+                // Check if error is pool not found - could be no pool OR amount too low
+                if (error.message?.includes('pool_not_found') || error.message?.includes('not found')) {
+                  // Try with a high amount (1M tokens) to distinguish between "no pool" and "amount too low"
+                  // This amount is high enough to exceed most minimums but reasonable for most pools
+                  try {
+                    const tokenId = asset.policy_id + asset.asset_id;
+                    const testAmount = Math.min(1_000_000, asset.quantity); // Use 1M or available quantity, whichever is smaller
+                    await this.dexHunterService.estimateSwap({
+                      tokenIn: tokenId,
+                      tokenOut: 'ADA',
+                      amountIn: testAmount,
+                      slippage,
+                    });
+                    // If higher amount works, the issue is insufficient swap amount
+                    throw new BadRequestException(
+                      `Swap amount too low for token ${asset.policy_id}${asset.asset_id}. ` +
+                        `Quantity ${swapQuantity} is below the minimum liquidity threshold. ` +
+                        `Try using the maximum available amount (${asset.quantity}) or check DexHunter for minimum swap requirements.`
+                    );
+                  } catch (maxError) {
+                    // If higher amount also fails, pool genuinely doesn't exist
+                    if (maxError instanceof BadRequestException) {
+                      throw maxError; // Re-throw our custom error
+                    }
+                    throw new BadRequestException(
+                      `No liquidity pool available for token ${asset.policy_id}${asset.asset_id}. ` +
+                        `This token cannot be swapped via DexHunter.`
+                    );
+                  }
+                }
+                // Re-throw other errors
+                throw new BadRequestException(`Failed to validate swap for ${action.assetId}: ${error.message}`);
+              }
+
               // Validate custom price if not using market price
               if (action.useMarketPrice === false) {
                 const customPrice = action.customPriceAda;
@@ -409,18 +456,6 @@ export class GovernanceService {
                   throw new BadRequestException(
                     `Custom price must be greater than 0 when not using market price. Got ${customPrice}`
                   );
-                }
-              } else {
-                // Fetch token price for estimated output (when using market price)
-                try {
-                  const tokenId = asset.policy_id + asset.asset_id;
-                  const price = await this.dexHunterPricingService.getTokenPrice(tokenId);
-                  if (price) {
-                    const estimatedAda = swapQuantity * price * (1 - slippage / 100);
-                    this.logger.log(`Swap estimate for ${action.assetId}: ~${estimatedAda} ADA`);
-                  }
-                } catch (error) {
-                  this.logger.warn(`Failed to fetch price for token ${action.assetId}: ${error.message}`);
                 }
               }
             }
@@ -743,6 +778,7 @@ export class GovernanceService {
       }));
 
     // Transform marketplace actions with enriched asset data and WayUp URLs
+    // For DexHunter swaps, combine quantities by token (policy_id + asset_id)
     const marketplaceActions = (proposal.metadata?.marketplaceActions || []).map(action => {
       const asset = assetMap.get(action.assetId);
 
@@ -1312,14 +1348,53 @@ export class GovernanceService {
       return [];
     }
 
-    // Build token IDs for price fetching
-    const tokenIds = availableAssets.map(asset => asset.policy_id + asset.asset_id);
+    // Group assets by token (policy_id + asset_id) and combine quantities
+    const combinedAssets = availableAssets.reduce(
+      (acc, asset) => {
+        const tokenKey = `${asset.policy_id}_${asset.asset_id}`;
+
+        if (acc.has(tokenKey)) {
+          // Add quantity to existing token
+          const existing = acc.get(tokenKey);
+          existing.quantity += asset.quantity;
+        } else {
+          // First occurrence of this token
+          acc.set(tokenKey, {
+            id: asset.id,
+            policy_id: asset.policy_id,
+            asset_id: asset.asset_id,
+            name: asset.name,
+            metadata: asset.metadata,
+            dex_price: asset.dex_price,
+            quantity: asset.quantity,
+          });
+        }
+
+        return acc;
+      },
+      new Map<
+        string,
+        {
+          id: string;
+          policy_id: string;
+          asset_id: string;
+          name: string;
+          metadata: any;
+          dex_price: number;
+          quantity: number;
+        }
+      >()
+    );
+
+    // Convert map to array and build token IDs for price fetching
+    const combinedAssetsList = Array.from(combinedAssets.values());
+    const tokenIds = combinedAssetsList.map(asset => asset.policy_id + asset.asset_id);
 
     // Batch fetch prices from DexHunter
     const priceMap = await this.dexHunterPricingService.getTokenPrices(tokenIds);
 
     // Map assets with pricing data
-    return availableAssets.map(asset => {
+    return combinedAssetsList.map(asset => {
       const tokenId = asset.policy_id + asset.asset_id;
       const currentPriceAda = priceMap.get(tokenId) || asset.dex_price || null;
       const estimatedAdaValue = currentPriceAda ? asset.quantity * currentPriceAda : null;

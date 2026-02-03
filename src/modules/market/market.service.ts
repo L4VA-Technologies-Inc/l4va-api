@@ -168,6 +168,7 @@ export class MarketService {
     price_change_7d: number;
     price_change_30d: number;
     tvl?: number;
+    has_market_data?: boolean;
   }): Promise<Market> {
     const calculateDelta = (mcap: number, tvl: number | undefined): number | null => {
       if (!mcap || !tvl || tvl === 0) return null;

@@ -746,18 +746,69 @@ export class LifecycleService {
             assetsOfferedPercent: ASSETS_OFFERED_PERCENT,
             lpPercent: LP_PERCENT,
           });
-        try {
-          const lpAdaInLovelace = Math.floor(lpAdaAmount * 1_000_000);
-          const minLpLiquidity = this.systemSettingsService.lpRecommendedMinLiquidity;
 
+        // Check if LP is configured and validate minimum threshold
+        const lpAdaInLovelace = Math.floor(lpAdaAmount * 1_000_000);
+        const minLpLiquidity = this.systemSettingsService.lpRecommendedMinLiquidity;
+        const hasLpConfigured = vault.liquidity_pool_contribution > 0;
+
+        if (hasLpConfigured && lpAdaInLovelace < minLpLiquidity) {
+          // Vault has LP configured but doesn't meet minimum threshold - FAIL the vault
+          this.logger.error(
+            `Vault ${vault.id} FAILED: LP configured but insufficient liquidity. ` +
+              `LP ADA: ${lpAdaAmount} ADA (${lpAdaInLovelace} lovelace) is below ` +
+              `required minimum ${minLpLiquidity / 1_000_000} ADA (${minLpLiquidity} lovelace). ` +
+              `Vault will transition to FAILED status and users will be refunded.`
+          );
+
+          // Transition vault to failed status
+          const cancellationResponse = await this.vaultManagingService.updateVaultMetadataTx({
+            vault,
+            acquireMultiplier: [],
+            adaDistribution: [],
+            adaPairMultiplier: 0,
+            vaultStatus: SmartContractVaultStatus.CANCELLED,
+          });
+
+          if (!cancellationResponse.txHash) {
+            this.logger.error(`Failed to get txHash for vault ${vault.id} cancellation transaction`);
+            return;
+          }
+
+          await this.claimsService.createCancellationClaims(vault, 'insufficient_lp_liquidity');
+
+          await this.executePhaseTransition({
+            vaultId: vault.id,
+            newStatus: VaultStatus.failed,
+            txHash: cancellationResponse.txHash,
+            failureReason: VaultFailureReason.INSUFFICIENT_LP_LIQUIDITY,
+            failureDetails: {
+              lpAdaAmount,
+              lpAdaInLovelace,
+              minLpLiquidity,
+              minLpLiquidityAda: minLpLiquidity / 1_000_000,
+              message: `LP liquidity ${lpAdaAmount} ADA is below required minimum ${minLpLiquidity / 1_000_000} ADA`,
+            },
+          });
+
+          this.eventEmitter.emit('vault.failed', {
+            vaultId: vault.id,
+            vaultName: vault.name,
+            reason: VaultFailureReason.INSUFFICIENT_LP_LIQUIDITY,
+            lpAdaAmount,
+            minLpLiquidityAda: minLpLiquidity / 1_000_000,
+          });
+
+          return;
+        }
+
+        try {
           if (adjustedVtLpAmount > 0 && lpAdaAmount > 0) {
-            // Check if LP liquidity meets minimum threshold
+            // LP meets minimum threshold or LP is not configured - create LP claim
             if (lpAdaInLovelace < minLpLiquidity) {
-              this.logger.warn(
-                `Skipping LP claim creation for vault ${vault.id}: ` +
-                  `LP liquidity ${lpAdaAmount} ADA (${lpAdaInLovelace} lovelace) is below ` +
-                  `recommended minimum ${minLpLiquidity / 1_000_000} ADA (${minLpLiquidity} lovelace). ` +
-                  `Pool would be too small for practical use.`
+              this.logger.log(
+                `No LP claim created for vault ${vault.id}: ` +
+                  `LP percentage is 0% or LP liquidity ${lpAdaAmount} ADA is below recommended minimum.`
               );
             } else {
               const lpClaimExists = await this.claimRepository.exists({
@@ -1163,18 +1214,67 @@ export class LifecycleService {
           `LP VT: ${lpVtAmount}, LP ADA: ${lpAdaAmount}`
       );
 
-      // Check if LP meets minimum liquidity threshold and create claim if applicable
+      // Check if LP is configured and validate minimum threshold
       const lpAdaInLovelace = Math.floor(lpAdaAmount * 1_000_000);
       const minLpLiquidity = this.systemSettingsService.lpRecommendedMinLiquidity;
+      const hasLpConfigured = vault.liquidity_pool_contribution > 0;
       let shouldCreateLpClaim = false;
+
+      if (hasLpConfigured && lpAdaInLovelace < minLpLiquidity) {
+        // Vault has LP configured but doesn't meet minimum threshold - FAIL the vault
+        this.logger.error(
+          `Vault ${vault.id} FAILED: LP configured but insufficient liquidity. ` +
+            `LP ADA: ${lpAdaAmount} ADA (${lpAdaInLovelace} lovelace) is below ` +
+            `required minimum ${minLpLiquidity / 1_000_000} ADA (${minLpLiquidity} lovelace). ` +
+            `Vault will transition to FAILED status and users will be refunded.`
+        );
+
+        // Transition vault to failed status
+        const cancellationResponse = await this.vaultManagingService.updateVaultMetadataTx({
+          vault,
+          acquireMultiplier: [],
+          adaDistribution: [],
+          adaPairMultiplier: 0,
+          vaultStatus: SmartContractVaultStatus.CANCELLED,
+        });
+
+        if (!cancellationResponse.txHash) {
+          this.logger.error(`Failed to get txHash for vault ${vault.id} cancellation transaction`);
+          return;
+        }
+
+        await this.claimsService.createCancellationClaims(vault, 'insufficient_lp_liquidity');
+
+        await this.executePhaseTransition({
+          vaultId: vault.id,
+          newStatus: VaultStatus.failed,
+          txHash: cancellationResponse.txHash,
+          failureReason: VaultFailureReason.INSUFFICIENT_LP_LIQUIDITY,
+          failureDetails: {
+            lpAdaAmount,
+            lpAdaInLovelace,
+            minLpLiquidity,
+            minLpLiquidityAda: minLpLiquidity / 1_000_000,
+            message: `LP liquidity ${lpAdaAmount} ADA is below required minimum ${minLpLiquidity / 1_000_000} ADA`,
+          },
+        });
+
+        this.eventEmitter.emit('vault.failed', {
+          vaultId: vault.id,
+          vaultName: vault.name,
+          reason: VaultFailureReason.INSUFFICIENT_LP_LIQUIDITY,
+          lpAdaAmount,
+          minLpLiquidityAda: minLpLiquidity / 1_000_000,
+        });
+
+        return;
+      }
 
       if (lpVtAmount > 0 && lpAdaAmount > 0) {
         if (lpAdaInLovelace < minLpLiquidity) {
-          this.logger.warn(
-            `Skipping LP claim creation for vault ${vault.id}: ` +
-              `LP liquidity ${lpAdaAmount} ADA (${lpAdaInLovelace} lovelace) is below ` +
-              `recommended minimum ${minLpLiquidity / 1_000_000} ADA (${minLpLiquidity} lovelace). ` +
-              `Pool would be too small for practical use.`
+          this.logger.log(
+            `No LP claim created for vault ${vault.id}: ` +
+              `LP percentage is 0% or LP liquidity ${lpAdaAmount} ADA is below recommended minimum.`
           );
         } else {
           shouldCreateLpClaim = true;

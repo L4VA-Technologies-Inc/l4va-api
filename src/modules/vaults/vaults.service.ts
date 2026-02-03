@@ -805,7 +805,7 @@ export class VaultsService {
       projectedLpUsdAmount: projectedLpAdaAmount * adaPrice,
       assetsCount: lockedAssetsCount,
       assetsPrices,
-      fdvAda: vault.fdv * adaPrice,
+      fdvUsd: vault.fdv * adaPrice,
     };
 
     let canCreateProposal = false;

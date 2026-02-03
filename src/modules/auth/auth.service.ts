@@ -4,6 +4,8 @@ import { COSESign1, COSEKey, Label, Int, BigNum } from '@emurgo/cardano-message-
 import { Ed25519Signature, PublicKey, Address, RewardAddress } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Brackets, Repository } from 'typeorm';
 import { generateUsername } from 'unique-username-generator';
 
 import { TaptoolsService } from '../taptools/taptools.service';
@@ -12,14 +14,18 @@ import { UsersService } from '../users/users.service';
 import { LoginReq } from './dto/login.req';
 import { LoginRes } from './dto/login.res';
 
+import { Vault } from '@/database/vault.entity';
 import { transformImageToUrl } from '@/helpers';
+import { VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class AuthService {
   constructor(
     private usersService: UsersService,
     private jwtService: JwtService,
-    private readonly taptoolsService: TaptoolsService
+    private readonly taptoolsService: TaptoolsService,
+    @InjectRepository(Vault)
+    private vaultRepository: Repository<Vault>
   ) {}
 
   async verifySignature(signatureData: LoginReq): Promise<LoginRes> {
@@ -88,6 +94,44 @@ export class AuthService {
 
       const profileImage = transformImageToUrl(user.profile_image);
       const bannerImage = transformImageToUrl(user.banner_image);
+
+      const statuses = [
+        VaultStatus.published,
+        VaultStatus.contribution,
+        VaultStatus.acquire,
+        VaultStatus.locked,
+        VaultStatus.burned,
+      ];
+      const vaultsCount = await this.vaultRepository
+        .createQueryBuilder('vault')
+        .andWhere('vault.deleted != :deleted', { deleted: true })
+        .andWhere('vault.vault_status IN (:...statuses)', { statuses })
+        .andWhere(
+          new Brackets(qb => {
+            qb.where('vault.owner_id = :userId', { userId: user.id })
+              .orWhere(
+                `EXISTS (
+              SELECT 1 FROM assets
+              WHERE assets.vault_id = vault.id 
+              AND assets.added_by = :userId
+              AND assets.status IN ('locked', 'distributed')
+            )`,
+                { userId: user.id }
+              )
+              .orWhere(
+                `EXISTS (
+              SELECT 1 FROM snapshot
+              WHERE snapshot.vault_id = vault.id 
+              AND snapshot.address_balances -> :userAddress IS NOT NULL
+              ORDER BY snapshot.created_at DESC
+              LIMIT 1
+            )`,
+                { userAddress: user.address }
+              );
+          })
+        )
+        .getCount();
+      user.total_vaults = vaultsCount || 0;
 
       return {
         success: true,
