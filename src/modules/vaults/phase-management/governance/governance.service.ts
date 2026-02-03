@@ -32,6 +32,7 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { Vote } from '@/database/vote.entity';
 import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
+import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
@@ -100,7 +101,8 @@ export class GovernanceService {
     private readonly eventEmitter: EventEmitter2,
     private readonly voteCountingService: VoteCountingService,
     private readonly distributionService: DistributionService,
-    private readonly dexHunterPricingService: DexHunterPricingService
+    private readonly dexHunterPricingService: DexHunterPricingService,
+    private readonly dexHunterService: DexHunterService
   ) {
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
 
@@ -402,6 +404,49 @@ export class GovernanceService {
                 throw new BadRequestException(`Slippage must be between 0.5% and 5%. Got ${slippage}%`);
               }
 
+              // Validate that swap pool exists and amount is sufficient by calling estimate endpoint
+              try {
+                const tokenId = asset.policy_id + asset.asset_id;
+                await this.dexHunterService.estimateSwap({
+                  tokenIn: tokenId,
+                  tokenOut: 'ADA',
+                  amountIn: swapQuantity,
+                  slippage,
+                });
+                this.logger.log(`Swap pool verified for ${action.assetId} with quantity ${swapQuantity}`);
+              } catch (error) {
+                // Check if error is pool not found - could be no pool OR amount too low
+                if (error.message?.includes('pool_not_found') || error.message?.includes('not found')) {
+                  // Try with max amount to distinguish between "no pool" and "amount too low"
+                  try {
+                    const tokenId = asset.policy_id + asset.asset_id;
+                    await this.dexHunterService.estimateSwap({
+                      tokenIn: tokenId,
+                      tokenOut: 'ADA',
+                      amountIn: asset.quantity,
+                      slippage,
+                    });
+                    // If max amount works, the issue is insufficient swap amount
+                    throw new BadRequestException(
+                      `Swap amount too low for token ${asset.policy_id}${asset.asset_id}. ` +
+                        `Quantity ${swapQuantity} is below the minimum liquidity threshold. ` +
+                        `Try using the maximum available amount (${asset.quantity}) or check DexHunter for minimum swap requirements.`
+                    );
+                  } catch (maxError) {
+                    // If max amount also fails, pool genuinely doesn't exist
+                    if (maxError instanceof BadRequestException) {
+                      throw maxError; // Re-throw our custom error
+                    }
+                    throw new BadRequestException(
+                      `No liquidity pool available for token ${asset.policy_id}${asset.asset_id}. ` +
+                        `This token cannot be swapped via DexHunter.`
+                    );
+                  }
+                }
+                // Re-throw other errors
+                throw new BadRequestException(`Failed to validate swap for ${action.assetId}: ${error.message}`);
+              }
+
               // Validate custom price if not using market price
               if (action.useMarketPrice === false) {
                 const customPrice = action.customPriceAda;
@@ -409,18 +454,6 @@ export class GovernanceService {
                   throw new BadRequestException(
                     `Custom price must be greater than 0 when not using market price. Got ${customPrice}`
                   );
-                }
-              } else {
-                // Fetch token price for estimated output (when using market price)
-                try {
-                  const tokenId = asset.policy_id + asset.asset_id;
-                  const price = await this.dexHunterPricingService.getTokenPrice(tokenId);
-                  if (price) {
-                    const estimatedAda = swapQuantity * price * (1 - slippage / 100);
-                    this.logger.log(`Swap estimate for ${action.assetId}: ~${estimatedAda} ADA`);
-                  }
-                } catch (error) {
-                  this.logger.warn(`Failed to fetch price for token ${action.assetId}: ${error.message}`);
                 }
               }
             }
