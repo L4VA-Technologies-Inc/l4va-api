@@ -442,8 +442,8 @@ export class DistributionCalculationService {
       );
     }
 
-    // Database constraint requires decimals between 1 and 9, never return 0
-    return Math.max(finalDecimals, 1);
+    // Database constraint requires decimals between 0 and 9, never return less than 0
+    return Math.max(finalDecimals, 0);
   }
 
   private round25(amount: number): number {

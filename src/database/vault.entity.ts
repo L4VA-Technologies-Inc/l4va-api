@@ -242,7 +242,7 @@ export class Vault {
   @Expose({ name: 'ftTokenDecimals' })
   @Column({ name: 'ft_token_decimals', type: 'smallint', default: 1, nullable: true })
   @Transform(({ value }) => (value ? Number(value) : null))
-  @Check('"ft_token_decimals" BETWEEN 1 AND 9')
+  @Check('"ft_token_decimals" BETWEEN 0 AND 9')
   ft_token_decimals?: number;
 
   @Expose({ name: 'terminationType' })
@@ -297,7 +297,7 @@ export class Vault {
     type: 'numeric',
     nullable: true,
   })
-  vote_threshold?: number;
+  vote_threshold?: number; // Means quorum threshold, minimum percent from snapshot of tokens voted in a proposal to be valid
 
   @Expose({ name: 'executionThreshold' })
   @Transform(({ value }) => (value ? Number(value) : null))
@@ -306,7 +306,7 @@ export class Vault {
     type: 'numeric',
     nullable: true,
   })
-  execution_threshold?: number;
+  execution_threshold?: number; // Means percent from snapshot of "yes" votes required for a proposal to be executed
 
   @Expose({ name: 'cosigningThreshold' })
   @Transform(({ value }) => (value ? Number(value) : null))
@@ -315,7 +315,7 @@ export class Vault {
     type: 'numeric',
     nullable: true,
   })
-  cosigning_threshold?: number;
+  cosigning_threshold?: number; // Not used for now
 
   @Expose({ name: 'totalAssetsCostUsd' })
   @Transform(({ value }) => (value ? Number(value) : null))
