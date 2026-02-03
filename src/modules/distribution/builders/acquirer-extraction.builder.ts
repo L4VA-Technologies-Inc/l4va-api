@@ -157,7 +157,7 @@ export class AcquirerExtractionBuilder {
 
     return {
       changeAddress: config.adminAddress,
-      message: `Extract ADA for ${claims.length} claims`,
+      message: `Claim vault tokens (${claims.length})`,
       utxos: adminUtxos,
       scriptInteractions,
       mint: mintAssets,
