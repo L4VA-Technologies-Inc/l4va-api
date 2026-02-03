@@ -776,6 +776,7 @@ export class GovernanceService {
       }));
 
     // Transform marketplace actions with enriched asset data and WayUp URLs
+    // For DexHunter swaps, combine quantities by token (policy_id + asset_id)
     const marketplaceActions = (proposal.metadata?.marketplaceActions || []).map(action => {
       const asset = assetMap.get(action.assetId);
 
@@ -1345,14 +1346,53 @@ export class GovernanceService {
       return [];
     }
 
-    // Build token IDs for price fetching
-    const tokenIds = availableAssets.map(asset => asset.policy_id + asset.asset_id);
+    // Group assets by token (policy_id + asset_id) and combine quantities
+    const combinedAssets = availableAssets.reduce(
+      (acc, asset) => {
+        const tokenKey = `${asset.policy_id}_${asset.asset_id}`;
+
+        if (acc.has(tokenKey)) {
+          // Add quantity to existing token
+          const existing = acc.get(tokenKey);
+          existing.quantity += asset.quantity;
+        } else {
+          // First occurrence of this token
+          acc.set(tokenKey, {
+            id: asset.id,
+            policy_id: asset.policy_id,
+            asset_id: asset.asset_id,
+            name: asset.name,
+            metadata: asset.metadata,
+            dex_price: asset.dex_price,
+            quantity: asset.quantity,
+          });
+        }
+
+        return acc;
+      },
+      new Map<
+        string,
+        {
+          id: string;
+          policy_id: string;
+          asset_id: string;
+          name: string;
+          metadata: any;
+          dex_price: number;
+          quantity: number;
+        }
+      >()
+    );
+
+    // Convert map to array and build token IDs for price fetching
+    const combinedAssetsList = Array.from(combinedAssets.values());
+    const tokenIds = combinedAssetsList.map(asset => asset.policy_id + asset.asset_id);
 
     // Batch fetch prices from DexHunter
     const priceMap = await this.dexHunterPricingService.getTokenPrices(tokenIds);
 
     // Map assets with pricing data
-    return availableAssets.map(asset => {
+    return combinedAssetsList.map(asset => {
       const tokenId = asset.policy_id + asset.asset_id;
       const currentPriceAda = priceMap.get(tokenId) || asset.dex_price || null;
       const estimatedAdaValue = currentPriceAda ? asset.quantity * currentPriceAda : null;
