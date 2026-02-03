@@ -417,23 +417,25 @@ export class GovernanceService {
               } catch (error) {
                 // Check if error is pool not found - could be no pool OR amount too low
                 if (error.message?.includes('pool_not_found') || error.message?.includes('not found')) {
-                  // Try with max amount to distinguish between "no pool" and "amount too low"
+                  // Try with a high amount (1M tokens) to distinguish between "no pool" and "amount too low"
+                  // This amount is high enough to exceed most minimums but reasonable for most pools
                   try {
                     const tokenId = asset.policy_id + asset.asset_id;
+                    const testAmount = Math.min(1_000_000, asset.quantity); // Use 1M or available quantity, whichever is smaller
                     await this.dexHunterService.estimateSwap({
                       tokenIn: tokenId,
                       tokenOut: 'ADA',
-                      amountIn: asset.quantity,
+                      amountIn: testAmount,
                       slippage,
                     });
-                    // If max amount works, the issue is insufficient swap amount
+                    // If higher amount works, the issue is insufficient swap amount
                     throw new BadRequestException(
                       `Swap amount too low for token ${asset.policy_id}${asset.asset_id}. ` +
                         `Quantity ${swapQuantity} is below the minimum liquidity threshold. ` +
                         `Try using the maximum available amount (${asset.quantity}) or check DexHunter for minimum swap requirements.`
                     );
                   } catch (maxError) {
-                    // If max amount also fails, pool genuinely doesn't exist
+                    // If higher amount also fails, pool genuinely doesn't exist
                     if (maxError instanceof BadRequestException) {
                       throw maxError; // Re-throw our custom error
                     }
