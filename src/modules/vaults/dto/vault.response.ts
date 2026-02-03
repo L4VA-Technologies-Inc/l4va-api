@@ -189,12 +189,12 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   maxContributeAssets: number;
 
-  @ApiProperty({ description: 'Fdv in ADA value' })
+  @ApiProperty({ description: 'Fdv in USD value' })
   @DtoRepresent({
     transform: false,
-    expose: { name: 'fdvAda' },
+    expose: { name: 'fdvUsd' },
   })
-  fdvAda: number;
+  fdvUsd: number;
 
   @ApiProperty({ description: 'Required values cost for success acquire phase in usd' })
   @DtoRepresent({
@@ -393,7 +393,7 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   ftTokenSupply: number;
 
-  @ApiProperty({ description: 'Fully diluted valuation' })
+  @ApiProperty({ description: 'Fully diluted valuation in ADA' })
   @DtoRepresent({
     transform: false,
     expose: true,
