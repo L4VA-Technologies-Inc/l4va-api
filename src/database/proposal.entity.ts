@@ -114,6 +114,7 @@ export class Proposal {
       message: string;
       timestamp: string;
       errorCode?: string;
+      userFriendlyMessage?: string;
     };
   };
 
