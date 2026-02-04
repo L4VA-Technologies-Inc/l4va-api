@@ -368,13 +368,40 @@ export class GovernanceService {
 
         const market = actions[0]?.market;
 
+        // For DexHunter, fetch all assets and aggregate by token to allow multi-asset swaps
+        const assetsByToken = new Map<
+          string,
+          Array<Pick<Asset, 'id' | 'status' | 'type' | 'policy_id' | 'asset_id' | 'quantity' | 'name'>>
+        >();
+
+        if (market === 'DexHunter') {
+          // Fetch all locked FT assets for this vault to enable multi-asset swaps
+          const allFTs = await this.assetRepository.find({
+            where: {
+              vault: { id: vaultId },
+              type: AssetType.FT,
+              status: AssetStatus.LOCKED,
+            },
+            select: ['id', 'status', 'type', 'policy_id', 'asset_id', 'quantity', 'name'],
+          });
+
+          // Group assets by token (policy_id + asset_id)
+          allFTs.forEach(asset => {
+            const tokenKey = asset.policy_id + asset.asset_id;
+            if (!assetsByToken.has(tokenKey)) {
+              assetsByToken.set(tokenKey, []);
+            }
+            assetsByToken.get(tokenKey).push(asset);
+          });
+        }
+
         // Validate all assets exist and handle market-specific validation
         await Promise.all(
           actions.map(async action => {
-            const asset: Pick<Asset, 'id' | 'status' | 'type' | 'policy_id' | 'asset_id' | 'quantity'> =
+            const asset: Pick<Asset, 'id' | 'status' | 'type' | 'policy_id' | 'asset_id' | 'quantity' | 'name'> =
               await this.assetRepository.findOne({
                 where: { id: action.assetId },
-                select: ['id', 'status', 'type', 'policy_id', 'asset_id', 'quantity'],
+                select: ['id', 'status', 'type', 'policy_id', 'asset_id', 'quantity', 'name'],
               });
 
             if (!asset) {
@@ -390,11 +417,15 @@ export class GovernanceService {
                 );
               }
 
-              // Validate quantity
+              // Validate quantity against TOTAL available across all assets of this token
               const swapQuantity = parseFloat(action.quantity || '0');
-              if (swapQuantity <= 0 || swapQuantity > asset.quantity) {
+              const tokenKey = asset.policy_id + asset.asset_id;
+              const allTokenAssets = assetsByToken.get(tokenKey) || [];
+              const totalAvailable = allTokenAssets.reduce((sum, a) => sum + a.quantity, 0);
+
+              if (swapQuantity <= 0 || swapQuantity > totalAvailable) {
                 throw new BadRequestException(
-                  `Invalid swap quantity for asset ${action.assetId}. Must be between 1 and ${asset.quantity}.`
+                  `Invalid swap quantity for ${asset.name || 'token'}. Requested: ${swapQuantity}, Available across all assets: ${totalAvailable}.`
                 );
               }
 
