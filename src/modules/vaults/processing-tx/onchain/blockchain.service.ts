@@ -159,9 +159,107 @@ export class BlockchainService {
     signatures?: string[];
   }): Promise<TransactionSubmitResponse> {
     try {
+      const requestPayload = {
+        transaction: signedTx.transaction,
+        signatures: signedTx.signatures || [],
+      };
+
+      const response = await firstValueFrom(
+        this.httpService.post<{ txHash: string }>(`${this.anvilApi}/transactions/submit`, requestPayload, {
+          headers: this.anvilHeaders,
+        })
+      );
+
+      if (!response.data.txHash) {
+        throw new Error('No transaction hash returned from blockchain');
+      }
+
+      this.logger.log(`Transaction submitted successfully: ${response.data.txHash}`);
+      return { txHash: response.data.txHash };
+    } catch (error) {
+      if (error.response?.status === 422) {
+        // Log full request and response for debugging 422 errors
+        this.logger.error('=== 422 ERROR DETAILS ===');
+        this.logger.error(
+          'Request Payload:',
+          JSON.stringify(
+            {
+              transaction: signedTx.transaction.substring(0, 200) + '...',
+              signatures: signedTx.signatures || [],
+              transactionLength: signedTx.transaction.length,
+            },
+            null,
+            2
+          )
+        );
+        this.logger.error('Full Error Response:', JSON.stringify(error.response.data, null, 2));
+        this.logger.error('Response Status:', error.response.status);
+        this.logger.error('Response Headers:', JSON.stringify(error.response.headers, null, 2));
+        this.logger.error('========================');
+      }
+
+      if (error.response?.status === 422 && error.response?.data?.message) {
+        const errorMessage = error.response.data.message;
+
+        // Check for FeeTooSmallUTxO error
+        if (errorMessage.includes('FeeTooSmallUTxO')) {
+          throw FeeTooSmallException.fromErrorMessage(errorMessage);
+        }
+
+        // Check for BadInputsUTxO error (UTXO already spent)
+        if (errorMessage.includes('BadInputsUTxO')) {
+          const utxoMatch = errorMessage.match(
+            /TxIn \(TxId \{unTxId = SafeHash "([a-f0-9]+)"\}\) \(TxIx \{unTxIx = (\d+)\}\)/
+          );
+          if (utxoMatch) {
+            const [, txHash, outputIndex] = utxoMatch;
+            throw new UtxoSpentException(txHash, parseInt(outputIndex));
+          }
+          throw new UtxoSpentException('unknown', 0, 'One or more transaction inputs have already been spent');
+        }
+
+        // Check for ValueNotConservedUTxO error
+        if (errorMessage.includes('ValueNotConservedUTxO')) {
+          const suppliedMatch = errorMessage.match(/mismatchSupplied = MaryValue \(Coin (\d+)\)/);
+          const expectedMatch = errorMessage.match(/mismatchExpected = MaryValue \(Coin (\d+)\)/);
+
+          const supplied = suppliedMatch ? `${parseInt(suppliedMatch[1]) / 1_000_000} ADA` : 'unknown';
+          const expected = expectedMatch ? `${parseInt(expectedMatch[1]) / 1_000_000} ADA` : 'unknown';
+
+          throw new ValueNotConservedException(supplied, expected);
+        }
+
+        // Existing validity interval check
+        if (errorMessage.includes('OutsideValidityIntervalUTxO')) {
+          const parsedError = this.parseValidityIntervalError(errorMessage);
+          throw new ValidityIntervalException(
+            parsedError.invalidBefore,
+            parsedError.invalidHereafter,
+            parsedError.currentSlot
+          );
+        }
+      }
+
+      // Log the full error for debugging
+      this.logger.error('Full submission error:', error);
+      this.logger.error('Error submitting transaction', error.message);
+      throw new Error(`Failed to submit transaction: ${error.message}`);
+    }
+  }
+
+  /**
+   * Submits a signed transaction to the blockchain
+   * @param signedTx Signed transaction data
+   * @returns Transaction hash
+   */
+  async submitWayUpTransaction(signedTx: {
+    transaction: string;
+    signatures?: string[];
+  }): Promise<TransactionSubmitResponse> {
+    try {
       const response = await firstValueFrom(
         this.httpService.post<{ txHash: string }>(
-          `${this.anvilApi}/transactions/submit`,
+          `https://prod.api.ada-anvil.app/marketplace/api/submit`,
           {
             transaction: signedTx.transaction,
             signatures: signedTx.signatures || [],

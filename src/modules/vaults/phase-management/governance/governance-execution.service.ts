@@ -125,7 +125,7 @@ export class GovernanceExecutionService {
     try {
       const proposal = await this.proposalRepository.findOne({
         where: { id: payload.proposalId },
-        select: ['id', 'status'],
+        select: ['id', 'status', 'metadata'],
       });
 
       if (!proposal) {
@@ -133,12 +133,17 @@ export class GovernanceExecutionService {
         return;
       }
 
+      // Clear executionError from metadata on successful execution
+      const updatedMetadata = { ...proposal.metadata };
+      delete updatedMetadata.executionError;
+
       // Mark proposal as EXECUTED now that all termination steps are complete
       await this.proposalRepository.update(
         { id: payload.proposalId },
         {
           status: ProposalStatus.EXECUTED,
           executionDate: new Date(),
+          metadata: updatedMetadata,
         }
       );
 
@@ -446,9 +451,17 @@ export class GovernanceExecutionService {
       const executed = await this.executeProposalActions(proposal);
 
       if (executed) {
+        // Clear executionError from metadata on successful execution
+        const updatedMetadata = { ...proposal.metadata };
+        delete updatedMetadata.executionError;
+
         await this.proposalRepository.update(
           { id: proposalId },
-          { status: ProposalStatus.EXECUTED, executionDate: new Date() }
+          {
+            status: ProposalStatus.EXECUTED,
+            executionDate: new Date(),
+            metadata: updatedMetadata,
+          }
         );
 
         this.eventEmitter.emit('proposal.executed', {
@@ -590,12 +603,14 @@ export class GovernanceExecutionService {
     // Collect all unique asset IDs to fetch from database
     const assetIds = [...new Set(proposal.metadata.marketplaceActions.map(opt => opt.assetId))];
 
-    // Fetch all assets from database in one query
-    const assets: Pick<Asset, 'id' | 'policy_id' | 'asset_id' | 'name' | 'metadata' | 'listing_tx_hash'>[] =
-      await this.assetRepository.find({
-        where: assetIds.map(id => ({ id })),
-        select: ['id', 'policy_id', 'asset_id', 'name', 'metadata', 'listing_tx_hash'],
-      });
+    // Fetch all assets from database in one query (including floor_price for Market sellType)
+    const assets: Pick<
+      Asset,
+      'id' | 'policy_id' | 'asset_id' | 'name' | 'metadata' | 'listing_tx_hash' | 'floor_price'
+    >[] = await this.assetRepository.find({
+      where: assetIds.map(id => ({ id })),
+      select: ['id', 'policy_id', 'asset_id', 'name', 'metadata', 'listing_tx_hash', 'floor_price'],
+    });
 
     // Create a map for quick asset lookup
     const assetMap = new Map(assets.map(asset => [asset.id, asset]));
@@ -665,7 +680,22 @@ export class GovernanceExecutionService {
 
         const policyId = asset.policy_id;
         const assetName = asset.asset_id;
-        const priceAda = parseFloat(option.price);
+
+        // Determine price based on sellType
+        let priceAda: number;
+        if (option.sellType === 'Market' && !option.price) {
+          // Use floor price for Market sellType when no custom price provided
+          priceAda = asset.floor_price || 5; // Fallback to 5 ADA minimum if no floor price
+          this.logger.log(`Using floor price ${priceAda} ADA for Market listing of ${asset.name || option.assetId}`);
+        } else {
+          // Use provided price for List sellType or Market with custom price
+          priceAda = parseFloat(option.price);
+          if (isNaN(priceAda) || priceAda <= 0) {
+            this.logger.warn(`Invalid price for ${asset.name || option.assetId}, skipping`);
+            skipped.sells.push(asset.name || option.assetId);
+            continue;
+          }
+        }
 
         listings.push({ policyId, assetName, priceAda });
         listingAssetInfos.push({ assetId: option.assetId, price: priceAda });

@@ -873,11 +873,28 @@ export class WayUpService {
       // Always sign with both wallets for any marketplace operation involving vault listings
       const signedTx = await this.signTransactionWithBothWallets(vaultId, buildResponse.transactions[0]);
 
-      // Submit the transaction
+      // Submit the transaction - try standard endpoint first, fallback to WayUp-specific endpoint
       this.logger.log('Submitting combined marketplace transaction to blockchain');
-      const submitResponse = await this.blockchainService.submitTransaction({
-        transaction: signedTx,
-      });
+      let submitResponse;
+
+      try {
+        // First attempt: use standard submission endpoint
+        submitResponse = await this.blockchainService.submitTransaction({
+          transaction: signedTx,
+        });
+      } catch (error) {
+        // If standard endpoint fails with 422, retry with WayUp-specific endpoint
+        if (error.message?.includes('422') || error.message?.includes('Request failed with status code 422')) {
+          this.logger.warn('Standard submission failed with 422, retrying with WayUp-specific endpoint');
+          submitResponse = await this.blockchainService.submitWayUpTransaction({
+            transaction: signedTx,
+          });
+          this.logger.log('Transaction submitted successfully via WayUp-specific endpoint');
+        } else {
+          // If it's not a 422 error, rethrow
+          throw error;
+        }
+      }
 
       const summary = {
         listedCount: actions.listings?.length ?? 0,
@@ -983,8 +1000,7 @@ export class WayUpService {
       txToSign.sign_and_add_vkey_signature(stakePrivateKey);
 
       // Sign with admin key
-      const adminPrivateKey = PrivateKey.from_bech32(this.adminSKey);
-      txToSign.sign_and_add_vkey_signature(adminPrivateKey);
+      txToSign.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
       // Return the signed transaction as hex
       return Buffer.from(txToSign.to_bytes()).toString('hex');
