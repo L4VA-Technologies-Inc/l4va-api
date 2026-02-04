@@ -1096,15 +1096,28 @@ export class GovernanceExecutionService {
       }
 
       // Execute swaps sequentially for each token
-      const swapResults: Array<{ assetId: string; txHash: string; estimatedOutput: number }> = [
-        ...proposal.metadata.swapResults,
-      ];
+      const swapResults: Array<{
+        actionIndex?: number;
+        assetId?: string;
+        tokenName?: string;
+        tokenUnit?: string;
+        totalSwapped?: number;
+        txHash: string;
+        estimatedOutput: number;
+        actualSlippage?: number;
+        affectedAssets?: Array<{
+          id: string;
+          name: string;
+          swappedQuantity: number;
+          remainingQuantity: number;
+        }>;
+      }> = [...proposal.metadata.swapResults];
 
       for (const action of actions) {
-        // Check if this asset was already swapped (idempotency)
-        const alreadySwapped = swapResults.some(r => r.assetId === action.assetId);
+        // Check if this swap was already completed (idempotency)
+        const alreadySwapped = swapResults.some(r => r.actionIndex === actions.indexOf(action));
         if (alreadySwapped) {
-          this.logger.log(`Asset ${action.assetId} already swapped, skipping`);
+          this.logger.log(`Swap action ${actions.indexOf(action)} already completed, skipping`);
           continue;
         }
 
@@ -1115,37 +1128,80 @@ export class GovernanceExecutionService {
         }
 
         const tokenIn = asset.policy_id + asset.asset_id;
-        const amountIn = action.quantity || asset.quantity.toString();
+        const requestedAmount = parseFloat(action.quantity || asset.quantity.toString());
         const slippage = action.slippage || 0.5;
 
-        this.logger.log(`Swapping ${amountIn} of ${asset.name} (${tokenIn}) with ${slippage}% slippage`);
+        // Find all assets of this token to handle multi-asset swaps
+        const sameTokenAssets = assets
+          .filter(a => a.policy_id === asset.policy_id && a.asset_id === asset.asset_id)
+          .sort((a, b) => a.quantity - b.quantity); // Start with smaller quantities (FIFO-ish)
+
+        let remainingToSwap = requestedAmount;
+        const affectedAssets: Array<{
+          id: string;
+          name: string;
+          swappedQuantity: number;
+          remainingQuantity: number;
+        }> = [];
+
+        // Calculate how much to take from each asset
+        for (const assetInstance of sameTokenAssets) {
+          if (remainingToSwap <= 0) break;
+
+          const takeFromThis = Math.min(remainingToSwap, assetInstance.quantity);
+          const newQuantity = assetInstance.quantity - takeFromThis;
+
+          affectedAssets.push({
+            id: assetInstance.id,
+            name: assetInstance.name || 'Unknown Token',
+            swappedQuantity: takeFromThis,
+            remainingQuantity: newQuantity,
+          });
+
+          remainingToSwap -= takeFromThis;
+        }
+
+        this.logger.log(
+          `Swapping ${requestedAmount} of ${asset.name} (${tokenIn}) across ${affectedAssets.length} asset(s) with ${slippage}% slippage`
+        );
 
         const swapResult = await this.dexHunterService.executeSwap(proposal.vaultId, {
           tokenIn,
-          amountIn: parseFloat(amountIn),
+          amountIn: requestedAmount,
           slippage,
         });
 
         this.logger.log(`Swap completed: ${swapResult.txHash}, output: ${swapResult.estimatedOutput} ADA`);
 
+        // Update each affected asset in the database
+        for (const affected of affectedAssets) {
+          await this.assetRepository.update(
+            { id: affected.id },
+            {
+              quantity: affected.remainingQuantity,
+              status: affected.remainingQuantity === 0 ? AssetStatus.EXTRACTED : AssetStatus.LOCKED,
+            }
+          );
+          this.logger.log(
+            `Updated asset ${affected.id}: swapped ${affected.swappedQuantity}, remaining ${affected.remainingQuantity}`
+          );
+        }
+
+        // Store detailed swap result (keeping backward compatibility with assetId field)
         swapResults.push({
-          assetId: action.assetId,
+          assetId: action.assetId, // Keep for backward compatibility
+          actionIndex: actions.indexOf(action),
+          tokenName: asset.name || 'Unknown Token',
+          tokenUnit: tokenIn,
+          totalSwapped: requestedAmount,
           txHash: swapResult.txHash,
           estimatedOutput: swapResult.estimatedOutput,
-        });
-
-        // Update asset quantity in database
-        const swappedAmount = parseFloat(amountIn);
-        await this.assetRepository.update(
-          { id: action.assetId },
-          {
-            quantity: asset.quantity - swappedAmount,
-            status: asset.quantity - swappedAmount === 0 ? AssetStatus.EXTRACTED : asset.status,
-          }
-        );
+          actualSlippage: swapResult.actualSlippage,
+          affectedAssets: affectedAssets,
+        } as any);
 
         // Save progress after each swap for idempotency
-        proposal.metadata.swapResults = swapResults;
+        proposal.metadata.swapResults = swapResults as any;
         await this.proposalRepository.save(proposal);
       }
 
