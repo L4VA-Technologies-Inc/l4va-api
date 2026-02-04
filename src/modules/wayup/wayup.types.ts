@@ -51,7 +51,6 @@ export interface ListingPayload {
   changeAddress: string;
   utxos: string[];
   collaterals?: string[];
-  message?: string;
   create: Array<{
     assets: {
       policyId: string;

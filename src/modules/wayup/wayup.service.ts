@@ -129,7 +129,6 @@ export class WayUpService {
     const listingPayload: ListingPayload = {
       changeAddress: this.adminAddress,
       utxos: combinedUtxos,
-      message: `Listing ${listings.length} NFT${listings.length > 1 ? 's' : ''} for sale on WayUp Marketplace`,
       create: listings.map(listing => ({
         assets: {
           policyId: listing.policyId,
@@ -244,7 +243,6 @@ export class WayUpService {
       const unlistPayload: UnlistPayload = {
         changeAddress: this.adminAddress,
         utxos: adminUtxos,
-        message: `Removing ${unlistings.length} NFT listing${unlistings.length > 1 ? 's' : ''} from WayUp Marketplace`,
         unlist: unlistings,
       };
 
@@ -344,7 +342,6 @@ export class WayUpService {
       const updatePayload: UpdateListingPayload = {
         changeAddress: this.adminAddress,
         utxos: adminUtxos,
-        message: `Updating ${updates.length} NFT listing price${updates.length > 1 ? 's' : ''} on WayUp Marketplace`,
         update: updates,
       };
 
@@ -468,7 +465,6 @@ export class WayUpService {
       const offerPayload: MakeOfferPayload = {
         changeAddress: this.adminAddress,
         utxos: combinedUtxos,
-        message: `Making ${offers.length} offer${offers.length > 1 ? 's' : ''} on WayUp Marketplace`,
         createOffer: offers,
       };
 
@@ -591,7 +587,6 @@ export class WayUpService {
       const buyPayload: BuyNFTPayload = {
         changeAddress: this.adminAddress,
         utxos: combinedUtxos,
-        message: `Purchasing ${purchases.length} NFT${purchases.length > 1 ? 's' : ''} from WayUp Marketplace`,
         buy: purchases,
       };
 
@@ -788,7 +783,6 @@ export class WayUpService {
       const combinedPayload: WayUpTransactionInput = {
         changeAddress: this.adminAddress,
         utxos: combinedUtxos,
-        message: `Combined WayUp actions: ${actionParts.join(', ')}`,
       };
 
       // Add listings if provided
