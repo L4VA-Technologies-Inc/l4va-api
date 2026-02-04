@@ -13,6 +13,7 @@ import { Claim } from '@/database/claim.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { PriceService } from '@/modules/price/price.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { VaultStatus } from '@/types/vault.types';
 
@@ -31,7 +32,8 @@ export class AssetsService {
     private readonly vaultsRepository: Repository<Vault>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-    private readonly eventEmitter: EventEmitter2
+    private readonly eventEmitter: EventEmitter2,
+    private readonly priceService: PriceService
   ) {}
 
   async addAssetToVault(userId: string, data: CreateAssetDto): Promise<Record<string, unknown>> {
@@ -132,14 +134,27 @@ export class AssetsService {
       .orderBy('asset.added_at', 'DESC')
       .getManyAndCount();
 
+    const adaPrice = await this.priceService.getAdaPrice();
+
+    const assetsWithUsd = assets as Array<Asset & { floorPriceUsd?: number }>;
+
+    assetsWithUsd.forEach(asset => {
+      if (asset.type === AssetType.NFT && asset.floor_price) {
+        asset.floorPriceUsd = asset.floor_price * adaPrice;
+      } else if (asset.type === AssetType.FT && asset.dex_price) {
+        asset.floorPriceUsd = asset.dex_price * adaPrice;
+      }
+    });
+
     return {
-      items: assets.map(asset => instanceToPlain(asset)),
+      items: assetsWithUsd.map(asset => instanceToPlain(asset)),
       total,
       page,
       limit,
       totalPages: Math.ceil(total / limit),
     };
   }
+
   async getAcquiredAssets(vaultId: string, page: number = 1, limit: number = 10): Promise<GetAcquiredAssetsRes> {
     // Verify vault ownership
     const vault = await this.vaultsRepository.exists({
