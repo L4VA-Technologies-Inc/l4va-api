@@ -125,7 +125,7 @@ export class GovernanceExecutionService {
     try {
       const proposal = await this.proposalRepository.findOne({
         where: { id: payload.proposalId },
-        select: ['id', 'status'],
+        select: ['id', 'status', 'metadata'],
       });
 
       if (!proposal) {
@@ -133,12 +133,17 @@ export class GovernanceExecutionService {
         return;
       }
 
+      // Clear executionError from metadata on successful execution
+      const updatedMetadata = { ...proposal.metadata };
+      delete updatedMetadata.executionError;
+
       // Mark proposal as EXECUTED now that all termination steps are complete
       await this.proposalRepository.update(
         { id: payload.proposalId },
         {
           status: ProposalStatus.EXECUTED,
           executionDate: new Date(),
+          metadata: updatedMetadata,
         }
       );
 
@@ -446,9 +451,17 @@ export class GovernanceExecutionService {
       const executed = await this.executeProposalActions(proposal);
 
       if (executed) {
+        // Clear executionError from metadata on successful execution
+        const updatedMetadata = { ...proposal.metadata };
+        delete updatedMetadata.executionError;
+
         await this.proposalRepository.update(
           { id: proposalId },
-          { status: ProposalStatus.EXECUTED, executionDate: new Date() }
+          {
+            status: ProposalStatus.EXECUTED,
+            executionDate: new Date(),
+            metadata: updatedMetadata,
+          }
         );
 
         this.eventEmitter.emit('proposal.executed', {

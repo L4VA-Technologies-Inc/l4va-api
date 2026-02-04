@@ -159,17 +159,15 @@ export class BlockchainService {
     signatures?: string[];
   }): Promise<TransactionSubmitResponse> {
     try {
+      const requestPayload = {
+        transaction: signedTx.transaction,
+        signatures: signedTx.signatures || [],
+      };
+
       const response = await firstValueFrom(
-        this.httpService.post<{ txHash: string }>(
-          `${this.anvilApi}/transactions/submit`,
-          {
-            transaction: signedTx.transaction,
-            signatures: signedTx.signatures || [],
-          },
-          {
-            headers: this.anvilHeaders,
-          }
-        )
+        this.httpService.post<{ txHash: string }>(`${this.anvilApi}/transactions/submit`, requestPayload, {
+          headers: this.anvilHeaders,
+        })
       );
 
       if (!response.data.txHash) {
@@ -179,6 +177,27 @@ export class BlockchainService {
       this.logger.log(`Transaction submitted successfully: ${response.data.txHash}`);
       return { txHash: response.data.txHash };
     } catch (error) {
+      if (error.response?.status === 422) {
+        // Log full request and response for debugging 422 errors
+        this.logger.error('=== 422 ERROR DETAILS ===');
+        this.logger.error(
+          'Request Payload:',
+          JSON.stringify(
+            {
+              transaction: signedTx.transaction.substring(0, 200) + '...',
+              signatures: signedTx.signatures || [],
+              transactionLength: signedTx.transaction.length,
+            },
+            null,
+            2
+          )
+        );
+        this.logger.error('Full Error Response:', JSON.stringify(error.response.data, null, 2));
+        this.logger.error('Response Status:', error.response.status);
+        this.logger.error('Response Headers:', JSON.stringify(error.response.headers, null, 2));
+        this.logger.error('========================');
+      }
+
       if (error.response?.status === 422 && error.response?.data?.message) {
         const errorMessage = error.response.data.message;
 

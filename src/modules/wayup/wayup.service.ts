@@ -983,8 +983,7 @@ export class WayUpService {
       txToSign.sign_and_add_vkey_signature(stakePrivateKey);
 
       // Sign with admin key
-      const adminPrivateKey = PrivateKey.from_bech32(this.adminSKey);
-      txToSign.sign_and_add_vkey_signature(adminPrivateKey);
+      txToSign.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
       // Return the signed transaction as hex
       return Buffer.from(txToSign.to_bytes()).toString('hex');
