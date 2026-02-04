@@ -277,6 +277,26 @@ export class BlockchainService {
       this.logger.log(`Transaction submitted successfully: ${response.data.txHash}`);
       return { txHash: response.data.txHash };
     } catch (error) {
+      // Log detailed error information for any error status
+      if (error.response) {
+        this.logger.error(`=== WayUp Submission Error (${error.response.status}) ===`);
+        this.logger.error(
+          'Request Payload:',
+          JSON.stringify(
+            {
+              transaction: signedTx.transaction.substring(0, 200) + '...',
+              signatures: signedTx.signatures || [],
+              transactionLength: signedTx.transaction.length,
+            },
+            null,
+            2
+          )
+        );
+        this.logger.error('Full Error Response:', JSON.stringify(error.response.data, null, 2));
+        this.logger.error('Response Status:', error.response.status);
+        this.logger.error('========================');
+      }
+
       if (error.response?.status === 422 && error.response?.data?.message) {
         const errorMessage = error.response.data.message;
 
