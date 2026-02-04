@@ -99,14 +99,61 @@ export class TransactionsService {
         });
       });
     } else if (transaction.type === TransactionType.contribute) {
-      pendingAssets.forEach(assetItem => {
-        // Decode hex asset name to readable string
+      // Fetch on-chain metadata for all NFT/FT assets in parallel
+      const metadataPromises = pendingAssets.map(async assetItem => {
+        if (assetItem.type === AssetType.ADA) {
+          return { assetItem, blockfrostMetadata: null };
+        }
+
+        // If frontend already provided good metadata with name, use it
+        if (assetItem.metadata?.onchainMetadata?.name || assetItem.metadata?.name) {
+          return { assetItem, blockfrostMetadata: null };
+        }
+
+        // Otherwise fetch from Blockfrost
+        try {
+          const unit = assetItem.policyId + assetItem.assetName;
+          const assetInfo = await this.blockfrost.assetsById(unit);
+          return { assetItem, blockfrostMetadata: assetInfo };
+        } catch (error) {
+          this.logger.warn(
+            `Failed to fetch metadata for ${assetItem.policyId}${assetItem.assetName}: ${error.message}`
+          );
+          return { assetItem, blockfrostMetadata: null };
+        }
+      });
+
+      const metadataResults = await Promise.all(metadataPromises);
+
+      metadataResults.forEach(({ assetItem, blockfrostMetadata }) => {
+        // Decode hex asset name to readable string as fallback
         let decodedName: string | null = null;
         try {
           decodedName = assetItem.assetName ? Buffer.from(assetItem.assetName, 'hex').toString('utf8') : null;
         } catch (error) {
           decodedName = assetItem.assetName || null;
         }
+
+        // Priority: frontend metadata > blockfrost metadata > decoded hex
+        const finalName =
+          assetItem.metadata?.onchainMetadata?.name ||
+          assetItem.metadata?.name ||
+          (blockfrostMetadata?.onchain_metadata as any)?.name ||
+          (blockfrostMetadata as any)?.asset_name ||
+          decodedName ||
+          null;
+
+        const finalImage =
+          assetItem.metadata?.image ||
+          assetItem.metadata?.files?.[0]?.src ||
+          (blockfrostMetadata?.onchain_metadata as any)?.image ||
+          null;
+
+        const finalDescription =
+          assetItem.metadata?.onchainMetadata?.description ||
+          assetItem.metadata?.description ||
+          (blockfrostMetadata?.onchain_metadata as any)?.description ||
+          null;
 
         assetsToCreate.push({
           transaction,
@@ -118,10 +165,10 @@ export class TransactionsService {
           status: AssetStatus.PENDING,
           origin_type: AssetOriginType.CONTRIBUTED,
           added_by: user,
-          image: assetItem.metadata?.image ?? assetItem.metadata?.files?.[0]?.src ?? null,
-          decimals: assetItem.metadata?.decimals ?? null,
-          name: assetItem.metadata?.onchainMetadata?.name || decodedName || null,
-          description: assetItem.metadata?.onchainMetadata?.description ?? null,
+          image: finalImage,
+          decimals: assetItem.metadata?.decimals ?? (blockfrostMetadata?.metadata as any)?.decimals ?? null,
+          name: finalName,
+          description: finalDescription,
         });
       });
     }

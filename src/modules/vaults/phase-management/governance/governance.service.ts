@@ -607,7 +607,9 @@ export class GovernanceService {
           startDate: proposal.startDate.toISOString(),
           endDate: proposal.endDate.toISOString(),
           abstain: proposal.abstain,
-          executionError: proposal.metadata?.executionError?.message,
+          executionError: proposal.metadata?.executionError?.userFriendlyMessage
+            ? proposal.metadata.executionError.userFriendlyMessage
+            : proposal.metadata.executionError.message,
         };
 
         if (proposal.status === ProposalStatus.UPCOMING) {
@@ -892,6 +894,7 @@ export class GovernanceService {
           message: proposal.metadata.executionError.message,
           timestamp: proposal.metadata.executionError.timestamp,
           errorCode: proposal.metadata.executionError.errorCode,
+          userFriendlyMessage: proposal.metadata.executionError.userFriendlyMessage,
         }
       : undefined;
 
