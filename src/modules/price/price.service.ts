@@ -56,8 +56,6 @@ export class PriceService {
       this.cache.set(cacheKey, adaPrice, 900);
       this.cache.set('last_known_good_ada_price', adaPrice, 86400);
 
-      this.logger.log(`ADA price updated: $${adaPrice.toFixed(4)}`);
-
       return adaPrice;
     } catch (error) {
       this.logger.error(`Failed to fetch ADA price from DexHunter: ${error.message}`);

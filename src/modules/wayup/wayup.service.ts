@@ -252,8 +252,9 @@ export class WayUpService {
       // Build the transaction
       const buildResponse = await this.blockchainService.buildWayUpTransaction(unlistPayload);
 
-      // Sign the transaction with admin wallet (treasury signature not needed for unlisting)
-      const signedTx = await this.signTransactionWithAdmin(buildResponse.transactions[0]);
+      // Sign the transaction with both treasury and admin wallet
+      // Treasury signature needed because the listing was created by treasury wallet
+      const signedTx = await this.signTransactionWithBothWallets(vaultId, buildResponse.transactions[0]);
 
       // Submit the transaction
       this.logger.log('Submitting unlist transaction to blockchain');
@@ -351,8 +352,9 @@ export class WayUpService {
       // Build the transaction
       const buildResponse = await this.blockchainService.buildWayUpTransaction(updatePayload);
 
-      // Sign the transaction with admin wallet
-      const signedTx = await this.signTransactionWithAdmin(buildResponse.transactions[0]);
+      // Sign the transaction with both treasury and admin wallet
+      // Treasury signature needed because the listing was created by treasury wallet
+      const signedTx = await this.signTransactionWithBothWallets(vaultId, buildResponse.transactions[0]);
 
       // Submit the transaction
       this.logger.log('Submitting update listing transaction to blockchain');
@@ -868,10 +870,8 @@ export class WayUpService {
       const buildResponse = await this.blockchainService.buildWayUpTransaction(combinedPayload);
 
       // Sign the transaction with appropriate keys
-      // If we used treasury UTXOs, sign with both wallets; otherwise just admin
-      const signedTx = needsTreasuryUtxos
-        ? await this.signTransactionWithBothWallets(vaultId, buildResponse.transactions[0])
-        : await this.signTransactionWithAdmin(buildResponse.transactions[0]);
+      // Always sign with both wallets for any marketplace operation involving vault listings
+      const signedTx = await this.signTransactionWithBothWallets(vaultId, buildResponse.transactions[0]);
 
       // Submit the transaction
       this.logger.log('Submitting combined marketplace transaction to blockchain');
