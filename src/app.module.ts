@@ -22,6 +22,7 @@ import { SystemSettingsModule } from './modules/globals/system-settings';
 import { GoogleCloudModule } from './modules/google_cloud/google-cloud.module';
 import { GoogleCloudStorageModule } from './modules/google_cloud/google_bucket/bucket.module';
 import { MarketModule } from './modules/market/market.module';
+import { PriceModule } from './modules/price/price.module';
 import { TaptoolsModule } from './modules/taptools/taptools.module';
 import { UsersModule } from './modules/users/users.module';
 import { ClaimsModule } from './modules/vaults/claims/claims.module';
@@ -77,6 +78,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     }),
     JwtGlobalModule,
     SystemSettingsModule,
+    PriceModule,
     AuthModule,
     AlertsModule,
     AssetsModule,

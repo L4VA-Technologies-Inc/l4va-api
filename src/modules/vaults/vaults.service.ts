@@ -13,6 +13,7 @@ import * as csv from 'csv-parse';
 import { Brackets, In, Not, Repository } from 'typeorm';
 
 import { GoogleCloudStorageService } from '../google_cloud/google_bucket/bucket.service';
+import { PriceService } from '../price/price.service';
 import { TaptoolsService } from '../taptools/taptools.service';
 
 import { CreateVaultReq } from './dto/createVault.req';
@@ -114,6 +115,7 @@ export class VaultsService {
     private readonly vaultContractService: VaultManagingService,
     private readonly blockchainService: BlockchainService,
     private readonly governanceService: GovernanceService,
+    private readonly priceService: PriceService,
     private readonly taptoolsService: TaptoolsService,
     private readonly transactionsService: TransactionsService,
     private readonly configService: ConfigService,
@@ -638,7 +640,7 @@ export class VaultsService {
       const vaultsByStage = await this.getVaultsByStageData();
       const vaultsByType = await this.getVaultsByTypeData();
 
-      const adaPrice = await this.taptoolsService.getAdaPrice();
+      const adaPrice = await this.priceService.getAdaPrice();
 
       const statistics = {
         activeVaults: activeVaultsCount,
@@ -769,8 +771,7 @@ export class VaultsService {
 
     const lockedAssetsCount = lockedNFTCount + lockedFTsCount;
     const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(vaultId);
-
-    const adaPrice = await this.taptoolsService.getAdaPrice();
+    const adaPrice = assetsPrices.adaPrice;
     const lpMinLiquidityLovelace = this.systemSettingsService.lpRecommendedMinLiquidity;
     const lpMinLiquidityAda = lpMinLiquidityLovelace / 1_000_000;
     const lpMinLiquidityUsd = lpMinLiquidityAda * adaPrice;
