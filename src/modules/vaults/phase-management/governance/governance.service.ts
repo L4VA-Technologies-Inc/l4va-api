@@ -640,7 +640,7 @@ export class GovernanceService {
           abstain: proposal.abstain,
           executionError: proposal.metadata?.executionError?.userFriendlyMessage
             ? proposal.metadata.executionError.userFriendlyMessage
-            : proposal.metadata.executionError.message,
+            : proposal.metadata?.executionError?.message,
         };
 
         if (proposal.status === ProposalStatus.UPCOMING) {
