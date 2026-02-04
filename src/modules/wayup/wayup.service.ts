@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { Address, FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
+import { Address, FixedTransaction } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -88,8 +88,7 @@ export class WayUpService {
     }
 
     const treasuryAddress = vault.treasury_wallet.treasury_address;
-    this.logger.log(`Using treasury wallet address: ${treasuryAddress}`);
-    this.logger.log(`Using admin wallet for fees: ${this.adminAddress}`);
+    this.logger.log(`Using treasury wallet for listing: ${treasuryAddress}`);
 
     // Collect target NFTs to list
     const targetAssets = listings.map(listing => ({
@@ -97,13 +96,14 @@ export class WayUpService {
       amount: 1,
     }));
 
-    // Get UTXOs containing the NFTs from treasury wallet
+    // Get UTXOs from treasury wallet - treasury provides both NFTs and ADA for fees
+    // This ensures the marketplace script uses treasury's staking credential, not admin's
     const { utxos: treasuryUtxos, requiredInputs } = await getUtxosExtract(
       Address.from_bech32(treasuryAddress),
       this.blockfrost,
       {
         targetAssets,
-        minAda: 0, // No ADA needed from treasury, just the NFTs
+        minAda: 5_000_000, // Treasury pays for fees (ensure 5 ADA available)
         maxUtxos: 20,
       }
     );
@@ -112,23 +112,14 @@ export class WayUpService {
       throw new Error('No UTXOs found containing the NFTs to list');
     }
 
-    // Get admin UTXOs for transaction fees
-    const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
-      minAda: 5_000_000, // 5 ADA for fees and minimum outputs
-      maxUtxos: 5,
-    });
-
-    if (adminUtxos.length === 0) {
-      throw new Error('Insufficient funds in admin wallet for transaction fees');
+    if (treasuryUtxos.length === 0) {
+      throw new Error('Insufficient funds in treasury wallet for listing transaction');
     }
 
-    // Combine UTXOs from both wallets
-    const combinedUtxos = [...treasuryUtxos, ...adminUtxos];
-
-    // Create listing payload with admin as change address
+    // Create listing payload with treasury as change address
     const listingPayload: ListingPayload = {
-      changeAddress: this.adminAddress,
-      utxos: combinedUtxos,
+      changeAddress: treasuryAddress,
+      utxos: treasuryUtxos,
       create: listings.map(listing => ({
         assets: {
           policyId: listing.policyId,
@@ -875,26 +866,10 @@ export class WayUpService {
 
       // Submit the transaction - try standard endpoint first, fallback to WayUp-specific endpoint
       this.logger.log('Submitting combined marketplace transaction to blockchain');
-      let submitResponse;
 
-      try {
-        // First attempt: use standard submission endpoint
-        submitResponse = await this.blockchainService.submitTransaction({
-          transaction: signedTx,
-        });
-      } catch (error) {
-        // If standard endpoint fails with 422, retry with WayUp-specific endpoint
-        if (error.message?.includes('422') || error.message?.includes('Request failed with status code 422')) {
-          this.logger.warn('Standard submission failed with 422, retrying with WayUp-specific endpoint');
-          submitResponse = await this.blockchainService.submitWayUpTransaction({
-            transaction: signedTx,
-          });
-          this.logger.log('Transaction submitted successfully via WayUp-specific endpoint');
-        } else {
-          // If it's not a 422 error, rethrow
-          throw error;
-        }
-      }
+      const submitResponse = await this.blockchainService.submitTransaction({
+        transaction: signedTx,
+      });
 
       const summary = {
         listedCount: actions.listings?.length ?? 0,
@@ -962,25 +937,6 @@ export class WayUpService {
   }
 
   /**
-   * Sign a transaction using only the admin wallet private key
-   *
-   * @param txHex - Transaction hex to sign
-   * @returns Signed transaction hex
-   */
-  private async signTransactionWithAdmin(txHex: string): Promise<string> {
-    try {
-      const txToSign = FixedTransaction.from_bytes(Buffer.from(txHex, 'hex'));
-      const adminPrivateKey = PrivateKey.from_bech32(this.adminSKey);
-      txToSign.sign_and_add_vkey_signature(adminPrivateKey);
-
-      return Buffer.from(txToSign.to_bytes()).toString('hex');
-    } catch (error) {
-      this.logger.error('Failed to sign transaction with admin wallet', error);
-      throw new Error(`Failed to sign transaction: ${error.message}`);
-    }
-  }
-
-  /**
    * Sign a transaction using both the vault's treasury wallet and admin wallet private keys
    *
    * @param vaultId - The vault ID
@@ -989,43 +945,15 @@ export class WayUpService {
    */
   private async signTransactionWithBothWallets(vaultId: string, txHex: string): Promise<string> {
     try {
-      // Get the decrypted private key from treasury wallet
       const { privateKey, stakePrivateKey } = await this.treasuryWalletService.getTreasuryWalletPrivateKey(vaultId);
 
-      // Deserialize and sign the transaction using FixedTransaction
       const txToSign = FixedTransaction.from_bytes(Buffer.from(txHex, 'hex'));
 
-      // Sign with treasury keys
+      // Sign with all three keys (treasury payment, treasury staking, admin payment)
       txToSign.sign_and_add_vkey_signature(privateKey);
       txToSign.sign_and_add_vkey_signature(stakePrivateKey);
 
-      // Sign with admin key
-      txToSign.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
-
-      // Return the signed transaction as hex
-      return Buffer.from(txToSign.to_bytes()).toString('hex');
-    } catch (error) {
-      this.logger.error(`Failed to sign transaction for vault ${vaultId}`, error);
-      throw new Error(`Failed to sign transaction: ${error.message}`);
-    }
-  }
-
-  /**
-   * Sign a transaction using the vault's treasury wallet private key (legacy method)
-   *
-   * @param vaultId - The vault ID
-   * @param txHex - Transaction hex to sign
-   * @returns Signed transaction hex
-   */
-  private async signTransaction(vaultId: string, txHex: string): Promise<string> {
-    try {
-      // Get the decrypted private key from treasury wallet
-      const { privateKey, stakePrivateKey } = await this.treasuryWalletService.getTreasuryWalletPrivateKey(vaultId);
-
-      // Deserialize and sign the transaction using FixedTransaction
-      const txToSign = FixedTransaction.from_bytes(Buffer.from(txHex, 'hex'));
-      txToSign.sign_and_add_vkey_signature(privateKey);
-      txToSign.sign_and_add_vkey_signature(stakePrivateKey);
+      this.logger.log(`Transaction signed with treasury payment, staking, and admin keys for vault ${vaultId}`);
 
       // Return the signed transaction as hex
       return Buffer.from(txToSign.to_bytes()).toString('hex');
