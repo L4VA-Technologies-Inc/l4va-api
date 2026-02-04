@@ -5,7 +5,7 @@ import { Brackets, Repository } from 'typeorm';
 
 import { transformImageToUrl } from '../../helpers';
 import { GoogleCloudStorageService } from '../google_cloud/google_bucket/bucket.service';
-import { TaptoolsService } from '../taptools/taptools.service';
+import { PriceService } from '../price/price.service';
 
 import { PublicProfileRes } from './dto/public-profile.res';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -32,7 +32,7 @@ export class UsersService {
     @InjectRepository(LinkEntity)
     private linksRepository: Repository<LinkEntity>,
     private readonly gcsService: GoogleCloudStorageService,
-    private readonly taptoolsService: TaptoolsService
+    private readonly priceService: PriceService
   ) {}
 
   async findByAddress(address: string): Promise<User | undefined> {
@@ -157,7 +157,7 @@ export class UsersService {
     user.total_vaults = vaultsCount || 0;
     const plainedUsers = instanceToPlain(user);
 
-    plainedUsers.totalValueUsd = parseFloat((user.tvl * (await this.taptoolsService.getAdaPrice())).toFixed(2));
+    plainedUsers.totalValueUsd = parseFloat((user.tvl * (await this.priceService.getAdaPrice())).toFixed(2));
     plainedUsers.totalValueAda = user.tvl;
 
     // Calculate gains as percentage: (gains / initial_investment) * 100

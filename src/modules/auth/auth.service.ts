@@ -8,7 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, Repository } from 'typeorm';
 import { generateUsername } from 'unique-username-generator';
 
-import { TaptoolsService } from '../taptools/taptools.service';
+import { PriceService } from '../price/price.service';
 import { UsersService } from '../users/users.service';
 
 import { LoginReq } from './dto/login.req';
@@ -23,7 +23,7 @@ export class AuthService {
   constructor(
     private usersService: UsersService,
     private jwtService: JwtService,
-    private readonly taptoolsService: TaptoolsService,
+    private readonly priceService: PriceService,
     @InjectRepository(Vault)
     private vaultRepository: Repository<Vault>
   ) {}
@@ -142,7 +142,7 @@ export class AuthService {
           name: user.name,
           address: user.address,
           description: user.description,
-          totalValueUsd: parseFloat((user.tvl * (await this.taptoolsService.getAdaPrice())).toFixed(2)),
+          totalValueUsd: parseFloat((user.tvl * (await this.priceService.getAdaPrice())).toFixed(2)),
           totalValueAda: user.tvl,
           totalVaults: user.total_vaults,
           gains: user.gains,
