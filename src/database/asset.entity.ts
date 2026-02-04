@@ -34,7 +34,16 @@ export class Asset {
   })
   type: AssetType;
 
-  @Column({ type: 'decimal', precision: 20, scale: 2, default: 0 })
+  @Column({
+    type: 'decimal',
+    precision: 20,
+    scale: 2,
+    default: 0,
+    transformer: {
+      to: (value: number) => value,
+      from: (value: string) => parseFloat(value),
+    },
+  })
   quantity: number;
 
   @Expose({ name: 'floorPrice' }) // ADA floor price from marketplaces
