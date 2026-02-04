@@ -461,6 +461,56 @@ export class GovernanceService {
             }
             // WayUp marketplace validation (NFTs)
             else if (market === 'WayUp') {
+              // Validate price is provided for SELL (LIST) actions
+              if (action.exec === ExecType.SELL) {
+                // For List sellType, price is REQUIRED
+                // For Market sellType, price is optional (will use floor price if not provided)
+                if (action.sellType === 'List') {
+                  const price = parseFloat(action.price || '0');
+                  if (!action.price || isNaN(price) || price <= 0) {
+                    throw new BadRequestException(
+                      `Price is required for List sellType on asset ${action.assetId}. Please provide a valid price in ADA.`
+                    );
+                  }
+                  if (price < 5) {
+                    throw new BadRequestException(
+                      `Minimum listing price is 5 ADA. Asset ${action.assetId} has price ${price} ADA.`
+                    );
+                  }
+                } else if (action.sellType === 'Market') {
+                  // Market sellType allows no price (uses floor price) or custom price
+                  if (action.price) {
+                    const price = parseFloat(action.price);
+                    if (isNaN(price) || price <= 0) {
+                      throw new BadRequestException(
+                        `Invalid price for Market sellType on asset ${action.assetId}. Price must be a positive number.`
+                      );
+                    }
+                    if (price < 5) {
+                      throw new BadRequestException(
+                        `Minimum listing price is 5 ADA. Asset ${action.assetId} has price ${price} ADA.`
+                      );
+                    }
+                  }
+                  // If no price provided for Market, it will use floor price at execution
+                }
+              }
+
+              // Validate new price is provided for UPDATE_LISTING actions
+              if (action.exec === ExecType.UPDATE_LISTING) {
+                const newPrice = parseFloat(action.newPrice || '0');
+                if (!action.newPrice || isNaN(newPrice) || newPrice <= 0) {
+                  throw new BadRequestException(
+                    `New price is required for updating listing of asset ${action.assetId}. Please provide a valid new price in ADA.`
+                  );
+                }
+                if (newPrice < 5) {
+                  throw new BadRequestException(
+                    `Minimum listing price is 5 ADA. Asset ${action.assetId} has new price ${newPrice} ADA.`
+                  );
+                }
+              }
+
               // For UNLIST and UPDATE_LISTING, verify asset is currently listed
               if (action.exec === ExecType.UNLIST || action.exec === ExecType.UPDATE_LISTING) {
                 if (asset.status !== 'listed') {
