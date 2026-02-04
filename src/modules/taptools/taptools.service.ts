@@ -2,13 +2,12 @@ import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { HttpException, Inject, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import axios, { AxiosInstance } from 'axios';
+import axios from 'axios';
 import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { In, Repository } from 'typeorm';
 
 import { DexHunterPricingService } from '../dexhunter/dexhunter-pricing.service';
-import { MarketService } from '../market/market.service';
 import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
 import { WayUpPricingService } from '../wayup/wayup-pricing.service';
 
@@ -21,6 +20,7 @@ import { Asset } from '@/database/asset.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { PriceService } from '@/modules/price/price.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
@@ -47,7 +47,6 @@ export class TaptoolsService {
     '53173a3d7ae0a0015163cc55f9f1c300c7eab74da26ed9af8c052646': 100000.0,
     '91918871f0baf335d32be00af3f0604a324b2e0728d8623c0d6e2601': 250000.0,
   };
-  private readonly axiosTapToolsInstance: AxiosInstance;
   private readonly tapToolsApiKey: string;
   private readonly tapToolsApiUrl: string;
 
@@ -61,98 +60,18 @@ export class TaptoolsService {
     @InjectRepository(Snapshot)
     private readonly snapshotRepository: Repository<Snapshot>,
     private readonly assetsService: AssetsService,
+    private readonly priceService: PriceService,
     private readonly configService: ConfigService,
     private readonly dexHunterPricingService: DexHunterPricingService,
     private readonly wayUpPricingService: WayUpPricingService,
-    private readonly marketService: MarketService,
     @Optional() @Inject('TreasuryWalletService') private readonly treasuryWalletService?: TreasuryWalletService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.tapToolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
     this.tapToolsApiUrl = this.configService.get<string>('TAPTOOLS_API_URL');
-    this.axiosTapToolsInstance = axios.create({
-      baseURL: this.tapToolsApiUrl,
-      headers: {
-        'x-api-key': this.tapToolsApiKey,
-      },
-    });
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
-  }
-
-  async getAdaPrice(): Promise<number> {
-    const cacheKey = 'ada_price_usd';
-    const cachedPrice = this.cache.get<number>(cacheKey);
-
-    if (cachedPrice !== undefined) {
-      return cachedPrice;
-    }
-
-    const fallbackPrice = 0.64;
-
-    try {
-      const now = Date.now();
-      const lastCallKey = 'last_price_api_call';
-      const lastCall = this.cache.get<number>(lastCallKey) || 0;
-
-      if (now - lastCall < 10000) {
-        const lastKnownGoodPrice = this.cache.get<number>('last_known_good_ada_price');
-        return lastKnownGoodPrice || fallbackPrice;
-      }
-
-      this.cache.set(lastCallKey, now);
-
-      const response = await axios.get('https://api.coingecko.com/api/v3/simple/price', {
-        params: {
-          ids: 'cardano',
-          vs_currencies: 'usd',
-        },
-        timeout: 3000, // Short timeout to fail fast
-      });
-
-      if (!response.data?.cardano?.usd) {
-        throw new Error('Invalid price data from API');
-      }
-
-      const adaPrice = Number(response.data.cardano.usd);
-
-      // Cache price for longer (15 minutes)
-      this.cache.set(cacheKey, adaPrice, 900);
-      this.cache.set('last_known_good_ada_price', adaPrice, 86400);
-
-      return adaPrice;
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    } catch (error) {
-      try {
-        const altResponse = await axios.get('https://min-api.cryptocompare.com/data/price', {
-          params: {
-            fsym: 'ADA',
-            tsyms: 'USD',
-          },
-          timeout: 3000,
-        });
-
-        if (altResponse.data && altResponse.data.USD) {
-          const altPrice = Number(altResponse.data.USD);
-          this.cache.set(cacheKey, altPrice, 900);
-          this.cache.set('last_known_good_ada_price', altPrice, 86400);
-          return altPrice;
-        }
-      } catch (altErr) {
-        this.logger.warn(`Alternate price API also failed: ${altErr.message}`);
-      }
-
-      // If we have a last known good price, use that
-      const lastKnownGoodPrice = this.cache.get<number>('last_known_good_ada_price');
-      if (lastKnownGoodPrice !== undefined) {
-        return lastKnownGoodPrice;
-      }
-
-      // Use fallback price instead of throwing error
-      this.logger.warn(`Using fallback ADA price: ${fallbackPrice}`);
-      return fallbackPrice;
-    }
   }
 
   private calculateBalances(data: BlockfrostAddressTotalDto): Map<string, number> {
@@ -239,7 +158,7 @@ export class TaptoolsService {
     isNFT: boolean
   ): Promise<{ priceAda: number; priceUsd: number }> {
     try {
-      const adaPrice = await this.getAdaPrice();
+      const adaPrice = await this.priceService.getAdaPrice();
 
       if (!this.isMainnet && this.testnetPrices[policyId]) {
         const hardcodedPriceAda = this.testnetPrices[policyId];
@@ -447,7 +366,7 @@ export class TaptoolsService {
       await this.updateAssetPrices([vaultId]);
     }
 
-    const adaPrice = await this.getAdaPrice();
+    const adaPrice = await this.priceService.getAdaPrice();
 
     // Group assets by policyId and assetId to handle quantities
     const assetMap = new Map<
@@ -652,7 +571,7 @@ export class TaptoolsService {
     if (vaultIds.length === 0) return;
 
     const batchResults = await this.batchCalculateVaultAssetsValue(vaultIds);
-    const adaPrice = await this.getAdaPrice();
+    const adaPrice = await this.priceService.getAdaPrice();
 
     const vaults: Pick<
       Vault,
@@ -944,7 +863,7 @@ export class TaptoolsService {
         relations: ['assets'],
       });
 
-      const adaPrice = await this.getAdaPrice();
+      const adaPrice = await this.priceService.getAdaPrice();
 
       // Process each vault
       for (const vault of vaults) {
@@ -1090,7 +1009,7 @@ export class TaptoolsService {
     const { address: walletAddress, page, limit, filter, whitelistedPolicies, search } = paginationQuery;
 
     try {
-      const adaPriceUsd = await this.getAdaPrice();
+      const adaPriceUsd = await this.priceService.getAdaPrice();
 
       // Get overview (cached)
       const overview = await this.getWalletOverview(walletAddress, adaPriceUsd);
