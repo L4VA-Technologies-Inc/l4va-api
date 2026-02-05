@@ -169,11 +169,6 @@ export class VaultValuationService {
         fdv = tvl;
         vtPrice = fdv / vtSupply;
 
-        this.logger.log(
-          `Vault ${vault.name}: No acquirers (0%) - FDV = TVL = ${fdv.toFixed(2)} ADA, ` +
-            `VT price = ${vtPrice.toFixed(25)} ADA`
-        );
-
         updates.push({
           id: vault.id,
           fdv,

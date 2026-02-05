@@ -429,6 +429,16 @@ export class GovernanceService {
                 );
               }
 
+              // Enforce full-amount swaps only
+              // Swaps must use the entire available quantity for the token to prevent partial swap edge cases
+              if (swapQuantity !== totalAvailable) {
+                throw new BadRequestException(
+                  `Only full-amount swaps are supported. ` +
+                    `Token "${asset.name || tokenKey}" has ${totalAvailable} available, but ${swapQuantity} was requested. ` +
+                    `Please swap the entire token balance to proceed.`
+                );
+              }
+
               // Validate slippage
               const slippage = action.slippage || 0.5;
               if (slippage < 0.5 || slippage > 5) {
