@@ -485,7 +485,7 @@ export class NotificationEventsListener {
         await this.notificationService.sendBulkNotification(
           {
             title: `Asset sold in ${event.vaultName}`,
-            description: `The asset "${event.assetName}" has been sold for ${formattedPrice} in vault ${event.vaultName}.`,
+            description: `The asset "${event.assetName}" has been listed for ${formattedPrice} in vault ${event.vaultName}.`,
             vaultId: event.vaultId,
             vaultName: event.vaultName,
           },
