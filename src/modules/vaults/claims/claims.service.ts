@@ -230,8 +230,24 @@ export class ClaimsService {
             this.logger.log(`Verified existing termination claim for user ${userId} in vault ${vault.id}`);
           }
         } catch (error) {
-          // If user doesn't hold VT or other error, just skip silently
-          if (!error.message?.includes('No VT balance found')) {
+          // If user doesn't hold VT, clean up any old termination claims for this vault
+          if (error.message?.includes('No VT balance found')) {
+            const oldClaims = await this.claimRepository.find({
+              where: {
+                user_id: userId,
+                vault: { id: vault.id },
+                type: ClaimType.TERMINATION,
+                status: ClaimStatus.AVAILABLE,
+              },
+            });
+
+            if (oldClaims.length > 0) {
+              await this.claimRepository.remove(oldClaims);
+              this.logger.log(
+                `Removed ${oldClaims.length} old termination claim(s) for user ${userId} in vault ${vault.id} (no longer holds VT)`
+              );
+            }
+          } else {
             this.logger.debug(`Could not auto-create claim for vault ${vault.id}: ${error.message}`);
           }
         }
