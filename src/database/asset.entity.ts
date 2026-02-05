@@ -7,6 +7,15 @@ import { Transaction } from './transaction.entity';
 import { User } from './user.entity';
 import { Vault } from './vault.entity';
 
+export class ColumnNumericTransformer {
+  to(data: number): number {
+    return data;
+  }
+  from(data: string): number {
+    return parseFloat(data);
+  }
+}
+
 @Entity('assets')
 export class Asset {
   @PrimaryGeneratedColumn('uuid')
@@ -39,10 +48,7 @@ export class Asset {
     precision: 20,
     scale: 2,
     default: 0,
-    transformer: {
-      to: (value: number) => value,
-      from: (value: string) => parseFloat(value),
-    },
+    transformer: new ColumnNumericTransformer(),
   })
   quantity: number;
 
@@ -51,8 +57,9 @@ export class Asset {
     name: 'floor_price',
     type: 'decimal',
     precision: 20,
-    scale: 2,
+    scale: 10,
     nullable: true,
+    transformer: new ColumnNumericTransformer(),
   })
   floor_price?: number;
 
@@ -61,8 +68,9 @@ export class Asset {
     name: 'dex_price',
     type: 'decimal',
     precision: 20,
-    scale: 2,
+    scale: 15,
     nullable: true,
+    transformer: new ColumnNumericTransformer(),
   })
   dex_price?: number;
 

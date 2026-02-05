@@ -38,6 +38,70 @@ export class ContributionAsset {
   quantity: number;
 
   @ApiPropertyOptional({
+    description: 'Display name of the asset (used for UI and stored as asset name)',
+    example: 'Pxlz8876',
+  })
+  @Expose()
+  @IsOptional()
+  displayName?: string;
+
+  @ApiPropertyOptional({
+    description: 'Asset image URL or IPFS path',
+    example: 'ipfs://QmXBGeSKUfMs6ZuTDqYG9Luc72ehP3Jv9v4763x2Gox84B',
+  })
+  @Expose()
+  @IsOptional()
+  image?: string;
+
+  @ApiPropertyOptional({
+    description: 'Price of the asset in ADA',
+    example: 250,
+  })
+  @Expose()
+  @IsOptional()
+  priceAda?: number;
+
+  @ApiPropertyOptional({
+    description: 'Price of the asset in USD',
+    example: 65.45,
+  })
+  @Expose()
+  @IsOptional()
+  priceUsd?: number;
+
+  @ApiPropertyOptional({
+    description: 'Total value in ADA (price × quantity)',
+    example: 250,
+  })
+  @Expose()
+  @IsOptional()
+  valueAda?: number;
+
+  @ApiPropertyOptional({
+    description: 'Total value in USD (price × quantity)',
+    example: 65.45,
+  })
+  @Expose()
+  @IsOptional()
+  valueUsd?: number;
+
+  @ApiPropertyOptional({
+    description: 'Asset description',
+    example: 'Pxlz NFT (example for testnet only - assets have no value)',
+  })
+  @Expose()
+  @IsOptional()
+  description?: string;
+
+  @ApiPropertyOptional({
+    description: 'Number of decimals for fungible tokens',
+    example: 0,
+  })
+  @Expose()
+  @IsOptional()
+  decimals?: number;
+
+  @ApiPropertyOptional({
     description: 'Asset metadata including on-chain details',
     type: 'object',
     additionalProperties: true,

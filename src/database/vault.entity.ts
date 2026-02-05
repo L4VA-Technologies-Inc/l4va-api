@@ -421,6 +421,8 @@ export class Vault {
   @Column({
     name: 'fdv_tvl',
     type: 'numeric',
+    precision: 12,
+    scale: 6,
     nullable: true,
     default: 0,
   })

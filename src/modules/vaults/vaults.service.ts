@@ -87,6 +87,19 @@ export class VaultsService {
    * which smart contract version was used when publishing vaults.
    */
   private readonly scVersion: string;
+  private readonly isMainnet: boolean;
+
+  /** List of vault IDs to be hidden on mainnet from Search and statistics, but should be available on getVaultById */
+  private readonly hiddenMainnetVaultIds: string[] = [
+    '1a6e7495-178b-464e-b37e-00997ef1e9c2',
+    '2761c805-77c5-443e-b352-f0afaf4860c0',
+    // 'deafbe8a-8939-4505-9e67-7dc3b3345243',
+    'cfd6b3d1-1ea2-4721-9c89-0a52484053ae',
+    'e9cf3cf9-4d7f-4188-954b-eef289f8e9b1',
+    'ad46dc9f-9b49-48aa-8c37-5180d035e08a',
+    'f008952b-c158-43a2-ae57-6e763ebb321e',
+    '16c6e87f-d29d-4de9-8b19-1484d3cd7183',
+  ];
 
   constructor(
     @InjectRepository(Vault)
@@ -123,6 +136,7 @@ export class VaultsService {
     private readonly distributionCalculationService: DistributionCalculationService
   ) {
     this.scVersion = this.configService.get<string>('SC_VERSION') || '1.0.0'; // Current SC version
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
   }
 
   /**
@@ -190,6 +204,23 @@ export class VaultsService {
     txId: string;
   }> {
     try {
+      if (this.isMainnet) {
+        // Check if user exists and get their wallet address
+        const user = await this.usersRepository.findOne({
+          where: { id: userId },
+          select: ['id', 'address'],
+        });
+
+        if (!user) {
+          throw new UnauthorizedException('User not found');
+        }
+
+        // Check if user's address is whitelisted for vault creation
+        if (!this.systemSettingsService.isAddressWhitelistedForVaultCreation(user.address)) {
+          throw new UnauthorizedException('Your wallet address is not authorized to create vaults');
+        }
+      }
+
       const owner = await this.usersRepository.findOne({
         where: { id: userId },
       });
@@ -592,29 +623,40 @@ export class VaultsService {
    */
   async getVaultStatistics(): Promise<VaultStatisticsResponse> {
     try {
-      // Count active vaults (published, contribution, acquire, locked)
+      // Count active vaults (published, contribution, acquire, locked), excluding hidden vaults on mainnet
+      const activeVaultsWhere: any = {
+        vault_status: In([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked]),
+        deleted: false,
+      };
+      if (this.isMainnet) {
+        activeVaultsWhere.id = Not(In(this.hiddenMainnetVaultIds));
+      }
       const activeVaultsCount = await this.vaultsRepository.count({
-        where: {
-          vault_status: In([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked]),
-          deleted: false,
-        },
+        where: activeVaultsWhere,
       });
 
+      const totalVaultsWhere: any = {
+        vault_status: In([VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked]),
+      };
+      if (this.isMainnet) {
+        totalVaultsWhere.id = Not(In(this.hiddenMainnetVaultIds));
+      }
       const totalVaultsCount = await this.vaultsRepository.count({
-        where: {
-          vault_status: In([VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked]),
-        },
+        where: totalVaultsWhere,
       });
-      // Get sum of total assets value for locked vaults only
+      // Get sum of total assets value for locked vaults only, excluding hidden vaults on mainnet
       const totalValueQuery = await this.vaultsRepository
         .createQueryBuilder('vault')
         .select('SUM(vault.total_assets_cost_usd)', 'totalValueUsd')
         .addSelect('SUM(vault.total_assets_cost_ada)', 'totalValueAda')
         .where('vault.vault_status = :status', { status: VaultStatus.locked })
-        .andWhere('vault.deleted = :deleted', { deleted: false })
-        .getRawOne();
+        .andWhere('vault.deleted = :deleted', { deleted: false });
+      if (this.isMainnet) {
+        totalValueQuery.andWhere('vault.id NOT IN (:...hiddenIds)', { hiddenIds: this.hiddenMainnetVaultIds });
+      }
+      const totalValueResult = await totalValueQuery.getRawOne();
 
-      // Count total assets contributed across all vaults
+      // Count total assets contributed across all vaults, excluding hidden vaults on mainnet
       const totalContributedQuery = await this.vaultsRepository
         .createQueryBuilder('vault')
         .select('SUM(vault.total_assets_cost_usd)', 'totalValueUsd')
@@ -622,8 +664,11 @@ export class VaultsService {
         .where('vault.vault_status IN (:...statuses)', {
           statuses: [VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked, VaultStatus.failed],
         })
-        .andWhere('vault.deleted = :deleted', { deleted: false })
-        .getRawOne();
+        .andWhere('vault.deleted = :deleted', { deleted: false });
+      if (this.isMainnet) {
+        totalContributedQuery.andWhere('vault.id NOT IN (:...hiddenIds)', { hiddenIds: this.hiddenMainnetVaultIds });
+      }
+      const totalContributedResult = await totalContributedQuery.getRawOne();
 
       // Count total assets ever contributed (all time, including removed)
       const totalAssetsQuery = await this.assetsRepository
@@ -631,11 +676,14 @@ export class VaultsService {
         .select('COUNT(asset.id)', 'count')
         .getRawOne();
 
-      // Get total acquired value (both ADA and USD) across all vaults
+      // Get total acquired value (both ADA and USD) across all vaults, excluding hidden vaults on mainnet
       const totalAcquiredQuery = await this.vaultsRepository
         .createQueryBuilder('vault')
-        .select('SUM(vault.total_acquired_value_ada)', 'totalAcquiredAda')
-        .getRawOne();
+        .select('SUM(vault.total_acquired_value_ada)', 'totalAcquiredAda');
+      if (this.isMainnet) {
+        totalAcquiredQuery.andWhere('vault.id NOT IN (:...hiddenIds)', { hiddenIds: this.hiddenMainnetVaultIds });
+      }
+      const totalAcquiredResult = await totalAcquiredQuery.getRawOne();
 
       const vaultsByStage = await this.getVaultsByStageData();
       const vaultsByType = await this.getVaultsByTypeData();
@@ -645,13 +693,13 @@ export class VaultsService {
       const statistics = {
         activeVaults: activeVaultsCount,
         totalVaults: totalVaultsCount,
-        totalValueUsd: Number(totalValueQuery?.totalValueUsd || 0),
-        totalValueAda: Number(totalValueQuery?.totalValueAda || 0),
-        totalContributedUsd: Number(totalContributedQuery?.totalValueUsd || 0),
-        totalContributedAda: Number(totalContributedQuery?.totalValueAda || 0),
+        totalValueUsd: Number(totalValueResult?.totalValueUsd || 0),
+        totalValueAda: Number(totalValueResult?.totalValueAda || 0),
+        totalContributedUsd: Number(totalContributedResult?.totalValueUsd || 0),
+        totalContributedAda: Number(totalContributedResult?.totalValueAda || 0),
         totalAssets: Number(totalAssetsQuery?.count || 0),
-        totalAcquiredAda: Number(totalAcquiredQuery?.totalAcquiredAda || 0),
-        totalAcquiredUsd: parseFloat((Number(totalAcquiredQuery?.totalAcquiredAda || 0) * adaPrice).toFixed(2)),
+        totalAcquiredAda: Number(totalAcquiredResult?.totalAcquiredAda || 0),
+        totalAcquiredUsd: parseFloat((Number(totalAcquiredResult?.totalAcquiredAda || 0) * adaPrice).toFixed(2)),
         vaultsByStage,
         vaultsByType,
       };
@@ -939,7 +987,7 @@ export class VaultsService {
       sortOrder = SortOrder.DESC,
     } = data;
 
-    // Create base query for all vaults
+    // Create base query for all vaults, excluding hidden vaults on mainnet
     const queryBuilder = this.vaultsRepository
       .createQueryBuilder('vault')
       .leftJoinAndSelect('vault.social_links', 'social_links')
@@ -948,6 +996,10 @@ export class VaultsService {
       .leftJoinAndSelect('vault.tags', 'tags')
       .andWhere('vault.deleted != :deleted', { deleted: true })
       .andWhere('vault.vault_status != :createdStatus', { createdStatus: VaultStatus.created });
+
+    if (this.isMainnet) {
+      queryBuilder.andWhere('vault.id NOT IN (:...hiddenIds)', { hiddenIds: this.hiddenMainnetVaultIds });
+    }
 
     // If userId is provided, retrieve user information and apply personalized filters
     let userWalletAddress: string | null = null;
@@ -1408,8 +1460,8 @@ export class VaultsService {
     Record<string, { percentage: number; valueAda: string; valueUsd: string }>
   > {
     try {
-      // Get TVL by vault status for both currencies
-      const statusResults = await this.vaultsRepository
+      // Get TVL by vault status for both currencies, excluding hidden vaults on mainnet
+      const statusQuery = this.vaultsRepository
         .createQueryBuilder('vault')
         .select('vault.vault_status', 'status')
         .addSelect('SUM(vault.total_assets_cost_ada)', 'valueAda')
@@ -1418,9 +1470,11 @@ export class VaultsService {
         .where('vault.deleted = :deleted', { deleted: false })
         .andWhere('vault.vault_status IN (:...statuses)', {
           statuses: ['contribution', 'acquire', 'locked', 'burned'],
-        })
-        .groupBy('vault.vault_status')
-        .getRawMany();
+        });
+      if (this.isMainnet) {
+        statusQuery.andWhere('vault.id NOT IN (:...hiddenIds)', { hiddenIds: this.hiddenMainnetVaultIds });
+      }
+      const statusResults = await statusQuery.groupBy('vault.vault_status').getRawMany();
 
       // Calculate total ADA value for percentages
       const totalValueAda = statusResults.reduce((sum, item) => sum + Number(item.valueAda || 0), 0);
@@ -1473,15 +1527,17 @@ export class VaultsService {
     Record<string, { percentage: number; valueAda: number; valueUsd: number }>
   > {
     try {
-      const privacyResults = await this.vaultsRepository
+      const privacyQuery = this.vaultsRepository
         .createQueryBuilder('vault')
         .select('vault.privacy', 'type')
         .addSelect('SUM(vault.total_assets_cost_ada)', 'valueAda')
         .addSelect('SUM(vault.total_assets_cost_usd)', 'valueUsd')
         .addSelect('COUNT(vault.id)', 'count')
-        .where('vault.deleted = :deleted', { deleted: false })
-        .groupBy('vault.privacy')
-        .getRawMany();
+        .where('vault.deleted = :deleted', { deleted: false });
+      if (this.isMainnet) {
+        privacyQuery.andWhere('vault.id NOT IN (:...hiddenIds)', { hiddenIds: this.hiddenMainnetVaultIds });
+      }
+      const privacyResults = await privacyQuery.groupBy('vault.privacy').getRawMany();
 
       const totalValueAda = privacyResults.reduce((sum, item) => sum + Number(item.valueAda || 0), 0);
 

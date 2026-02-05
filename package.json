@@ -33,6 +33,8 @@
     "@google-cloud/kms": "^5.2.1",
     "@google-cloud/secret-manager": "^6.1.1",
     "@google-cloud/storage": "^7.17.3",
+    "@lucid-evolution/lucid": "^0.4.29",
+    "@lucid-evolution/provider": "^0.1.90",
     "@nestjs/axios": "^4.0.0",
     "@nestjs/bullmq": "^11.0.2",
     "@nestjs/common": "^10.0.0",

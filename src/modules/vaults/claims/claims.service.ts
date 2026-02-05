@@ -230,9 +230,26 @@ export class ClaimsService {
             this.logger.log(`Verified existing termination claim for user ${userId} in vault ${vault.id}`);
           }
         } catch (error) {
-          // If user doesn't hold VT or other error, just skip silently
-          if (!error.message?.includes('No VT balance found')) {
-            this.logger.debug(`Could not auto-create claim for vault ${vault.id}: ${error.message}`);
+          const noVtBalanceError =
+            error.message?.includes('No VT balance found') ||
+            error.message?.includes('no VT balance') ||
+            error.message?.includes('must hold vault tokens');
+
+          if (noVtBalanceError) {
+            const oldClaims = await this.claimRepository
+              .createQueryBuilder('claim')
+              .where('claim.user_id = :userId', { userId })
+              .andWhere('claim.vault_id = :vaultId', { vaultId: vault.id })
+              .andWhere('claim.type = :type', { type: ClaimType.TERMINATION })
+              .andWhere('claim.status = :status', { status: ClaimStatus.AVAILABLE })
+              .getMany();
+
+            if (oldClaims.length > 0) {
+              await this.claimRepository.remove(oldClaims);
+              this.logger.log(
+                `Removed ${oldClaims.length} old termination claim(s) for user ${userId} in vault ${vault.id} (no longer holds VT)`
+              );
+            }
           }
         }
       }
@@ -371,8 +388,6 @@ export class ClaimsService {
     if (claimIds.length === 0) {
       throw new BadRequestException('Must provide at least 1 claim ID for batch processing');
     }
-
-    this.logger.debug(`Building batch cancellation transaction for  ${claimIds.length} claims: ${claimIds.join(', ')}`);
 
     // Fetch all claims with relations
     const claims = await this.claimRepository.find({
@@ -530,7 +545,6 @@ export class ClaimsService {
     try {
       const buildResponse = await this.blockchainService.buildTransaction(input);
       const actualTxSize = getTransactionSize(buildResponse.complete);
-      this.logger.debug(`Transaction size: ${actualTxSize} bytes (${(actualTxSize / 1024).toFixed(2)} KB)`);
 
       if (actualTxSize > this.MAX_TX_SIZE) {
         throw new Error(

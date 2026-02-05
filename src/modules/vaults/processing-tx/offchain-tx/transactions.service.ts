@@ -134,8 +134,9 @@ export class TransactionsService {
           decodedName = assetItem.assetName || null;
         }
 
-        // Priority: frontend metadata > blockfrost metadata > decoded hex
+        // Priority: frontend displayName > frontend metadata > blockfrost metadata > decoded hex
         const finalName =
+          assetItem.displayName ||
           assetItem.metadata?.onchainMetadata?.name ||
           assetItem.metadata?.name ||
           (blockfrostMetadata?.onchain_metadata as any)?.name ||
@@ -144,16 +145,22 @@ export class TransactionsService {
           null;
 
         const finalImage =
+          assetItem.image ||
           assetItem.metadata?.image ||
           assetItem.metadata?.files?.[0]?.src ||
           (blockfrostMetadata?.onchain_metadata as any)?.image ||
           null;
 
         const finalDescription =
+          assetItem.description ||
           assetItem.metadata?.onchainMetadata?.description ||
           assetItem.metadata?.description ||
           (blockfrostMetadata?.onchain_metadata as any)?.description ||
           null;
+
+        // Use prices from frontend if provided, otherwise will be fetched later
+        const floorPrice = assetItem.type === AssetType.NFT ? assetItem.priceAda : null;
+        const dexPrice = assetItem.type === AssetType.FT ? assetItem.priceAda : null;
 
         assetsToCreate.push({
           transaction,
@@ -166,9 +173,16 @@ export class TransactionsService {
           origin_type: AssetOriginType.CONTRIBUTED,
           added_by: user,
           image: finalImage,
-          decimals: assetItem.metadata?.decimals ?? (blockfrostMetadata?.metadata as any)?.decimals ?? null,
+          decimals:
+            assetItem.decimals ??
+            assetItem.metadata?.decimals ??
+            (blockfrostMetadata?.metadata as any)?.decimals ??
+            null,
           name: finalName,
           description: finalDescription,
+          floor_price: floorPrice,
+          dex_price: dexPrice,
+          last_valuation: floorPrice || dexPrice ? new Date() : null,
         });
       });
     }

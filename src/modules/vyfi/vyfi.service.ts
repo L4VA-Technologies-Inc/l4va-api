@@ -2,6 +2,7 @@ import { Buffer } from 'buffer';
 
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Address, FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
+import { Blockfrost, Lucid } from '@lucid-evolution/lucid';
 import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -760,6 +761,7 @@ export class VyfiService {
 
   /**
    * Step 2: Create VyFi liquidity pool using admin UTXOs only
+   * Uses Lucid Evolution to build and submit the transaction
    * (No script interactions, so admin address will be first input)
    */
   async createLiquidityPoolSimple(vaultId: string): Promise<{
@@ -810,6 +812,20 @@ export class VyfiService {
       claim.vault.vault_token_ticker
     );
 
+    // Initialize Lucid with Blockfrost provider
+    const network = this.networkId === 1 ? 'Mainnet' : 'Preprod';
+
+    const lucid = await Lucid(
+      new Blockfrost(
+        `https://cardano-${network.toLowerCase()}.blockfrost.io/api/v0`,
+        this.configService.get<string>('BLOCKFROST_API_KEY')
+      ),
+      network
+    );
+
+    const adminUtxos = await lucid.utxosAt(this.adminAddress);
+    lucid.selectWallet.fromAddress(this.adminAddress, adminUtxos);
+
     // Retry loop for spent admin UTXOs
     const MAX_UTXO_RETRIES = 3;
     let utxoRetryCount = 0;
@@ -817,76 +833,53 @@ export class VyfiService {
 
     while (utxoRetryCount <= MAX_UTXO_RETRIES) {
       try {
-        // Get admin UTXOs (pass excludeUtxoRefs to filter known spent UTXOs)
-        const { utxos: adminUtxos, requiredInputs } = await getUtxosExtract(
-          Address.from_bech32(this.adminAddress),
-          this.blockfrost,
-          {
-            targetAssets: [
-              { token: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`, amount: +claim.amount },
-            ],
-            excludeUtxoRefs: excludedUtxos.size > 0 ? excludedUtxos : undefined,
-          }
-        );
+        // Get all admin UTXOs from Lucid
+        const addr = await lucid.wallet().address();
 
-        if (excludedUtxos.size > 0) {
-          this.logger.log(`Fetched admin UTXOs for LP creation with ${excludedUtxos.size} excluded refs`);
+        if (addr !== this.adminAddress) {
+          throw new Error('Admin address mismatch in Lucid wallet selection');
         }
 
-        if (adminUtxos.length === 0) {
-          throw new Error('No valid admin UTXOs available after filtering spent UTXOs');
-        }
+        const vaultTokenUnit = `${claim.vault.script_hash}${claim.vault.asset_vault_name}`;
+        const targetAmount = BigInt(claim.amount);
 
-        const input = {
-          changeAddress: this.adminAddress,
-          message: metadataText,
-          utxos: adminUtxos,
-          outputs: [
-            {
-              address: this.poolAddress,
-              assets: [
-                {
-                  assetName: { name: claim.vault.asset_vault_name, format: 'hex' },
-                  policyId: claim.vault.script_hash,
-                  quantity: +claim.amount,
-                },
-              ],
-              lovelace: requiredLpAda,
-            },
-          ],
-          metadata: {
-            [674]: metadataText,
-          },
-          requiredSigners: [this.adminHash],
-          requiredInputs,
-          validityInterval: {
-            start: true,
-            end: true,
-          },
-          network: this.isMainnet ? 'mainnet' : 'preprod',
-        };
+        // Build transaction using Lucid Evolution
+        // Lucid will automatically select appropriate UTXOs
+        const tx = await lucid
+          .newTx()
+          .pay.ToAddress(this.poolAddress, {
+            lovelace: BigInt(requiredLpAda),
+            [vaultTokenUnit]: targetAmount,
+          })
+          .attachMetadata(674, metadataText)
+          .complete({ changeAddress: this.adminAddress });
 
-        const buildResponse = await this.blockchainService.buildTransaction(input);
-        const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-        txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+        // Sign the transaction with admin key
+        const signedTx = await tx.sign.withPrivateKey(this.adminSKey).complete();
 
-        const submitResponse = await this.blockchainService.submitTransaction({
-          transaction: txToSubmitOnChain.to_hex(),
-          signatures: [],
-        });
+        // Submit the transaction
+        const txHash = await signedTx.submit();
+
+        this.logger.log(`LP creation transaction submitted successfully: ${txHash}`);
 
         // Mark claim as claimed
         await this.claimRepository.update({ id: claim.id }, { status: ClaimStatus.CLAIMED });
 
         return {
-          txHash: submitResponse.txHash,
+          txHash: txHash,
         };
       } catch (error) {
-        // Check if this is a MissingUtxoException and we can retry
-        if (error instanceof MissingUtxoException && error.fullTxHash && utxoRetryCount < MAX_UTXO_RETRIES) {
-          const spentUtxoRef = error.getUtxoReference();
+        // Check if this is a spent UTXO error and we can retry
+        const errorMessage = error.message || String(error);
+
+        // Lucid throws errors with UTXO references in various formats
+        // Try to extract txHash#index pattern
+        const utxoRefMatch = errorMessage.match(/([a-f0-9]{64})#(\d+)/);
+
+        if (utxoRefMatch && utxoRetryCount < MAX_UTXO_RETRIES) {
+          const spentUtxoRef = `${utxoRefMatch[1]}#${utxoRefMatch[2]}`;
           this.logger.warn(
-            `Detected spent admin UTXO in LP creation: ${spentUtxoRef}, ` +
+            `Detected spent UTXO in LP creation: ${spentUtxoRef}, ` +
               `removing from pool and retrying (attempt ${utxoRetryCount + 1}/${MAX_UTXO_RETRIES})`
           );
           excludedUtxos.add(spentUtxoRef);
@@ -898,6 +891,7 @@ export class VyfiService {
         }
 
         // Non-retryable error or max retries reached
+        this.logger.error(`Failed to create LP transaction: ${errorMessage}`);
         throw error;
       }
     }
@@ -935,9 +929,39 @@ export class VyfiService {
     };
   }
 
-  private formatMetadataText(tokenA: { policyId?: string; assetName: string }, ticker: string): string {
-    const tokenAUnit = tokenA.policyId ? `${tokenA.policyId}.${tokenA.assetName}` : 'lovelace';
-    return `L4VA: LP Factory Create Pool Order Request -- /${tokenAUnit} --- ADA/${ticker}`;
+  private formatMetadataText(tokenA: { policyId?: string; assetName: string }, ticker: string): any {
+    // VyFi requires specific format: 'L4VA: LP Factory Create Pool Order Request -- {assetId tokenA}/{assetId tokenB} --- {ticker tokenA}/{ticker tokenB}'
+    // Must split into chunks of max 64 characters due to Cardano metadata limits
+    const tokenAId = tokenA.policyId ? `${tokenA.policyId}.${tokenA.assetName}` : 'lovelace';
+    const fullMessage = `L4VA: LP Factory Create Pool Order Request -- /${tokenAId} --- ADA/${ticker}`;
+
+    // Split into chunks of max 64 characters
+    const chunks: string[] = [];
+    let remaining = fullMessage;
+
+    while (remaining.length > 0) {
+      if (remaining.length <= 64) {
+        chunks.push(remaining);
+        break;
+      }
+      // Find a good break point (prefer breaking at word boundaries)
+      let breakPoint = 64;
+      // Try to break at a space, dot, or slash near the 64 char limit
+      const searchSpace = remaining.substring(0, 65);
+      const lastSpace = searchSpace.lastIndexOf(' ');
+      const lastDot = searchSpace.lastIndexOf('.');
+      const lastSlash = searchSpace.lastIndexOf('/');
+
+      const breakOptions = [lastSpace, lastDot, lastSlash].filter(i => i > 50 && i <= 64);
+      if (breakOptions.length > 0) {
+        breakPoint = Math.max(...breakOptions) + 1;
+      }
+
+      chunks.push(remaining.substring(0, breakPoint).trimEnd());
+      remaining = remaining.substring(breakPoint).trimStart();
+    }
+
+    return { msg: chunks };
   }
 
   // Original TX with only creating LP
