@@ -34,6 +34,16 @@ export class TaptoolsService {
   private cache = new NodeCache({ stdTTL: 600 }); // cache for 10 minutes to reduce API calls for ADA price
   private readonly blockfrost: BlockFrostAPI;
   private assetDetailsCache = new NodeCache({ stdTTL: 3600, checkperiod: 300 });
+
+  // Relics of Magma trait-based pricing configuration
+  private readonly RELICS_OF_MAGMA_VITA_POLICY = '94ec588251e710b7660dfd7765f08c87742a3012cce802897a3ebd28';
+  private readonly RELICS_OF_MAGMA_PORTA_POLICY = '14296258677a869366d6bb01568f31f7b2e690208739b7bcdca444b2';
+  private readonly RELICS_CHARACTER_PRICES = {
+    Exploratur: 300, // 300 ADA
+    Phoenix: 200, // 200 ADA
+    Balaena: 140, // 140 ADA
+  };
+  private readonly RELICS_PORTA_PRICE = 70; // 70 ADA for all Porta NFTs
   private readonly testnetPrices = {
     f61a534fd4484b4b58d5ff18cb77cfc9e74ad084a18c0409321c811a: 0.00526,
     ed8145e0a4b8b54967e8f7700a5ee660196533ded8a55db620cc6a37: 0.00374,
@@ -146,6 +156,62 @@ export class TaptoolsService {
   }
 
   /**
+   * Extract character trait from NFT metadata for Relics of Magma collections
+   * @param metadata The NFT metadata object
+   * @returns Character trait value or null if not found
+   */
+  private extractCharacterTrait(metadata: any): string | null {
+    if (!metadata || typeof metadata !== 'object') return null;
+
+    // Check various possible metadata structures
+    const characterKeys = ['attributes / Character', 'Character', 'character', 'attributes.Character'];
+
+    for (const key of characterKeys) {
+      if (metadata[key]) {
+        return metadata[key];
+      }
+    }
+
+    // Check if attributes is an array
+    if (Array.isArray(metadata.attributes)) {
+      const characterAttr = metadata.attributes.find(
+        (attr: any) => attr.trait_type === 'Character' || attr.name === 'Character'
+      );
+      if (characterAttr) {
+        return characterAttr.value;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Get trait-based price for Relics of Magma NFTs
+   * @param policyId The policy ID of the NFT
+   * @param metadata The NFT metadata
+   * @returns Price in ADA or null if not a Relics of Magma NFT
+   */
+  private getRelicsOfMagmaPrice(policyId: string, metadata: any): number | null {
+    // Handle Relics of Magma - The Porta (fixed price for all)
+    if (policyId === this.RELICS_OF_MAGMA_PORTA_POLICY) {
+      return this.RELICS_PORTA_PRICE;
+    }
+
+    // Handle Relics of Magma - The Vita (trait-based pricing)
+    if (policyId === this.RELICS_OF_MAGMA_VITA_POLICY) {
+      const character = this.extractCharacterTrait(metadata);
+      if (character && this.RELICS_CHARACTER_PRICES[character]) {
+        return this.RELICS_CHARACTER_PRICES[character];
+      }
+      // If character trait not found or not recognized, log warning and use default
+      this.logger.warn(`Character trait not found or not recognized for Vita NFT. Character: ${character}`);
+      return this.RELICS_CHARACTER_PRICES.Balaena; // Default to Balaena price
+    }
+
+    return null;
+  }
+
+  /**
    * Get the value of an asset in ADA and USD
    * Uses DexHunter for fungible tokens and WayUp for NFT floor prices
    * @param policyId The policy ID of the asset
@@ -184,6 +250,31 @@ export class TaptoolsService {
 
       // Route to appropriate API based on asset type
       if (isNFT) {
+        // Check if this is a Relics of Magma NFT - use trait-based pricing
+        if (policyId === this.RELICS_OF_MAGMA_VITA_POLICY || policyId === this.RELICS_OF_MAGMA_PORTA_POLICY) {
+          try {
+            // Fetch asset details to get metadata
+            const assetId = `${policyId}${assetName}`;
+            const assetDetails = await this.fetchAssetDetailsFromApi(assetId);
+
+            if (assetDetails) {
+              const traitPrice = this.getRelicsOfMagmaPrice(policyId, assetDetails.details.onchain_metadata);
+              if (traitPrice !== null) {
+                this.logger.debug(`Using trait-based price for Relics of Magma NFT ${assetId}: ${traitPrice} ADA`);
+                const result = {
+                  priceAda: traitPrice,
+                  priceUsd: traitPrice * adaPrice,
+                };
+                this.cache.set(cacheKey, result);
+                return result;
+              }
+            }
+          } catch (error) {
+            this.logger.warn(`Failed to get trait-based price for Relics NFT ${policyId}: ${error.message}`);
+          }
+        }
+
+        // Default NFT pricing using WayUp floor price
         try {
           const { floorPriceAda } = await this.wayUpPricingService.getCollectionFloorPrice(policyId);
           if (floorPriceAda > 0) {
