@@ -16,6 +16,7 @@ export interface SystemSettingsData {
   auto_create_treasury_wallets: boolean;
   auto_create_treasury_wallets_testnet: boolean;
   vault_creator_whitelist: string[];
+  hidden_mainnet_vault_ids: string[];
 }
 
 const DEFAULT_SETTINGS: SystemSettingsData = {
@@ -29,6 +30,17 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   lp_recommended_min_liquidity: 500000000, // 500 ADA
   auto_create_treasury_wallets: false, // Disabled by default for mainnet
   auto_create_treasury_wallets_testnet: false, // Disabled by default for testnet
+  hidden_mainnet_vault_ids: [
+    '1a6e7495-178b-464e-b37e-00997ef1e9c2',
+    '2761c805-77c5-443e-b352-f0afaf4860c0',
+    'deafbe8a-8939-4505-9e67-7dc3b3345243',
+    'cfd6b3d1-1ea2-4721-9c89-0a52484053ae',
+    'e9cf3cf9-4d7f-4188-954b-eef289f8e9b1',
+    'ad46dc9f-9b49-48aa-8c37-5180d035e08a',
+    'f008952b-c158-43a2-ae57-6e763ebb321e',
+    '16c6e87f-d29d-4de9-8b19-1484d3cd7183',
+    '912eb055-da67-41a4-98b0-30b25871e4db',
+  ],
   vault_creator_whitelist: [
     'addr1q9j4eqs7v5pz08fddkfng2kvj762jhkhnpen4shr5jtht3evu56kfxkaqdjl4he2d6nguzl489fsvwsnx5554fe4lsjqe0ygg5',
     'addr1q90jnj7v8qmd3ypa668tufp7r663ppkctfd34dfwdfmam9eu2heaaj7eknfhahkydax07wqmvszndrcmh83adfph4umsskaxm5',
@@ -126,6 +138,10 @@ export class SystemSettingsService implements OnModuleInit {
 
   get vaultCreatorWhitelist(): string[] {
     return this.settings.vault_creator_whitelist || [];
+  }
+
+  get hiddenMainnetVaultIds(): string[] {
+    return this.settings.hidden_mainnet_vault_ids || [];
   }
 
   isAddressWhitelistedForVaultCreation(address: string): boolean {

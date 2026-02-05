@@ -89,18 +89,6 @@ export class VaultsService {
   private readonly scVersion: string;
   private readonly isMainnet: boolean;
 
-  /** List of vault IDs to be hidden on mainnet from Search and statistics, but should be available on getVaultById */
-  private readonly hiddenMainnetVaultIds: string[] = [
-    '1a6e7495-178b-464e-b37e-00997ef1e9c2',
-    '2761c805-77c5-443e-b352-f0afaf4860c0',
-    // 'deafbe8a-8939-4505-9e67-7dc3b3345243',
-    'cfd6b3d1-1ea2-4721-9c89-0a52484053ae',
-    'e9cf3cf9-4d7f-4188-954b-eef289f8e9b1',
-    'ad46dc9f-9b49-48aa-8c37-5180d035e08a',
-    'f008952b-c158-43a2-ae57-6e763ebb321e',
-    '16c6e87f-d29d-4de9-8b19-1484d3cd7183',
-  ];
-
   constructor(
     @InjectRepository(Vault)
     private readonly vaultsRepository: Repository<Vault>,
@@ -629,7 +617,7 @@ export class VaultsService {
         deleted: false,
       };
       if (this.isMainnet) {
-        activeVaultsWhere.id = Not(In(this.hiddenMainnetVaultIds));
+        activeVaultsWhere.id = Not(In(this.systemSettingsService.hiddenMainnetVaultIds));
       }
       const activeVaultsCount = await this.vaultsRepository.count({
         where: activeVaultsWhere,
@@ -639,7 +627,7 @@ export class VaultsService {
         vault_status: In([VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked]),
       };
       if (this.isMainnet) {
-        totalVaultsWhere.id = Not(In(this.hiddenMainnetVaultIds));
+        totalVaultsWhere.id = Not(In(this.systemSettingsService.hiddenMainnetVaultIds));
       }
       const totalVaultsCount = await this.vaultsRepository.count({
         where: totalVaultsWhere,
@@ -652,7 +640,9 @@ export class VaultsService {
         .where('vault.vault_status = :status', { status: VaultStatus.locked })
         .andWhere('vault.deleted = :deleted', { deleted: false });
       if (this.isMainnet) {
-        totalValueQuery.andWhere('vault.id NOT IN (:...hiddenIds)', { hiddenIds: this.hiddenMainnetVaultIds });
+        totalValueQuery.andWhere('vault.id NOT IN (:...hiddenIds)', {
+          hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
+        });
       }
       const totalValueResult = await totalValueQuery.getRawOne();
 
@@ -666,7 +656,9 @@ export class VaultsService {
         })
         .andWhere('vault.deleted = :deleted', { deleted: false });
       if (this.isMainnet) {
-        totalContributedQuery.andWhere('vault.id NOT IN (:...hiddenIds)', { hiddenIds: this.hiddenMainnetVaultIds });
+        totalContributedQuery.andWhere('vault.id NOT IN (:...hiddenIds)', {
+          hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
+        });
       }
       const totalContributedResult = await totalContributedQuery.getRawOne();
 
@@ -681,7 +673,9 @@ export class VaultsService {
         .createQueryBuilder('vault')
         .select('SUM(vault.total_acquired_value_ada)', 'totalAcquiredAda');
       if (this.isMainnet) {
-        totalAcquiredQuery.andWhere('vault.id NOT IN (:...hiddenIds)', { hiddenIds: this.hiddenMainnetVaultIds });
+        totalAcquiredQuery.andWhere('vault.id NOT IN (:...hiddenIds)', {
+          hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
+        });
       }
       const totalAcquiredResult = await totalAcquiredQuery.getRawOne();
 
@@ -998,7 +992,9 @@ export class VaultsService {
       .andWhere('vault.vault_status != :createdStatus', { createdStatus: VaultStatus.created });
 
     if (this.isMainnet) {
-      queryBuilder.andWhere('vault.id NOT IN (:...hiddenIds)', { hiddenIds: this.hiddenMainnetVaultIds });
+      queryBuilder.andWhere('vault.id NOT IN (:...hiddenIds)', {
+        hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
+      });
     }
 
     // If userId is provided, retrieve user information and apply personalized filters
@@ -1472,7 +1468,9 @@ export class VaultsService {
           statuses: ['contribution', 'acquire', 'locked', 'burned'],
         });
       if (this.isMainnet) {
-        statusQuery.andWhere('vault.id NOT IN (:...hiddenIds)', { hiddenIds: this.hiddenMainnetVaultIds });
+        statusQuery.andWhere('vault.id NOT IN (:...hiddenIds)', {
+          hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
+        });
       }
       const statusResults = await statusQuery.groupBy('vault.vault_status').getRawMany();
 
@@ -1535,7 +1533,9 @@ export class VaultsService {
         .addSelect('COUNT(vault.id)', 'count')
         .where('vault.deleted = :deleted', { deleted: false });
       if (this.isMainnet) {
-        privacyQuery.andWhere('vault.id NOT IN (:...hiddenIds)', { hiddenIds: this.hiddenMainnetVaultIds });
+        privacyQuery.andWhere('vault.id NOT IN (:...hiddenIds)', {
+          hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
+        });
       }
       const privacyResults = await privacyQuery.groupBy('vault.privacy').getRawMany();
 
