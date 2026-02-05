@@ -9,6 +9,20 @@ import { AssetType } from '@/types/asset.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { VoteType } from '@/types/vote.types';
 
+export class VotePercentagesDto {
+  @Expose()
+  @ApiProperty({ description: 'Percentage of yes votes', example: 65.5 })
+  yes: number;
+
+  @Expose()
+  @ApiProperty({ description: 'Percentage of no votes', example: 25.3 })
+  no: number;
+
+  @Expose()
+  @ApiProperty({ description: 'Percentage of abstain votes', example: 9.2 })
+  abstain: number;
+}
+
 export class ProposalDetailDto {
   @Expose()
   @ApiProperty({ description: 'Proposal ID', example: '123e4567-e89b-12d3-a456-426614174000' })
@@ -85,6 +99,11 @@ export class ProposalDetailDto {
     timestamp: string;
     errorCode?: string;
   };
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'Vote percentages (yes, no, abstain)', type: VotePercentagesDto })
+  @Type(() => VotePercentagesDto)
+  votes?: VotePercentagesDto;
 
   @Expose()
   @ApiPropertyOptional({ description: 'Vault information including termination configuration', type: Object })
