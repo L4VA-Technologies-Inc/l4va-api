@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -9,15 +10,23 @@ import { GetMarketsDto, MarketSortField, SortOrder, TvlCurrency } from './dto/ge
 
 import { Market } from '@/database/market.entity';
 import { Vault } from '@/database/vault.entity';
+import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 
 @Injectable()
-export class MarketService {
+export class MarketService implements OnModuleInit {
   private readonly logger = new Logger(MarketService.name);
+  private isMainnet: boolean;
 
   constructor(
     @InjectRepository(Market)
-    private readonly marketRepository: Repository<Market>
+    private readonly marketRepository: Repository<Market>,
+    private readonly configService: ConfigService,
+    private readonly systemSettingsService: SystemSettingsService
   ) {}
+
+  onModuleInit(): void {
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+  }
 
   async getMarkets(query: GetMarketsDto): Promise<GetMarketsResponse> {
     const {
@@ -45,6 +54,14 @@ export class MarketService {
       .leftJoinAndSelect('vault.vault_image', 'vault_image')
       .leftJoinAndSelect('vault.ft_token_img', 'ft_token_img')
       .leftJoinAndSelect('vault.tags', 'tags');
+
+    // Hide vaults on mainnet that are in the hidden list
+    if (this.isMainnet) {
+      const hiddenIds = this.systemSettingsService.hiddenMainnetVaultIds;
+      if (hiddenIds.length > 0) {
+        queryBuilder.andWhere('market.vault_id NOT IN (:...hiddenIds)', { hiddenIds });
+      }
+    }
 
     if (ticker) {
       queryBuilder.andWhere('vault.vault_token_ticker ILIKE :ticker', {
