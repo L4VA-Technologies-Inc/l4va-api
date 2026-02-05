@@ -1210,6 +1210,36 @@ export class GovernanceExecutionService {
       return true;
     } catch (error) {
       this.logger.error(`Error executing DexHunter swap proposal ${proposal.id}: ${error.message}`, error.stack);
+
+      // Handle pool_not_found error on retry - this means token has no liquidity
+      const isRetry = proposal.metadata._executionRetry && proposal.metadata._executionRetry.count > 0;
+      const isPoolNotFound =
+        error.message?.toLowerCase().includes('pool_not_found') ||
+        error.message?.toLowerCase().includes('pool not found') ||
+        error.message?.toLowerCase().includes('no liquidity');
+
+      if (isRetry && isPoolNotFound) {
+        this.logger.warn(
+          `Proposal ${proposal.id} retry failed with pool_not_found - marking as REJECTED. ` +
+            `Token no longer has sufficient liquidity for swap.`
+        );
+
+        proposal.status = ProposalStatus.REJECTED;
+        proposal.metadata.executionError = {
+          message: error.message,
+          timestamp: new Date().toISOString(),
+          errorCode: 'POOL_NOT_FOUND',
+          userFriendlyMessage:
+            'This swap proposal was rejected because the token no longer has sufficient ' +
+            'liquidity on any DEX. The token may have been delisted or the liquidity pool removed.',
+        };
+
+        await this.proposalRepository.save(proposal);
+
+        this.logger.log(`Proposal ${proposal.id} marked as REJECTED due to insufficient liquidity`);
+        return false;
+      }
+
       await this.storeExecutionError(proposal, error);
       return false;
     }
@@ -1564,6 +1594,7 @@ export class GovernanceExecutionService {
       INSUFFICIENT_FUNDS: 'Insufficient ADA in treasury to cover transaction fees.',
       ASSET_NOT_AVAILABLE: 'Assets no longer available or already sold.',
       ASSET_ALREADY_LISTED: 'Assets already listed on marketplace. Unlist them first.',
+      POOL_NOT_FOUND: 'Token has no liquidity pool on any DEX. Token may be delisted or liquidity removed.',
       NETWORK_ERROR: 'Network error. Will retry automatically.',
       API_ERROR: 'External API error. Will retry automatically.',
       TRANSACTION_ERROR: 'Transaction failed to submit. Will retry automatically.',
@@ -1601,6 +1632,15 @@ export class GovernanceExecutionService {
       errorMessage.toLowerCase().includes('asset not found')
     ) {
       return 'ASSET_NOT_AVAILABLE';
+    }
+
+    // DexHunter pool not found errors (no liquidity)
+    if (
+      errorMessage.toLowerCase().includes('pool_not_found') ||
+      errorMessage.toLowerCase().includes('pool not found') ||
+      errorMessage.toLowerCase().includes('no liquidity')
+    ) {
+      return 'POOL_NOT_FOUND';
     }
 
     // Asset already listed
