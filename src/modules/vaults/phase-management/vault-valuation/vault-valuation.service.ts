@@ -193,15 +193,12 @@ export class VaultValuationService {
           // We have a market price - LP exists and is traded
           fdv = vtPrice * vtSupply;
 
-          this.logger.log(
-            `Vault ${vault.name}: With LP - Using market price ${vtPrice.toFixed(25)} ADA, ` +
-              `FDV = ${fdv.toFixed(2)} ADA, TVL = ${tvl.toFixed(2)} ADA, FDV/TVL = ${(fdv / tvl).toFixed(2)}`
-          );
-
+          // Store up to 6 decimal places for small ratios
+          const fdvTvlRatio = fdv / tvl;
           updates.push({
             id: vault.id,
             fdv,
-            fdv_tvl: Number((fdv / tvl).toFixed(2)),
+            fdv_tvl: Number(fdvTvlRatio.toFixed(6)),
           });
         } else {
           // LP configured but no market price yet
@@ -236,10 +233,12 @@ export class VaultValuationService {
               `FDV = ${fdv.toFixed(2)} ADA`
           );
 
+          // Store up to 6 decimal places for small ratios
+          const fdvTvlRatio = fdv / tvl;
           updates.push({
             id: vault.id,
             fdv,
-            fdv_tvl: Number((fdv / tvl).toFixed(2)),
+            fdv_tvl: Number(fdvTvlRatio.toFixed(6)),
           });
         }
       }

@@ -250,8 +250,6 @@ export class ClaimsService {
                 `Removed ${oldClaims.length} old termination claim(s) for user ${userId} in vault ${vault.id} (no longer holds VT)`
               );
             }
-          } else {
-            this.logger.debug(`Could not auto-create claim for vault ${vault.id}: ${error.message}`);
           }
         }
       }
@@ -390,8 +388,6 @@ export class ClaimsService {
     if (claimIds.length === 0) {
       throw new BadRequestException('Must provide at least 1 claim ID for batch processing');
     }
-
-    this.logger.debug(`Building batch cancellation transaction for  ${claimIds.length} claims: ${claimIds.join(', ')}`);
 
     // Fetch all claims with relations
     const claims = await this.claimRepository.find({
@@ -549,7 +545,6 @@ export class ClaimsService {
     try {
       const buildResponse = await this.blockchainService.buildTransaction(input);
       const actualTxSize = getTransactionSize(buildResponse.complete);
-      this.logger.debug(`Transaction size: ${actualTxSize} bytes (${(actualTxSize / 1024).toFixed(2)} KB)`);
 
       if (actualTxSize > this.MAX_TX_SIZE) {
         throw new Error(
