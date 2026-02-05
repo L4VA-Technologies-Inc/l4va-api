@@ -929,6 +929,22 @@ export class GovernanceService {
         }
       : undefined;
 
+    // Calculate vote percentages
+    let votePercentages = null;
+    try {
+      const voteResult = this.voteCountingService.calculateResult(votes, 0, 0, BigInt(totals.totalVotingPower));
+      votePercentages = {
+        yes: voteResult.yesVotePercent,
+        no: voteResult.noVotePercent,
+        abstain: proposal.abstain ? voteResult.abstainVotePercent : 0,
+      };
+    } catch (error) {
+      this.logger.error(
+        `Error calculating vote percentages for proposal ${proposal.id}: ${error.message}`,
+        error.stack
+      );
+    }
+
     // Map proposal entity to DTO with only needed fields
     const proposalDto = {
       id: proposal.id,
@@ -949,6 +965,7 @@ export class GovernanceService {
       createdAt: proposal.createdAt,
       metadata: proposal.metadata,
       executionError,
+      votes: votePercentages,
       vault: proposal.vault
         ? {
             id: proposal.vault.id,
