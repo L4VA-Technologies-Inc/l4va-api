@@ -232,14 +232,13 @@ export class ClaimsService {
         } catch (error) {
           // If user doesn't hold VT, clean up any old termination claims for this vault
           if (error.message?.includes('No VT balance found')) {
-            const oldClaims = await this.claimRepository.find({
-              where: {
-                user_id: userId,
-                vault: { id: vault.id },
-                type: ClaimType.TERMINATION,
-                status: ClaimStatus.AVAILABLE,
-              },
-            });
+            const oldClaims = await this.claimRepository
+              .createQueryBuilder('claim')
+              .where('claim.user_id = :userId', { userId })
+              .andWhere('claim.vault_id = :vaultId', { vaultId: vault.id })
+              .andWhere('claim.type = :type', { type: ClaimType.TERMINATION })
+              .andWhere('claim.status = :status', { status: ClaimStatus.AVAILABLE })
+              .getMany();
 
             if (oldClaims.length > 0) {
               await this.claimRepository.remove(oldClaims);
