@@ -23,6 +23,7 @@ import { Vault } from '@/database/vault.entity';
 import { DistributionModule } from '@/modules/distribution/distribution.module';
 import { GovernanceModule } from '@/modules/vaults/phase-management/governance/governance.module';
 import { LifecycleModule } from '@/modules/vaults/phase-management/lifecycle/lifecycle.module';
+import { MarketStatsModule } from '@/modules/vaults/phase-management/market-stats/market-stats.module';
 import { TransactionsModule } from '@/modules/vaults/processing-tx/offchain-tx/transactions.module';
 import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockchain.module';
 import { StatisticsService } from '@/modules/vaults/statistics/statistics.service';
@@ -35,6 +36,7 @@ import { StatisticsService } from '@/modules/vaults/statistics/statistics.servic
     BlockchainModule,
     GovernanceModule,
     DistributionModule,
+    MarketStatsModule,
     TaptoolsModule,
     TypeOrmModule.forFeature([
       Vault,
