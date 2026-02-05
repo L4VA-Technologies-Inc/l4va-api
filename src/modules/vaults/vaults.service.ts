@@ -204,19 +204,21 @@ export class VaultsService {
     txId: string;
   }> {
     try {
-      // Check if user exists and get their wallet address
-      const user = await this.usersRepository.findOne({
-        where: { id: userId },
-        select: ['id', 'address'],
-      });
+      if (this.isMainnet) {
+        // Check if user exists and get their wallet address
+        const user = await this.usersRepository.findOne({
+          where: { id: userId },
+          select: ['id', 'address'],
+        });
 
-      if (!user) {
-        throw new UnauthorizedException('User not found');
-      }
+        if (!user) {
+          throw new UnauthorizedException('User not found');
+        }
 
-      // Check if user's address is whitelisted for vault creation
-      if (!this.systemSettingsService.isAddressWhitelistedForVaultCreation(user.address)) {
-        throw new UnauthorizedException('Your wallet address is not authorized to create vaults');
+        // Check if user's address is whitelisted for vault creation
+        if (!this.systemSettingsService.isAddressWhitelistedForVaultCreation(user.address)) {
+          throw new UnauthorizedException('Your wallet address is not authorized to create vaults');
+        }
       }
 
       const owner = await this.usersRepository.findOne({
