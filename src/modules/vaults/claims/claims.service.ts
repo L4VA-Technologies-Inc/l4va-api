@@ -230,8 +230,12 @@ export class ClaimsService {
             this.logger.log(`Verified existing termination claim for user ${userId} in vault ${vault.id}`);
           }
         } catch (error) {
-          // If user doesn't hold VT, clean up any old termination claims for this vault
-          if (error.message?.includes('No VT balance found')) {
+          const noVtBalanceError =
+            error.message?.includes('No VT balance found') ||
+            error.message?.includes('no VT balance') ||
+            error.message?.includes('must hold vault tokens');
+
+          if (noVtBalanceError) {
             const oldClaims = await this.claimRepository
               .createQueryBuilder('claim')
               .where('claim.user_id = :userId', { userId })
