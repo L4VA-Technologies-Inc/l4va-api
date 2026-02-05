@@ -429,13 +429,17 @@ export class GovernanceService {
                 );
               }
 
-              // Enforce full-amount swaps only
-              // Swaps must use the entire available quantity for the token to prevent partial swap edge cases
-              if (swapQuantity !== totalAvailable) {
+              // Validate that swap quantity is a valid combination of individual asset quantities
+              // This ensures we can swap complete asset entries (no partial swaps within an asset)
+              const individualQuantities = allTokenAssets.map(a => a.quantity);
+              const isValidCombination = this.isValidQuantityCombination(swapQuantity, individualQuantities);
+
+              if (!isValidCombination) {
                 throw new BadRequestException(
-                  `Only full-amount swaps are supported. ` +
-                    `Token "${asset.name || tokenKey}" has ${totalAvailable} available, but ${swapQuantity} was requested. ` +
-                    `Please swap the entire token balance to proceed.`
+                  `Invalid swap quantity for ${asset.name || 'token'}. ` +
+                    `Amount ${swapQuantity} is not a valid combination of available asset quantities. ` +
+                    `Available individual amounts: [${individualQuantities.join(', ')}]. ` +
+                    `Please select a quantity that equals a sum of one or more of these amounts.`
                 );
               }
 
@@ -1428,6 +1432,7 @@ export class GovernanceService {
   /**
    * Get fungible tokens available for swapping via DexHunter
    * Returns FT assets with current prices and estimated ADA values
+   * Includes individual asset quantities to allow valid combination swaps
    */
   async getSwappableAssets(vaultId: string): Promise<
     {
@@ -1441,6 +1446,8 @@ export class GovernanceService {
       currentPriceAda: number;
       estimatedAdaValue: number;
       lastPriceUpdate: string;
+      /** Individual asset quantities that can be combined for swapping */
+      availableAmounts: number[];
     }[]
   > {
     // Query all FT assets for this vault with quantity > 0
@@ -1459,15 +1466,16 @@ export class GovernanceService {
       return [];
     }
 
-    // Group assets by token (policy_id + asset_id) and combine quantities
+    // Group assets by token (policy_id + asset_id) and collect individual quantities
     const combinedAssets = availableAssets.reduce(
       (acc, asset) => {
         const tokenKey = `${asset.policy_id}_${asset.asset_id}`;
 
         if (acc.has(tokenKey)) {
-          // Add quantity to existing token
+          // Add quantity to existing token and track individual amount
           const existing = acc.get(tokenKey);
           existing.quantity += asset.quantity;
+          existing.individualQuantities.push(asset.quantity);
         } else {
           // First occurrence of this token
           acc.set(tokenKey, {
@@ -1478,6 +1486,7 @@ export class GovernanceService {
             metadata: asset.metadata,
             dex_price: asset.dex_price,
             quantity: asset.quantity,
+            individualQuantities: [asset.quantity],
           });
         }
 
@@ -1493,6 +1502,7 @@ export class GovernanceService {
           metadata: any;
           dex_price: number;
           quantity: number;
+          individualQuantities: number[];
         }
       >()
     );
@@ -1521,6 +1531,7 @@ export class GovernanceService {
         currentPriceAda,
         estimatedAdaValue,
         lastPriceUpdate: new Date().toISOString(),
+        availableAmounts: asset.individualQuantities.sort((a, b) => a - b),
       };
     });
   }
@@ -1606,5 +1617,43 @@ export class GovernanceService {
       );
       throw new InternalServerErrorException('Error getting voting power. Please try again later.');
     }
+  }
+
+  /**
+   * Check if a target quantity is a valid combination (sum) of available amounts
+   * Uses subset sum algorithm with memoization for efficiency
+   *
+   * @param target - The target quantity to validate
+   * @param amounts - Array of available individual quantities
+   * @returns true if target can be achieved by summing a subset of amounts
+   */
+  private isValidQuantityCombination(target: number, amounts: number[]): boolean {
+    // Handle floating point precision by working with integers (multiply by 100 for 2 decimal places)
+    const precision = 100;
+    const targetInt = Math.round(target * precision);
+    const amountsInt = amounts.map(a => Math.round(a * precision));
+
+    // Use dynamic programming subset sum
+    const possible = new Set<number>([0]);
+
+    for (const amount of amountsInt) {
+      const newPossible = new Set<number>(possible);
+      for (const sum of possible) {
+        const newSum = sum + amount;
+        if (newSum <= targetInt) {
+          newPossible.add(newSum);
+        }
+      }
+      // Early exit if we found the target
+      if (newPossible.has(targetInt)) {
+        return true;
+      }
+      // Update possible sums
+      for (const sum of newPossible) {
+        possible.add(sum);
+      }
+    }
+
+    return possible.has(targetInt);
   }
 }
