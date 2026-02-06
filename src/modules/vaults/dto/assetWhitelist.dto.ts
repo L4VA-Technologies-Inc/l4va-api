@@ -14,6 +14,16 @@ export class AssetWhitelistDto {
   policyId: string;
 
   @ApiProperty({
+    description: 'Human-readable collection name (optional)',
+    required: false,
+    example: 'Relics of Magma - The Vita',
+  })
+  @IsOptional()
+  @IsString()
+  @Expose({ name: 'collectionName' })
+  collectionName?: string;
+
+  @ApiProperty({
     description: 'Minimum number of assets allowed',
     required: false,
     example: 1,
