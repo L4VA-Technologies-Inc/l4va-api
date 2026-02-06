@@ -1498,7 +1498,8 @@ export class GovernanceService {
   /**
    * Get fungible tokens available for swapping via DexHunter
    * Returns FT assets with current prices and estimated ADA values
-   * Includes individual asset records (with IDs) and precomputed valid combinations
+   * Includes both vault assets (LOCKED) and treasury assets (EXTRACTED)
+   * Provides breakdown of quantities in vault vs treasury
    */
   async getSwappableAssets(vaultId: string): Promise<
     {
@@ -1509,24 +1510,38 @@ export class GovernanceService {
       name: string;
       image: any;
       quantity: number;
+      lockedQuantity: number;
+      extractedQuantity: number;
+      treasuryQuantity: number;
       currentPriceAda: number;
       estimatedAdaValue: number;
       lastPriceUpdate: string;
       /** Individual asset records with their IDs and quantities */
-      assetRecords: Array<{ id: string; quantity: number }>;
+      assetRecords: Array<{ id: string; quantity: number; status: string }>;
       /** Individual asset quantities (for backwards compatibility) */
       availableAmounts: number[];
       /** Precomputed valid quantity combinations */
       validCombinations: number[];
     }[]
   > {
-    // Query all FT assets for this vault with quantity > 0
+    // Get vault with treasury wallet info
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      relations: ['treasury_wallet'],
+    });
+
+    if (!vault) {
+      throw new Error(`Vault ${vaultId} not found`);
+    }
+
+    // Query all FT assets for this vault (LOCKED + EXTRACTED)
     const ftAssets = await this.assetRepository.find({
       where: {
         vault: { id: vaultId },
         type: AssetType.FT,
+        status: In([AssetStatus.LOCKED, AssetStatus.EXTRACTED]),
       },
-      relations: ['vault'],
+      select: ['id', 'policy_id', 'asset_id', 'name', 'metadata', 'dex_price', 'quantity', 'status'],
     });
 
     // Filter assets with available quantity
@@ -1536,21 +1551,52 @@ export class GovernanceService {
       return [];
     }
 
-    // Group assets by token (policy_id + asset_id) and collect individual asset info
+    // Get treasury balances from Blockfrost
+    const treasuryBalances = new Map<string, number>();
+    if (vault.treasury_wallet?.treasury_address) {
+      try {
+        const treasuryInfo = await this.blockfrost.addresses(vault.treasury_wallet.treasury_address);
+        for (const amount of treasuryInfo.amount) {
+          if (amount.unit !== 'lovelace') {
+            treasuryBalances.set(amount.unit, parseInt(amount.quantity));
+          }
+        }
+      } catch (error) {
+        // Treasury wallet empty or not found - that's ok
+        if (error.status_code !== 404) {
+          this.logger.warn(`Failed to fetch treasury balance: ${error.message}`);
+        }
+      }
+    }
+
+    // Group assets by token (policy_id + asset_id) and separate by status
     const combinedAssets = availableAssets.reduce(
       (acc, asset) => {
         const tokenKey = `${asset.policy_id}_${asset.asset_id}`;
+        const tokenUnit = asset.policy_id + asset.asset_id;
 
         if (acc.has(tokenKey)) {
-          // Add quantity to existing token and track individual asset
+          // Add to existing token
           const existing = acc.get(tokenKey);
           existing.quantity += asset.quantity;
+
+          if (asset.status === AssetStatus.LOCKED) {
+            existing.lockedQuantity += asset.quantity;
+          } else if (asset.status === AssetStatus.EXTRACTED) {
+            existing.extractedQuantity += asset.quantity;
+          }
+
           existing.assetRecords.push({
             id: asset.id,
             quantity: asset.quantity,
+            status: asset.status,
           });
         } else {
           // First occurrence of this token
+          const lockedQty = asset.status === AssetStatus.LOCKED ? asset.quantity : 0;
+          const extractedQty = asset.status === AssetStatus.EXTRACTED ? asset.quantity : 0;
+          const treasuryQty = treasuryBalances.get(tokenUnit) || 0;
+
           acc.set(tokenKey, {
             id: asset.id, // Keep first asset ID for backwards compatibility
             policy_id: asset.policy_id,
@@ -1559,10 +1605,14 @@ export class GovernanceService {
             metadata: asset.metadata,
             dex_price: asset.dex_price,
             quantity: asset.quantity,
+            lockedQuantity: lockedQty,
+            extractedQuantity: extractedQty,
+            treasuryQuantity: treasuryQty,
             assetRecords: [
               {
                 id: asset.id,
                 quantity: asset.quantity,
+                status: asset.status,
               },
             ],
           });
@@ -1580,7 +1630,10 @@ export class GovernanceService {
           metadata: any;
           dex_price: number;
           quantity: number;
-          assetRecords: Array<{ id: string; quantity: number }>;
+          lockedQuantity: number;
+          extractedQuantity: number;
+          treasuryQuantity: number;
+          assetRecords: Array<{ id: string; quantity: number; status: string }>;
         }
       >()
     );
@@ -1596,7 +1649,10 @@ export class GovernanceService {
     return combinedAssetsList.map(asset => {
       const tokenId = asset.policy_id + asset.asset_id;
       const currentPriceAda = priceMap.get(tokenId) || asset.dex_price || null;
-      const estimatedAdaValue = currentPriceAda ? asset.quantity * currentPriceAda : null;
+      const totalQuantity = asset.quantity;
+      const estimatedAdaValue = currentPriceAda ? totalQuantity * currentPriceAda : null;
+
+      // Sort records by quantity (smallest first) for greedy algorithm
       const sortedRecords = asset.assetRecords.sort((a, b) => a.quantity - b.quantity);
       const availableAmounts = sortedRecords.map(r => r.quantity);
 
@@ -1607,11 +1663,14 @@ export class GovernanceService {
         unit: tokenId, // Full token identifier for DexHunter
         name: asset.name,
         image: asset.metadata?.image || null,
-        quantity: asset.quantity,
+        quantity: totalQuantity, // Total available (locked + extracted)
+        lockedQuantity: asset.lockedQuantity, // Still in vault
+        extractedQuantity: asset.extractedQuantity, // Already extracted from vault
+        treasuryQuantity: asset.treasuryQuantity, // Currently in treasury wallet
         currentPriceAda,
         estimatedAdaValue,
         lastPriceUpdate: new Date().toISOString(),
-        assetRecords: sortedRecords, // All individual asset records with IDs
+        assetRecords: sortedRecords, // All individual asset records with IDs and status
         availableAmounts: availableAmounts, // Just the quantities (backwards compatible)
         validCombinations: this.calculateValidCombinations(availableAmounts),
       };
