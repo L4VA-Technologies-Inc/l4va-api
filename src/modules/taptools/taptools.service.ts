@@ -3,7 +3,6 @@ import { HttpException, Inject, Injectable, Logger, NotFoundException, Optional 
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import axios from 'axios';
-import * as cbor from 'cbor';
 import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { In, Repository } from 'typeorm';
@@ -164,35 +163,7 @@ export class TaptoolsService {
   private extractCharacterTrait(metadata: any): string | null {
     if (!metadata || typeof metadata !== 'object') return null;
 
-    // Check if attributes is a CBOR-encoded hex string (Relics of Magma format)
-    if (typeof metadata.attributes === 'string' && metadata.attributes.length > 0) {
-      try {
-        // Decode hex string to buffer
-        const hexStr = metadata.attributes;
-        const buffer = Buffer.from(hexStr, 'hex');
-
-        // Decode CBOR to get the actual attributes object
-        const decodedAttributes = cbor.decodeFirstSync(buffer);
-
-        this.logger.debug(`Decoded CBOR attributes: ${JSON.stringify(decodedAttributes)}`);
-
-        // Check for Character trait in decoded object
-        if (decodedAttributes && typeof decodedAttributes === 'object') {
-          const characterKeys = ['Character', 'character', 'CHARACTER'];
-
-          for (const key of characterKeys) {
-            if (decodedAttributes[key]) {
-              this.logger.debug(`Found character trait in CBOR: ${decodedAttributes[key]}`);
-              return decodedAttributes[key];
-            }
-          }
-        }
-      } catch (error) {
-        this.logger.warn(`Failed to decode CBOR attributes: ${error.message}`);
-      }
-    }
-
-    // Check top-level keys first
+    // Check top-level keys first  (WayUp API format: "attributes / Character")
     const characterKeys = ['attributes / Character', 'Character', 'character'];
 
     for (const key of characterKeys) {
@@ -230,12 +201,57 @@ export class TaptoolsService {
   }
 
   /**
-   * Get trait-based price for Relics of Magma NFTs
+   * Fetch Relics of Magma Vita character trait from WayUp API
+   * WayUp API returns properly decoded attributes including "attributes / Character"
    * @param policyId The policy ID of the NFT
-   * @param metadata The NFT metadata
+   * @param name The readable asset name (e.g., "Relics of Magma - The Vita #0899")
+   * @returns Character trait value or null if not found
+   */
+  private async fetchRelicsCharacterFromWayUp(policyId: string, name: string): Promise<string | null> {
+    // Only works on mainnet - WayUp doesn't support testnet
+    if (!this.isMainnet) {
+      this.logger.debug('Skipping WayUp character fetch for testnet');
+      return null;
+    }
+
+    try {
+      this.logger.debug(`Fetching character trait from WayUp for: ${name}`);
+
+      // Query WayUp API for the specific asset by name
+      const response = await this.wayUpPricingService.getCollectionAssets({
+        policyId,
+        term: name,
+        limit: 1,
+      });
+
+      if (response.results.length > 0) {
+        const asset = response.results[0];
+        // WayUp returns decoded attributes with key "attributes / Character"
+        if (asset.attributes) {
+          const character = this.extractCharacterTrait(asset.attributes);
+          if (character) {
+            this.logger.debug(`Found character trait from WayUp: ${character}`);
+            return character;
+          }
+        }
+      }
+
+      this.logger.debug(`Character trait not found in WayUp response for ${name}`);
+      return null;
+    } catch (error) {
+      this.logger.warn(`Failed to fetch character from WayUp: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Get trait-based price for Relics of Magma NFTs
+   * Uses WayUp API to fetch properly decoded character traits
+   * @param policyId The policy ID of the NFT
+   * @param name The readable asset name (e.g., "Relics of Magma - The Vita #0899")
    * @returns Price in ADA or null if not a Relics of Magma NFT
    */
-  private getRelicsOfMagmaPrice(policyId: string, metadata: any): number | null {
+  private async getRelicsOfMagmaPrice(policyId: string, name: string): Promise<number | null> {
     // Handle Relics of Magma - The Porta (fixed price for all)
     if (policyId === this.RELICS_OF_MAGMA_PORTA_POLICY) {
       return this.RELICS_PORTA_PRICE;
@@ -243,10 +259,16 @@ export class TaptoolsService {
 
     // Handle Relics of Magma - The Vita (trait-based pricing)
     if (policyId === this.RELICS_OF_MAGMA_VITA_POLICY) {
-      const character = this.extractCharacterTrait(metadata);
+      // Fetch character trait from WayUp API (they have decoded attributes)
+      const character = await this.fetchRelicsCharacterFromWayUp(policyId, name);
+
       if (character && this.RELICS_CHARACTER_PRICES[character]) {
+        this.logger.debug(
+          `Using trait-based price for Vita NFT with character ${character}: ${this.RELICS_CHARACTER_PRICES[character]} ADA`
+        );
         return this.RELICS_CHARACTER_PRICES[character];
       }
+
       // If character trait not found or not recognized, log warning and use default
       this.logger.warn(`Character trait not found or not recognized for Vita NFT. Character: ${character}`);
       return this.RELICS_CHARACTER_PRICES.Balaena; // Default to Balaena price
@@ -260,12 +282,15 @@ export class TaptoolsService {
    * Uses DexHunter for fungible tokens and WayUp for NFT floor prices
    * @param policyId The policy ID of the asset
    * @param assetName The asset name (hex encoded)
+   * @param isNFT Whether the asset is an NFT
+   * @param name Optional readable asset name for Relics of Magma trait-based pricing
    * @returns Promise with the asset value in ADA and USD
    */
   async getAssetValue(
     policyId: string,
     assetName: string,
-    isNFT: boolean
+    isNFT: boolean,
+    name?: string
   ): Promise<{ priceAda: number; priceUsd: number }> {
     try {
       const adaPrice = await this.priceService.getAdaPrice();
@@ -297,20 +322,19 @@ export class TaptoolsService {
         // Check if this is a Relics of Magma NFT - use trait-based pricing
         if (policyId === this.RELICS_OF_MAGMA_VITA_POLICY || policyId === this.RELICS_OF_MAGMA_PORTA_POLICY) {
           try {
-            // Fetch asset details to get metadata
-            const assetId = `${policyId}${assetName}`;
-            const assetDetails = await this.fetchAssetDetailsFromApi(assetId);
-
-            if (assetDetails) {
-              const traitPrice = this.getRelicsOfMagmaPrice(policyId, assetDetails.details.onchain_metadata);
-              if (traitPrice !== null) {
-                const result = {
-                  priceAda: traitPrice,
-                  priceUsd: traitPrice * adaPrice,
-                };
-                this.cache.set(cacheKey, result);
-                return result;
-              }
+            // Fetch trait-based price using WayUp API (for Vita) or fixed price (for Porta)
+            // Pass the readable name for WayUp search
+            const traitPrice = await this.getRelicsOfMagmaPrice(policyId, name || '');
+            if (traitPrice !== null) {
+              const result = {
+                priceAda: traitPrice,
+                priceUsd: traitPrice * adaPrice,
+              };
+              this.cache.set(cacheKey, result);
+              this.logger.debug(
+                `Using trait-based price for Relics of Magma NFT ${name || assetName}: ${traitPrice} ADA`
+              );
+              return result;
             }
           } catch (error) {
             this.logger.warn(`Failed to get trait-based price for Relics NFT ${policyId}: ${error.message}`);
@@ -512,6 +536,7 @@ export class TaptoolsService {
         isNft: boolean;
         cachedPrice?: number;
         metadata?: Record<string, unknown>;
+        name?: string;
       }
     >();
 
@@ -544,6 +569,7 @@ export class TaptoolsService {
           isNft: asset.type === AssetType.NFT,
           cachedPrice: cachedPrice ? Number(cachedPrice) : undefined,
           metadata: asset.metadata || {},
+          name: asset.name,
         });
       }
     }
@@ -588,7 +614,7 @@ export class TaptoolsService {
           valueAda = asset.cachedPrice;
           valueUsd = valueAda * adaPrice;
         } else {
-          const assetValue = await this.getAssetValue(asset.policyId, asset.assetId, asset.isNft);
+          const assetValue = await this.getAssetValue(asset.policyId, asset.assetId, asset.isNft, asset.name);
           valueAda = assetValue?.priceAda || 0;
           valueUsd = assetValue?.priceUsd || 0;
         }
@@ -1014,6 +1040,7 @@ export class TaptoolsService {
             quantity: number;
             isNft: boolean;
             cachedPrice?: number;
+            name?: string;
           }
         >();
 
@@ -1052,6 +1079,7 @@ export class TaptoolsService {
               quantity: asset.type === AssetType.NFT ? 1 : Number(asset.quantity),
               isNft: asset.type === AssetType.NFT,
               cachedPrice: cachedPrice ? Number(cachedPrice) : undefined,
+              name: asset.name,
             });
           }
         }
@@ -1075,7 +1103,7 @@ export class TaptoolsService {
             if (asset.cachedPrice !== undefined && asset.cachedPrice > 0) {
               valueAda = asset.cachedPrice;
             } else {
-              const assetValue = await this.getAssetValue(asset.policyId, asset.assetId, asset.isNft);
+              const assetValue = await this.getAssetValue(asset.policyId, asset.assetId, asset.isNft, asset.name);
               valueAda = assetValue?.priceAda || 0;
             }
 
@@ -1383,10 +1411,14 @@ export class TaptoolsService {
         }
       }
 
+      // Get readable name from metadata for WayUp API (e.g., "Relics of Magma - The Vita #0899")
+      const readableName = String((metadata as Record<string, unknown>)?.name || assetName);
+
       const { priceAda, priceUsd } = await this.getAssetValue(
         assetDetailsResult?.details.policy_id || asset.unit.substring(0, 56),
         assetDetailsResult?.details.asset_name || asset.unit.substring(56),
-        isNFT
+        isNFT,
+        readableName
       );
 
       const assetData: AssetValueDto = {
