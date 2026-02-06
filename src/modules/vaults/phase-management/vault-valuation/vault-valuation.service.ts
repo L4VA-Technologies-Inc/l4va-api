@@ -223,11 +223,6 @@ export class VaultValuationService {
         if (vtPrice > 0) {
           fdv = vtPrice * vtSupply;
 
-          this.logger.log(
-            `Vault ${vault.name}: No LP, with acquirers - Using transition price ${vtPrice.toFixed(25)} ADA, ` +
-              `FDV = ${fdv.toFixed(2)} ADA`
-          );
-
           // Store up to 6 decimal places for small ratios
           const fdvTvlRatio = fdv / tvl;
           updates.push({

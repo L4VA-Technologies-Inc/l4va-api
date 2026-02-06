@@ -4,8 +4,6 @@ import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { DistributionService } from './distribution.service';
 import { CreateProposalReq } from './dto/create-proposal.req';
 import { CreateProposalRes } from './dto/create-proposal.res';
-import { CreateSnapshotVaultParamDto, CreateSnapshotAssetParamDto } from './dto/create-snapshot-param.dto';
-import { CreateSnapshotRes } from './dto/create-snapshot.res';
 import { GetDistributionInfoRes } from './dto/distribution.dto';
 import { GetAssetsToStakeRes } from './dto/get-assets-to-stake.res';
 import { AssetBuySellDto } from './dto/get-assets.dto';
@@ -38,17 +36,6 @@ export class GovernanceController {
     @Body() data: CreateProposalReq
   ): Promise<CreateProposalRes> {
     return this.governanceService.createProposal(vaultId, data, req.user.sub);
-  }
-
-  @Post('snapshot/:vaultId/:assetId')
-  @UseGuards(OptionalAuthGuard)
-  @ApiOperation({ summary: 'Create a snapshot for a vault' })
-  @ApiResponse({ status: 201, description: 'Snapshot created successfully', type: CreateSnapshotRes })
-  async createAutomaticSnapshot(
-    @Param() params: CreateSnapshotVaultParamDto & CreateSnapshotAssetParamDto
-  ): Promise<CreateSnapshotRes> {
-    const snapshot = await this.governanceService.createAutomaticSnapshot(params.vaultId, params.assetId);
-    return { snapshot };
   }
 
   @Get('vaults/:vaultId/proposals')

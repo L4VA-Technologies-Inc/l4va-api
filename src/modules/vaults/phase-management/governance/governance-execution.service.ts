@@ -1046,12 +1046,24 @@ export class GovernanceExecutionService {
 
       // Check which assets are already in treasury wallet
       this.logger.log(`Checking treasury wallet ${treasuryAddress} for existing assets`);
-      const treasuryAddressInfo = await this.blockfrost.addresses(treasuryAddress);
       const tokensInTreasury = new Set<string>();
 
-      for (const amount of treasuryAddressInfo.amount) {
-        if (amount.unit !== 'lovelace') {
-          tokensInTreasury.add(amount.unit);
+      try {
+        const treasuryAddressInfo = await this.blockfrost.addresses(treasuryAddress);
+
+        for (const amount of treasuryAddressInfo.amount) {
+          if (amount.unit !== 'lovelace') {
+            tokensInTreasury.add(amount.unit);
+          }
+        }
+      } catch (error) {
+        // If treasury wallet has never received transactions, Blockfrost returns 404
+        // Treat this as an empty wallet
+        if (error.status_code === 404 || error.message?.includes('not been found')) {
+          this.logger.log(`Treasury wallet ${treasuryAddress} is empty (no transactions yet)`);
+        } else {
+          // Re-throw unexpected errors
+          throw error;
         }
       }
 
