@@ -564,6 +564,46 @@ export class GovernanceService {
           })
         );
 
+        // For DexHunter swaps, resolve specific asset IDs needed for each action
+        if (market === 'DexHunter') {
+          for (const action of actions) {
+            const asset = await this.assetRepository.findOne({
+              where: { id: action.assetId },
+              select: ['id', 'policy_id', 'asset_id', 'quantity'],
+            });
+
+            // Get all assets for this token type
+            const tokenKey = asset.policy_id + asset.asset_id;
+            const allTokenAssets = assetsByToken.get(tokenKey) || [];
+
+            // Sort by quantity descending (largest first) for greedy algorithm
+            const sorted = [...allTokenAssets].sort((a, b) => b.quantity - a.quantity);
+
+            // Resolve which specific assets to use
+            const swapQuantity = parseFloat(action.quantity);
+            const resolvedAssets = [];
+            let remaining = swapQuantity;
+
+            for (const record of sorted) {
+              if (remaining <= 0) break;
+
+              const takeAmount = Math.min(record.quantity, remaining);
+              resolvedAssets.push({
+                assetId: record.id,
+                quantity: takeAmount,
+              });
+              remaining -= takeAmount;
+            }
+
+            // Store resolved assets in action metadata
+            action.resolvedAssets = resolvedAssets;
+
+            this.logger.log(
+              `Resolved ${resolvedAssets.length} asset records for swap of ${swapQuantity} ${asset.policy_id}${asset.asset_id}`
+            );
+          }
+        }
+
         // Store only the action data, asset details will be fetched in getProposal
         proposal.metadata.marketplaceActions = actions;
 
@@ -1458,7 +1498,7 @@ export class GovernanceService {
   /**
    * Get fungible tokens available for swapping via DexHunter
    * Returns FT assets with current prices and estimated ADA values
-   * Includes individual asset quantities and precomputed valid combinations
+   * Includes individual asset records (with IDs) and precomputed valid combinations
    */
   async getSwappableAssets(vaultId: string): Promise<
     {
@@ -1472,7 +1512,9 @@ export class GovernanceService {
       currentPriceAda: number;
       estimatedAdaValue: number;
       lastPriceUpdate: string;
-      /** Individual asset quantities that can be combined for swapping */
+      /** Individual asset records with their IDs and quantities */
+      assetRecords: Array<{ id: string; quantity: number }>;
+      /** Individual asset quantities (for backwards compatibility) */
       availableAmounts: number[];
       /** Precomputed valid quantity combinations */
       validCombinations: number[];
@@ -1494,27 +1536,35 @@ export class GovernanceService {
       return [];
     }
 
-    // Group assets by token (policy_id + asset_id) and collect individual quantities
+    // Group assets by token (policy_id + asset_id) and collect individual asset info
     const combinedAssets = availableAssets.reduce(
       (acc, asset) => {
         const tokenKey = `${asset.policy_id}_${asset.asset_id}`;
 
         if (acc.has(tokenKey)) {
-          // Add quantity to existing token and track individual amount
+          // Add quantity to existing token and track individual asset
           const existing = acc.get(tokenKey);
           existing.quantity += asset.quantity;
-          existing.individualQuantities.push(asset.quantity);
+          existing.assetRecords.push({
+            id: asset.id,
+            quantity: asset.quantity,
+          });
         } else {
           // First occurrence of this token
           acc.set(tokenKey, {
-            id: asset.id,
+            id: asset.id, // Keep first asset ID for backwards compatibility
             policy_id: asset.policy_id,
             asset_id: asset.asset_id,
             name: asset.name,
             metadata: asset.metadata,
             dex_price: asset.dex_price,
             quantity: asset.quantity,
-            individualQuantities: [asset.quantity],
+            assetRecords: [
+              {
+                id: asset.id,
+                quantity: asset.quantity,
+              },
+            ],
           });
         }
 
@@ -1530,7 +1580,7 @@ export class GovernanceService {
           metadata: any;
           dex_price: number;
           quantity: number;
-          individualQuantities: number[];
+          assetRecords: Array<{ id: string; quantity: number }>;
         }
       >()
     );
@@ -1547,10 +1597,11 @@ export class GovernanceService {
       const tokenId = asset.policy_id + asset.asset_id;
       const currentPriceAda = priceMap.get(tokenId) || asset.dex_price || null;
       const estimatedAdaValue = currentPriceAda ? asset.quantity * currentPriceAda : null;
-      const sortedAmounts = asset.individualQuantities.sort((a, b) => a - b);
+      const sortedRecords = asset.assetRecords.sort((a, b) => a.quantity - b.quantity);
+      const availableAmounts = sortedRecords.map(r => r.quantity);
 
       return {
-        id: asset.id,
+        id: asset.id, // First asset ID (for backwards compatibility)
         policyId: asset.policy_id,
         assetId: asset.asset_id,
         unit: tokenId, // Full token identifier for DexHunter
@@ -1560,8 +1611,9 @@ export class GovernanceService {
         currentPriceAda,
         estimatedAdaValue,
         lastPriceUpdate: new Date().toISOString(),
-        availableAmounts: sortedAmounts,
-        validCombinations: this.calculateValidCombinations(sortedAmounts),
+        assetRecords: sortedRecords, // All individual asset records with IDs
+        availableAmounts: availableAmounts, // Just the quantities (backwards compatible)
+        validCombinations: this.calculateValidCombinations(availableAmounts),
       };
     });
   }

@@ -1032,11 +1032,22 @@ export class GovernanceExecutionService {
     const actions = proposal.metadata.marketplaceActions || [];
 
     try {
-      // Fetch all FT assets from database
-      const assetIds = [...new Set(actions.map(opt => opt.assetId))];
+      // Collect all asset IDs from resolved assets (new format) or fallback to single assetId (old format)
+      const allAssetIds = new Set<string>();
+      for (const action of actions) {
+        if (action.resolvedAssets && Array.isArray(action.resolvedAssets)) {
+          // New format: array of {assetId, quantity}
+          action.resolvedAssets.forEach(resolved => allAssetIds.add(resolved.assetId));
+        } else if (action.assetId) {
+          // Old format (backwards compatibility): single assetId
+          allAssetIds.add(action.assetId);
+        }
+      }
+
+      // Fetch all FT assets from database (including EXTRACTED ones for reference)
       const assets = await this.assetRepository.find({
-        where: assetIds.map(id => ({ id })),
-        select: ['id', 'policy_id', 'asset_id', 'name', 'quantity', 'type'],
+        where: Array.from(allAssetIds).map(id => ({ id })),
+        select: ['id', 'policy_id', 'asset_id', 'name', 'quantity', 'type', 'status'],
       });
 
       const assetMap = new Map(assets.map(asset => [asset.id, asset]));
@@ -1048,16 +1059,16 @@ export class GovernanceExecutionService {
 
       const treasuryAddress = proposal.vault.treasury_wallet.treasury_address;
 
-      // Check which assets are already in treasury wallet
+      // Check token quantities in treasury wallet
       this.logger.log(`Checking treasury wallet ${treasuryAddress} for existing assets`);
-      const tokensInTreasury = new Set<string>();
+      const treasuryBalances = new Map<string, number>(); // tokenUnit -> quantity
 
       try {
         const treasuryAddressInfo = await this.blockfrost.addresses(treasuryAddress);
 
         for (const amount of treasuryAddressInfo.amount) {
           if (amount.unit !== 'lovelace') {
-            tokensInTreasury.add(amount.unit);
+            treasuryBalances.set(amount.unit, parseInt(amount.quantity));
           }
         }
       } catch (error) {
@@ -1071,17 +1082,45 @@ export class GovernanceExecutionService {
         }
       }
 
-      // Filter assets that need extraction (not already in treasury)
+      // Calculate required quantities from resolvedAssets
+      const requiredQuantities = new Map<string, number>(); // tokenUnit -> total required quantity
+
+      for (const action of actions) {
+        if (action.resolvedAssets && Array.isArray(action.resolvedAssets)) {
+          for (const resolved of action.resolvedAssets) {
+            const asset = assetMap.get(resolved.assetId);
+            if (asset) {
+              const tokenUnit = asset.policy_id + asset.asset_id;
+              const current = requiredQuantities.get(tokenUnit) || 0;
+              requiredQuantities.set(tokenUnit, current + resolved.quantity);
+            }
+          }
+        }
+      }
+
+      // Check if treasury has sufficient quantities for each token
+      const needsExtraction = new Map<string, boolean>(); // tokenUnit -> needs extraction
+
+      for (const [tokenUnit, requiredQty] of requiredQuantities) {
+        const treasuryQty = treasuryBalances.get(tokenUnit) || 0;
+        const hasEnough = treasuryQty >= requiredQty;
+        needsExtraction.set(tokenUnit, !hasEnough);
+
+        this.logger.log(
+          `Token ${tokenUnit}: Required ${requiredQty}, In Treasury ${treasuryQty}, Needs Extraction: ${!hasEnough}`
+        );
+      }
+
+      // Filter assets that need extraction (treasury doesn't have enough of this token type)
       const assetsNeedingExtraction = assets.filter(asset => {
         const tokenUnit = asset.policy_id + asset.asset_id;
-        return !tokensInTreasury.has(tokenUnit);
+        // Only extract if this token type needs more quantity AND this asset is still LOCKED
+        return needsExtraction.get(tokenUnit) === true && asset.status !== 'extracted';
       });
 
-      // Extract assets that are not yet in treasury wallet
+      // Extract assets that are not yet in treasury wallet (or insufficient quantity)
       if (assetsNeedingExtraction.length > 0) {
-        this.logger.log(
-          `Extracting ${assetsNeedingExtraction.length} assets to treasury (${assets.length - assetsNeedingExtraction.length} already there)`
-        );
+        this.logger.log(`Extracting ${assetsNeedingExtraction.length} assets to treasury to meet required quantities`);
 
         const extractionResult = await this.treasuryExtractionService.extractAssetsFromVault({
           vaultId: proposal.vaultId,
@@ -1103,7 +1142,7 @@ export class GovernanceExecutionService {
 
         await new Promise(resolve => setTimeout(resolve, 5000)); // Wait for blockchain sync
       } else {
-        this.logger.log('All assets already in treasury wallet, skipping extraction');
+        this.logger.log('Treasury wallet has sufficient token quantities, skipping extraction');
       }
 
       // Initialize swap results array if not exists
