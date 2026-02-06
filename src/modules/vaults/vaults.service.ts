@@ -738,6 +738,14 @@ export class VaultsService {
       assetsCount: lockedAssetsCount,
       assetsPrices,
       fdvUsd: vault.fdv * adaPrice,
+      // Protocol fees
+      protocolContributorsFeeLovelace: this.systemSettingsService.protocolContributorsFee,
+      protocolContributorsFeeAda: this.systemSettingsService.protocolContributorsFee / 1_000_000,
+      protocolContributorsFeeUsd: (this.systemSettingsService.protocolContributorsFee / 1_000_000) * adaPrice,
+      protocolAcquiresFeeLovelace: this.systemSettingsService.protocolAcquiresFee,
+      protocolAcquiresFeeAda: this.systemSettingsService.protocolAcquiresFee / 1_000_000,
+      protocolAcquiresFeeUsd: (this.systemSettingsService.protocolAcquiresFee / 1_000_000) * adaPrice,
+      protocolEnabled: this.systemSettingsService.protocolEnabled,
     };
 
     let canCreateProposal = false;
