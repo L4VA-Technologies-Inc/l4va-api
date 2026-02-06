@@ -1098,25 +1098,53 @@ export class GovernanceExecutionService {
         }
       }
 
-      // Check if treasury has sufficient quantities for each token
-      const needsExtraction = new Map<string, boolean>(); // tokenUnit -> needs extraction
+      // Calculate deficit quantities - only extract what's missing from treasury
+      const deficitQuantities = new Map<string, number>(); // tokenUnit -> quantity to extract
 
       for (const [tokenUnit, requiredQty] of requiredQuantities) {
         const treasuryQty = treasuryBalances.get(tokenUnit) || 0;
-        const hasEnough = treasuryQty >= requiredQty;
-        needsExtraction.set(tokenUnit, !hasEnough);
+        const deficit = Math.max(0, requiredQty - treasuryQty);
 
-        this.logger.log(
-          `Token ${tokenUnit}: Required ${requiredQty}, In Treasury ${treasuryQty}, Needs Extraction: ${!hasEnough}`
-        );
+        if (deficit > 0) {
+          deficitQuantities.set(tokenUnit, deficit);
+          this.logger.log(
+            `Token ${tokenUnit}: Required ${requiredQty}, In Treasury ${treasuryQty}, Need to Extract: ${deficit}`
+          );
+        } else {
+          this.logger.log(
+            `Token ${tokenUnit}: Required ${requiredQty}, In Treasury ${treasuryQty}, Sufficient in treasury (no extraction needed)`
+          );
+        }
       }
 
-      // Filter assets that need extraction (treasury doesn't have enough of this token type)
-      const assetsNeedingExtraction = assets.filter(asset => {
-        const tokenUnit = asset.policy_id + asset.asset_id;
-        // Only extract if this token type needs more quantity AND this asset is still LOCKED
-        return needsExtraction.get(tokenUnit) === true && asset.status !== 'extracted';
-      });
+      // Select specific assets to extract based on deficit amounts
+      const assetsNeedingExtraction = [];
+
+      for (const [tokenUnit, deficitQty] of deficitQuantities) {
+        // Get all LOCKED assets for this token type, sorted by quantity descending
+        const availableAssets = assets
+          .filter(asset => asset.policy_id + asset.asset_id === tokenUnit && asset.status !== 'extracted')
+          .sort((a, b) => b.quantity - a.quantity);
+
+        // Greedy selection: pick assets to cover the deficit
+        let remaining = deficitQty;
+        for (const asset of availableAssets) {
+          if (remaining <= 0) break;
+
+          assetsNeedingExtraction.push(asset);
+          this.logger.log(`  → Selecting asset ${asset.id} (${asset.quantity} tokens) to cover deficit`);
+          remaining -= asset.quantity;
+        }
+
+        // Verify we have enough assets to cover the deficit
+        if (remaining > 0) {
+          throw new Error(
+            `Insufficient LOCKED assets for token ${tokenUnit}. Need ${deficitQty} more, but only found ${
+              deficitQty - remaining
+            } in vault. Check if assets were already extracted or consumed.`
+          );
+        }
+      }
 
       // Extract assets that are not yet in treasury wallet (or insufficient quantity)
       if (assetsNeedingExtraction.length > 0) {
