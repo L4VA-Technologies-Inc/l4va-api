@@ -243,21 +243,51 @@ export class TreasuryExtractionService {
         throw new NotFoundException(`Contribution UTXO not found or already consumed in tx ${txHash}`);
       }
 
-      // Extract assets from UTXO (excluding lovelace and receipt token)
+      // Calculate total quantities we want to extract for each token type FROM OUR SELECTED ASSETS
+      const quantitiesToExtract = new Map<string, number>(); // tokenUnit -> total quantity to extract
+
+      for (const asset of groupAssets) {
+        const tokenUnit = `${asset.policy_id}${asset.asset_id}`;
+        const current = quantitiesToExtract.get(tokenUnit) || 0;
+        // IMPORTANT: Parse quantity as number - database stores as decimal/string
+        const assetQuantity = typeof asset.quantity === 'string' ? parseFloat(asset.quantity) : Number(asset.quantity);
+        quantitiesToExtract.set(tokenUnit, current + assetQuantity);
+      }
+
+      // Log the aggregated quantities for debugging
+      for (const [tokenUnit, totalQty] of quantitiesToExtract) {
+        this.logger.log(`Token ${tokenUnit}: Aggregated quantity to extract = ${totalQty}`);
+      }
+
+      // Extract only the assets and quantities we want (blockchain aggregates FTs by token unit)
       const assetsToExtract = contributionOutput.amount
         .filter((a: any) => {
           if (a.unit === 'lovelace') return false;
           if (a.unit.endsWith('72656365697074')) return false; // "receipt" in hex
-          return true;
+          // Only extract if this token unit is in our selection
+          return quantitiesToExtract.has(a.unit);
         })
-        .map((a: any) => ({
-          policyId: a.unit.slice(0, 56),
-          assetName: {
-            name: a.unit.slice(56),
-            format: 'hex' as const,
-          },
-          quantity: parseInt(a.quantity),
-        }));
+        .map((a: any) => {
+          const quantityInUtxo = parseInt(a.quantity);
+          const quantityWeWant = quantitiesToExtract.get(a.unit) || 0;
+
+          // Extract the minimum of what's in UTXO and what we want
+          // (usually they should match, but this handles edge cases)
+          const quantityToExtract = Math.min(quantityInUtxo, quantityWeWant);
+
+          this.logger.log(
+            `Token ${a.unit}: In UTXO ${quantityInUtxo}, We want ${quantityWeWant}, Extracting ${quantityToExtract}`
+          );
+
+          return {
+            policyId: a.unit.slice(0, 56),
+            assetName: {
+              name: a.unit.slice(56),
+              format: 'hex' as const,
+            },
+            quantity: quantityToExtract,
+          };
+        });
 
       const lovelace = contributionOutput.amount.find((a: any) => a.unit === 'lovelace')?.quantity || '0';
 
@@ -292,6 +322,41 @@ export class TreasuryExtractionService {
     // 6. Build transaction with multiple script interactions
     const treasuryAddress = config.treasuryAddress || this.adminAddress;
 
+    // Prepare detailed extraction metadata for audit/debugging
+    // Build aggregated quantities per token type
+    const aggregatedQuantities: Record<string, { tokenUnit: string; quantity: number; tokenName: string }> = {};
+    for (const group of utxoGroups) {
+      for (const assetToExtract of group.assetsToExtract) {
+        const tokenUnit = `${assetToExtract.policyId}${assetToExtract.assetName.name}`;
+        if (!aggregatedQuantities[tokenUnit]) {
+          aggregatedQuantities[tokenUnit] = { tokenUnit, quantity: 0, tokenName: assetToExtract.assetName.name };
+        }
+        aggregatedQuantities[tokenUnit].quantity += assetToExtract.quantity;
+      }
+    }
+
+    // Build per-asset extraction details
+    const assetExtractionDetails = utxoGroups.flatMap(group =>
+      group.assets.map(asset => ({
+        assetId: asset.id,
+        policyId: asset.policy_id,
+        assetName: asset.asset_id,
+        quantity: parseFloat(String(asset.quantity)),
+        sourceUtxo: group.txHash,
+      }))
+    );
+
+    this.logger.log('=== EXTRACTION SUMMARY ===');
+    this.logger.log(`Total assets to extract: ${assetExtractionDetails.length}`);
+    for (const [tokenUnit, data] of Object.entries(aggregatedQuantities)) {
+      this.logger.log(`Token ${tokenUnit}: Total quantity = ${data.quantity}`);
+    }
+    this.logger.log('Per-asset breakdown:');
+    for (const detail of assetExtractionDetails) {
+      this.logger.log(`  Asset ${detail.assetId}: ${detail.quantity} of ${detail.assetName}`);
+    }
+    this.logger.log('=========================');
+
     const transaction = await this.transactionsService.createTransaction({
       vault_id: vault.id,
       type: TransactionType.extract,
@@ -302,6 +367,9 @@ export class TreasuryExtractionService {
         sourceTransactions: utxoGroups.map(g => g.txHash),
         assetCount: allExtractedAssets.length,
         assetIds: allExtractedAssets.map(a => a.assetId),
+        // NEW: Detailed extraction tracking for audit
+        aggregatedQuantities: Object.values(aggregatedQuantities),
+        assetExtractionDetails,
       },
     });
 

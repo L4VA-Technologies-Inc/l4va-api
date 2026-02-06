@@ -373,12 +373,12 @@ export class GovernanceService {
         >();
 
         if (market === 'DexHunter') {
-          // Fetch all locked FT assets for this vault to enable multi-asset swaps
+          // Fetch all swappable FT assets (LOCKED in vault + EXTRACTED in treasury)
           const allFTs = await this.assetRepository.find({
             where: {
               vault: { id: vaultId },
               type: AssetType.FT,
-              status: AssetStatus.LOCKED,
+              status: In([AssetStatus.LOCKED, AssetStatus.EXTRACTED]),
             },
             select: ['id', 'status', 'type', 'policy_id', 'asset_id', 'quantity', 'name'],
           });
@@ -1654,7 +1654,13 @@ export class GovernanceService {
 
       // Sort records by quantity (smallest first) for greedy algorithm
       const sortedRecords = asset.assetRecords.sort((a, b) => a.quantity - b.quantity);
-      const availableAmounts = sortedRecords.map(r => r.quantity);
+
+      // Both LOCKED (in vault) and EXTRACTED (already in treasury) can be swapped
+      // LOCKED assets need extraction first, EXTRACTED assets can swap directly
+      const swappableRecords = sortedRecords.filter(
+        r => r.status === AssetStatus.LOCKED || r.status === AssetStatus.EXTRACTED
+      );
+      const swappableAmounts = swappableRecords.map(r => r.quantity);
 
       return {
         id: asset.id, // First asset ID (for backwards compatibility)
@@ -1663,16 +1669,16 @@ export class GovernanceService {
         unit: tokenId, // Full token identifier for DexHunter
         name: asset.name,
         image: asset.metadata?.image || null,
-        quantity: totalQuantity, // Total available (locked + extracted)
-        lockedQuantity: asset.lockedQuantity, // Still in vault
-        extractedQuantity: asset.extractedQuantity, // Already extracted from vault
-        treasuryQuantity: asset.treasuryQuantity, // Currently in treasury wallet
+        quantity: totalQuantity, // Total across all statuses (locked + extracted + treasury)
+        lockedQuantity: asset.lockedQuantity, // In vault (needs extraction)
+        extractedQuantity: asset.extractedQuantity, // Already in treasury (ready to swap)
+        treasuryQuantity: asset.treasuryQuantity, // Currently in treasury wallet (from Blockfrost)
         currentPriceAda,
         estimatedAdaValue,
         lastPriceUpdate: new Date().toISOString(),
         assetRecords: sortedRecords, // All individual asset records with IDs and status
-        availableAmounts: availableAmounts, // Just the quantities (backwards compatible)
-        validCombinations: this.calculateValidCombinations(availableAmounts),
+        availableAmounts: swappableAmounts, // LOCKED + EXTRACTED quantities (swappable)
+        validCombinations: this.calculateValidCombinations(swappableAmounts), // From LOCKED + EXTRACTED
       };
     });
   }
