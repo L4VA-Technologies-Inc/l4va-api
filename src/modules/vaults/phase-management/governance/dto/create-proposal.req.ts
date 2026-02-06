@@ -220,6 +220,16 @@ export class MarketplaceActionDto {
   @IsOptional()
   @IsNumber()
   customPriceAda?: number;
+
+  @ApiProperty({
+    description: 'Resolved asset IDs and quantities for DexHunter swaps (auto-populated by backend)',
+    required: false,
+  })
+  @IsOptional()
+  resolvedAssets?: Array<{
+    assetId: string;
+    quantity: number;
+  }>;
 }
 
 export class CreateProposalReq {

@@ -216,7 +216,20 @@ export const getUtxosExtract = async (
     });
   });
 
-  const utxos = await blockfrost.addressesUtxosAll(address.to_bech32());
+  let utxos = [];
+  try {
+    utxos = await blockfrost.addressesUtxosAll(address.to_bech32());
+  } catch (error) {
+    // If address has never received transactions, Blockfrost returns 404
+    if (error.status_code === 404 || error.message?.includes('not been found')) {
+      // Return empty result for empty address
+      return {
+        utxos: [],
+        requiredInputs: [],
+      };
+    }
+    throw error; // Re-throw unexpected errors
+  }
 
   // Initial filtering before sorting to reduce unnecessary comparisons
   const preFilteredUtxos = utxos.filter(utxo => {

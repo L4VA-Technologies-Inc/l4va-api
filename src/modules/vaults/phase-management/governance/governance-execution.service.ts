@@ -853,8 +853,12 @@ export class GovernanceExecutionService {
           }
           this.logger.log(`Found ${assetsInTreasury.size} unique asset(s) in treasury wallet`);
         } catch (error) {
-          // If treasury is empty or query fails, assume no assets are there
-          this.logger.log(`Treasury wallet appears empty or query failed: ${error.message}`);
+          // If treasury wallet has never received transactions, Blockfrost returns 404
+          if (error.status_code === 404 || error.message?.includes('not been found')) {
+            this.logger.log(`Treasury wallet ${treasuryAddress} is empty (no transactions yet)`);
+          } else {
+            this.logger.log(`Treasury wallet query failed: ${error.message}`);
+          }
         }
 
         // Filter out assets that are already in treasury
@@ -1028,11 +1032,22 @@ export class GovernanceExecutionService {
     const actions = proposal.metadata.marketplaceActions || [];
 
     try {
-      // Fetch all FT assets from database
-      const assetIds = [...new Set(actions.map(opt => opt.assetId))];
+      // Collect all asset IDs from resolved assets (new format) or fallback to single assetId (old format)
+      const allAssetIds = new Set<string>();
+      for (const action of actions) {
+        if (action.resolvedAssets && Array.isArray(action.resolvedAssets)) {
+          // New format: array of {assetId, quantity}
+          action.resolvedAssets.forEach(resolved => allAssetIds.add(resolved.assetId));
+        } else if (action.assetId) {
+          // Old format (backwards compatibility): single assetId
+          allAssetIds.add(action.assetId);
+        }
+      }
+
+      // Fetch all FT assets from database (including EXTRACTED ones for reference)
       const assets = await this.assetRepository.find({
-        where: assetIds.map(id => ({ id })),
-        select: ['id', 'policy_id', 'asset_id', 'name', 'quantity', 'type'],
+        where: Array.from(allAssetIds).map(id => ({ id })),
+        select: ['id', 'policy_id', 'asset_id', 'name', 'quantity', 'type', 'status'],
       });
 
       const assetMap = new Map(assets.map(asset => [asset.id, asset]));
@@ -1044,16 +1059,16 @@ export class GovernanceExecutionService {
 
       const treasuryAddress = proposal.vault.treasury_wallet.treasury_address;
 
-      // Check which assets are already in treasury wallet
+      // Check token quantities in treasury wallet
       this.logger.log(`Checking treasury wallet ${treasuryAddress} for existing assets`);
-      const tokensInTreasury = new Set<string>();
+      const treasuryBalances = new Map<string, number>(); // tokenUnit -> quantity
 
       try {
         const treasuryAddressInfo = await this.blockfrost.addresses(treasuryAddress);
 
         for (const amount of treasuryAddressInfo.amount) {
           if (amount.unit !== 'lovelace') {
-            tokensInTreasury.add(amount.unit);
+            treasuryBalances.set(amount.unit, parseInt(amount.quantity));
           }
         }
       } catch (error) {
@@ -1067,17 +1082,73 @@ export class GovernanceExecutionService {
         }
       }
 
-      // Filter assets that need extraction (not already in treasury)
-      const assetsNeedingExtraction = assets.filter(asset => {
-        const tokenUnit = asset.policy_id + asset.asset_id;
-        return !tokensInTreasury.has(tokenUnit);
-      });
+      // Calculate required quantities from resolvedAssets
+      const requiredQuantities = new Map<string, number>(); // tokenUnit -> total required quantity
 
-      // Extract assets that are not yet in treasury wallet
+      for (const action of actions) {
+        if (action.resolvedAssets && Array.isArray(action.resolvedAssets)) {
+          for (const resolved of action.resolvedAssets) {
+            const asset = assetMap.get(resolved.assetId);
+            if (asset) {
+              const tokenUnit = asset.policy_id + asset.asset_id;
+              const current = requiredQuantities.get(tokenUnit) || 0;
+              requiredQuantities.set(tokenUnit, current + resolved.quantity);
+            }
+          }
+        }
+      }
+
+      // Calculate deficit quantities - only extract what's missing from treasury
+      const deficitQuantities = new Map<string, number>(); // tokenUnit -> quantity to extract
+
+      for (const [tokenUnit, requiredQty] of requiredQuantities) {
+        const treasuryQty = treasuryBalances.get(tokenUnit) || 0;
+        const deficit = Math.max(0, requiredQty - treasuryQty);
+
+        if (deficit > 0) {
+          deficitQuantities.set(tokenUnit, deficit);
+          this.logger.log(
+            `Token ${tokenUnit}: Required ${requiredQty}, In Treasury ${treasuryQty}, Need to Extract: ${deficit}`
+          );
+        } else {
+          this.logger.log(
+            `Token ${tokenUnit}: Required ${requiredQty}, In Treasury ${treasuryQty}, Sufficient in treasury (no extraction needed)`
+          );
+        }
+      }
+
+      // Select specific assets to extract based on deficit amounts
+      const assetsNeedingExtraction = [];
+
+      for (const [tokenUnit, deficitQty] of deficitQuantities) {
+        // Get all LOCKED assets for this token type, sorted by quantity descending
+        const availableAssets = assets
+          .filter(asset => asset.policy_id + asset.asset_id === tokenUnit && asset.status !== 'extracted')
+          .sort((a, b) => b.quantity - a.quantity);
+
+        // Greedy selection: pick assets to cover the deficit
+        let remaining = deficitQty;
+        for (const asset of availableAssets) {
+          if (remaining <= 0) break;
+
+          assetsNeedingExtraction.push(asset);
+          this.logger.log(`  → Selecting asset ${asset.id} (${asset.quantity} tokens) to cover deficit`);
+          remaining -= asset.quantity;
+        }
+
+        // Verify we have enough assets to cover the deficit
+        if (remaining > 0) {
+          throw new Error(
+            `Insufficient LOCKED assets for token ${tokenUnit}. Need ${deficitQty} more, but only found ${
+              deficitQty - remaining
+            } in vault. Check if assets were already extracted or consumed.`
+          );
+        }
+      }
+
+      // Extract assets that are not yet in treasury wallet (or insufficient quantity)
       if (assetsNeedingExtraction.length > 0) {
-        this.logger.log(
-          `Extracting ${assetsNeedingExtraction.length} assets to treasury (${assets.length - assetsNeedingExtraction.length} already there)`
-        );
+        this.logger.log(`Extracting ${assetsNeedingExtraction.length} assets to treasury to meet required quantities`);
 
         const extractionResult = await this.treasuryExtractionService.extractAssetsFromVault({
           vaultId: proposal.vaultId,
@@ -1099,7 +1170,7 @@ export class GovernanceExecutionService {
 
         await new Promise(resolve => setTimeout(resolve, 5000)); // Wait for blockchain sync
       } else {
-        this.logger.log('All assets already in treasury wallet, skipping extraction');
+        this.logger.log('Treasury wallet has sufficient token quantities, skipping extraction');
       }
 
       // Initialize swap results array if not exists

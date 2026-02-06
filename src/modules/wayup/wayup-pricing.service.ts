@@ -131,7 +131,6 @@ export class WayUpPricingService {
 
   /**
    * Cron job that tracks NFT sales by checking if LISTED assets are still on WayUp
-   * Runs every 30 minutes
    * Implements locking mechanism to prevent concurrent executions
    */
   @Cron(CronExpression.EVERY_30_MINUTES)
@@ -159,7 +158,7 @@ export class WayUpPricingService {
           status: AssetStatus.LISTED,
           deleted: false,
         },
-        select: ['id', 'policy_id', 'asset_id'],
+        select: ['id', 'policy_id', 'asset_id', 'name'],
       });
 
       if (listedAssets.length === 0) {
@@ -170,7 +169,7 @@ export class WayUpPricingService {
       this.logger.log(`Found ${listedAssets.length} listed assets to check`);
 
       // Group assets by policy_id for efficient querying
-      const assetsByPolicyId = new Map<string, Array<{ id: string; assetId: string }>>();
+      const assetsByPolicyId = new Map<string, Array<{ id: string; assetId: string; name: string }>>();
       for (const asset of listedAssets) {
         if (!assetsByPolicyId.has(asset.policy_id)) {
           assetsByPolicyId.set(asset.policy_id, []);
@@ -178,6 +177,7 @@ export class WayUpPricingService {
         assetsByPolicyId.get(asset.policy_id)!.push({
           id: asset.id,
           assetId: asset.asset_id,
+          name: asset.name,
         });
       }
 
@@ -187,32 +187,27 @@ export class WayUpPricingService {
 
       // Check each collection
       for (const [policyId, assets] of assetsByPolicyId) {
-        try {
-          // Get all assets from this collection that are listed on WayUp
-          const response = await this.getCollectionAssets({
-            policyId,
-            saleType: 'listedOnly',
-            limit: 100, // Adjust based on expected collection size
-          });
+        // Check each asset individually by name
+        for (const asset of assets) {
+          try {
+            // Query for the specific asset by name
+            const response = await this.getCollectionAssets({
+              policyId,
+              term: asset.name,
+              limit: 1,
+            });
 
-          // Create a set of currently listed asset IDs for quick lookup
-          const currentlyListedAssetIds = new Set(
-            response.results
-              .filter(result => result.listing) // Only assets with active listings
-              .map(result => result.assetName) // assetName is the hex asset_id
-          );
-
-          // Check each of our assets
-          for (const asset of assets) {
-            // If the asset is NOT in the WayUp response, it has been sold
-            if (!currentlyListedAssetIds.has(asset.assetId)) {
+            // If the response is empty or has no listing, the asset was sold
+            if (response.results.length === 0 || !response.results[0].listing) {
               soldAssetIds.push(asset.id);
-              this.logger.log(`Asset ${asset.assetId} from policy ${policyId} has been sold`);
+              this.logger.log(`Asset ${asset.name} (${asset.assetId}) from policy ${policyId} has been sold`);
             }
+          } catch (error) {
+            this.logger.error(
+              `Failed to check sale status for asset ${asset.name} (${asset.assetId}): ${error.message}`
+            );
+            // Continue with next asset
           }
-        } catch (error) {
-          this.logger.error(`Failed to check sales for collection ${policyId}: ${error.message}`);
-          // Continue with next collection
         }
       }
 
