@@ -668,7 +668,7 @@ export class VaultsService {
     const [assetsWhitelist, acquirerWhitelist] = await Promise.all([
       this.assetsWhitelistRepository.find({
         where: { vault: { id: vaultId } },
-        select: ['policy_id', 'asset_count_cap_min', 'asset_count_cap_max'],
+        select: ['policy_id', 'collection_name', 'asset_count_cap_min', 'asset_count_cap_max'],
       }),
       this.acquirerWhitelistRepository.find({
         where: { vault: { id: vaultId } },
