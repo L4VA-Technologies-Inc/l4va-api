@@ -1,11 +1,4 @@
-import {
-  BadRequestException,
-  Injectable,
-  InternalServerErrorException,
-  Logger,
-  NotFoundException,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
@@ -18,7 +11,6 @@ import { TaptoolsService } from '../taptools/taptools.service';
 
 import { CreateVaultReq } from './dto/createVault.req';
 import { VaultActivityFilter } from './dto/get-vault-activity.dto';
-import { VaultStatisticsResponse } from './dto/get-vaults-statistics.dto';
 import { GetVaultsDto, SortOrder, TVLCurrency, VaultFilter } from './dto/get-vaults.dto';
 import { IncrementViewCountRes } from './dto/increment-view-count.res';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
@@ -605,115 +597,12 @@ export class VaultsService {
   }
 
   /**
-   * Retrieves statistics about vaults for the landing page.
-   *
-   * @returns Object containing platform statistics
-   */
-  async getVaultStatistics(): Promise<VaultStatisticsResponse> {
-    try {
-      // Count active vaults (published, contribution, acquire, locked), excluding hidden vaults on mainnet
-      const activeVaultsWhere: any = {
-        vault_status: In([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked]),
-        deleted: false,
-      };
-      if (this.isMainnet) {
-        activeVaultsWhere.id = Not(In(this.systemSettingsService.hiddenMainnetVaultIds));
-      }
-      const activeVaultsCount = await this.vaultsRepository.count({
-        where: activeVaultsWhere,
-      });
-
-      const totalVaultsWhere: any = {
-        vault_status: In([VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked]),
-      };
-      if (this.isMainnet) {
-        totalVaultsWhere.id = Not(In(this.systemSettingsService.hiddenMainnetVaultIds));
-      }
-      const totalVaultsCount = await this.vaultsRepository.count({
-        where: totalVaultsWhere,
-      });
-      // Get sum of total assets value for locked vaults only, excluding hidden vaults on mainnet
-      const totalValueQuery = await this.vaultsRepository
-        .createQueryBuilder('vault')
-        .select('SUM(vault.total_assets_cost_usd)', 'totalValueUsd')
-        .addSelect('SUM(vault.total_assets_cost_ada)', 'totalValueAda')
-        .where('vault.vault_status = :status', { status: VaultStatus.locked })
-        .andWhere('vault.deleted = :deleted', { deleted: false });
-      if (this.isMainnet) {
-        totalValueQuery.andWhere('vault.id NOT IN (:...hiddenIds)', {
-          hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
-        });
-      }
-      const totalValueResult = await totalValueQuery.getRawOne();
-
-      // Count total assets contributed across all vaults, excluding hidden vaults on mainnet
-      const totalContributedQuery = await this.vaultsRepository
-        .createQueryBuilder('vault')
-        .select('SUM(vault.total_assets_cost_usd)', 'totalValueUsd')
-        .addSelect('SUM(vault.total_assets_cost_ada)', 'totalValueAda')
-        .where('vault.vault_status IN (:...statuses)', {
-          statuses: [VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked, VaultStatus.failed],
-        })
-        .andWhere('vault.deleted = :deleted', { deleted: false });
-      if (this.isMainnet) {
-        totalContributedQuery.andWhere('vault.id NOT IN (:...hiddenIds)', {
-          hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
-        });
-      }
-      const totalContributedResult = await totalContributedQuery.getRawOne();
-
-      // Count total assets ever contributed (all time, including removed)
-      const totalAssetsQuery = await this.assetsRepository
-        .createQueryBuilder('asset')
-        .select('COUNT(asset.id)', 'count')
-        .getRawOne();
-
-      // Get total acquired value (both ADA and USD) across all vaults, excluding hidden vaults on mainnet
-      const totalAcquiredQuery = await this.vaultsRepository
-        .createQueryBuilder('vault')
-        .select('SUM(vault.total_acquired_value_ada)', 'totalAcquiredAda');
-      if (this.isMainnet) {
-        totalAcquiredQuery.andWhere('vault.id NOT IN (:...hiddenIds)', {
-          hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
-        });
-      }
-      const totalAcquiredResult = await totalAcquiredQuery.getRawOne();
-
-      const vaultsByStage = await this.getVaultsByStageData();
-      const vaultsByType = await this.getVaultsByTypeData();
-
-      const adaPrice = await this.priceService.getAdaPrice();
-
-      const statistics = {
-        activeVaults: activeVaultsCount,
-        totalVaults: totalVaultsCount,
-        totalValueUsd: Number(totalValueResult?.totalValueUsd || 0),
-        totalValueAda: Number(totalValueResult?.totalValueAda || 0),
-        totalContributedUsd: Number(totalContributedResult?.totalValueUsd || 0),
-        totalContributedAda: Number(totalContributedResult?.totalValueAda || 0),
-        totalAssets: Number(totalAssetsQuery?.count || 0),
-        totalAcquiredAda: Number(totalAcquiredResult?.totalAcquiredAda || 0),
-        totalAcquiredUsd: parseFloat((Number(totalAcquiredResult?.totalAcquiredAda || 0) * adaPrice).toFixed(2)),
-        vaultsByStage,
-        vaultsByType,
-      };
-
-      return plainToInstance(VaultStatisticsResponse, statistics, {
-        excludeExtraneousValues: true,
-      });
-    } catch (error) {
-      this.logger.error('Error retrieving vault statistics:', error);
-      throw new InternalServerErrorException('Failed to retrieve vault statistics');
-    }
-  }
-
-  /**
    * DEPRECATED FOR NOW, NOT IN USE
    * Retrieves top 5 public vaults currently in the acquire phase, sorted by total assets cost in ADA.
    * Calculates time left for the acquire phase for each vault.
    * @returns Array of VaultAcquireResponse objects
    */
-  async getAcquire(): Promise<VaultAcquireResponse[]> {
+  async getTopPublicAcquireVaults(): Promise<VaultAcquireResponse[]> {
     const vaults = await this.vaultsRepository
       .createQueryBuilder('vault')
       .leftJoinAndSelect('vault.vault_image', 'file')
@@ -849,6 +738,14 @@ export class VaultsService {
       assetsCount: lockedAssetsCount,
       assetsPrices,
       fdvUsd: vault.fdv * adaPrice,
+      // Protocol fees
+      protocolContributorsFeeLovelace: this.systemSettingsService.protocolContributorsFee,
+      protocolContributorsFeeAda: this.systemSettingsService.protocolContributorsFee / 1_000_000,
+      protocolContributorsFeeUsd: (this.systemSettingsService.protocolContributorsFee / 1_000_000) * adaPrice,
+      protocolAcquiresFeeLovelace: this.systemSettingsService.protocolAcquiresFee,
+      protocolAcquiresFeeAda: this.systemSettingsService.protocolAcquiresFee / 1_000_000,
+      protocolAcquiresFeeUsd: (this.systemSettingsService.protocolAcquiresFee / 1_000_000) * adaPrice,
+      protocolEnabled: this.systemSettingsService.protocolEnabled,
     };
 
     let canCreateProposal = false;
@@ -1445,144 +1342,6 @@ export class VaultsService {
     } catch (error) {
       this.logger.error(`Error calculating phase times for vault ${vault.id}:`, error);
       return { phaseStartTime: null, phaseEndTime: null };
-    }
-  }
-
-  /**
-   * Gets distribution of vaults by stage with TVL in both ADA and USD
-   * @returns Record of stages with percentages and TVL values
-   */
-  private async getVaultsByStageData(): Promise<
-    Record<string, { percentage: number; valueAda: string; valueUsd: string }>
-  > {
-    try {
-      // Get TVL by vault status for both currencies, excluding hidden vaults on mainnet
-      const statusQuery = this.vaultsRepository
-        .createQueryBuilder('vault')
-        .select('vault.vault_status', 'status')
-        .addSelect('SUM(vault.total_assets_cost_ada)', 'valueAda')
-        .addSelect('SUM(vault.total_assets_cost_usd)', 'valueUsd')
-        .addSelect('COUNT(vault.id)', 'count')
-        .where('vault.deleted = :deleted', { deleted: false })
-        .andWhere('vault.vault_status IN (:...statuses)', {
-          statuses: ['contribution', 'acquire', 'locked', 'burned'],
-        });
-      if (this.isMainnet) {
-        statusQuery.andWhere('vault.id NOT IN (:...hiddenIds)', {
-          hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
-        });
-      }
-      const statusResults = await statusQuery.groupBy('vault.vault_status').getRawMany();
-
-      // Calculate total ADA value for percentages
-      const totalValueAda = statusResults.reduce((sum, item) => sum + Number(item.valueAda || 0), 0);
-
-      const result = {
-        contribution: { percentage: 0, valueAda: '0', valueUsd: '0' },
-        acquire: { percentage: 0, valueAda: '0', valueUsd: '0' },
-        locked: { percentage: 0, valueAda: '0', valueUsd: '0' },
-        terminated: { percentage: 0, valueAda: '0', valueUsd: '0' },
-      };
-
-      const statusMap = {
-        contribution: 'contribution',
-        acquire: 'acquire',
-        locked: 'locked',
-        burned: 'terminated',
-      };
-
-      statusResults.forEach(item => {
-        const status = statusMap[item.status] || item.status;
-        const valueAda = Number(item.valueAda || 0);
-        const valueUsd = Number(item.valueUsd || 0);
-        const percentage = totalValueAda > 0 ? (valueAda / totalValueAda) * 100 : 0;
-
-        result[status.toLowerCase()] = {
-          percentage: parseFloat(percentage.toFixed(2)),
-          valueAda,
-          valueUsd,
-        };
-      });
-
-      return result;
-    } catch (error) {
-      this.logger.error('Error calculating vaults by stage:', error);
-      // Return default object with zero values for all required statuses
-      return {
-        contribution: { percentage: 0, valueAda: '0', valueUsd: '0' },
-        acquire: { percentage: 0, valueAda: '0', valueUsd: '0' },
-        locked: { percentage: 0, valueAda: '0', valueUsd: '0' },
-        terminated: { percentage: 0, valueAda: '0', valueUsd: '0' },
-      };
-    }
-  }
-
-  /**
-   * Gets distribution of vaults by privacy type with TVL in both ADA and USD
-   * @returns Record of privacy types with percentages and TVL values
-   */
-  private async getVaultsByTypeData(): Promise<
-    Record<string, { percentage: number; valueAda: number; valueUsd: number }>
-  > {
-    try {
-      const privacyQuery = this.vaultsRepository
-        .createQueryBuilder('vault')
-        .select('vault.privacy', 'type')
-        .addSelect('SUM(vault.total_assets_cost_ada)', 'valueAda')
-        .addSelect('SUM(vault.total_assets_cost_usd)', 'valueUsd')
-        .addSelect('COUNT(vault.id)', 'count')
-        .where('vault.deleted = :deleted', { deleted: false });
-      if (this.isMainnet) {
-        privacyQuery.andWhere('vault.id NOT IN (:...hiddenIds)', {
-          hiddenIds: this.systemSettingsService.hiddenMainnetVaultIds,
-        });
-      }
-      const privacyResults = await privacyQuery.groupBy('vault.privacy').getRawMany();
-
-      const totalValueAda = privacyResults.reduce((sum, item) => sum + Number(item.valueAda || 0), 0);
-
-      const result = {
-        private: {
-          percentage: 0,
-          valueAda: 0,
-          valueUsd: 0,
-        },
-        public: {
-          percentage: 0,
-          valueAda: 0,
-          valueUsd: 0,
-        },
-        semiPrivate: {
-          percentage: 0,
-          valueAda: 0,
-          valueUsd: 0,
-        },
-      };
-
-      privacyResults.forEach(item => {
-        if (item.type) {
-          const type = item.type;
-          const valueAda = Number(item.valueAda || 0);
-          const valueUsd = Number(item.valueUsd || 0);
-          const percentage = parseFloat((totalValueAda > 0 ? (valueAda / totalValueAda) * 100 : 0).toFixed(2)) || 0;
-
-          const key = type === 'semi-private' ? 'semiPrivate' : type.toLowerCase();
-          result[key] = {
-            percentage,
-            valueAda,
-            valueUsd,
-          };
-        }
-      });
-
-      return result;
-    } catch (error) {
-      this.logger.error('Error calculating vaults by type:', error);
-      return {
-        private: { percentage: 0, valueAda: 0, valueUsd: 0 },
-        public: { percentage: 0, valueAda: 0, valueUsd: 0 },
-        semiPrivate: { percentage: 0, valueAda: 0, valueUsd: 0 },
-      };
     }
   }
 

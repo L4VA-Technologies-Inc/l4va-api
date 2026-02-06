@@ -137,13 +137,13 @@ export class VaultsController {
   }
 
   @ApiDoc({
-    summary: 'List of biggest investments',
-    description: 'Returns list of biggest transaction.',
+    summary: 'Get top public vaults in acquire phase',
+    description: 'Returns top 5 public vaults currently in acquire phase, sorted by total assets value.',
     status: 200,
   })
-  @Get('acquire')
-  async getAcquire(): Promise<VaultAcquireResponse[]> {
-    return this.vaultsService.getAcquire();
+  @Get('acquire/top')
+  async getTopPublicAcquireVaults(): Promise<VaultAcquireResponse[]> {
+    return this.vaultsService.getTopPublicAcquireVaults();
   }
 
   @ApiDoc({
@@ -153,7 +153,7 @@ export class VaultsController {
   })
   @Get('statistics')
   async getVaultStatistics(): Promise<VaultStatisticsResponse> {
-    return await this.vaultsService.getVaultStatistics();
+    return await this.statisticsService.getVaultStatistics();
   }
 
   @ApiDoc({

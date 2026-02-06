@@ -1430,9 +1430,37 @@ export class GovernanceService {
   }
 
   /**
+   * Calculate all valid quantity combinations from individual asset amounts
+   * Uses subset sum to find all possible sums
+   * @param amounts - Array of individual asset quantities
+   * @returns Sorted array of all valid combination sums (excluding 0)
+   */
+  private calculateValidCombinations(amounts: number[]): number[] {
+    if (!amounts || amounts.length === 0) {
+      return [];
+    }
+
+    const combinations = new Set<number>([0]);
+    for (const amount of amounts) {
+      const newCombinations = new Set(combinations);
+      for (const sum of combinations) {
+        newCombinations.add(sum + amount);
+      }
+      for (const sum of newCombinations) {
+        combinations.add(sum);
+      }
+    }
+
+    // Return sorted array excluding 0
+    return Array.from(combinations)
+      .filter(c => c > 0)
+      .sort((a, b) => a - b);
+  }
+
+  /**
    * Get fungible tokens available for swapping via DexHunter
    * Returns FT assets with current prices and estimated ADA values
-   * Includes individual asset quantities to allow valid combination swaps
+   * Includes individual asset quantities and precomputed valid combinations
    */
   async getSwappableAssets(vaultId: string): Promise<
     {
@@ -1448,6 +1476,8 @@ export class GovernanceService {
       lastPriceUpdate: string;
       /** Individual asset quantities that can be combined for swapping */
       availableAmounts: number[];
+      /** Precomputed valid quantity combinations */
+      validCombinations: number[];
     }[]
   > {
     // Query all FT assets for this vault with quantity > 0
@@ -1519,6 +1549,7 @@ export class GovernanceService {
       const tokenId = asset.policy_id + asset.asset_id;
       const currentPriceAda = priceMap.get(tokenId) || asset.dex_price || null;
       const estimatedAdaValue = currentPriceAda ? asset.quantity * currentPriceAda : null;
+      const sortedAmounts = asset.individualQuantities.sort((a, b) => a - b);
 
       return {
         id: asset.id,
@@ -1531,7 +1562,8 @@ export class GovernanceService {
         currentPriceAda,
         estimatedAdaValue,
         lastPriceUpdate: new Date().toISOString(),
-        availableAmounts: asset.individualQuantities.sort((a, b) => a - b),
+        availableAmounts: sortedAmounts,
+        validCombinations: this.calculateValidCombinations(sortedAmounts),
       };
     });
   }

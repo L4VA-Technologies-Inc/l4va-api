@@ -237,6 +237,55 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   projectedLpUsdAmount: number;
 
+  @ApiProperty({ description: 'Protocol fee for contributors in lovelace', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'protocolContributorsFeeLovelace' },
+  })
+  protocolContributorsFeeLovelace?: number;
+
+  @ApiProperty({ description: 'Protocol fee for contributors in ADA', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'protocolContributorsFeeAda' },
+  })
+  protocolContributorsFeeAda?: number;
+
+  @ApiProperty({ description: 'Protocol fee for contributors in USD', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'protocolContributorsFeeUsd' },
+  })
+  protocolContributorsFeeUsd?: number;
+
+  @ApiProperty({ description: 'Protocol fee for acquirers in lovelace', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'protocolAcquiresFeeLovelace' },
+  })
+  protocolAcquiresFeeLovelace?: number;
+
+  @ApiProperty({ description: 'Protocol fee for acquirers in ADA', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'protocolAcquiresFeeAda' },
+  })
+  protocolAcquiresFeeAda?: number;
+
+  @ApiProperty({ description: 'Protocol fee for acquirers in USD', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'protocolAcquiresFeeUsd' },
+  })
+  protocolAcquiresFeeUsd?: number;
+
+  @ApiProperty({ description: 'Whether protocol fees are enabled', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'protocolEnabled' },
+  })
+  protocolEnabled?: boolean;
+
   @ApiProperty({
     description: 'Indicates whether the user can create proposals for this vault',
     type: Boolean,
