@@ -1154,7 +1154,12 @@ export class TerminationService {
 
       return balance;
     } catch (error) {
-      this.logger.error(`Failed to get treasury balance for vault ${vault.id}: ${error.message}`);
+      // If treasury wallet has never received transactions, Blockfrost returns 404
+      if (error.status_code === 404 || error.message?.includes('not been found')) {
+        this.logger.log(`Treasury wallet for vault ${vault.id} is empty (no transactions yet)`);
+      } else {
+        this.logger.error(`Failed to get treasury balance for vault ${vault.id}: ${error.message}`);
+      }
       return BigInt(0);
     }
   }

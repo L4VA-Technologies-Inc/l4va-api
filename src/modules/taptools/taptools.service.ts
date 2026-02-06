@@ -1149,8 +1149,33 @@ export class TaptoolsService {
     }
 
     try {
-      // Validate address
-      await this.blockfrost.addresses(walletAddress);
+      // Validate address and check if it exists
+      try {
+        await this.blockfrost.addresses(walletAddress);
+      } catch (error) {
+        // If address has never received transactions, Blockfrost returns 404
+        if (error.status_code === 404 || error.message?.includes('not been found')) {
+          // Return empty wallet overview
+          const emptyOverviewData = {
+            wallet: walletAddress,
+            totalValueAda: 0,
+            totalValueUsd: 0,
+            lastUpdated: new Date().toISOString(),
+            summary: {
+              totalAssets: 0,
+              nfts: 0,
+              tokens: 0,
+              ada: 0,
+            },
+          };
+          const emptyOverview = plainToInstance(WalletOverviewDto, emptyOverviewData, {
+            excludeExtraneousValues: true,
+          });
+          this.cache.set(overviewCacheKey, emptyOverview, 300);
+          return emptyOverview;
+        }
+        throw error; // Re-throw unexpected errors
+      }
 
       // Get totals
       const addressTotal = await this.blockfrost.addressesTotal(walletAddress);

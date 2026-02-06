@@ -853,8 +853,12 @@ export class GovernanceExecutionService {
           }
           this.logger.log(`Found ${assetsInTreasury.size} unique asset(s) in treasury wallet`);
         } catch (error) {
-          // If treasury is empty or query fails, assume no assets are there
-          this.logger.log(`Treasury wallet appears empty or query failed: ${error.message}`);
+          // If treasury wallet has never received transactions, Blockfrost returns 404
+          if (error.status_code === 404 || error.message?.includes('not been found')) {
+            this.logger.log(`Treasury wallet ${treasuryAddress} is empty (no transactions yet)`);
+          } else {
+            this.logger.log(`Treasury wallet query failed: ${error.message}`);
+          }
         }
 
         // Filter out assets that are already in treasury

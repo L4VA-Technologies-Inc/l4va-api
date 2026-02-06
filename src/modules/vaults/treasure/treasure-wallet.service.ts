@@ -311,7 +311,18 @@ export class TreasuryWalletService {
     }
 
     try {
-      const utxos = await this.blockfrost.addressesUtxosAll(wallet.treasury_address);
+      let utxos = [];
+      try {
+        utxos = await this.blockfrost.addressesUtxosAll(wallet.treasury_address);
+      } catch (error) {
+        // If treasury wallet has never received transactions, Blockfrost returns 404
+        if (error.status_code === 404 || error.message?.includes('not been found')) {
+          this.logger.log(`Treasury wallet ${wallet.treasury_address} is empty (no transactions yet)`);
+          utxos = []; // Empty array for empty wallet
+        } else {
+          throw error; // Re-throw unexpected errors
+        }
+      }
 
       let totalLovelace = 0;
       const assetsMap = new Map<string, bigint>();
