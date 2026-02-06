@@ -168,7 +168,6 @@ export class TaptoolsService {
 
     for (const key of characterKeys) {
       if (metadata[key]) {
-        this.logger.debug(`Found character at top level: ${metadata[key]}`);
         return metadata[key];
       }
     }
@@ -263,9 +262,6 @@ export class TaptoolsService {
       const character = await this.fetchRelicsCharacterFromWayUp(policyId, name);
 
       if (character && this.RELICS_CHARACTER_PRICES[character]) {
-        this.logger.debug(
-          `Using trait-based price for Vita NFT with character ${character}: ${this.RELICS_CHARACTER_PRICES[character]} ADA`
-        );
         return this.RELICS_CHARACTER_PRICES[character];
       }
 
@@ -331,9 +327,6 @@ export class TaptoolsService {
                 priceUsd: traitPrice * adaPrice,
               };
               this.cache.set(cacheKey, result);
-              this.logger.debug(
-                `Using trait-based price for Relics of Magma NFT ${name || assetName}: ${traitPrice} ADA`
-              );
               return result;
             }
           } catch (error) {
@@ -416,10 +409,10 @@ export class TaptoolsService {
       // Build query to get unique assets across specified vaults
       let query = this.assetRepository
         .createQueryBuilder('asset')
-        .select(['asset.policy_id', 'asset.asset_id', 'asset.type'])
+        .select(['asset.policy_id', 'asset.asset_id', 'asset.type', 'asset.name'])
         .where('asset.status IN (:...statuses)', { statuses: [AssetStatus.PENDING, AssetStatus.LOCKED] })
         .andWhere('asset.deleted = false')
-        .groupBy('asset.policy_id, asset.asset_id, asset.type');
+        .groupBy('asset.policy_id, asset.asset_id, asset.type, asset.name');
 
       if (vaultIds && vaultIds.length > 0) {
         query = query.andWhere('asset.vault_id IN (:...vaultIds)', { vaultIds });
@@ -448,12 +441,20 @@ export class TaptoolsService {
             if (!this.isMainnet) {
               priceAda = this.testnetPrices[asset.asset_policy_id] || 5.0;
             } else if (isNFT) {
-              // Get floor price from WayUp for NFTs
-              try {
-                const { floorPriceAda } = await this.wayUpPricingService.getCollectionFloorPrice(asset.asset_policy_id);
-                priceAda = floorPriceAda > 0 ? floorPriceAda : null;
-              } catch (error) {
-                this.logger.debug(`Failed to get floor price for NFT ${asset.asset_policy_id}: ${error.message}`);
+              // Check for Relics of Magma trait-based pricing first
+              const relicsPrice = await this.getRelicsOfMagmaPrice(asset.asset_policy_id, asset.asset_name);
+              if (relicsPrice !== null) {
+                priceAda = relicsPrice;
+              } else {
+                // Fall back to WayUp collection floor price for other NFTs
+                try {
+                  const { floorPriceAda } = await this.wayUpPricingService.getCollectionFloorPrice(
+                    asset.asset_policy_id
+                  );
+                  priceAda = floorPriceAda > 0 ? floorPriceAda : null;
+                } catch (error) {
+                  this.logger.debug(`Failed to get floor price for NFT ${asset.asset_policy_id}: ${error.message}`);
+                }
               }
             } else {
               // Get DEX price from DexHunter for FTs
