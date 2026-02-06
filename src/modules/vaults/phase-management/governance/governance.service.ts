@@ -169,8 +169,6 @@ export class GovernanceService {
    * @returns - List of a addresses containing a specific asset.
    */
   async createAutomaticSnapshot(vaultId: string, assetId: string): Promise<Snapshot> {
-    this.logger.log(`Creating automatic snapshot for vault ${vaultId} with asset ${assetId}`);
-
     try {
       // First, check if there's at least one claimed contribution or acquisition for this vault
       const claimedContributions = await this.claimRepository.count({
