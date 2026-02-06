@@ -365,6 +365,7 @@ export class VaultsService {
             .values({
               vault: newVault,
               policy_id: assetItem.policyId,
+              collection_name: assetItem.collectionName,
               asset_count_cap_min: assetItem.countCapMin,
               asset_count_cap_max: assetItem.countCapMax,
             })

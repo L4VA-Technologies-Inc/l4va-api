@@ -26,6 +26,10 @@ export class AssetsWhitelistEntity {
   })
   policy_id: string;
 
+  @Expose({ name: 'collectionName' })
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  collection_name?: string;
+
   @Expose({ name: 'countCapMin' })
   @Column({
     name: 'asset_count_cap_min',

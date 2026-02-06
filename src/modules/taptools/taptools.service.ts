@@ -174,6 +174,8 @@ export class TaptoolsService {
       this.logger.debug(`Attributes structure: ${attributeKeys}`);
     }
 
+    this.logger.debug(`metadata: ${JSON.stringify(metadata)}`);
+
     // Check top-level keys first
     const characterKeys = ['attributes / Character', 'Character', 'character'];
 
@@ -198,6 +200,11 @@ export class TaptoolsService {
 
     // Check if attributes is an array (CIP-25 standard)
     if (Array.isArray(metadata.attributes)) {
+      // Log first few array items to understand structure
+      const sampleItems = metadata.attributes.slice(0, 5);
+
+      this.logger.debug(`Sample attribute items: ${JSON.stringify(sampleItems)}`);
+
       const characterAttr = metadata.attributes.find(
         (attr: any) => attr.trait_type === 'Character' || attr.name === 'Character'
       );
