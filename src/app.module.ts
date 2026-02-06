@@ -38,6 +38,7 @@ import { WayUpModule } from './modules/wayup/wayup.module';
 
 import { AlertsModule } from '@/modules/alerts/alerts.module';
 import { NotificationModule } from '@/modules/notification/notification.module';
+import { OgModule } from '@/modules/og/og.module';
 import { PresetsModule } from '@/modules/presets/presets.module';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
 
@@ -103,6 +104,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     WayUpModule,
     EventEmitterModule.forRoot(),
     PresetsModule,
+    OgModule,
   ],
   controllers: [AppController],
   providers: [
