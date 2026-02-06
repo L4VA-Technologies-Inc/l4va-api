@@ -92,10 +92,10 @@ interface AcquireMultiplierParams {
 }
 
 interface AcquireMultiplierResult {
-  /** Array of [policyId, assetName, vtAmount] for each asset */
-  acquireMultiplier: [string, string, number][];
-  /** Array of [policyId, assetName, adaAmount] for each asset */
-  adaDistribution: [string, string, number][];
+  /** Array of [policyId, assetName | null, vtAmount] for each asset. Use null for policy-level multipliers. */
+  acquireMultiplier: [string, string | null, number][];
+  /** Array of [policyId, assetName | null, adaAmount] for each asset. Use null for policy-level multipliers. */
+  adaDistribution: [string, string | null, number][];
   /** Map of claim ID to recalculated VT amount (qty × multiplier) for smart contract consistency */
   recalculatedClaimAmounts: Map<string, number>;
   /** Map of claim ID to recalculated lovelace amount (qty × ada_multiplier) for smart contract consistency */
@@ -277,6 +277,25 @@ export class DistributionCalculationService {
     const recalculatedClaimAmounts = new Map<string, number>();
     const recalculatedLovelaceAmounts = new Map<string, number>();
 
+    // Track assets by (policyId, multiplier) for potential grouping
+    const assetsByPolicyAndMultiplier = new Map<
+      string,
+      {
+        policyId: string;
+        multiplier: number;
+        assets: Array<{ assetName: string; quantity: number }>;
+      }
+    >();
+
+    const adaAssetsByPolicyAndMultiplier = new Map<
+      string,
+      {
+        policyId: string;
+        adaMultiplier: number;
+        assets: Array<{ assetName: string; quantity: number }>;
+      }
+    >();
+
     for (const claim of contributorsClaims) {
       const contributorLovelaceAmount = claim?.lovelace_amount || 0;
 
@@ -294,18 +313,42 @@ export class DistributionCalculationService {
 
       claim.transaction.assets.forEach((asset, index) => {
         const vtShare = baseVtShare + (index < vtRemainder ? 1 : 0);
-        // Divide by asset quantity to get per-unit multiplier
-        // Smart contract calculates: expected = multiplier * quantity_on_utxo
         const assetQuantity = Number(asset.quantity) || 1;
         const vtSharePerUnit = Math.floor(vtShare / assetQuantity);
-        acquireMultiplier.push([asset.policy_id, asset.asset_id, vtSharePerUnit]);
+
+        // Group assets by (policyId, multiplier) for VT distribution
+        const vtKey = `${asset.policy_id}:${vtSharePerUnit}`;
+        if (!assetsByPolicyAndMultiplier.has(vtKey)) {
+          assetsByPolicyAndMultiplier.set(vtKey, {
+            policyId: asset.policy_id,
+            multiplier: vtSharePerUnit,
+            assets: [],
+          });
+        }
+        assetsByPolicyAndMultiplier.get(vtKey)!.assets.push({
+          assetName: asset.asset_id,
+          quantity: assetQuantity,
+        });
 
         // Recalculate VT amount using the same formula as smart contract: qty × multiplier
         recalculatedVtAmount += assetQuantity * vtSharePerUnit;
 
         const adaShare = baseAdaShare + (index < adaRemainder ? 1 : 0);
         const adaSharePerUnit = Math.floor(adaShare / assetQuantity);
-        adaDistribution.push([asset.policy_id, asset.asset_id, adaSharePerUnit]);
+
+        // Group assets by (policyId, adaMultiplier) for ADA distribution
+        const adaKey = `${asset.policy_id}:${adaSharePerUnit}`;
+        if (!adaAssetsByPolicyAndMultiplier.has(adaKey)) {
+          adaAssetsByPolicyAndMultiplier.set(adaKey, {
+            policyId: asset.policy_id,
+            adaMultiplier: adaSharePerUnit,
+            assets: [],
+          });
+        }
+        adaAssetsByPolicyAndMultiplier.get(adaKey)!.assets.push({
+          assetName: asset.asset_id,
+          quantity: assetQuantity,
+        });
 
         // Recalculate lovelace amount using the same formula as smart contract
         recalculatedLovelace += assetQuantity * adaSharePerUnit;
@@ -314,6 +357,75 @@ export class DistributionCalculationService {
       // Store the recalculated amounts (these will match smart contract validation exactly)
       recalculatedClaimAmounts.set(claim.id, recalculatedVtAmount);
       recalculatedLovelaceAmounts.set(claim.id, recalculatedLovelace);
+    }
+
+    // Optimize: Use policy-level multipliers when all assets from a policy share the same value
+    // IMPORTANT: Grouping key is (policyId + multiplier), so assets from the same policy
+    // with DIFFERENT multipliers will be in separate groups (e.g., Relics Vita traits:
+    // Exploratur=300₳, Phoenix=200₳, Balaena=140₳ won't group together despite same policy)
+    // Threshold: If a policy has 10+ assets with same multiplier, use policy-level
+    const POLICY_GROUPING_THRESHOLD = 10;
+
+    // Detect mixed-value policies (same policy with multiple multiplier groups)
+    const policyCounts = new Map<string, number>();
+    for (const group of assetsByPolicyAndMultiplier.values()) {
+      policyCounts.set(group.policyId, (policyCounts.get(group.policyId) || 0) + 1);
+    }
+    const mixedValuePolicies = Array.from(policyCounts.entries()).filter(([_, count]) => count > 1);
+    if (mixedValuePolicies.length > 0) {
+      this.logger.log(
+        `Detected ${mixedValuePolicies.length} mixed-value policies: ` +
+          mixedValuePolicies
+            .map(([policyId, groupCount]) => `${policyId.slice(0, 8)}... (${groupCount} different multipliers)`)
+            .join(', ')
+      );
+    }
+
+    for (const group of assetsByPolicyAndMultiplier.values()) {
+      if (group.assets.length >= POLICY_GROUPING_THRESHOLD) {
+        // Use policy-level multiplier (null assetName)
+        acquireMultiplier.push([group.policyId, null, group.multiplier]);
+        this.logger.log(
+          `VT: Grouped ${group.assets.length} assets from policy ${group.policyId.slice(0, 8)}... ` +
+            `with multiplier ${group.multiplier} into single policy-level entry`
+        );
+      } else {
+        // Use asset-level multipliers for small groups
+        for (const asset of group.assets) {
+          acquireMultiplier.push([group.policyId, asset.assetName, group.multiplier]);
+        }
+      }
+    }
+
+    // Detect mixed-value policies for ADA distribution
+    const adaPolicyCounts = new Map<string, number>();
+    for (const group of adaAssetsByPolicyAndMultiplier.values()) {
+      adaPolicyCounts.set(group.policyId, (adaPolicyCounts.get(group.policyId) || 0) + 1);
+    }
+    const adaMixedValuePolicies = Array.from(adaPolicyCounts.entries()).filter(([_, count]) => count > 1);
+    if (adaMixedValuePolicies.length > 0) {
+      this.logger.log(
+        `ADA: Detected ${adaMixedValuePolicies.length} mixed-value policies: ` +
+          adaMixedValuePolicies
+            .map(([policyId, groupCount]) => `${policyId.slice(0, 8)}... (${groupCount} different ADA multipliers)`)
+            .join(', ')
+      );
+    }
+
+    for (const group of adaAssetsByPolicyAndMultiplier.values()) {
+      if (group.assets.length >= POLICY_GROUPING_THRESHOLD) {
+        // Use policy-level ADA distribution
+        adaDistribution.push([group.policyId, null, group.adaMultiplier]);
+        this.logger.log(
+          `ADA: Grouped ${group.assets.length} assets from policy ${group.policyId.slice(0, 8)}... ` +
+            `with ADA multiplier ${group.adaMultiplier} into single policy-level entry`
+        );
+      } else {
+        // Use asset-level ADA distribution for small groups
+        for (const asset of group.assets) {
+          adaDistribution.push([group.policyId, asset.assetName, group.adaMultiplier]);
+        }
+      }
     }
 
     if (!acquirerClaims || acquirerClaims.length === 0) {

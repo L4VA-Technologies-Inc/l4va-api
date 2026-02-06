@@ -500,7 +500,7 @@ export class VaultManagingService {
     vaultStatus: SmartContractVaultStatus;
     acquireMultiplier?: [string, string | null, number][];
     adaPairMultiplier?: number;
-    adaDistribution?: [string, string, number][];
+    adaDistribution?: [string, string | null, number][];
     asset_window?: {
       start: number;
       end: number;

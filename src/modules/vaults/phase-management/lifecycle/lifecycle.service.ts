@@ -125,8 +125,8 @@ export class LifecycleService {
     phaseStartField?: 'contribution_phase_start' | 'acquire_phase_start' | 'governance_phase_start';
     newScStatus?: SmartContractVaultStatus;
     txHash?: string;
-    acquire_multiplier?: [string, string, number][];
-    ada_distribution?: [string, string, number][];
+    acquire_multiplier?: [string, string | null, number][];
+    ada_distribution?: [string, string | null, number][];
     ada_pair_multiplier?: number;
     vtPrice?: number;
     fdv?: number;
