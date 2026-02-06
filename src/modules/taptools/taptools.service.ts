@@ -44,7 +44,7 @@ export class TaptoolsService {
     Phoenix: 200, // 200 ADA
     Balaena: 140, // 140 ADA
   };
-  private readonly RELICS_PORTA_PRICE = 70; // 70 ADA for all Porta NFTs
+  private readonly RELICS_PORTA_PRICE = 70; // 70 ADA for all Porta NFTsА
   private readonly testnetPrices = {
     f61a534fd4484b4b58d5ff18cb77cfc9e74ad084a18c0409321c811a: 0.00526,
     ed8145e0a4b8b54967e8f7700a5ee660196533ded8a55db620cc6a37: 0.00374,
@@ -304,7 +304,6 @@ export class TaptoolsService {
             if (assetDetails) {
               const traitPrice = this.getRelicsOfMagmaPrice(policyId, assetDetails.details.onchain_metadata);
               if (traitPrice !== null) {
-                this.logger.debug(`Using trait-based price for Relics of Magma NFT ${assetId}: ${traitPrice} ADA`);
                 const result = {
                   priceAda: traitPrice,
                   priceUsd: traitPrice * adaPrice,
