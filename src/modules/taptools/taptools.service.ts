@@ -3,6 +3,7 @@ import { HttpException, Inject, Injectable, Logger, NotFoundException, Optional 
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import axios from 'axios';
+import * as cbor from 'cbor';
 import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { In, Repository } from 'typeorm';
@@ -43,7 +44,7 @@ export class TaptoolsService {
     Phoenix: 200, // 200 ADA
     Balaena: 140, // 140 ADA
   };
-  private readonly RELICS_PORTA_PRICE = 70; // 70 ADA for all Porta NFTs
+  private readonly RELICS_PORTA_PRICE = 70; // 70 ADA for all Porta NFTsА
   private readonly testnetPrices = {
     f61a534fd4484b4b58d5ff18cb77cfc9e74ad084a18c0409321c811a: 0.00526,
     ed8145e0a4b8b54967e8f7700a5ee660196533ded8a55db620cc6a37: 0.00374,
@@ -163,18 +164,33 @@ export class TaptoolsService {
   private extractCharacterTrait(metadata: any): string | null {
     if (!metadata || typeof metadata !== 'object') return null;
 
-    // Log metadata structure for debugging (first few keys only)
-    const metadataKeys = Object.keys(metadata).slice(0, 10);
-    this.logger.debug(`Metadata keys: ${metadataKeys.join(', ')}`);
-    if (metadata.attributes) {
-      const attributeKeys =
-        typeof metadata.attributes === 'object' && !Array.isArray(metadata.attributes)
-          ? Object.keys(metadata.attributes).slice(0, 10)
-          : `array with ${metadata.attributes.length} items`;
-      this.logger.debug(`Attributes structure: ${attributeKeys}`);
-    }
+    // Check if attributes is a CBOR-encoded hex string (Relics of Magma format)
+    if (typeof metadata.attributes === 'string' && metadata.attributes.length > 0) {
+      try {
+        // Decode hex string to buffer
+        const hexStr = metadata.attributes;
+        const buffer = Buffer.from(hexStr, 'hex');
 
-    this.logger.debug(`metadata: ${JSON.stringify(metadata)}`);
+        // Decode CBOR to get the actual attributes object
+        const decodedAttributes = cbor.decodeFirstSync(buffer);
+
+        this.logger.debug(`Decoded CBOR attributes: ${JSON.stringify(decodedAttributes)}`);
+
+        // Check for Character trait in decoded object
+        if (decodedAttributes && typeof decodedAttributes === 'object') {
+          const characterKeys = ['Character', 'character', 'CHARACTER'];
+
+          for (const key of characterKeys) {
+            if (decodedAttributes[key]) {
+              this.logger.debug(`Found character trait in CBOR: ${decodedAttributes[key]}`);
+              return decodedAttributes[key];
+            }
+          }
+        }
+      } catch (error) {
+        this.logger.warn(`Failed to decode CBOR attributes: ${error.message}`);
+      }
+    }
 
     // Check top-level keys first
     const characterKeys = ['attributes / Character', 'Character', 'character'];
@@ -200,11 +216,6 @@ export class TaptoolsService {
 
     // Check if attributes is an array (CIP-25 standard)
     if (Array.isArray(metadata.attributes)) {
-      // Log first few array items to understand structure
-      const sampleItems = metadata.attributes.slice(0, 5);
-
-      this.logger.debug(`Sample attribute items: ${JSON.stringify(sampleItems)}`);
-
       const characterAttr = metadata.attributes.find(
         (attr: any) => attr.trait_type === 'Character' || attr.name === 'Character'
       );
@@ -293,7 +304,6 @@ export class TaptoolsService {
             if (assetDetails) {
               const traitPrice = this.getRelicsOfMagmaPrice(policyId, assetDetails.details.onchain_metadata);
               if (traitPrice !== null) {
-                this.logger.debug(`Using trait-based price for Relics of Magma NFT ${assetId}: ${traitPrice} ADA`);
                 const result = {
                   priceAda: traitPrice,
                   priceUsd: traitPrice * adaPrice,
