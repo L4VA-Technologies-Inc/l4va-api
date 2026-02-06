@@ -163,25 +163,51 @@ export class TaptoolsService {
   private extractCharacterTrait(metadata: any): string | null {
     if (!metadata || typeof metadata !== 'object') return null;
 
-    // Check various possible metadata structures
-    const characterKeys = ['attributes / Character', 'Character', 'character', 'attributes.Character'];
+    // Log metadata structure for debugging (first few keys only)
+    const metadataKeys = Object.keys(metadata).slice(0, 10);
+    this.logger.debug(`Metadata keys: ${metadataKeys.join(', ')}`);
+    if (metadata.attributes) {
+      const attributeKeys =
+        typeof metadata.attributes === 'object' && !Array.isArray(metadata.attributes)
+          ? Object.keys(metadata.attributes).slice(0, 10)
+          : `array with ${metadata.attributes.length} items`;
+      this.logger.debug(`Attributes structure: ${attributeKeys}`);
+    }
+
+    // Check top-level keys first
+    const characterKeys = ['attributes / Character', 'Character', 'character'];
 
     for (const key of characterKeys) {
       if (metadata[key]) {
+        this.logger.debug(`Found character at top level: ${metadata[key]}`);
         return metadata[key];
       }
     }
 
-    // Check if attributes is an array
+    // Check if attributes is an object (nested structure)
+    if (metadata.attributes && typeof metadata.attributes === 'object' && !Array.isArray(metadata.attributes)) {
+      // Check nested attributes keys
+      const nestedKeys = ['attributes / Character', 'Character', 'character'];
+      for (const key of nestedKeys) {
+        if (metadata.attributes[key]) {
+          this.logger.debug(`Found character in attributes.${key}: ${metadata.attributes[key]}`);
+          return metadata.attributes[key];
+        }
+      }
+    }
+
+    // Check if attributes is an array (CIP-25 standard)
     if (Array.isArray(metadata.attributes)) {
       const characterAttr = metadata.attributes.find(
         (attr: any) => attr.trait_type === 'Character' || attr.name === 'Character'
       );
       if (characterAttr) {
+        this.logger.debug(`Found character in array: ${characterAttr.value}`);
         return characterAttr.value;
       }
     }
 
+    this.logger.debug(`Character trait not found in metadata`);
     return null;
   }
 
