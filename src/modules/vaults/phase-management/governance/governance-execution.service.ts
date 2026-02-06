@@ -1121,27 +1121,52 @@ export class GovernanceExecutionService {
       const assetsNeedingExtraction = [];
 
       for (const [tokenUnit, deficitQty] of deficitQuantities) {
+        // Check how many are already EXTRACTED (from previous attempts)
+        const alreadyExtracted = assets
+          .filter(asset => asset.policy_id + asset.asset_id === tokenUnit && asset.status === AssetStatus.EXTRACTED)
+          .reduce((sum, asset) => sum + asset.quantity, 0);
+
+        // Adjust deficit by subtracting what's already extracted
+        const adjustedDeficit = Math.max(0, deficitQty - alreadyExtracted);
+
+        if (adjustedDeficit === 0) {
+          this.logger.log(
+            `Token ${tokenUnit}: Deficit of ${deficitQty} already covered by ${alreadyExtracted} EXTRACTED assets, skipping extraction`
+          );
+          continue;
+        }
+
         // Get all LOCKED assets for this token type, sorted by quantity descending
-        const availableAssets = assets
-          .filter(asset => asset.policy_id + asset.asset_id === tokenUnit && asset.status !== 'extracted')
+        const lockedAssets = assets
+          .filter(asset => asset.policy_id + asset.asset_id === tokenUnit && asset.status === AssetStatus.LOCKED)
           .sort((a, b) => b.quantity - a.quantity);
 
-        // Greedy selection: pick assets to cover the deficit
-        let remaining = deficitQty;
-        for (const asset of availableAssets) {
+        // Greedy selection: pick LOCKED assets to cover the adjusted deficit
+        let remaining = adjustedDeficit;
+        for (const asset of lockedAssets) {
           if (remaining <= 0) break;
 
           assetsNeedingExtraction.push(asset);
-          this.logger.log(`  → Selecting asset ${asset.id} (${asset.quantity} tokens) to cover deficit`);
+          this.logger.log(`  → Selecting asset ${asset.id} (${asset.quantity} tokens) to cover adjusted deficit`);
           remaining -= asset.quantity;
         }
 
-        // Verify we have enough assets to cover the deficit
+        // Verify we have enough LOCKED assets to cover the adjusted deficit
         if (remaining > 0) {
+          const totalExtracted = alreadyExtracted;
+          const totalLocked = adjustedDeficit - remaining;
+          const totalAvailable = totalLocked + totalExtracted;
+
           throw new Error(
-            `Insufficient LOCKED assets for token ${tokenUnit}. Need ${deficitQty} more, but only found ${
-              deficitQty - remaining
-            } in vault. Check if assets were already extracted or consumed.`
+            `Insufficient assets for token ${tokenUnit}. ` +
+              `Need ${deficitQty}, Found LOCKED: ${totalLocked}, EXTRACTED: ${totalExtracted}, Total: ${totalAvailable}. ` +
+              `Still missing: ${remaining}. Assets may have been consumed or are unavailable.`
+          );
+        }
+
+        if (alreadyExtracted > 0) {
+          this.logger.log(
+            `Token ${tokenUnit}: Using ${alreadyExtracted} already EXTRACTED + ${adjustedDeficit} newly LOCKED to cover deficit of ${deficitQty}`
           );
         }
       }
@@ -1171,6 +1196,51 @@ export class GovernanceExecutionService {
         await new Promise(resolve => setTimeout(resolve, 5000)); // Wait for blockchain sync
       } else {
         this.logger.log('Treasury wallet has sufficient token quantities, skipping extraction');
+      }
+
+      // Validate treasury wallet has the required FTs before executing swaps
+      const requiredTokens = new Map<string, { amount: number; name: string }>();
+
+      for (const action of actions) {
+        const asset = assetMap.get(action.assetId);
+        if (!asset) continue;
+
+        const tokenUnit = asset.policy_id + asset.asset_id;
+        const requestedAmount = parseFloat(action.quantity || asset.quantity.toString());
+
+        const existing = requiredTokens.get(tokenUnit);
+        if (existing) {
+          existing.amount += requestedAmount;
+        } else {
+          requiredTokens.set(tokenUnit, {
+            amount: requestedAmount,
+            name: asset.name || 'Unknown Token',
+          });
+        }
+      }
+
+      // Query treasury wallet to verify current balances
+      this.logger.log('Validating treasury wallet has required FT amounts...');
+      const treasuryAddressInfo = await this.blockfrost.addresses(treasuryAddress);
+      const currentTreasuryTokens = new Map<string, number>();
+
+      for (const asset of treasuryAddressInfo.amount) {
+        if (asset.unit !== 'lovelace') {
+          currentTreasuryTokens.set(asset.unit, parseFloat(asset.quantity));
+        }
+      }
+
+      for (const [tokenUnit, required] of requiredTokens.entries()) {
+        const actualAmount = currentTreasuryTokens.get(tokenUnit) || 0;
+
+        if (actualAmount < required.amount) {
+          throw new Error(
+            `Treasury wallet validation failed: ${required.name} (${tokenUnit}) has ${actualAmount} but needs ${required.amount}. ` +
+              `Deficit: ${required.amount - actualAmount}. Extraction may have failed or is still pending.`
+          );
+        }
+
+        this.logger.log(`✓ Treasury validated: ${required.name} has ${actualAmount} (needs ${required.amount})`);
       }
 
       // Initialize swap results array if not exists
@@ -1258,15 +1328,20 @@ export class GovernanceExecutionService {
 
         // Update each affected asset in the database
         for (const affected of affectedAssets) {
+          // After swap:
+          // - If fully consumed (remaining = 0): mark as SOLD
+          // - If partially consumed (remaining > 0): keep as EXTRACTED (still in treasury)
+          const newStatus = affected.remainingQuantity === 0 ? AssetStatus.SOLD : AssetStatus.EXTRACTED;
+
           await this.assetRepository.update(
             { id: affected.id },
             {
               quantity: affected.remainingQuantity,
-              status: affected.remainingQuantity === 0 ? AssetStatus.EXTRACTED : AssetStatus.LOCKED,
+              status: newStatus,
             }
           );
           this.logger.log(
-            `Updated asset ${affected.id}: swapped ${affected.swappedQuantity}, remaining ${affected.remainingQuantity}`
+            `Updated asset ${affected.id}: swapped ${affected.swappedQuantity}, remaining ${affected.remainingQuantity}, status: ${newStatus}`
           );
         }
 
