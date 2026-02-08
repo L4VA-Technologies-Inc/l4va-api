@@ -178,7 +178,6 @@ export class TaptoolsService {
       const nestedKeys = ['attributes / Character', 'Character', 'character'];
       for (const key of nestedKeys) {
         if (metadata.attributes[key]) {
-          this.logger.debug(`Found character in attributes.${key}: ${metadata.attributes[key]}`);
           return metadata.attributes[key];
         }
       }
@@ -190,7 +189,6 @@ export class TaptoolsService {
         (attr: any) => attr.trait_type === 'Character' || attr.name === 'Character'
       );
       if (characterAttr) {
-        this.logger.debug(`Found character in array: ${characterAttr.value}`);
         return characterAttr.value;
       }
     }
@@ -229,7 +227,6 @@ export class TaptoolsService {
         if (asset.attributes) {
           const character = this.extractCharacterTrait(asset.attributes);
           if (character) {
-            this.logger.debug(`Found character trait from WayUp: ${character}`);
             return character;
           }
         }
