@@ -191,7 +191,8 @@ export class MultiBatchDistributionService {
   }
 
   /**
-   * Assign batch numbers to claims based on which multipliers are in the current batch
+   * Assign batch numbers to claims based on which multipliers are in the current batch.
+   * Claims are assigned to the batch containing their assets' multipliers.
    */
   async assignClaimsToBatch(
     vaultId: string,
@@ -200,34 +201,37 @@ export class MultiBatchDistributionService {
   ): Promise<number> {
     // Build a set of (policyId, assetName) pairs from the batch multipliers
     const batchAssetKeys = new Set<string>();
+    const policyLevelKeys = new Set<string>();
 
     for (const [policyId, assetName] of batchMultipliers) {
       if (assetName === '' || assetName === null) {
-        // Policy-level multiplier - need to find all assets with this policy
-        batchAssetKeys.add(`policy:${policyId}`);
+        // Policy-level multiplier - will match all assets with this policy
+        policyLevelKeys.add(policyId);
       } else {
         batchAssetKeys.add(`${policyId}:${assetName}`);
       }
     }
 
-    // Find claims that match these multipliers
-    const claims = await this.claimRepository
-      .createQueryBuilder('claim')
-      .innerJoin('claim.transaction', 'tx')
-      .innerJoin('tx.assets', 'asset')
-      .where('claim.vault_id = :vaultId', { vaultId })
-      .andWhere('claim.type IN (:...types)', {
-        types: [ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER],
-      })
-      .andWhere('claim.distribution_batch IS NULL')
-      .select(['claim.id', 'asset.policy_id', 'asset.asset_id'])
-      .getMany();
+    this.logger.debug(
+      `Vault ${vaultId}: Assigning claims to batch ${batchNumber}. ` +
+        `Asset keys: ${batchAssetKeys.size}, Policy-level keys: ${policyLevelKeys.size}`
+    );
+
+    // Find claims with properly loaded relations
+    // Need to use leftJoinAndSelect to actually populate the relations
+    const claims = await this.claimRepository.find({
+      where: {
+        vault_id: vaultId,
+        type: In([ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER]),
+        distribution_batch: null as unknown as number, // TypeORM quirk for IS NULL
+      },
+      relations: ['transaction', 'transaction.assets'],
+    });
+
+    this.logger.debug(`Vault ${vaultId}: Found ${claims.length} claims without batch assignment`);
 
     // Determine which claims should be in this batch
     const claimIdsForBatch: string[] = [];
-
-    // For policy-level multipliers, we need to check if any asset in the claim matches
-    const policyLevelKeys = [...batchAssetKeys].filter(k => k.startsWith('policy:')).map(k => k.replace('policy:', ''));
 
     for (const claim of claims) {
       const assets = claim.transaction?.assets || [];
@@ -236,14 +240,14 @@ export class MultiBatchDistributionService {
       for (const asset of assets) {
         const assetKey = `${asset.policy_id}:${asset.asset_id}`;
 
-        // Check exact match
+        // Check exact asset match
         if (batchAssetKeys.has(assetKey)) {
           matchesBatch = true;
           break;
         }
 
         // Check policy-level match
-        if (policyLevelKeys.includes(asset.policy_id)) {
+        if (policyLevelKeys.has(asset.policy_id)) {
           matchesBatch = true;
           break;
         }
@@ -264,9 +268,25 @@ export class MultiBatchDistributionService {
   }
 
   /**
-   * Check if all claims in current batch are completed
+   * Check if all claims in current batch are completed.
+   * Returns false if no claims have been assigned to this batch yet.
    */
   async isBatchComplete(vaultId: string, batchNumber: number): Promise<boolean> {
+    // First check if any claims are assigned to this batch
+    const totalBatchClaims = await this.claimRepository.count({
+      where: {
+        vault_id: vaultId,
+        distribution_batch: batchNumber,
+      },
+    });
+
+    // If no claims assigned to this batch, it's NOT complete (we need assignment first)
+    if (totalBatchClaims === 0) {
+      this.logger.debug(`Vault ${vaultId}: Batch ${batchNumber} has no claims assigned - not complete`);
+      return false;
+    }
+
+    // Check for pending/available/failed claims
     const pendingCount = await this.claimRepository.count({
       where: {
         vault_id: vaultId,
@@ -275,7 +295,13 @@ export class MultiBatchDistributionService {
       },
     });
 
-    return pendingCount === 0;
+    const isComplete = pendingCount === 0;
+    this.logger.debug(
+      `Vault ${vaultId}: Batch ${batchNumber} status - ` +
+        `total: ${totalBatchClaims}, pending: ${pendingCount}, complete: ${isComplete}`
+    );
+
+    return isComplete;
   }
 
   /**

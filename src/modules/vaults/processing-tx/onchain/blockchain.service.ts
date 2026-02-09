@@ -184,9 +184,9 @@ export class BlockchainService {
           'Request Payload:',
           JSON.stringify(
             {
-              transaction: signedTx.transaction.substring(0, 200) + '...',
+              transaction: signedTx.transaction?.substring(0, 200) + '...',
               signatures: signedTx.signatures || [],
-              transactionLength: signedTx.transaction.length,
+              transactionLength: signedTx.transaction?.length ?? 'undefined',
             },
             null,
             2
