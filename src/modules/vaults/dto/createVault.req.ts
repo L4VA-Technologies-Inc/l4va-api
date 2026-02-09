@@ -306,6 +306,7 @@ export class CreateVaultReq {
   })
   @IsOptional()
   @IsNumber()
+  @Type(() => Number)
   @Min(0)
   @Max(100)
   @Expose()
