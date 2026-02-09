@@ -462,15 +462,22 @@ export class ContributorDistributionOrchestrator {
 
   /**
    * Check if all contributor payments are complete
+   * @param vaultId - The vault ID to check
+   * @param batchNumber - Optional batch number for multi-batch vaults
    */
-  async arePaymentsComplete(vaultId: string): Promise<boolean> {
-    const remainingClaims = await this.claimRepository.count({
-      where: {
-        vault: { id: vaultId },
-        type: ClaimType.CONTRIBUTOR,
-        status: In([ClaimStatus.PENDING, ClaimStatus.FAILED]),
-      },
-    });
+  async arePaymentsComplete(vaultId: string, batchNumber?: number): Promise<boolean> {
+    const whereClause: any = {
+      vault: { id: vaultId },
+      type: ClaimType.CONTRIBUTOR,
+      status: In([ClaimStatus.PENDING, ClaimStatus.FAILED]),
+    };
+
+    // If batch number specified, only check claims for that batch
+    if (batchNumber !== undefined) {
+      whereClause.distribution_batch = batchNumber;
+    }
+
+    const remainingClaims = await this.claimRepository.count({ where: whereClause });
 
     return remainingClaims === 0;
   }

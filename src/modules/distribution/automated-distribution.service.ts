@@ -2,8 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Not, IsNull, MoreThan } from 'typeorm';
+import { In, IsNull, MoreThan, Not, Repository } from 'typeorm';
 
+import { MultiBatchDistributionService } from './multi-batch-distribution.service';
 import { AcquirerDistributionOrchestrator } from './orchestrators/acquirer-distribution.orchestrator';
 import {
   ContributorDistributionOrchestrator,
@@ -53,7 +54,8 @@ export class AutomatedDistributionService {
     private readonly governanceService: GovernanceService,
     private readonly vyfiService: VyfiService,
     private readonly acquirerOrchestrator: AcquirerDistributionOrchestrator,
-    private readonly contributorOrchestrator: ContributorDistributionOrchestrator
+    private readonly contributorOrchestrator: ContributorDistributionOrchestrator,
+    private readonly multiBatchDistributionService: MultiBatchDistributionService
   ) {
     this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
     this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
@@ -145,6 +147,7 @@ export class AutomatedDistributionService {
 
   /**
    * Check if acquirer extractions are complete and trigger contributor payments
+   * For multi-batch vaults, only processes claims for the current batch
    */
   private async checkExtractionsAndTriggerPayments(): Promise<void> {
     const vaultsWithClaims = await this.vaultRepository
@@ -159,6 +162,9 @@ export class AutomatedDistributionService {
         'vault.tokens_for_acquires',
         'vault.last_update_tx_hash',
         'vault.acquire_multiplier',
+        'vault.current_distribution_batch',
+        'vault.total_distribution_batches',
+        'vault.pending_multipliers',
       ])
       .leftJoin(
         'claims',
@@ -189,14 +195,42 @@ export class AutomatedDistributionService {
       const remainingAcquirerClaims = parseInt(claimCounts[i].remainingAcquirerClaims || '0');
 
       try {
-        this.logger.log(`Checking vault ${vault.id} - ${remainingAcquirerClaims} acquirer claims remaining`);
+        // Check if this is a multi-batch vault with pending batches
+        const hasMultipleBatches = vault.total_distribution_batches && vault.total_distribution_batches > 1;
+        const hasPendingBatches = vault.pending_multipliers && vault.pending_multipliers.length > 0;
+        const currentBatch = vault.current_distribution_batch || 1;
+
+        if (hasMultipleBatches) {
+          this.logger.log(
+            `Vault ${vault.id} is multi-batch: batch ${currentBatch}/${vault.total_distribution_batches}` +
+              (hasPendingBatches ? ` (${vault.pending_multipliers.length} pending multipliers)` : '')
+          );
+        }
+
+        // For multi-batch vaults, count only claims in current batch
+        let remainingClaimsForCurrentBatch = remainingAcquirerClaims;
+        if (hasMultipleBatches) {
+          remainingClaimsForCurrentBatch = await this.claimRepository.count({
+            where: {
+              vault_id: vault.id,
+              type: ClaimType.ACQUIRER,
+              distribution_batch: currentBatch,
+              status: In([ClaimStatus.PENDING, ClaimStatus.FAILED]),
+            },
+          });
+        }
+
+        this.logger.log(
+          `Checking vault ${vault.id} - ${remainingClaimsForCurrentBatch} acquirer claims remaining` +
+            (hasMultipleBatches ? ` (batch ${currentBatch})` : '')
+        );
 
         // Check if vault has 0% for acquirers (skip acquirer check)
         const shouldSkipAcquirerCheck = vault.tokens_for_acquires === 0;
 
-        if (!shouldSkipAcquirerCheck && remainingAcquirerClaims > 0) {
+        if (!shouldSkipAcquirerCheck && remainingClaimsForCurrentBatch > 0) {
           this.logger.log(
-            `Vault ${vault.id} still has ${remainingAcquirerClaims} acquirer claims pending. ` +
+            `Vault ${vault.id} still has ${remainingClaimsForCurrentBatch} acquirer claims pending. ` +
               `Skipping contributor payments for now.`
           );
           continue;
@@ -205,15 +239,34 @@ export class AutomatedDistributionService {
         this.logger.log(
           shouldSkipAcquirerCheck
             ? `Vault ${vault.id} has 0% for acquirers, proceeding to contributor payments.`
-            : `All acquirer extractions complete for vault ${vault.id}`
+            : `All acquirer extractions complete for vault ${vault.id}` +
+                (hasMultipleBatches ? ` (batch ${currentBatch})` : '')
         );
 
-        // Delegate to contributor orchestrator
+        // Delegate to contributor orchestrator (it will handle batch-aware processing)
         await this.contributorOrchestrator.processContributorPayments(vault.id, vault, this.getConfig());
 
-        // Check if all payments complete, then finalize
-        const isComplete = await this.contributorOrchestrator.arePaymentsComplete(vault.id);
-        if (isComplete) {
+        // Check if all payments complete for this batch
+        const isCurrentBatchComplete = await this.contributorOrchestrator.arePaymentsComplete(vault.id, currentBatch);
+
+        if (isCurrentBatchComplete) {
+          // For multi-batch vaults, check if all batches are complete
+          if (hasPendingBatches) {
+            this.logger.log(
+              `Batch ${currentBatch} complete for vault ${vault.id}. ` +
+                `Waiting for next batch to be processed by lifecycle service.`
+            );
+            // Don't finalize yet - lifecycle service will handle next batch
+            continue;
+          }
+
+          // Check if all batches are truly complete
+          const allBatchesComplete = await this.multiBatchDistributionService.isAllBatchesComplete(vault.id);
+          if (!allBatchesComplete) {
+            this.logger.log(`Vault ${vault.id} has more batches pending. Skipping finalization.`);
+            continue;
+          }
+
           this.logger.log(`All contributor payments complete for vault ${vault.id}, finalizing...`);
           await this.finalizeVaultDistribution(vault.id, vault.script_hash, vault.asset_vault_name);
         }

@@ -312,8 +312,18 @@ export class TaptoolsService {
 
       // Route to appropriate API based on asset type
       if (isNFT) {
-        // Check if this is a Relics of Magma NFT - use trait-based pricing
-        if (policyId === this.RELICS_OF_MAGMA_VITA_POLICY || policyId === this.RELICS_OF_MAGMA_PORTA_POLICY) {
+        // Relics of Magma - The Porta: Fixed price for ALL, no API call needed
+        if (policyId === this.RELICS_OF_MAGMA_PORTA_POLICY) {
+          const result = {
+            priceAda: this.RELICS_PORTA_PRICE,
+            priceUsd: this.RELICS_PORTA_PRICE * adaPrice,
+          };
+          this.cache.set(cacheKey, result);
+          return result;
+        }
+
+        // Relics of Magma - The Vita: Trait-based pricing, needs metadata
+        if (policyId === this.RELICS_OF_MAGMA_VITA_POLICY) {
           try {
             // Fetch trait-based price using WayUp API (for Vita) or fixed price (for Porta)
             // Pass the readable name for WayUp search
@@ -327,7 +337,15 @@ export class TaptoolsService {
               return result;
             }
           } catch (error) {
-            this.logger.warn(`Failed to get trait-based price for Relics NFT ${policyId}: ${error.message}`);
+            // Fallback to Balaena price for Vita on error
+            this.logger.warn(`Failed to get trait-based price for Vita NFT, using Balaena fallback: ${error.message}`);
+            const fallbackPrice = this.RELICS_CHARACTER_PRICES.Balaena;
+            const result = {
+              priceAda: fallbackPrice,
+              priceUsd: fallbackPrice * adaPrice,
+            };
+            this.cache.set(cacheKey, result);
+            return result;
           }
         }
 
