@@ -36,6 +36,7 @@ export class LifecycleService {
   private readonly logger = new Logger(LifecycleService.name);
   private readonly processingVaults = new Set<string>(); // Track vaults currently being processed
   private readonly MAX_FAILED_ATTEMPTS = 3; // Maximum allowed failed attempts before skipping
+  private isRunning = false;
 
   constructor(
     @InjectRepository(Asset)
@@ -62,9 +63,19 @@ export class LifecycleService {
 
   @Cron(CronExpression.EVERY_MINUTE)
   async handleVaultLifecycleTransitions(): Promise<void> {
-    await this.handlePublishedToContribution(); // Handle created vault -> contribution transitin
-    await this.handleContributionToAcquire(); // Handle contribution -> acquire transitions
-    await this.handleAcquireToGovernance(); // Handle acquire -> governance transitions
+    if (this.isRunning) {
+      this.logger.warn('Distribution process already running, skipping this execution');
+      return;
+    }
+
+    this.isRunning = true;
+    try {
+      await this.handlePublishedToContribution(); // Handle created vault -> contribution transitin
+      await this.handleContributionToAcquire(); // Handle contribution -> acquire transitions
+      await this.handleAcquireToGovernance(); // Handle acquire -> governance transitions
+    } finally {
+      this.isRunning = false;
+    }
   }
 
   private async queuePhaseTransition(
