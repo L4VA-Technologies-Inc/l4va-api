@@ -222,8 +222,6 @@ export class TaptoolsService {
     }
 
     try {
-      this.logger.debug(`Fetching character trait from WayUp for: ${name}`);
-
       // Query WayUp API for the specific asset by name
       const response = await this.wayUpPricingService.getCollectionAssets({
         policyId,
