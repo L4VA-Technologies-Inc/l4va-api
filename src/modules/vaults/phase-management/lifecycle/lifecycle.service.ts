@@ -998,15 +998,9 @@ export class LifecycleService {
 
             if (vtNeedsUpdate || lovelaceNeedsUpdate) {
               if (vtNeedsUpdate) {
-                this.logger.debug(
-                  `Updating claim ${claim.id} VT amount from ${claim.amount} to ${recalculatedVt} (diff: ${claim.amount - recalculatedVt})`
-                );
                 claim.amount = recalculatedVt;
               }
               if (lovelaceNeedsUpdate) {
-                this.logger.debug(
-                  `Updating claim ${claim.id} lovelace from ${claim.lovelace_amount} to ${recalculatedLovelace} (diff: ${claim.lovelace_amount - recalculatedLovelace})`
-                );
                 claim.lovelace_amount = recalculatedLovelace;
               }
               claimsToUpdate.push(claim);
@@ -1669,6 +1663,516 @@ export class LifecycleService {
   }
 
   /**
+   * TEST METHOD: Simulate multi-batch distribution for a vault
+   * Shows how multipliers would be split across multiple transactions
+   * @param vaultId - The vault ID to simulate batching for
+   * @returns Detailed batching simulation results
+   */
+  async simulateMultiBatchDistribution(vaultId: string): Promise<{
+    vault: {
+      id: string;
+      name: string;
+      status: string;
+    };
+    summary: {
+      totalMultipliers: number;
+      totalAdaDistribution: number;
+      needsBatching: boolean;
+      totalBatches: number;
+      estimatedTimeMinutes: number;
+      totalClaims: number;
+    };
+    singleTransactionAttempt: {
+      withinLimit: boolean;
+      txSizeBytes: number;
+      txSizeKB: number;
+      percentOfMax: number;
+    };
+    batches: Array<{
+      batchNumber: number;
+      multiplierCount: number;
+      adaDistributionCount: number;
+      multiplierRange: {
+        first: [string, string | null, number];
+        last: [string, string | null, number];
+      };
+      estimatedTxSize?: {
+        txSizeBytes: number;
+        txSizeKB: number;
+        percentOfMax: number;
+        withinLimit: boolean;
+      };
+    }>;
+    rawData: {
+      acquireMultiplier: [string, string | null, number][];
+      adaDistribution: [string, string, number][];
+      adaPairMultiplier: number;
+    };
+  }> {
+    this.logger.log(`[TEST] Simulating multi-batch distribution for vault ${vaultId}`);
+
+    // First, run the regular simulation to get multipliers
+    const simulation = await this.simulateVaultMultipliers(vaultId);
+
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: [
+        'id',
+        'name',
+        'asset_vault_name',
+        'privacy',
+        'contribution_phase_start',
+        'contribution_duration',
+        'value_method',
+        'vault_status',
+      ],
+    });
+
+    if (!vault) {
+      throw new Error(`Vault ${vaultId} not found`);
+    }
+
+    const acquireMultiplier = simulation.multipliers.acquireMultiplier;
+    const adaDistribution = simulation.multipliers.adaDistribution;
+    const adaPairMultiplier = simulation.lpTokens.adaPairMultiplier;
+
+    // Try single transaction first
+    const singleTxAttempt = {
+      withinLimit: simulation.transactionSize.withinLimit,
+      txSizeBytes: simulation.transactionSize.txSizeBytes,
+      txSizeKB: simulation.transactionSize.txSizeKB,
+      percentOfMax: simulation.transactionSize.percentOfMax,
+    };
+
+    // Calculate batching strategy
+    const batchingStrategy = await this.multiBatchDistributionService.calculateBatchingStrategy(
+      vault,
+      acquireMultiplier,
+      adaDistribution,
+      adaPairMultiplier
+    );
+
+    const batches: Array<{
+      batchNumber: number;
+      multiplierCount: number;
+      adaDistributionCount: number;
+      multiplierRange: {
+        first: [string, string | null, number];
+        last: [string, string | null, number];
+      };
+      estimatedTxSize?: {
+        txSizeBytes: number;
+        txSizeKB: number;
+        percentOfMax: number;
+        withinLimit: boolean;
+      };
+    }> = [];
+
+    if (!batchingStrategy.needsBatching) {
+      // Single batch
+      batches.push({
+        batchNumber: 1,
+        multiplierCount: acquireMultiplier.length,
+        adaDistributionCount: adaDistribution.length,
+        multiplierRange: {
+          first: acquireMultiplier[0],
+          last: acquireMultiplier[acquireMultiplier.length - 1],
+        },
+        estimatedTxSize: singleTxAttempt,
+      });
+    } else {
+      // Multiple batches - simulate each batch
+      let remainingMultipliers = [...acquireMultiplier];
+      let remainingAdaDistribution = [...adaDistribution];
+      let batchNumber = 1;
+
+      // First batch
+      const firstBatchMultipliers = batchingStrategy.firstBatchMultipliers;
+      const firstBatchAda = batchingStrategy.firstBatchAdaDistribution;
+
+      try {
+        const firstBatchSize = await this.vaultManagingService.estimateUpdateVaultTxSize({
+          vault,
+          vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
+          acquireMultiplier: firstBatchMultipliers,
+          adaDistribution: firstBatchAda,
+          adaPairMultiplier,
+        });
+
+        batches.push({
+          batchNumber: 1,
+          multiplierCount: firstBatchMultipliers.length,
+          adaDistributionCount: firstBatchAda.length,
+          multiplierRange: {
+            first: firstBatchMultipliers[0],
+            last: firstBatchMultipliers[firstBatchMultipliers.length - 1],
+          },
+          estimatedTxSize: {
+            txSizeBytes: firstBatchSize.txSizeBytes,
+            txSizeKB: firstBatchSize.txSizeKB,
+            percentOfMax: firstBatchSize.percentOfMax,
+            withinLimit: firstBatchSize.withinLimit,
+          },
+        });
+      } catch (error) {
+        batches.push({
+          batchNumber: 1,
+          multiplierCount: firstBatchMultipliers.length,
+          adaDistributionCount: firstBatchAda.length,
+          multiplierRange: {
+            first: firstBatchMultipliers[0],
+            last: firstBatchMultipliers[firstBatchMultipliers.length - 1],
+          },
+        });
+      }
+
+      // Remaining batches (estimate based on first batch size)
+      remainingMultipliers = batchingStrategy.pendingMultipliers;
+      remainingAdaDistribution = batchingStrategy.pendingAdaDistribution;
+      batchNumber = 2;
+
+      const batchSize = firstBatchMultipliers.length;
+      const adaBatchSize = firstBatchAda.length;
+
+      while (remainingMultipliers.length > 0) {
+        const batchMultipliers = remainingMultipliers.slice(0, batchSize);
+        const batchAda = remainingAdaDistribution.slice(0, adaBatchSize);
+
+        try {
+          const estimatedSize = await this.vaultManagingService.estimateUpdateVaultTxSize({
+            vault,
+            vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
+            acquireMultiplier: batchMultipliers,
+            adaDistribution: batchAda,
+            adaPairMultiplier,
+          });
+
+          batches.push({
+            batchNumber,
+            multiplierCount: batchMultipliers.length,
+            adaDistributionCount: batchAda.length,
+            multiplierRange: {
+              first: batchMultipliers[0],
+              last: batchMultipliers[batchMultipliers.length - 1],
+            },
+            estimatedTxSize: {
+              txSizeBytes: estimatedSize.txSizeBytes,
+              txSizeKB: estimatedSize.txSizeKB,
+              percentOfMax: estimatedSize.percentOfMax,
+              withinLimit: estimatedSize.withinLimit,
+            },
+          });
+        } catch {
+          batches.push({
+            batchNumber,
+            multiplierCount: batchMultipliers.length,
+            adaDistributionCount: batchAda.length,
+            multiplierRange: {
+              first: batchMultipliers[0],
+              last: batchMultipliers[batchMultipliers.length - 1],
+            },
+          });
+        }
+
+        remainingMultipliers = remainingMultipliers.slice(batchSize);
+        remainingAdaDistribution = remainingAdaDistribution.slice(adaBatchSize);
+        batchNumber++;
+
+        // Safety limit
+        if (batchNumber > 50) {
+          this.logger.warn(`[TEST] Batch simulation exceeded 50 batches, stopping`);
+          break;
+        }
+      }
+    }
+
+    // Estimate time: ~5 minutes per batch (tx confirmation + claim processing)
+    const estimatedTimeMinutes = batches.length * 5;
+
+    // Simulate claims that would be created
+    const simulatedClaims = await this.simulateClaimsForVault(vaultId, simulation);
+
+    return {
+      vault: {
+        id: vault.id,
+        name: vault.name,
+        status: vault.vault_status,
+      },
+      summary: {
+        totalMultipliers: acquireMultiplier.length,
+        totalAdaDistribution: adaDistribution.length,
+        needsBatching: batchingStrategy.needsBatching,
+        totalBatches: batches.length,
+        estimatedTimeMinutes,
+        totalClaims: simulatedClaims.summary.totalClaims,
+      },
+      singleTransactionAttempt: singleTxAttempt,
+      batches,
+      claims: simulatedClaims,
+      rawData: {
+        acquireMultiplier,
+        adaDistribution,
+        adaPairMultiplier,
+      },
+    } as any;
+  }
+
+  /**
+   * Simulate claims that would be created for a vault distribution
+   * Does not save anything to the database
+   */
+  private async simulateClaimsForVault(
+    vaultId: string,
+    simulation: Awaited<ReturnType<typeof this.simulateVaultMultipliers>>
+  ): Promise<{
+    summary: {
+      totalClaims: number;
+      acquirerClaimsCount: number;
+      contributorClaimsCount: number;
+      lpClaimCount: number;
+      totalVtDistributed: number;
+      totalAdaDistributed: number;
+    };
+    lpClaim: {
+      type: string;
+      vtAmount: number;
+      adaAmount: number;
+      adaPairMultiplier: number;
+    } | null;
+    acquirerClaims: Array<{
+      userId: string;
+      userAddress: string;
+      transactionId: string;
+      txHash: string;
+      type: string;
+      vtAmount: number;
+      adaSent: number;
+      multiplier: number;
+    }>;
+    contributorClaims: Array<{
+      userId: string;
+      userAddress: string;
+      transactionId: string;
+      txHash: string;
+      type: string;
+      vtAmount: number;
+      adaAmount: number;
+      contributedValueAda: number;
+      assetCount: number;
+      assets: Array<{
+        policyId: string;
+        assetName: string;
+        quantity: number;
+        priceAda: number;
+      }>;
+    }>;
+  }> {
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: ['id', 'tokens_for_acquires', 'liquidity_pool_contribution', 'ft_token_supply', 'ft_token_decimals'],
+    });
+
+    if (!vault) {
+      throw new Error(`Vault ${vaultId} not found`);
+    }
+
+    // Get transactions
+    const allTransactions = await this.transactionsRepository.find({
+      where: {
+        vault_id: vault.id,
+        type: In([TransactionType.acquire, TransactionType.contribute]),
+        status: TransactionStatus.confirmed,
+      },
+      relations: ['user'],
+      order: { created_at: 'ASC' },
+    });
+
+    const acquisitionTransactions = allTransactions.filter(tx => tx.type === TransactionType.acquire);
+    const contributionTransactions = allTransactions.filter(tx => tx.type === TransactionType.contribute);
+
+    const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
+    const ASSETS_OFFERED_PERCENT = (vault.tokens_for_acquires || 0) / 100;
+    const lpResult = simulation.lpTokens;
+    const totalAcquiredAda = simulation.calculations.totalAcquiredAda;
+    const totalContributedValueAda = simulation.calculations.totalContributedValueAda;
+
+    // Simulate acquirer claims
+    const acquirerClaims: Array<{
+      userId: string;
+      userAddress: string;
+      transactionId: string;
+      txHash: string;
+      type: string;
+      vtAmount: number;
+      adaSent: number;
+      multiplier: number;
+    }> = [];
+
+    for (const tx of acquisitionTransactions) {
+      if (!tx.user?.id) continue;
+
+      const adaSent = tx.amount || 0;
+      if (adaSent <= 0) continue;
+
+      const { vtReceived, multiplier } = this.distributionCalculationService.calculateAcquirerTokens({
+        adaSent,
+        totalAcquiredValueAda: totalAcquiredAda,
+        lpAdaAmount: lpResult.lpAdaAmount,
+        lpVtAmount: lpResult.lpVtAmount,
+        vtPrice: lpResult.vtPrice,
+        vtSupply,
+        ASSETS_OFFERED_PERCENT,
+      });
+
+      acquirerClaims.push({
+        userId: tx.user.id,
+        userAddress: tx.user.address || 'unknown',
+        transactionId: tx.id,
+        txHash: tx.tx_hash || 'unknown',
+        type: 'ACQUIRER',
+        vtAmount: vtReceived,
+        adaSent,
+        multiplier,
+      });
+    }
+
+    // Normalize multipliers (use minimum)
+    if (acquirerClaims.length > 0) {
+      const minMultiplier = Math.min(...acquirerClaims.map(c => c.multiplier));
+      for (const claim of acquirerClaims) {
+        claim.vtAmount = minMultiplier * claim.adaSent * 1_000_000;
+        claim.multiplier = minMultiplier;
+      }
+    }
+
+    // Simulate contributor claims
+    const contributorClaims: Array<{
+      userId: string;
+      userAddress: string;
+      transactionId: string;
+      txHash: string;
+      type: string;
+      vtAmount: number;
+      adaAmount: number;
+      contributedValueAda: number;
+      assetCount: number;
+      assets: Array<{
+        policyId: string;
+        assetName: string;
+        quantity: number;
+        priceAda: number;
+      }>;
+    }> = [];
+
+    // Build user value map first
+    const userContributedValueMap: Record<string, number> = {};
+    const contributionValueByTransaction: Record<string, number> = {};
+    const assetsByTransaction: Record<string, any[]> = {};
+
+    for (const tx of contributionTransactions) {
+      if (!tx.user?.id) continue;
+
+      const txAssets = await this.assetsRepository.find({
+        where: {
+          transaction: { id: tx.id },
+          origin_type: AssetOriginType.CONTRIBUTED,
+          deleted: false,
+        },
+      });
+
+      assetsByTransaction[tx.id] = txAssets;
+
+      let transactionValueAda = 0;
+      for (const asset of txAssets) {
+        const priceAda = asset.floor_price || asset.dex_price || 0;
+        const quantity = asset.quantity || 1;
+        transactionValueAda += priceAda * quantity;
+      }
+
+      contributionValueByTransaction[tx.id] = transactionValueAda;
+
+      if (!userContributedValueMap[tx.user.id]) {
+        userContributedValueMap[tx.user.id] = 0;
+      }
+      userContributedValueMap[tx.user.id] += transactionValueAda;
+    }
+
+    // Now create contributor claims
+    for (const tx of contributionTransactions) {
+      if (!tx.user?.id) continue;
+
+      const txValueAda = contributionValueByTransaction[tx.id] || 0;
+      if (txValueAda <= 0) continue;
+
+      const userTotalValue = userContributedValueMap[tx.user.id] || 0;
+
+      const contributorResult = this.distributionCalculationService.calculateContributorTokens({
+        txContributedValue: txValueAda,
+        userTotalValue,
+        totalAcquiredAda,
+        totalTvl: totalContributedValueAda,
+        lpAdaAmount: lpResult.lpAdaAmount,
+        lpVtAmount: lpResult.lpVtAmount,
+        vtSupply,
+        ASSETS_OFFERED_PERCENT,
+      });
+
+      const txAssets = assetsByTransaction[tx.id] || [];
+
+      contributorClaims.push({
+        userId: tx.user.id,
+        userAddress: tx.user.address || 'unknown',
+        transactionId: tx.id,
+        txHash: tx.tx_hash || 'unknown',
+        type: 'CONTRIBUTOR',
+        vtAmount: contributorResult.vtAmount,
+        adaAmount: contributorResult.lovelaceAmount / 1_000_000, // Convert to ADA for readability
+        contributedValueAda: txValueAda,
+        assetCount: txAssets.length,
+        assets: txAssets.map(a => ({
+          policyId: a.policy_id,
+          assetName: a.asset_id,
+          quantity: a.quantity || 1,
+          priceAda: a.floor_price || a.dex_price || 0,
+        })),
+      });
+    }
+
+    // LP claim info
+    const lpClaim =
+      lpResult.lpAdaAmount > 0 && lpResult.lpVtAmount > 0
+        ? {
+            type: 'LP',
+            vtAmount: lpResult.adjustedVtLpAmount,
+            adaAmount: lpResult.lpAdaAmount,
+            adaPairMultiplier: lpResult.adaPairMultiplier,
+          }
+        : null;
+
+    // Calculate totals
+    const totalVtDistributed =
+      acquirerClaims.reduce((sum, c) => sum + c.vtAmount, 0) +
+      contributorClaims.reduce((sum, c) => sum + c.vtAmount, 0) +
+      (lpClaim?.vtAmount || 0);
+
+    const totalAdaDistributed = contributorClaims.reduce((sum, c) => sum + c.adaAmount, 0) + (lpClaim?.adaAmount || 0);
+
+    return {
+      summary: {
+        totalClaims: acquirerClaims.length + contributorClaims.length + (lpClaim ? 1 : 0),
+        acquirerClaimsCount: acquirerClaims.length,
+        contributorClaimsCount: contributorClaims.length,
+        lpClaimCount: lpClaim ? 1 : 0,
+        totalVtDistributed,
+        totalAdaDistributed,
+      },
+      lpClaim,
+      acquirerClaims,
+      contributorClaims,
+    };
+  }
+
+  /**
    * Analyze multiplier grouping to provide detailed insights
    * Now uses price-based grouping: assets with the same price within a policy are grouped together
    */
@@ -2252,15 +2756,9 @@ export class LifecycleService {
 
           if (vtNeedsUpdate || lovelaceNeedsUpdate) {
             if (vtNeedsUpdate) {
-              this.logger.debug(
-                `Updating claim ${claim.id} VT amount from ${claim.amount} to ${recalculatedVt} (diff: ${claim.amount - recalculatedVt})`
-              );
               claim.amount = recalculatedVt;
             }
             if (lovelaceNeedsUpdate) {
-              this.logger.debug(
-                `Updating claim ${claim.id} lovelace_amount from ${claim.lovelace_amount} to ${recalculatedLovelace} (diff: ${claim.lovelace_amount - recalculatedLovelace})`
-              );
               claim.lovelace_amount = recalculatedLovelace;
             }
             claimsToUpdate.push(claim);
@@ -2302,14 +2800,68 @@ export class LifecycleService {
         await this.vaultRepository.update(vault.id, { ft_token_decimals: optimalDecimals });
       }
 
-      // Update vault metadata and transition to governance
-      const response = await this.vaultManagingService.updateVaultMetadataTx({
+      // Check if multipliers need to be split across multiple transactions
+      const batchingStrategy = await this.multiBatchDistributionService.calculateBatchingStrategy(
         vault,
         acquireMultiplier,
-        adaDistribution: [], // No ADA distribution (no acquirers)
-        adaPairMultiplier,
-        vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
-      });
+        [], // No ADA distribution (no acquirers)
+        adaPairMultiplier
+      );
+
+      let response;
+      let finalAcquireMultiplier = acquireMultiplier;
+
+      if (!batchingStrategy.needsBatching) {
+        // All multipliers fit in single transaction - proceed normally
+        response = await this.vaultManagingService.updateVaultMetadataTx({
+          vault,
+          acquireMultiplier,
+          adaDistribution: [], // No ADA distribution (no acquirers)
+          adaPairMultiplier,
+          vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
+        });
+      } else {
+        // Multi-batch distribution required
+        this.logger.log(
+          `Vault ${vault.id}: Initiating multi-batch distribution (0% acquirers). ` +
+            `Total batches: ${batchingStrategy.totalBatches}`
+        );
+
+        // Update vault with first batch of multipliers
+        response = await this.vaultManagingService.updateVaultMetadataTx({
+          vault,
+          acquireMultiplier: batchingStrategy.firstBatchMultipliers,
+          adaDistribution: [], // No ADA distribution (no acquirers)
+          adaPairMultiplier,
+          vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
+        });
+
+        // Store batching state in vault
+        await this.multiBatchDistributionService.updateVaultBatchProgress(vault.id, {
+          currentBatch: 1,
+          totalBatches: batchingStrategy.totalBatches,
+          pendingMultipliers: batchingStrategy.pendingMultipliers,
+          pendingAdaDistribution: [], // No ADA distribution (no acquirers)
+          acquireMultiplier: batchingStrategy.firstBatchMultipliers,
+          adaDistribution: [],
+        });
+
+        // Assign claims to first batch based on included multipliers
+        await this.multiBatchDistributionService.assignClaimsToBatch(
+          vault.id,
+          batchingStrategy.firstBatchMultipliers,
+          1
+        );
+
+        // Update the final values for phase transition
+        finalAcquireMultiplier = batchingStrategy.firstBatchMultipliers;
+
+        this.logger.log(
+          `Vault ${vault.id}: First batch submitted (0% acquirers). ` +
+            `Multipliers: ${batchingStrategy.firstBatchMultipliers.length}/${acquireMultiplier.length}, ` +
+            `Pending: ${batchingStrategy.pendingMultipliers.length}`
+        );
+      }
 
       if (!response.txHash) {
         this.logger.error(`Failed to get txHash for vault ${vault.id} metadata update transaction`);
@@ -2347,7 +2899,7 @@ export class LifecycleService {
         phaseStartField: 'governance_phase_start',
         newScStatus: SmartContractVaultStatus.SUCCESSFUL,
         txHash: response.txHash,
-        acquire_multiplier: acquireMultiplier,
+        acquire_multiplier: finalAcquireMultiplier,
         ada_distribution: [], // No ADA distribution (no acquirers)
         ada_pair_multiplier: adaPairMultiplier,
         vtPrice,
