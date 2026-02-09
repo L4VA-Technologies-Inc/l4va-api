@@ -643,11 +643,24 @@ export class VaultManagingService {
       // Build the transaction using BlockchainService
       const buildResponse = await this.blockchainService.buildTransaction(input);
 
+      // Validate buildResponse.complete is a valid hex string
+      if (!buildResponse.complete || typeof buildResponse.complete !== 'string') {
+        this.logger.error('Invalid buildResponse.complete:', typeof buildResponse.complete, buildResponse.complete);
+        throw new Error(`Invalid transaction response: expected hex string, got ${typeof buildResponse.complete}`);
+      }
+
       const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
       txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
+      const signedTxHex = txToSubmitOnChain.to_hex();
+      // Validate signed transaction hex
+      if (!signedTxHex || typeof signedTxHex !== 'string') {
+        this.logger.error('Invalid signed transaction hex:', typeof signedTxHex);
+        throw new Error(`Failed to serialize signed transaction: got ${typeof signedTxHex}`);
+      }
+
       const response = await this.blockchainService.submitTransaction({
-        transaction: txToSubmitOnChain.to_hex(),
+        transaction: signedTxHex,
       });
 
       await this.transactionsService.updateTransactionHash(transaction.id, response.txHash);

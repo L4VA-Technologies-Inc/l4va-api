@@ -36,6 +36,7 @@ export class LifecycleService {
   private readonly logger = new Logger(LifecycleService.name);
   private readonly processingVaults = new Set<string>(); // Track vaults currently being processed
   private readonly MAX_FAILED_ATTEMPTS = 3; // Maximum allowed failed attempts before skipping
+  private isRunning = false;
 
   constructor(
     @InjectRepository(Asset)
@@ -62,9 +63,19 @@ export class LifecycleService {
 
   @Cron(CronExpression.EVERY_MINUTE)
   async handleVaultLifecycleTransitions(): Promise<void> {
-    await this.handlePublishedToContribution(); // Handle created vault -> contribution transitin
-    await this.handleContributionToAcquire(); // Handle contribution -> acquire transitions
-    await this.handleAcquireToGovernance(); // Handle acquire -> governance transitions
+    if (this.isRunning) {
+      this.logger.warn('Distribution process already running, skipping this execution');
+      return;
+    }
+
+    this.isRunning = true;
+    try {
+      await this.handlePublishedToContribution(); // Handle created vault -> contribution transitin
+      await this.handleContributionToAcquire(); // Handle contribution -> acquire transitions
+      await this.handleAcquireToGovernance(); // Handle acquire -> governance transitions
+    } finally {
+      this.isRunning = false;
+    }
   }
 
   private async queuePhaseTransition(
@@ -312,12 +323,21 @@ export class LifecycleService {
       .andWhere(`vault.contribution_phase_start + (vault.contribution_duration * interval '1 millisecond') <= :now`, {
         now,
       })
+      .andWhere('vault.id NOT IN (:...processingIds)', {
+        processingIds:
+          this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'], // Dummy UUID to avoid empty array
+      })
       .leftJoinAndSelect('vault.owner', 'owner')
       .leftJoinAndSelect('vault.assets_whitelist', 'assets_whitelist')
       .leftJoinAndSelect('vault.assets', 'assets', 'assets.deleted = :deleted', { deleted: false })
       .getMany();
 
     for (const vault of contributionVaults) {
+      // Skip if vault is already being processed (double-check in case of race condition)
+      if (this.processingVaults.has(vault.id)) {
+        continue;
+      }
+
       // Check for failed update-vault transactions
       const failedTransactionsCount = await this.transactionsRepository.count({
         where: {
@@ -458,10 +478,20 @@ export class LifecycleService {
         // All VT goes to contributors (minus LP if ADA was contributed)
 
         // Skip to governance immediately after contribution window ends
-        await this.executeContributionDirectToGovernance(vault);
+        try {
+          this.processingVaults.add(vault.id);
+          await this.executeContributionDirectToGovernance(vault);
+        } finally {
+          this.processingVaults.delete(vault.id);
+        }
         return;
       } else {
-        await this.executeContributionToAcquireTransition(vault);
+        try {
+          this.processingVaults.add(vault.id);
+          await this.executeContributionToAcquireTransition(vault);
+        } finally {
+          this.processingVaults.delete(vault.id);
+        }
       }
     }
   }
@@ -2477,6 +2507,37 @@ export class LifecycleService {
    */
   private async executeContributionDirectToGovernance(vault: Vault): Promise<void> {
     try {
+      // Check if multi-batch distribution is already in progress for this vault
+      // This prevents race conditions when the cron re-picks up the same vault
+      const freshVault = await this.vaultRepository.findOne({
+        where: { id: vault.id },
+        select: [
+          'id',
+          'vault_status',
+          'pending_multipliers',
+          'current_distribution_batch',
+          'total_distribution_batches',
+        ],
+      });
+
+      if (freshVault?.pending_multipliers && freshVault.pending_multipliers.length > 0) {
+        this.logger.warn(
+          `Vault ${vault.id} already has multi-batch distribution in progress ` +
+            `(batch ${freshVault.current_distribution_batch}/${freshVault.total_distribution_batches}, ` +
+            `${freshVault.pending_multipliers.length} pending multipliers). Skipping duplicate processing.`
+        );
+        return;
+      }
+
+      // Also check if vault status has already transitioned (another race condition safeguard)
+      if (freshVault?.vault_status !== VaultStatus.contribution) {
+        this.logger.warn(
+          `Vault ${vault.id} status changed to ${freshVault?.vault_status} since initial check. ` +
+            `Skipping duplicate processing.`
+        );
+        return;
+      }
+
       this.logger.log(
         `Starting direct contribution to governance transition for vault ${vault.id} ` + `(0% for acquirers)`
       );
@@ -2827,6 +2888,43 @@ export class LifecycleService {
             `Total batches: ${batchingStrategy.totalBatches}`
         );
 
+        // Pre-assign claims to batches BEFORE submitting any TX
+        // This ensures claims are correctly batched before on-chain data changes
+        // For batch 1: assign claims matching firstBatchMultipliers
+        const batch1Count = await this.multiBatchDistributionService.assignClaimsToBatch(
+          vault.id,
+          batchingStrategy.firstBatchMultipliers,
+          1
+        );
+
+        // For batch 2+: assign claims matching pendingMultipliers to batch 2
+        // (These will be re-assigned to batch 3,4,etc. if needed during processNextDistributionBatch)
+        let batch2Count = 0;
+        if (batchingStrategy.pendingMultipliers.length > 0) {
+          batch2Count = await this.multiBatchDistributionService.assignClaimsToBatch(
+            vault.id,
+            batchingStrategy.pendingMultipliers,
+            2
+          );
+        }
+
+        this.logger.log(`Vault ${vault.id}: Pre-assigned claims - Batch 1: ${batch1Count}, Batch 2+: ${batch2Count}`);
+
+        // Verify all claims are assigned
+        const unassignedCount = await this.claimRepository.count({
+          where: {
+            vault_id: vault.id,
+            type: In([ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER]),
+            distribution_batch: null as unknown as number,
+          },
+        });
+
+        if (unassignedCount > 0) {
+          this.logger.warn(
+            `Vault ${vault.id}: ${unassignedCount} claims still unassigned. This may indicate missing multipliers.`
+          );
+        }
+
         // Update vault with first batch of multipliers
         response = await this.vaultManagingService.updateVaultMetadataTx({
           vault,
@@ -2845,13 +2943,6 @@ export class LifecycleService {
           acquireMultiplier: batchingStrategy.firstBatchMultipliers,
           adaDistribution: [],
         });
-
-        // Assign claims to first batch based on included multipliers
-        await this.multiBatchDistributionService.assignClaimsToBatch(
-          vault.id,
-          batchingStrategy.firstBatchMultipliers,
-          1
-        );
 
         // Update the final values for phase transition
         finalAcquireMultiplier = batchingStrategy.firstBatchMultipliers;
@@ -2942,7 +3033,7 @@ export class LifecycleService {
    * Cron job to check for vaults with pending distribution batches.
    * When all claims in the current batch are claimed, processes the next batch.
    */
-  @Cron(CronExpression.EVERY_5_MINUTES)
+  @Cron('0 */15 * * * *')
   async handlePendingDistributionBatches(): Promise<void> {
     // Find vaults with pending multipliers (multi-batch in progress)
     const vaultsWithPendingBatches = await this.vaultRepository
