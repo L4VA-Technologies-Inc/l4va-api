@@ -45,6 +45,7 @@ export class TaptoolsService {
   };
   private readonly RELICS_PORTA_PRICE = 70; // 70 ADA for all Porta NFTsА
   private readonly testnetPrices = {
+    // Policy-level prices (fallback when no asset-specific price exists)
     f61a534fd4484b4b58d5ff18cb77cfc9e74ad084a18c0409321c811a: 0.00526,
     ed8145e0a4b8b54967e8f7700a5ee660196533ded8a55db620cc6a37: 0.00374,
     '755457ffd6fffe7b20b384d002be85b54a0b3820181f19c5f9032c2e': 250.0,
@@ -56,9 +57,20 @@ export class TaptoolsService {
     '0d27d4483fc9e684193466d11bc6d90a0ff1ab10a12725462197188a': 188.57,
     '53173a3d7ae0a0015163cc55f9f1c300c7eab74da26ed9af8c052646': 100000.0,
     '91918871f0baf335d32be00af3f0604a324b2e0728d8623c0d6e2601': 250000.0,
+
+    // Asset-specific prices (policyId + assetName) - for testing multiple multipliers
+    // Example: Different prices for individual NFTs within the same policy
+    '0b89a746fd2d859e0b898544487c17d9ac94b187ea4c74fd0bfbab16526f6d616e2330303031': 3400.0,
+    '0b89a746fd2d859e0b898544487c17d9ac94b187ea4c74fd0bfbab16526f6d616e2330303032': 3500.0,
+    '0b89a746fd2d859e0b898544487c17d9ac94b187ea4c74fd0bfbab16526f6d616e2330303033': 3600.0,
+    '0b89a746fd2d859e0b898544487c17d9ac94b187ea4c74fd0bfbab16526f6d616e2330303034': 3700.0,
+    '0b89a746fd2d859e0b898544487c17d9ac94b187ea4c74fd0bfbab16526f6d616e2330303035': 3800.0,
+    '436ca2e51fa2887fa306e8f6aa0c8bda313dd5882202e21ae2972ac8546573744e46543031': 115.93,
+    '436ca2e51fa2887fa306e8f6aa0c8bda313dd5882202e21ae2972ac8546573744e46543032': 120.5,
+    '436ca2e51fa2887fa306e8f6aa0c8bda313dd5882202e21ae2972ac8546573744e46543033': 125.75,
+    '436ca2e51fa2887fa306e8f6aa0c8bda313dd5882202e21ae2972ac8546573744e46543034': 130.25,
+    '436ca2e51fa2887fa306e8f6aa0c8bda313dd5882202e21ae2972ac8546573744e46543035': 135,
   };
-  private readonly tapToolsApiKey: string;
-  private readonly tapToolsApiUrl: string;
 
   constructor(
     @InjectRepository(Vault)
@@ -77,8 +89,6 @@ export class TaptoolsService {
     @Optional() @Inject('TreasuryWalletService') private readonly treasuryWalletService?: TreasuryWalletService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
-    this.tapToolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
-    this.tapToolsApiUrl = this.configService.get<string>('TAPTOOLS_API_URL');
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
@@ -288,12 +298,25 @@ export class TaptoolsService {
     try {
       const adaPrice = await this.priceService.getAdaPrice();
 
-      if (!this.isMainnet && this.testnetPrices[policyId]) {
-        const hardcodedPriceAda = this.testnetPrices[policyId];
-        return {
-          priceAda: hardcodedPriceAda,
-          priceUsd: hardcodedPriceAda * adaPrice,
-        };
+      if (!this.isMainnet) {
+        // Check for asset-specific price first (policyId + assetName)
+        const assetId = `${policyId}${assetName}`;
+        if (this.testnetPrices[assetId] !== undefined) {
+          const hardcodedPriceAda = this.testnetPrices[assetId];
+          return {
+            priceAda: hardcodedPriceAda,
+            priceUsd: hardcodedPriceAda * adaPrice,
+          };
+        }
+
+        // Fall back to policy-level price
+        if (this.testnetPrices[policyId] !== undefined) {
+          const hardcodedPriceAda = this.testnetPrices[policyId];
+          return {
+            priceAda: hardcodedPriceAda,
+            priceUsd: hardcodedPriceAda * adaPrice,
+          };
+        }
       }
 
       const cacheKey = `asset_value_${policyId}_${assetName}`;

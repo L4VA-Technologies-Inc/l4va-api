@@ -201,12 +201,10 @@ export class BlockchainService {
       if (error.response?.status === 422 && error.response?.data?.message) {
         const errorMessage = error.response.data.message;
 
-        // Check for FeeTooSmallUTxO error
-        if (errorMessage.includes('FeeTooSmallUTxO')) {
-          throw FeeTooSmallException.fromErrorMessage(errorMessage);
-        }
+        // NOTE: Error checking order matters! Check BadInputsUTxO first because when a UTXO is already spent,
+        // it often causes ValueNotConservedUTxO as a side effect. We want to report the root cause.
 
-        // Check for BadInputsUTxO error (UTXO already spent)
+        // Check for BadInputsUTxO error (UTXO already spent) - HIGHEST PRIORITY
         if (errorMessage.includes('BadInputsUTxO')) {
           const utxoMatch = errorMessage.match(
             /TxIn \(TxId \{unTxId = SafeHash "([a-f0-9]+)"\}\) \(TxIx \{unTxIx = (\d+)\}\)/
@@ -216,6 +214,11 @@ export class BlockchainService {
             throw new UtxoSpentException(txHash, parseInt(outputIndex));
           }
           throw new UtxoSpentException('unknown', 0, 'One or more transaction inputs have already been spent');
+        }
+
+        // Check for FeeTooSmallUTxO error
+        if (errorMessage.includes('FeeTooSmallUTxO')) {
+          throw FeeTooSmallException.fromErrorMessage(errorMessage);
         }
 
         // Check for ValueNotConservedUTxO error

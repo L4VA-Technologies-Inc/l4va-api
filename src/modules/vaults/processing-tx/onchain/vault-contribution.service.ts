@@ -266,19 +266,26 @@ export class VaultContributionService {
       this.logger.error('Error submitting transaction', error);
       await this.transactionsService.updateTransactionStatusById(signedTx.txId, TransactionStatus.failed);
 
+      // Re-throw HTTP exceptions as-is (they contain proper status codes and messages)
       if (error instanceof ValidityIntervalException) {
         throw error;
       }
 
       if (error instanceof UtxoSpentException) {
-        throw new Error(
+        // Re-throw the exception with a user-friendly message
+        throw new UtxoSpentException(
+          error.txHash,
+          error.outputIndex,
           'One or more of your wallet UTXOs were already spent in another transaction. ' +
             'Please refresh your wallet and try again.'
         );
       }
 
       if (error instanceof ValueNotConservedException) {
-        throw new Error(
+        // Re-throw the exception with a user-friendly message
+        throw new ValueNotConservedException(
+          error.supplied,
+          error.expected,
           'Transaction value mismatch detected. This is likely a bug in the transaction builder. ' +
             'Please contact support with this transaction ID: ' +
             signedTx.txId
