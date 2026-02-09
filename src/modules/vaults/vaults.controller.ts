@@ -23,6 +23,7 @@ import { DraftVaultsService } from './draft-vaults.service';
 import { BuildBurnTransactionRes } from './dto/build-burn-transaction.res';
 import { CreateVaultRes } from './dto/create-vault.res';
 import { CreateVaultReq } from './dto/createVault.req';
+import { CollectionNameItem, GetCollectionNamesReq } from './dto/get-collection-names.dto';
 import { GetVaultActivityDto } from './dto/get-vault-activity.dto';
 import { GetVaultParamDto } from './dto/get-vault-param.dto';
 import { GetVaultTransactionsDto } from './dto/get-vault-transactions.dto';
@@ -169,6 +170,18 @@ export class VaultsController {
   ): Promise<PaginatedResponseDto<VaultShortResponse>> {
     const userId = req.user.sub;
     return this.draftVaultsService.getMyDraftVaults(userId, query.page, query.limit, query.sortBy, query.sortOrder);
+  }
+
+  @ApiDoc({
+    summary: 'Get collection names by policy IDs',
+    description:
+      'Fetches collection names (or token tickers) for the given policy IDs from the Ada Anvil marketplace API.',
+    status: 200,
+  })
+  @UseGuards(AuthGuard)
+  @Post('collection-names')
+  async getCollectionNames(@Body() body: GetCollectionNamesReq): Promise<CollectionNameItem[]> {
+    return this.vaultsService.getCollectionNamesByPolicyIds(body.policyIds);
   }
 
   @ApiDoc({
