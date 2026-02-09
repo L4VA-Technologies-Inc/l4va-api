@@ -11,6 +11,7 @@ import { TransactionsService } from '../offchain-tx/transactions.service';
 
 import { BlockchainService } from './blockchain.service';
 import { SubmitTransactionDto } from './dto/transaction.dto';
+import { InsufficientAssetsException } from './exceptions/insufficient-assets.exception';
 import { UtxoSpentException } from './exceptions/utxo-spent.exception';
 import { ValidityIntervalException } from './exceptions/validity-interval.exception';
 import { ValueNotConservedException } from './exceptions/value-not-conserved.exception';
@@ -230,6 +231,18 @@ export class VaultContributionService {
       };
     } catch (error) {
       await this.transactionsService.updateTransactionStatusById(params.txId, TransactionStatus.failed);
+
+      // Handle insufficient assets error with user-friendly message
+      if (error.message && error.message.includes('Insufficient assets found')) {
+        // Extract the "Missing: ..." part from the error message
+        const missingPart = error.message.replace('Insufficient assets found. ', '');
+        throw new InsufficientAssetsException(
+          missingPart,
+          'You do not have the required assets in your wallet to complete this transaction. ' +
+            'Please ensure all selected assets are still in your wallet and try again.'
+        );
+      }
+
       throw error;
     }
   }
