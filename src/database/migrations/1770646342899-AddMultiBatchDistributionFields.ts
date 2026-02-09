@@ -1,7 +1,7 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class $npmConfigName1770646342899 implements MigrationInterface {
-  name = ' $npmConfigName1770646342899';
+export class AddMultiBatchDistributionFields1770646342899 implements MigrationInterface {
+  name = 'AddMultiBatchDistributionFields1770646342899';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`ALTER TABLE "vault_tags" DROP CONSTRAINT "FK_adf9f0b047319be1ec67ac1d1eb"`);
