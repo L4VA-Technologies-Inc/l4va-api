@@ -209,17 +209,31 @@ export class ContributorDistributionOrchestrator {
     dispatchUtxos: AddressesUtxo[],
     config: any
   ): Promise<BatchSizeResult> {
-    let testBatchSize = 2;
-    let lastSuccessfulSize = 2;
-    let lastSuccessfulClaims = claims.slice(0, 2);
+    // Start with batch size 1 due to high script execution memory per claim
+    // Each claim uses ~12-13M memory units, Cardano limit is 14M per tx
+    // This means only 1 claim per transaction is safe
+    let testBatchSize = 1;
+    let lastSuccessfulSize = 1;
+    let lastSuccessfulClaims = claims.slice(0, 1);
+
+    // If only 1 claim, just return it
+    if (claims.length === 1) {
+      return {
+        optimalBatchSize: 1,
+        actualClaims: claims,
+      };
+    }
 
     // Get admin UTXOs once for testing
     const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(config.adminAddress), this.blockfrost, {
       minAda: 4_000_000,
     });
 
-    // Test increasing batch sizes
-    while (testBatchSize <= Math.min(this.MAX_BATCH_SIZE, claims.length)) {
+    // Test increasing batch sizes (conservatively, max 1 due to ExUnits)
+    // Note: We keep the loop structure for future optimization if script memory reduces
+    const effectiveMaxBatch = Math.min(1, this.MAX_BATCH_SIZE, claims.length); // Limit to 1 for now
+
+    while (testBatchSize <= effectiveMaxBatch) {
       const testClaims = claims.slice(0, testBatchSize);
 
       try {
