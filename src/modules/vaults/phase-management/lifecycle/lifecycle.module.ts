@@ -41,6 +41,6 @@ import { VyfiModule } from '@/modules/vyfi/vyfi.module';
     }),
   ],
   providers: [LifecycleService, LifecycleProcessor, VaultValuationService],
-  exports: [VaultValuationService],
+  exports: [VaultValuationService, LifecycleService],
 })
 export class LifecycleModule {}

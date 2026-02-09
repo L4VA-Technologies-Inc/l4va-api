@@ -10,6 +10,7 @@ import { AutomatedDistributionService } from './automated-distribution.service';
 import { AcquirerExtractionBuilder } from './builders/acquirer-extraction.builder';
 import { ContributorPaymentBuilder } from './builders/contributor-payment.builder';
 import { DistributionCalculationService } from './distribution-calculation.service';
+import { MultiBatchDistributionService } from './multi-batch-distribution.service';
 import { AcquirerDistributionOrchestrator } from './orchestrators/acquirer-distribution.orchestrator';
 import { ContributorDistributionOrchestrator } from './orchestrators/contributor-distribution.orchestrator';
 
@@ -41,6 +42,7 @@ import { VyfiModule } from '@/modules/vyfi/vyfi.module';
   providers: [
     DistributionCalculationService,
     AutomatedDistributionService,
+    MultiBatchDistributionService,
     AcquirerExtractionBuilder,
     ContributorPaymentBuilder,
     AcquirerDistributionOrchestrator,
@@ -55,6 +57,6 @@ import { VyfiModule } from '@/modules/vyfi/vyfi.module';
       inject: [ConfigService],
     },
   ],
-  exports: [DistributionCalculationService],
+  exports: [DistributionCalculationService, MultiBatchDistributionService],
 })
 export class DistributionModule {}

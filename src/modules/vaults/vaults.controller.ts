@@ -35,6 +35,7 @@ import { PublishVaultDto } from './dto/publish-vault.dto';
 import { SaveDraftReq } from './dto/saveDraft.req';
 import { VaultActivityItem } from './dto/vault-activity.dto';
 import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
+import { LifecycleService } from './phase-management/lifecycle/lifecycle.service';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { VaultsService } from './vaults.service';
 
@@ -50,7 +51,8 @@ export class VaultsController {
     private readonly vaultsService: VaultsService,
     private readonly draftVaultsService: DraftVaultsService,
     private readonly transactionsService: TransactionsService,
-    private readonly statisticsService: StatisticsService
+    private readonly statisticsService: StatisticsService,
+    private readonly lifecycleService: LifecycleService
   ) {}
 
   @ApiDoc({

@@ -14,10 +14,7 @@ export class OgController {
   @Get('vaults/:vaultId')
   @Header('Content-Type', 'text/html; charset=utf-8')
   @Header('Cache-Control', 'public, max-age=300')
-  async getVaultOg(
-    @Param('vaultId', new ParseUUIDPipe()) vaultId: string,
-    @Req() req: Request,
-  ): Promise<string> {
+  async getVaultOg(@Param('vaultId', new ParseUUIDPipe()) vaultId: string, @Req() req: Request): Promise<string> {
     const host = req.get('host') || 'l4va.io';
     return this.ogService.getVaultOgHtml(vaultId, host);
   }

@@ -92,10 +92,10 @@ interface AcquireMultiplierParams {
 }
 
 interface AcquireMultiplierResult {
-  /** Array of [policyId, assetName, vtAmount] for each asset */
-  acquireMultiplier: [string, string, number][];
-  /** Array of [policyId, assetName, adaAmount] for each asset */
-  adaDistribution: [string, string, number][];
+  /** Array of [policyId, assetName | null, vtAmount] for each asset. Use null for policy-level multipliers. */
+  acquireMultiplier: [string, string | null, number][];
+  /** Array of [policyId, assetName | null, adaAmount] for each asset. Use null for policy-level multipliers. */
+  adaDistribution: [string, string | null, number][];
   /** Map of claim ID to recalculated VT amount (qty × multiplier) for smart contract consistency */
   recalculatedClaimAmounts: Map<string, number>;
   /** Map of claim ID to recalculated lovelace amount (qty × ada_multiplier) for smart contract consistency */
@@ -272,15 +272,28 @@ export class DistributionCalculationService {
   calculateAcquireMultipliers(params: AcquireMultiplierParams): AcquireMultiplierResult {
     const { contributorsClaims, acquirerClaims } = params;
 
-    const acquireMultiplier = [];
-    const adaDistribution = [];
+    const acquireMultiplier: [string, string | null, number][] = [];
+    const adaDistribution: [string, string | null, number][] = [];
     const recalculatedClaimAmounts = new Map<string, number>();
     const recalculatedLovelaceAmounts = new Map<string, number>();
 
+    // Track assets by (policy, price) for price-based grouping
+    // Key: `${policyId}:${price}`, Value: array of assets with their data
+    interface AssetWithData {
+      assetName: string;
+      quantity: number;
+      multiplier: number;
+      adaMultiplier: number;
+      price: number;
+    }
+
+    const assetsByPolicyAndPrice = new Map<string, AssetWithData[]>();
+
+    // First pass: collect all assets with their data
     for (const claim of contributorsClaims) {
       const contributorLovelaceAmount = claim?.lovelace_amount || 0;
 
-      // VT token distribution (existing logic)
+      // VT token distribution
       const baseVtShare = Math.floor(claim.amount / claim.transaction.assets.length);
       const vtRemainder = claim.amount - baseVtShare * claim.transaction.assets.length;
 
@@ -294,26 +307,106 @@ export class DistributionCalculationService {
 
       claim.transaction.assets.forEach((asset, index) => {
         const vtShare = baseVtShare + (index < vtRemainder ? 1 : 0);
-        // Divide by asset quantity to get per-unit multiplier
-        // Smart contract calculates: expected = multiplier * quantity_on_utxo
         const assetQuantity = Number(asset.quantity) || 1;
         const vtSharePerUnit = Math.floor(vtShare / assetQuantity);
-        acquireMultiplier.push([asset.policy_id, asset.asset_id, vtSharePerUnit]);
-
-        // Recalculate VT amount using the same formula as smart contract: qty × multiplier
-        recalculatedVtAmount += assetQuantity * vtSharePerUnit;
 
         const adaShare = baseAdaShare + (index < adaRemainder ? 1 : 0);
         const adaSharePerUnit = Math.floor(adaShare / assetQuantity);
-        adaDistribution.push([asset.policy_id, asset.asset_id, adaSharePerUnit]);
 
-        // Recalculate lovelace amount using the same formula as smart contract
+        // Get asset price (prefer floor_price for NFTs, dex_price for FTs)
+        const price = Number(asset.floor_price) || Number(asset.dex_price) || Number(asset.listing_price) || 0;
+
+        // Group by policy AND price for smart grouping
+        const groupKey = `${asset.policy_id}:${price}`;
+        if (!assetsByPolicyAndPrice.has(groupKey)) {
+          assetsByPolicyAndPrice.set(groupKey, []);
+        }
+        assetsByPolicyAndPrice.get(groupKey)!.push({
+          assetName: asset.asset_id,
+          quantity: assetQuantity,
+          multiplier: vtSharePerUnit,
+          adaMultiplier: adaSharePerUnit,
+          price,
+        });
+
+        // Recalculate VT amount using the same formula as smart contract: qty × multiplier
+        recalculatedVtAmount += assetQuantity * vtSharePerUnit;
         recalculatedLovelace += assetQuantity * adaSharePerUnit;
       });
 
       // Store the recalculated amounts (these will match smart contract validation exactly)
       recalculatedClaimAmounts.set(claim.id, recalculatedVtAmount);
       recalculatedLovelaceAmounts.set(claim.id, recalculatedLovelace);
+    }
+
+    // Group price buckets by policy to decide grouping strategy
+    const policiesData = new Map<
+      string,
+      {
+        priceGroups: Map<number, AssetWithData[]>;
+        totalAssets: number;
+      }
+    >();
+
+    for (const [groupKey, assets] of assetsByPolicyAndPrice.entries()) {
+      const [policyId, priceStr] = groupKey.split(':');
+      const price = Number(priceStr);
+
+      if (!policiesData.has(policyId)) {
+        policiesData.set(policyId, { priceGroups: new Map(), totalAssets: 0 });
+      }
+      const policyData = policiesData.get(policyId)!;
+      policyData.priceGroups.set(price, assets);
+      policyData.totalAssets += assets.length;
+    }
+
+    const POLICY_GROUPING_THRESHOLD = 10;
+
+    // Process each policy
+    for (const [policyId, policyData] of policiesData.entries()) {
+      const { priceGroups, totalAssets } = policyData;
+      const uniquePrices = priceGroups.size;
+
+      // Case 1: Single price for all assets in policy → use policy-level multiplier
+      if (uniquePrices === 1 && totalAssets >= POLICY_GROUPING_THRESHOLD) {
+        const [price, assets] = [...priceGroups.entries()][0];
+
+        // Calculate weighted average multiplier for the policy
+        const totalQty = assets.reduce((sum, a) => sum + a.quantity, 0);
+        const weightedVtSum = assets.reduce((sum, a) => sum + a.multiplier * a.quantity, 0);
+        const weightedAdaSum = assets.reduce((sum, a) => sum + a.adaMultiplier * a.quantity, 0);
+
+        // Use floor to ensure we don't over-distribute
+        const policyVtMultiplier = Math.floor(weightedVtSum / totalQty);
+        const policyAdaMultiplier = Math.floor(weightedAdaSum / totalQty);
+
+        acquireMultiplier.push([policyId, '', policyVtMultiplier]);
+        adaDistribution.push([policyId, '', policyAdaMultiplier]);
+
+        this.logger.log(
+          `Grouped ${totalAssets} assets from policy ${policyId.slice(0, 8)}... ` +
+            `(single price: ${price} ADA) using policy-level multiplier: VT=${policyVtMultiplier}, ADA=${policyAdaMultiplier}`
+        );
+      }
+      // Case 2: Multiple prices → keep individual asset-level entries
+      else {
+        for (const assets of priceGroups.values()) {
+          // If this price group has many assets, we could still use policy-level
+          // but with different prices, we must use asset-level to be accurate
+          for (const asset of assets) {
+            acquireMultiplier.push([policyId, asset.assetName, asset.multiplier]);
+            adaDistribution.push([policyId, asset.assetName, asset.adaMultiplier]);
+          }
+        }
+
+        if (totalAssets >= POLICY_GROUPING_THRESHOLD) {
+          const priceList = [...priceGroups.keys()].slice(0, 5).join(', ');
+          this.logger.log(
+            `NOT grouping ${totalAssets} assets from policy ${policyId.slice(0, 8)}... ` +
+              `(${uniquePrices} different prices: ${priceList}${uniquePrices > 5 ? '...' : ''})`
+          );
+        }
+      }
     }
 
     if (!acquirerClaims || acquirerClaims.length === 0) {

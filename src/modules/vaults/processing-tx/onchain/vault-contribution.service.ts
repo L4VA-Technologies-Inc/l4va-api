@@ -11,6 +11,7 @@ import { TransactionsService } from '../offchain-tx/transactions.service';
 
 import { BlockchainService } from './blockchain.service';
 import { SubmitTransactionDto } from './dto/transaction.dto';
+import { InsufficientAssetsException } from './exceptions/insufficient-assets.exception';
 import { UtxoSpentException } from './exceptions/utxo-spent.exception';
 import { ValidityIntervalException } from './exceptions/validity-interval.exception';
 import { ValueNotConservedException } from './exceptions/value-not-conserved.exception';
@@ -230,6 +231,18 @@ export class VaultContributionService {
       };
     } catch (error) {
       await this.transactionsService.updateTransactionStatusById(params.txId, TransactionStatus.failed);
+
+      // Handle insufficient assets error with user-friendly message
+      if (error.message && error.message.includes('Insufficient assets found')) {
+        // Extract the "Missing: ..." part from the error message
+        const missingPart = error.message.replace('Insufficient assets found. ', '');
+        throw new InsufficientAssetsException(
+          missingPart,
+          'You do not have the required assets in your wallet to complete this transaction. ' +
+            'Please ensure all selected assets are still in your wallet and try again.'
+        );
+      }
+
       throw error;
     }
   }
@@ -266,19 +279,26 @@ export class VaultContributionService {
       this.logger.error('Error submitting transaction', error);
       await this.transactionsService.updateTransactionStatusById(signedTx.txId, TransactionStatus.failed);
 
+      // Re-throw HTTP exceptions as-is (they contain proper status codes and messages)
       if (error instanceof ValidityIntervalException) {
         throw error;
       }
 
       if (error instanceof UtxoSpentException) {
-        throw new Error(
+        // Re-throw the exception with a user-friendly message
+        throw new UtxoSpentException(
+          error.txHash,
+          error.outputIndex,
           'One or more of your wallet UTXOs were already spent in another transaction. ' +
             'Please refresh your wallet and try again.'
         );
       }
 
       if (error instanceof ValueNotConservedException) {
-        throw new Error(
+        // Re-throw the exception with a user-friendly message
+        throw new ValueNotConservedException(
+          error.supplied,
+          error.expected,
           'Transaction value mismatch detected. This is likely a bug in the transaction builder. ' +
             'Please contact support with this transaction ID: ' +
             signedTx.txId
