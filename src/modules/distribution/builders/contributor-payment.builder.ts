@@ -96,6 +96,44 @@ export class ContributorPaymentBuilder {
         vault.script_hash
       );
 
+      // CRITICAL VALIDATION: Never burn receipt if VT would be 0!
+      // This prevents catastrophic loss where receipt is burned but no VT minted
+      if (vaultTokenQuantity === 0) {
+        this.logger.error(
+          `CRITICAL: Claim ${claim.id} would mint 0 VT! ` +
+            `This indicates multipliers for this claim's assets are NOT on-chain. ` +
+            `Claim amount (DB): ${claim.amount}, UTXO assets: ${JSON.stringify(contribOutput.amount.filter(a => a.unit !== 'lovelace'))}, ` +
+            `Multipliers count: ${vault.acquire_multiplier?.length || 0}`
+        );
+        throw new Error(
+          `ABORT: Claim ${claim.id} would mint 0 VT - multipliers not on-chain for assets. ` +
+            `This would burn receipt without minting VT! Skipping claim to prevent loss.`
+        );
+      }
+
+      // VALIDATION: Warn if calculated VT differs significantly from expected
+      const expectedVt = Number(claim.amount);
+      if (vaultTokenQuantity !== expectedVt) {
+        const difference = Math.abs(vaultTokenQuantity - expectedVt);
+        const percentDiff = (difference / expectedVt) * 100;
+        // Log warning for any discrepancy, but only error on large differences
+        this.logger.warn(
+          `VT mismatch for claim ${claim.id}: calculated=${vaultTokenQuantity}, expected=${expectedVt}, diff=${percentDiff.toFixed(2)}%`
+        );
+        // If difference is more than 1%, something is seriously wrong
+        if (percentDiff > 1) {
+          this.logger.error(
+            `CRITICAL VT MISMATCH for claim ${claim.id}! ` +
+              `Calculated: ${vaultTokenQuantity}, Expected: ${expectedVt}, Difference: ${percentDiff.toFixed(2)}%`
+          );
+          throw new Error(
+            `ABORT: VT mismatch too large for claim ${claim.id}. ` +
+              `Calculated ${vaultTokenQuantity} vs expected ${expectedVt} (${percentDiff.toFixed(2)}% diff). ` +
+              `Possible multiplier issue.`
+          );
+        }
+      }
+
       // Add script interaction for spending the contribution UTXO
       scriptInteractions.push({
         purpose: 'spend',
@@ -382,6 +420,7 @@ export class ContributorPaymentBuilder {
 
     let totalVtAmount = 0;
     const receiptUnit = vaultPolicyId + '72656365697074'; // "receipt" in hex
+    const unmatchedAssets: Array<{ policyId: string; assetName: string; quantity: number }> = [];
 
     for (const amount of utxoAmounts) {
       // Skip lovelace and receipt token
@@ -399,7 +438,18 @@ export class ContributorPaymentBuilder {
 
       if (multiplier > 0) {
         totalVtAmount += multiplier * quantity;
+      } else {
+        // Track unmatched assets for debugging
+        unmatchedAssets.push({ policyId, assetName, quantity });
       }
+    }
+
+    // Log warning if any assets had no multiplier
+    if (unmatchedAssets.length > 0) {
+      this.logger.warn(
+        `Assets without multipliers: ${JSON.stringify(unmatchedAssets)}. ` +
+          `Total multipliers in vault: ${acquireMultiplier.length}`
+      );
     }
 
     return totalVtAmount;
