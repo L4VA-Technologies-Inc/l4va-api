@@ -1,8 +1,11 @@
+import { HttpService } from '@nestjs/axios';
 import { BadRequestException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
+import NodeCache from 'node-cache';
+import { firstValueFrom } from 'rxjs';
 import { Brackets, In, Not, Repository } from 'typeorm';
 
 import { GoogleCloudStorageService } from '../google_cloud/google_bucket/bucket.service';
@@ -80,6 +83,7 @@ export class VaultsService {
    */
   private readonly scVersion: string;
   private readonly isMainnet: boolean;
+  private readonly collectionNameCache: NodeCache;
 
   constructor(
     @InjectRepository(Vault)
@@ -113,10 +117,17 @@ export class VaultsService {
     private readonly transactionsService: TransactionsService,
     private readonly configService: ConfigService,
     private readonly systemSettingsService: SystemSettingsService,
-    private readonly distributionCalculationService: DistributionCalculationService
+    private readonly distributionCalculationService: DistributionCalculationService,
+    private readonly httpService: HttpService
   ) {
     this.scVersion = this.configService.get<string>('SC_VERSION') || '1.0.0'; // Current SC version
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+    // Cache collection names for 1 hour (3600 seconds)
+    this.collectionNameCache = new NodeCache({
+      stdTTL: 3600,
+      checkperiod: 300,
+      useClones: false,
+    });
   }
 
   /**
@@ -1514,5 +1525,53 @@ export class VaultsService {
     }
 
     return events;
+  }
+
+  /**
+   * Fetches collection names for given policy IDs from Ada Anvil marketplace API.
+   * For each policy ID, retrieves the collection name or ticker from the first asset.
+   * Uses cache to avoid redundant API calls for the same policy ID.
+   * @param policyIds - Array of policy IDs to look up
+   * @returns Array of { policyId, collectionName } objects
+   */
+  async getCollectionNamesByPolicyIds(
+    policyIds: string[]
+  ): Promise<{ policyId: string; collectionName: string | null }[]> {
+    return await Promise.all(
+      policyIds.map(async policyId => {
+        const cacheKey = `collection_name_${policyId}`;
+        const cached = this.collectionNameCache.get<string | null>(cacheKey);
+
+        if (cached !== undefined) {
+          return { policyId, collectionName: cached };
+        }
+
+        try {
+          const response = await firstValueFrom(
+            this.httpService.get<{
+              count: number;
+              results: Array<{
+                collection: { name: string | null };
+                attributes: Record<string, string> | null;
+              }>;
+            }>(`https://prod.api.ada-anvil.app/marketplace/api/get-collection-assets`, {
+              params: { policyId },
+              timeout: 10000,
+            })
+          );
+
+          const firstAsset = response.data?.results?.[0];
+          const collectionName = firstAsset?.collection?.name || firstAsset?.attributes?.Ticker || null;
+
+          this.collectionNameCache.set(cacheKey, collectionName);
+
+          return { policyId, collectionName };
+        } catch (error) {
+          this.logger.warn(`Failed to fetch collection name for policyId ${policyId}: ${error.message}`);
+          const collectionName = null;
+          return { policyId, collectionName };
+        }
+      })
+    );
   }
 }
