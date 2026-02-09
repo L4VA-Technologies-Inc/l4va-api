@@ -37,7 +37,7 @@ export class VaultValuationService {
    * Only processes vaults in contribution, acquire, or locked phases.
    * Active vaults (contribution/acquire) only update prices and TVL, not FDV.
    */
-  @Cron(CronExpression.EVERY_30_MINUTES)
+  // @Cron(CronExpression.EVERY_30_MINUTES)
   async updateActiveVaultTotals(): Promise<void> {
     if (this.isProcessing) {
       this.logger.warn('Vault valuation update already in progress, skipping...');

@@ -230,6 +230,47 @@ export class TaptoolsService {
   }
 
   /**
+   * Fetch Relics of Magma Vita character trait from WayUp API
+   * WayUp API returns properly decoded attributes including "attributes / Character"
+   * @param policyId The policy ID of the NFT
+   * @param name The readable asset name (e.g., "Relics of Magma - The Vita #0899")
+   * @returns Character trait value or null if not found
+   */
+  private async fetchRelicsCharacterFromWayUp(policyId: string, name: string): Promise<string | null> {
+    // Only works on mainnet - WayUp doesn't support testnet
+    if (!this.isMainnet) {
+      this.logger.debug('Skipping WayUp character fetch for testnet');
+      return null;
+    }
+
+    try {
+      // Query WayUp API for the specific asset by name
+      const response = await this.wayUpPricingService.getCollectionAssets({
+        policyId,
+        term: name,
+        limit: 1,
+      });
+
+      if (response.results.length > 0) {
+        const asset = response.results[0];
+        // WayUp returns decoded attributes with key "attributes / Character"
+        if (asset.attributes) {
+          const character = this.extractCharacterTrait(asset.attributes);
+          if (character) {
+            return character;
+          }
+        }
+      }
+
+      this.logger.debug(`Character trait not found in WayUp response for ${name}`);
+      return null;
+    } catch (error) {
+      this.logger.warn(`Failed to fetch character from WayUp: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
    * Get trait-based price for Relics of Magma NFTs
    * @param policyId The policy ID of the NFT
    * @param metadata The NFT metadata
@@ -294,10 +335,20 @@ export class TaptoolsService {
 
       // Route to appropriate API based on asset type
       if (isNFT) {
-        // Check if this is a Relics of Magma NFT - use trait-based pricing
-        if (policyId === this.RELICS_OF_MAGMA_VITA_POLICY || policyId === this.RELICS_OF_MAGMA_PORTA_POLICY) {
+        // Relics of Magma - The Porta: Fixed price for ALL, no API call needed
+        if (policyId === this.RELICS_OF_MAGMA_PORTA_POLICY) {
+          const result = {
+            priceAda: this.RELICS_PORTA_PRICE,
+            priceUsd: this.RELICS_PORTA_PRICE * adaPrice,
+          };
+          this.cache.set(cacheKey, result);
+          return result;
+        }
+
+        // Relics of Magma - The Vita: Trait-based pricing, needs metadata
+        if (policyId === this.RELICS_OF_MAGMA_VITA_POLICY) {
           try {
-            // Fetch asset details to get metadata
+            // Fetch asset details to get metadata for trait-based pricing
             const assetId = `${policyId}${assetName}`;
             const assetDetails = await this.fetchAssetDetailsFromApi(assetId);
 
@@ -313,7 +364,15 @@ export class TaptoolsService {
               }
             }
           } catch (error) {
-            this.logger.warn(`Failed to get trait-based price for Relics NFT ${policyId}: ${error.message}`);
+            // Fallback to Balaena price for Vita on error
+            this.logger.warn(`Failed to get trait-based price for Vita NFT, using Balaena fallback: ${error.message}`);
+            const fallbackPrice = this.RELICS_CHARACTER_PRICES.Balaena;
+            const result = {
+              priceAda: fallbackPrice,
+              priceUsd: fallbackPrice * adaPrice,
+            };
+            this.cache.set(cacheKey, result);
+            return result;
           }
         }
 

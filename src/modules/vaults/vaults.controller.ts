@@ -35,6 +35,7 @@ import { PublishVaultDto } from './dto/publish-vault.dto';
 import { SaveDraftReq } from './dto/saveDraft.req';
 import { VaultActivityItem } from './dto/vault-activity.dto';
 import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
+import { LifecycleService } from './phase-management/lifecycle/lifecycle.service';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { VaultsService } from './vaults.service';
 
@@ -50,7 +51,8 @@ export class VaultsController {
     private readonly vaultsService: VaultsService,
     private readonly draftVaultsService: DraftVaultsService,
     private readonly transactionsService: TransactionsService,
-    private readonly statisticsService: StatisticsService
+    private readonly statisticsService: StatisticsService,
+    private readonly lifecycleService: LifecycleService
   ) {}
 
   @ApiDoc({
@@ -293,5 +295,18 @@ export class VaultsController {
       query.filter,
       query.isExport
     );
+  }
+
+  @ApiDoc({
+    summary: '[TEST] Simulate vault multipliers',
+    description:
+      'Test endpoint to simulate multiplier calculations for a vault without executing the phase transition. ' +
+      'Returns calculated multipliers, asset pricing, LP tokens, and optimal decimals. ' +
+      'Useful for validating calculations before actual transitions.',
+    status: 200,
+  })
+  @Get('test/simulate-multipliers/:id')
+  async simulateVaultMultipliers(@Param('id', new ParseUUIDPipe()) vaultId: string): Promise<any> {
+    return this.lifecycleService.simulateVaultMultipliers(vaultId);
   }
 }
