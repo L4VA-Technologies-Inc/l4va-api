@@ -296,17 +296,4 @@ export class VaultsController {
       query.isExport
     );
   }
-
-  @ApiDoc({
-    summary: '[TEST] Simulate vault multipliers',
-    description:
-      'Test endpoint to simulate multiplier calculations for a vault without executing the phase transition. ' +
-      'Returns calculated multipliers, asset pricing, LP tokens, and optimal decimals. ' +
-      'Useful for validating calculations before actual transitions.',
-    status: 200,
-  })
-  @Get('test/simulate-multipliers/:id')
-  async simulateVaultMultipliers(@Param('id', new ParseUUIDPipe()) vaultId: string): Promise<any> {
-    return this.lifecycleService.simulateVaultMultipliers(vaultId);
-  }
 }

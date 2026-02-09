@@ -2395,7 +2395,7 @@ export class LifecycleService {
     // Find vaults with pending multipliers (multi-batch in progress)
     const vaultsWithPendingBatches = await this.vaultRepository
       .createQueryBuilder('vault')
-      .where('vault.status = :status', { status: VaultStatus.locked })
+      .where('vault.vault_status = :status', { status: VaultStatus.locked })
       .andWhere('vault.pending_multipliers IS NOT NULL')
       .andWhere("vault.pending_multipliers != '[]'::jsonb")
       .getMany();
