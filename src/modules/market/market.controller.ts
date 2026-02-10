@@ -1,4 +1,4 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Query, Param } from '@nestjs/common';
 import { ApiTags, ApiResponse } from '@nestjs/swagger';
 
 import { ApiDoc } from '../../decorators/api-doc.decorator';
@@ -6,7 +6,7 @@ import { ApiDoc } from '../../decorators/api-doc.decorator';
 import { GetMarketsDto } from './dto/get-markets.dto';
 import { MarketService } from './market.service';
 
-import { GetMarketsResponse } from '@/modules/market/dto/get-markets-response.dto';
+import { GetMarketsResponse, MarketItem, MarketItemWithOHLCV } from '@/modules/market/dto/get-markets-response.dto';
 
 @Controller('markets')
 @ApiTags('Markets')
@@ -22,5 +22,33 @@ export class MarketController {
   @ApiResponse({ status: 200, description: 'Returns paginated markets' })
   async getMarkets(@Query() query: GetMarketsDto): Promise<GetMarketsResponse> {
     return this.marketService.getMarkets(query);
+  }
+
+  @Get(':id/ohlcv')
+  @ApiDoc({
+    summary: 'Get market by ID with OHLCV data',
+    description:
+      'Returns market data with vault information, statistics, and OHLCV (Open, High, Low, Close, Volume) data from Taptools API',
+    status: 200,
+  })
+  @ApiResponse({ status: 200, description: 'Returns market data with OHLCV', type: Object })
+  @ApiResponse({ status: 404, description: 'Market not found' })
+  async getMarketByIdWithOHLCV(
+    @Param('id') vaultId: string,
+    @Query('interval') interval?: string
+  ): Promise<MarketItemWithOHLCV | null> {
+    return this.marketService.getMarketByIdWithOHLCV(vaultId, interval || '1h');
+  }
+
+  @Get(':id')
+  @ApiDoc({
+    summary: 'Get market by ID',
+    description: 'Returns market data with vault information and statistics',
+    status: 200,
+  })
+  @ApiResponse({ status: 200, description: 'Returns market data', type: Object })
+  @ApiResponse({ status: 404, description: 'Market not found' })
+  async getMarketById(@Param('id') id: string): Promise<MarketItem | null> {
+    return this.marketService.getMarketById(id);
   }
 }

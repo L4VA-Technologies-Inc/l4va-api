@@ -1,12 +1,13 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import axios, { AxiosInstance } from 'axios';
 import { Repository } from 'typeorm';
 
+import { Market } from '@/database/market.entity';
 import { Vault } from '@/database/vault.entity';
-import { MarketService } from '@/modules/market/market.service';
+import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { VyfiService } from '@/modules/vyfi/vyfi.service';
 import { VaultStatus } from '@/types/vault.types';
@@ -25,8 +26,9 @@ export class VaultMarketStatsService {
   constructor(
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
+    @InjectRepository(Market)
+    private readonly marketRepository: Repository<Market>,
     private readonly configService: ConfigService,
-    private readonly marketService: MarketService,
     private readonly vyfiService: VyfiService,
     private readonly taptoolsService: TaptoolsService
   ) {
@@ -210,7 +212,7 @@ export class VaultMarketStatsService {
             has_market_data: hasMarketData, // Track if LP actually exists on DEX
           };
 
-          await this.marketService.upsertMarketData(marketData);
+          await this.upsertMarketData(marketData);
 
           return { vault_id: vault.id, ...marketData, ...vaultUpdateData };
         } catch (error) {
@@ -218,7 +220,9 @@ export class VaultMarketStatsService {
             `Error fetching market data for vault ${vault.name} (${unit}):`,
             error.response?.data || error.message
           );
-          return null;
+          throw new ServiceUnavailableException(
+            `Failed to fetch market data for vault ${vault.name}. Please try again later.`
+          );
         }
       })
     );
@@ -286,5 +290,111 @@ export class VaultMarketStatsService {
       this.logger.warn(`Could not check liquidity for ${policyId}.${assetName}: ${error.message}`);
       return { exists: false };
     }
+  }
+
+  /**
+   * Get OHLCV (Open, High, Low, Close, Volume) data for a vault token from Taptools API
+   * @param policyId Token policy ID
+   * @param assetName Token asset name (hex)
+   * @param interval Time interval for OHLCV data (e.g., '1h', '24h', '7d', '30d')
+   * @returns OHLCV data from Taptools API or null if error
+   */
+  async getTokenOHLCV(policyId: string, assetName: string, interval: string = '1h'): Promise<MarketOhlcvSeries> {
+    if (!this.isMainnet) {
+      this.logger.warn('Not mainnet environment - OHLCV data not available');
+      return null;
+    }
+
+    if (!policyId || !assetName) {
+      this.logger.warn('Policy ID and asset name are required for OHLCV data');
+      throw new NotFoundException('Policy ID and asset name are required for OHLCV data');
+    }
+
+    try {
+      const unit = `${policyId}${assetName}`;
+      const { data } = await this.axiosTapToolsInstance.get<MarketOhlcvSeries>('/token/ohlcv', {
+        params: {
+          unit,
+          interval,
+        },
+      });
+
+      this.logger.log(`Successfully fetched OHLCV data for ${unit} with interval ${interval}`);
+      return data;
+    } catch (error) {
+      this.logger.error(
+        `Error fetching OHLCV data for ${policyId}.${assetName} (interval: ${interval}):`,
+        error.response?.data || error.message
+      );
+      throw new ServiceUnavailableException('Failed to fetch OHLCV data from Taptools API');
+    }
+  }
+
+  /**
+   * Get OHLCV data for a vault by vault ID
+   * Fetches policy_id and asset_vault_name from vault and calls getTokenOHLCV
+   * @param vaultId Vault ID
+   * @param interval Time interval for OHLCV data (e.g., '1h', '24h', '7d', '30d')
+   * @returns OHLCV data from Taptools API or null if error/vault not found
+   */
+  async getVaultTokenOHLCV(vaultId: string, interval: string = '1h'): Promise<MarketOhlcvSeries> {
+    try {
+      const vault = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        select: ['id', 'policy_id', 'asset_vault_name', 'name'],
+      });
+
+      if (!vault) {
+        this.logger.warn(`Vault with ID ${vaultId} not found`);
+        throw new NotFoundException(`Vault with ID ${vaultId} not found`);
+      }
+
+      if (!vault.policy_id || !vault.asset_vault_name) {
+        this.logger.warn(`Vault ${vault.name} (${vaultId}) does not have policy_id or asset_vault_name`);
+        throw new NotFoundException(`Vault ${vaultId} is missing policy_id or asset_vault_name`);
+      }
+
+      return await this.getTokenOHLCV(vault.policy_id, vault.asset_vault_name, interval);
+    } catch (error) {
+      this.logger.error(
+        `Error fetching OHLCV data for vault ${vaultId}:`,
+        error instanceof Error ? error.message : String(error)
+      );
+      throw error;
+    }
+  }
+
+  async upsertMarketData(data: {
+    vault_id: string;
+    circSupply: number;
+    mcap: number;
+    totalSupply: number;
+    price_change_1h: number;
+    price_change_24h: number;
+    price_change_7d: number;
+    price_change_30d: number;
+    tvl?: number;
+    has_market_data?: boolean;
+  }): Promise<Market> {
+    const calculateDelta = (mcap: number, tvl: number | undefined): number | null => {
+      if (!mcap || !tvl || tvl === 0) return null;
+      return (mcap / tvl) * 100;
+    };
+
+    const delta = calculateDelta(data.mcap, data.tvl);
+    const marketData = { ...data, delta };
+    delete marketData.tvl;
+
+    const existingMarket = await this.marketRepository.findOne({
+      where: { vault_id: data.vault_id },
+    });
+
+    if (existingMarket) {
+      Object.assign(existingMarket, marketData);
+      return await this.marketRepository.save(existingMarket);
+    }
+
+    const newMarket = this.marketRepository.create(marketData);
+    return await this.marketRepository.save(newMarket);
   }
 }
