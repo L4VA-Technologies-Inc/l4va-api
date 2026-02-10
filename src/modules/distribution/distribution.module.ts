@@ -57,6 +57,10 @@ import { VyfiModule } from '@/modules/vyfi/vyfi.module';
       inject: [ConfigService],
     },
   ],
-  exports: [DistributionCalculationService, MultiBatchDistributionService],
+  exports: [
+    DistributionCalculationService,
+    MultiBatchDistributionService,
+    ContributorDistributionOrchestrator,
+  ],
 })
 export class DistributionModule {}

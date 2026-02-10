@@ -44,6 +44,9 @@ export class MultiBatchDistributionService {
   /**
    * Determine if multipliers need to be split across multiple transactions
    * and calculate optimal batching
+   *
+   * OPTIMIZED STRATEGY: One contribution transaction = One batch
+   * This minimizes memory usage and ensures predictable transaction sizes
    */
   async calculateBatchingStrategy(
     vault: Pick<
@@ -61,59 +64,102 @@ export class MultiBatchDistributionService {
     pendingMultipliers: Array<[string, string | null, number]>;
     pendingAdaDistribution: Array<[string, string, number]>;
   }> {
-    // First, try with all multipliers
-    try {
-      const fullSizeEstimate = await this.vaultManagingService.estimateUpdateVaultTxSize({
-        vault,
-        vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
-        acquireMultiplier,
-        adaDistribution,
-        adaPairMultiplier,
-      });
+    // Group multipliers by contribution transaction
+    const { transactionGroups } = await this.groupMultipliersByTransaction(vault.id, acquireMultiplier);
 
-      if (fullSizeEstimate.withinLimit && fullSizeEstimate.percentOfMax <= this.TARGET_SIZE_PERCENT) {
-        this.logger.log(
-          `Vault ${vault.id}: All ${acquireMultiplier.length} multipliers fit in single transaction ` +
-            `(${fullSizeEstimate.percentOfMax}% of max)`
-        );
-        return {
-          needsBatching: false,
-          totalBatches: 1,
-          firstBatchMultipliers: acquireMultiplier,
-          firstBatchAdaDistribution: adaDistribution,
-          pendingMultipliers: [],
-          pendingAdaDistribution: [],
-        };
-      }
-    } catch (error) {
-      this.logger.warn(`Full multiplier array failed size estimation, will need batching: ${error.message}`);
+    // If only one transaction group, no batching needed
+    if (transactionGroups.length <= 1) {
+      this.logger.log(
+        `Vault ${vault.id}: Single contribution transaction with ${acquireMultiplier.length} multipliers - no batching needed`
+      );
+      return {
+        needsBatching: false,
+        totalBatches: 1,
+        firstBatchMultipliers: acquireMultiplier,
+        firstBatchAdaDistribution: adaDistribution,
+        pendingMultipliers: [],
+        pendingAdaDistribution: [],
+      };
     }
 
-    // Need to split - use binary search to find optimal batch size
+    // OPTIMIZED: Process ONE contribution transaction per batch
+    // This minimizes memory usage on both vault updates and claim processing
     this.logger.log(
-      `Vault ${vault.id}: ${acquireMultiplier.length} multipliers too large, starting binary search split`
+      `Vault ${vault.id}: ${acquireMultiplier.length} multipliers from ${transactionGroups.length} contribution transactions. ` +
+        `Using single-transaction-per-batch strategy for optimal memory usage.`
     );
 
-    const batchResult = await this.binarySearchOptimalBatchSize(
-      vault,
+    const batchResult = await this.createSingleTransactionBatch(
+      vault.id,
       acquireMultiplier,
       adaDistribution,
-      adaPairMultiplier
+      transactionGroups
     );
 
-    // Calculate total batches needed
-    const totalBatches = this.estimateTotalBatches(acquireMultiplier.length, batchResult.firstBatchMultipliers.length);
+    const totalBatches = transactionGroups.length;
 
     this.logger.log(
-      `Vault ${vault.id}: Split into ${totalBatches} batches. ` +
-        `First batch: ${batchResult.firstBatchMultipliers.length} multipliers, ` +
-        `Remaining: ${batchResult.pendingMultipliers.length} multipliers`
+      `Vault ${vault.id}: Split into ${totalBatches} batches (1 contribution tx per batch). ` +
+        `First batch: ${batchResult.firstBatchMultipliers.length} multipliers (tx: ${transactionGroups[0].transactionId}), ` +
+        `Remaining: ${batchResult.pendingMultipliers.length} multipliers from ${totalBatches - 1} transactions`
     );
 
     return {
       needsBatching: true,
       totalBatches,
       ...batchResult,
+    };
+  }
+
+  /**
+   * Create a batch containing only the first contribution transaction's multipliers
+   * OPTIMIZED: One transaction = One batch for minimal memory usage
+   */
+  private async createSingleTransactionBatch(
+    vaultId: string,
+    acquireMultiplier: Array<[string, string | null, number]>,
+    adaDistribution: Array<[string, string, number]>,
+    transactionGroups: Array<{
+      transactionId: string | null;
+      multiplierIndices: number[];
+    }>
+  ): Promise<{
+    firstBatchMultipliers: Array<[string, string | null, number]>;
+    firstBatchAdaDistribution: Array<[string, string, number]>;
+    pendingMultipliers: Array<[string, string | null, number]>;
+    pendingAdaDistribution: Array<[string, string, number]>;
+  }> {
+    // Take only the FIRST transaction group for this batch
+    const firstGroup = transactionGroups[0];
+    const firstBatchIndices = [...firstGroup.multiplierIndices].sort((a, b) => a - b);
+
+    // All other transaction groups become pending
+    const pendingIndices: number[] = [];
+    for (let g = 1; g < transactionGroups.length; g++) {
+      pendingIndices.push(...transactionGroups[g].multiplierIndices);
+    }
+    pendingIndices.sort((a, b) => a - b);
+
+    const firstBatchMultipliers = firstBatchIndices.map(i => acquireMultiplier[i]);
+    const pendingMultipliers = pendingIndices.map(i => acquireMultiplier[i]);
+
+    // Calculate ADA distribution split proportionally
+    const adaFirstCount = Math.floor(
+      (firstBatchMultipliers.length / acquireMultiplier.length) * adaDistribution.length
+    );
+
+    this.logger.debug(
+      `Vault ${vaultId}: Single-transaction batch created - ` +
+        `Transaction: ${firstGroup.transactionId || 'unknown'}, ` +
+        `Multipliers: ${firstBatchMultipliers.length}, ` +
+        `Remaining transactions: ${transactionGroups.length - 1}`
+    );
+
+    return {
+      firstBatchMultipliers,
+      firstBatchAdaDistribution: adaDistribution.slice(0, adaFirstCount),
+      pendingMultipliers,
+      pendingAdaDistribution: adaDistribution.slice(adaFirstCount),
     };
   }
 
