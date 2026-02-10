@@ -1,14 +1,24 @@
+import { Buffer } from 'node:buffer';
+
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
+import { Address, FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Controller, Post, Body, Logger, HttpCode, HttpStatus, UseGuards, Get, Param } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 
 import { AuthGuard } from '../auth/auth.guard';
+import { ContributorPaymentBuilder } from '../distribution/builders/contributor-payment.builder';
 import { MultiBatchDistributionService } from '../distribution/multi-batch-distribution.service';
 
 import { Claim } from '@/database/claim.entity';
+import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
+import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
+import { getAddressFromHash, getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
 /**
  * Manual Distribution Controller
@@ -34,7 +44,13 @@ export class DiagnosticController {
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(Claim)
-    private readonly claimRepository: Repository<Claim>
+    private readonly claimRepository: Repository<Claim>,
+    @InjectRepository(Transaction)
+    private readonly transactionRepository: Repository<Transaction>,
+    private readonly paymentBuilder: ContributorPaymentBuilder,
+    private readonly blockchainService: BlockchainService,
+    private readonly transactionsService: TransactionsService,
+    private readonly blockfrost: BlockFrostAPI
   ) {}
 
   /**
@@ -331,67 +347,177 @@ export class DiagnosticController {
   }
 
   /**
-   * STEP 5: Process specific claims
+   * STEP 5: Process specific contribution claims using buildPaymentInput
    *
-   * This triggers the actual claim processing (minting VT, burning receipts).
-   * Only works if the claims' multipliers are already on-chain.
+   * This builds and submits a claim payment transaction for specific contributor claims.
+   * Uses buildPaymentInput directly for full control over the transaction building process.
+   *
+   * The vault must have last_update_tx_hash set from a previous vault update.
+   * Only process claims whose multipliers were just added via submit-update-for-claims.
    */
   @Post('vault/:vaultId/process-claims')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Process specific claims',
+    summary: 'Process specific contribution claims manually',
     description:
-      'Trigger claim processing for selected claims (mints VT, burns receipts). Multipliers must be on-chain.',
+      'Build and submit claim payment transaction for specific contributor claims (mints VT, burns receipts).',
   })
   async processClaims(@Param('vaultId') vaultId: string, @Body() body: { claimIds: string[] }): Promise<any> {
-    this.logger.log(`Processing claims for vault ${vaultId}: ${body.claimIds.join(', ')}`);
+    this.logger.log(`Processing ${body.claimIds.length} specific claims for vault ${vaultId}`);
+
+    if (!body.claimIds || body.claimIds.length === 0) {
+      return {
+        success: false,
+        message: 'Please provide at least one claim ID to process',
+      };
+    }
 
     const vault = await this.vaultRepository.findOne({ where: { id: vaultId } });
     if (!vault) {
       return { success: false, message: `Vault ${vaultId} not found` };
     }
 
-    // Verify all claims can be processed
-    const verificationResults = await Promise.all(
-      body.claimIds.map(claimId => this.multiBatchService.canClaimBeProcessed(vaultId, claimId))
-    );
-
-    const notReady = verificationResults.filter(r => !r.canProcess);
-    if (notReady.length > 0) {
+    if (!vault.last_update_tx_hash) {
       return {
         success: false,
-        message: `${notReady.length} claim(s) cannot be processed yet. Multipliers not on-chain.`,
-        claimsNotReady: body.claimIds.slice(0, notReady.length),
-        details: notReady,
+        message: 'Vault has no last_update_tx_hash. Please submit a vault update first.',
       };
     }
 
-    // Get the actual claim objects
-    const claims = await this.claimRepository.find({
-      where: { id: body.claimIds as any, vault_id: vaultId },
-      relations: ['transaction', 'user'],
-    });
+    // Get admin config from environment
+    const adminAddress = process.env.ADMIN_ADDRESS;
+    const adminHash = process.env.ADMIN_HASH;
+    const adminSKey = process.env.ADMIN_SKEY;
+    const unparametizedDispatchHash = process.env.UNPARAMETERIZED_DISPATCH_HASH;
+    const networkId = Number(process.env.NETWORK_ID) || 0;
 
-    if (claims.length === 0) {
-      return { success: false, message: 'No claims found with provided IDs' };
+    if (!adminAddress || !adminHash || !adminSKey || !unparametizedDispatchHash) {
+      return {
+        success: false,
+        message: 'Missing admin configuration in environment variables',
+      };
     }
 
-    // Trigger the distribution orchestrator
-    // Note: This is a simplified approach. In production, you might want to
-    // call the orchestrator with proper config from your system settings
     try {
-      // This will process the claims in batches
-      this.logger.log(`Triggering contributor payment processing for ${claims.length} claims`);
+      // Get only the specific claims requested by ID
+      const claims = await this.claimRepository.find({
+        where: {
+          id: In(body.claimIds),
+          vault_id: vaultId,
+          type: ClaimType.CONTRIBUTOR,
+        },
+        relations: ['transaction', 'transaction.assets', 'user'],
+        order: { created_at: 'ASC' },
+      });
 
-      // You'll need to inject proper admin config here
-      // For now, just return success indicators
+      if (claims.length === 0) {
+        return {
+          success: false,
+          message: 'No claims found with the provided IDs for this vault',
+        };
+      }
+
+      if (claims.length !== body.claimIds.length) {
+        const foundIds = claims.map(c => c.id);
+        const missingIds = body.claimIds.filter(id => !foundIds.includes(id));
+        this.logger.warn(`Some claim IDs not found: ${missingIds.join(', ')}`);
+      }
+
+      this.logger.log(`Found ${claims.length} claims to process: ${claims.map(c => c.id).join(', ')}`);
+
+      // Get admin UTXOs
+      const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(adminAddress), this.blockfrost, {
+        minAda: 4_000_000,
+      });
+
+      if (adminUtxos.length === 0) {
+        return {
+          success: false,
+          message: 'No admin UTXOs available with sufficient ADA',
+        };
+      }
+
+      // Get dispatch UTXOs with full details
+      const dispatchAddress = getAddressFromHash(unparametizedDispatchHash, networkId);
+      const dispatchAddressUtxos = await this.blockfrost.addressesUtxos(dispatchAddress);
+      const dispatchUtxos = dispatchAddressUtxos
+        .filter(utxo => {
+          const lovelaceAmount = utxo.amount.find(a => a.unit === 'lovelace');
+          return lovelaceAmount && BigInt(lovelaceAmount.quantity) >= BigInt(2_000_000);
+        })
+        .map(utxo => ({
+          address: dispatchAddress,
+          tx_hash: utxo.tx_hash,
+          tx_index: utxo.tx_index,
+          output_index: utxo.output_index,
+          amount: utxo.amount,
+          block: utxo.block,
+          data_hash: utxo.data_hash,
+          inline_datum: utxo.inline_datum,
+          reference_script_hash: utxo.reference_script_hash,
+        }));
+
+      this.logger.log(
+        `Building payment transaction: ${claims.length} claims, ${adminUtxos.length} admin UTXOs, ${dispatchUtxos.length} dispatch UTXOs`
+      );
+
+      // Build payment input using ContributorPaymentBuilder
+      const paymentInput = await this.paymentBuilder.buildPaymentInput(vault, claims, adminUtxos, dispatchUtxos, {
+        adminAddress,
+        adminHash,
+        unparametizedDispatchHash,
+      });
+
+      this.logger.log('Payment input built successfully, building transaction...');
+
+      // Build the transaction
+      const buildResponse = await this.blockchainService.buildTransaction(paymentInput);
+
+      // Sign the transaction
+      const txToSubmit = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+      txToSubmit.sign_and_add_vkey_signature(PrivateKey.from_bech32(adminSKey));
+      const signedTxHex = txToSubmit.to_hex();
+
+      this.logger.log('Transaction signed, submitting to blockchain...');
+
+      // Submit the transaction
+      const response = await this.blockchainService.submitTransaction({
+        transaction: signedTxHex,
+      });
+
+      this.logger.log(`Transaction submitted successfully: ${response.txHash}`);
+
+      // Create transaction record
+      const batchTransaction = await this.transactionRepository.save({
+        vault_id: vaultId,
+        user_id: null,
+        type: TransactionType.claim,
+        status: TransactionStatus.pending,
+        tx_hash: response.txHash,
+        metadata: {
+          claimIds: claims.map(c => c.id),
+          manual: true,
+        },
+      });
+
+      // Update all claims to PENDING status with reference to the distribution transaction
+      await this.claimRepository.update(
+        { id: In(claims.map(c => c.id)) },
+        {
+          status: ClaimStatus.PENDING,
+          distribution_tx_id: batchTransaction.id,
+        }
+      );
+
       return {
         success: true,
-        message: `Claim processing initiated for ${claims.length} claim(s)`,
+        message: `Successfully submitted claim processing transaction for ${claims.length} claim(s)`,
         vaultId,
-        claimIds: body.claimIds,
-        processedCount: claims.length,
-        note: 'Claims are being processed. Check claim status in a few moments.',
+        txHash: response.txHash,
+        transactionId: batchTransaction.id,
+        claimIds: claims.map(c => c.id),
+        claimCount: claims.length,
+        note: 'Claims are now PENDING. They will be marked CLAIMED once the transaction is confirmed on-chain.',
       };
     } catch (error) {
       this.logger.error(`Failed to process claims:`, error);
@@ -399,6 +525,7 @@ export class DiagnosticController {
         success: false,
         message: `Failed to process claims: ${error.message}`,
         error: error.toString(),
+        stack: error.stack,
       };
     }
   }

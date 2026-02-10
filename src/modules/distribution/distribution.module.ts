@@ -61,6 +61,10 @@ import { VyfiModule } from '@/modules/vyfi/vyfi.module';
     DistributionCalculationService,
     MultiBatchDistributionService,
     ContributorDistributionOrchestrator,
+    ContributorPaymentBuilder,
+    BlockFrostAPI,
+    BlockchainModule,
+    TransactionsModule,
   ],
 })
 export class DistributionModule {}

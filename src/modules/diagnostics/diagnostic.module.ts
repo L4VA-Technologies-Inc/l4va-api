@@ -6,6 +6,7 @@ import { DistributionModule } from '../distribution/distribution.module';
 import { DiagnosticController } from './diagnostic.controller';
 
 import { Claim } from '@/database/claim.entity';
+import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 
 /**
@@ -15,7 +16,7 @@ import { Vault } from '@/database/vault.entity';
  * For admin/recovery use only.
  */
 @Module({
-  imports: [DistributionModule, TypeOrmModule.forFeature([Vault, Claim])],
+  imports: [DistributionModule, TypeOrmModule.forFeature([Vault, Claim, Transaction])],
   controllers: [DiagnosticController],
 })
 export class DiagnosticModule {}

@@ -1015,6 +1015,12 @@ export class MultiBatchDistributionService {
         adaDistribution: [...(vault.ada_distribution || []), ...batchResult.firstBatchAdaDistribution],
       });
 
+      // Update last_update_tx_hash separately
+      await this.vaultRepository.update(vaultId, {
+        last_update_tx_hash: response.txHash,
+        last_update_tx_index: 0,
+      });
+
       // Assign claims to this batch
       await this.assignClaimsToBatch(vaultId, batchResult.firstBatchMultipliers, nextBatch);
 
@@ -1266,10 +1272,12 @@ export class MultiBatchDistributionService {
         throw new Error('No transaction hash returned from vault update');
       }
 
-      // Update vault in database
+      // Update vault in database with the transaction reference
       await this.vaultRepository.update(vaultId, {
         acquire_multiplier: newMultipliers,
         ada_distribution: newAdaDistribution,
+        last_update_tx_hash: response.txHash,
+        last_update_tx_index: 0, // Vault token is always first output
       });
 
       // Remove added multipliers from pending (if they were there)
