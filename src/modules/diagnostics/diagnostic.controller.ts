@@ -386,9 +386,9 @@ export class DiagnosticController {
 
     // Get admin config from environment
     const adminAddress = process.env.ADMIN_ADDRESS;
-    const adminHash = process.env.ADMIN_HASH;
-    const adminSKey = process.env.ADMIN_SKEY;
-    const unparametizedDispatchHash = process.env.UNPARAMETERIZED_DISPATCH_HASH;
+    const adminHash = process.env.ADMIN_KEY_HASH;
+    const adminSKey = process.env.ADMIN_S_KEY;
+    const unparametizedDispatchHash = process.env.DISPATCH_SCRIPT_HASH;
     const networkId = Number(process.env.NETWORK_ID) || 0;
 
     if (!adminAddress || !adminHash || !adminSKey || !unparametizedDispatchHash) {
