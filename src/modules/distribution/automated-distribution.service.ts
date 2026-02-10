@@ -117,6 +117,7 @@ export class AutomatedDistributionService {
         last_update_tx_hash: Not(IsNull()),
         distribution_processed: false,
         created_at: MoreThan(new Date('2025-10-22')),
+        manual_distribution_mode: false,
       },
       select: ['id', 'tokens_for_acquires', 'dispatch_parametized_hash', 'script_hash', 'asset_vault_name'],
     });
@@ -179,6 +180,7 @@ export class AutomatedDistributionService {
       .addSelect('COUNT(claim.id)', 'remainingAcquirerClaims')
       .where('vault.distribution_processed = :processed', { processed: false })
       .andWhere('vault.distribution_in_progress = :inProgress', { inProgress: true })
+      .andWhere('vault.manual_distribution_mode = :manualMode', { manualMode: false })
       .groupBy('vault.id')
       .getRawAndEntities();
 

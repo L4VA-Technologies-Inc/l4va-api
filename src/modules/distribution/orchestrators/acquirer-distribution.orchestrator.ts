@@ -67,6 +67,7 @@ export class AcquirerDistributionOrchestrator {
       | 'stake_registered'
       | 'current_distribution_batch'
       | 'total_distribution_batches'
+      | 'manual_distribution_mode'
     > = await this.vaultRepository
       .createQueryBuilder('vault')
       .select([
@@ -81,12 +82,22 @@ export class AcquirerDistributionOrchestrator {
         'vault.stake_registered',
         'vault.current_distribution_batch',
         'vault.total_distribution_batches',
+        'vault.manual_distribution_mode',
       ])
       .where('vault.id = :vaultId', { vaultId })
       .getOne();
 
     if (!vault) {
       throw new Error(`Vault ${vaultId} not found`);
+    }
+
+    // Skip vaults in manual distribution mode
+    if (vault.manual_distribution_mode) {
+      this.logger.log(
+        `Skipping vault ${vaultId} - manual distribution mode enabled. ` +
+          `Administrator must manually process acquirer claims.`
+      );
+      return;
     }
 
     // CRITICAL: Only process acquirer claims whose multipliers are already on-chain
