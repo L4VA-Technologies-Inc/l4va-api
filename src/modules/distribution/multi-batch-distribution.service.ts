@@ -1199,16 +1199,18 @@ export class MultiBatchDistributionService {
    * Use this when automated batch progression is disabled (manual_distribution_mode = true)
    *
    * @param vaultId - The vault ID
-   * @param additionalMultipliers - Multipliers to add to the vault
-   * @param additionalAdaDistribution - ADA distribution to add
+   * @param additionalMultipliers - Multipliers to add to the vault (or replace existing if replaceExisting=true)
+   * @param additionalAdaDistribution - ADA distribution to add (or replace existing if replaceExisting=true)
    * @param updateDescription - Optional description of why this manual update is needed
+   * @param replaceExisting - If true, use ONLY the passed multipliers instead of appending to existing ones
    * @returns Transaction hash and updated vault state
    */
   async manuallyUpdateVaultMultipliers(
     vaultId: string,
     additionalMultipliers: Array<[string, string | null, number]>,
     additionalAdaDistribution: Array<[string, string, number]> = [],
-    updateDescription?: string
+    updateDescription?: string,
+    replaceExisting = false
   ): Promise<{
     success: boolean;
     txHash?: string;
@@ -1244,19 +1246,32 @@ export class MultiBatchDistributionService {
       );
     }
 
-    // Combine existing on-chain multipliers with new ones
-    const existingMultipliers = vault.acquire_multiplier || [];
-    const existingAdaDistribution = vault.ada_distribution || [];
+    // Either replace existing multipliers or append to them
+    let newMultipliers: Array<[string, string | null, number]>;
+    let newAdaDistribution: Array<[string, string, number]>;
 
-    const newMultipliers = [...existingMultipliers, ...additionalMultipliers];
-    const newAdaDistribution = [...existingAdaDistribution, ...additionalAdaDistribution];
-
-    this.logger.log(
-      `Manual vault update for ${vaultId}: ` +
-        `Adding ${additionalMultipliers.length} multipliers. ` +
-        `Total will be ${newMultipliers.length}. ` +
-        `${updateDescription ? `Reason: ${updateDescription}` : ''}`
-    );
+    if (replaceExisting) {
+      // Use ONLY the passed multipliers - don't append to existing
+      newMultipliers = additionalMultipliers;
+      newAdaDistribution = additionalAdaDistribution;
+      this.logger.log(
+        `Manual vault update for ${vaultId}: ` +
+          `REPLACING with ${additionalMultipliers.length} multipliers (replaceExisting=true). ` +
+          `${updateDescription ? `Reason: ${updateDescription}` : ''}`
+      );
+    } else {
+      // Combine existing on-chain multipliers with new ones
+      const existingMultipliers = vault.acquire_multiplier || [];
+      const existingAdaDistribution = vault.ada_distribution || [];
+      newMultipliers = [...existingMultipliers, ...additionalMultipliers];
+      newAdaDistribution = [...existingAdaDistribution, ...additionalAdaDistribution];
+      this.logger.log(
+        `Manual vault update for ${vaultId}: ` +
+          `Adding ${additionalMultipliers.length} multipliers. ` +
+          `Total will be ${newMultipliers.length}. ` +
+          `${updateDescription ? `Reason: ${updateDescription}` : ''}`
+      );
+    }
 
     try {
       // Submit vault update transaction
