@@ -131,6 +131,7 @@ export class DraftVaultsService {
           'social_links',
           'assets_whitelist',
           'acquirer_whitelist',
+          'contributor_whitelist',
           'acquirer_whitelist_csv',
           'vault_image',
           'ft_token_img',
@@ -139,21 +140,6 @@ export class DraftVaultsService {
 
       if (existingVault && existingVault.vault_status !== VaultStatus.draft) {
         throw new BadRequestException('Cannot modify a published vault');
-      }
-
-      if (existingVault) {
-        if (existingVault.social_links?.length > 0) {
-          await this.linksRepository.remove(existingVault.social_links);
-        }
-        if (existingVault.assets_whitelist?.length > 0) {
-          await this.assetsWhitelistRepository.remove(existingVault.assets_whitelist);
-        }
-        if (existingVault.acquirer_whitelist?.length > 0) {
-          await this.acquirerWhitelistRepository.remove(existingVault.acquirer_whitelist);
-        }
-        if (existingVault.contributor_whitelist?.length > 0) {
-          await this.contributorWhitelistRepository.remove(existingVault.contributor_whitelist);
-        }
       }
     }
 
@@ -164,25 +150,58 @@ export class DraftVaultsService {
 
       // Process image files
       const imgKey = data.vaultImage?.split('image/')[1];
-      const vaultImg = imgKey
-        ? await this.filesRepository.findOne({
-            where: { file_key: imgKey },
-          })
-        : null;
+      let vaultImg = null;
+      if (imgKey) {
+        vaultImg = await this.filesRepository.findOne({
+          where: { file_key: imgKey },
+        });
+        // Check if this file is already used by another vault
+        if (vaultImg) {
+          const vaultUsingImage = await this.vaultsRepository.findOne({
+            where: { vault_image: { id: vaultImg.id } },
+            select: ['id'],
+          });
+          if (vaultUsingImage && vaultUsingImage.id !== existingVault?.id) {
+            throw new BadRequestException('The selected vault image is already in use by another vault');
+          }
+        }
+      }
 
       const ftTokenImgKey = data.ftTokenImg?.split('image/')[1];
-      const ftTokenImg = ftTokenImgKey
-        ? await this.filesRepository.findOne({
-            where: { file_key: ftTokenImgKey },
-          })
-        : null;
+      let ftTokenImg = null;
+      if (ftTokenImgKey) {
+        ftTokenImg = await this.filesRepository.findOne({
+          where: { file_key: ftTokenImgKey },
+        });
+        // Check if this file is already used by another vault
+        if (ftTokenImg) {
+          const vaultUsingImage = await this.vaultsRepository.findOne({
+            where: { ft_token_img: { id: ftTokenImg.id } },
+            select: ['id'],
+          });
+          if (vaultUsingImage && vaultUsingImage.id !== existingVault?.id) {
+            throw new BadRequestException('The selected FT token image is already in use by another vault');
+          }
+        }
+      }
 
       const acquirerWhitelistCsvKey = data.acquirerWhitelistCsv?.key;
-      const acquirerWhitelistFile = acquirerWhitelistCsvKey
-        ? await this.filesRepository.findOne({
-            where: { file_key: acquirerWhitelistCsvKey },
-          })
-        : null;
+      let acquirerWhitelistFile = null;
+      if (acquirerWhitelistCsvKey) {
+        acquirerWhitelistFile = await this.filesRepository.findOne({
+          where: { file_key: acquirerWhitelistCsvKey },
+        });
+        // Check if this file is already used by another vault
+        if (acquirerWhitelistFile) {
+          const vaultUsingFile = await this.vaultsRepository.findOne({
+            where: { acquirer_whitelist_csv: { id: acquirerWhitelistFile.id } },
+            select: ['id'],
+          });
+          if (vaultUsingFile && vaultUsingFile.id !== existingVault?.id) {
+            throw new BadRequestException('The selected acquirer whitelist CSV is already in use by another vault');
+          }
+        }
+      }
 
       // Check if the vault already has these files to avoid duplicate relations
       const hasVaultImage = existingVault?.vault_image?.file_key === imgKey;
@@ -218,7 +237,8 @@ export class DraftVaultsService {
       }
       if (data.creationThreshold) vaultData.creation_threshold = data.creationThreshold;
       if (data.startThreshold) vaultData.start_threshold = data.startThreshold;
-      if (data.voteThreshold) vaultData.vote_threshold = data.voteThreshold;
+      if (data.voteThreshold !== undefined && data.voteThreshold !== null)
+        vaultData.vote_threshold = data.voteThreshold;
       if (data.executionThreshold) vaultData.execution_threshold = data.executionThreshold;
       if (data.cosigningThreshold) vaultData.cosigning_threshold = data.cosigningThreshold;
       if (data.vaultAppreciation) vaultData.vault_appreciation = data.vaultAppreciation;
@@ -246,9 +266,22 @@ export class DraftVaultsService {
       }
 
       // Handle file relationships only if provided and not already set
-      if (vaultImg && !hasVaultImage) vaultData.vault_image = vaultImg;
-      if (ftTokenImg && !hasFtTokenImage) vaultData.ft_token_img = ftTokenImg;
-      if (acquirerWhitelistFile && !hasAcquirerWhitelistCsv) vaultData.acquirer_whitelist_csv = acquirerWhitelistFile;
+      if (vaultImg && !hasVaultImage) {
+        vaultData.vault_image = vaultImg;
+      } else if (data.vaultImage === null) {
+        // If vaultImage is explicitly set to null, remove the relationship
+        vaultData.vault_image = null;
+      }
+      if (ftTokenImg && !hasFtTokenImage) {
+        vaultData.ft_token_img = ftTokenImg;
+      } else if (data.ftTokenImg === null) {
+        vaultData.ft_token_img = null;
+      }
+      if (acquirerWhitelistFile && !hasAcquirerWhitelistCsv) {
+        vaultData.acquirer_whitelist_csv = acquirerWhitelistFile;
+      } else if (data.acquirerWhitelistCsv === null) {
+        vaultData.acquirer_whitelist_csv = null;
+      }
 
       let vault: Vault;
       if (existingVault) {
@@ -260,16 +293,30 @@ export class DraftVaultsService {
         vault = await this.vaultsRepository.save(vaultData as Vault);
       }
 
+      // Always remove old whitelist entries before adding new ones
+      // This ensures we replace the entire list, not append to it
+      if (existingVault) {
+        // Remove old social links if new ones are provided or explicitly empty
+        if (data.socialLinks !== undefined) {
+          if (existingVault.social_links?.length > 0) {
+            await this.linksRepository.remove(existingVault.social_links);
+          }
+        }
+      }
+
       // Handle social links only if provided
-      if (data.socialLinks !== undefined && data.socialLinks.length > 0) {
-        const links = data.socialLinks.map(linkItem => {
-          return this.linksRepository.create({
-            vault: vault,
-            name: linkItem.name,
-            url: linkItem.url,
+      if (data.socialLinks !== undefined) {
+        if (data.socialLinks.length > 0) {
+          const links = data.socialLinks.map(linkItem => {
+            return this.linksRepository.create({
+              vault: vault,
+              name: linkItem.name,
+              url: linkItem.url,
+            });
           });
-        });
-        await this.linksRepository.save(links);
+          await this.linksRepository.save(links);
+        }
+        // If socialLinks is empty array, old links were already removed above
       }
 
       // Handle tags if provided
@@ -291,45 +338,86 @@ export class DraftVaultsService {
         await this.vaultsRepository.save(vault);
       }
 
-      // Handle assets whitelist only if provided
-      if (data.assetsWhitelist !== undefined && data.assetsWhitelist.length > 0) {
-        await Promise.all(
-          data.assetsWhitelist.map(whitelistItem => {
-            return this.assetsWhitelistRepository.save({
-              vault: vault,
-              policy_id: whitelistItem.policyId,
-              asset_count_cap_min: whitelistItem?.countCapMin,
-              asset_count_cap_max: whitelistItem?.countCapMax,
-            });
-          })
-        );
-      }
-
-      // Handle acquirer whitelist only if provided
-      if (data.acquirerWhitelist !== undefined && data.acquirerWhitelist.length > 0) {
-        const manualAcquirer = data.acquirerWhitelist?.map(item => item.walletAddress) || [];
-        const allAcquirer = new Set([...manualAcquirer]);
-
-        if (allAcquirer.size > 0) {
-          const investorItems = Array.from(allAcquirer).map(walletAddress => {
-            return this.acquirerWhitelistRepository.create({
-              vault: vault,
-              wallet_address: walletAddress,
-            });
-          });
-          await this.acquirerWhitelistRepository.save(investorItems);
-        }
-      }
-
-      // Handle contributor whitelist only if provided and vault is private
-      if (data.contributorWhitelist !== undefined && data.contributorWhitelist.length > 0) {
-        const contributorItems = data.contributorWhitelist.map(item => {
-          return this.contributorWhitelistRepository.create({
-            vault: vault,
-            wallet_address: item.walletAddress,
-          });
+      // Handle assets whitelist - always replace entire list if provided
+      if (data.assetsWhitelist !== undefined) {
+        // Remove all existing assets whitelist entries for this vault
+        const existingAssetsWhitelist = await this.assetsWhitelistRepository.find({
+          where: { vault: { id: vault.id } },
         });
-        await this.contributorWhitelistRepository.save(contributorItems);
+        if (existingAssetsWhitelist.length > 0) {
+          await this.assetsWhitelistRepository.remove(existingAssetsWhitelist);
+        }
+
+        // Add new entries if provided
+        if (data.assetsWhitelist.length > 0) {
+          // Use unique policy IDs to avoid duplicates
+          const uniquePolicyIds = Array.from(new Map(data.assetsWhitelist.map(obj => [obj.policyId, obj])).values());
+
+          await Promise.all(
+            uniquePolicyIds.map(async whitelistItem => {
+              // Create new entry (old ones were already removed)
+              await this.assetsWhitelistRepository.save({
+                vault: vault,
+                policy_id: whitelistItem.policyId,
+                collection_name: whitelistItem?.collectionName,
+                asset_count_cap_min: whitelistItem?.countCapMin,
+                asset_count_cap_max: whitelistItem?.countCapMax,
+              });
+            })
+          );
+        }
+        // If assetsWhitelist is empty array, old entries were already removed above
+      }
+
+      // Handle acquirer whitelist - always replace entire list if provided
+      if (data.acquirerWhitelist !== undefined) {
+        // Remove all existing acquirer whitelist entries for this vault
+        const existingAcquirerWhitelist = await this.acquirerWhitelistRepository.find({
+          where: { vault: { id: vault.id } },
+        });
+        if (existingAcquirerWhitelist.length > 0) {
+          await this.acquirerWhitelistRepository.remove(existingAcquirerWhitelist);
+        }
+
+        // Add new entries if provided
+        if (data.acquirerWhitelist.length > 0) {
+          const manualAcquirer = data.acquirerWhitelist.map(item => item.walletAddress) || [];
+          const allAcquirer = new Set([...manualAcquirer]);
+
+          if (allAcquirer.size > 0) {
+            const investorItems = Array.from(allAcquirer).map(walletAddress => {
+              return this.acquirerWhitelistRepository.create({
+                vault: vault,
+                wallet_address: walletAddress,
+              });
+            });
+            await this.acquirerWhitelistRepository.save(investorItems);
+          }
+        }
+        // If acquirerWhitelist is empty array, old entries were already removed above
+      }
+
+      // Handle contributor whitelist - always replace entire list if provided
+      if (data.contributorWhitelist !== undefined) {
+        // Remove all existing contributor whitelist entries for this vault
+        const existingContributorWhitelist = await this.contributorWhitelistRepository.find({
+          where: { vault: { id: vault.id } },
+        });
+        if (existingContributorWhitelist.length > 0) {
+          await this.contributorWhitelistRepository.remove(existingContributorWhitelist);
+        }
+
+        // Add new entries if provided
+        if (data.contributorWhitelist.length > 0) {
+          const contributorItems = data.contributorWhitelist.map(item => {
+            return this.contributorWhitelistRepository.create({
+              vault: vault,
+              wallet_address: item.walletAddress,
+            });
+          });
+          await this.contributorWhitelistRepository.save(contributorItems);
+        }
+        // If contributorWhitelist is empty array, old entries were already removed above
       }
 
       return await this.getDraftVaultById(vault.id, userId);
