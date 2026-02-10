@@ -10,6 +10,7 @@ import { Repository, In } from 'typeorm';
 
 import { AuthGuard } from '../auth/auth.guard';
 import { ContributorPaymentBuilder } from '../distribution/builders/contributor-payment.builder';
+import { AddressesUtxo } from '../distribution/distribution.types';
 import { MultiBatchDistributionService } from '../distribution/multi-batch-distribution.service';
 
 import { Claim } from '@/database/claim.entity';
@@ -443,25 +444,42 @@ export class DiagnosticController {
         };
       }
 
-      // Get dispatch UTXOs with full details
-      const dispatchAddress = getAddressFromHash(unparametizedDispatchHash, networkId);
-      const dispatchAddressUtxos = await this.blockfrost.addressesUtxos(dispatchAddress);
-      const dispatchUtxos = dispatchAddressUtxos
-        .filter(utxo => {
-          const lovelaceAmount = utxo.amount.find(a => a.unit === 'lovelace');
-          return lovelaceAmount && BigInt(lovelaceAmount.quantity) >= BigInt(2_000_000);
-        })
-        .map(utxo => ({
-          address: dispatchAddress,
-          tx_hash: utxo.tx_hash,
-          tx_index: utxo.tx_index,
-          output_index: utxo.output_index,
-          amount: utxo.amount,
-          block: utxo.block,
-          data_hash: utxo.data_hash,
-          inline_datum: utxo.inline_datum,
-          reference_script_hash: utxo.reference_script_hash,
-        }));
+      // Get dispatch UTXOs only if vault has tokens for acquirers (ADA distribution)
+      const hasDispatchFunding = Number(vault.tokens_for_acquires) > 0;
+      let dispatchUtxos: AddressesUtxo[] = [];
+
+      if (hasDispatchFunding) {
+        this.logger.log('Vault has tokens for acquirers, fetching dispatch UTXOs...');
+        const dispatchAddress = getAddressFromHash(vault.dispatch_parametized_hash, networkId);
+        const dispatchAddressUtxos = await this.blockfrost.addressesUtxos(dispatchAddress);
+        dispatchUtxos = dispatchAddressUtxos
+          .filter(utxo => {
+            const lovelaceAmount = utxo.amount.find(a => a.unit === 'lovelace');
+            return lovelaceAmount && BigInt(lovelaceAmount.quantity) >= BigInt(2_000_000);
+          })
+          .map(utxo => ({
+            address: dispatchAddress,
+            tx_hash: utxo.tx_hash,
+            tx_index: utxo.tx_index,
+            output_index: utxo.output_index,
+            amount: utxo.amount,
+            block: utxo.block,
+            data_hash: utxo.data_hash,
+            inline_datum: utxo.inline_datum,
+            reference_script_hash: utxo.reference_script_hash,
+          }));
+
+        if (dispatchUtxos.length === 0) {
+          return {
+            success: false,
+            message: 'No dispatch UTXOs found with sufficient ADA (>= 2 ADA)',
+          };
+        }
+      } else {
+        this.logger.log(
+          'Vault has 0% for acquirers. No dispatch funding required, processing vault token minting only.'
+        );
+      }
 
       this.logger.log(
         `Building payment transaction: ${claims.length} claims, ${adminUtxos.length} admin UTXOs, ${dispatchUtxos.length} dispatch UTXOs`
