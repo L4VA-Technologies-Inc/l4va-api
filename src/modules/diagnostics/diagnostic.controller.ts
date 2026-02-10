@@ -140,6 +140,199 @@ export class DiagnosticController {
     };
   }
 
+  /**
+   * Calculate multipliers for a specific claim
+   *
+   * This calculates the exact multipliers needed for a claim's assets.
+   * Uses pending_multipliers if available, otherwise calculates from claim amounts.
+   *
+   * The returned multipliers can be passed directly to manual-update-multipliers.
+   */
+  @Post('vault/calculate-multipliers-for-claim')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Calculate multipliers for a specific claim',
+    description: 'Calculate the exact VT and ADA multipliers for a claim. Returns data ready for vault update.',
+  })
+  async calculateMultipliersForClaim(@Body() body: { vaultId: string; claimId: string }): Promise<any> {
+    this.logger.log(`Calculating multipliers for claim ${body.claimId} in vault ${body.vaultId}`);
+
+    const vault = await this.vaultRepository.findOne({
+      where: { id: body.vaultId },
+      select: ['id', 'pending_multipliers', 'pending_ada_distribution', 'acquire_multiplier', 'ada_distribution'],
+    });
+
+    if (!vault) {
+      return { success: false, message: `Vault ${body.vaultId} not found` };
+    }
+
+    const claim = await this.claimRepository.findOne({
+      where: { id: body.claimId, vault_id: body.vaultId },
+      relations: ['transaction', 'transaction.assets'],
+    });
+
+    if (!claim) {
+      return { success: false, message: `Claim ${body.claimId} not found in vault ${body.vaultId}` };
+    }
+
+    if (!claim.transaction?.assets?.length) {
+      return { success: false, message: `Claim ${body.claimId} has no transaction assets` };
+    }
+
+    const assets = claim.transaction.assets;
+    const claimVtAmount = Number(claim.amount) || 0;
+    const claimLovelaceAmount = Number(claim.lovelace_amount) || 0;
+
+    // Calculate total quantity to distribute proportionally
+    const totalQuantity = assets.reduce((sum, a) => sum + Number(a.quantity), 0);
+
+    const multipliersToAdd: Array<[string, string | null, number]> = [];
+    const adaDistributionToAdd: Array<[string, string, number]> = [];
+
+    // Check existing on-chain multipliers
+    const onChainMap = new Map<string, number>();
+    for (const [policyId, assetName, mult] of vault.acquire_multiplier || []) {
+      const key = assetName ? `${policyId}:${assetName}` : policyId;
+      onChainMap.set(key, mult);
+    }
+
+    const onChainAdaMap = new Map<string, number>();
+    for (const [policyId, assetName, mult] of vault.ada_distribution || []) {
+      const key = assetName ? `${policyId}:${assetName}` : policyId;
+      onChainAdaMap.set(key, mult);
+    }
+
+    // Check pending multipliers
+    const pendingMap = new Map<string, [string, string | null, number]>();
+    for (const mult of vault.pending_multipliers || []) {
+      const key = mult[1] ? `${mult[0]}:${mult[1]}` : mult[0];
+      pendingMap.set(key, mult);
+    }
+
+    const pendingAdaMap = new Map<string, [string, string, number]>();
+    for (const mult of vault.pending_ada_distribution || []) {
+      const key = mult[1] ? `${mult[0]}:${mult[1]}` : mult[0];
+      pendingAdaMap.set(key, mult);
+    }
+
+    const assetDetails: Array<{
+      policyId: string;
+      assetId: string;
+      assetName: string;
+      quantity: number;
+      vtMultiplier: number;
+      adaMultiplier: number;
+      calculatedVt: number;
+      calculatedAda: number;
+      source: string;
+    }> = [];
+
+    let calculatedTotalVt = 0;
+    let calculatedTotalAda = 0;
+
+    for (const asset of assets) {
+      const key = asset.asset_id ? `${asset.policy_id}:${asset.asset_id}` : asset.policy_id;
+      const quantity = Number(asset.quantity);
+
+      let vtMultiplier: number;
+      let adaMultiplier: number;
+      let source: string;
+
+      // Check if already on-chain
+      if (onChainMap.has(key)) {
+        vtMultiplier = onChainMap.get(key)!;
+        adaMultiplier = onChainAdaMap.get(key) || 0;
+        source = 'on-chain (skip)';
+      }
+      // Check pending multipliers
+      else if (pendingMap.has(key)) {
+        const pendingMult = pendingMap.get(key)!;
+        vtMultiplier = pendingMult[2];
+        const pendingAda = pendingAdaMap.get(key);
+        adaMultiplier = pendingAda ? pendingAda[2] : 0;
+        source = 'pending';
+
+        // Add to multipliers to submit
+        multipliersToAdd.push([asset.policy_id, asset.asset_id || null, vtMultiplier]);
+        if (adaMultiplier > 0) {
+          adaDistributionToAdd.push([asset.policy_id, asset.asset_id || '', adaMultiplier]);
+        }
+      }
+      // Calculate from claim amounts
+      else {
+        // Distribute proportionally by quantity
+        const proportion = quantity / totalQuantity;
+        const assetVtShare = claimVtAmount * proportion;
+        const assetAdaShare = claimLovelaceAmount * proportion;
+
+        // multiplier = vtAmount / quantity (integer)
+        vtMultiplier = quantity > 0 ? Math.floor(assetVtShare / quantity) : 0;
+        adaMultiplier = quantity > 0 ? Math.floor(assetAdaShare / quantity) : 0;
+        source = 'calculated';
+
+        // Add to multipliers to submit
+        multipliersToAdd.push([asset.policy_id, asset.asset_id || null, vtMultiplier]);
+        if (adaMultiplier > 0) {
+          adaDistributionToAdd.push([asset.policy_id, asset.asset_id || '', adaMultiplier]);
+        }
+      }
+
+      const calculatedVt = quantity * vtMultiplier;
+      const calculatedAda = quantity * adaMultiplier;
+
+      if (source !== 'on-chain (skip)') {
+        calculatedTotalVt += calculatedVt;
+        calculatedTotalAda += calculatedAda;
+      }
+
+      assetDetails.push({
+        policyId: asset.policy_id,
+        assetId: asset.asset_id || '',
+        assetName: asset.name || '',
+        quantity,
+        vtMultiplier,
+        adaMultiplier,
+        calculatedVt,
+        calculatedAda,
+        source,
+      });
+    }
+
+    const vtDifference = claimVtAmount - calculatedTotalVt;
+    const adaDifference = claimLovelaceAmount - calculatedTotalAda;
+
+    return {
+      success: true,
+      claimId: body.claimId,
+      vaultId: body.vaultId,
+      claim: {
+        expectedVtAmount: claimVtAmount,
+        expectedLovelaceAmount: claimLovelaceAmount,
+        assetCount: assets.length,
+        totalQuantity,
+      },
+      calculation: {
+        calculatedTotalVt,
+        calculatedTotalAda,
+        vtDifference,
+        adaDifference,
+        note:
+          vtDifference !== 0 || adaDifference !== 0
+            ? '⚠️ Rounding difference due to integer multipliers. This is expected.'
+            : '✅ Exact match',
+      },
+      assets: assetDetails,
+      // Ready to use for vault update
+      multipliersToAdd,
+      adaDistributionToAdd,
+      multipliersCount: multipliersToAdd.length,
+      usage:
+        multipliersToAdd.length > 0
+          ? 'Pass multipliersToAdd and adaDistributionToAdd to POST /vault/manual-update-multipliers'
+          : 'All multipliers already on-chain. Claim can be processed directly.',
+    };
+  }
+
   // ========================================
   // MANUAL DISTRIBUTION CONTROL ENDPOINTS
   // ========================================
@@ -337,7 +530,7 @@ export class DiagnosticController {
 
     // Update the distribution_batch on these claims if needed
     await this.claimRepository.update(
-      { id: body.claimIds as any },
+      { id: In(body.claimIds) },
       { distribution_batch: 1 } // Mark as batch 1 since we're manually controlling
     );
 
