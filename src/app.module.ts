@@ -16,6 +16,7 @@ import { SentryMonitoringService } from './common/services/sentry-monitoring.ser
 import { AuthModule } from './modules/auth/auth.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { DexHunterModule } from './modules/dexhunter/dexhunter.module';
+import { DiagnosticModule } from './modules/diagnostics/diagnostic.module';
 import { DistributionModule } from './modules/distribution/distribution.module';
 import { JwtGlobalModule } from './modules/globals/jwt_global_module/jwt_global.module';
 import { SystemSettingsModule } from './modules/globals/system-settings';
@@ -91,6 +92,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     AcquireModule,
     TransactionsModule,
     DistributionModule,
+    DiagnosticModule,
     ClaimsModule,
     VyfiModule,
     TaptoolsModule,

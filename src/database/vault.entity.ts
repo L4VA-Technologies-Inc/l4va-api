@@ -571,6 +571,16 @@ export class Vault {
   })
   pending_ada_distribution?: Array<[string, string, number]>;
 
+  @Expose({ name: 'manualDistributionMode' })
+  @Column({
+    name: 'manual_distribution_mode',
+    type: 'boolean',
+    nullable: false,
+    default: false,
+    comment: 'If true, automated distribution is disabled. Vault must be manually updated with multipliers.',
+  })
+  manual_distribution_mode: boolean;
+
   @Exclude()
   @Column({
     name: 'script_hash',

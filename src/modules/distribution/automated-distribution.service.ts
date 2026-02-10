@@ -165,6 +165,7 @@ export class AutomatedDistributionService {
         'vault.current_distribution_batch',
         'vault.total_distribution_batches',
         'vault.pending_multipliers',
+        'vault.manual_distribution_mode',
       ])
       .leftJoin(
         'claims',

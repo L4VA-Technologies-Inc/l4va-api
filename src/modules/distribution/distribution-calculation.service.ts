@@ -360,7 +360,7 @@ export class DistributionCalculationService {
       policyData.totalAssets += assets.length;
     }
 
-    const POLICY_GROUPING_THRESHOLD = 10;
+    const POLICY_GROUPING_THRESHOLD = 5;
 
     // Process each policy
     for (const [policyId, policyData] of policiesData.entries()) {

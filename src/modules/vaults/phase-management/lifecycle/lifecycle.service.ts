@@ -3041,6 +3041,7 @@ export class LifecycleService {
       .where('vault.vault_status = :status', { status: VaultStatus.locked })
       .andWhere('vault.pending_multipliers IS NOT NULL')
       .andWhere("vault.pending_multipliers != '[]'::jsonb")
+      .andWhere('vault.manual_distribution_mode = :manualMode', { manualMode: false })
       .getMany();
 
     for (const vault of vaultsWithPendingBatches) {

@@ -25,7 +25,15 @@ export class AcquirerExtractionBuilder {
    * Build extraction transaction input for a batch of acquirer claims
    */
   async buildExtractionInput(
-    vault: Vault,
+    vault: Pick<
+      Vault,
+      | 'script_hash'
+      | 'dispatch_parametized_hash'
+      | 'asset_vault_name'
+      | 'last_update_tx_hash'
+      | 'stake_registered'
+      | 'ada_pair_multiplier'
+    >,
     claims: Claim[],
     adminUtxos: string[],
     config: {
