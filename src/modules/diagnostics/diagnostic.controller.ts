@@ -3,6 +3,7 @@ import { Buffer } from 'node:buffer';
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Address, FixedTransaction, PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Controller, Post, Body, Logger, HttpCode, HttpStatus, UseGuards, Get, Param } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
@@ -50,8 +51,13 @@ export class DiagnosticController {
     private readonly paymentBuilder: ContributorPaymentBuilder,
     private readonly blockchainService: BlockchainService,
     private readonly transactionsService: TransactionsService,
-    private readonly blockfrost: BlockFrostAPI
-  ) {}
+    private readonly blockfrost: BlockFrostAPI,
+    private readonly configService: ConfigService
+  ) {
+    this.blockfrost = new BlockFrostAPI({
+      projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
+    });
+  }
 
   /**
    * Get required multipliers for specific claims
