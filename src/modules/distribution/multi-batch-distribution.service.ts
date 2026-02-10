@@ -55,7 +55,7 @@ export class MultiBatchDistributionService {
     >,
     acquireMultiplier: Array<[string, string | null, number]>,
     adaDistribution: Array<[string, string, number]>,
-    adaPairMultiplier: number
+    _adaPairMultiplier: number
   ): Promise<{
     needsBatching: boolean;
     totalBatches: number;
