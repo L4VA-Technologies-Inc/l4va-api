@@ -87,12 +87,14 @@ export class DiagnosticController {
    *
    * Use this to manually add multipliers to a vault on-chain.
    * WARNING: Only use this when manual_distribution_mode is enabled!
+   *
+   * Set replaceExisting=true to use ONLY the passed multipliers (not append to existing).
    */
   @Post('vault/manual-update-multipliers')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Manually update vault multipliers on-chain',
-    description: 'Manually add multipliers to vault. Requires manual_distribution_mode = true on the vault.',
+    description: 'Manually add multipliers to vault. Use replaceExisting=true to use ONLY the passed multipliers.',
   })
   async manuallyUpdateVaultMultipliers(
     @Body()
@@ -101,15 +103,19 @@ export class DiagnosticController {
       multipliers: Array<[string, string | null, number]>;
       adaDistribution: Array<[string, string, number]>;
       reason: string;
+      replaceExisting?: boolean;
     }
   ): Promise<any> {
-    this.logger.log(`Manual vault update for ${body.vaultId}: ${body.reason}`);
+    this.logger.log(
+      `Manual vault update for ${body.vaultId}: ${body.reason} (replaceExisting=${body.replaceExisting ?? false})`
+    );
 
     const result = await this.multiBatchService.manuallyUpdateVaultMultipliers(
       body.vaultId,
       body.multipliers,
       body.adaDistribution,
-      body.reason
+      body.reason,
+      body.replaceExisting ?? false
     );
 
     return {
