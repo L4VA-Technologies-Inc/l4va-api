@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import axios, { AxiosInstance } from 'axios';
+import NodeCache from 'node-cache';
 import { Repository } from 'typeorm';
 
 import { Market } from '@/database/market.entity';
@@ -22,6 +23,7 @@ export class VaultMarketStatsService {
   private readonly logger = new Logger(VaultMarketStatsService.name);
   private readonly isMainnet: boolean;
   private readonly axiosTapToolsInstance: AxiosInstance;
+  private readonly ohlcvCache: NodeCache;
 
   constructor(
     @InjectRepository(Vault)
@@ -41,6 +43,12 @@ export class VaultMarketStatsService {
       headers: {
         'x-api-key': tapToolsApiKey,
       },
+    });
+
+    this.ohlcvCache = new NodeCache({
+      stdTTL: 300,
+      checkperiod: 60,
+      useClones: false,
     });
   }
 
@@ -294,6 +302,7 @@ export class VaultMarketStatsService {
 
   /**
    * Get OHLCV (Open, High, Low, Close, Volume) data for a vault token from Taptools API
+   * Results are cached for 5 minutes to reduce API calls
    * @param policyId Token policy ID
    * @param assetName Token asset name (hex)
    * @param interval Time interval for OHLCV data (e.g., '1h', '24h', '7d', '30d')
@@ -310,6 +319,14 @@ export class VaultMarketStatsService {
       throw new NotFoundException('Policy ID and asset name are required for OHLCV data');
     }
 
+    const cacheKey = `ohlcv_${policyId}_${assetName}_${interval}`;
+
+    const cachedData = this.ohlcvCache.get<MarketOhlcvSeries>(cacheKey);
+    if (cachedData) {
+      this.logger.debug(`Returning cached OHLCV data for ${policyId}.${assetName} (interval: ${interval})`);
+      return cachedData;
+    }
+
     try {
       const unit = `${policyId}${assetName}`;
       const { data } = await this.axiosTapToolsInstance.get<MarketOhlcvSeries>('/token/ohlcv', {
@@ -319,7 +336,9 @@ export class VaultMarketStatsService {
         },
       });
 
-      this.logger.log(`Successfully fetched OHLCV data for ${unit} with interval ${interval}`);
+      this.ohlcvCache.set(cacheKey, data);
+
+      this.logger.log(`Successfully fetched and cached OHLCV data for ${unit} with interval ${interval}`);
       return data;
     } catch (error) {
       this.logger.error(

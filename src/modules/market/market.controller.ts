@@ -34,21 +34,21 @@ export class MarketController {
   @ApiResponse({ status: 200, description: 'Returns market data with OHLCV', type: Object })
   @ApiResponse({ status: 404, description: 'Market not found' })
   async getMarketByIdWithOHLCV(
-    @Param('id') vaultId: string,
+    @Param('id') marketId: string,
     @Query('interval') interval?: string
   ): Promise<MarketItemWithOHLCV | null> {
-    return this.marketService.getMarketByIdWithOHLCV(vaultId, interval || '1h');
+    return this.marketService.getMarketByIdWithOHLCV(marketId, interval || '1h');
   }
 
   @Get(':id')
   @ApiDoc({
     summary: 'Get market by ID',
-    description: 'Returns market data with vault information and statistics',
+    description: 'Returns market data with vault information and statistics. The ID parameter is the vault_id.',
     status: 200,
   })
   @ApiResponse({ status: 200, description: 'Returns market data', type: Object })
   @ApiResponse({ status: 404, description: 'Market not found' })
-  async getMarketById(@Param('id') id: string): Promise<MarketItem | null> {
-    return this.marketService.getMarketById(id);
+  async getMarketById(@Param('id') marketId: string): Promise<MarketItem | null> {
+    return this.marketService.getMarketById(marketId);
   }
 }

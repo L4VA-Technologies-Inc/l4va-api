@@ -147,6 +147,12 @@ export class MarketService implements OnModuleInit {
     };
   }
 
+  /**
+   * Get market by vault ID
+   * Note: The market is searched by vault_id since there is one market per vault
+   * @param vaultId Vault ID to search for market
+   * @returns Market data with vault information
+   */
   async getMarketById(vaultId: string): Promise<MarketItem> {
     const queryBuilder = this.marketRepository.createQueryBuilder('market');
 
@@ -170,12 +176,13 @@ export class MarketService implements OnModuleInit {
   /**
    * Get market data with OHLCV statistics
    * Combines market data from getMarketById with OHLCV data from Taptools API
-   * @param id Market ID
+   * Note: The id parameter is the vault_id since markets are searched by vault_id
+   * @param vaultId Vault ID to search for market
    * @param interval OHLCV interval (default: '1h')
-   * @returns Combined market data with OHLCV or null if market not found
+   * @returns Combined market data with OHLCV
    */
-  async getMarketByIdWithOHLCV(id: string, interval: string = '1h'): Promise<MarketItemWithOHLCV> {
-    const marketData = await this.getMarketById(id);
+  async getMarketByIdWithOHLCV(vaultId: string, interval: string = '1h'): Promise<MarketItemWithOHLCV> {
+    const marketData = await this.getMarketById(vaultId);
 
     const ohlcvData = await this.vaultMarketStatsService.getVaultTokenOHLCV(marketData.vault_id, interval);
 
