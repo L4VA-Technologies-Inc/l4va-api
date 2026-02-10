@@ -608,6 +608,72 @@ export class MultiBatchDistributionService {
   }
 
   /**
+   * Check if a claim can be processed (its multipliers are on-chain)
+   * Returns true if the claim's batch is on-chain, false otherwise
+   */
+  async canClaimBeProcessed(
+    vaultId: string,
+    claimId: string
+  ): Promise<{
+    canProcess: boolean;
+    reason: string;
+    claimBatch: number | null;
+    currentBatch: number;
+    totalBatches: number | null;
+  }> {
+    const claim = await this.claimRepository.findOne({
+      where: { id: claimId, vault_id: vaultId },
+      select: ['id', 'distribution_batch', 'vault_id'],
+    });
+
+    if (!claim) {
+      return {
+        canProcess: false,
+        reason: 'Claim not found',
+        claimBatch: null,
+        currentBatch: 0,
+        totalBatches: null,
+      };
+    }
+
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: ['id', 'current_distribution_batch', 'total_distribution_batches'],
+    });
+
+    if (!vault) {
+      return {
+        canProcess: false,
+        reason: 'Vault not found',
+        claimBatch: claim.distribution_batch,
+        currentBatch: 0,
+        totalBatches: null,
+      };
+    }
+
+    const currentBatch = vault.current_distribution_batch || 1;
+    const claimBatch = claim.distribution_batch || 1;
+
+    if (claimBatch > currentBatch) {
+      return {
+        canProcess: false,
+        reason: `Claim is in batch ${claimBatch}, but only batches 1-${currentBatch} are on-chain`,
+        claimBatch,
+        currentBatch,
+        totalBatches: vault.total_distribution_batches,
+      };
+    }
+
+    return {
+      canProcess: true,
+      reason: 'Claim multipliers are on-chain',
+      claimBatch,
+      currentBatch,
+      totalBatches: vault.total_distribution_batches,
+    };
+  }
+
+  /**
    * RECOVERY METHOD: Recalculate batch assignments using transaction-boundary-aware logic.
    * Use this when a vault had incorrect batch splitting and needs re-batching.
    *
@@ -920,6 +986,270 @@ export class MultiBatchDistributionService {
     } catch (error) {
       this.logger.error(`Failed to force submit batch for vault ${vaultId}:`, error);
       return { success: false, message: `Error: ${error.message}` };
+    }
+  }
+
+  /**
+   * MANUAL METHOD: Get required multipliers for specific claim IDs
+   * Use this to determine what multipliers need to be on-chain for claims to process
+   *
+   * @param vaultId - The vault ID
+   * @param claimIds - Array of claim IDs to check
+   * @returns Information about required multipliers and current status
+   */
+  async getRequiredMultipliersForClaims(
+    vaultId: string,
+    claimIds: string[]
+  ): Promise<{
+    vaultId: string;
+    currentOnChainMultipliers: number;
+    pendingMultipliers: number;
+    claims: Array<{
+      claimId: string;
+      claimBatch: number | null;
+      status: string;
+      canProcess: boolean;
+      transactionId: string;
+      contributedAssets: Array<{
+        policyId: string;
+        assetName: string;
+        assetId: string;
+        quantity: number;
+        multiplierOnChain: boolean;
+        multiplierValue: number | null;
+      }>;
+    }>;
+    requiredMultipliers: Array<[string, string | null, number]>;
+    recommendation: string;
+  }> {
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: [
+        'id',
+        'acquire_multiplier',
+        'pending_multipliers',
+        'current_distribution_batch',
+        'total_distribution_batches',
+        'manual_distribution_mode',
+      ],
+    });
+
+    if (!vault) {
+      throw new Error(`Vault ${vaultId} not found`);
+    }
+
+    const claims = await this.claimRepository.find({
+      where: { id: In(claimIds), vault_id: vaultId },
+      relations: ['transaction', 'transaction.assets', 'user'],
+    });
+
+    if (claims.length === 0) {
+      throw new Error(`No claims found for IDs: ${claimIds.join(', ')}`);
+    }
+
+    const onChainMultipliers = vault.acquire_multiplier || [];
+    const onChainMultiplierMap = new Map<string, number>();
+    for (const [policyId, assetName, mult] of onChainMultipliers) {
+      const key = assetName ? `${policyId}:${assetName}` : policyId;
+      onChainMultiplierMap.set(key, mult);
+    }
+
+    const requiredMultipliers = new Map<string, [string, string | null, number]>();
+    const claimDetails = [];
+
+    for (const claim of claims) {
+      const contributedAssets = claim.transaction?.assets || [];
+      const assetDetails = [];
+
+      for (const asset of contributedAssets) {
+        const key = asset.asset_id ? `${asset.policy_id}:${asset.asset_id}` : asset.policy_id;
+        const policyKey = asset.policy_id;
+
+        let multiplierValue: number | null = null;
+        let multiplierOnChain = false;
+
+        // Check if specific asset multiplier exists
+        if (asset.asset_id && onChainMultiplierMap.has(key)) {
+          multiplierValue = onChainMultiplierMap.get(key);
+          multiplierOnChain = true;
+        }
+        // Check if policy-level multiplier exists
+        else if (onChainMultiplierMap.has(policyKey)) {
+          multiplierValue = onChainMultiplierMap.get(policyKey);
+          multiplierOnChain = true;
+        }
+
+        assetDetails.push({
+          policyId: asset.policy_id,
+          assetName: asset.name,
+          assetId: asset.asset_id || '',
+          quantity: Number(asset.quantity),
+          multiplierOnChain,
+          multiplierValue,
+        });
+
+        // If not on-chain, add to required list
+        if (!multiplierOnChain && multiplierValue === null) {
+          // Check if multiplier exists in pending_multipliers or needs to be calculated
+          const pendingMult = (vault.pending_multipliers || []).find(
+            ([p, a]) => p === asset.policy_id && (a === asset.asset_id || (!a && !asset.asset_id))
+          );
+
+          if (pendingMult) {
+            requiredMultipliers.set(key, pendingMult);
+          } else {
+            // Calculate expected multiplier (you'll need to implement this based on your logic)
+            // For now, mark as missing
+            this.logger.warn(
+              `Missing multiplier for ${asset.policy_id}:${asset.asset_id || 'ADA'} in claim ${claim.id}`
+            );
+          }
+        }
+      }
+
+      const canProcess = assetDetails.every(a => a.multiplierOnChain);
+      claimDetails.push({
+        claimId: claim.id,
+        claimBatch: claim.distribution_batch,
+        status: claim.status,
+        canProcess,
+        transactionId: claim.transaction?.id,
+        contributedAssets: assetDetails,
+      });
+    }
+
+    const requiredMultipliersArray = Array.from(requiredMultipliers.values());
+    const allClaimsCanProcess = claimDetails.every(c => c.canProcess);
+
+    let recommendation = '';
+    if (allClaimsCanProcess) {
+      recommendation = '✅ All claims can be processed with current on-chain multipliers.';
+    } else {
+      const missingCount = claimDetails.filter(c => !c.canProcess).length;
+      recommendation =
+        `⚠️ ${missingCount} claim(s) cannot be processed. ` +
+        `${requiredMultipliersArray.length} multiplier(s) need to be added on-chain. ` +
+        `Use manuallyUpdateVaultMultipliers() to add them.`;
+    }
+
+    return {
+      vaultId,
+      currentOnChainMultipliers: onChainMultipliers.length,
+      pendingMultipliers: (vault.pending_multipliers || []).length,
+      claims: claimDetails,
+      requiredMultipliers: requiredMultipliersArray,
+      recommendation,
+    };
+  }
+
+  /**
+   * MANUAL METHOD: Manually update vault with additional multipliers
+   * Use this when automated batch progression is disabled (manual_distribution_mode = true)
+   *
+   * @param vaultId - The vault ID
+   * @param additionalMultipliers - Multipliers to add to the vault
+   * @param additionalAdaDistribution - ADA distribution to add
+   * @param updateDescription - Optional description of why this manual update is needed
+   * @returns Transaction hash and updated vault state
+   */
+  async manuallyUpdateVaultMultipliers(
+    vaultId: string,
+    additionalMultipliers: Array<[string, string | null, number]>,
+    additionalAdaDistribution: Array<[string, string, number]> = [],
+    updateDescription?: string
+  ): Promise<{
+    success: boolean;
+    txHash?: string;
+    message: string;
+    newMultiplierCount: number;
+    newOnChainMultipliers: Array<[string, string | null, number]>;
+  }> {
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: [
+        'id',
+        'asset_vault_name',
+        'privacy',
+        'contribution_phase_start',
+        'contribution_duration',
+        'value_method',
+        'acquire_multiplier',
+        'ada_distribution',
+        'ada_pair_multiplier',
+        'pending_multipliers',
+        'pending_ada_distribution',
+        'manual_distribution_mode',
+      ],
+    });
+
+    if (!vault) {
+      throw new Error(`Vault ${vaultId} not found`);
+    }
+
+    if (!vault.manual_distribution_mode) {
+      this.logger.warn(
+        `Vault ${vaultId} is not in manual mode. Consider enabling manual_distribution_mode flag first.`
+      );
+    }
+
+    // Combine existing on-chain multipliers with new ones
+    const existingMultipliers = vault.acquire_multiplier || [];
+    const existingAdaDistribution = vault.ada_distribution || [];
+
+    const newMultipliers = [...existingMultipliers, ...additionalMultipliers];
+    const newAdaDistribution = [...existingAdaDistribution, ...additionalAdaDistribution];
+
+    this.logger.log(
+      `Manual vault update for ${vaultId}: ` +
+        `Adding ${additionalMultipliers.length} multipliers. ` +
+        `Total will be ${newMultipliers.length}. ` +
+        `${updateDescription ? `Reason: ${updateDescription}` : ''}`
+    );
+
+    try {
+      // Submit vault update transaction
+      const response = await this.vaultManagingService.updateVaultMetadataTx({
+        vault,
+        acquireMultiplier: newMultipliers,
+        adaDistribution: newAdaDistribution,
+        adaPairMultiplier: vault.ada_pair_multiplier || 0,
+        vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
+      });
+
+      if (!response.txHash) {
+        throw new Error('No transaction hash returned from vault update');
+      }
+
+      // Update vault in database
+      await this.vaultRepository.update(vaultId, {
+        acquire_multiplier: newMultipliers,
+        ada_distribution: newAdaDistribution,
+      });
+
+      // Remove added multipliers from pending (if they were there)
+      if (vault.pending_multipliers && vault.pending_multipliers.length > 0) {
+        const addedKeys = new Set(additionalMultipliers.map(([p, a]) => `${p}:${a || ''}`));
+        const remainingPending = vault.pending_multipliers.filter(([p, a]) => !addedKeys.has(`${p}:${a || ''}`));
+
+        await this.vaultRepository.update(vaultId, {
+          pending_multipliers: remainingPending,
+        });
+
+        this.logger.log(
+          `Updated pending_multipliers: ${vault.pending_multipliers.length} → ${remainingPending.length}`
+        );
+      }
+
+      return {
+        success: true,
+        txHash: response.txHash,
+        message: `Successfully added ${additionalMultipliers.length} multipliers to vault. Transaction: ${response.txHash}`,
+        newMultiplierCount: newMultipliers.length,
+        newOnChainMultipliers: newMultipliers,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to manually update vault ${vaultId}:`, error);
+      throw error;
     }
   }
 }

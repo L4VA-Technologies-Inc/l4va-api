@@ -187,7 +187,7 @@ export const getUtxosExtract = async (
     targetAdaAmount,
     filterByAda,
     targetAssets = [],
-    validateUtxos = true,
+    validateUtxos = false,
     removeInlineDatums = true,
     minAda = 0,
     maxUtxos = 15,

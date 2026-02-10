@@ -54,7 +54,20 @@ export class AcquirerDistributionOrchestrator {
       unparametizedDispatchHash: string;
     }
   ): Promise<void> {
-    const vault = await this.vaultRepository
+    const vault: Pick<
+      Vault,
+      | 'id'
+      | 'script_hash'
+      | 'asset_vault_name'
+      | 'ada_pair_multiplier'
+      | 'last_update_tx_hash'
+      | 'dispatch_parametized_hash'
+      | 'dispatch_preloaded_script'
+      | 'tokens_for_acquires'
+      | 'stake_registered'
+      | 'current_distribution_batch'
+      | 'total_distribution_batches'
+    > = await this.vaultRepository
       .createQueryBuilder('vault')
       .select([
         'vault.id',
@@ -66,13 +79,9 @@ export class AcquirerDistributionOrchestrator {
         'vault.dispatch_preloaded_script',
         'vault.tokens_for_acquires',
         'vault.stake_registered',
+        'vault.current_distribution_batch',
+        'vault.total_distribution_batches',
       ])
-      .leftJoinAndSelect('vault.claims', 'claim', 'claim.type = :type AND claim.status = :status', {
-        type: ClaimType.ACQUIRER,
-        status: ClaimStatus.PENDING,
-      })
-      .leftJoinAndSelect('claim.transaction', 'transaction')
-      .leftJoinAndSelect('claim.user', 'user')
       .where('vault.id = :vaultId', { vaultId })
       .getOne();
 
@@ -80,10 +89,44 @@ export class AcquirerDistributionOrchestrator {
       throw new Error(`Vault ${vaultId} not found`);
     }
 
-    const claims = vault.claims || [];
+    // CRITICAL: Only process acquirer claims whose multipliers are already on-chain
+    const currentBatch = vault.current_distribution_batch || 1;
+    const hasBatching = vault.total_distribution_batches && vault.total_distribution_batches > 1;
+
+    const claimQuery = this.vaultRepository
+      .createQueryBuilder('vault')
+      .leftJoinAndSelect('vault.claims', 'claim', 'claim.type = :type AND claim.status = :status', {
+        type: ClaimType.ACQUIRER,
+        status: ClaimStatus.PENDING,
+      })
+      .leftJoinAndSelect('claim.transaction', 'transaction')
+      .leftJoinAndSelect('claim.user', 'user')
+      .where('vault.id = :vaultId', { vaultId });
+
+    // Filter by batch if vault uses batching
+    if (hasBatching) {
+      claimQuery.andWhere('(claim.distribution_batch IS NULL OR claim.distribution_batch <= :currentBatch)', {
+        currentBatch,
+      });
+      this.logger.log(
+        `Multi-batch vault: Processing acquirer claims from batches 1-${currentBatch} of ${vault.total_distribution_batches}`
+      );
+    }
+
+    const vaultWithClaims = await claimQuery.getOne();
+    const claims = vaultWithClaims?.claims || [];
+
     this.logger.log(`Found ${claims.length} acquirer claims to extract for vault ${vaultId}`);
 
-    if (claims.length === 0) return;
+    if (claims.length === 0) {
+      if (hasBatching) {
+        this.logger.log(
+          `No ready acquirer claims for vault ${vaultId} in batches 1-${currentBatch}. ` +
+            `${vault.total_distribution_batches - currentBatch} batches pending.`
+        );
+      }
+      return;
+    }
 
     // Process in batches
     for (let i = 0; i < claims.length; i += this.MAX_BATCH_SIZE) {
@@ -100,7 +143,18 @@ export class AcquirerDistributionOrchestrator {
    * Process a single batch of acquirer claims
    */
   private async processAcquirerBatch(
-    vault: Vault,
+    vault: Pick<
+      Vault,
+      | 'id'
+      | 'script_hash'
+      | 'asset_vault_name'
+      | 'ada_pair_multiplier'
+      | 'last_update_tx_hash'
+      | 'dispatch_parametized_hash'
+      | 'dispatch_preloaded_script'
+      | 'tokens_for_acquires'
+      | 'stake_registered'
+    >,
     claims: Claim[],
     vaultId: string,
     config: {
@@ -141,7 +195,18 @@ export class AcquirerDistributionOrchestrator {
    * Execute the actual batch extraction transaction
    */
   private async executeBatchExtraction(
-    vault: Vault,
+    vault: Pick<
+      Vault,
+      | 'id'
+      | 'script_hash'
+      | 'asset_vault_name'
+      | 'ada_pair_multiplier'
+      | 'last_update_tx_hash'
+      | 'dispatch_parametized_hash'
+      | 'dispatch_preloaded_script'
+      | 'tokens_for_acquires'
+      | 'stake_registered'
+    >,
     claims: Claim[],
     extractionTx: Transaction,
     config: {
@@ -232,7 +297,23 @@ export class AcquirerDistributionOrchestrator {
   /**
    * Split batch in half and retry with smaller batches
    */
-  private async splitAndRetryBatch(vault: Vault, claims: Claim[], vaultId: string, config: any): Promise<void> {
+  private async splitAndRetryBatch(
+    vault: Pick<
+      Vault,
+      | 'id'
+      | 'script_hash'
+      | 'asset_vault_name'
+      | 'ada_pair_multiplier'
+      | 'last_update_tx_hash'
+      | 'dispatch_parametized_hash'
+      | 'dispatch_preloaded_script'
+      | 'tokens_for_acquires'
+      | 'stake_registered'
+    >,
+    claims: Claim[],
+    vaultId: string,
+    config: any
+  ): Promise<void> {
     const midPoint = Math.ceil(claims.length / 2);
     const firstHalf = claims.slice(0, midPoint);
     const secondHalf = claims.slice(midPoint);

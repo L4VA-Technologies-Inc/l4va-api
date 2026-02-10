@@ -71,19 +71,59 @@ export class ContributorDistributionOrchestrator {
       unparametizedDispatchHash: string;
     }
   ): Promise<void> {
+    // Skip vaults in manual distribution mode
+    if (vault.manual_distribution_mode) {
+      this.logger.log(
+        `Skipping vault ${vaultId} - manual distribution mode enabled. ` +
+          `Administrator must manually update vault multipliers.`
+      );
+      return;
+    }
+
     this.logger.log(`Starting contributor payment processing for vault ${vaultId}`);
 
-    const readyClaims = await this.claimRepository.find({
-      where: {
-        vault: { id: vaultId },
-        type: ClaimType.CONTRIBUTOR,
-        status: ClaimStatus.PENDING,
-      },
-      relations: ['user', 'transaction'],
-    });
+    // CRITICAL: Only process claims whose multipliers are already on-chain
+    // This prevents attempting to process claims before their batch's multipliers are submitted
+    const currentBatch = vault.current_distribution_batch || 1;
+    const hasBatching = vault.total_distribution_batches && vault.total_distribution_batches > 1;
+
+    let readyClaims: Claim[];
+    if (hasBatching) {
+      // Multi-batch vault: only process claims from completed batches (batch <= currentBatch)
+      readyClaims = await this.claimRepository.find({
+        where: {
+          vault: { id: vaultId },
+          type: ClaimType.CONTRIBUTOR,
+          status: ClaimStatus.PENDING,
+          // Only process claims from batches that are already on-chain
+          distribution_batch: In(Array.from({ length: currentBatch }, (_, i) => i + 1)),
+        },
+        relations: ['user', 'transaction'],
+      });
+      this.logger.log(
+        `Multi-batch vault: Processing claims from batches 1-${currentBatch} of ${vault.total_distribution_batches}`
+      );
+    } else {
+      // Single-batch vault: process all pending claims
+      readyClaims = await this.claimRepository.find({
+        where: {
+          vault: { id: vaultId },
+          type: ClaimType.CONTRIBUTOR,
+          status: ClaimStatus.PENDING,
+        },
+        relations: ['user', 'transaction'],
+      });
+    }
 
     if (readyClaims.length === 0) {
-      this.logger.log(`No ready contributor claims for vault ${vaultId}`);
+      if (hasBatching) {
+        this.logger.log(
+          `No ready contributor claims for vault ${vaultId} in batches 1-${currentBatch}. ` +
+            `${vault.total_distribution_batches - currentBatch} batches pending.`
+        );
+      } else {
+        this.logger.log(`No ready contributor claims for vault ${vaultId}`);
+      }
       return;
     }
 
@@ -240,7 +280,6 @@ export class ContributorDistributionOrchestrator {
         this.logger.debug(`Testing batch size ${testBatchSize}...`);
 
         const input = await this.paymentBuilder.buildPaymentInput(vault, testClaims, adminUtxos, dispatchUtxos, config);
-        console.log(JSON.stringify(input));
 
         const buildResponse = await this.blockchainService.buildTransaction(input);
         const txSize = getTransactionSize(buildResponse.complete);
@@ -359,7 +398,6 @@ export class ContributorDistributionOrchestrator {
           dispatchUtxos,
           config
         );
-        console.log(JSON.stringify(input));
 
         const buildResponse = await this.blockchainService.buildTransaction(input);
         const txSize = getTransactionSize(buildResponse.complete);
