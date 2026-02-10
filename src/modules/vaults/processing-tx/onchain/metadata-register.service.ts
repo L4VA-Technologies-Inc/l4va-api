@@ -72,6 +72,10 @@ export class MetadataRegistryApiService {
     this.repoName = this.configService.get<string>('METADATA_REGISTRY_REPO');
     this.folderName = this.configService.get<string>('METADATA_REGISTRY_FOLDER');
     this.network = this.configService.get<string>('NETWORK', 'mainnet');
+
+    if (!this.githubToken) {
+      this.logger.warn('GITHUB_TOKEN is not configured - token registry submissions will fail');
+    }
   }
 
   @Cron(CronExpression.EVERY_5_HOURS)
@@ -543,6 +547,15 @@ export class MetadataRegistryApiService {
     vaultId: string
   ): Promise<{ success: boolean; message: string; prUrl?: string }> {
     try {
+      // Validate GitHub token before proceeding
+      if (!this.githubToken) {
+        this.logger.error('GITHUB_TOKEN is not configured');
+        return {
+          success: false,
+          message: 'GitHub token is not configured. Please set GITHUB_TOKEN environment variable.',
+        };
+      }
+
       // 1. Format metadata as JSON
       const metadataJson = JSON.stringify(metadata, null, 2);
 
