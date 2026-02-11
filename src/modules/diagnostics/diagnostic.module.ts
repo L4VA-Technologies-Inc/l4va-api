@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { DistributionModule } from '../distribution/distribution.module';
+import { BlockchainModule } from '../vaults/processing-tx/onchain/blockchain.module';
 
 import { DiagnosticController } from './diagnostic.controller';
 
@@ -16,7 +17,7 @@ import { Vault } from '@/database/vault.entity';
  * For admin/recovery use only.
  */
 @Module({
-  imports: [DistributionModule, TypeOrmModule.forFeature([Vault, Claim, Transaction])],
+  imports: [DistributionModule, BlockchainModule, TypeOrmModule.forFeature([Vault, Claim, Transaction])],
   controllers: [DiagnosticController],
 })
 export class DiagnosticModule {}

@@ -8,7 +8,7 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 
-import { AuthGuard } from '../auth/auth.guard';
+import { AdminGuard } from '../auth/admin.guard';
 import { ContributorPaymentBuilder } from '../distribution/builders/contributor-payment.builder';
 import { AddressesUtxo } from '../distribution/distribution.types';
 import { MultiBatchDistributionService } from '../distribution/multi-batch-distribution.service';
@@ -19,8 +19,10 @@ import { Vault } from '@/database/vault.entity';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { getAddressFromHash, getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
+import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
+import { SmartContractVaultStatus } from '@/types/vault.types';
 
 /**
  * Manual Distribution Controller
@@ -36,7 +38,7 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
  * 5. Trigger claim processing
  */
 @ApiTags('manual-distribution')
-@UseGuards(AuthGuard)
+@UseGuards(AdminGuard)
 @Controller('manual-distribution')
 export class DiagnosticController {
   private readonly logger = new Logger(DiagnosticController.name);
@@ -52,6 +54,7 @@ export class DiagnosticController {
     private readonly paymentBuilder: ContributorPaymentBuilder,
     private readonly blockchainService: BlockchainService,
     private readonly transactionsService: TransactionsService,
+    private readonly vaultManagingService: VaultManagingService,
     private readonly blockfrost: BlockFrostAPI,
     private readonly configService: ConfigService
   ) {
@@ -806,6 +809,362 @@ export class DiagnosticController {
         completed: completedClaims,
         total: pendingClaims + completedClaims,
       },
+    };
+  }
+
+  // ========================================
+  // VAULT RECOVERY ENDPOINTS (SILENT MODE)
+  // ========================================
+
+  /**
+   * RECOVERY STEP 1: Reopen vault contribution window ON-CHAIN only
+   *
+   * This updates the vault status to OPEN on-chain with new time windows,
+   * but DOES NOT update the vault status in the database.
+   * Vault will still appear LOCKED in the UI.
+   *
+   * Use this to accept a recovery contribution without showing the vault as open.
+   */
+  @Post('recovery/:vaultId/reopen-onchain')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Reopen vault contribution window on-chain only (silent recovery)',
+    description: 'Updates vault to OPEN on-chain but keeps DB status unchanged. Vault appears LOCKED in UI.',
+  })
+  async reopenVaultOnChainOnly(
+    @Param('vaultId') vaultId: string,
+    @Body()
+    body: {
+      durationHours?: number; // Default: 24 hours
+      reason: string;
+    }
+  ): Promise<any> {
+    this.logger.log(`[RECOVERY] Reopening vault ${vaultId} on-chain only: ${body.reason}`);
+
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: [
+        'id',
+        'asset_vault_name',
+        'privacy',
+        'contribution_phase_start',
+        'contribution_duration',
+        'value_method',
+        'acquire_multiplier',
+        'ada_distribution',
+      ],
+    });
+
+    if (!vault) {
+      return { success: false, message: `Vault ${vaultId} not found` };
+    }
+
+    // Calculate new time windows (start now, end in X hours)
+    const now = Date.now();
+    const durationMs = (body.durationHours || 24) * 60 * 60 * 1000;
+    const endTime = now + durationMs;
+
+    const asset_window = {
+      start: now,
+      end: endTime,
+    };
+
+    const acquire_window = {
+      start: endTime + 1, // Acquire starts after contribution
+      end: endTime + 1000, // Short acquire window (not used)
+    };
+
+    this.logger.log(`Setting contribution window: ${new Date(now).toISOString()} - ${new Date(endTime).toISOString()}`);
+
+    // Update vault on-chain to OPEN status
+    const result = await this.vaultManagingService.updateVaultMetadataTx({
+      vault: vault as any,
+      vaultStatus: SmartContractVaultStatus.OPEN,
+      asset_window,
+      acquire_window,
+      acquireMultiplier: vault.acquire_multiplier || [],
+      adaPairMultiplier: 0,
+      adaDistribution: vault.ada_distribution || [],
+    });
+
+    // DO NOT update vault status in database - it stays LOCKED in UI
+
+    this.logger.log(
+      `[RECOVERY] Vault ${vaultId} reopened on-chain only. DB status unchanged. TxHash: ${result.txHash}`
+    );
+
+    return {
+      success: true,
+      message: 'Vault reopened on-chain. Status in UI remains unchanged (LOCKED).',
+      txHash: result.txHash,
+      contributionWindow: {
+        start: new Date(now).toISOString(),
+        end: new Date(endTime).toISOString(),
+        durationHours: body.durationHours || 24,
+      },
+      nextStep: 'Contribute your recovery NFT using the API endpoint: POST /contribute/:vaultId (requires auth token)',
+      contributionEndpoint: {
+        method: 'POST',
+        path: `/contribute/${vaultId}`,
+        headers: {
+          Authorization: 'Bearer <your-auth-token>',
+          'Content-Type': 'application/json',
+        },
+        body: {
+          assets: [
+            {
+              policyId: '<your-nft-policy-id>',
+              type: 'nft',
+              assetName: '<your-nft-asset-name-hex>',
+              quantity: 1,
+              displayName: 'Recovery NFT',
+            },
+          ],
+        },
+      },
+    };
+  }
+
+  /**
+   * RECOVERY STEP 2: Calculate reverse multiplier for recovery contribution
+   *
+   * Given the desired VT amount to mint, calculates the multiplier needed
+   * for a single NFT contribution.
+   *
+   * Example: Need 1000 VT, contribute 1 NFT → multiplier = 1000
+   */
+  @Post('recovery/:vaultId/calculate-reverse-multiplier')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Calculate multiplier needed for desired VT amount',
+    description: 'Given desired VT to mint and NFT details, returns the multiplier to set on vault.',
+  })
+  async calculateReverseMultiplier(
+    @Param('vaultId') vaultId: string,
+    @Body()
+    body: {
+      desiredVtAmount: number; // Total VT to mint
+      nftPolicyId: string; // NFT policy ID
+      nftAssetName: string; // NFT asset name (hex)
+      nftQuantity?: number; // Default: 1 (for NFTs)
+    }
+  ): Promise<any> {
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: ['id', 'name', 'tokens_for_acquires'],
+    });
+
+    if (!vault) {
+      return { success: false, message: `Vault ${vaultId} not found` };
+    }
+
+    const nftQty = body.nftQuantity || 1;
+    const desiredVt = body.desiredVtAmount;
+
+    // Calculate multiplier: VT = NFT_quantity * multiplier
+    // So: multiplier = VT / NFT_quantity
+    const multiplier = Math.round(desiredVt / nftQty);
+
+    // Build the multiplier tuple for vault update
+    const multiplierTuple: [string, string | null, number] = [body.nftPolicyId, body.nftAssetName || null, multiplier];
+
+    this.logger.log(`[RECOVERY] Calculated multiplier for ${nftQty} NFT(s) to mint ${desiredVt} VT: ${multiplier}`);
+
+    return {
+      success: true,
+      vaultId,
+      vaultName: vault.name,
+      calculation: {
+        desiredVtAmount: desiredVt,
+        nftQuantity: nftQty,
+        calculatedMultiplier: multiplier,
+        formula: `${desiredVt} VT / ${nftQty} NFT = ${multiplier}`,
+      },
+      multiplier: multiplierTuple,
+      nextSteps: [
+        '1. Close vault as SUCCESSFUL with this multiplier using manual-update-multipliers endpoint',
+        '2. Process the claim to mint VT to your account',
+        '3. Manually distribute VT via Eternl wallet',
+        '4. Extract NFT back using recovery/extract-contribution endpoint',
+      ],
+    };
+  }
+
+  /**
+   * RECOVERY STEP 3: Extract admin recovery contribution back
+   *
+   * After VT has been minted and manually distributed, extract the recovery
+   * NFT back from the vault contribution.
+   *
+   * This uses the ExtractAsset redeemer to withdraw the contribution
+   * to the specified address (defaults to admin address).
+   */
+  @Post('recovery/:vaultId/extract-contribution')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Extract recovery contribution back to contributor address',
+    description:
+      'Extracts the recovery NFT from the vault contribution script back to specified address (or admin address).',
+  })
+  async extractRecoveryContribution(
+    @Param('vaultId') vaultId: string,
+    @Body()
+    body: {
+      contributionTxHash: string; // The tx hash where you contributed the NFT
+      extractToAddress?: string; // Address to send NFT back to (defaults to admin)
+      reason: string;
+    }
+  ): Promise<any> {
+    this.logger.log(
+      `[RECOVERY] Extracting contribution from vault ${vaultId}, tx ${body.contributionTxHash}: ${body.reason}`
+    );
+
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: ['id', 'name', 'script_hash', 'last_update_tx_hash'],
+    });
+
+    if (!vault) {
+      return { success: false, message: `Vault ${vaultId} not found` };
+    }
+
+    if (!vault.script_hash) {
+      return { success: false, message: 'Vault script hash not found' };
+    }
+
+    if (!vault.last_update_tx_hash) {
+      return { success: false, message: 'Vault must have last_update_tx_hash set (from vault update tx)' };
+    }
+
+    const adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
+    const adminSKey = this.configService.get<string>('ADMIN_S_KEY');
+    const adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
+    const extractToAddress = body.extractToAddress || adminAddress;
+
+    // Get the contribution UTXO
+    const txUtxos = await this.blockfrost.txsUtxos(body.contributionTxHash);
+
+    // Find the output with the contribution script address
+    const contributionOutput = txUtxos.outputs.find(output => {
+      const outputAddress = output.address;
+      const vaultAddress = getAddressFromHash(vault.script_hash, this.blockchainService.getNetworkId());
+      return outputAddress === vaultAddress;
+    });
+
+    if (!contributionOutput) {
+      return {
+        success: false,
+        message: `No contribution UTXO found at vault address in tx ${body.contributionTxHash}`,
+      };
+    }
+
+    this.logger.log(
+      `Found contribution UTXO at output index ${contributionOutput.output_index} with ${contributionOutput.amount.length} assets`
+    );
+
+    // Get admin UTXOs for fees
+    const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(adminAddress), this.blockfrost, {
+      minAda: 2_000_000,
+    });
+
+    // Extract all assets from this contribution UTXO
+    const assetsToExtract = contributionOutput.amount
+      .filter((a: any) => a.unit !== 'lovelace')
+      .map((a: any) => ({
+        policyId: a.unit.slice(0, 56),
+        assetName: {
+          name: a.unit.slice(56),
+          format: 'hex' as const,
+        },
+        quantity: parseInt(a.quantity),
+      }));
+
+    const lovelace = contributionOutput.amount.find((a: any) => a.unit === 'lovelace')?.quantity || '0';
+
+    this.logger.log(`Extracting ${assetsToExtract.length} assets and ${lovelace} lovelace to ${extractToAddress}`);
+
+    // Create extraction transaction
+    const transaction = await this.transactionsService.createTransaction({
+      vault_id: vault.id,
+      type: TransactionType.extract,
+      assets: [],
+      metadata: {
+        extractionType: 'recovery',
+        contributionTxHash: body.contributionTxHash,
+        extractToAddress,
+        reason: body.reason,
+      },
+    });
+
+    const input = {
+      changeAddress: adminAddress,
+      utxos: adminUtxos,
+      message: `Recovery: Extract contribution from tx ${body.contributionTxHash}`,
+      scriptInteractions: [
+        {
+          purpose: 'spend' as const,
+          hash: vault.script_hash,
+          outputRef: {
+            txHash: body.contributionTxHash,
+            index: contributionOutput.output_index,
+          },
+          redeemer: {
+            type: 'json' as const,
+            value: {
+              __variant: 'ExtractAsset',
+              __data: {
+                vault_token_output_index: null,
+              },
+            },
+          },
+        },
+      ],
+      outputs: [
+        {
+          address: extractToAddress,
+          lovelace: lovelace,
+          assets: assetsToExtract,
+        },
+      ],
+      requiredSigners: [adminHash],
+      referenceInputs: [
+        {
+          txHash: vault.last_update_tx_hash,
+          index: 0,
+        },
+      ],
+      validityInterval: {
+        start: true,
+        end: true,
+      },
+      network: this.configService.get<string>('CARDANO_NETWORK'),
+    };
+
+    const buildResponse = await this.blockchainService.buildTransaction(input);
+
+    const txToSubmit = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+    txToSubmit.sign_and_add_vkey_signature(PrivateKey.from_bech32(adminSKey));
+
+    const response = await this.blockchainService.submitTransaction({
+      transaction: txToSubmit.to_hex(),
+    });
+
+    await this.transactionsService.updateTransactionHash(transaction.id, response.txHash);
+
+    this.logger.log(`[RECOVERY] Successfully extracted contribution. TxHash: ${response.txHash}`);
+
+    return {
+      success: true,
+      message: 'Recovery contribution extracted successfully',
+      transactionId: transaction.id,
+      txHash: response.txHash,
+      extractedAssets: assetsToExtract.map(a => ({
+        policyId: a.policyId,
+        assetName: a.assetName.name,
+        quantity: a.quantity,
+      })),
+      extractedLovelace: lovelace,
+      extractedToAddress: extractToAddress,
     };
   }
 }
