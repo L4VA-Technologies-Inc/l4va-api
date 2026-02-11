@@ -337,49 +337,68 @@ export class VaultsService {
       }
 
       // Handle social links
-      if (data.socialLinks?.length > 0) {
-        const links = data.socialLinks.map(linkItem => {
-          return this.linksRepository.create({
-            vault: newVault,
-            name: linkItem.name,
-            url: linkItem.url,
-          });
+      if (data.socialLinks !== undefined) {
+        // Remove all existing social links to avoid duplicates
+        const existingSocialLinks = await this.linksRepository.find({
+          where: { vault: { id: newVault.id } },
         });
-        await this.linksRepository.save(links);
+        if (existingSocialLinks.length > 0) {
+          await this.linksRepository.remove(existingSocialLinks);
+        }
+
+        // Add new links if provided
+        if (data.socialLinks.length > 0) {
+          const links = data.socialLinks.map(linkItem => {
+            return this.linksRepository.create({
+              vault: newVault,
+              name: linkItem.name,
+              url: linkItem.url,
+            });
+          });
+          await this.linksRepository.save(links);
+        }
       }
 
       // Handle assets whitelist
       // TODO: Add lovelace support
       let maxCountOf = 0;
 
-      // Then process them
-      const uniquePolicyIds = Array.from(new Map(data.assetsWhitelist.map(obj => [obj.policyId, obj])).values());
+      if (data.assetsWhitelist && data.assetsWhitelist.length > 0) {
+        // Remove all existing assets whitelist entries for this vault to avoid duplicates
+        // This is important in case createVault is called multiple times for the same vault
+        const existingAssetsWhitelist = await this.assetsWhitelistRepository.find({
+          where: { vault: { id: newVault.id } },
+        });
+        if (existingAssetsWhitelist.length > 0) {
+          await this.assetsWhitelistRepository.remove(existingAssetsWhitelist);
+        }
 
-      await Promise.all(
-        uniquePolicyIds.map(async assetItem => {
-          if (!assetItem.policyId) return;
+        // Process unique policy IDs
+        const uniquePolicyIds = Array.from(new Map(data.assetsWhitelist.map(obj => [obj.policyId, obj])).values());
 
-          const result = await this.assetsWhitelistRepository
-            .createQueryBuilder()
-            .insert()
-            .values({
+        await Promise.all(
+          uniquePolicyIds.map(async assetItem => {
+            if (!assetItem.policyId) return;
+
+            // Insert new entry (old ones were already removed)
+            const result = await this.assetsWhitelistRepository.save({
               vault: newVault,
               policy_id: assetItem.policyId,
               collection_name: assetItem.collectionName,
               asset_count_cap_min: assetItem.countCapMin,
               asset_count_cap_max: assetItem.countCapMax,
-            })
-            .orIgnore()
-            .execute();
+            });
 
-          if (result.identifiers.length > 0 && assetItem.countCapMax) {
-            maxCountOf += assetItem.countCapMax;
-          }
-        })
-      );
+            if (result && assetItem.countCapMax) {
+              maxCountOf += assetItem.countCapMax;
+            }
+          })
+        );
+      }
 
       newVault.max_contribute_assets = Number(maxCountOf) || 0;
       await this.vaultsRepository.save(newVault);
+
       // Handle acquirer whitelist
       const acquirerFromCsv = acquirerWhitelistFile ? await this.parseCSVFromS3(acquirerWhitelistFile.file_key) : [];
 
@@ -387,14 +406,24 @@ export class VaultsService {
 
       const allAcquirer = new Set([...acquirer, ...acquirerFromCsv]);
 
-      await Promise.all(
-        Array.from(allAcquirer).map(walletAddress => {
-          return this.acquirerWhitelistRepository.save({
-            vault: newVault,
-            wallet_address: walletAddress,
-          });
-        })
-      );
+      // Remove all existing acquirer whitelist entries to avoid duplicates
+      if (allAcquirer.size > 0) {
+        const existingAcquirerWhitelist = await this.acquirerWhitelistRepository.find({
+          where: { vault: { id: newVault.id } },
+        });
+        if (existingAcquirerWhitelist.length > 0) {
+          await this.acquirerWhitelistRepository.remove(existingAcquirerWhitelist);
+        }
+
+        await Promise.all(
+          Array.from(allAcquirer).map(walletAddress => {
+            return this.acquirerWhitelistRepository.save({
+              vault: newVault,
+              wallet_address: walletAddress,
+            });
+          })
+        );
+      }
 
       // Handle contributors whitelist
       const contributorsFromCsv = contributorWhitelistFile
@@ -408,12 +437,22 @@ export class VaultsService {
       const allContributors = new Set([...contributorList, ...contributorsFromCsv]);
       const contributorsArray = [...allContributors];
 
-      await this.contributorWhitelistRepository.save(
-        contributorsArray.map(item => ({
-          vault: newVault,
-          wallet_address: item,
-        }))
-      );
+      // Remove all existing contributor whitelist entries to avoid duplicates
+      if (contributorsArray.length > 0) {
+        const existingContributorWhitelist = await this.contributorWhitelistRepository.find({
+          where: { vault: { id: newVault.id } },
+        });
+        if (existingContributorWhitelist.length > 0) {
+          await this.contributorWhitelistRepository.remove(existingContributorWhitelist);
+        }
+
+        await this.contributorWhitelistRepository.save(
+          contributorsArray.map(item => ({
+            vault: newVault,
+            wallet_address: item,
+          }))
+        );
+      }
 
       // this.eventEmitter.emit('vault.whitelist_added', {
       //   vaultId: newVault.id,
