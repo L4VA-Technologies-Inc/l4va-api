@@ -1,16 +1,17 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { transformImageToUrl } from '../../helpers';
 
-import { GetMarketsResponse, MarketItem } from './dto/get-markets-response.dto';
+import { GetMarketsResponse, MarketItem, MarketItemWithOHLCV } from './dto/get-markets-response.dto';
 import { GetMarketsDto, MarketSortField, SortOrder, TvlCurrency } from './dto/get-markets.dto';
 
 import { Market } from '@/database/market.entity';
 import { Vault } from '@/database/vault.entity';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
+import { VaultMarketStatsService } from '@/modules/vaults/phase-management/market-stats/vault-market-stats.service';
 
 @Injectable()
 export class MarketService implements OnModuleInit {
@@ -21,7 +22,8 @@ export class MarketService implements OnModuleInit {
     @InjectRepository(Market)
     private readonly marketRepository: Repository<Market>,
     private readonly configService: ConfigService,
-    private readonly systemSettingsService: SystemSettingsService
+    private readonly systemSettingsService: SystemSettingsService,
+    private readonly vaultMarketStatsService: VaultMarketStatsService
   ) {}
 
   onModuleInit(): void {
@@ -134,37 +136,7 @@ export class MarketService implements OnModuleInit {
 
     const [items, total] = await queryBuilder.getManyAndCount();
 
-    const mappedItems: MarketItem[] = items.map(item => {
-      const vault: Vault | null = item.vault || null;
-
-      const vaultImage = vault?.vault_image ? transformImageToUrl(vault.vault_image as any) : null;
-      const tokenImage = vault?.ft_token_img ? transformImageToUrl(vault.ft_token_img as any) : null;
-
-      return {
-        id: item.id,
-        vault_id: item.vault_id,
-        circSupply: item.circSupply,
-        mcap: item.mcap,
-        totalSupply: item.totalSupply,
-        price_change_1h: item.price_change_1h,
-        price_change_24h: item.price_change_24h,
-        price_change_7d: item.price_change_7d,
-        price_change_30d: item.price_change_30d,
-        delta: item.delta,
-        created_at: item.created_at,
-        updated_at: item.updated_at,
-
-        ticker: vault?.vault_token_ticker || null,
-        price: vault?.vt_price || null,
-        tvl_ada: vault?.total_assets_cost_ada || null,
-        tvl_usd: vault?.total_assets_cost_usd || null,
-        fdv: vault?.fdv || null,
-        vault_image: vaultImage,
-        token_image: tokenImage,
-        social_links: vault?.social_links || [],
-        tags: vault?.tags || [],
-      };
-    });
+    const mappedItems: MarketItem[] = items.map(item => this.mapMarketToItem(item));
 
     return {
       items: mappedItems,
@@ -175,38 +147,74 @@ export class MarketService implements OnModuleInit {
     };
   }
 
-  async upsertMarketData(data: {
-    vault_id: string;
-    circSupply: number;
-    mcap: number;
-    totalSupply: number;
-    price_change_1h: number;
-    price_change_24h: number;
-    price_change_7d: number;
-    price_change_30d: number;
-    tvl?: number;
-    has_market_data?: boolean;
-  }): Promise<Market> {
-    const calculateDelta = (mcap: number, tvl: number | undefined): number | null => {
-      if (!mcap || !tvl || tvl === 0) return null;
-      return (mcap / tvl) * 100;
-    };
+  async getMarketById(vaultId: string): Promise<MarketItem> {
+    const queryBuilder = this.marketRepository.createQueryBuilder('market');
 
-    const delta = calculateDelta(data.mcap, data.tvl);
-    const marketData = { ...data, delta };
-    delete marketData.tvl;
+    queryBuilder
+      .leftJoinAndSelect('market.vault', 'vault')
+      .leftJoinAndSelect('vault.social_links', 'social_links')
+      .leftJoinAndSelect('vault.vault_image', 'vault_image')
+      .leftJoinAndSelect('vault.ft_token_img', 'ft_token_img')
+      .leftJoinAndSelect('vault.tags', 'tags')
+      .where('market.vault_id = :vaultId', { vaultId });
 
-    const existingMarket = await this.marketRepository.findOne({
-      where: { vault_id: data.vault_id },
-    });
+    const item = await queryBuilder.getOne();
 
-    if (existingMarket) {
-      Object.assign(existingMarket, marketData);
-      return await this.marketRepository.save(existingMarket);
-    } else {
-      const newMarket = this.marketRepository.create(marketData);
-      return await this.marketRepository.save(newMarket);
+    if (!item) {
+      throw new NotFoundException(`Market not found for vault ${vaultId}`);
     }
+
+    return this.mapMarketToItem(item);
+  }
+
+  /**
+   * Get market data with OHLCV statistics
+   * Combines market data from getMarketById with OHLCV data from Taptools API
+   * @param id Market ID
+   * @param interval OHLCV interval (default: '1h')
+   * @returns Combined market data with OHLCV or null if market not found
+   */
+  async getMarketByIdWithOHLCV(id: string, interval: string = '1h'): Promise<MarketItemWithOHLCV> {
+    const marketData = await this.getMarketById(id);
+
+    const ohlcvData = await this.vaultMarketStatsService.getVaultTokenOHLCV(marketData.vault_id, interval);
+
+    return {
+      ...marketData,
+      ohlcv: ohlcvData,
+    };
+  }
+
+  private mapMarketToItem(item: Market): MarketItem {
+    const vault: Vault | null = item.vault || null;
+
+    const vaultImage = vault?.vault_image ? transformImageToUrl(vault.vault_image as any) : null;
+    const tokenImage = vault?.ft_token_img ? transformImageToUrl(vault.ft_token_img as any) : null;
+
+    return {
+      id: item.id,
+      vault_id: item.vault_id,
+      circSupply: item.circSupply,
+      mcap: item.mcap,
+      totalSupply: item.totalSupply,
+      price_change_1h: item.price_change_1h,
+      price_change_24h: item.price_change_24h,
+      price_change_7d: item.price_change_7d,
+      price_change_30d: item.price_change_30d,
+      delta: item.delta,
+      created_at: item.created_at,
+      updated_at: item.updated_at,
+
+      ticker: vault?.vault_token_ticker || null,
+      price: vault?.vt_price || null,
+      tvl_ada: vault?.total_assets_cost_ada || null,
+      tvl_usd: vault?.total_assets_cost_usd || null,
+      fdv: vault?.fdv || null,
+      vault_image: vaultImage,
+      token_image: tokenImage,
+      social_links: vault?.social_links || [],
+      tags: vault?.tags || [],
+    };
   }
 
   private mapSortField(sortBy: MarketSortField): string {

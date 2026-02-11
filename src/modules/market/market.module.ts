@@ -6,9 +6,10 @@ import { MarketService } from './market.service';
 
 import { Market } from '@/database/market.entity';
 import { SystemSettingsModule } from '@/modules/globals/system-settings/system-settings.module';
+import { MarketStatsModule } from '@/modules/vaults/phase-management/market-stats/market-stats.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Market]), SystemSettingsModule],
+  imports: [TypeOrmModule.forFeature([Market]), SystemSettingsModule, MarketStatsModule],
   controllers: [MarketController],
   providers: [MarketService],
   exports: [MarketService],
