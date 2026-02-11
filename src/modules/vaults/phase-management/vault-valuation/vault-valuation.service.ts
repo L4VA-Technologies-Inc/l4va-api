@@ -152,15 +152,14 @@ export class VaultValuationService {
       const tokensForAcquires = Number(vault.tokens_for_acquires || 0);
       const lpPercent = Number(vault.liquidity_pool_contribution || 0);
       const tvl = Number(vault.total_assets_cost_ada || 0);
-      const supply = vault.ft_token_supply || 0;
-      const decimals = vault.ft_token_decimals || 1;
+      const vtSupply = vault.ft_token_supply || 0;
 
       // Skip if no valid supply or TVL
-      if (supply <= 0 || tvl <= 0) {
+      if (vtSupply <= 0 || tvl <= 0) {
         continue;
       }
 
-      const vtSupply = supply * Math.pow(10, decimals);
+      // Use raw supply for price calculation (decimals are just display metadata)
       let fdv: number;
       let vtPrice: number;
 

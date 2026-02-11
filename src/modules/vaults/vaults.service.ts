@@ -711,6 +711,7 @@ export class VaultsService {
     // Calculate projected LP ADA if vault reaches 100% reserve threshold
     const requireReservedCostAda =
       assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01);
+    // Use raw units for LP calculations (on-chain transactions need decimal-adjusted amounts)
     const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
     const ASSETS_OFFERED_PERCENT = vault.tokens_for_acquires * 0.01;
     const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
