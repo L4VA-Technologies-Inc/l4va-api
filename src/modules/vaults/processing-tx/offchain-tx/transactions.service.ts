@@ -82,6 +82,10 @@ export class TransactionsService {
       throw new NotFoundException('User not found for the transaction');
     }
 
+    if (user.address) {
+      this.taptoolsService.invalidateWalletCache(user.address);
+    }
+
     const assetsToCreate: Partial<Asset>[] = [];
 
     if (transaction.type === TransactionType.acquire) {
