@@ -514,11 +514,16 @@ export class TransactionsService {
     const transaction = await this.transactionRepository.findOne({
       where: { id: transactionId },
       select: ['id', 'vault_id', 'tx_hash'],
+      relations: ['user'],
     });
 
     if (!transaction) {
       this.logger.warn(`Transaction ${transactionId} not found`);
       return 0;
+    }
+
+    if (transaction.user?.address) {
+      this.taptoolsService.invalidateWalletCache(transaction.user.address);
     }
 
     const assets = await this.assetRepository.find({
