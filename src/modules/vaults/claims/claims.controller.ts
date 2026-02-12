@@ -1,5 +1,6 @@
-import { Controller, Get, Post, UseGuards, Query, Request, Body, Param } from '@nestjs/common';
+import { Controller, Get, Post, UseGuards, Query, Request, Body, Param, Res, Header } from '@nestjs/common';
 import { ApiTags, ApiResponse } from '@nestjs/swagger';
+import { Response } from 'express';
 
 import { AuthGuard } from '../../auth/auth.guard';
 import { AuthRequest } from '../../auth/dto/auth-user.interface';
@@ -7,9 +8,12 @@ import { AuthRequest } from '../../auth/dto/auth-user.interface';
 import { ClaimsService } from './claims.service';
 import { ClaimResponseDto } from './dto/claim-response.dto';
 import { GetClaimsDto } from './dto/get-claims.dto';
+import { VerifyClaimsQueryDto } from './dto/verify-claims-query.dto';
+import { VerifyClaimsResponseDto } from './dto/verify-claims.dto';
 import { L4vaRewardsService } from './l4va-rewards.service';
 
 import { ApiDoc } from '@/decorators/api-doc.decorator';
+import { AdminGuard } from '@/modules/auth/admin.guard';
 
 @ApiTags('Claims')
 @Controller('claims')
@@ -96,6 +100,112 @@ export class ClaimsController {
   }> {
     const userId = req.user.sub;
     return this.l4vaRewardsService.claimAllAvailableL4VA(userId);
+  }
+
+  @ApiDoc({
+    summary: 'Verify vault claims calculations',
+    description:
+      'Recalculates all claims for a vault from transactions and compares with database to show rounding differences and discrepancies',
+    status: 200,
+  })
+  @UseGuards(AdminGuard)
+  @Get('verify/:vaultId')
+  @ApiResponse({ type: VerifyClaimsResponseDto })
+  async verifyClaims(
+    @Param('vaultId') vaultId: string,
+    @Query() query: VerifyClaimsQueryDto
+  ): Promise<VerifyClaimsResponseDto> {
+    return this.claimsService.verifyClaims(vaultId, query);
+  }
+
+  @ApiDoc({
+    summary: 'Export vault claims verification as CSV',
+    description: 'Exports per-user claim breakdowns and discrepancies as a CSV file for spreadsheet analysis',
+    status: 200,
+  })
+  @UseGuards(AdminGuard)
+  @Get('verify/:vaultId/export/csv')
+  @Header('Content-Type', 'text/csv')
+  @Header('Content-Disposition', 'attachment; filename="vault-claims-verification.csv"')
+  async exportVerificationCsv(
+    @Param('vaultId') vaultId: string,
+    @Query() query: VerifyClaimsQueryDto,
+    @Res() res: Response
+  ): Promise<void> {
+    const verification = await this.claimsService.verifyClaims(vaultId, query);
+
+    // Build CSV header
+    const csvRows: string[] = [
+      [
+        'User ID',
+        'User Address',
+        'Total VT Claimed',
+        'Total ADA Claimed (lovelace)',
+        'TVL Contributed (ADA)',
+        'ADA Acquired',
+        'TVL Share %',
+        'Expected VT (Simple)',
+        'Actual VT',
+        'VT Difference',
+        'Contribution Txs',
+        'Acquisition Txs',
+        'Discrepancy Count',
+        'Max VT Discrepancy',
+        'Max ADA Discrepancy',
+      ].join(','),
+    ];
+
+    // Add user rows
+    for (const user of verification.userBreakdowns) {
+      csvRows.push(
+        [
+          user.userId,
+          user.userAddress || 'N/A',
+          user.totalVtClaimed,
+          user.totalAdaClaimed,
+          user.totalContributed || 0,
+          user.totalAcquired || 0,
+          user.tvlSharePercent?.toFixed(4) || 'N/A',
+          user.expectedVtFromTvlShare || 'N/A',
+          user.totalVtClaimed,
+          user.expectedVtFromTvlShare ? user.totalVtClaimed - user.expectedVtFromTvlShare : 'N/A',
+          user.contributionTransactions,
+          user.acquisitionTransactions,
+          user.discrepancyCount,
+          user.maxVtDiscrepancy,
+          user.maxAdaDiscrepancy,
+        ].join(',')
+      );
+    }
+
+    // Add summary section
+    csvRows.push(''); // Empty line
+    csvRows.push('SUMMARY');
+    csvRows.push(`Total Claims,${verification.summary.totalClaims}`);
+    csvRows.push(`Valid Claims,${verification.summary.validClaims}`);
+    csvRows.push(`Claims with Discrepancies,${verification.summary.claimsWithDiscrepancies}`);
+    csvRows.push(`Total VT Distributed (Actual),${verification.summary.actualTotalVtDistributed}`);
+    csvRows.push(`Total VT Distributed (Expected),${verification.summary.expectedTotalVtDistributed}`);
+    csvRows.push(`VT Distribution Difference,${verification.summary.vtDistributionDifference}`);
+    csvRows.push(`Total ADA Distributed (Actual),${verification.summary.actualTotalAdaDistributed}`);
+    csvRows.push(`Total ADA Distributed (Expected),${verification.summary.expectedTotalAdaDistributed}`);
+    csvRows.push(`ADA Distribution Difference,${verification.summary.adaDistributionDifference}`);
+
+    // Add vault context section
+    csvRows.push(''); // Empty line
+    csvRows.push('VAULT CONTEXT');
+    csvRows.push(`Vault ID,${verification.context.vaultId}`);
+    csvRows.push(`Vault Name,${verification.context.vaultName}`);
+    csvRows.push(`VT Supply,${verification.context.vtSupply}`);
+    csvRows.push(`Total Acquired ADA,${verification.context.totalAcquiredAda}`);
+    csvRows.push(`Total Contributed Value ADA,${verification.context.totalContributedValueAda}`);
+    csvRows.push(`Assets Offered %,${verification.context.assetsOfferedPercent * 100}`);
+    csvRows.push(`LP %,${verification.context.lpPercent * 100}`);
+    csvRows.push(`VT Price,${verification.context.vtPrice}`);
+    csvRows.push(`FDV,${verification.context.fdv}`);
+
+    const csv = csvRows.join('\n');
+    res.send(csv);
   }
 
   // @UseGuards(AuthGuard)
