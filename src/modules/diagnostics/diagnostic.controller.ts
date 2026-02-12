@@ -10,7 +10,7 @@ import { Repository, In } from 'typeorm';
 
 import { AdminGuard } from '../auth/admin.guard';
 import { ContributorPaymentBuilder } from '../distribution/builders/contributor-payment.builder';
-import { AddressesUtxo } from '../distribution/distribution.types';
+import { AddressesUtxo, ContributionInput } from '../distribution/distribution.types';
 import { MultiBatchDistributionService } from '../distribution/multi-batch-distribution.service';
 
 import { Claim } from '@/database/claim.entity';
@@ -694,8 +694,7 @@ export class DiagnosticController {
         unparametizedDispatchHash,
       });
 
-      this.logger.log('Payment input built successfully, building transaction...');
-
+      this.logger.log(JSON.stringify(paymentInput));
       // Build the transaction
       const buildResponse = await this.blockchainService.buildTransaction(paymentInput);
 
@@ -1073,7 +1072,7 @@ export class DiagnosticController {
       }
 
       // Build contribution transaction input
-      const input = {
+      const input: ContributionInput = {
         changeAddress: body.contributorAddress,
         message: `Recovery contribution: ${body.displayName || 'NFT'} to vault`,
         utxos: contributorUtxos,
