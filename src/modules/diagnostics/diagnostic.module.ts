@@ -4,8 +4,6 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { DistributionModule } from '../distribution/distribution.module';
 import { BlockchainModule } from '../vaults/processing-tx/onchain/blockchain.module';
 
-import { DiagnosticController } from './diagnostic.controller';
-
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
@@ -18,6 +16,5 @@ import { Vault } from '@/database/vault.entity';
  */
 @Module({
   imports: [DistributionModule, BlockchainModule, TypeOrmModule.forFeature([Vault, Claim, Transaction])],
-  controllers: [DiagnosticController],
 })
 export class DiagnosticModule {}
