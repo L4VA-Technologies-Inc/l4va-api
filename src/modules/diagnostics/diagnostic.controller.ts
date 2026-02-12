@@ -991,6 +991,213 @@ export class DiagnosticController {
   }
 
   /**
+   * RECOVERY STEP 2.5: Contribute NFT with auto-signing (Recovery Mode)
+   *
+   * This builds, signs, and submits a contribution transaction using both:
+   * - Admin S-key (for minting receipt)
+   * - Contributor S-key (for spending contributor UTXOs)
+   *
+   * Use this instead of the normal contribution flow for recovery.
+   */
+  @Post('recovery/:vaultId/contribute-with-keys')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Contribute NFT with auto-signing for recovery',
+    description:
+      'Builds and submits contribution transaction with both admin and contributor signing. For recovery use only.',
+  })
+  async contributeWithKeys(
+    @Param('vaultId') vaultId: string,
+    @Body()
+    body: {
+      contributorAddress: string;
+      contributorSKeyBech32: string; // bech32 format signing key
+      nftPolicyId: string;
+      nftAssetName: string; // hex format
+      nftQuantity?: number; // default 1
+      displayName?: string;
+      reason: string;
+    }
+  ): Promise<any> {
+    this.logger.log(`[RECOVERY] Building contribution for vault ${vaultId}: ${body.reason}`);
+
+    const vault = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: ['id', 'asset_vault_name', 'script_hash', 'contract_address', 'last_update_tx_hash'],
+    });
+
+    if (!vault) {
+      return { success: false, message: `Vault ${vaultId} not found` };
+    }
+
+    if (!vault.last_update_tx_hash) {
+      return { success: false, message: 'Vault must have last_update_tx_hash (vault needs to be updated first)' };
+    }
+
+    const adminSKey = this.configService.get<string>('ADMIN_S_KEY');
+    const adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
+
+    // Create transaction record
+    const transaction = await this.transactionsService.createTransaction({
+      vault_id: vault.id,
+      type: TransactionType.contribute,
+      assets: [],
+      metadata: {
+        recoveryMode: true,
+        reason: body.reason,
+        nftPolicyId: body.nftPolicyId,
+        nftAssetName: body.nftAssetName,
+      },
+    });
+
+    try {
+      // Get contributor UTXOs containing the NFT
+      const targetAssets = [
+        {
+          token: `${body.nftPolicyId}${body.nftAssetName}`,
+          amount: body.nftQuantity || 1,
+        },
+      ];
+
+      const { utxos: contributorUtxos, requiredInputs } = await getUtxosExtract(
+        Address.from_bech32(body.contributorAddress),
+        this.blockfrost,
+        {
+          targetAssets,
+          validateUtxos: false,
+        }
+      );
+
+      if (contributorUtxos.length === 0) {
+        throw new Error('No UTXOs found with the specified NFT in contributor address');
+      }
+
+      // Build contribution transaction input
+      const input = {
+        changeAddress: body.contributorAddress,
+        message: `Recovery contribution: ${body.displayName || 'NFT'} to vault`,
+        utxos: contributorUtxos,
+        mint: [
+          {
+            version: 'cip25' as const,
+            assetName: { name: 'receipt', format: 'utf8' as const },
+            policyId: vault.script_hash,
+            type: 'plutus' as const,
+            quantity: 1,
+            metadata: {},
+          },
+        ],
+        scriptInteractions: [
+          {
+            purpose: 'mint' as const,
+            hash: vault.script_hash,
+            redeemer: {
+              type: 'json' as const,
+              value: {
+                output_index: 0,
+                contribution: 'Asset',
+              },
+            },
+          },
+        ],
+        outputs: [
+          {
+            address: vault.contract_address,
+            assets: [
+              {
+                assetName: { name: 'receipt', format: 'utf8' as const },
+                policyId: vault.script_hash,
+                quantity: 1,
+              },
+              {
+                assetName: { name: body.nftAssetName, format: 'hex' as const },
+                policyId: body.nftPolicyId,
+                quantity: body.nftQuantity || 1,
+              },
+            ],
+            datum: {
+              type: 'inline' as const,
+              value: {
+                policy_id: vault.script_hash,
+                asset_name: vault.asset_vault_name,
+                owner: body.contributorAddress,
+              },
+              shape: {
+                validatorHash: vault.script_hash,
+                purpose: 'spend' as const,
+              },
+            },
+          },
+        ],
+        requiredSigners: [adminHash],
+        requiredInputs,
+        referenceInputs: [
+          {
+            txHash: vault.last_update_tx_hash,
+            index: 0,
+          },
+        ],
+        validityInterval: {
+          start: true,
+          end: true,
+        },
+        network: this.configService.get<string>('CARDANO_NETWORK'),
+      };
+
+      // Build transaction
+      const buildResponse = await this.blockchainService.buildTransaction(input);
+
+      // Sign with BOTH admin and contributor keys
+      const txToSubmit = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
+
+      // Sign with admin key (for minting)
+      txToSubmit.sign_and_add_vkey_signature(PrivateKey.from_bech32(adminSKey));
+
+      // Sign with contributor key (for spending UTXOs)
+      txToSubmit.sign_and_add_vkey_signature(PrivateKey.from_bech32(body.contributorSKeyBech32));
+
+      this.logger.log('[RECOVERY] Transaction signed with admin + contributor keys, submitting...');
+
+      // Submit transaction
+      const response = await this.blockchainService.submitTransaction({
+        transaction: txToSubmit.to_hex(),
+      });
+
+      // Update transaction record
+      await this.transactionsService.updateTransactionHash(transaction.id, response.txHash);
+
+      // NOTE: Skip createAssets() for recovery contributions
+      // We don't want the recovery NFT to be tracked in vault TVL calculations
+      // This is a temporary contribution that will be extracted immediately after VT minting
+
+      this.logger.log(`[RECOVERY] Contribution submitted successfully: ${response.txHash}`);
+
+      return {
+        success: true,
+        message: 'Recovery contribution submitted successfully',
+        transactionId: transaction.id,
+        txHash: response.txHash,
+        contributedAsset: {
+          policyId: body.nftPolicyId,
+          assetName: body.nftAssetName,
+          quantity: body.nftQuantity || 1,
+          displayName: body.displayName,
+        },
+        nextStep: 'Save this txHash for the extraction step (Step 7)',
+      };
+    } catch (error) {
+      this.logger.error(`[RECOVERY] Failed to submit contribution:`, error);
+      await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
+
+      return {
+        success: false,
+        message: `Failed to submit contribution: ${error.message}`,
+        error: error.message,
+      };
+    }
+  }
+
+  /**
    * RECOVERY STEP 3: Extract admin recovery contribution back
    *
    * After VT has been minted and manually distributed, extract the recovery
