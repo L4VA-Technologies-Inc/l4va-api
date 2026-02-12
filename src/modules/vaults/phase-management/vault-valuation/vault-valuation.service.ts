@@ -30,9 +30,9 @@ export class VaultValuationService {
    * 2. Recalculates vault TVL and gains using updated asset prices
    * 3. Recalculates FDV and token prices using appropriate method:
    *    - Vaults with LP: FDV from market price × supply (if available)
-   *    - Vaults without LP but with acquirers: FDV from transition calculation
+   *    - Vaults without LP but with acquirers: SKIP (values remain static from transition)
    *    - Vaults without acquirers (0%): FDV = TVL (contributors own all tokens)
-   * 4. Updates FDV/TVL ratios for all locked vaults
+   * 4. Updates FDV/TVL ratios for applicable locked vaults
    *
    * Only processes vaults in contribution, acquire, or locked phases.
    * Active vaults (contribution/acquire) only update prices and TVL, not FDV.
@@ -114,15 +114,17 @@ export class VaultValuationService {
    * 1. Locked vaults WITH LP (LP % > 0):
    *    - Try to get market price from Taptools API (if token is traded)
    *    - If available: FDV = market_price × supply
-   *    - If not available: FDV = vt_price × supply (use stored price from transition)
+   *    - If not available: Keep FDV from transition until market price becomes available
    *
    * 2. Locked vaults WITHOUT LP but WITH acquirers (LP % = 0, Acquirers % > 0):
-   *    - FDV remains from initial calculation at transition (based on acquisition amounts)
-   *    - vt_price = FDV / supply
+   *    - SKIP periodic updates - no recalculation needed
+   *    - FDV, vt_price, and fdv_tvl remain static from phase transition
+   *    - These vaults don't have a market to derive dynamic pricing from
    *
    * 3. Vaults WITHOUT acquirers (Acquirers % = 0):
    *    - FDV = TVL (all tokens distributed to contributors based on asset value)
    *    - vt_price = FDV / supply = TVL / supply
+   *    - Updates periodically as asset prices change
    *
    * 4. Active vaults (contribution/acquire phases):
    *    - Skip FDV calculation (not locked yet, values still changing)
@@ -212,24 +214,12 @@ export class VaultValuationService {
         continue;
       }
 
-      // Case 3: No LP but has acquirers - Keep original FDV from transition, calculate price
-      // The FDV was set during phase transition based on acquisition math
-      // We just need to ensure vt_price is consistent with it
+      // Case 3: No LP but has acquirers - Skip periodic updates
+      // FDV, vt_price, and fdv_tvl were set during phase transition and should remain static
+      // These vaults don't have a market to derive dynamic pricing from
       if (tokensForAcquires > 0 && lpPercent === 0) {
-        // FDV should already be set from transition, just calculate price from it
-        // If vt_price exists, derive FDV from it
-        vtPrice = Number(vault.vt_price || 0);
-        if (vtPrice > 0) {
-          fdv = vtPrice * vtSupply;
-
-          // Store up to 6 decimal places for small ratios
-          const fdvTvlRatio = fdv / tvl;
-          updates.push({
-            id: vault.id,
-            fdv,
-            fdv_tvl: Number(fdvTvlRatio.toFixed(6)),
-          });
-        }
+        // Skip - no recalculation needed for non-LP vaults
+        continue;
       }
     }
 
