@@ -158,9 +158,9 @@ export class VaultMarketStatsService {
                   vaultUpdateData.vt_price = vtPrice;
 
                   // Calculate FDV = price × total supply
-                  const supply = vault.ft_token_supply || 0;
-                  if (supply > 0) {
-                    const vtSupply = supply * Math.pow(10, decimals);
+                  const vtSupply = vault.ft_token_supply || 0;
+                  if (vtSupply > 0) {
+                    // Use raw supply for FDV calculation (decimals are just display metadata)
                     const fdv = vtPrice * vtSupply;
                     vaultUpdateData.fdv = fdv;
 

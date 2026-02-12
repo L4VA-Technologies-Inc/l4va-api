@@ -766,6 +766,7 @@ export class LifecycleService {
       );
 
       if (meetsThreshold) {
+        // Use raw units for claim calculations (on-chain minting needs decimal-adjusted amounts)
         const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
         const ASSETS_OFFERED_PERCENT = vault.tokens_for_acquires * 0.01;
         const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
@@ -1456,6 +1457,7 @@ export class LifecycleService {
       }
     }
 
+    // Use raw units for claim calculations (on-chain minting needs decimal-adjusted amounts)
     const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
     const ASSETS_OFFERED_PERCENT = vault.tokens_for_acquires * 0.01;
     const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
@@ -2020,6 +2022,7 @@ export class LifecycleService {
     const acquisitionTransactions = allTransactions.filter(tx => tx.type === TransactionType.acquire);
     const contributionTransactions = allTransactions.filter(tx => tx.type === TransactionType.contribute);
 
+    // Use raw units for claim calculations (on-chain minting needs decimal-adjusted amounts)
     const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
     const ASSETS_OFFERED_PERCENT = (vault.tokens_for_acquires || 0) / 100;
     const lpResult = simulation.lpTokens;
@@ -2548,6 +2551,7 @@ export class LifecycleService {
       const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
       const totalContributedValueAda = assetsValue.totalValueAda;
 
+      // Use raw units for claim calculations (on-chain minting needs decimal-adjusted amounts)
       const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
       const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
 

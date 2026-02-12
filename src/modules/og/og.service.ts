@@ -24,7 +24,8 @@ export class OgService {
     }
 
     const title = this.escapeHtml(vault.name || 'L4VA Vault');
-    const description = this.escapeHtml(vault.description || 'Explore this vault on L4VA');
+    const fullDescription = vault.description || '';
+    const truncatedDescription = fullDescription ? this.truncateText(fullDescription, 200) : '';
     const imageUrl = vault.vault_image?.file_url || '';
     const vaultUrl = `https://${host}/vaults/${vault.id}`;
 
@@ -43,7 +44,7 @@ export class OgService {
       .filter(Boolean)
       .join(' | ');
 
-    const ogDescription = `${description}\n${statsLine}`;
+    const ogDescription = truncatedDescription ? `${truncatedDescription}\n${statsLine}` : statsLine;
 
     const tags = vault.tags?.map(t => t.name).join(', ') || '';
 
@@ -74,7 +75,8 @@ export class OgService {
 </head>
 <body>
   <h1>${title}</h1>
-  <p>${this.escapeHtml(ogDescription)}</p>
+  ${fullDescription ? `<p>${this.escapeHtml(truncatedDescription)}</p>` : ''}
+  <p>${this.escapeHtml(statsLine)}</p>
   ${imageUrl ? `<img src="${this.escapeAttr(imageUrl)}" alt="${this.escapeAttr(title)}" />` : ''}
 </body>
 </html>`;
@@ -105,5 +107,12 @@ export class OgService {
 
   private escapeAttr(str: string): string {
     return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  }
+
+  private truncateText(text: string, maxLength: number): string {
+    if (!text || text.length <= maxLength) {
+      return text;
+    }
+    return text.substring(0, maxLength).trim() + '...';
   }
 }

@@ -702,6 +702,30 @@ export class VaultsService {
     });
 
     const lockedAssetsCount = lockedNFTCount + lockedFTsCount;
+
+    const membersFromTransactions = await this.transactionRepository
+      .createQueryBuilder('transaction')
+      .select('COUNT(DISTINCT transaction.user_id)', 'count')
+      .where('transaction.vault_id = :vaultId', { vaultId })
+      .andWhere('transaction.type IN (:...types)', {
+        types: [TransactionType.contribute, TransactionType.acquire],
+      })
+      .andWhere('transaction.status = :status', { status: TransactionStatus.confirmed })
+      .andWhere('transaction.user_id IS NOT NULL')
+      .getRawOne()
+      .then(result => Number(result?.count || 0));
+
+    const ownerHasTransactions = await this.transactionRepository.exists({
+      where: {
+        vault_id: vaultId,
+        user_id: vault.owner.id,
+        type: In([TransactionType.contribute, TransactionType.acquire]),
+        status: TransactionStatus.confirmed,
+      },
+    });
+
+    const vaultMembersCount = ownerHasTransactions ? membersFromTransactions : membersFromTransactions + 1;
+
     const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(vaultId);
     const adaPrice = assetsPrices.adaPrice;
     const lpMinLiquidityLovelace = this.systemSettingsService.lpRecommendedMinLiquidity;
@@ -711,6 +735,7 @@ export class VaultsService {
     // Calculate projected LP ADA if vault reaches 100% reserve threshold
     const requireReservedCostAda =
       assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01);
+    // Use raw units for LP calculations (on-chain transactions need decimal-adjusted amounts)
     const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
     const ASSETS_OFFERED_PERCENT = vault.tokens_for_acquires * 0.01;
     const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
@@ -739,6 +764,7 @@ export class VaultsService {
       assetsCount: lockedAssetsCount,
       assetsPrices,
       fdvUsd: vault.fdv * adaPrice,
+      vaultMembersCount,
       // Protocol fees
       protocolContributorsFeeLovelace: this.systemSettingsService.protocolContributorsFee,
       protocolContributorsFeeAda: this.systemSettingsService.protocolContributorsFee / 1_000_000,
