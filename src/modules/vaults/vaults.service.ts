@@ -702,6 +702,30 @@ export class VaultsService {
     });
 
     const lockedAssetsCount = lockedNFTCount + lockedFTsCount;
+
+    const membersFromTransactions = await this.transactionRepository
+      .createQueryBuilder('transaction')
+      .select('COUNT(DISTINCT transaction.user_id)', 'count')
+      .where('transaction.vault_id = :vaultId', { vaultId })
+      .andWhere('transaction.type IN (:...types)', {
+        types: [TransactionType.contribute, TransactionType.acquire],
+      })
+      .andWhere('transaction.status = :status', { status: TransactionStatus.confirmed })
+      .andWhere('transaction.user_id IS NOT NULL')
+      .getRawOne()
+      .then(result => Number(result?.count || 0));
+
+    const ownerHasTransactions = await this.transactionRepository.exists({
+      where: {
+        vault_id: vaultId,
+        user_id: vault.owner.id,
+        type: In([TransactionType.contribute, TransactionType.acquire]),
+        status: TransactionStatus.confirmed,
+      },
+    });
+
+    const vaultMembersCount = ownerHasTransactions ? membersFromTransactions : membersFromTransactions + 1;
+
     const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(vaultId);
     const adaPrice = assetsPrices.adaPrice;
     const lpMinLiquidityLovelace = this.systemSettingsService.lpRecommendedMinLiquidity;
@@ -740,6 +764,7 @@ export class VaultsService {
       assetsCount: lockedAssetsCount,
       assetsPrices,
       fdvUsd: vault.fdv * adaPrice,
+      vaultMembersCount,
       // Protocol fees
       protocolContributorsFeeLovelace: this.systemSettingsService.protocolContributorsFee,
       protocolContributorsFeeAda: this.systemSettingsService.protocolContributorsFee / 1_000_000,
