@@ -277,47 +277,51 @@ export class DistributionCalculationService {
     const recalculatedClaimAmounts = new Map<string, number>();
     const recalculatedLovelaceAmounts = new Map<string, number>();
 
-    // Track assets by (policy, price) for price-based grouping
-    // Key: `${policyId}:${price}`, Value: array of assets with their data
+    // Track assets grouped by (policy, floor_price)
+    // Key: `${policyId}:${floorPrice}`, Value: array of assets with same price
     interface AssetWithData {
       assetName: string;
       quantity: number;
       multiplier: number;
       adaMultiplier: number;
-      price: number;
+      floorPrice: number;
     }
 
     const assetsByPolicyAndPrice = new Map<string, AssetWithData[]>();
 
-    // First pass: collect all assets with their data
+    // First pass: collect all assets, distribute VT PROPORTIONALLY to floor_price
     for (const claim of contributorsClaims) {
       const contributorLovelaceAmount = claim?.lovelace_amount || 0;
+      const assets = claim.transaction.assets;
 
-      // VT token distribution
-      const baseVtShare = Math.floor(claim.amount / claim.transaction.assets.length);
-      const vtRemainder = claim.amount - baseVtShare * claim.transaction.assets.length;
+      // Calculate total transaction value from floor prices
+      const totalTxValue = assets.reduce((sum, asset) => {
+        const qty = Number(asset.quantity) || 1;
+        const price = asset.floor_price ?? 0;
+        return sum + qty * price;
+      }, 0);
 
-      // ADA distribution among assets
-      const baseAdaShare = Math.floor(contributorLovelaceAmount / claim.transaction.assets.length);
-      const adaRemainder = contributorLovelaceAmount - baseAdaShare * claim.transaction.assets.length;
-
-      // Track recalculated amounts for this claim (qty × multiplier)
+      // Track recalculated amounts for this claim
       let recalculatedVtAmount = 0;
       let recalculatedLovelace = 0;
 
-      claim.transaction.assets.forEach((asset, index) => {
-        const vtShare = baseVtShare + (index < vtRemainder ? 1 : 0);
+      assets.forEach(asset => {
         const assetQuantity = Number(asset.quantity) || 1;
+        const floorPrice = asset.floor_price ?? 0;
+        const assetValue = assetQuantity * floorPrice;
+
+        // Distribute VT PROPORTIONALLY to floor_price
+        // Each asset gets: (assetValue / totalTxValue) * claim.amount
+        const proportion = totalTxValue > 0 ? assetValue / totalTxValue : 1 / assets.length;
+        const vtShare = Math.floor(proportion * claim.amount);
         const vtSharePerUnit = Math.floor(vtShare / assetQuantity);
 
-        const adaShare = baseAdaShare + (index < adaRemainder ? 1 : 0);
+        // Distribute ADA proportionally as well
+        const adaShare = Math.floor(proportion * contributorLovelaceAmount);
         const adaSharePerUnit = Math.floor(adaShare / assetQuantity);
 
-        // Get asset price (prefer floor_price for NFTs, dex_price for FTs)
-        const price = Number(asset.floor_price) || Number(asset.dex_price) || Number(asset.listing_price) || 0;
-
-        // Group by policy AND price for smart grouping
-        const groupKey = `${asset.policy_id}:${price}`;
+        // Group by (policy, floor_price) for policy-level grouping decision
+        const groupKey = `${asset.policy_id}:${floorPrice}`;
         if (!assetsByPolicyAndPrice.has(groupKey)) {
           assetsByPolicyAndPrice.set(groupKey, []);
         }
@@ -326,7 +330,7 @@ export class DistributionCalculationService {
           quantity: assetQuantity,
           multiplier: vtSharePerUnit,
           adaMultiplier: adaSharePerUnit,
-          price,
+          floorPrice,
         });
 
         // Recalculate VT amount using the same formula as smart contract: qty × multiplier
@@ -339,7 +343,7 @@ export class DistributionCalculationService {
       recalculatedLovelaceAmounts.set(claim.id, recalculatedLovelace);
     }
 
-    // Group price buckets by policy to decide grouping strategy
+    // Group assets by policy to decide grouping strategy
     const policiesData = new Map<
       string,
       {
@@ -350,26 +354,29 @@ export class DistributionCalculationService {
 
     for (const [groupKey, assets] of assetsByPolicyAndPrice.entries()) {
       const [policyId, priceStr] = groupKey.split(':');
-      const price = Number(priceStr);
+      const floorPrice = Number(priceStr);
 
       if (!policiesData.has(policyId)) {
         policiesData.set(policyId, { priceGroups: new Map(), totalAssets: 0 });
       }
       const policyData = policiesData.get(policyId)!;
-      policyData.priceGroups.set(price, assets);
+
+      // Merge assets with same floor_price
+      if (!policyData.priceGroups.has(floorPrice)) {
+        policyData.priceGroups.set(floorPrice, []);
+      }
+      policyData.priceGroups.get(floorPrice)!.push(...assets);
       policyData.totalAssets += assets.length;
     }
 
-    const POLICY_GROUPING_THRESHOLD = 5;
-
-    // Process each policy
+    // Process each policy - single price = policy-level grouping
     for (const [policyId, policyData] of policiesData.entries()) {
       const { priceGroups, totalAssets } = policyData;
       const uniquePrices = priceGroups.size;
 
-      // Case 1: Single price for all assets in policy → use policy-level multiplier
-      if (uniquePrices === 1 && totalAssets >= POLICY_GROUPING_THRESHOLD) {
-        const [price, assets] = [...priceGroups.entries()][0];
+      // Case 1: All assets in policy have SAME floor_price → use policy-level multiplier
+      if (uniquePrices === 1) {
+        const [floorPrice, assets] = [...priceGroups.entries()][0];
 
         // Calculate weighted average multiplier for the policy
         const totalQty = assets.reduce((sum, a) => sum + a.quantity, 0);
@@ -384,28 +391,24 @@ export class DistributionCalculationService {
         adaDistribution.push([policyId, '', policyAdaMultiplier]);
 
         this.logger.log(
-          `Grouped ${totalAssets} assets from policy ${policyId.slice(0, 8)}... ` +
-            `(single price: ${price} ADA) using policy-level multiplier: VT=${policyVtMultiplier}, ADA=${policyAdaMultiplier}`
+          `Policy grouping: ${totalAssets} assets from ${policyId.slice(0, 8)}... ` +
+            `(same price: ${floorPrice} ADA) → VT=${policyVtMultiplier}, ADA=${policyAdaMultiplier}`
         );
       }
-      // Case 2: Multiple prices → keep individual asset-level entries
+      // Case 2: Different floor_prices → asset-level entries
       else {
         for (const assets of priceGroups.values()) {
-          // If this price group has many assets, we could still use policy-level
-          // but with different prices, we must use asset-level to be accurate
           for (const asset of assets) {
             acquireMultiplier.push([policyId, asset.assetName, asset.multiplier]);
             adaDistribution.push([policyId, asset.assetName, asset.adaMultiplier]);
           }
         }
 
-        if (totalAssets >= POLICY_GROUPING_THRESHOLD) {
-          const priceList = [...priceGroups.keys()].slice(0, 5).join(', ');
-          this.logger.log(
-            `NOT grouping ${totalAssets} assets from policy ${policyId.slice(0, 8)}... ` +
-              `(${uniquePrices} different prices: ${priceList}${uniquePrices > 5 ? '...' : ''})`
-          );
-        }
+        const priceList = [...priceGroups.keys()].slice(0, 5).join(', ');
+        this.logger.log(
+          `Asset-level entries: ${totalAssets} assets from ${policyId.slice(0, 8)}... ` +
+            `(${uniquePrices} different prices: ${priceList}${uniquePrices > 5 ? '...' : ''} ADA)`
+        );
       }
     }
 
