@@ -13,7 +13,6 @@ import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
-import { MultiBatchDistributionService } from '@/modules/distribution/multi-batch-distribution.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
@@ -51,7 +50,6 @@ export class LifecycleService {
     private readonly tokenRegistryRepository: Repository<TokenRegistry>,
     private readonly vaultManagingService: VaultManagingService,
     private readonly distributionCalculationService: DistributionCalculationService,
-    private readonly multiBatchDistributionService: MultiBatchDistributionService,
     private readonly taptoolsService: TaptoolsService,
     private readonly metadataRegistryApiService: MetadataRegistryApiService,
     private readonly treasuryWalletService: TreasuryWalletService,
@@ -1079,70 +1077,14 @@ export class LifecycleService {
           await this.vaultRepository.update(vault.id, { ft_token_decimals: optimalDecimals });
         }
 
-        // Check if multipliers need to be split across multiple transactions
-        const batchingStrategy = await this.multiBatchDistributionService.calculateBatchingStrategy(
+        // Submit single update transaction with all multipliers
+        const response = await this.vaultManagingService.updateVaultMetadataTx({
           vault,
           acquireMultiplier,
           adaDistribution,
-          adaPairMultiplier
-        );
-
-        let response;
-        let finalAcquireMultiplier = acquireMultiplier;
-        let finalAdaDistribution = adaDistribution;
-
-        if (!batchingStrategy.needsBatching) {
-          // All multipliers fit in single transaction - proceed normally
-          response = await this.vaultManagingService.updateVaultMetadataTx({
-            vault,
-            acquireMultiplier,
-            adaDistribution,
-            adaPairMultiplier,
-            vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
-          });
-        } else {
-          // Multi-batch distribution required
-          this.logger.log(
-            `Vault ${vault.id}: Initiating multi-batch distribution. ` +
-              `Total batches: ${batchingStrategy.totalBatches}`
-          );
-
-          // Update vault with first batch of multipliers
-          response = await this.vaultManagingService.updateVaultMetadataTx({
-            vault,
-            acquireMultiplier: batchingStrategy.firstBatchMultipliers,
-            adaDistribution: batchingStrategy.firstBatchAdaDistribution,
-            adaPairMultiplier,
-            vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
-          });
-
-          // Store batching state in vault
-          await this.multiBatchDistributionService.updateVaultBatchProgress(vault.id, {
-            currentBatch: 1,
-            totalBatches: batchingStrategy.totalBatches,
-            pendingMultipliers: batchingStrategy.pendingMultipliers,
-            pendingAdaDistribution: batchingStrategy.pendingAdaDistribution,
-            acquireMultiplier: batchingStrategy.firstBatchMultipliers,
-            adaDistribution: batchingStrategy.firstBatchAdaDistribution,
-          });
-
-          // Assign claims to first batch based on included multipliers
-          await this.multiBatchDistributionService.assignClaimsToBatch(
-            vault.id,
-            batchingStrategy.firstBatchMultipliers,
-            1
-          );
-
-          // Update the final values for phase transition
-          finalAcquireMultiplier = batchingStrategy.firstBatchMultipliers;
-          finalAdaDistribution = batchingStrategy.firstBatchAdaDistribution;
-
-          this.logger.log(
-            `Vault ${vault.id}: First batch submitted. ` +
-              `Multipliers: ${batchingStrategy.firstBatchMultipliers.length}/${acquireMultiplier.length}, ` +
-              `Pending: ${batchingStrategy.pendingMultipliers.length}`
-          );
-        }
+          adaPairMultiplier,
+          vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
+        });
 
         if (!response.txHash) {
           this.logger.error(`Failed to get txHash for vault ${vault.id} metadata update transaction`);
@@ -1177,8 +1119,8 @@ export class LifecycleService {
           phaseStartField: 'governance_phase_start',
           newScStatus: SmartContractVaultStatus.SUCCESSFUL,
           txHash: response.txHash,
-          acquire_multiplier: finalAcquireMultiplier,
-          ada_distribution: finalAdaDistribution,
+          acquire_multiplier: acquireMultiplier,
+          ada_distribution: adaDistribution,
           ada_pair_multiplier: adaPairMultiplier,
           vtPrice,
           fdv,
@@ -1768,7 +1710,7 @@ export class LifecycleService {
     const adaDistribution = simulation.multipliers.adaDistribution;
     const adaPairMultiplier = simulation.lpTokens.adaPairMultiplier;
 
-    // Try single transaction first
+    // Single transaction info
     const singleTxAttempt = {
       withinLimit: simulation.transactionSize.withinLimit,
       txSizeBytes: simulation.transactionSize.txSizeBytes,
@@ -1776,33 +1718,9 @@ export class LifecycleService {
       percentOfMax: simulation.transactionSize.percentOfMax,
     };
 
-    // Calculate batching strategy
-    const batchingStrategy = await this.multiBatchDistributionService.calculateBatchingStrategy(
-      vault,
-      acquireMultiplier,
-      adaDistribution,
-      adaPairMultiplier
-    );
-
-    const batches: Array<{
-      batchNumber: number;
-      multiplierCount: number;
-      adaDistributionCount: number;
-      multiplierRange: {
-        first: [string, string | null, number];
-        last: [string, string | null, number];
-      };
-      estimatedTxSize?: {
-        txSizeBytes: number;
-        txSizeKB: number;
-        percentOfMax: number;
-        withinLimit: boolean;
-      };
-    }> = [];
-
-    if (!batchingStrategy.needsBatching) {
-      // Single batch
-      batches.push({
+    // Always single batch (multi-batch has been removed)
+    const batches = [
+      {
         batchNumber: 1,
         multiplierCount: acquireMultiplier.length,
         adaDistributionCount: adaDistribution.length,
@@ -1811,115 +1729,8 @@ export class LifecycleService {
           last: acquireMultiplier[acquireMultiplier.length - 1],
         },
         estimatedTxSize: singleTxAttempt,
-      });
-    } else {
-      // Multiple batches - simulate each batch
-      let remainingMultipliers = [...acquireMultiplier];
-      let remainingAdaDistribution = [...adaDistribution];
-      let batchNumber = 1;
-
-      // First batch
-      const firstBatchMultipliers = batchingStrategy.firstBatchMultipliers;
-      const firstBatchAda = batchingStrategy.firstBatchAdaDistribution;
-
-      try {
-        const firstBatchSize = await this.vaultManagingService.estimateUpdateVaultTxSize({
-          vault,
-          vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
-          acquireMultiplier: firstBatchMultipliers,
-          adaDistribution: firstBatchAda,
-          adaPairMultiplier,
-        });
-
-        batches.push({
-          batchNumber: 1,
-          multiplierCount: firstBatchMultipliers.length,
-          adaDistributionCount: firstBatchAda.length,
-          multiplierRange: {
-            first: firstBatchMultipliers[0],
-            last: firstBatchMultipliers[firstBatchMultipliers.length - 1],
-          },
-          estimatedTxSize: {
-            txSizeBytes: firstBatchSize.txSizeBytes,
-            txSizeKB: firstBatchSize.txSizeKB,
-            percentOfMax: firstBatchSize.percentOfMax,
-            withinLimit: firstBatchSize.withinLimit,
-          },
-        });
-      } catch (error) {
-        batches.push({
-          batchNumber: 1,
-          multiplierCount: firstBatchMultipliers.length,
-          adaDistributionCount: firstBatchAda.length,
-          multiplierRange: {
-            first: firstBatchMultipliers[0],
-            last: firstBatchMultipliers[firstBatchMultipliers.length - 1],
-          },
-        });
-      }
-
-      // Remaining batches (estimate based on first batch size)
-      remainingMultipliers = batchingStrategy.pendingMultipliers;
-      remainingAdaDistribution = batchingStrategy.pendingAdaDistribution;
-      batchNumber = 2;
-
-      const batchSize = firstBatchMultipliers.length;
-      const adaBatchSize = firstBatchAda.length;
-
-      while (remainingMultipliers.length > 0) {
-        const batchMultipliers = remainingMultipliers.slice(0, batchSize);
-        const batchAda = remainingAdaDistribution.slice(0, adaBatchSize);
-
-        try {
-          const estimatedSize = await this.vaultManagingService.estimateUpdateVaultTxSize({
-            vault,
-            vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
-            acquireMultiplier: batchMultipliers,
-            adaDistribution: batchAda,
-            adaPairMultiplier,
-          });
-
-          batches.push({
-            batchNumber,
-            multiplierCount: batchMultipliers.length,
-            adaDistributionCount: batchAda.length,
-            multiplierRange: {
-              first: batchMultipliers[0],
-              last: batchMultipliers[batchMultipliers.length - 1],
-            },
-            estimatedTxSize: {
-              txSizeBytes: estimatedSize.txSizeBytes,
-              txSizeKB: estimatedSize.txSizeKB,
-              percentOfMax: estimatedSize.percentOfMax,
-              withinLimit: estimatedSize.withinLimit,
-            },
-          });
-        } catch {
-          batches.push({
-            batchNumber,
-            multiplierCount: batchMultipliers.length,
-            adaDistributionCount: batchAda.length,
-            multiplierRange: {
-              first: batchMultipliers[0],
-              last: batchMultipliers[batchMultipliers.length - 1],
-            },
-          });
-        }
-
-        remainingMultipliers = remainingMultipliers.slice(batchSize);
-        remainingAdaDistribution = remainingAdaDistribution.slice(adaBatchSize);
-        batchNumber++;
-
-        // Safety limit
-        if (batchNumber > 50) {
-          this.logger.warn(`[TEST] Batch simulation exceeded 50 batches, stopping`);
-          break;
-        }
-      }
-    }
-
-    // Estimate time: ~5 minutes per batch (tx confirmation + claim processing)
-    const estimatedTimeMinutes = batches.length * 5;
+      },
+    ];
 
     // Simulate claims that would be created
     const simulatedClaims = await this.simulateClaimsForVault(vaultId, simulation);
@@ -1933,9 +1744,9 @@ export class LifecycleService {
       summary: {
         totalMultipliers: acquireMultiplier.length,
         totalAdaDistribution: adaDistribution.length,
-        needsBatching: batchingStrategy.needsBatching,
-        totalBatches: batches.length,
-        estimatedTimeMinutes,
+        needsBatching: false, // Multi-batch removed
+        totalBatches: 1,
+        estimatedTimeMinutes: 5,
         totalClaims: simulatedClaims.summary.totalClaims,
       },
       singleTransactionAttempt: singleTxAttempt,
@@ -2865,98 +2676,14 @@ export class LifecycleService {
         await this.vaultRepository.update(vault.id, { ft_token_decimals: optimalDecimals });
       }
 
-      // Check if multipliers need to be split across multiple transactions
-      const batchingStrategy = await this.multiBatchDistributionService.calculateBatchingStrategy(
+      // Submit single update transaction with all multipliers
+      const response = await this.vaultManagingService.updateVaultMetadataTx({
         vault,
         acquireMultiplier,
-        [], // No ADA distribution (no acquirers)
-        adaPairMultiplier
-      );
-
-      let response;
-      let finalAcquireMultiplier = acquireMultiplier;
-
-      if (!batchingStrategy.needsBatching) {
-        // All multipliers fit in single transaction - proceed normally
-        response = await this.vaultManagingService.updateVaultMetadataTx({
-          vault,
-          acquireMultiplier,
-          adaDistribution: [], // No ADA distribution (no acquirers)
-          adaPairMultiplier,
-          vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
-        });
-      } else {
-        // Multi-batch distribution required
-        this.logger.log(
-          `Vault ${vault.id}: Initiating multi-batch distribution (0% acquirers). ` +
-            `Total batches: ${batchingStrategy.totalBatches}`
-        );
-
-        // Pre-assign claims to batches BEFORE submitting any TX
-        // This ensures claims are correctly batched before on-chain data changes
-        // For batch 1: assign claims matching firstBatchMultipliers
-        const batch1Count = await this.multiBatchDistributionService.assignClaimsToBatch(
-          vault.id,
-          batchingStrategy.firstBatchMultipliers,
-          1
-        );
-
-        // For batch 2+: assign claims matching pendingMultipliers to batch 2
-        // (These will be re-assigned to batch 3,4,etc. if needed during processNextDistributionBatch)
-        let batch2Count = 0;
-        if (batchingStrategy.pendingMultipliers.length > 0) {
-          batch2Count = await this.multiBatchDistributionService.assignClaimsToBatch(
-            vault.id,
-            batchingStrategy.pendingMultipliers,
-            2
-          );
-        }
-
-        this.logger.log(`Vault ${vault.id}: Pre-assigned claims - Batch 1: ${batch1Count}, Batch 2+: ${batch2Count}`);
-
-        // Verify all claims are assigned
-        const unassignedCount = await this.claimRepository.count({
-          where: {
-            vault_id: vault.id,
-            type: In([ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER]),
-            distribution_batch: null as unknown as number,
-          },
-        });
-
-        if (unassignedCount > 0) {
-          this.logger.warn(
-            `Vault ${vault.id}: ${unassignedCount} claims still unassigned. This may indicate missing multipliers.`
-          );
-        }
-
-        // Update vault with first batch of multipliers
-        response = await this.vaultManagingService.updateVaultMetadataTx({
-          vault,
-          acquireMultiplier: batchingStrategy.firstBatchMultipliers,
-          adaDistribution: [], // No ADA distribution (no acquirers)
-          adaPairMultiplier,
-          vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
-        });
-
-        // Store batching state in vault
-        await this.multiBatchDistributionService.updateVaultBatchProgress(vault.id, {
-          currentBatch: 1,
-          totalBatches: batchingStrategy.totalBatches,
-          pendingMultipliers: batchingStrategy.pendingMultipliers,
-          pendingAdaDistribution: [], // No ADA distribution (no acquirers)
-          acquireMultiplier: batchingStrategy.firstBatchMultipliers,
-          adaDistribution: [],
-        });
-
-        // Update the final values for phase transition
-        finalAcquireMultiplier = batchingStrategy.firstBatchMultipliers;
-
-        this.logger.log(
-          `Vault ${vault.id}: First batch submitted (0% acquirers). ` +
-            `Multipliers: ${batchingStrategy.firstBatchMultipliers.length}/${acquireMultiplier.length}, ` +
-            `Pending: ${batchingStrategy.pendingMultipliers.length}`
-        );
-      }
+        adaDistribution: [], // No ADA distribution (no acquirers)
+        adaPairMultiplier,
+        vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
+      });
 
       if (!response.txHash) {
         this.logger.error(`Failed to get txHash for vault ${vault.id} metadata update transaction`);
@@ -2994,7 +2721,7 @@ export class LifecycleService {
         phaseStartField: 'governance_phase_start',
         newScStatus: SmartContractVaultStatus.SUCCESSFUL,
         txHash: response.txHash,
-        acquire_multiplier: finalAcquireMultiplier,
+        acquire_multiplier: acquireMultiplier,
         ada_distribution: [], // No ADA distribution (no acquirers)
         ada_pair_multiplier: adaPairMultiplier,
         vtPrice,
@@ -3034,98 +2761,10 @@ export class LifecycleService {
   }
 
   /**
-   * Cron job to check for vaults with pending distribution batches.
-   * When all claims in the current batch are claimed, processes the next batch.
+   * @deprecated Multi-batch distribution has been removed. All distributions now use single transactions.
    */
-  @Cron('0 */15 * * * *')
   async handlePendingDistributionBatches(): Promise<void> {
-    // Find vaults with pending multipliers (multi-batch in progress)
-    const vaultsWithPendingBatches = await this.vaultRepository
-      .createQueryBuilder('vault')
-      .where('vault.vault_status = :status', { status: VaultStatus.locked })
-      .andWhere('vault.pending_multipliers IS NOT NULL')
-      .andWhere("vault.pending_multipliers != '[]'::jsonb")
-      .andWhere('vault.manual_distribution_mode = :manualMode', { manualMode: false })
-      .getMany();
-
-    for (const vault of vaultsWithPendingBatches) {
-      if (this.processingVaults.has(vault.id)) continue;
-
-      try {
-        this.processingVaults.add(vault.id);
-        await this.processNextDistributionBatch(vault);
-      } catch (error) {
-        this.logger.error(`Error processing next batch for vault ${vault.id}:`, error);
-      } finally {
-        this.processingVaults.delete(vault.id);
-      }
-    }
-  }
-
-  /**
-   * Process the next distribution batch for a vault with pending multipliers
-   */
-  private async processNextDistributionBatch(vault: Vault): Promise<void> {
-    const currentBatch = vault.current_distribution_batch || 1;
-
-    // Check if all claims in current batch are complete
-    const batchComplete = await this.multiBatchDistributionService.isBatchComplete(vault.id, currentBatch);
-
-    if (!batchComplete) {
-      this.logger.debug(`Vault ${vault.id}: Batch ${currentBatch} still has pending claims. Skipping.`);
-      return;
-    }
-
-    this.logger.log(`Vault ${vault.id}: Batch ${currentBatch} complete. Processing next batch...`);
-
-    // Get the next batch of multipliers
-    const nextBatch = await this.multiBatchDistributionService.getNextBatch(vault);
-
-    if (!nextBatch) {
-      this.logger.log(`Vault ${vault.id}: All distribution batches complete!`);
-      // Clear pending data
-      await this.multiBatchDistributionService.updateVaultBatchProgress(vault.id, {
-        pendingMultipliers: [],
-        pendingAdaDistribution: [],
-      });
-      return;
-    }
-
-    // Update vault with next batch of multipliers
-    const response = await this.vaultManagingService.updateVaultMetadataTx({
-      vault,
-      acquireMultiplier: nextBatch.currentBatchMultipliers,
-      adaDistribution: nextBatch.currentBatchAdaDistribution,
-      adaPairMultiplier: vault.ada_pair_multiplier,
-      vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
-    });
-
-    if (!response.txHash) {
-      this.logger.error(`Failed to submit batch ${nextBatch.batchNumber} for vault ${vault.id}`);
-      return;
-    }
-
-    // Update vault batch tracking
-    await this.multiBatchDistributionService.updateVaultBatchProgress(vault.id, {
-      currentBatch: nextBatch.batchNumber,
-      pendingMultipliers: nextBatch.remainingMultipliers,
-      pendingAdaDistribution: nextBatch.remainingAdaDistribution,
-      // Append current batch multipliers to existing ones
-      acquireMultiplier: [...(vault.acquire_multiplier || []), ...nextBatch.currentBatchMultipliers],
-      adaDistribution: [...(vault.ada_distribution || []), ...nextBatch.currentBatchAdaDistribution],
-    });
-
-    // Assign claims to this batch
-    await this.multiBatchDistributionService.assignClaimsToBatch(
-      vault.id,
-      nextBatch.currentBatchMultipliers,
-      nextBatch.batchNumber
-    );
-
-    this.logger.log(
-      `Vault ${vault.id}: Submitted batch ${nextBatch.batchNumber}/${nextBatch.totalBatches}. ` +
-        `Multipliers: ${nextBatch.currentBatchMultipliers.length}, ` +
-        `Remaining: ${nextBatch.remainingMultipliers.length}`
-    );
+    // No-op: Multi-batch distribution has been removed
+    // All distributions now use single transactions with policy-level grouping
   }
 }
