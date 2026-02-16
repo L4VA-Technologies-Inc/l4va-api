@@ -100,7 +100,7 @@ export class Vault {
 
   @Expose({ name: 'policyId' })
   @Column({ name: 'policy_id', nullable: true })
-  policy_id: string;
+  policy_id: string; // This is the policyId for vault tokens, the same as script_hash if vault has multiple versions of smart contracts
 
   @Expose({ name: 'countView' })
   @Column({ name: 'count_view', type: 'integer', default: 0 })
@@ -549,7 +549,7 @@ export class Vault {
     type: 'varchar',
     nullable: true,
   })
-  script_hash?: string;
+  script_hash?: string; // This is policyId for vault and its tokens
 
   @Expose({ name: 'scVersion' })
   @Column({
