@@ -507,6 +507,8 @@ export class TransactionsService {
 
   /**
    * Lock assets for a confirmed transaction and update vault values
+   * Only locks assets that are still pending to prevent double locking
+   * Invalidates user wallet cache to ensure they see updated asset list
    * @param transactionId Transaction ID
    * @returns Number of assets locked
    */
