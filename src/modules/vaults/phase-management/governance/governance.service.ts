@@ -25,6 +25,7 @@ import { VoteRes } from './dto/vote.res';
 import { VoteCountingService } from './vote-counting.service';
 
 import { Asset } from '@/database/asset.entity';
+import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
@@ -95,6 +96,8 @@ export class GovernanceService {
     private readonly voteRepository: Repository<Vote>,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
+    @InjectRepository(AssetsWhitelistEntity)
+    private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly configService: ConfigService,
@@ -606,6 +609,72 @@ export class GovernanceService {
 
         // Store only the action data, asset details will be fetched in getProposal
         proposal.metadata.marketplaceActions = actions;
+
+        break;
+      }
+
+      case ProposalType.EXPANSION: {
+        // Validate expansion fields
+        const {
+          expansionPolicyIds,
+          expansionDuration,
+          expansionNoLimit,
+          expansionAssetMax,
+          expansionNoMax,
+          expansionPriceType,
+          expansionLimitPrice,
+        } = createProposalReq;
+
+        if (!expansionPolicyIds || expansionPolicyIds.length === 0) {
+          throw new BadRequestException('At least one policy ID must be selected for expansion');
+        }
+
+        // Validate policy IDs are whitelisted for this vault
+        const whitelistedPolicies = await this.assetsWhitelistRepository.find({
+          where: { vault: { id: vaultId } },
+        });
+
+        const whitelistedPolicyIds = whitelistedPolicies.map(w => w.policy_id);
+
+        for (const policyId of expansionPolicyIds) {
+          if (!whitelistedPolicyIds.includes(policyId)) {
+            throw new BadRequestException(`Policy ID ${policyId} is not whitelisted for this vault`);
+          }
+        }
+
+        // Validate duration if no limit is not set
+        if (!expansionNoLimit && (!expansionDuration || expansionDuration <= 0)) {
+          throw new BadRequestException('Expansion duration is required when "No Limit" is not selected');
+        }
+
+        // Validate asset max if no max is not set
+        if (!expansionNoMax && (!expansionAssetMax || expansionAssetMax <= 0)) {
+          throw new BadRequestException('Asset max is required when "No Max" is not selected');
+        }
+
+        // Validate price type
+        if (!expansionPriceType || !['limit', 'market'].includes(expansionPriceType)) {
+          throw new BadRequestException('Price type must be either "limit" or "market"');
+        }
+
+        // Validate limit price if using limit pricing
+        if (expansionPriceType === 'limit') {
+          if (!expansionLimitPrice || expansionLimitPrice <= 0) {
+            throw new BadRequestException('Limit price is required when using limit pricing');
+          }
+        }
+
+        // Store expansion config in metadata
+        proposal.metadata.expansion = {
+          policyIds: expansionPolicyIds,
+          duration: expansionNoLimit ? undefined : expansionDuration,
+          noLimit: expansionNoLimit || false,
+          assetMax: expansionNoMax ? undefined : expansionAssetMax,
+          noMax: expansionNoMax || false,
+          priceType: expansionPriceType,
+          limitPrice: expansionPriceType === 'limit' ? expansionLimitPrice : undefined,
+          currentAssetCount: 0,
+        };
 
         break;
       }
