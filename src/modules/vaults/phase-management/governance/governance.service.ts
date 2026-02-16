@@ -1340,7 +1340,7 @@ export class GovernanceService {
           {
             vault: { id: vaultId },
             type: In([AssetType.NFT]),
-            status: AssetStatus.LOCKED,
+            status: In([AssetStatus.LOCKED, AssetStatus.EXTRACTED]),
             origin_type: AssetOriginType.CONTRIBUTED,
           },
         ],
