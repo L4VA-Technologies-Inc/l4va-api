@@ -437,6 +437,7 @@ export class TaptoolsService {
   /**
    * Update asset prices in database from DexHunter/WayUp APIs
    * Updates dex_price for FTs and floor_price for NFTs
+   * Includes assets with PENDING, LOCKED, and EXTRACTED (in treasury wallet) status
    * Uses controlled concurrency to avoid overwhelming external APIs
    * @param vaultIds Optional array of vault IDs to update assets for. If not provided, updates all active vaults
    */
@@ -446,7 +447,9 @@ export class TaptoolsService {
       let query = this.assetRepository
         .createQueryBuilder('asset')
         .select(['asset.policy_id', 'asset.asset_id', 'asset.type', 'asset.name'])
-        .where('asset.status IN (:...statuses)', { statuses: [AssetStatus.PENDING, AssetStatus.LOCKED] })
+        .where('asset.status IN (:...statuses)', {
+          statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED],
+        })
         .andWhere('asset.deleted = false')
         .groupBy('asset.policy_id, asset.asset_id, asset.type, asset.name');
 
@@ -539,6 +542,7 @@ export class TaptoolsService {
 
   /**
    * Calculate the total value of all assets in a vault
+   * Includes assets with PENDING, LOCKED, and EXTRACTED (in treasury wallet) status
    * Uses cached prices from database (dex_price/floor_price)
    * Set updatePrices=true only during phase transitions to fetch fresh prices
    * @param vaultId The ID of the vault
@@ -586,7 +590,12 @@ export class TaptoolsService {
       }
 
       // Skip assets that are not in a valid status for valuation
-      if (asset.status !== AssetStatus.PENDING && asset.status !== AssetStatus.LOCKED) {
+      // Include PENDING, LOCKED, and EXTRACTED (in treasury wallet)
+      if (
+        asset.status !== AssetStatus.PENDING &&
+        asset.status !== AssetStatus.LOCKED &&
+        asset.status !== AssetStatus.EXTRACTED
+      ) {
         continue;
       }
 
@@ -758,6 +767,7 @@ export class TaptoolsService {
 
   /**
    * Update cached vault totals for multiple vaults
+   * Includes assets with PENDING, LOCKED, EXTRACTED (in treasury), and DISTRIBUTED status
    * Also calculates user TVL and gains based on:
    * - For locked vaults: VT token holdings (proportional ownership)
    * - For active vaults: Contributed asset values
@@ -828,7 +838,9 @@ export class TaptoolsService {
             .createQueryBuilder('asset')
             .select(['asset.vault_id as vault_id', 'asset.added_by as added_by'])
             .where('asset.vault_id IN (:...vaultIds)', { vaultIds: activeVaultIds })
-            .andWhere('asset.status IN (:...statuses)', { statuses: [AssetStatus.LOCKED, AssetStatus.DISTRIBUTED] })
+            .andWhere('asset.status IN (:...statuses)', {
+              statuses: [AssetStatus.LOCKED, AssetStatus.DISTRIBUTED, AssetStatus.EXTRACTED],
+            })
             .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
             .andWhere('asset.added_by IS NOT NULL')
             .distinct(true)
@@ -940,7 +952,7 @@ export class TaptoolsService {
               where: {
                 vault: { id: In(allActiveVaultIds) },
                 added_by: { id: In([...affectedUserIds]) },
-                status: In([AssetStatus.LOCKED, AssetStatus.DISTRIBUTED]),
+                status: In([AssetStatus.LOCKED, AssetStatus.DISTRIBUTED, AssetStatus.EXTRACTED]),
                 origin_type: AssetOriginType.CONTRIBUTED,
               },
               select: ['vault', 'added_by', 'quantity', 'dex_price', 'floor_price', 'type'],
@@ -1039,6 +1051,7 @@ export class TaptoolsService {
 
   /**
    * Batch calculate vault assets values for multiple vaults
+   * Includes assets with PENDING, LOCKED, and EXTRACTED (in treasury wallet) status
    * Much more efficient than calling calculateVaultAssetsValue() for each vault
    * Uses cached prices from database (dex_price/floor_price)
    * @param vaultIds Array of vault IDs to calculate values for
@@ -1083,7 +1096,12 @@ export class TaptoolsService {
 
         for (const asset of vault.assets) {
           // Skip invalid statuses
-          if (asset.status !== AssetStatus.PENDING && asset.status !== AssetStatus.LOCKED) {
+          // Include PENDING, LOCKED, and EXTRACTED (in treasury wallet)
+          if (
+            asset.status !== AssetStatus.PENDING &&
+            asset.status !== AssetStatus.LOCKED &&
+            asset.status !== AssetStatus.EXTRACTED
+          ) {
             continue;
           }
 

@@ -74,7 +74,7 @@ export class VaultMarketStatsService {
       .createQueryBuilder('v')
       .select([
         'v.id',
-        'v.policy_id',
+        'v.script_hash',
         'v.asset_vault_name',
         'v.total_assets_cost_ada',
         'v.name',
@@ -83,7 +83,7 @@ export class VaultMarketStatsService {
       ])
       .where('v.vault_status = :status', { status: VaultStatus.locked })
       .andWhere('v.liquidity_pool_contribution > 0')
-      .andWhere('v.policy_id IS NOT NULL')
+      .andWhere('v.script_hash IS NOT NULL')
       .andWhere('v.asset_vault_name IS NOT NULL')
       .getMany();
 
@@ -96,7 +96,7 @@ export class VaultMarketStatsService {
 
     const tokensMarketData = await Promise.all(
       vaults.map(async vault => {
-        const unit = `${vault.policy_id}${vault.asset_vault_name}`;
+        const unit = `${vault.script_hash}${vault.asset_vault_name}`;
 
         try {
           // Try Taptools first

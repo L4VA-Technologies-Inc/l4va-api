@@ -100,7 +100,7 @@ export class Vault {
 
   @Expose({ name: 'policyId' })
   @Column({ name: 'policy_id', nullable: true })
-  policy_id: string;
+  policy_id: string; // This is the policyId for vault tokens, the same as script_hash if vault has multiple versions of smart contracts
 
   @Expose({ name: 'countView' })
   @Column({ name: 'count_view', type: 'integer', default: 0 })
@@ -533,44 +533,6 @@ export class Vault {
   })
   distribution_processed: boolean;
 
-  @Expose({ name: 'currentDistributionBatch' })
-  @Column({
-    name: 'current_distribution_batch',
-    type: 'smallint',
-    nullable: true,
-    comment: 'Current batch number being processed (1-based)',
-  })
-  current_distribution_batch?: number;
-
-  @Expose({ name: 'totalDistributionBatches' })
-  @Column({
-    name: 'total_distribution_batches',
-    type: 'smallint',
-    nullable: true,
-    comment: 'Total number of distribution batches needed',
-  })
-  total_distribution_batches?: number;
-
-  @Exclude()
-  @Column({
-    name: 'pending_multipliers',
-    type: 'jsonb',
-    nullable: true,
-    default: () => 'null',
-    comment: 'Multipliers not yet sent on-chain (remaining batches)',
-  })
-  pending_multipliers?: Array<[string, string | null, number]>;
-
-  @Exclude()
-  @Column({
-    name: 'pending_ada_distribution',
-    type: 'jsonb',
-    nullable: true,
-    default: () => 'null',
-    comment: 'ADA distribution not yet sent on-chain (remaining batches)',
-  })
-  pending_ada_distribution?: Array<[string, string, number]>;
-
   @Expose({ name: 'manualDistributionMode' })
   @Column({
     name: 'manual_distribution_mode',
@@ -587,7 +549,7 @@ export class Vault {
     type: 'varchar',
     nullable: true,
   })
-  script_hash?: string;
+  script_hash?: string; // This is policyId for vault and its tokens
 
   @Expose({ name: 'scVersion' })
   @Column({

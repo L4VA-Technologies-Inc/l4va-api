@@ -149,7 +149,6 @@ export class WayUpPricingService {
 
     // Acquire lock
     this.isTrackingInProgress = true;
-    this.logger.log('Starting NFT sale tracking cron job (lock acquired)');
 
     try {
       // Query all LISTED assets
@@ -162,52 +161,34 @@ export class WayUpPricingService {
       });
 
       if (listedAssets.length === 0) {
-        this.logger.debug('No listed assets found to track');
+        this.logger.log('No listed assets found to track');
         return;
       }
 
       this.logger.log(`Found ${listedAssets.length} listed assets to check`);
 
-      // Group assets by policy_id for efficient querying
-      const assetsByPolicyId = new Map<string, Array<{ id: string; assetId: string; name: string }>>();
-      for (const asset of listedAssets) {
-        if (!assetsByPolicyId.has(asset.policy_id)) {
-          assetsByPolicyId.set(asset.policy_id, []);
-        }
-        assetsByPolicyId.get(asset.policy_id)!.push({
-          id: asset.id,
-          assetId: asset.asset_id,
-          name: asset.name,
-        });
-      }
-
-      this.logger.log(`Checking ${assetsByPolicyId.size} unique collections`);
-
       const soldAssetIds: string[] = [];
 
-      // Check each collection
-      for (const [policyId, assets] of assetsByPolicyId) {
-        // Check each asset individually by name
-        for (const asset of assets) {
-          try {
-            // Query for the specific asset by name
-            const response = await this.getCollectionAssets({
-              policyId,
-              term: asset.name,
-              limit: 1,
-            });
+      // Check each asset individually
+      for (const asset of listedAssets) {
+        try {
+          // Query for the specific asset by name
+          const response = await this.getCollectionAssets({
+            policyId: asset.policy_id,
+            term: asset.name,
+            limit: 1,
+          });
 
-            // If the response is empty or has no listing, the asset was sold
-            if (response.results.length === 0 || !response.results[0].listing) {
-              soldAssetIds.push(asset.id);
-              this.logger.log(`Asset ${asset.name} (${asset.assetId}) from policy ${policyId} has been sold`);
-            }
-          } catch (error) {
-            this.logger.error(
-              `Failed to check sale status for asset ${asset.name} (${asset.assetId}): ${error.message}`
-            );
-            // Continue with next asset
+          // If the response is empty or has no listing, the asset was sold
+          if (response.results.length === 0 || !response.results[0].listing) {
+            soldAssetIds.push(asset.id);
+            this.logger.log(`Asset ${asset.name} (${asset.asset_id}) from policy ${asset.policy_id} has been sold`);
           }
+        } catch (error) {
+          this.logger.error(
+            `Failed to check sale status for asset ${asset.name} (${asset.asset_id}): ${error.message}`
+          );
+          // Continue with next asset
         }
       }
 
@@ -225,7 +206,6 @@ export class WayUpPricingService {
     } finally {
       // Release lock
       this.isTrackingInProgress = false;
-      this.logger.debug('NFT sale tracking lock released');
     }
   }
 }
