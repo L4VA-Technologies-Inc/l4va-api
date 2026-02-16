@@ -25,7 +25,7 @@ export class AssetsController {
     @Param('vaultId', ParseUUIDPipe) vaultId: string,
     @Body() body: GetContributedAssetsReq
   ): Promise<GetContributedAssetsRes> {
-    return this.assetsService.getVaultAssets(vaultId, body.page, body.limit, body.search);
+    return this.assetsService.getVaultAssets(vaultId, body.page, body.limit, body.search, body.filter);
   }
 
   @ApiDoc({

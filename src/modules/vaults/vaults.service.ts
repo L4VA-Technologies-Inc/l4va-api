@@ -37,6 +37,7 @@ import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.enti
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
 import { Proposal } from '@/database/proposal.entity';
+import { Snapshot } from '@/database/snapshot.entity';
 import { TagEntity } from '@/database/tag.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
@@ -104,6 +105,8 @@ export class VaultsService {
     private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(Proposal)
     private readonly proposalRepository: Repository<Proposal>,
+    @InjectRepository(Snapshot)
+    private readonly snapshotRepository: Repository<Snapshot>,
     private readonly gcsService: GoogleCloudStorageService,
     private readonly vaultContractService: VaultManagingService,
     private readonly blockchainService: BlockchainService,
@@ -681,50 +684,64 @@ export class VaultsService {
     vault.acquirer_whitelist = acquirerWhitelist;
 
     // Get count of locked assets for this vault
-    const assetCounts = await this.assetsRepository
+    const { lockedNFTCount, lockedFTsCount } = await this.assetsRepository
       .createQueryBuilder('asset')
-      .select(['asset.type', 'COUNT(asset.id) as count', 'SUM(asset.quantity) as totalQuantity'])
-      .where('asset.vault_id = :vaultId', { vaultId: vaultId })
+      .select([
+        `SUM(CASE WHEN asset.type = :nftType THEN 1 ELSE 0 END) as "lockedNFTCount"`,
+        `SUM(CASE WHEN asset.type = :ftType THEN asset.quantity ELSE 0 END) as "lockedFTsCount"`,
+      ])
+      .where('asset.vault_id = :vaultId', { vaultId })
       .andWhere('asset.status = :status', { status: AssetStatus.LOCKED })
       .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
-      .groupBy('asset.type')
-      .getRawMany();
-
-    let lockedNFTCount = 0;
-    let lockedFTsCount = 0;
-
-    assetCounts.forEach(result => {
-      if (result.asset_type === AssetType.NFT) {
-        lockedNFTCount = parseInt(result.count);
-      } else if (result.asset_type === AssetType.FT) {
-        lockedFTsCount = parseInt(result.totalquantity);
-      }
-    });
+      .setParameters({
+        nftType: AssetType.NFT,
+        ftType: AssetType.FT,
+      })
+      .getRawOne()
+      .then(result => ({
+        lockedNFTCount: Number(result?.lockedNFTCount || 0),
+        lockedFTsCount: Number(result?.lockedFTsCount || 0),
+      }));
 
     const lockedAssetsCount = lockedNFTCount + lockedFTsCount;
 
-    const membersFromTransactions = await this.transactionRepository
+    const rawStats = await this.transactionRepository
       .createQueryBuilder('transaction')
-      .select('COUNT(DISTINCT transaction.user_id)', 'count')
+      .select([
+        `COUNT(DISTINCT CASE WHEN transaction.type = :contribute THEN transaction.user_id END) AS "contributorsCount"`,
+        `COUNT(DISTINCT CASE WHEN transaction.type = :acquire THEN transaction.user_id END) AS "acquirersCount"`,
+        `SUM(CASE WHEN transaction.user_id = :ownerId AND transaction.type = :contribute THEN 1 ELSE 0 END) AS "ownerContributed"`,
+        `SUM(CASE WHEN transaction.user_id = :ownerId AND transaction.type = :acquire THEN 1 ELSE 0 END) AS "ownerAcquired"`,
+      ])
       .where('transaction.vault_id = :vaultId', { vaultId })
+      .andWhere('transaction.status = :status', { status: TransactionStatus.confirmed })
       .andWhere('transaction.type IN (:...types)', {
         types: [TransactionType.contribute, TransactionType.acquire],
+        contribute: TransactionType.contribute,
+        acquire: TransactionType.acquire,
       })
-      .andWhere('transaction.status = :status', { status: TransactionStatus.confirmed })
       .andWhere('transaction.user_id IS NOT NULL')
-      .getRawOne()
-      .then(result => Number(result?.count || 0));
+      .setParameters({ ownerId: vault.owner.id })
+      .getRawOne();
 
-    const ownerHasTransactions = await this.transactionRepository.exists({
-      where: {
-        vault_id: vaultId,
-        user_id: vault.owner.id,
-        type: In([TransactionType.contribute, TransactionType.acquire]),
-        status: TransactionStatus.confirmed,
-      },
+    const dbContributors = Number(rawStats?.contributorsCount || 0);
+    const dbAcquirers = Number(rawStats?.acquirersCount || 0);
+
+    const ownerHasContributeTx = Number(rawStats?.ownerContributed || 0) > 0;
+    const ownerHasAcquireTx = Number(rawStats?.ownerAcquired || 0) > 0;
+
+    const vaultContributorsCount = ownerHasContributeTx ? dbContributors : dbContributors + 1;
+    const vaultAcquirersCount = ownerHasAcquireTx ? dbAcquirers : dbAcquirers + 1;
+
+    const latestSnapshot = await this.snapshotRepository.findOne({
+      where: { vaultId },
+      order: { createdAt: 'DESC' },
+      select: ['addressBalances'],
     });
 
-    const vaultMembersCount = ownerHasTransactions ? membersFromTransactions : membersFromTransactions + 1;
+    const tokenHolders = latestSnapshot?.addressBalances
+      ? Number(Object.keys(latestSnapshot.addressBalances).length)
+      : 0;
 
     const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(vaultId);
     const adaPrice = assetsPrices.adaPrice;
@@ -764,7 +781,9 @@ export class VaultsService {
       assetsCount: lockedAssetsCount,
       assetsPrices,
       fdvUsd: vault.fdv * adaPrice,
-      vaultMembersCount,
+      tokenHolders,
+      vaultContributorsCount,
+      vaultAcquirersCount,
       // Protocol fees
       protocolContributorsFeeLovelace: this.systemSettingsService.protocolContributorsFee,
       protocolContributorsFeeAda: this.systemSettingsService.protocolContributorsFee / 1_000_000,

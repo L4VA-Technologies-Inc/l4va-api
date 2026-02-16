@@ -6,6 +6,7 @@ import { Repository, In } from 'typeorm';
 
 import { CreateAssetDto } from './dto/create-asset.dto';
 import { GetAcquiredAssetsRes } from './dto/get-acquired-assets.res';
+import { AssetsFilterDto } from './dto/get-contributed-assets.req';
 import { GetContributedAssetsRes } from './dto/get-contributed-assets.res';
 
 import { Asset } from '@/database/asset.entity';
@@ -91,10 +92,14 @@ export class AssetsService {
     vaultId: string,
     page: number = 1,
     limit: number = 10,
-    search: string = ''
+    search: string = '',
+    filter?: AssetsFilterDto
   ): Promise<GetContributedAssetsRes> {
+    const { policyId, type } = filter || {};
+
     let queryBuilder = this.assetsRepository
       .createQueryBuilder('asset')
+      .leftJoinAndSelect('asset.added_by', 'user')
       .select([
         'asset.id',
         'asset.policy_id',
@@ -115,6 +120,8 @@ export class AssetsService {
         'asset.description',
         'asset.added_at',
         'asset.updated_at',
+        'user.id',
+        'user.address',
       ])
       .where('asset.vault_id = :vaultId', { vaultId })
       .andWhere('asset.origin_type IN (:...originTypes)', {
@@ -125,7 +132,19 @@ export class AssetsService {
       });
 
     if (search) {
-      queryBuilder = queryBuilder.andWhere('asset.name ILIKE :search', { search: `%${search}%` });
+      queryBuilder = queryBuilder.andWhere('(asset.name ILIKE :search OR user.address ILIKE :search)', {
+        search: `%${search}%`,
+      });
+    }
+
+    if (policyId && policyId.length > 0) {
+      queryBuilder = queryBuilder.andWhere('asset.policy_id IN (:...policyIds)', {
+        policyIds: policyId,
+      });
+    }
+
+    if (type) {
+      queryBuilder = queryBuilder.andWhere('asset.type = :type', { type });
     }
 
     const [assets, total] = await queryBuilder

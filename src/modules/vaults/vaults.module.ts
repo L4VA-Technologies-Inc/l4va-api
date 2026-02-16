@@ -16,6 +16,7 @@ import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.enti
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
 import { Proposal } from '@/database/proposal.entity';
+import { Snapshot } from '@/database/snapshot.entity';
 import { TagEntity } from '@/database/tag.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
@@ -50,6 +51,7 @@ import { StatisticsService } from '@/modules/vaults/statistics/statistics.servic
       ContributorWhitelistEntity,
       Transaction,
       Proposal,
+      Snapshot,
     ]),
     HttpModule,
   ],
