@@ -2325,25 +2325,10 @@ export class LifecycleService {
       // This prevents race conditions when the cron re-picks up the same vault
       const freshVault = await this.vaultRepository.findOne({
         where: { id: vault.id },
-        select: [
-          'id',
-          'vault_status',
-          'pending_multipliers',
-          'current_distribution_batch',
-          'total_distribution_batches',
-        ],
+        select: ['id', 'vault_status'],
       });
 
-      if (freshVault?.pending_multipliers && freshVault.pending_multipliers.length > 0) {
-        this.logger.warn(
-          `Vault ${vault.id} already has multi-batch distribution in progress ` +
-            `(batch ${freshVault.current_distribution_batch}/${freshVault.total_distribution_batches}, ` +
-            `${freshVault.pending_multipliers.length} pending multipliers). Skipping duplicate processing.`
-        );
-        return;
-      }
-
-      // Also check if vault status has already transitioned (another race condition safeguard)
+      // Check if vault status has already transitioned (race condition safeguard)
       if (freshVault?.vault_status !== VaultStatus.contribution) {
         this.logger.warn(
           `Vault ${vault.id} status changed to ${freshVault?.vault_status} since initial check. ` +

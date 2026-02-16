@@ -82,48 +82,17 @@ export class ContributorDistributionOrchestrator {
 
     this.logger.log(`Starting contributor payment processing for vault ${vaultId}`);
 
-    // CRITICAL: Only process claims whose multipliers are already on-chain
-    // This prevents attempting to process claims before their batch's multipliers are submitted
-    const currentBatch = vault.current_distribution_batch || 1;
-    const hasBatching = vault.total_distribution_batches && vault.total_distribution_batches > 1;
-
-    let readyClaims: Claim[];
-    if (hasBatching) {
-      // Multi-batch vault: only process claims from completed batches (batch <= currentBatch)
-      readyClaims = await this.claimRepository.find({
-        where: {
-          vault: { id: vaultId },
-          type: ClaimType.CONTRIBUTOR,
-          status: ClaimStatus.PENDING,
-          // Only process claims from batches that are already on-chain
-          distribution_batch: In(Array.from({ length: currentBatch }, (_, i) => i + 1)),
-        },
-        relations: ['user', 'transaction'],
-      });
-      this.logger.log(
-        `Multi-batch vault: Processing claims from batches 1-${currentBatch} of ${vault.total_distribution_batches}`
-      );
-    } else {
-      // Single-batch vault: process all pending claims
-      readyClaims = await this.claimRepository.find({
-        where: {
-          vault: { id: vaultId },
-          type: ClaimType.CONTRIBUTOR,
-          status: ClaimStatus.PENDING,
-        },
-        relations: ['user', 'transaction'],
-      });
-    }
+    const readyClaims: Claim[] = await this.claimRepository.find({
+      where: {
+        vault: { id: vaultId },
+        type: ClaimType.CONTRIBUTOR,
+        status: ClaimStatus.PENDING,
+      },
+      relations: ['user', 'transaction'],
+    });
 
     if (readyClaims.length === 0) {
-      if (hasBatching) {
-        this.logger.log(
-          `No ready contributor claims for vault ${vaultId} in batches 1-${currentBatch}. ` +
-            `${vault.total_distribution_batches - currentBatch} batches pending.`
-        );
-      } else {
-        this.logger.log(`No ready contributor claims for vault ${vaultId}`);
-      }
+      this.logger.log(`No ready contributor claims for vault ${vaultId}`);
       return;
     }
 
@@ -519,17 +488,12 @@ export class ContributorDistributionOrchestrator {
    * @param vaultId - The vault ID to check
    * @param batchNumber - Optional batch number for multi-batch vaults
    */
-  async arePaymentsComplete(vaultId: string, batchNumber?: number): Promise<boolean> {
+  async arePaymentsComplete(vaultId: string): Promise<boolean> {
     const whereClause: any = {
       vault: { id: vaultId },
       type: ClaimType.CONTRIBUTOR,
       status: In([ClaimStatus.PENDING, ClaimStatus.FAILED]),
     };
-
-    // If batch number specified, only check claims for that batch
-    if (batchNumber !== undefined) {
-      whereClause.distribution_batch = batchNumber;
-    }
 
     const remainingClaims = await this.claimRepository.count({ where: whereClause });
 

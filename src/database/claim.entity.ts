@@ -94,15 +94,6 @@ export class Claim {
   @Index()
   distribution_tx_id: string;
 
-  @Expose({ name: 'distributionBatch' })
-  @Column({
-    name: 'distribution_batch',
-    type: 'smallint',
-    nullable: true,
-    comment: 'Which batch this claim belongs to for multi-batch distribution (1, 2, 3...)',
-  })
-  distribution_batch?: number;
-
   @ManyToOne(() => Proposal, { nullable: true, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'proposal_id' })
   proposal: Proposal;
