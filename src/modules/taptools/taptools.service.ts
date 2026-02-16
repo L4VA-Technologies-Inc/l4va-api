@@ -2,7 +2,7 @@ import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { HttpException, Inject, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import axios from 'axios';
+import axios, { AxiosInstance } from 'axios';
 import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { In, Repository } from 'typeorm';
@@ -33,17 +33,21 @@ export class TaptoolsService {
   private readonly isMainnet: boolean;
   private cache = new NodeCache({ stdTTL: 600 }); // cache for 10 minutes to reduce API calls for ADA price
   private readonly blockfrost: BlockFrostAPI;
+  private readonly axiosTapToolsInstance: AxiosInstance;
   private assetDetailsCache = new NodeCache({ stdTTL: 3600, checkperiod: 300 });
+  private walletUnitsCache = new NodeCache({ stdTTL: 60 }); // cache for 1 minute for wallet asset units
+  private traitPricesCache = new NodeCache({ stdTTL: 600 }); // cache trait prices for 10 minutes
 
   // Relics of Magma trait-based pricing configuration
   private readonly RELICS_OF_MAGMA_VITA_POLICY = '94ec588251e710b7660dfd7765f08c87742a3012cce802897a3ebd28';
   private readonly RELICS_OF_MAGMA_PORTA_POLICY = '14296258677a869366d6bb01568f31f7b2e690208739b7bcdca444b2';
-  private readonly RELICS_CHARACTER_PRICES = {
+  // Fallback prices if TapTools API fails
+  private readonly RELICS_CHARACTER_PRICES_FALLBACK = {
     Exploratur: 300, // 300 ADA
     Phoenix: 200, // 200 ADA
     Balaena: 140, // 140 ADA
   };
-  private readonly RELICS_PORTA_PRICE = 70; // 70 ADA for all Porta NFTsА
+  private readonly RELICS_PORTA_PRICE_FALLBACK = 70; // 70 ADA for all Porta NFTs - fallback
   private readonly testnetPrices = {
     // Policy-level prices (fallback when no asset-specific price exists)
     f61a534fd4484b4b58d5ff18cb77cfc9e74ad084a18c0409321c811a: 0.00526,
@@ -91,6 +95,16 @@ export class TaptoolsService {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
+    });
+
+    const tapToolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
+    const tapToolsApiUrl = this.configService.get<string>('TAPTOOLS_API_URL');
+
+    this.axiosTapToolsInstance = axios.create({
+      baseURL: tapToolsApiUrl,
+      headers: {
+        'x-api-key': tapToolsApiKey,
+      },
     });
   }
 
@@ -208,6 +222,53 @@ export class TaptoolsService {
   }
 
   /**
+   * Fetch trait prices from TapTools API for a given collection policy
+   * @param policyId The policy ID of the NFT collection
+   * @returns Object containing trait prices or null if failed
+   */
+  private async fetchTraitPricesFromTapTools(policyId: string): Promise<Record<string, Record<string, number>> | null> {
+    // Check cache first
+    const cacheKey = `trait_prices_${policyId}`;
+    const cached = this.traitPricesCache.get<Record<string, Record<string, number>>>(cacheKey);
+
+    if (cached) {
+      this.logger.debug(`Using cached trait prices for policy ${policyId}`);
+      return cached;
+    }
+
+    // Only works on mainnet - TapTools doesn't support testnet
+    if (!this.isMainnet) {
+      this.logger.debug('Skipping TapTools trait prices fetch for testnet');
+      return null;
+    }
+
+    try {
+      const endpoint = `/nft/collection/traits/price?policy=${policyId}`;
+      this.logger.debug(`Fetching trait prices from TapTools: ${endpoint}`);
+
+      const response = await this.axiosTapToolsInstance.get(endpoint, {
+        timeout: 10000,
+        headers: {
+          Accept: 'application/json',
+        },
+      });
+
+      if (response.data && typeof response.data === 'object') {
+        // Cache the result
+        this.traitPricesCache.set(cacheKey, response.data);
+        this.logger.debug(`Successfully fetched and cached trait prices for policy ${policyId}`);
+        return response.data;
+      }
+
+      this.logger.warn(`Invalid response format from TapTools trait prices API`);
+      return null;
+    } catch (error) {
+      this.logger.warn(`Failed to fetch trait prices from TapTools: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
    * Fetch Relics of Magma Vita character trait from WayUp API
    * WayUp API returns properly decoded attributes including "attributes / Character"
    * @param policyId The policy ID of the NFT
@@ -250,29 +311,58 @@ export class TaptoolsService {
 
   /**
    * Get trait-based price for Relics of Magma NFTs
-   * Uses WayUp API to fetch properly decoded character traits
+   * - Porta: Fetches floor price from WayUp API
+   * - Vita: Fetches trait-based prices from TapTools API
+   * Falls back to hardcoded prices if APIs fail
    * @param policyId The policy ID of the NFT
    * @param name The readable asset name (e.g., "Relics of Magma - The Vita #0899")
    * @returns Price in ADA or null if not a Relics of Magma NFT
    */
   private async getRelicsOfMagmaPrice(policyId: string, name: string): Promise<number | null> {
-    // Handle Relics of Magma - The Porta (fixed price for all)
+    // Handle Relics of Magma - The Porta (fetch floor price from WayUp)
     if (policyId === this.RELICS_OF_MAGMA_PORTA_POLICY) {
-      return this.RELICS_PORTA_PRICE;
+      try {
+        const floorPriceData = await this.wayUpPricingService.getCollectionFloorPrice(policyId);
+
+        if (floorPriceData.hasListings && floorPriceData.floorPriceAda !== null) {
+          this.logger.debug(`Using WayUp floor price for Porta: ${floorPriceData.floorPriceAda} ADA`);
+          return floorPriceData.floorPriceAda;
+        }
+      } catch (error) {
+        this.logger.warn(`Failed to fetch Porta floor price from WayUp: ${error.message}`);
+      }
+
+      // Fallback to fixed price if WayUp fails or no listings
+      this.logger.debug(`Using fallback price for Porta: ${this.RELICS_PORTA_PRICE_FALLBACK} ADA`);
+      return this.RELICS_PORTA_PRICE_FALLBACK;
     }
 
-    // Handle Relics of Magma - The Vita (trait-based pricing)
+    // Handle Relics of Magma - The Vita (trait-based pricing from TapTools)
     if (policyId === this.RELICS_OF_MAGMA_VITA_POLICY) {
       // Fetch character trait from WayUp API (they have decoded attributes)
       const character = await this.fetchRelicsCharacterFromWayUp(policyId, name);
 
-      if (character && this.RELICS_CHARACTER_PRICES[character]) {
-        return this.RELICS_CHARACTER_PRICES[character];
+      if (character) {
+        // Try to get dynamic price from TapTools first
+        const traitPrices = await this.fetchTraitPricesFromTapTools(policyId);
+
+        if (traitPrices && traitPrices.Character && traitPrices.Character[character]) {
+          this.logger.debug(`Using TapTools price for Vita ${character}: ${traitPrices.Character[character]} ADA`);
+          return traitPrices.Character[character];
+        }
+
+        // Fallback to hardcoded prices if TapTools fails
+        if (this.RELICS_CHARACTER_PRICES_FALLBACK[character]) {
+          this.logger.debug(
+            `Using fallback price for Vita ${character}: ${this.RELICS_CHARACTER_PRICES_FALLBACK[character]} ADA`
+          );
+          return this.RELICS_CHARACTER_PRICES_FALLBACK[character];
+        }
       }
 
       // If character trait not found or not recognized, log warning and use default
       this.logger.warn(`Character trait not found or not recognized for Vita NFT. Character: ${character}`);
-      return this.RELICS_CHARACTER_PRICES.Balaena; // Default to Balaena price
+      return this.RELICS_CHARACTER_PRICES_FALLBACK.Balaena; // Default to Balaena fallback price
     }
 
     return null;
@@ -333,21 +423,35 @@ export class TaptoolsService {
 
       // Route to appropriate API based on asset type
       if (isNFT) {
-        // Relics of Magma - The Porta: Fixed price for ALL, no API call needed
+        // Relics of Magma - The Porta: Use WayUp floor price
         if (policyId === this.RELICS_OF_MAGMA_PORTA_POLICY) {
+          try {
+            const traitPrice = await this.getRelicsOfMagmaPrice(policyId, name || '');
+            if (traitPrice !== null) {
+              const result = {
+                priceAda: traitPrice,
+                priceUsd: traitPrice * adaPrice,
+              };
+              this.cache.set(cacheKey, result);
+              return result;
+            }
+          } catch (error) {
+            this.logger.warn(`Failed to get floor price for Porta NFT, using fallback: ${error.message}`);
+          }
+          // Fallback if trait price fetch fails
           const result = {
-            priceAda: this.RELICS_PORTA_PRICE,
-            priceUsd: this.RELICS_PORTA_PRICE * adaPrice,
+            priceAda: this.RELICS_PORTA_PRICE_FALLBACK,
+            priceUsd: this.RELICS_PORTA_PRICE_FALLBACK * adaPrice,
           };
           this.cache.set(cacheKey, result);
           return result;
         }
 
-        // Relics of Magma - The Vita: Trait-based pricing, needs metadata
+        // Relics of Magma - The Vita: TapTools trait-based pricing
         if (policyId === this.RELICS_OF_MAGMA_VITA_POLICY) {
           try {
-            // Fetch trait-based price using WayUp API (for Vita) or fixed price (for Porta)
-            // Pass the readable name for WayUp search
+            // Fetch trait-based price from TapTools API using WayUp for character extraction
+            // Pass the readable name for WayUp character trait search
             const traitPrice = await this.getRelicsOfMagmaPrice(policyId, name || '');
             if (traitPrice !== null) {
               const result = {
@@ -360,7 +464,7 @@ export class TaptoolsService {
           } catch (error) {
             // Fallback to Balaena price for Vita on error
             this.logger.warn(`Failed to get trait-based price for Vita NFT, using Balaena fallback: ${error.message}`);
-            const fallbackPrice = this.RELICS_CHARACTER_PRICES.Balaena;
+            const fallbackPrice = this.RELICS_CHARACTER_PRICES_FALLBACK.Balaena;
             const result = {
               priceAda: fallbackPrice,
               priceUsd: fallbackPrice * adaPrice,
@@ -1388,7 +1492,7 @@ export class TaptoolsService {
     whitelistedPolicies: string[]
   ): Promise<{ unit: string; quantity: number }[]> {
     const cacheKey = `wallet_assets_${walletAddress}`;
-    const cached = this.cache.get<Array<{ unit: string; quantity: number }>>(cacheKey);
+    const cached = this.walletUnitsCache.get<Array<{ unit: string; quantity: number }>>(cacheKey);
 
     let assetUnits: Array<{ unit: string; quantity: number }>;
 
@@ -1397,25 +1501,22 @@ export class TaptoolsService {
     } else {
       try {
         const addressTotal = await this.blockfrost.addressesTotal(walletAddress);
-
         const balances = this.calculateBalances(addressTotal);
         assetUnits = Array.from(balances.entries())
           .filter(([unit, balance]) => unit !== 'lovelace' && balance > 0)
           .map(([unit, quantity]) => ({ unit, quantity }));
 
         // Cache for 2 minutes
-        this.cache.set(cacheKey, assetUnits, 120);
+        this.walletUnitsCache.set(cacheKey, assetUnits, 60);
       } catch (err) {
-        this.logger.error('Error fetching all asset units:', err.message);
+        this.logger.error('Error fetching asset units:', err.message);
         throw new HttpException('Failed to fetch asset units', 500);
       }
     }
 
-    const filteredUnits = whitelistedPolicies.length
+    return whitelistedPolicies.length
       ? assetUnits.filter(asset => whitelistedPolicies.includes(asset.unit.substring(0, 56)))
       : assetUnits;
-
-    return filteredUnits;
   }
 
   private async processAssetsPage(
@@ -1542,5 +1643,21 @@ export class TaptoolsService {
 
     // 5. Fallback: assume NFT if quantity is 1
     return qty === 1;
+  }
+
+  public invalidateWalletCache(walletAddress: string): void {
+    if (!walletAddress) return;
+
+    const assetsCacheKey = `wallet_assets_${walletAddress}`;
+
+    const overviewCacheKey = `wallet_overview_${walletAddress}`;
+
+    const deletedAssets = this.walletUnitsCache.del(assetsCacheKey);
+    const deletedOverview = this.cache.del(overviewCacheKey);
+
+    this.logger.log(
+      `Cache invalidated for wallet ${walletAddress}. ` +
+        `Assets deleted: ${deletedAssets > 0}, Overview deleted: ${deletedOverview > 0}`
+    );
   }
 }
