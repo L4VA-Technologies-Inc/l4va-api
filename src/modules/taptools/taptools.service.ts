@@ -34,6 +34,7 @@ export class TaptoolsService {
   private cache = new NodeCache({ stdTTL: 600 }); // cache for 10 minutes to reduce API calls for ADA price
   private readonly blockfrost: BlockFrostAPI;
   private assetDetailsCache = new NodeCache({ stdTTL: 3600, checkperiod: 300 });
+  private walletUnitsCache = new NodeCache({ stdTTL: 60 }); // cache for 1 minute for wallet asset units
 
   // Relics of Magma trait-based pricing configuration
   private readonly RELICS_OF_MAGMA_VITA_POLICY = '94ec588251e710b7660dfd7765f08c87742a3012cce802897a3ebd28';
@@ -1388,7 +1389,7 @@ export class TaptoolsService {
     whitelistedPolicies: string[]
   ): Promise<{ unit: string; quantity: number }[]> {
     const cacheKey = `wallet_assets_${walletAddress}`;
-    const cached = this.cache.get<Array<{ unit: string; quantity: number }>>(cacheKey);
+    const cached = this.walletUnitsCache.get<Array<{ unit: string; quantity: number }>>(cacheKey);
 
     let assetUnits: Array<{ unit: string; quantity: number }>;
 
@@ -1397,25 +1398,22 @@ export class TaptoolsService {
     } else {
       try {
         const addressTotal = await this.blockfrost.addressesTotal(walletAddress);
-
         const balances = this.calculateBalances(addressTotal);
         assetUnits = Array.from(balances.entries())
           .filter(([unit, balance]) => unit !== 'lovelace' && balance > 0)
           .map(([unit, quantity]) => ({ unit, quantity }));
 
         // Cache for 2 minutes
-        this.cache.set(cacheKey, assetUnits, 120);
+        this.walletUnitsCache.set(cacheKey, assetUnits, 60);
       } catch (err) {
-        this.logger.error('Error fetching all asset units:', err.message);
+        this.logger.error('Error fetching asset units:', err.message);
         throw new HttpException('Failed to fetch asset units', 500);
       }
     }
 
-    const filteredUnits = whitelistedPolicies.length
+    return whitelistedPolicies.length
       ? assetUnits.filter(asset => whitelistedPolicies.includes(asset.unit.substring(0, 56)))
       : assetUnits;
-
-    return filteredUnits;
   }
 
   private async processAssetsPage(
@@ -1542,5 +1540,21 @@ export class TaptoolsService {
 
     // 5. Fallback: assume NFT if quantity is 1
     return qty === 1;
+  }
+
+  public invalidateWalletCache(walletAddress: string): void {
+    if (!walletAddress) return;
+
+    const assetsCacheKey = `wallet_assets_${walletAddress}`;
+
+    const overviewCacheKey = `wallet_overview_${walletAddress}`;
+
+    const deletedAssets = this.walletUnitsCache.del(assetsCacheKey);
+    const deletedOverview = this.cache.del(overviewCacheKey);
+
+    this.logger.log(
+      `Cache invalidated for wallet ${walletAddress}. ` +
+        `Assets deleted: ${deletedAssets > 0}, Overview deleted: ${deletedOverview > 0}`
+    );
   }
 }
