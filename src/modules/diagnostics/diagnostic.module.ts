@@ -19,11 +19,7 @@ import { Vault } from '@/database/vault.entity';
  * For admin/recovery use only.
  */
 @Module({
-  imports: [
-    DistributionModule,
-    BlockchainModule,
-    TypeOrmModule.forFeature([Vault, Claim, Transaction, Asset]),
-  ],
+  imports: [DistributionModule, BlockchainModule, TypeOrmModule.forFeature([Vault, Claim, Transaction, Asset])],
   controllers: [DiagnosticController],
   providers: [DiagnosticService],
   exports: [DiagnosticService],

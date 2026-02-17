@@ -6,9 +6,11 @@ import { In, Repository } from 'typeorm';
 
 import { ClaimsService } from '../../claims/claims.service';
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
+import { ExpansionService } from '../governance/expansion.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
+import { Proposal } from '@/database/proposal.entity';
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
@@ -48,6 +50,8 @@ export class LifecycleService {
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(TokenRegistry)
     private readonly tokenRegistryRepository: Repository<TokenRegistry>,
+    @InjectRepository(Proposal)
+    private readonly proposalRepository: Repository<Proposal>,
     private readonly vaultManagingService: VaultManagingService,
     private readonly distributionCalculationService: DistributionCalculationService,
     private readonly taptoolsService: TaptoolsService,
@@ -56,7 +60,8 @@ export class LifecycleService {
     private readonly claimsService: ClaimsService,
     private readonly transactionsService: TransactionsService,
     private readonly eventEmitter: EventEmitter2,
-    private readonly systemSettingsService: SystemSettingsService
+    private readonly systemSettingsService: SystemSettingsService,
+    private readonly expansionService: ExpansionService
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -71,6 +76,7 @@ export class LifecycleService {
       await this.handlePublishedToContribution(); // Handle created vault -> contribution transitin
       await this.handleContributionToAcquire(); // Handle contribution -> acquire transitions (also handles direct contribution -> governance for 0% acquire vaults)
       await this.handleAcquireToGovernance(); // Handle acquire -> governance transitions
+      await this.handleExpansionToLocked(); // Handle expansion -> locked transitions
     } finally {
       this.isRunning = false;
     }
@@ -1468,19 +1474,10 @@ export class LifecycleService {
         }
       }
 
-      this.logger.log(
-        `Calculated acquire multipliers for ${finalContributorClaims.length} contributors ` + `(no acquirers)`
-      );
-
       // Recalculate optimal decimals now that we have final multiplier values
       // This ensures we don't hit floating point precision issues
       const maxMultiplier = Math.max(...acquireMultiplier.map(m => m[2]), 0);
       const minMultiplier = Math.min(...acquireMultiplier.map(m => m[2]).filter(m => m > 0), Infinity);
-
-      this.logger.log(
-        `Vault ${vault.id} multiplier stats (no acquirers): ` +
-          `maxMultiplier=${maxMultiplier}, minMultiplier=${minMultiplier === Infinity ? 'N/A' : minMultiplier}`
-      );
 
       const optimalDecimals = this.distributionCalculationService.calculateOptimalDecimals(
         vault.ft_token_supply || 1_000_000,
@@ -1579,6 +1576,54 @@ export class LifecycleService {
     } catch (error) {
       this.logger.error(`Error in direct contribution to governance for vault ${vault.id}:`, error);
       throw error;
+    }
+  }
+
+  /**
+   * Handle transition from Expansion phase back to Locked (governance) phase
+   * Runs periodically to check for vaults whose expansion duration has expired
+   * Calculates and creates claims for new contributors during expansion
+   */
+  private async handleExpansionToLocked(): Promise<void> {
+    const now = new Date();
+
+    // Find vaults in expansion phase whose expansion duration has expired
+    const expansionVaults = await this.vaultRepository
+      .createQueryBuilder('vault')
+      .where('vault.vault_status = :status', { status: VaultStatus.expansion })
+      .andWhere('vault.expansion_phase_start IS NOT NULL')
+      .andWhere('vault.expansion_duration IS NOT NULL')
+      .andWhere(`vault.expansion_phase_start + (vault.expansion_duration * interval '1 millisecond') <= :now`, { now })
+      .andWhere('vault.id NOT IN (:...processingIds)', {
+        processingIds:
+          this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'],
+      })
+      .getMany();
+
+    if (expansionVaults.length > 0) {
+      this.logger.log(
+        `Found ${expansionVaults.length} vault(s) with expired expansion phase: ${expansionVaults.map(v => v.id).join(', ')}`
+      );
+    }
+
+    for (const vault of expansionVaults) {
+      // Skip if vault is already being processed
+      if (this.processingVaults.has(vault.id)) {
+        continue;
+      }
+
+      this.processingVaults.add(vault.id);
+
+      try {
+        await this.expansionService.executeExpansionToLockedTransition(vault);
+      } catch (error) {
+        this.logger.error(
+          `Failed to process expansion->locked transition for vault ${vault.id}: ${error.message}`,
+          error.stack
+        );
+      } finally {
+        this.processingVaults.delete(vault.id);
+      }
     }
   }
 }

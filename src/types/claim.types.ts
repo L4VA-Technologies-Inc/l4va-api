@@ -1,7 +1,11 @@
 export enum ClaimStatus {
+  /** Available for claiming manually */
   AVAILABLE = 'available',
+  /** Claim is pending and waiting for processing */
   PENDING = 'pending',
+  /** Claim has been successfully processed */
   CLAIMED = 'claimed',
+  /** Claim processing failed */
   FAILED = 'failed',
 }
 

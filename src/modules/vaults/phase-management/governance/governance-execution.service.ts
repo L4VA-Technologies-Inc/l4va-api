@@ -8,6 +8,7 @@ import { In, Repository } from 'typeorm';
 
 import { DistributionService } from './distribution.service';
 import { ExecType, MarketplaceActionDto } from './dto/create-proposal.req';
+import { ExpansionService } from './expansion.service';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
 import { TerminationService } from './termination.service';
 import { VoteCountingService } from './vote-counting.service';
@@ -16,7 +17,6 @@ import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
-import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
@@ -26,7 +26,6 @@ import { AssetStatus } from '@/types/asset.types';
 import { ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionStatus } from '@/types/transaction.types';
-import { VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class GovernanceExecutionService {
@@ -62,7 +61,7 @@ export class GovernanceExecutionService {
     private readonly terminationService: TerminationService,
     private readonly distributionService: DistributionService,
     private readonly dexHunterService: DexHunterService,
-    private readonly dexHunterPricingService: DexHunterPricingService
+    private readonly expansionService: ExpansionService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
@@ -1710,10 +1709,23 @@ export class GovernanceExecutionService {
   }
 
   /**
+   * Execute EXPANSION proposal actions
+   * Delegates to ExpansionService for all expansion logic
+   */
+  async executeExpansionProposal(proposal: Proposal): Promise<boolean> {
+    try {
+      return await this.expansionService.executeExpansion(proposal);
+    } catch (error) {
+      await this.storeExecutionError(proposal, error);
+      throw error;
+    }
+  }
+
+  /**
    * Store execution error in proposal metadata
    * Tracks error details including message, timestamp, error code, user-friendly message, and attempt count
    */
-  private async storeExecutionError(proposal: Proposal, error: Error): Promise<void> {
+  async storeExecutionError(proposal: Proposal, error: Error): Promise<void> {
     try {
       const metadata = proposal.metadata || {};
 
@@ -1873,101 +1885,6 @@ export class GovernanceExecutionService {
 
     // Default to generic execution error
     return 'EXECUTION_ERROR';
-  }
-
-  /**
-   * Execute EXPANSION proposal actions
-   * Changes vault status to EXPANSION and allows new contributions based on the proposal parameters
-   * Vault will accept contributions from whitelisted policies until duration expires or asset max is reached
-   * Returns true immediately as execution is just changing vault status
-   */
-  private async executeExpansionProposal(proposal: Proposal): Promise<boolean> {
-    const networkLabel = this.isMainnet ? 'MAINNET' : 'TESTNET';
-
-    this.logger.log(`[${networkLabel}] Executing expansion proposal ${proposal.id} for vault ${proposal.vaultId}`);
-
-    if (!proposal.metadata?.expansion) {
-      this.logger.warn(`Expansion proposal ${proposal.id} has no expansion configuration`);
-      return false;
-    }
-
-    try {
-      const expansionConfig = proposal.metadata.expansion;
-
-      // Update vault status to EXPANSION
-      await this.vaultRepository.update(
-        { id: proposal.vaultId },
-        {
-          vault_status: VaultStatus.expansion,
-        }
-      );
-
-      this.logger.log(`Vault ${proposal.vaultId} status changed to EXPANSION`);
-
-      // Emit event for tracking
-      this.eventEmitter.emit('proposal.expansion.executed', {
-        proposalId: proposal.id,
-        vaultId: proposal.vaultId,
-        expansionConfig,
-        network: networkLabel.toLowerCase(),
-      });
-
-      // If there's a time limit, schedule the vault to close expansion after duration
-      if (!expansionConfig.noLimit && expansionConfig.duration) {
-        const closeDate = new Date(Date.now() + expansionConfig.duration);
-
-        this.logger.log(
-          `Scheduling vault ${proposal.vaultId} expansion to close at ${closeDate.toISOString()}`
-        );
-
-        // Schedule a job to close expansion
-        this.schedulerService.scheduleExecution(
-          `expansion-close-${proposal.vaultId}`,
-          closeDate,
-          () => this.closeExpansion(proposal.vaultId, proposal.id, 'duration_expired')
-        );
-      }
-
-      this.logger.log(`Successfully executed expansion proposal ${proposal.id}`);
-      return true;
-    } catch (error) {
-      this.logger.error(`Error executing expansion proposal ${proposal.id}: ${error.message}`, error.stack);
-      await this.storeExecutionError(proposal, error);
-      throw error;
-    }
-  }
-
-  /**
-   * Close vault expansion and return vault to LOCKED status
-   * Called when expansion duration expires or asset max is reached
-   */
-  private async closeExpansion(
-    vaultId: string,
-    proposalId: string,
-    reason: 'duration_expired' | 'asset_max_reached'
-  ): Promise<void> {
-    this.logger.log(`Closing expansion for vault ${vaultId}, reason: ${reason}`);
-
-    try {
-      // Update vault status back to LOCKED
-      await this.vaultRepository.update(
-        { id: vaultId },
-        {
-          vault_status: VaultStatus.locked,
-        }
-      );
-
-      this.logger.log(`Vault ${vaultId} status changed back to LOCKED`);
-
-      // Emit event for tracking
-      this.eventEmitter.emit('vault.expansion.closed', {
-        vaultId,
-        proposalId,
-        reason,
-      });
-    } catch (error) {
-      this.logger.error(`Error closing expansion for vault ${vaultId}: ${error.message}`, error.stack);
-    }
   }
 
   onModuleDestroy(): void {

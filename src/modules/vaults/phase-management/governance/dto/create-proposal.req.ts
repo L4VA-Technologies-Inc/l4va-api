@@ -10,6 +10,7 @@ import {
   IsArray,
   IsNumber,
   IsNumberString,
+  Matches,
 } from 'class-validator';
 
 import { MarketplaceAction, ProposalType } from '@/types/proposal.types';
@@ -348,6 +349,10 @@ export class CreateProposalReq {
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
+  @Matches(/^[0-9a-fA-F]{56}$/, {
+    each: true,
+    message: 'Policy ID must be a 56-character hexadecimal string',
+  })
   @Expose()
   expansionPolicyIds?: string[];
 

@@ -8,6 +8,7 @@ import { BlockchainModule } from '../../processing-tx/onchain/blockchain.module'
 import { TreasureWalletModule } from '../../treasure/treasure-wallet.module';
 
 import { DistributionService } from './distribution.service';
+import { ExpansionService } from './expansion.service';
 import { GovernanceExecutionService } from './governance-execution.service';
 import { GovernanceController } from './governance.controller';
 import { GovernanceService } from './governance.service';
@@ -61,6 +62,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     GovernanceService,
     GovernanceExecutionService,
     ProposalSchedulerService,
+    ExpansionService,
     VoteCountingService,
     TerminationService,
     DistributionService,
@@ -77,6 +79,6 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
       inject: [getRepositoryToken(Proposal), EventEmitter2, ProposalSchedulerService, GovernanceExecutionService],
     },
   ],
-  exports: [GovernanceService, GovernanceExecutionService, TerminationService, DistributionService],
+  exports: [GovernanceService, GovernanceExecutionService, TerminationService, DistributionService, ExpansionService],
 })
 export class GovernanceModule {}
