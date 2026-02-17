@@ -66,8 +66,8 @@ export class LifecycleService {
       return;
     }
 
-    this.isRunning = true;
     try {
+      this.isRunning = true;
       await this.handlePublishedToContribution(); // Handle created vault -> contribution transitin
       await this.handleContributionToAcquire(); // Handle contribution -> acquire transitions (also handles direct contribution -> governance for 0% acquire vaults)
       await this.handleAcquireToGovernance(); // Handle acquire -> governance transitions
@@ -1170,8 +1170,6 @@ export class LifecycleService {
    */
   private async executeContributionDirectToGovernance(vault: Vault): Promise<void> {
     try {
-      // Check if multi-batch distribution is already in progress for this vault
-      // This prevents race conditions when the cron re-picks up the same vault
       const freshVault = await this.vaultRepository.findOne({
         where: { id: vault.id },
         select: ['id', 'vault_status'],
@@ -1185,10 +1183,6 @@ export class LifecycleService {
         );
         return;
       }
-
-      this.logger.log(
-        `Starting direct contribution to governance transition for vault ${vault.id} ` + `(0% for acquirers)`
-      );
 
       await this.transactionsService.syncVaultTransactions(vault.id);
 
@@ -1209,12 +1203,6 @@ export class LifecycleService {
           lpPercent: LP_PERCENT,
           totalContributedValueAda: totalContributedValueAda,
         });
-
-      this.logger.log(
-        `Vault ${vault.id} LP calculation: ` +
-          `VT Price: ${vtPrice} ADA, FDV: ${fdv} ADA (= TVL), ` +
-          `LP VT: ${lpVtAmount}, LP ADA: ${lpAdaAmount}`
-      );
 
       // Check if LP is configured and validate minimum threshold
       const lpAdaInLovelace = Math.floor(lpAdaAmount * 1_000_000);
