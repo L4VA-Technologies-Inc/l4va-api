@@ -18,6 +18,7 @@ import { TerminationService } from './termination.service';
 import { VoteCountingService } from './vote-counting.service';
 
 import { Asset } from '@/database/asset.entity';
+import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
@@ -34,7 +35,18 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Vault, Asset, Snapshot, Proposal, Vote, Claim, User, Transaction, VaultTreasuryWallet]),
+    TypeOrmModule.forFeature([
+      Vault,
+      Asset,
+      Snapshot,
+      Proposal,
+      Vote,
+      Claim,
+      User,
+      Transaction,
+      VaultTreasuryWallet,
+      AssetsWhitelistEntity,
+    ]),
     RedisModule,
     AssetsModule,
     WayUpModule,

@@ -1,9 +1,11 @@
-import { Controller, Post, Logger, HttpCode, HttpStatus, UseGuards, Param } from '@nestjs/common';
+import { Controller, Post, Logger, HttpCode, HttpStatus, UseGuards, Param, Get } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { AdminGuard } from '../auth/admin.guard';
+
+import { DiagnosticService } from './diagnostic.service';
 
 import { Vault } from '@/database/vault.entity';
 
@@ -28,7 +30,8 @@ export class DiagnosticController {
 
   constructor(
     @InjectRepository(Vault)
-    private readonly vaultRepository: Repository<Vault>
+    private readonly vaultRepository: Repository<Vault>,
+    private readonly diagnosticService: DiagnosticService
   ) {}
 
   // ========================================
@@ -888,4 +891,68 @@ export class DiagnosticController {
   //     extractedToAddress: extractToAddress,
   //   };
   // }
+
+  // ========================================
+  // VAULT SIMULATION & TESTING ENDPOINTS
+  // ========================================
+
+  /**
+   * Simulate multiplier calculations for a vault
+   * Returns detailed breakdown of token distribution without executing any transactions
+   */
+  @Get('vault/:vaultId/simulate-multipliers')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Simulate vault multipliers',
+    description:
+      'Test method: Simulate multiplier calculations for a vault without executing the transition. ' +
+      'Returns detailed multiplier data, asset pricing, and transaction size estimates.',
+  })
+  async simulateVaultMultipliers(@Param('vaultId') vaultId: string): Promise<any> {
+    this.logger.log(`Simulating vault multipliers for vault ${vaultId}`);
+
+    try {
+      const result = await this.diagnosticService.simulateVaultMultipliers(vaultId);
+      return {
+        success: true,
+        data: result,
+      };
+    } catch (error) {
+      this.logger.error(`Error simulating vault multipliers for vault ${vaultId}:`, error);
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  }
+
+  /**
+   * Simulate multi-batch distribution for a vault
+   * Shows how multipliers would be split across multiple transactions
+   */
+  @Get('vault/:vaultId/simulate-distribution')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Simulate vault distribution',
+    description:
+      'Test method: Simulate multi-batch distribution for a vault. ' +
+      'Shows how multipliers would be split across multiple transactions and estimates claims.',
+  })
+  async simulateVaultDistribution(@Param('vaultId') vaultId: string): Promise<any> {
+    this.logger.log(`Simulating vault distribution for vault ${vaultId}`);
+
+    try {
+      const result = await this.diagnosticService.simulateMultiBatchDistribution(vaultId);
+      return {
+        success: true,
+        data: result,
+      };
+    } catch (error) {
+      this.logger.error(`Error simulating vault distribution for vault ${vaultId}:`, error);
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  }
 }
