@@ -5,6 +5,7 @@ import { Response } from 'express';
 import { AuthGuard } from '../../auth/auth.guard';
 import { AuthRequest } from '../../auth/dto/auth-user.interface';
 
+import { ClaimsVerificationService } from './claims-verification.service';
 import { ClaimsService } from './claims.service';
 import { ClaimResponseDto } from './dto/claim-response.dto';
 import { GetClaimsDto } from './dto/get-claims.dto';
@@ -20,6 +21,7 @@ import { AdminGuard } from '@/modules/auth/admin.guard';
 export class ClaimsController {
   constructor(
     private readonly claimsService: ClaimsService,
+    private readonly claimsVerificationService: ClaimsVerificationService,
     private readonly l4vaRewardsService: L4vaRewardsService
   ) {}
 
@@ -115,7 +117,7 @@ export class ClaimsController {
     @Param('vaultId') vaultId: string,
     @Query() query: VerifyClaimsQueryDto
   ): Promise<VerifyClaimsResponseDto> {
-    return this.claimsService.verifyClaims(vaultId, query);
+    return this.claimsVerificationService.verifyClaims(vaultId, query);
   }
 
   @ApiDoc({
@@ -132,7 +134,7 @@ export class ClaimsController {
     @Query() query: VerifyClaimsQueryDto,
     @Res() res: Response
   ): Promise<void> {
-    const verification = await this.claimsService.verifyClaims(vaultId, query);
+    const verification = await this.claimsVerificationService.verifyClaims(vaultId, query);
 
     // Build CSV header
     const csvRows: string[] = [
