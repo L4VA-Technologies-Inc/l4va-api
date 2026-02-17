@@ -14,4 +14,5 @@ export enum ClaimType {
   CANCELLATION = 'cancellation',
   DISTRIBUTION = 'distribution',
   TERMINATION = 'termination',
+  EXPANSION = 'expansion',
 }
