@@ -232,7 +232,6 @@ export class TaptoolsService {
     const cached = this.traitPricesCache.get<Record<string, Record<string, number>>>(cacheKey);
 
     if (cached) {
-      this.logger.debug(`Using cached trait prices for policy ${policyId}`);
       return cached;
     }
 
@@ -325,7 +324,6 @@ export class TaptoolsService {
         const floorPriceData = await this.wayUpPricingService.getCollectionFloorPrice(policyId);
 
         if (floorPriceData.hasListings && floorPriceData.floorPriceAda !== null) {
-          this.logger.debug(`Using WayUp floor price for Porta: ${floorPriceData.floorPriceAda} ADA`);
           return floorPriceData.floorPriceAda;
         }
       } catch (error) {
