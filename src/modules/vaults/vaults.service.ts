@@ -710,8 +710,6 @@ export class VaultsService {
       .select([
         `COUNT(DISTINCT CASE WHEN transaction.type = :contribute THEN transaction.user_id END) AS "contributorsCount"`,
         `COUNT(DISTINCT CASE WHEN transaction.type = :acquire THEN transaction.user_id END) AS "acquirersCount"`,
-        `SUM(CASE WHEN transaction.user_id = :ownerId AND transaction.type = :contribute THEN 1 ELSE 0 END) AS "ownerContributed"`,
-        `SUM(CASE WHEN transaction.user_id = :ownerId AND transaction.type = :acquire THEN 1 ELSE 0 END) AS "ownerAcquired"`,
       ])
       .where('transaction.vault_id = :vaultId', { vaultId })
       .andWhere('transaction.status = :status', { status: TransactionStatus.confirmed })
@@ -724,14 +722,8 @@ export class VaultsService {
       .setParameters({ ownerId: vault.owner.id })
       .getRawOne();
 
-    const dbContributors = Number(rawStats?.contributorsCount || 0);
-    const dbAcquirers = Number(rawStats?.acquirersCount || 0);
-
-    const ownerHasContributeTx = Number(rawStats?.ownerContributed || 0) > 0;
-    const ownerHasAcquireTx = Number(rawStats?.ownerAcquired || 0) > 0;
-
-    const vaultContributorsCount = ownerHasContributeTx ? dbContributors : dbContributors + 1;
-    const vaultAcquirersCount = ownerHasAcquireTx ? dbAcquirers : dbAcquirers + 1;
+    const vaultContributorsCount = Number(rawStats?.contributorsCount || 0);
+    const vaultAcquirersCount = Number(rawStats?.acquirersCount || 0);
 
     const latestSnapshot = await this.snapshotRepository.findOne({
       where: { vaultId },

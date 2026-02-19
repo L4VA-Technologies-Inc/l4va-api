@@ -97,7 +97,7 @@ export class AssetsService {
   ): Promise<GetContributedAssetsRes> {
     const { policyId, type } = filter || {};
 
-    let queryBuilder = this.assetsRepository
+    const queryBuilder = this.assetsRepository
       .createQueryBuilder('asset')
       .leftJoinAndSelect('asset.added_by', 'user')
       .select([
@@ -132,20 +132,26 @@ export class AssetsService {
       });
 
     if (search) {
-      queryBuilder = queryBuilder.andWhere('(asset.name ILIKE :search OR user.address ILIKE :search)', {
+      queryBuilder.andWhere('(asset.name ILIKE :search OR user.address ILIKE :search)', {
         search: `%${search}%`,
       });
     }
 
     if (policyId && policyId.length > 0) {
-      queryBuilder = queryBuilder.andWhere('asset.policy_id IN (:...policyIds)', {
+      queryBuilder.andWhere('asset.policy_id IN (:...policyIds)', {
         policyIds: policyId,
       });
     }
 
     if (type) {
-      queryBuilder = queryBuilder.andWhere('asset.type = :type', { type });
+      queryBuilder.andWhere('asset.type = :type', { type });
     }
+
+    const statsQuery = queryBuilder.clone();
+    statsQuery.select('SUM(asset.quantity * COALESCE(asset.floor_price, asset.dex_price, 0))', 'totalValue');
+
+    const rawStats = await statsQuery.getRawOne();
+    const totalAssetValueAda = parseFloat(rawStats?.totalValue || '0');
 
     const [assets, total] = await queryBuilder
       .skip((page - 1) * limit)
@@ -154,6 +160,10 @@ export class AssetsService {
       .getManyAndCount();
 
     const adaPrice = await this.priceService.getAdaPrice();
+
+    const totalAssetValueUsd = totalAssetValueAda * adaPrice;
+    const assetsAvgAda = total > 0 ? totalAssetValueAda / total : 0;
+    const assetsAvgUsd = total > 0 ? totalAssetValueUsd / total : 0;
 
     const assetsWithUsd = assets as Array<Asset & { floorPriceUsd?: number }>;
 
@@ -171,11 +181,23 @@ export class AssetsService {
       page,
       limit,
       totalPages: Math.ceil(total / limit),
+      statistics: {
+        totalAssetValueAda,
+        totalAssetValueUsd,
+        assetsAvgAda,
+        assetsAvgUsd,
+      },
     };
   }
 
-  async getAcquiredAssets(vaultId: string, page: number = 1, limit: number = 10): Promise<GetAcquiredAssetsRes> {
-    // Verify vault ownership
+  async getAcquiredAssets(
+    vaultId: string,
+    page: number = 1,
+    limit: number = 10,
+    search?: string,
+    minQuantity?: number,
+    maxQuantity?: number
+  ): Promise<GetAcquiredAssetsRes> {
     const vault = await this.vaultsRepository.exists({
       where: { id: vaultId },
     });
@@ -184,41 +206,76 @@ export class AssetsService {
       throw new BadRequestException('Vault not found or access denied');
     }
 
-    const [assets, total] = await this.assetsRepository.findAndCount({
-      where: {
-        vault: {
-          id: vaultId,
-        },
-        origin_type: AssetOriginType.ACQUIRED,
-        status: In([AssetStatus.LOCKED, AssetStatus.RELEASED, AssetStatus.DISTRIBUTED]),
-      },
-      select: {
-        id: true,
-        policy_id: true,
-        asset_id: true,
-        type: true,
-        quantity: true,
-        floor_price: true,
-        dex_price: true,
-        deleted: true,
-        last_valuation: true,
-        status: true,
-        locked_at: true,
-        released_at: true,
-        origin_type: true,
-        image: true,
-        decimals: true,
-        name: true,
-        description: true,
-        added_at: true,
-        updated_at: true,
-      },
-      skip: (page - 1) * limit,
-      take: limit,
-      order: {
-        added_at: 'DESC',
-      },
-    });
+    const queryBuilder = this.assetsRepository
+      .createQueryBuilder('asset')
+      .leftJoin('asset.transaction', 'transaction')
+      .leftJoin('transaction.user', 'user')
+      .select([
+        'asset.id',
+        'asset.policy_id',
+        'asset.asset_id',
+        'asset.type',
+        'asset.quantity',
+        'asset.floor_price',
+        'asset.dex_price',
+        'asset.deleted',
+        'asset.last_valuation',
+        'asset.status',
+        'asset.locked_at',
+        'asset.released_at',
+        'asset.origin_type',
+        'asset.image',
+        'asset.decimals',
+        'asset.name',
+        'asset.description',
+        'asset.added_at',
+        'asset.updated_at',
+        'user.id',
+        'user.address',
+      ])
+      .where('asset.vault_id = :vaultId', { vaultId })
+      .andWhere('asset.origin_type = :originType', {
+        originType: AssetOriginType.ACQUIRED,
+      })
+      .andWhere('asset.status IN (:...statuses)', {
+        statuses: [AssetStatus.LOCKED, AssetStatus.RELEASED, AssetStatus.DISTRIBUTED],
+      });
+
+    if (search) {
+      queryBuilder.andWhere('user.address ILIKE :search', {
+        search: `%${search}%`,
+      });
+    }
+
+    if (minQuantity) {
+      queryBuilder.andWhere('asset.quantity >= :minQuantity', {
+        minQuantity,
+      });
+    }
+
+    if (maxQuantity) {
+      queryBuilder.andWhere('asset.quantity <= :maxQuantity', {
+        maxQuantity,
+      });
+    }
+
+    const statsResult = await queryBuilder
+      .clone()
+      .select('SUM(asset.quantity)', 'totalAcquired')
+      .addSelect('COUNT(DISTINCT transaction.user_id)', 'totalAcquirers')
+      .getRawOne();
+
+    const totalAcquired = parseFloat(statsResult?.totalAcquired || '0');
+    const totalAcquirers = parseInt(statsResult?.totalAcquirers || '0', 10);
+
+    const adaPrice = await this.priceService.getAdaPrice();
+    const totalAcquiredUsd = totalAcquired * adaPrice;
+
+    const [assets, total] = await queryBuilder
+      .skip((page - 1) * limit)
+      .take(limit)
+      .orderBy('asset.added_at', 'DESC')
+      .getManyAndCount();
 
     return {
       items: assets.map(asset => instanceToPlain(asset)),
@@ -226,6 +283,9 @@ export class AssetsService {
       page,
       limit,
       totalPages: Math.ceil(total / limit),
+      totalAcquired,
+      totalAcquiredUsd,
+      totalAcquirers,
     };
   }
 
