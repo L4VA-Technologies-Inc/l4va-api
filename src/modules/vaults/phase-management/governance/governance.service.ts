@@ -132,13 +132,22 @@ export class GovernanceService {
     this.logger.log('Starting daily snapshot creation');
 
     try {
+      // Include both locked and expansion vaults for snapshot creation
       const lockedVaults = await this.vaultRepository.find({
-        where: {
-          vault_status: VaultStatus.locked,
-          asset_vault_name: Not(IsNull()),
-          script_hash: Not(IsNull()),
-          distribution_processed: true,
-        },
+        where: [
+          {
+            vault_status: VaultStatus.locked,
+            asset_vault_name: Not(IsNull()),
+            script_hash: Not(IsNull()),
+            distribution_processed: true,
+          },
+          {
+            vault_status: VaultStatus.expansion,
+            asset_vault_name: Not(IsNull()),
+            script_hash: Not(IsNull()),
+            distribution_processed: true,
+          },
+        ],
         select: ['id', 'asset_vault_name', 'script_hash'],
       });
 
@@ -147,7 +156,7 @@ export class GovernanceService {
         return;
       }
 
-      this.logger.log(`Found ${lockedVaults.length} locked vaults for snapshots`);
+      this.logger.log(`Found ${lockedVaults.length} locked/expansion vaults for snapshots`);
 
       const results = await Promise.allSettled(
         lockedVaults.map(async (vault, index) => {
@@ -268,8 +277,21 @@ export class GovernanceService {
       throw new NotFoundException('Vault not found');
     }
 
-    if (vault.vault_status !== VaultStatus.locked) {
-      throw new BadRequestException('Governance is only available for locked vaults');
+    // Allow governance for both locked and expansion statuses
+    // Expansion windows can be long/indefinite, so governance should continue
+    if (vault.vault_status !== VaultStatus.locked && vault.vault_status !== VaultStatus.expansion) {
+      throw new BadRequestException('Governance is only available for locked or expansion vaults');
+    }
+
+    // During expansion, only Distribution proposals are allowed
+    // All other proposal types involve extracting assets from vault which conflicts with expansion
+    if (vault.vault_status === VaultStatus.expansion) {
+      if (createProposalReq.type !== ProposalType.DISTRIBUTION) {
+        throw new BadRequestException(
+          'During vault expansion, only Distribution proposals are allowed. ' +
+            'Proposals that extract assets (Marketplace Actions, Burning, Termination, or new Expansions) must wait until the current expansion completes.'
+        );
+      }
     }
 
     const latestSnapshot = await this.snapshotRepository.findOne({
@@ -1589,7 +1611,8 @@ export class GovernanceService {
     }
 
     try {
-      if (!vault || vault.vault_status !== VaultStatus.locked) {
+      // Allow proposal creation for both locked and expansion vaults
+      if (!vault || (vault.vault_status !== VaultStatus.locked && vault.vault_status !== VaultStatus.expansion)) {
         if (vault?.distribution_processed) {
           this.proposalCreationCache.set(cacheKey, false, this.CACHE_TTL.CAN_CREATE_PROPOSAL);
         }

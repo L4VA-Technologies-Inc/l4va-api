@@ -675,12 +675,23 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   expansionAssetsByPolicy?: Array<{ policyId: string; quantity: number }>;
 
-  @ApiProperty({ description: 'Expansion whitelisted policy IDs', required: false })
+  @ApiProperty({
+    description: 'Expansion whitelisted collections with names',
+    required: false,
+    type: 'array',
+    items: {
+      type: 'object',
+      properties: {
+        policyId: { type: 'string' },
+        collectionName: { type: 'string', nullable: true },
+      },
+    },
+  })
   @DtoRepresent({
     transform: false,
-    expose: { name: 'expansionPolicyIds' },
+    expose: { name: 'expansionWhitelist' },
   })
-  expansionPolicyIds?: string[];
+  expansionWhitelist?: Array<{ policyId: string; collectionName: string | null }>;
 
   @ApiProperty({ description: 'Owner of the vault', type: () => User })
   @DtoRepresent({

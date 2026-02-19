@@ -1,13 +1,9 @@
-import { Controller, Post, Logger, HttpCode, HttpStatus, UseGuards, Param, Get } from '@nestjs/common';
+import { Controller, Logger, HttpCode, HttpStatus, UseGuards, Param, Get } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 
 import { AdminGuard } from '../auth/admin.guard';
 
 import { DiagnosticService } from './diagnostic.service';
-
-import { Vault } from '@/database/vault.entity';
 
 /*
  * Manual Distribution Controller
@@ -28,11 +24,7 @@ import { Vault } from '@/database/vault.entity';
 export class DiagnosticController {
   private readonly logger = new Logger(DiagnosticController.name);
 
-  constructor(
-    @InjectRepository(Vault)
-    private readonly vaultRepository: Repository<Vault>,
-    private readonly diagnosticService: DiagnosticService
-  ) {}
+  constructor(private readonly diagnosticService: DiagnosticService) {}
 
   // ========================================
   // MANUAL DISTRIBUTION CONTROL ENDPOINTS
@@ -43,49 +35,49 @@ export class DiagnosticController {
    *
    * This stops automatic batch progression and allows manual control.
    */
-  @Post('vault/:vaultId/enable-manual-mode')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Enable manual distribution mode',
-    description: 'Enable manual distribution mode to stop automatic batch progression and allow manual control',
-  })
-  async enableManualMode(@Param('vaultId') vaultId: string): Promise<any> {
-    this.logger.log(`Enabling manual distribution mode for vault ${vaultId}`);
+  // @Post('vault/:vaultId/enable-manual-mode')
+  // @HttpCode(HttpStatus.OK)
+  // @ApiOperation({
+  //   summary: 'Enable manual distribution mode',
+  //   description: 'Enable manual distribution mode to stop automatic batch progression and allow manual control',
+  // })
+  // async enableManualMode(@Param('vaultId') vaultId: string): Promise<any> {
+  //   this.logger.log(`Enabling manual distribution mode for vault ${vaultId}`);
 
-    const vault = await this.vaultRepository.findOne({ where: { id: vaultId } });
-    if (!vault) {
-      return { success: false, message: `Vault ${vaultId} not found` };
-    }
+  //   const vault = await this.vaultRepository.findOne({ where: { id: vaultId } });
+  //   if (!vault) {
+  //     return { success: false, message: `Vault ${vaultId} not found` };
+  //   }
 
-    await this.vaultRepository.update(vaultId, { manual_distribution_mode: true });
+  //   await this.vaultRepository.update(vaultId, { manual_distribution_mode: true });
 
-    return {
-      success: true,
-      message: `Manual distribution mode enabled for vault ${vaultId}`,
-      vaultId,
-    };
-  }
+  //   return {
+  //     success: true,
+  //     message: `Manual distribution mode enabled for vault ${vaultId}`,
+  //     vaultId,
+  //   };
+  // }
 
   /**
    * Disable manual distribution mode
    */
-  @Post('vault/:vaultId/disable-manual-mode')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Disable manual distribution mode',
-    description: 'Disable manual mode and resume automatic distribution',
-  })
-  async disableManualMode(@Param('vaultId') vaultId: string): Promise<any> {
-    this.logger.log(`Disabling manual distribution mode for vault ${vaultId}`);
+  // @Post('vault/:vaultId/disable-manual-mode')
+  // @HttpCode(HttpStatus.OK)
+  // @ApiOperation({
+  //   summary: 'Disable manual distribution mode',
+  //   description: 'Disable manual mode and resume automatic distribution',
+  // })
+  // async disableManualMode(@Param('vaultId') vaultId: string): Promise<any> {
+  //   this.logger.log(`Disabling manual distribution mode for vault ${vaultId}`);
 
-    await this.vaultRepository.update(vaultId, { manual_distribution_mode: false });
+  //   await this.vaultRepository.update(vaultId, { manual_distribution_mode: false });
 
-    return {
-      success: true,
-      message: `Manual distribution mode disabled for vault ${vaultId}. Automatic distribution will resume.`,
-      vaultId,
-    };
-  }
+  //   return {
+  //     success: true,
+  //     message: `Manual distribution mode disabled for vault ${vaultId}. Automatic distribution will resume.`,
+  //     vaultId,
+  //   };
+  // }
 
   /**
    * STEP 3: Prepare vault update for specific claims

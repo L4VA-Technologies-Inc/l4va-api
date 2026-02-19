@@ -715,7 +715,7 @@ export class VaultsService {
     let expansionAssetMax: number | undefined;
     let expansionNoMax: boolean | undefined;
     let expansionAssetsByPolicy: Array<{ policyId: string; quantity: number }> = [];
-    let expansionPolicyIds: string[] | undefined;
+    let expansionWhitelist: Array<{ policyId: string; collectionName: string | null }> = [];
 
     if (vault.vault_status === VaultStatus.expansion || vault.expansion_phase_start) {
       // Find the latest expansion proposal
@@ -731,7 +731,12 @@ export class VaultsService {
       if (expansionProposal?.metadata?.expansion) {
         expansionAssetMax = expansionProposal.metadata.expansion.assetMax;
         expansionNoMax = expansionProposal.metadata.expansion.noMax;
-        expansionPolicyIds = expansionProposal.metadata.expansion.policyIds || [];
+        const expansionPolicyIds = expansionProposal.metadata.expansion.policyIds || [];
+
+        // Fetch collection names for expansion policies
+        if (expansionPolicyIds.length > 0) {
+          expansionWhitelist = await this.getCollectionNamesByPolicyIds(expansionPolicyIds);
+        }
 
         // Count confirmed expansion contributions
         const expansionAssetData = await this.assetsRepository
@@ -840,7 +845,7 @@ export class VaultsService {
       expansionAssetMax,
       expansionNoMax,
       expansionAssetsByPolicy,
-      expansionPolicyIds,
+      expansionWhitelist,
       // Protocol fees
       protocolContributorsFeeLovelace: this.systemSettingsService.protocolContributorsFee,
       protocolContributorsFeeAda: this.systemSettingsService.protocolContributorsFee / 1_000_000,

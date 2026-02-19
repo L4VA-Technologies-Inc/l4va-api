@@ -527,6 +527,50 @@ export class GovernanceExecutionService {
       order: { created_at: 'ASC' },
     });
 
+    // Get vault to check status for extraction-based proposals
+    const vault = await this.vaultRepository.findOne({
+      where: { id: proposal.vaultId },
+      select: ['id', 'vault_status'],
+    });
+
+    if (!vault) {
+      this.logger.error(`Vault ${proposal.vaultId} not found`);
+      return false;
+    }
+
+    // Proposals that involve asset extraction from vault can only execute when vault is LOCKED
+    // During EXPANSION, assets are being added and extraction would conflict with the expansion mechanics
+    const extractionProposalTypes = [
+      ProposalType.MARKETPLACE_ACTION,
+      ProposalType.BUY_SELL,
+      ProposalType.BURNING,
+      ProposalType.TERMINATION,
+    ];
+
+    if (extractionProposalTypes.includes(proposal.proposalType)) {
+      if (vault.vault_status !== 'locked') {
+        this.logger.warn(
+          `Cannot execute ${proposal.proposalType} proposal ${proposal.id}: Vault must be in LOCKED status for asset extraction. Current status: ${vault.vault_status}`
+        );
+        // Store error in metadata so it can be retried later
+        await this.proposalRepository.update(
+          { id: proposal.id },
+          {
+            metadata: {
+              ...proposal.metadata,
+              executionError: {
+                message: `Vault must be in LOCKED status to execute this proposal. Current status: ${vault.vault_status}.`,
+                timestamp: new Date().toISOString(),
+                errorCode: 'VAULT_STATUS_NOT_LOCKED',
+                userFriendlyMessage: 'This proposal will automatically retry when vault returns to LOCKED status.',
+              },
+            },
+          }
+        );
+        return false;
+      }
+    }
+
     try {
       switch (proposal.proposalType) {
         case ProposalType.MARKETPLACE_ACTION:

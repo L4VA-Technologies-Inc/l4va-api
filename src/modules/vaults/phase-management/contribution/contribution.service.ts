@@ -10,7 +10,7 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
-import { AssetStatus, AssetOriginType } from '@/types/asset.types';
+import { AssetStatus, AssetOriginType, AssetType } from '@/types/asset.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionType } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';
@@ -268,34 +268,36 @@ export class ContributionService {
 
     // Check asset max if configured - count already CONFIRMED contributions
     if (!expansionConfig.noMax && expansionConfig.assetMax) {
-      // Count currently locked expansion assets
-      const confirmedAssetCount = await this.assetRepository
+      // Count currently locked expansion assets (sum quantities for FTs, count for NFTs)
+      const expansionAssetData = await this.assetRepository
         .createQueryBuilder('asset')
-        .where('asset.vault_id = :vaultId', { vaultId })
-        .andWhere('asset.status IN (:...statuses)', {
-          statuses: [AssetStatus.LOCKED],
-        })
-        .andWhere('asset.origin_type = :originType', {
-          originType: AssetOriginType.CONTRIBUTED,
-        })
+        .select('asset.type', 'assetType')
+        .addSelect('COUNT(DISTINCT asset.id)', 'nftCount')
+        .addSelect('COALESCE(SUM(asset.quantity), 0)', 'ftQuantity')
         .innerJoin('asset.transaction', 'tx')
-        .innerJoin('tx.vault', 'vault')
-        .andWhere('vault.vault_status = :expansionStatus', {
-          expansionStatus: VaultStatus.expansion,
-        })
-        .getCount();
+        .where('asset.vault_id = :vaultId', { vaultId })
+        .andWhere('asset.status IN (:...statuses)', { statuses: [AssetStatus.LOCKED, AssetStatus.PENDING] })
+        .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
+        .andWhere('tx.created_at >= (SELECT expansion_phase_start FROM vaults WHERE id = :vaultId)', { vaultId })
+        .groupBy('asset.type')
+        .getRawMany();
 
-      const projectedCount = confirmedAssetCount + contributionAssetCount;
+      const currentAssetCount = expansionAssetData.reduce((total, row) => {
+        const quantity = row.assetType === AssetType.NFT ? Number(row.nftCount) : Number(row.ftQuantity);
+        return total + quantity;
+      }, 0);
+
+      const projectedCount = currentAssetCount + contributionAssetCount;
 
       if (projectedCount > expansionConfig.assetMax) {
         throw new BadRequestException(
-          `Adding ${contributionAssetCount} asset(s) would exceed expansion maximum of ${expansionConfig.assetMax}. ` +
-            `Current confirmed: ${confirmedAssetCount}, Available: ${expansionConfig.assetMax - confirmedAssetCount}`
+          `Adding ${contributionAssetCount} assets would exceed the expansion limit of ${expansionConfig.assetMax}. ` +
+            `Current expansion assets (confirmed + pending): ${currentAssetCount}`
         );
       }
 
       this.logger.log(
-        `Expansion asset check: ${confirmedAssetCount} confirmed + ${contributionAssetCount} new = ${projectedCount}/${expansionConfig.assetMax}`
+        `Expansion asset check: ${currentAssetCount} (confirmed + pending) + ${contributionAssetCount} new = ${projectedCount}/${expansionConfig.assetMax}`
       );
     }
 
@@ -308,11 +310,6 @@ export class ContributionService {
       fee: this.systemSettingsService.protocolContributorsFee,
       metadata: contributeReq.assets,
     });
-
-    this.logger.log(
-      `Expansion contribution transaction created: ${contributionAssetCount} asset(s) from user ${userId}. ` +
-        `VT claims will be calculated during phase transition.`
-    );
 
     return {
       success: true,
