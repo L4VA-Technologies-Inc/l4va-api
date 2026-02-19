@@ -1,5 +1,23 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Expose } from 'class-transformer';
+import { Expose, Type } from 'class-transformer';
+
+export class AssetsStatisticsDto {
+  @Expose()
+  @ApiProperty({ description: 'Total asset value in ADA', example: 1000.5 })
+  totalAssetValueAda: number;
+
+  @Expose()
+  @ApiProperty({ description: 'Total asset value in USD', example: 500.25 })
+  totalAssetValueUsd: number;
+
+  @Expose()
+  @ApiProperty({ description: 'Average asset value in ADA', example: 100.05 })
+  assetsAvgAda: number;
+
+  @Expose()
+  @ApiProperty({ description: 'Average asset value in USD', example: 50.025 })
+  assetsAvgUsd: number;
+}
 
 export class GetContributedAssetsRes {
   @Expose()
@@ -21,4 +39,9 @@ export class GetContributedAssetsRes {
   @Expose()
   @ApiProperty({ description: 'Total number of pages', example: 10 })
   totalPages: number;
+
+  @Expose()
+  @Type(() => AssetsStatisticsDto)
+  @ApiProperty({ description: 'Asset statistics', type: AssetsStatisticsDto })
+  statistics: AssetsStatisticsDto;
 }
