@@ -213,6 +213,100 @@ export class LifecycleService {
     }
   }
 
+  /**
+   * Calculate multipliers, update claim amounts, and compute optimal decimals.
+   * This is the single source of truth for the claim recalculation flow.
+   *
+   * Flow:
+   * 1. Calculate acquire multipliers and recalculated claim amounts
+   * 2. Update contributor claims with recalculated VT and lovelace amounts
+   * 3. Calculate optimal decimals based on multiplier values
+   * 4. Update vault decimals if changed
+   *
+   * @returns All data needed for updateVaultMetadataTx call
+   */
+  private async processMultipliersAndUpdateClaims(params: {
+    vault: Vault;
+    contributorClaims: Claim[];
+    acquirerClaims: Claim[];
+  }): Promise<{
+    acquireMultiplier: [string, string | null, number][];
+    adaDistribution: [string, string | null, number][];
+    optimalDecimals: number;
+  }> {
+    const { vault, contributorClaims, acquirerClaims } = params;
+
+    // Step 1: Calculate multipliers (pure calculation, no mutations)
+    const { acquireMultiplier, adaDistribution, recalculatedClaimAmounts, recalculatedLovelaceAmounts } =
+      this.distributionCalculationService.calculateAcquireMultipliers({
+        contributorsClaims: contributorClaims,
+        acquirerClaims: acquirerClaims,
+      });
+
+    // Step 2: Update contributor claims with recalculated amounts to match smart contract calculation (qty × multiplier)
+    if (recalculatedClaimAmounts.size > 0 || recalculatedLovelaceAmounts.size > 0) {
+      const claimsToUpdate: Claim[] = [];
+      for (const claim of contributorClaims) {
+        const recalculatedVt = recalculatedClaimAmounts.get(claim.id);
+        const recalculatedLovelace = recalculatedLovelaceAmounts.get(claim.id);
+        const vtNeedsUpdate = recalculatedVt !== undefined && recalculatedVt !== claim.amount;
+        const lovelaceNeedsUpdate =
+          recalculatedLovelace !== undefined && recalculatedLovelace !== claim.lovelace_amount;
+
+        if (vtNeedsUpdate || lovelaceNeedsUpdate) {
+          if (vtNeedsUpdate) {
+            claim.amount = recalculatedVt;
+          }
+          if (lovelaceNeedsUpdate) {
+            claim.lovelace_amount = recalculatedLovelace;
+          }
+          claimsToUpdate.push(claim);
+        }
+      }
+      if (claimsToUpdate.length > 0) {
+        await this.claimRepository.save(claimsToUpdate);
+        this.logger.log(`Updated ${claimsToUpdate.length} contributor claim amounts to match multiplier calculation`);
+      }
+    }
+
+    // Step 3: Calculate optimal decimals based on multiplier values
+    const maxMultiplier = Math.max(...acquireMultiplier.map(m => m[2]), 0);
+    const minMultiplier = Math.min(...acquireMultiplier.map(m => m[2]).filter(m => m > 0), Infinity);
+    const maxAdaDistribution = Math.max(...adaDistribution.map(d => d[2]), 0);
+    const minAdaDistribution = Math.min(...adaDistribution.map(d => d[2]).filter(d => d > 0), Infinity);
+    const minValue = Math.min(
+      minMultiplier === Infinity ? 1 : minMultiplier,
+      minAdaDistribution === Infinity ? 1 : minAdaDistribution
+    );
+
+    this.logger.log(
+      `Vault ${vault.id} multiplier stats: ` +
+        `maxMultiplier=${maxMultiplier}, minMultiplier=${minMultiplier === Infinity ? 'N/A' : minMultiplier}, ` +
+        `maxAdaDist=${maxAdaDistribution}, minAdaDist=${minAdaDistribution === Infinity ? 'N/A' : minAdaDistribution}`
+    );
+
+    const optimalDecimals = this.distributionCalculationService.calculateOptimalDecimals(
+      vault.ft_token_supply || 1_000_000,
+      minValue === Infinity ? undefined : minValue
+    );
+
+    // Step 4: Update vault decimals if changed
+    if (optimalDecimals !== vault.ft_token_decimals) {
+      this.logger.log(
+        `Updating vault ${vault.id} decimals from ${vault.ft_token_decimals} to ${optimalDecimals} ` +
+          `(maxMultiplier: ${maxMultiplier}, maxAdaDistribution: ${maxAdaDistribution})`
+      );
+      vault.ft_token_decimals = optimalDecimals;
+      await this.vaultRepository.update(vault.id, { ft_token_decimals: optimalDecimals });
+    }
+
+    return {
+      acquireMultiplier,
+      adaDistribution,
+      optimalDecimals,
+    };
+  }
+
   private async handlePublishedToContribution(): Promise<void> {
     // Handle immediate start vaults
     const immediateStartVaults = await this.vaultRepository
@@ -619,19 +713,22 @@ export class LifecycleService {
       // Sync transactions one more time
       await this.transactionsService.syncVaultTransactions(vault.id);
 
+      try {
+        await this.taptoolsService.updateAssetPrices([vault.id]);
+      } catch (error) {
+        this.logger.error(`Failed to update asset prices for vault ${vault.id}:`, error);
+      }
+
       // 1. First get all relevant transactions for this vault
-      const allTransactions = await this.transactionsRepository.find({
+      const acquisitionTransactions = await this.transactionsRepository.find({
         where: {
           vault_id: vault.id,
-          type: In([TransactionType.acquire, TransactionType.contribute]),
+          type: TransactionType.acquire,
           status: TransactionStatus.confirmed,
         },
         relations: ['user'],
         order: { created_at: 'ASC' },
       });
-
-      const acquisitionTransactions = allTransactions.filter(tx => tx.type === TransactionType.acquire);
-      const contributionTransactions = allTransactions.filter(tx => tx.type === TransactionType.contribute);
 
       // Calculate total ADA from acquisitions
       let totalAcquiredAda = 0;
@@ -641,15 +738,24 @@ export class LifecycleService {
       for (const tx of acquisitionTransactions) {
         if (!tx.user_id) continue;
 
-        const adaSent = tx.amount || 0;
-        totalAcquiredAda += adaSent;
+        totalAcquiredAda += tx.amount || 0;
 
         // Track total per user for later calculations
         if (!userAcquiredAdaMap[tx.user_id]) {
           userAcquiredAdaMap[tx.user_id] = 0;
         }
-        userAcquiredAdaMap[tx.user_id] += adaSent;
+        userAcquiredAdaMap[tx.user_id] += tx.amount || 0;
       }
+
+      const contributionTransactions = await this.transactionsRepository.find({
+        where: {
+          vault_id: vault.id,
+          type: TransactionType.contribute,
+          status: TransactionStatus.confirmed,
+        },
+        relations: ['user'],
+        order: { created_at: 'ASC' },
+      });
 
       // Calculate total value of contributed assets
       let totalContributedValueAda = 0;
@@ -973,74 +1079,12 @@ export class LifecycleService {
         const finalContributorClaims = finalClaims.filter(cl => cl.type === ClaimType.CONTRIBUTOR);
         const finalAcquirerClaims = finalClaims.filter(cl => cl.type === ClaimType.ACQUIRER);
 
-        const { acquireMultiplier, adaDistribution, recalculatedClaimAmounts, recalculatedLovelaceAmounts } =
-          this.distributionCalculationService.calculateAcquireMultipliers({
-            contributorsClaims: finalContributorClaims,
-            acquirerClaims: finalAcquirerClaims,
-          });
-
-        // Update contributor claim amounts to match smart contract calculation (qty × multiplier)
-        // This ensures the transaction validation will pass
-        if (recalculatedClaimAmounts.size > 0 || recalculatedLovelaceAmounts.size > 0) {
-          const claimsToUpdate = [];
-          for (const claim of finalContributorClaims) {
-            const recalculatedVt = recalculatedClaimAmounts.get(claim.id);
-            const recalculatedLovelace = recalculatedLovelaceAmounts.get(claim.id);
-            const vtNeedsUpdate = recalculatedVt !== undefined && recalculatedVt !== claim.amount;
-            const lovelaceNeedsUpdate =
-              recalculatedLovelace !== undefined && recalculatedLovelace !== claim.lovelace_amount;
-
-            if (vtNeedsUpdate || lovelaceNeedsUpdate) {
-              if (vtNeedsUpdate) {
-                claim.amount = recalculatedVt;
-              }
-              if (lovelaceNeedsUpdate) {
-                claim.lovelace_amount = recalculatedLovelace;
-              }
-              claimsToUpdate.push(claim);
-            }
-          }
-          if (claimsToUpdate.length > 0) {
-            await this.claimRepository.save(claimsToUpdate);
-            this.logger.log(
-              `Updated ${claimsToUpdate.length} contributor claim amounts to match multiplier calculation`
-            );
-          }
-        }
-
-        // Recalculate optimal decimals now that we have final multiplier values
-        // This ensures we don't hit floating point precision issues
-        const maxMultiplier = Math.max(...acquireMultiplier.map(m => m[2]), 0);
-        const minMultiplier = Math.min(...acquireMultiplier.map(m => m[2]).filter(m => m > 0), Infinity);
-        const maxAdaDistribution = Math.max(...adaDistribution.map(d => d[2]), 0);
-        const minAdaDistribution = Math.min(...adaDistribution.map(d => d[2]).filter(d => d > 0), Infinity);
-        const maxValue = Math.max(maxMultiplier, maxAdaDistribution);
-        const minValue = Math.min(
-          minMultiplier === Infinity ? 1 : minMultiplier,
-          minAdaDistribution === Infinity ? 1 : minAdaDistribution
-        );
-
-        this.logger.log(
-          `Vault ${vault.id} multiplier stats: ` +
-            `maxMultiplier=${maxMultiplier}, minMultiplier=${minMultiplier === Infinity ? 'N/A' : minMultiplier}, ` +
-            `maxAdaDist=${maxAdaDistribution}, minAdaDist=${minAdaDistribution === Infinity ? 'N/A' : minAdaDistribution}`
-        );
-
-        const optimalDecimals = this.distributionCalculationService.calculateOptimalDecimals(
-          vault.ft_token_supply || 1_000_000,
-          maxValue,
-          minValue
-        );
-
-        // Update vault decimals if they changed
-        if (optimalDecimals !== vault.ft_token_decimals) {
-          this.logger.log(
-            `Updating vault ${vault.id} decimals from ${vault.ft_token_decimals} to ${optimalDecimals} ` +
-              `(maxMultiplier: ${maxMultiplier}, maxAdaDistribution: ${maxAdaDistribution})`
-          );
-          vault.ft_token_decimals = optimalDecimals;
-          await this.vaultRepository.update(vault.id, { ft_token_decimals: optimalDecimals });
-        }
+        // Single source of truth: calculate multipliers, update claims, and compute decimals
+        const { acquireMultiplier, adaDistribution } = await this.processMultipliersAndUpdateClaims({
+          vault,
+          contributorClaims: finalContributorClaims,
+          acquirerClaims: finalAcquirerClaims,
+        });
 
         // Submit single update transaction with all multipliers
         const response = await this.vaultManagingService.updateVaultMetadataTx({
@@ -1056,19 +1100,15 @@ export class LifecycleService {
           return;
         }
 
+        // Recalculate vault totals with fresh prices after successful metadata update
         try {
-          await this.taptoolsService.updateAssetPrices([vault.id]);
-          // Recalculate vault totals with fresh prices
           await this.taptoolsService.updateMultipleVaultTotals([vault.id]);
         } catch (error) {
-          this.logger.error(`Failed to update prices before locking vault ${vault.id}:`, error);
+          this.logger.error(`Failed to update vault totals for ${vault.id}:`, error);
         }
 
         // Submit token metadata PR now that decimals are finalized
         try {
-          this.logger.log(
-            `Submitting token metadata PR for vault ${vault.id} with finalized decimals: ${optimalDecimals}`
-          );
           await this.metadataRegistryApiService.submitVaultTokenMetadata(vault.id);
         } catch (metadataError) {
           this.logger.error(
@@ -1191,6 +1231,15 @@ export class LifecycleService {
       }
 
       await this.transactionsService.syncVaultTransactions(vault.id);
+
+      // Update asset prices BEFORE calculations to use fresh market data
+      this.logger.log(`Updating asset prices for vault ${vault.id} before distribution calculations`);
+      try {
+        await this.taptoolsService.updateAssetPrices([vault.id]);
+      } catch (error) {
+        this.logger.error(`Failed to update asset prices for vault ${vault.id}:`, error);
+        // Continue with cached prices if update fails
+      }
 
       // Calculate total value of contributed assets (this becomes the FDV)
       const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
@@ -1440,66 +1489,18 @@ export class LifecycleService {
         order: { created_at: 'ASC' },
       });
 
-      // Calculate acquire multipliers (only contributors, no acquirers)
-      const { acquireMultiplier, recalculatedClaimAmounts, recalculatedLovelaceAmounts } =
-        this.distributionCalculationService.calculateAcquireMultipliers({
-          contributorsClaims: finalContributorClaims,
-          acquirerClaims: [], // No acquirers
-        });
-
-      // Update contributor claim amounts to match smart contract calculation (qty × multiplier)
-      // This ensures the transaction validation will pass
-      if (recalculatedClaimAmounts.size > 0 || recalculatedLovelaceAmounts.size > 0) {
-        const claimsToUpdate = [];
-        for (const claim of finalContributorClaims) {
-          const recalculatedVt = recalculatedClaimAmounts.get(claim.id);
-          const recalculatedLovelace = recalculatedLovelaceAmounts.get(claim.id);
-          const vtNeedsUpdate = recalculatedVt !== undefined && recalculatedVt !== claim.amount;
-          const lovelaceNeedsUpdate =
-            recalculatedLovelace !== undefined && recalculatedLovelace !== claim.lovelace_amount;
-
-          if (vtNeedsUpdate || lovelaceNeedsUpdate) {
-            if (vtNeedsUpdate) {
-              claim.amount = recalculatedVt;
-            }
-            if (lovelaceNeedsUpdate) {
-              claim.lovelace_amount = recalculatedLovelace;
-            }
-            claimsToUpdate.push(claim);
-          }
-        }
-        if (claimsToUpdate.length > 0) {
-          await this.claimRepository.save(claimsToUpdate);
-          this.logger.log(`Updated ${claimsToUpdate.length} contributor claim amounts to match multiplier calculation`);
-        }
-      }
-
-      // Recalculate optimal decimals now that we have final multiplier values
-      // This ensures we don't hit floating point precision issues
-      const maxMultiplier = Math.max(...acquireMultiplier.map(m => m[2]), 0);
-      const minMultiplier = Math.min(...acquireMultiplier.map(m => m[2]).filter(m => m > 0), Infinity);
-
-      const optimalDecimals = this.distributionCalculationService.calculateOptimalDecimals(
-        vault.ft_token_supply || 1_000_000,
-        maxMultiplier,
-        minMultiplier === Infinity ? undefined : minMultiplier
-      );
-
-      // Update vault decimals if they changed
-      if (optimalDecimals !== vault.ft_token_decimals) {
-        this.logger.log(
-          `Updating vault ${vault.id} decimals from ${vault.ft_token_decimals} to ${optimalDecimals} ` +
-            `(maxMultiplier: ${maxMultiplier}, no acquirers scenario)`
-        );
-        vault.ft_token_decimals = optimalDecimals;
-        await this.vaultRepository.update(vault.id, { ft_token_decimals: optimalDecimals });
-      }
+      // Single source of truth: calculate multipliers, update claims, and compute decimals (no acquirers)
+      const { acquireMultiplier, adaDistribution, optimalDecimals } = await this.processMultipliersAndUpdateClaims({
+        vault,
+        contributorClaims: finalContributorClaims,
+        acquirerClaims: [], // No acquirers in direct contribution → governance flow
+      });
 
       // Submit single update transaction with all multipliers
       const response = await this.vaultManagingService.updateVaultMetadataTx({
         vault,
         acquireMultiplier,
-        adaDistribution: [], // No ADA distribution (no acquirers)
+        adaDistribution, // Empty array for no acquirers scenario
         adaPairMultiplier,
         vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
       });
@@ -1509,14 +1510,11 @@ export class LifecycleService {
         throw new Error('Failed to update vault metadata');
       }
 
-      // Update asset prices before locking to ensure accurate initial_total_value_ada
-      this.logger.log(`Updating asset prices before locking vault ${vault.id}`);
+      // Recalculate vault totals with fresh prices after successful metadata update
       try {
-        await this.taptoolsService.updateAssetPrices([vault.id]);
-        // Recalculate vault totals with fresh prices
         await this.taptoolsService.updateMultipleVaultTotals([vault.id]);
       } catch (error) {
-        this.logger.error(`Failed to update prices before locking vault ${vault.id}:`, error);
+        this.logger.error(`Failed to update vault totals for ${vault.id}:`, error);
       }
 
       // Submit token metadata PR now that decimals are finalized
@@ -1541,7 +1539,7 @@ export class LifecycleService {
         newScStatus: SmartContractVaultStatus.SUCCESSFUL,
         txHash: response.txHash,
         acquire_multiplier: acquireMultiplier,
-        ada_distribution: [], // No ADA distribution (no acquirers)
+        ada_distribution: adaDistribution, // Empty for no acquirers scenario
         ada_pair_multiplier: adaPairMultiplier,
         vtPrice,
         fdv,

@@ -8,6 +8,7 @@ import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
@@ -28,7 +29,8 @@ export class ExpansionService {
     @InjectRepository(Transaction)
     private readonly transactionsRepository: Repository<Transaction>,
     private readonly eventEmitter: EventEmitter2,
-    private readonly vaultManagingService: VaultManagingService
+    private readonly vaultManagingService: VaultManagingService,
+    private readonly distributionCalculationService: DistributionCalculationService
   ) {}
 
   /**
@@ -71,7 +73,7 @@ export class ExpansionService {
             }
           : {
               start: Date.now(),
-              end: Date.now() + expansionConfig.duration + 5 * 60 * 1000, // Add 5 minutes buffer to ensure on-chain state is updated before accepting contributions
+              end: Date.now() + expansionConfig.duration + 24 * 60 * 60 * 1000, // Add 1 day buffer to ensure on-chain state is updated before accepting contributions
             },
       });
 
@@ -106,11 +108,13 @@ export class ExpansionService {
   /**
    * Close vault expansion and return vault to LOCKED status
    * Called when expansion duration expires or asset max is reached
+   * @param expansionMultipliers - Optional expansion multipliers to include in on-chain update
    */
   async closeExpansion(
     vaultId: string,
     proposalId: string,
-    reason: 'duration_expired' | 'asset_max_reached'
+    reason: 'duration_expired' | 'asset_max_reached',
+    expansionMultipliers: [string, string | null, number][]
   ): Promise<void> {
     this.logger.log(`Closing expansion for vault ${vaultId}, reason: ${reason}`);
 
@@ -135,11 +139,12 @@ export class ExpansionService {
       const onChainResult = await this.vaultManagingService.updateVaultMetadataTx({
         vault,
         vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
+        acquireMultiplier: expansionMultipliers,
       });
 
       this.logger.log(`On-chain vault closure successful. TX: ${onChainResult.txHash}`);
 
-      // Update vault status back to LOCKED in database and clear expansion timing
+      // Update vault status back to LOCKED in database and save merged multipliers
       await this.vaultRepository.update(
         { id: vaultId },
         {
@@ -148,10 +153,13 @@ export class ExpansionService {
           expansion_phase_start: null,
           expansion_duration: null,
           last_update_tx_hash: onChainResult.txHash,
+          acquire_multiplier: expansionMultipliers,
+          distribution_in_progress: true,
+          distribution_processed: false,
         }
       );
 
-      this.logger.log(`Vault ${vaultId} status changed back to LOCKED`);
+      this.logger.log(`Vault ${vaultId} status changed back to LOCKED with ${expansionMultipliers.length} multipliers`);
 
       // Emit event for tracking
       this.eventEmitter.emit('vault.expansion.closed', {
@@ -206,6 +214,10 @@ export class ExpansionService {
         const createdClaims: Claim[] = [];
         const contributedAssets: Asset[] = [];
 
+        // Get vault decimals once (outside the loop)
+        const decimals = vault.ft_token_decimals ?? 6;
+        const decimalMultiplier = Math.pow(10, decimals);
+
         for (const transaction of expansionContributions) {
           try {
             // Calculate asset value in ADA
@@ -223,9 +235,9 @@ export class ExpansionService {
                 continue;
               }
 
-              // VT amount = Asset Value (ADA) / Limit Price (ADA per VT)
+              // VT amount = Asset Value (ADA) / Limit Price (ADA per VT) * 10^decimals
               const vtAmountRaw = assetValueAda / expansionConfig.limitPrice;
-              vtAmount = Math.floor(vtAmountRaw * 1_000_000).toString(); // Convert to lovelace equivalent (6 decimals)
+              vtAmount = Math.floor(vtAmountRaw * decimalMultiplier).toString();
             } else {
               // Market price: use current VT price from vault
               const currentVtPrice = vault.vt_price;
@@ -235,9 +247,9 @@ export class ExpansionService {
                 continue;
               }
 
-              // VT amount = Asset Value (ADA) / Current VT Price (ADA per VT)
+              // VT amount = Asset Value (ADA) / Current VT Price (ADA per VT) * 10^decimals
               const vtAmountRaw = assetValueAda / currentVtPrice;
-              vtAmount = Math.floor(vtAmountRaw * 1_000_000).toString(); // Convert to lovelace equivalent (6 decimals)
+              vtAmount = Math.floor(vtAmountRaw * decimalMultiplier).toString();
             }
 
             if (vtAmount === '0') {
@@ -247,63 +259,73 @@ export class ExpansionService {
               continue;
             }
 
-            // Create expansion claim
-            const claimData = {
+            const claim = this.claimRepository.create({
               user: { id: transaction.user.id },
               vault: { id: vault.id },
               transaction: { id: transaction.id },
+              proposal: { id: expansionProposal.id },
               type: ClaimType.EXPANSION,
               status: ClaimStatus.PENDING,
               amount: Number(vtAmount),
-              description: `Expansion contribution: ${transaction.assets.length} asset(s) → ${Number(vtAmount) / 1_000_000} VT`,
+              proposal_id: expansionProposal.id,
+              description: `Expansion contribution: ${transaction.assets.length} asset(s) → ${Number(vtAmount) / decimalMultiplier} VT`,
               metadata: {
-                expansionProposalId: expansionProposal.id,
-                pricingMethod: expansionConfig.priceType,
-                limitPrice: expansionConfig.limitPrice,
-                marketPrice: expansionConfig.priceType === 'market' ? vault.vt_price : undefined,
-                assetCount: transaction.assets.length,
                 assetValueAda,
-                calculatedAt: new Date().toISOString(),
-                assets: transaction.assets.map(asset => ({
-                  id: asset.id,
-                  policyId: asset.policy_id,
-                  assetId: asset.asset_id,
-                  name: asset.name,
-                })),
               },
-            };
-
-            const claim = this.claimRepository.create(claimData);
+            });
 
             createdClaims.push(claim);
             contributedAssets.push(...transaction.assets);
 
             this.logger.log(
-              `Created expansion claim for user ${transaction.user_id}: ${assetValueAda} ADA → ${Number(vtAmount) / 1_000_000} VT`
+              `Created expansion claim for user ${transaction.user_id}: ${assetValueAda} ADA → ${Number(vtAmount) / decimalMultiplier} VT`
             );
           } catch (error) {
             this.logger.error(`Error creating claim for transaction ${transaction.id}: ${error.message}`, error.stack);
           }
         }
 
-        // Save all claims in bulk
+        // Save claims in bulk (to get IDs for multiplier recalculation)
         if (createdClaims.length > 0) {
-          await this.claimRepository.save(createdClaims);
+          // STEP 1: Save claims first to get IDs
+          const savedClaims = await this.claimRepository.save(createdClaims);
+          this.logger.log(`Saved ${savedClaims.length} initial expansion claim(s) for vault ${vault.id}`);
+
+          // STEP 2: Calculate multipliers and recalculate amounts (now that we have IDs)
+          const multiplierResult = this.distributionCalculationService.calculateExpansionMultipliers({
+            assets: contributedAssets,
+            vtPrice: expansionConfig.priceType === 'limit' ? expansionConfig.limitPrice : vault.vt_price,
+            decimals,
+          });
+
+          this.logger.log(JSON.stringify(multiplierResult));
+
+          const expansionMultipliers = multiplierResult.multipliers;
+          const recalculatedClaimAmounts = multiplierResult.recalculatedClaimAmounts;
+
+          // STEP 3: Apply recalculated amounts to claims
+          this.distributionCalculationService.applyRecalculatedAmounts(savedClaims, recalculatedClaimAmounts);
+
+          for (const claim of savedClaims) {
+            this.logger.log(
+              `Recalculated claim ${claim.id}: ${claim.amount / decimalMultiplier} VT (${recalculatedClaimAmounts.get(claim.id) || 0} base units)`
+            );
+          }
+
+          // STEP 4: Update claims with final recalculated amounts
+          await this.claimRepository.save(savedClaims);
           this.logger.log(`Successfully created ${createdClaims.length} expansion claim(s) for vault ${vault.id}`);
 
-          // Calculate and update multipliers for expansion assets
-          const expansionMultipliers = await this.calculateExpansionMultipliers(
-            contributedAssets,
-            expansionConfig.priceType === 'limit' ? expansionConfig.limitPrice : vault.vt_price
-          );
-
-          // Update vault with new multipliers (append to existing acquire_multiplier)
-          await this.updateVaultMultipliers(vault.id, expansionMultipliers);
+          // Close the expansion and return vault to locked status (with multipliers)
+          await this.closeExpansion(vault.id, expansionProposal.id, 'duration_expired', expansionMultipliers);
+        } else {
+          // No contributions, close without multipliers
+          await this.closeExpansion(vault.id, expansionProposal.id, 'duration_expired', []);
         }
+      } else {
+        // No contributions, close without multipliers
+        await this.closeExpansion(vault.id, expansionProposal.id, 'duration_expired', []);
       }
-
-      // Close the expansion and return vault to locked status
-      await this.closeExpansion(vault.id, expansionProposal.id, 'duration_expired');
 
       this.logger.log(`Successfully closed expansion for vault ${vault.id}`);
     } catch (error) {
@@ -336,139 +358,5 @@ export class ExpansionService {
     }
 
     return totalValueAda;
-  }
-
-  /**
-   * Calculate multipliers for expansion assets
-   * Groups assets by policy and price, calculates VT multiplier for each group
-   */
-  private async calculateExpansionMultipliers(
-    assets: Asset[],
-    vtPrice: number
-  ): Promise<[string, string | null, number][]> {
-    interface AssetWithData {
-      policyId: string;
-      assetName: string | null;
-      price: number;
-      vtAmount: number;
-      quantity: number;
-    }
-
-    const assetsByPolicyAndPrice = new Map<string, AssetWithData[]>();
-
-    // Collect and group all assets by policy and price
-    for (const fullAsset of assets) {
-      const price = fullAsset.floor_price || fullAsset.dex_price || 0;
-      if (price === 0) continue;
-
-      // Calculate VT amount for this asset
-      const vtPerAsset = (price / vtPrice) * 1_000_000; // VT in lovelace units
-      const quantity = fullAsset.quantity || 1;
-
-      const groupKey = `${fullAsset.policy_id}:${price}`;
-
-      if (!assetsByPolicyAndPrice.has(groupKey)) {
-        assetsByPolicyAndPrice.set(groupKey, []);
-      }
-
-      assetsByPolicyAndPrice.get(groupKey)!.push({
-        policyId: fullAsset.policy_id,
-        assetName: fullAsset.asset_id || null,
-        price,
-        vtAmount: vtPerAsset,
-        quantity,
-      });
-    }
-
-    // Group by policy to determine if we can use policy-level multipliers
-    const policiesData = new Map<
-      string,
-      {
-        priceGroups: Map<number, AssetWithData[]>;
-        totalAssets: number;
-      }
-    >();
-
-    for (const assets of assetsByPolicyAndPrice.values()) {
-      const policyId = assets[0].policyId;
-      const price = assets[0].price;
-
-      if (!policiesData.has(policyId)) {
-        policiesData.set(policyId, {
-          priceGroups: new Map(),
-          totalAssets: 0,
-        });
-      }
-
-      const policyData = policiesData.get(policyId)!;
-      policyData.priceGroups.set(price, assets);
-      policyData.totalAssets += assets.length;
-    }
-
-    const expansionMultipliers: [string, string | null, number][] = [];
-
-    // Process each policy
-    for (const [policyId, policyData] of policiesData.entries()) {
-      // If all assets in this policy have the same price, use policy-level multiplier
-      if (policyData.priceGroups.size === 1) {
-        const [price, assets] = Array.from(policyData.priceGroups.entries())[0];
-        const multiplier = Math.floor(assets[0].vtAmount / price / 1_000_000);
-
-        expansionMultipliers.push([policyId, null, multiplier]);
-
-        this.logger.log(
-          `Policy-level multiplier for ${policyId}: ${multiplier} (${assets.length} assets with price ${price})`
-        );
-      } else {
-        // Different prices - need asset-level multipliers
-        for (const [price, assets] of policyData.priceGroups.entries()) {
-          const multiplier = Math.floor(assets[0].vtAmount / price / 1_000_000);
-
-          for (const asset of assets) {
-            expansionMultipliers.push([asset.policyId, asset.assetName, multiplier]);
-          }
-
-          this.logger.log(
-            `Asset-level multipliers for ${policyId} (price ${price}): ${multiplier} (${assets.length} assets)`
-          );
-        }
-      }
-    }
-
-    return expansionMultipliers;
-  }
-
-  /**
-   * Update vault with new expansion multipliers
-   * Appends expansion multipliers to existing acquire_multiplier array
-   */
-  private async updateVaultMultipliers(
-    vaultId: string,
-    expansionMultipliers: [string, string | null, number][]
-  ): Promise<void> {
-    if (expansionMultipliers.length === 0) {
-      this.logger.warn(`No expansion multipliers to update for vault ${vaultId}`);
-      return;
-    }
-
-    // Fetch current vault multipliers
-    const vault = await this.vaultRepository.findOne({
-      where: { id: vaultId },
-      select: ['id', 'acquire_multiplier'],
-    });
-
-    if (!vault) {
-      throw new Error(`Vault ${vaultId} not found`);
-    }
-
-    // Append expansion multipliers to existing multipliers
-    const currentMultipliers = vault.acquire_multiplier || [];
-    const updatedMultipliers = [...currentMultipliers, ...expansionMultipliers];
-
-    await this.vaultRepository.update({ id: vaultId }, { acquire_multiplier: updatedMultipliers });
-
-    this.logger.log(
-      `Updated vault ${vaultId} multipliers: added ${expansionMultipliers.length} expansion multipliers (total: ${updatedMultipliers.length})`
-    );
   }
 }

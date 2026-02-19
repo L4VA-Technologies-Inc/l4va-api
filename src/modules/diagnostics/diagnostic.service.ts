@@ -363,7 +363,6 @@ export class DiagnosticService {
       Infinity
     );
 
-    const maxValue = Math.max(maxMultiplier, maxAdaDistribution);
     const minValue = Math.min(
       minMultiplier === Infinity ? 1 : minMultiplier,
       minAdaDistribution === Infinity ? 1 : minAdaDistribution
@@ -371,7 +370,6 @@ export class DiagnosticService {
 
     const optimalDecimals = this.distributionCalculationService.calculateOptimalDecimals(
       vault.ft_token_supply || 1_000_000,
-      maxValue,
       minValue
     );
 

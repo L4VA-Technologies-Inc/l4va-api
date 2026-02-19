@@ -218,9 +218,7 @@ export class ContributorDistributionOrchestrator {
     dispatchUtxos: AddressesUtxo[],
     config: any
   ): Promise<BatchSizeResult> {
-    // Start with batch size 1 due to high script execution memory per claim
-    // Each claim uses ~12-13M memory units, Cardano limit is 14M per tx
-    // This means only 1 claim per transaction is safe
+    // Start with batch size 1 and increase until we hit limits
     let testBatchSize = 1;
     let lastSuccessfulSize = 1;
     let lastSuccessfulClaims = claims.slice(0, 1);
@@ -238,9 +236,8 @@ export class ContributorDistributionOrchestrator {
       minAda: 4_000_000,
     });
 
-    // Test increasing batch sizes (conservatively, max 1 due to ExUnits)
-    // Note: We keep the loop structure for future optimization if script memory reduces
-    const effectiveMaxBatch = Math.min(1, this.MAX_BATCH_SIZE, claims.length); // Limit to 1 for now
+    // Test increasing batch sizes up to MAX_BATCH_SIZE or available claims
+    const effectiveMaxBatch = Math.min(this.MAX_BATCH_SIZE, claims.length);
 
     while (testBatchSize <= effectiveMaxBatch) {
       const testClaims = claims.slice(0, testBatchSize);
