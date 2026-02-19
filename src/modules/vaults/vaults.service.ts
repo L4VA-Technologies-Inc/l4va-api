@@ -715,11 +715,13 @@ export class VaultsService {
       .andWhere('transaction.status = :status', { status: TransactionStatus.confirmed })
       .andWhere('transaction.type IN (:...types)', {
         types: [TransactionType.contribute, TransactionType.acquire],
+      })
+      .andWhere('transaction.user_id IS NOT NULL')
+      .setParameters({
+        ownerId: vault.owner.id,
         contribute: TransactionType.contribute,
         acquire: TransactionType.acquire,
       })
-      .andWhere('transaction.user_id IS NOT NULL')
-      .setParameters({ ownerId: vault.owner.id })
       .getRawOne();
 
     const vaultContributorsCount = Number(rawStats?.contributorsCount || 0);
@@ -732,7 +734,14 @@ export class VaultsService {
     });
 
     const tokenHolders = latestSnapshot?.addressBalances
-      ? Number(Object.keys(latestSnapshot.addressBalances).length)
+      ? Object.keys(latestSnapshot.addressBalances).filter(addr => {
+          const balance = latestSnapshot.addressBalances[addr];
+          try {
+            return BigInt(balance) > 0n;
+          } catch {
+            return parseFloat(balance) > 0;
+          }
+        }).length
       : 0;
 
     const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(vaultId);

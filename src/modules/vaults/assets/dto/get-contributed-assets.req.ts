@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Transform, Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
+import { IsArray, IsEnum, IsInt, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
 
 import { AssetType } from '@/types/asset.types';
 
@@ -18,6 +18,8 @@ export class AssetsFilterDto {
     }
     return Array.isArray(value) ? value : undefined;
   })
+  @IsArray()
+  @IsString({ each: true })
   @ApiProperty({
     description: 'Filter by policy IDs (comma-separated string)',
     example: 'policy123,policy456',
