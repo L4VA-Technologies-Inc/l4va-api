@@ -72,6 +72,8 @@ export class GovernanceService {
   private readonly votingPowerCache: NodeCache;
   private readonly proposalCreationCache: NodeCache;
   private readonly poolAddress: string;
+  private readonly MIN_VOTING_DURATION = 86400000; // 24 hours in ms
+  private readonly MAX_VOTING_DURATION = 259200000; // 3 days in ms
 
   // private readonly snapshotCache: NodeCache;
 
@@ -277,7 +279,77 @@ export class GovernanceService {
 
     await this.getVotingPower(vaultId, userId, 'create_proposal');
 
+    if (createProposalReq.duration < this.MIN_VOTING_DURATION) {
+      throw new BadRequestException(
+        `Voting duration must be at least 24 hours (${this.MIN_VOTING_DURATION}ms). Provided: ${createProposalReq.duration}ms`
+      );
+    }
+
+    if (createProposalReq.duration > this.MAX_VOTING_DURATION) {
+      throw new BadRequestException(
+        `Voting duration cannot exceed 3 days (${this.MAX_VOTING_DURATION}ms). Provided: ${createProposalReq.duration}ms`
+      );
+    }
+
+    // ===== PROPOSAL TYPE SPECIFIC CONSTRAINTS =====
     const startDate = new Date(createProposalReq.startDate ?? createProposalReq.proposalStart);
+
+    // Check for only 1 active expansion proposal at a time
+    if (createProposalReq.type === ProposalType.EXPANSION) {
+      const activeExpansionProposal = await this.proposalRepository.findOne({
+        where: {
+          vaultId,
+          proposalType: ProposalType.EXPANSION,
+          status: In([ProposalStatus.ACTIVE, ProposalStatus.UPCOMING]),
+        },
+      });
+
+      if (activeExpansionProposal) {
+        throw new BadRequestException(
+          `Only one expansion proposal can be active at a time. ` +
+            `Please wait for the current expansion proposal "${activeExpansionProposal.title}" to complete before creating a new one.`
+        );
+      }
+    }
+
+    // Check for only 1 active market action proposal for the same asset at a time
+    if (createProposalReq.type === ProposalType.MARKETPLACE_ACTION) {
+      const requestedActions = createProposalReq.marketplaceActions || [];
+      const requestedAssetIds = requestedActions.map(action => action.assetId);
+
+      // Find all active/upcoming marketplace action proposals for this vault
+      const activeMarketProposals = await this.proposalRepository.find({
+        where: {
+          vaultId,
+          proposalType: ProposalType.MARKETPLACE_ACTION,
+          status: In([ProposalStatus.ACTIVE, ProposalStatus.UPCOMING]),
+        },
+      });
+
+      // Check if any of the requested assets are already in an active proposal
+      for (const existingProposal of activeMarketProposals) {
+        const existingActions = existingProposal.metadata?.marketplaceActions || [];
+        const existingAssetIds = existingActions.map((action: any) => action.assetId);
+
+        // Check for overlap
+        const overlappingAssets = requestedAssetIds.filter(assetId => existingAssetIds.includes(assetId));
+
+        if (overlappingAssets.length > 0) {
+          // Get asset names for better error message
+          const overlappingAssetRecords = await this.assetRepository.find({
+            where: { id: In(overlappingAssets) },
+            select: ['id', 'name'],
+          });
+
+          const assetNames = overlappingAssetRecords.map(a => a.name || a.id).join(', ');
+
+          throw new BadRequestException(
+            `Cannot create market action proposal. The following assets are already in an active proposal "${existingProposal.title}": ${assetNames}. ` +
+              `Please wait for that proposal to complete before creating a new one for these assets.`
+          );
+        }
+      }
+    }
 
     // Create the proposal with the appropriate fields based on type
     const proposal = this.proposalRepository.create({
