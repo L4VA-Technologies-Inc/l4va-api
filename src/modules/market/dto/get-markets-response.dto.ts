@@ -1,3 +1,5 @@
+import { MarketOhlcvSeries } from './market-ohlcv.dto';
+
 import { LinkEntity } from '@/database/link.entity';
 import { TagEntity } from '@/database/tag.entity';
 
@@ -31,4 +33,8 @@ export interface GetMarketsResponse {
   page: number;
   limit: number;
   totalPages: number;
+}
+
+export interface MarketItemWithOHLCV extends MarketItem {
+  ohlcv: MarketOhlcvSeries | null;
 }

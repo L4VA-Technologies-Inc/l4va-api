@@ -175,12 +175,26 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   assetsCount: number;
 
-  @ApiProperty({ description: 'Count of unique vault members (users who contributed assets or acquired tokens)' })
+  @ApiProperty({ description: 'Count of token holders from the latest snapshot' })
   @DtoRepresent({
     transform: false,
-    expose: { name: 'vaultMembersCount' },
+    expose: { name: 'tokenHolders' },
   })
-  vaultMembersCount: number;
+  tokenHolders: number;
+
+  @ApiProperty({ description: 'Count of unique contributors (users who contributed assets)' })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'vaultContributorsCount' },
+  })
+  vaultContributorsCount: number;
+
+  @ApiProperty({ description: 'Count of unique acquirers (users who acquired tokens)' })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'vaultAcquirersCount' },
+  })
+  vaultAcquirersCount: number;
 
   @ApiProperty({ description: 'Response with list of assets prices  ' })
   @DtoRepresent({

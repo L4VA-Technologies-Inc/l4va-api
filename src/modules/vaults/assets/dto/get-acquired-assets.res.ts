@@ -21,4 +21,16 @@ export class GetAcquiredAssetsRes {
   @Expose()
   @ApiProperty({ description: 'Total number of pages', example: 10 })
   totalPages: number;
+
+  @Expose()
+  @ApiProperty({ description: 'Total acquired quantity (sum of all quantities)', example: 1000.5 })
+  totalAcquired: number;
+
+  @Expose()
+  @ApiProperty({ description: 'Total acquired value in USD', example: 500.25 })
+  totalAcquiredUsd: number;
+
+  @Expose()
+  @ApiProperty({ description: 'Total number of unique acquirers', example: 25 })
+  totalAcquirers: number;
 }

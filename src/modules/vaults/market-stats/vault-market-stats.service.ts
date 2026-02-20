@@ -1,12 +1,14 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import axios, { AxiosInstance } from 'axios';
+import NodeCache from 'node-cache';
 import { Repository } from 'typeorm';
 
+import { Market } from '@/database/market.entity';
 import { Vault } from '@/database/vault.entity';
-import { MarketService } from '@/modules/market/market.service';
+import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { VyfiService } from '@/modules/vyfi/vyfi.service';
 import { VaultStatus } from '@/types/vault.types';
@@ -21,12 +23,15 @@ export class VaultMarketStatsService {
   private readonly logger = new Logger(VaultMarketStatsService.name);
   private readonly isMainnet: boolean;
   private readonly axiosTapToolsInstance: AxiosInstance;
+  private readonly ohlcvCache: NodeCache;
+  private readonly validOHLCVIntervals: readonly string[] = ['1h', '24h', '7d', '30d'];
 
   constructor(
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
+    @InjectRepository(Market)
+    private readonly marketRepository: Repository<Market>,
     private readonly configService: ConfigService,
-    private readonly marketService: MarketService,
     private readonly vyfiService: VyfiService,
     private readonly taptoolsService: TaptoolsService
   ) {
@@ -39,6 +44,12 @@ export class VaultMarketStatsService {
       headers: {
         'x-api-key': tapToolsApiKey,
       },
+    });
+
+    this.ohlcvCache = new NodeCache({
+      stdTTL: 300,
+      checkperiod: 60,
+      useClones: false,
     });
   }
 
@@ -210,7 +221,7 @@ export class VaultMarketStatsService {
             has_market_data: hasMarketData, // Track if LP actually exists on DEX
           };
 
-          await this.marketService.upsertMarketData(marketData);
+          await this.upsertMarketData(marketData);
 
           return { vault_id: vault.id, ...marketData, ...vaultUpdateData };
         } catch (error) {
@@ -218,7 +229,9 @@ export class VaultMarketStatsService {
             `Error fetching market data for vault ${vault.name} (${unit}):`,
             error.response?.data || error.message
           );
-          return null;
+          throw new ServiceUnavailableException(
+            `Failed to fetch market data for vault ${vault.name}. Please try again later.`
+          );
         }
       })
     );
@@ -286,5 +299,96 @@ export class VaultMarketStatsService {
       this.logger.warn(`Could not check liquidity for ${policyId}.${assetName}: ${error.message}`);
       return { exists: false };
     }
+  }
+
+  async getTokenOHLCV(policyId: string, assetName: string, interval: string = '1h'): Promise<MarketOhlcvSeries | null> {
+    if (!this.isMainnet) {
+      this.logger.warn('Not mainnet environment - OHLCV data not available');
+      return null;
+    }
+
+    if (!policyId || !assetName) {
+      this.logger.warn('Policy ID and asset name are required for OHLCV data');
+      return null;
+    }
+
+    if (!this.validOHLCVIntervals.includes(interval)) {
+      this.logger.warn(`Invalid interval '${interval}'. Valid are: ${this.validOHLCVIntervals.join(', ')}`);
+      return null;
+    }
+
+    const cacheKey = `ohlcv_${policyId}_${assetName}_${interval}`;
+    const cachedData = this.ohlcvCache.get<MarketOhlcvSeries>(cacheKey);
+
+    if (cachedData) {
+      return cachedData;
+    }
+
+    try {
+      const unit = `${policyId}${assetName}`;
+      const { data } = await this.axiosTapToolsInstance.get<MarketOhlcvSeries>('/token/ohlcv', {
+        params: { unit, interval },
+      });
+
+      this.ohlcvCache.set(cacheKey, data);
+      return data;
+    } catch (error) {
+      this.logger.error(
+        `Error fetching OHLCV data from TapTools for ${policyId}.${assetName} (interval: ${interval}):`,
+        error.response?.data || error.message
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Upserts (inserts or updates) market data for a vault in the Market table
+   * Calculates the delta (market cap / TVL percentage) if both mcap and tvl are provided
+   * Updates existing market record if found, otherwise creates a new one
+   * @param data Market data object containing:
+   *   - vault_id: The ID of the vault
+   *   - circSupply: Circulating supply of the token
+   *   - mcap: Market capitalization
+   *   - totalSupply: Total supply of the token
+   *   - price_change_1h: Price change percentage over 1 hour
+   *   - price_change_24h: Price change percentage over 24 hours
+   *   - price_change_7d: Price change percentage over 7 days
+   *   - price_change_30d: Price change percentage over 30 days
+   *   - tvl: Optional total value locked (used for delta calculation)
+   *   - has_market_data: Optional flag indicating if LP exists on DEX
+   * @returns The saved Market entity (either updated or newly created)
+   */
+  async upsertMarketData(data: {
+    vault_id: string;
+    circSupply: number;
+    mcap: number;
+    totalSupply: number;
+    price_change_1h: number;
+    price_change_24h: number;
+    price_change_7d: number;
+    price_change_30d: number;
+    tvl?: number;
+    has_market_data?: boolean;
+  }): Promise<Market> {
+    const calculateDelta = (mcap: number, tvl: number | undefined): number | null => {
+      if (!mcap || !tvl || tvl === 0) return null;
+      return (mcap / tvl) * 100;
+    };
+
+    const delta = calculateDelta(data.mcap, data.tvl);
+    const marketData = { ...data, delta };
+    delete marketData.tvl;
+
+    const existingMarket = await this.marketRepository.findOne({
+      where: { vault_id: data.vault_id },
+    });
+
+    if (existingMarket) {
+      Object.assign(existingMarket, marketData);
+      return await this.marketRepository.save(existingMarket);
+    }
+
+    const newMarket = this.marketRepository.create(marketData);
+    return await this.marketRepository.save(newMarket);
   }
 }
