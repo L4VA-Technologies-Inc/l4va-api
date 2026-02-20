@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -24,6 +24,7 @@ export class VaultMarketStatsService {
   private readonly isMainnet: boolean;
   private readonly axiosTapToolsInstance: AxiosInstance;
   private readonly ohlcvCache: NodeCache;
+  private readonly validOHLCVIntervals: readonly string[] = ['1h', '24h', '7d', '30d'];
 
   constructor(
     @InjectRepository(Vault)
@@ -300,15 +301,7 @@ export class VaultMarketStatsService {
     }
   }
 
-  /**
-   * Get OHLCV (Open, High, Low, Close, Volume) data for a vault token from Taptools API
-   * Results are cached for 5 minutes to reduce API calls
-   * @param policyId Token policy ID
-   * @param assetName Token asset name (hex)
-   * @param interval Time interval for OHLCV data (e.g., '1h', '24h', '7d', '30d')
-   * @returns OHLCV data from Taptools API or null if error
-   */
-  async getTokenOHLCV(policyId: string, assetName: string, interval: string = '1h'): Promise<MarketOhlcvSeries> {
+  async getTokenOHLCV(policyId: string, assetName: string, interval: string = '1h'): Promise<MarketOhlcvSeries | null> {
     if (!this.isMainnet) {
       this.logger.warn('Not mainnet environment - OHLCV data not available');
       return null;
@@ -316,73 +309,55 @@ export class VaultMarketStatsService {
 
     if (!policyId || !assetName) {
       this.logger.warn('Policy ID and asset name are required for OHLCV data');
-      throw new NotFoundException('Policy ID and asset name are required for OHLCV data');
+      return null;
+    }
+
+    if (!this.validOHLCVIntervals.includes(interval)) {
+      this.logger.warn(`Invalid interval '${interval}'. Valid are: ${this.validOHLCVIntervals.join(', ')}`);
+      return null;
     }
 
     const cacheKey = `ohlcv_${policyId}_${assetName}_${interval}`;
-
     const cachedData = this.ohlcvCache.get<MarketOhlcvSeries>(cacheKey);
+
     if (cachedData) {
-      this.logger.debug(`Returning cached OHLCV data for ${policyId}.${assetName} (interval: ${interval})`);
       return cachedData;
     }
 
     try {
       const unit = `${policyId}${assetName}`;
       const { data } = await this.axiosTapToolsInstance.get<MarketOhlcvSeries>('/token/ohlcv', {
-        params: {
-          unit,
-          interval,
-        },
+        params: { unit, interval },
       });
 
       this.ohlcvCache.set(cacheKey, data);
-
-      this.logger.log(`Successfully fetched and cached OHLCV data for ${unit} with interval ${interval}`);
       return data;
     } catch (error) {
       this.logger.error(
-        `Error fetching OHLCV data for ${policyId}.${assetName} (interval: ${interval}):`,
+        `Error fetching OHLCV data from TapTools for ${policyId}.${assetName} (interval: ${interval}):`,
         error.response?.data || error.message
       );
-      throw new ServiceUnavailableException('Failed to fetch OHLCV data from Taptools API');
+      return null;
     }
   }
 
   /**
-   * Get OHLCV data for a vault by vault ID
-   * Fetches policy_id and asset_vault_name from vault and calls getTokenOHLCV
-   * @param vaultId Vault ID
-   * @param interval Time interval for OHLCV data (e.g., '1h', '24h', '7d', '30d')
-   * @returns OHLCV data from Taptools API or null if error/vault not found
+   * Upserts (inserts or updates) market data for a vault in the Market table
+   * Calculates the delta (market cap / TVL percentage) if both mcap and tvl are provided
+   * Updates existing market record if found, otherwise creates a new one
+   * @param data Market data object containing:
+   *   - vault_id: The ID of the vault
+   *   - circSupply: Circulating supply of the token
+   *   - mcap: Market capitalization
+   *   - totalSupply: Total supply of the token
+   *   - price_change_1h: Price change percentage over 1 hour
+   *   - price_change_24h: Price change percentage over 24 hours
+   *   - price_change_7d: Price change percentage over 7 days
+   *   - price_change_30d: Price change percentage over 30 days
+   *   - tvl: Optional total value locked (used for delta calculation)
+   *   - has_market_data: Optional flag indicating if LP exists on DEX
+   * @returns The saved Market entity (either updated or newly created)
    */
-  async getVaultTokenOHLCV(vaultId: string, interval: string = '1h'): Promise<MarketOhlcvSeries> {
-    try {
-      const vault = await this.vaultRepository.findOne({
-        where: { id: vaultId },
-        select: ['id', 'policy_id', 'asset_vault_name', 'name'],
-      });
-
-      if (!vault) {
-        this.logger.warn(`Vault with ID ${vaultId} not found`);
-        throw new NotFoundException(`Vault with ID ${vaultId} not found`);
-      }
-
-      if (!vault.policy_id || !vault.asset_vault_name) {
-        this.logger.warn(`Vault ${vault.name} (${vaultId}) does not have policy_id or asset_vault_name`);
-        throw new NotFoundException(`Vault ${vaultId} is missing policy_id or asset_vault_name`);
-      }
-
-      return await this.getTokenOHLCV(vault.policy_id, vault.asset_vault_name, interval);
-    } catch (error) {
-      this.logger.error(
-        `Error fetching OHLCV data for vault ${vaultId}:`,
-        error instanceof Error ? error.message : String(error)
-      );
-      throw error;
-    }
-  }
-
   async upsertMarketData(data: {
     vault_id: string;
     circSupply: number;

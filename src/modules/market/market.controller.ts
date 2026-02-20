@@ -32,11 +32,12 @@ export class MarketController {
     status: 200,
   })
   @ApiResponse({ status: 200, description: 'Returns market data with OHLCV', type: Object })
+  @ApiResponse({ status: 503, description: 'Service unavailable - failed to fetch OHLCV data' })
   @ApiResponse({ status: 404, description: 'Market not found' })
   async getMarketByIdWithOHLCV(
     @Param('id') marketId: string,
     @Query('interval') interval?: string
-  ): Promise<MarketItemWithOHLCV | null> {
+  ): Promise<MarketItemWithOHLCV> {
     return this.marketService.getMarketByIdWithOHLCV(marketId, interval || '1h');
   }
 
@@ -48,7 +49,7 @@ export class MarketController {
   })
   @ApiResponse({ status: 200, description: 'Returns market data', type: Object })
   @ApiResponse({ status: 404, description: 'Market not found' })
-  async getMarketById(@Param('id') marketId: string): Promise<MarketItem | null> {
+  async getMarketById(@Param('id') marketId: string): Promise<MarketItem> {
     return this.marketService.getMarketById(marketId);
   }
 }

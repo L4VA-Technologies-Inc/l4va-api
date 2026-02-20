@@ -154,23 +154,8 @@ export class MarketService implements OnModuleInit {
    * @returns Market data with vault information
    */
   async getMarketById(vaultId: string): Promise<MarketItem> {
-    const queryBuilder = this.marketRepository.createQueryBuilder('market');
-
-    queryBuilder
-      .leftJoinAndSelect('market.vault', 'vault')
-      .leftJoinAndSelect('vault.social_links', 'social_links')
-      .leftJoinAndSelect('vault.vault_image', 'vault_image')
-      .leftJoinAndSelect('vault.ft_token_img', 'ft_token_img')
-      .leftJoinAndSelect('vault.tags', 'tags')
-      .where('market.vault_id = :vaultId', { vaultId });
-
-    const item = await queryBuilder.getOne();
-
-    if (!item) {
-      throw new NotFoundException(`Market not found for vault ${vaultId}`);
-    }
-
-    return this.mapMarketToItem(item);
+    const rawItem = await this.getRawMarketByVaultId(vaultId);
+    return this.mapMarketToItem(rawItem);
   }
 
   /**
@@ -182,9 +167,19 @@ export class MarketService implements OnModuleInit {
    * @returns Combined market data with OHLCV
    */
   async getMarketByIdWithOHLCV(vaultId: string, interval: string = '1h'): Promise<MarketItemWithOHLCV> {
-    const marketData = await this.getMarketById(vaultId);
+    const rawMarket = await this.getRawMarketByVaultId(vaultId);
 
-    const ohlcvData = await this.vaultMarketStatsService.getVaultTokenOHLCV(marketData.vault_id, interval);
+    const policyId = rawMarket.vault?.policy_id;
+    const assetName = rawMarket.vault?.asset_vault_name;
+
+    const marketData = this.mapMarketToItem(rawMarket);
+
+    let ohlcvData = null;
+    if (policyId && assetName) {
+      ohlcvData = await this.vaultMarketStatsService.getTokenOHLCV(policyId, assetName, interval);
+    } else {
+      this.logger.warn(`Missing policy_id or asset_vault_name for vault ${vaultId}, skipping OHLCV`);
+    }
 
     return {
       ...marketData,
@@ -222,6 +217,26 @@ export class MarketService implements OnModuleInit {
       social_links: vault?.social_links || [],
       tags: vault?.tags || [],
     };
+  }
+
+  private async getRawMarketByVaultId(vaultId: string): Promise<Market> {
+    const queryBuilder = this.marketRepository.createQueryBuilder('market');
+
+    queryBuilder
+      .leftJoinAndSelect('market.vault', 'vault')
+      .leftJoinAndSelect('vault.social_links', 'social_links')
+      .leftJoinAndSelect('vault.vault_image', 'vault_image')
+      .leftJoinAndSelect('vault.ft_token_img', 'ft_token_img')
+      .leftJoinAndSelect('vault.tags', 'tags')
+      .where('market.vault_id = :vaultId', { vaultId });
+
+    const item = await queryBuilder.getOne();
+
+    if (!item) {
+      throw new NotFoundException(`Market not found for vault ${vaultId}`);
+    }
+
+    return item;
   }
 
   private mapSortField(sortBy: MarketSortField): string {
