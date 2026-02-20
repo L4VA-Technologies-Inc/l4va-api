@@ -693,6 +693,20 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   expansionWhitelist?: Array<{ policyId: string; collectionName: string | null }>;
 
+  @ApiProperty({ description: 'Expansion price type (limit or market)', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'expansionPriceType' },
+  })
+  expansionPriceType?: 'limit' | 'market';
+
+  @ApiProperty({ description: 'Expansion limit price (ADA per VT)', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'expansionLimitPrice' },
+  })
+  expansionLimitPrice?: number;
+
   @ApiProperty({ description: 'Owner of the vault', type: () => User })
   @DtoRepresent({
     transform: false,

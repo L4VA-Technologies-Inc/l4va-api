@@ -714,6 +714,8 @@ export class VaultsService {
     let expansionAssetsCount = 0;
     let expansionAssetMax: number | undefined;
     let expansionNoMax: boolean | undefined;
+    let expansionPriceType: 'limit' | 'market' | undefined;
+    let expansionLimitPrice: number | undefined;
     let expansionAssetsByPolicy: Array<{ policyId: string; quantity: number }> = [];
     let expansionWhitelist: Array<{ policyId: string; collectionName: string | null }> = [];
 
@@ -731,6 +733,8 @@ export class VaultsService {
       if (expansionProposal?.metadata?.expansion) {
         expansionAssetMax = expansionProposal.metadata.expansion.assetMax;
         expansionNoMax = expansionProposal.metadata.expansion.noMax;
+        expansionPriceType = expansionProposal.metadata.expansion.priceType;
+        expansionLimitPrice = expansionProposal.metadata.expansion.limitPrice;
         const expansionPolicyIds = expansionProposal.metadata.expansion.policyIds || [];
 
         // Fetch collection names for expansion policies
@@ -844,6 +848,8 @@ export class VaultsService {
       expansionAssetsCount,
       expansionAssetMax,
       expansionNoMax,
+      expansionPriceType,
+      expansionLimitPrice,
       expansionAssetsByPolicy,
       expansionWhitelist,
       // Protocol fees
@@ -1083,6 +1089,9 @@ export class VaultsService {
           break;
         case VaultFilter.contribution:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.contribution });
+          break;
+        case VaultFilter.expansion:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.expansion });
           break;
         case VaultFilter.acquire:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.acquire });

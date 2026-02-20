@@ -79,7 +79,7 @@ export class AutomatedDistributionService {
     };
   }
 
-  @Cron(CronExpression.EVERY_5_MINUTES)
+  @Cron(CronExpression.EVERY_10_MINUTES)
   async processVaultDistributions(): Promise<void> {
     if (this.isRunning) {
       this.logger.warn('Distribution process already running, skipping this execution');

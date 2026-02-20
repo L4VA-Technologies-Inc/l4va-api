@@ -59,7 +59,7 @@ export class ContributorDistributionOrchestrator {
   ) {}
 
   /**
-   * Process all contributor payments for a vault
+   * Process all contributor and expansion payments for a vault
    */
   async processContributorPayments(
     vaultId: string,
@@ -85,18 +85,18 @@ export class ContributorDistributionOrchestrator {
     const readyClaims: Claim[] = await this.claimRepository.find({
       where: {
         vault: { id: vaultId },
-        type: ClaimType.CONTRIBUTOR,
+        type: In([ClaimType.CONTRIBUTOR, ClaimType.EXPANSION]),
         status: ClaimStatus.PENDING,
       },
       relations: ['user', 'transaction'],
     });
 
     if (readyClaims.length === 0) {
-      this.logger.log(`No ready contributor claims for vault ${vaultId}`);
+      this.logger.log(`No ready contributor or expansion claims for vault ${vaultId}`);
       return;
     }
 
-    this.logger.log(`Found ${readyClaims.length} contributor claims to process`);
+    this.logger.log(`Found ${readyClaims.length} contributor or expansion claims to process`);
 
     // Get dispatch UTXOs only if vault has tokens for acquirers
     const hasDispatchFunding = Number(vault.tokens_for_acquires) > 0;
@@ -243,8 +243,6 @@ export class ContributorDistributionOrchestrator {
       const testClaims = claims.slice(0, testBatchSize);
 
       try {
-        this.logger.debug(`Testing batch size ${testBatchSize}...`);
-
         const input = await this.paymentBuilder.buildPaymentInput(vault, testClaims, adminUtxos, dispatchUtxos, config);
 
         const buildResponse = await this.blockchainService.buildTransaction(input);

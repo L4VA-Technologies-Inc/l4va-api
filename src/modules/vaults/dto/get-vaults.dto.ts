@@ -8,6 +8,7 @@ export enum VaultFilter {
   open = 'open',
   locked = 'locked',
   contribution = 'contribution',
+  expansion = 'expansion',
   acquire = 'acquire',
   published = 'published',
   draft = 'draft',

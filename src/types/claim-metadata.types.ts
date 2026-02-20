@@ -25,7 +25,7 @@ export interface ContributorClaimMetadata extends BaseClaimMetadata {
  */
 export interface CancellationClaimMetadata extends BaseClaimMetadata {
   /** Type of transaction being cancelled */
-  transactionType: 'contribution' | 'acquisition';
+  transactionType: 'contribution' | 'acquisition' | 'expansion_refund';
   /** Reason for vault failure/cancellation */
   failureReason: string;
   /** Output index for the UTXO to claim (default: 0) */
@@ -38,6 +38,10 @@ export interface CancellationClaimMetadata extends BaseClaimMetadata {
     quantity: number | string;
     type: string;
   }>;
+  /** ID of expansion proposal (for expansion refunds) */
+  expansionProposalId?: string;
+  /** Required minimum that wasn't met (for expansion refunds) */
+  requiredMin?: number;
 }
 
 /**

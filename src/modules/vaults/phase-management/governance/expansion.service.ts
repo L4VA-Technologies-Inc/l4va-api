@@ -178,7 +178,9 @@ export class ExpansionService {
    * Calculates and creates expansion claims for new contributors
    * Closes the expansion and returns vault to governance (locked) status
    */
-  async executeExpansionToLockedTransition(vault: Vault): Promise<void> {
+  async executeExpansionToLockedTransition(
+    vault: Pick<Vault, 'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals'>
+  ): Promise<void> {
     this.logger.log(`Processing expansion->locked transition for vault ${vault.id}`);
 
     const expansionProposal = await this.proposalRepository.findOne({
@@ -193,6 +195,18 @@ export class ExpansionService {
     if (!expansionProposal) {
       this.logger.error(`No executed expansion proposal found for vault ${vault.id}`);
       return;
+    }
+
+    // Determine the reason for closing expansion
+    const expansionConfig = expansionProposal.metadata?.expansion;
+    let closeReason: 'duration_expired' | 'asset_max_reached' = 'duration_expired';
+
+    if (expansionConfig && !expansionConfig.noMax && expansionConfig.assetMax) {
+      const currentAssetCount = expansionConfig.currentAssetCount || 0;
+      if (currentAssetCount >= expansionConfig.assetMax) {
+        closeReason = 'asset_max_reached';
+        this.logger.log(`Expansion closing due to asset max reached: ${currentAssetCount}/${expansionConfig.assetMax}`);
+      }
     }
 
     try {
@@ -317,14 +331,14 @@ export class ExpansionService {
           this.logger.log(`Successfully created ${createdClaims.length} expansion claim(s) for vault ${vault.id}`);
 
           // Close the expansion and return vault to locked status (with multipliers)
-          await this.closeExpansion(vault.id, expansionProposal.id, 'duration_expired', expansionMultipliers);
+          await this.closeExpansion(vault.id, expansionProposal.id, closeReason, expansionMultipliers);
         } else {
           // No contributions, close without multipliers
-          await this.closeExpansion(vault.id, expansionProposal.id, 'duration_expired', []);
+          await this.closeExpansion(vault.id, expansionProposal.id, closeReason, []);
         }
       } else {
         // No contributions, close without multipliers
-        await this.closeExpansion(vault.id, expansionProposal.id, 'duration_expired', []);
+        await this.closeExpansion(vault.id, expansionProposal.id, closeReason, []);
       }
 
       this.logger.log(`Successfully closed expansion for vault ${vault.id}`);

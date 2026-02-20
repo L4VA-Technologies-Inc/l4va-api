@@ -22,6 +22,7 @@ import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vau
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { AssetOriginType, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
+import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TokenRegistryStatus } from '@/types/tokenRegistry.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import {
@@ -1579,14 +1580,14 @@ export class LifecycleService {
 
   /**
    * Handle transition from Expansion phase back to Locked (governance) phase
-   * Runs periodically to check for vaults whose expansion duration has expired
+   * Runs periodically to check for vaults whose expansion duration has expired OR asset max is reached
    * Calculates and creates claims for new contributors during expansion
    */
   private async handleExpansionToLocked(): Promise<void> {
     const now = new Date();
 
     // Find vaults in expansion phase whose expansion duration has expired
-    const expansionVaults = await this.vaultRepository
+    const durationExpiredVaults = await this.vaultRepository
       .createQueryBuilder('vault')
       .where('vault.vault_status = :status', { status: VaultStatus.expansion })
       .andWhere('vault.expansion_phase_start IS NOT NULL')
@@ -1598,11 +1599,24 @@ export class LifecycleService {
       })
       .getMany();
 
-    if (expansionVaults.length > 0) {
+    if (durationExpiredVaults.length > 0) {
       this.logger.log(
-        `Found ${expansionVaults.length} vault(s) with expired expansion phase: ${expansionVaults.map(v => v.id).join(', ')}`
+        `Found ${durationExpiredVaults.length} vault(s) with expired expansion phase: ${durationExpiredVaults.map(v => v.id).join(', ')}`
       );
     }
+
+    // Find vaults in expansion phase whose asset max has been reached
+    const assetMaxReachedVaults = await this.findExpansionVaultsAtAssetMax();
+
+    // Combine both sets, removing duplicates
+    const expansionVaultsMap = new Map<
+      string,
+      Pick<Vault, 'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals'>
+    >();
+    for (const vault of [...durationExpiredVaults, ...assetMaxReachedVaults]) {
+      expansionVaultsMap.set(vault.id, vault);
+    }
+    const expansionVaults = Array.from(expansionVaultsMap.values());
 
     for (const vault of expansionVaults) {
       // Skip if vault is already being processed
@@ -1623,5 +1637,66 @@ export class LifecycleService {
         this.processingVaults.delete(vault.id);
       }
     }
+  }
+
+  /**
+   * Find expansion vaults that have reached their asset maximum
+   * Queries expansion proposals to check if currentAssetCount >= assetMax
+   */
+  private async findExpansionVaultsAtAssetMax(): Promise<
+    Pick<Vault, 'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals'>[]
+  > {
+    // Find all expansion vaults not already being processed
+    const expansionVaults: Pick<
+      Vault,
+      'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals'
+    >[] = await this.vaultRepository.find({
+      where: {
+        vault_status: VaultStatus.expansion,
+      },
+      select: ['id', 'vault_status', 'expansion_phase_start', 'vt_price', 'ft_token_decimals'],
+    });
+
+    const vaultsAtMax: Pick<Vault, 'id' | 'vault_status' | 'expansion_phase_start'>[] = [];
+
+    for (const vault of expansionVaults) {
+      if (this.processingVaults.has(vault.id)) {
+        continue;
+      }
+
+      // Find the active expansion proposal for this vault
+      const expansionProposal: Pick<Proposal, 'id' | 'metadata' | 'executionDate'> =
+        await this.proposalRepository.findOne({
+          where: {
+            vaultId: vault.id,
+            proposalType: ProposalType.EXPANSION,
+            status: ProposalStatus.EXECUTED,
+          },
+          order: { executionDate: 'DESC' },
+          select: ['id', 'metadata', 'executionDate'],
+        });
+
+      if (!expansionProposal?.metadata?.expansion) {
+        continue;
+      }
+
+      const expansionConfig = expansionProposal.metadata.expansion;
+
+      // Skip if no max configured
+      if (expansionConfig.noMax || !expansionConfig.assetMax) {
+        continue;
+      }
+
+      // Check if currentAssetCount >= assetMax
+      const currentAssetCount = expansionConfig.currentAssetCount || 0;
+      if (currentAssetCount >= expansionConfig.assetMax) {
+        this.logger.log(
+          `Vault ${vault.id} reached expansion asset max: ${currentAssetCount}/${expansionConfig.assetMax}`
+        );
+        vaultsAtMax.push(vault);
+      }
+    }
+
+    return vaultsAtMax;
   }
 }
