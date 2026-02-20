@@ -1,4 +1,4 @@
-import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -229,9 +229,7 @@ export class VaultMarketStatsService {
             `Error fetching market data for vault ${vault.name} (${unit}):`,
             error.response?.data || error.message
           );
-          throw new ServiceUnavailableException(
-            `Failed to fetch market data for vault ${vault.name}. Please try again later.`
-          );
+          return null;
         }
       })
     );

@@ -32,7 +32,6 @@ export class MarketController {
     status: 200,
   })
   @ApiResponse({ status: 200, description: 'Returns market data with OHLCV', type: Object })
-  @ApiResponse({ status: 503, description: 'Service unavailable - failed to fetch OHLCV data' })
   @ApiResponse({ status: 404, description: 'Market not found' })
   async getMarketByIdWithOHLCV(
     @Param('id') marketId: string,
