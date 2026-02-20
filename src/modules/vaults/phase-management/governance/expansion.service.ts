@@ -243,7 +243,7 @@ export class ExpansionService {
             let vtAmount: string;
 
             if (expansionConfig.priceType === 'limit') {
-              // Limit price: fixed ADA per VT
+              // Limit price: fixed VT per asset
               if (
                 !expansionConfig.limitPrice ||
                 expansionConfig.limitPrice <= 0 ||
@@ -255,13 +255,14 @@ export class ExpansionService {
                 continue;
               }
 
-              // VT amount = Asset Value (ADA) / Limit Price (ADA per VT) * 10^decimals
-              const vtAmountRaw = assetValueAda / expansionConfig.limitPrice;
+              // VT amount = Limit Price (VT per asset) * asset count * 10^decimals
+              const assetCount = transaction.assets.length;
+              const vtAmountRaw = expansionConfig.limitPrice * assetCount;
 
               // Validate result before using it
               if (!Number.isFinite(vtAmountRaw) || vtAmountRaw < 0) {
                 this.logger.error(
-                  `Invalid VT calculation result for transaction ${transaction.id}: ${vtAmountRaw} (assetValueAda: ${assetValueAda}, limitPrice: ${expansionConfig.limitPrice})`
+                  `Invalid VT calculation result for transaction ${transaction.id}: ${vtAmountRaw} (assetCount: ${assetCount}, limitPrice: ${expansionConfig.limitPrice})`
                 );
                 continue;
               }

@@ -682,6 +682,13 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   expansionNoMax?: boolean;
 
+  @ApiProperty({ description: 'Whether expansion has no time limit', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'expansionNoLimit' },
+  })
+  expansionNoLimit?: boolean;
+
   @ApiProperty({ description: 'Expansion assets grouped by policy', required: false })
   @DtoRepresent({
     transform: false,
@@ -714,7 +721,7 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   expansionPriceType?: 'limit' | 'market';
 
-  @ApiProperty({ description: 'Expansion limit price (ADA per VT)', required: false })
+  @ApiProperty({ description: 'Expansion limit price (VT per asset)', required: false })
   @DtoRepresent({
     transform: false,
     expose: { name: 'expansionLimitPrice' },

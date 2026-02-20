@@ -123,7 +123,7 @@ export interface ExpansionClaimMetadata extends BaseClaimMetadata {
   expansionProposalId: string;
   /** Pricing method used: 'limit' or 'market' */
   pricingMethod: 'limit' | 'market';
-  /** Limit price in ADA per VT (if using limit pricing) */
+  /** Limit price in VT per asset (if using limit pricing) */
   limitPrice?: number;
   /** Market price in ADA per VT (if using market pricing) */
   marketPrice?: number;
