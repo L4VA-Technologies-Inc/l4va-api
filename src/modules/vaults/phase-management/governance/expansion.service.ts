@@ -147,8 +147,7 @@ export class ExpansionService {
       this.logger.log(`On-chain vault closure successful. TX: ${onChainResult.txHash}`);
 
       // Update vault status back to LOCKED in database and save merged multipliers
-      // Note: expansion_phase_start and expansion_duration are preserved as historical timestamps
-      // for querying expansion contributions after the expansion phase closes
+      // Clear expansion phase fields to indicate expansion is complete
       await this.vaultRepository.update(
         { id: vaultId },
         {
@@ -158,6 +157,8 @@ export class ExpansionService {
           acquire_multiplier: expansionMultipliers,
           distribution_in_progress: true,
           distribution_processed: false,
+          expansion_phase_start: null,
+          expansion_duration: null,
         }
       );
 
@@ -331,9 +332,9 @@ export class ExpansionService {
           this.logger.log(`Saved ${savedClaims.length} initial expansion claim(s) for vault ${vault.id}`);
 
           // STEP 2: Validate vtPrice before calculating multipliers
-          const vtPrice = expansionConfig.priceType === 'limit' ? expansionConfig.limitPrice : vault.vt_price;
+          const vtPrice = expansionConfig.priceType === 'limit' ? expansionConfig.limitPrice : Number(vault.vt_price);
 
-          if (!vtPrice || vtPrice <= 0 || !Number.isFinite(vtPrice)) {
+          if (!vtPrice || !Number.isFinite(vtPrice)) {
             this.logger.error(
               `CRITICAL: Invalid vtPrice (${vtPrice}) for expansion multiplier calculation on vault ${vault.id}. ` +
                 `Expansion config: ${JSON.stringify({
@@ -375,8 +376,6 @@ export class ExpansionService {
             vtPrice,
             decimals,
           });
-
-          this.logger.log(JSON.stringify(multiplierResult));
 
           const expansionMultipliers = multiplierResult.multipliers;
           const recalculatedClaimAmounts = multiplierResult.recalculatedClaimAmounts;
