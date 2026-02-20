@@ -1587,7 +1587,10 @@ export class LifecycleService {
     const now = new Date();
 
     // Find vaults in expansion phase whose expansion duration has expired
-    const durationExpiredVaults = await this.vaultRepository
+    const durationExpiredVaults: Pick<
+      Vault,
+      'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals'
+    >[] = await this.vaultRepository
       .createQueryBuilder('vault')
       .where('vault.vault_status = :status', { status: VaultStatus.expansion })
       .andWhere('vault.expansion_phase_start IS NOT NULL')
@@ -1597,6 +1600,13 @@ export class LifecycleService {
         processingIds:
           this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'],
       })
+      .select([
+        'vault.id',
+        'vault.vault_status',
+        'vault.expansion_phase_start',
+        'vault.vt_price',
+        'vault.ft_token_decimals',
+      ])
       .getMany();
 
     if (durationExpiredVaults.length > 0) {

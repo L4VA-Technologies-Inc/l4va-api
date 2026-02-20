@@ -270,9 +270,9 @@ export class ExpansionService {
               vtAmount = Math.floor(vtAmountRaw * decimalMultiplier).toString();
             } else {
               // Market price: use current VT price from vault
-              const currentVtPrice = vault.vt_price;
+              const currentVtPrice = Number(vault.vt_price);
 
-              if (!currentVtPrice || currentVtPrice <= 0 || !Number.isFinite(currentVtPrice)) {
+              if (!currentVtPrice || !Number.isFinite(currentVtPrice)) {
                 this.logger.error(`Cannot calculate VT amount: VT price is ${currentVtPrice} for vault ${vault.id}`);
                 continue;
               }
