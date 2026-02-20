@@ -11,6 +11,7 @@ export type SlackAlertType =
   | 'wallet_fetch_failed'
   | 'general_error'
   | 'admin_utxos_exhausted'
+  | 'expansion_invalid_vtprice'
   | string;
 
 @Injectable()
@@ -252,6 +253,86 @@ export class AlertsService {
                 {
                   type: 'mrkdwn',
                   text: `*Timestamp:*\n${timestamp}`,
+                },
+              ],
+            },
+          ],
+        };
+
+      case 'expansion_invalid_vtprice':
+        return {
+          text: `🚨 Expansion Invalid VT Price - Manual Review Required`,
+          blocks: [
+            {
+              type: 'header',
+              text: {
+                type: 'plain_text',
+                text: '🚨 Expansion Invalid VT Price',
+                emoji: true,
+              },
+            },
+            {
+              type: 'section',
+              fields: [
+                {
+                  type: 'mrkdwn',
+                  text: `*Vault ID:*\n\`${data.vaultId}\``,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Proposal ID:*\n\`${data.proposalId}\``,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Invalid VT Price:*\n${data.vtPrice}`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Price Type:*\n${data.priceType}`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Limit Price:*\n${data.limitPrice || 'N/A'}`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Vault VT Price:*\n${data.vaultVtPrice || 'N/A'}`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Claims Created:*\n${data.claimCount}`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Assets Contributed:*\n${data.contributedAssetsCount}`,
+                },
+              ],
+            },
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text:
+                  `*⚠️ Critical Data Integrity Issue:*\n` +
+                  `Expansion closing failed due to invalid VT price. Cannot calculate multipliers with price <= 0 or Infinity.\n\n` +
+                  `*Automatic Actions Taken:*\n` +
+                  `• Vault set to manual distribution mode\n` +
+                  `• Expansion closed without multipliers\n` +
+                  `• Claims saved but amounts may need recalculation\n\n` +
+                  `*Required Manual Actions:*\n` +
+                  `1. Investigate why VT price is invalid (${data.priceType === 'limit' ? 'limit price' : 'vault VT price'})\n` +
+                  `2. Review expansion claims for vault ${data.vaultId}\n` +
+                  `3. Manually calculate and update vault multipliers\n` +
+                  `4. Update claim amounts if necessary\n` +
+                  `5. Disable manual distribution mode when resolved`,
+              },
+            },
+            {
+              type: 'context',
+              elements: [
+                {
+                  type: 'mrkdwn',
+                  text: `*Close Reason:* ${data.closeReason} | *Timestamp:* ${timestamp}`,
                 },
               ],
             },

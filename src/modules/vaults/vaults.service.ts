@@ -719,7 +719,9 @@ export class VaultsService {
     let expansionAssetsByPolicy: Array<{ policyId: string; quantity: number }> = [];
     let expansionWhitelist: Array<{ policyId: string; collectionName: string | null }> = [];
 
-    if (vault.vault_status === VaultStatus.expansion || vault.expansion_phase_start) {
+    // Only check vault_status to determine if vault is currently in expansion
+    // expansion_phase_start is preserved as a historical timestamp
+    if (vault.vault_status === VaultStatus.expansion) {
       // Find the latest expansion proposal
       const expansionProposal = await this.proposalRepository.findOne({
         where: {

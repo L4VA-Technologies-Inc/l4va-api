@@ -26,6 +26,7 @@ import { AssetStatus } from '@/types/asset.types';
 import { ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionStatus } from '@/types/transaction.types';
+import { VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class GovernanceExecutionService {
@@ -548,7 +549,7 @@ export class GovernanceExecutionService {
     ];
 
     if (extractionProposalTypes.includes(proposal.proposalType)) {
-      if (vault.vault_status !== 'locked') {
+      if (vault.vault_status !== VaultStatus.locked) {
         this.logger.warn(
           `Cannot execute ${proposal.proposalType} proposal ${proposal.id}: Vault must be in LOCKED status for asset extraction. Current status: ${vault.vault_status}`
         );

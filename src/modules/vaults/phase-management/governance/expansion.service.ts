@@ -8,6 +8,7 @@ import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { AlertsService } from '@/modules/alerts/alerts.service';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
@@ -30,7 +31,8 @@ export class ExpansionService {
     private readonly transactionsRepository: Repository<Transaction>,
     private readonly eventEmitter: EventEmitter2,
     private readonly vaultManagingService: VaultManagingService,
-    private readonly distributionCalculationService: DistributionCalculationService
+    private readonly distributionCalculationService: DistributionCalculationService,
+    private readonly alertsService: AlertsService
   ) {}
 
   /**
@@ -145,13 +147,13 @@ export class ExpansionService {
       this.logger.log(`On-chain vault closure successful. TX: ${onChainResult.txHash}`);
 
       // Update vault status back to LOCKED in database and save merged multipliers
+      // Note: expansion_phase_start and expansion_duration are preserved as historical timestamps
+      // for querying expansion contributions after the expansion phase closes
       await this.vaultRepository.update(
         { id: vaultId },
         {
           vault_status: VaultStatus.locked,
           vault_sc_status: SmartContractVaultStatus.SUCCESSFUL,
-          expansion_phase_start: null,
-          expansion_duration: null,
           last_update_tx_hash: onChainResult.txHash,
           acquire_multiplier: expansionMultipliers,
           distribution_in_progress: true,
@@ -242,7 +244,11 @@ export class ExpansionService {
 
             if (expansionConfig.priceType === 'limit') {
               // Limit price: fixed ADA per VT
-              if (!expansionConfig.limitPrice || expansionConfig.limitPrice === 0) {
+              if (
+                !expansionConfig.limitPrice ||
+                expansionConfig.limitPrice <= 0 ||
+                !Number.isFinite(expansionConfig.limitPrice)
+              ) {
                 this.logger.error(
                   `Invalid limit price for expansion proposal ${expansionProposal.id}: ${expansionConfig.limitPrice}`
                 );
@@ -251,18 +257,36 @@ export class ExpansionService {
 
               // VT amount = Asset Value (ADA) / Limit Price (ADA per VT) * 10^decimals
               const vtAmountRaw = assetValueAda / expansionConfig.limitPrice;
+
+              // Validate result before using it
+              if (!Number.isFinite(vtAmountRaw) || vtAmountRaw < 0) {
+                this.logger.error(
+                  `Invalid VT calculation result for transaction ${transaction.id}: ${vtAmountRaw} (assetValueAda: ${assetValueAda}, limitPrice: ${expansionConfig.limitPrice})`
+                );
+                continue;
+              }
+
               vtAmount = Math.floor(vtAmountRaw * decimalMultiplier).toString();
             } else {
               // Market price: use current VT price from vault
               const currentVtPrice = vault.vt_price;
 
-              if (!currentVtPrice || currentVtPrice === 0) {
+              if (!currentVtPrice || currentVtPrice <= 0 || !Number.isFinite(currentVtPrice)) {
                 this.logger.error(`Cannot calculate VT amount: VT price is ${currentVtPrice} for vault ${vault.id}`);
                 continue;
               }
 
               // VT amount = Asset Value (ADA) / Current VT Price (ADA per VT) * 10^decimals
               const vtAmountRaw = assetValueAda / currentVtPrice;
+
+              // Validate result before using it
+              if (!Number.isFinite(vtAmountRaw) || vtAmountRaw < 0) {
+                this.logger.error(
+                  `Invalid VT calculation result for transaction ${transaction.id}: ${vtAmountRaw} (assetValueAda: ${assetValueAda}, vtPrice: ${currentVtPrice})`
+                );
+                continue;
+              }
+
               vtAmount = Math.floor(vtAmountRaw * decimalMultiplier).toString();
             }
 
@@ -305,10 +329,49 @@ export class ExpansionService {
           const savedClaims = await this.claimRepository.save(createdClaims);
           this.logger.log(`Saved ${savedClaims.length} initial expansion claim(s) for vault ${vault.id}`);
 
-          // STEP 2: Calculate multipliers and recalculate amounts (now that we have IDs)
+          // STEP 2: Validate vtPrice before calculating multipliers
+          const vtPrice = expansionConfig.priceType === 'limit' ? expansionConfig.limitPrice : vault.vt_price;
+
+          if (!vtPrice || vtPrice <= 0 || !Number.isFinite(vtPrice)) {
+            this.logger.error(
+              `CRITICAL: Invalid vtPrice (${vtPrice}) for expansion multiplier calculation on vault ${vault.id}. ` +
+                `Expansion config: ${JSON.stringify({
+                  priceType: expansionConfig.priceType,
+                  limitPrice: expansionConfig.limitPrice,
+                  vaultVtPrice: vault.vt_price,
+                })}`
+            );
+
+            // Send Slack alert for manual intervention
+            await this.alertsService.sendAlert('expansion_invalid_vtprice', {
+              vaultId: vault.id,
+              proposalId: expansionProposal.id,
+              vtPrice,
+              priceType: expansionConfig.priceType,
+              limitPrice: expansionConfig.limitPrice,
+              vaultVtPrice: vault.vt_price,
+              claimCount: savedClaims.length,
+              contributedAssetsCount: contributedAssets.length,
+              closeReason,
+            });
+
+            // Set vault to manual distribution mode for admin review
+            await this.vaultRepository.update({ id: vault.id }, { manual_distribution_mode: true });
+
+            // Close expansion without multipliers (safe fallback)
+            await this.closeExpansion(vault.id, expansionProposal.id, closeReason, []);
+
+            this.logger.warn(
+              `Vault ${vault.id} closed without multipliers and set to manual distribution mode due to invalid vtPrice. ` +
+                `Administrator must manually review and update vault multipliers.`
+            );
+            return;
+          }
+
+          // STEP 3: Calculate multipliers and recalculate amounts (now that we have IDs)
           const multiplierResult = this.distributionCalculationService.calculateExpansionMultipliers({
             assets: contributedAssets,
-            vtPrice: expansionConfig.priceType === 'limit' ? expansionConfig.limitPrice : vault.vt_price,
+            vtPrice,
             decimals,
           });
 
