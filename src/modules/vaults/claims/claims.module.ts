@@ -5,6 +5,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { AutomaticCancellationService } from './automatic-cancellation.service';
 import { CancellationProcessor } from './cancellation.processor';
+import { ClaimsVerificationService } from './claims-verification.service';
 import { ClaimsController } from './claims.controller';
 import { ClaimsService } from './claims.service';
 import { L4vaRewardsService } from './l4va-rewards.service';
@@ -40,6 +41,7 @@ import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockch
   controllers: [ClaimsController],
   providers: [
     ClaimsService,
+    ClaimsVerificationService,
     L4vaRewardsService,
     AutomaticCancellationService,
     CancellationProcessor,

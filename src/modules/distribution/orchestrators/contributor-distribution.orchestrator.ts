@@ -59,7 +59,7 @@ export class ContributorDistributionOrchestrator {
   ) {}
 
   /**
-   * Process all contributor payments for a vault
+   * Process all contributor and expansion payments for a vault
    */
   async processContributorPayments(
     vaultId: string,
@@ -85,18 +85,18 @@ export class ContributorDistributionOrchestrator {
     const readyClaims: Claim[] = await this.claimRepository.find({
       where: {
         vault: { id: vaultId },
-        type: ClaimType.CONTRIBUTOR,
+        type: In([ClaimType.CONTRIBUTOR, ClaimType.EXPANSION]),
         status: ClaimStatus.PENDING,
       },
       relations: ['user', 'transaction'],
     });
 
     if (readyClaims.length === 0) {
-      this.logger.log(`No ready contributor claims for vault ${vaultId}`);
+      this.logger.log(`No ready contributor or expansion claims for vault ${vaultId}`);
       return;
     }
 
-    this.logger.log(`Found ${readyClaims.length} contributor claims to process`);
+    this.logger.log(`Found ${readyClaims.length} contributor or expansion claims to process`);
 
     // Get dispatch UTXOs only if vault has tokens for acquirers
     const hasDispatchFunding = Number(vault.tokens_for_acquires) > 0;
@@ -218,9 +218,7 @@ export class ContributorDistributionOrchestrator {
     dispatchUtxos: AddressesUtxo[],
     config: any
   ): Promise<BatchSizeResult> {
-    // Start with batch size 1 due to high script execution memory per claim
-    // Each claim uses ~12-13M memory units, Cardano limit is 14M per tx
-    // This means only 1 claim per transaction is safe
+    // Start with batch size 1 and increase until we hit limits
     let testBatchSize = 1;
     let lastSuccessfulSize = 1;
     let lastSuccessfulClaims = claims.slice(0, 1);
@@ -238,16 +236,13 @@ export class ContributorDistributionOrchestrator {
       minAda: 4_000_000,
     });
 
-    // Test increasing batch sizes (conservatively, max 1 due to ExUnits)
-    // Note: We keep the loop structure for future optimization if script memory reduces
-    const effectiveMaxBatch = Math.min(1, this.MAX_BATCH_SIZE, claims.length); // Limit to 1 for now
+    // Test increasing batch sizes up to MAX_BATCH_SIZE or available claims
+    const effectiveMaxBatch = Math.min(this.MAX_BATCH_SIZE, claims.length);
 
     while (testBatchSize <= effectiveMaxBatch) {
       const testClaims = claims.slice(0, testBatchSize);
 
       try {
-        this.logger.debug(`Testing batch size ${testBatchSize}...`);
-
         const input = await this.paymentBuilder.buildPaymentInput(vault, testClaims, adminUtxos, dispatchUtxos, config);
 
         const buildResponse = await this.blockchainService.buildTransaction(input);

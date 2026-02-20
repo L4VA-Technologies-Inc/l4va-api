@@ -167,6 +167,24 @@ export class Vault {
   })
   contribution_duration?: number;
 
+  @Expose({ name: 'expansionPhaseStart' })
+  @Transform(({ value }) => (value ? new Date(value).getTime() : null))
+  @Column({
+    name: 'expansion_phase_start',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  expansion_phase_start?: Date;
+
+  @Expose({ name: 'expansionDuration' })
+  @Transform(({ value }) => (value ? Number(value) : null))
+  @Column({
+    name: 'expansion_duration',
+    type: 'bigint',
+    nullable: true,
+  })
+  expansion_duration?: number;
+
   @Expose({ name: 'acquireWindowDuration' })
   @Transform(({ value }) => (value ? Number(value) : null))
   @Column({ name: 'acquire_window_duration', type: 'bigint', nullable: true })

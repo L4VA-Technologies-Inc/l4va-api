@@ -10,6 +10,7 @@ import {
   IsArray,
   IsNumber,
   IsNumberString,
+  Matches,
 } from 'class-validator';
 
 import { MarketplaceAction, ProposalType } from '@/types/proposal.types';
@@ -337,6 +338,82 @@ export class CreateProposalReq {
   @IsString()
   @Expose()
   proposalStart?: string;
+
+  // ===== EXPANSION fields =====
+  @ApiProperty({
+    description: 'Policy IDs of whitelisted asset collections for expansion',
+    type: [String],
+    required: false,
+    example: ['abc123', 'def456'],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @Matches(/^[0-9a-fA-F]{56}$/, {
+    each: true,
+    message: 'Policy ID must be a 56-character hexadecimal string',
+  })
+  @Expose()
+  expansionPolicyIds?: string[];
+
+  @ApiProperty({
+    description: 'Duration in milliseconds for vault expansion period',
+    required: false,
+    example: 604800000,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Expose()
+  expansionDuration?: number;
+
+  @ApiProperty({
+    description: 'No time limit for expansion period',
+    required: false,
+    default: false,
+  })
+  @IsOptional()
+  @Expose()
+  expansionNoLimit?: boolean;
+
+  @ApiProperty({
+    description: 'Maximum number of assets allowed for expansion (whole numbers only)',
+    required: false,
+    example: 100,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Expose()
+  expansionAssetMax?: number;
+
+  @ApiProperty({
+    description: 'No maximum for expansion assets',
+    required: false,
+    default: false,
+  })
+  @IsOptional()
+  @Expose()
+  expansionNoMax?: boolean;
+
+  @ApiProperty({
+    description: 'Pricing method for expansion: "limit" or "market"',
+    required: false,
+    enum: ['limit', 'market'],
+    example: 'market',
+  })
+  @IsOptional()
+  @IsString()
+  @Expose()
+  expansionPriceType?: 'limit' | 'market';
+
+  @ApiProperty({
+    description: 'Limit price per asset (VT per asset, up to 5 decimals) when using limit pricing',
+    required: false,
+    example: 1.5,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Expose()
+  expansionLimitPrice?: number;
 
   @ApiProperty({
     description: 'Additional metadata for the proposal',

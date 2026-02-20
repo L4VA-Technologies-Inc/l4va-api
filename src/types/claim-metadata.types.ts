@@ -25,7 +25,7 @@ export interface ContributorClaimMetadata extends BaseClaimMetadata {
  */
 export interface CancellationClaimMetadata extends BaseClaimMetadata {
   /** Type of transaction being cancelled */
-  transactionType: 'contribution' | 'acquisition';
+  transactionType: 'contribution' | 'acquisition' | 'expansion_refund';
   /** Reason for vault failure/cancellation */
   failureReason: string;
   /** Output index for the UTXO to claim (default: 0) */
@@ -38,6 +38,10 @@ export interface CancellationClaimMetadata extends BaseClaimMetadata {
     quantity: number | string;
     type: string;
   }>;
+  /** ID of expansion proposal (for expansion refunds) */
+  expansionProposalId?: string;
+  /** Required minimum that wasn't met (for expansion refunds) */
+  requiredMin?: number;
 }
 
 /**
@@ -111,6 +115,35 @@ export interface L4vaClaimMetadata extends BaseClaimMetadata {
 }
 
 /**
+ * Metadata for EXPANSION claims
+ * Used when users contribute during expansion phase and receive VT tokens
+ */
+export interface ExpansionClaimMetadata extends BaseClaimMetadata {
+  /** ID of the expansion proposal that created this claim */
+  expansionProposalId: string;
+  /** Pricing method used: 'limit' or 'market' */
+  pricingMethod: 'limit' | 'market';
+  /** Limit price in ADA per VT (if using limit pricing) */
+  limitPrice?: number;
+  /** Market price in ADA per VT (if using market pricing) */
+  marketPrice?: number;
+  /** Number of assets contributed */
+  assetCount: number;
+  /** Total ADA value of contributed assets */
+  assetValueAda?: number;
+  /** Timestamp when claim was calculated */
+  calculatedAt: string;
+  /** Assets contributed in this expansion contribution */
+  assets: Array<{
+    id?: string;
+    policyId: string;
+    assetId: string;
+    name?: string;
+    quantity: number;
+  }>;
+}
+
+/**
  * Union type for all claim metadata types
  * Use this for type-safe access to claim metadata based on claim type
  */
@@ -121,6 +154,7 @@ export type ClaimMetadata =
   | LpClaimMetadata
   | DistributionClaimMetadata
   | L4vaClaimMetadata
+  | ExpansionClaimMetadata
   | BaseClaimMetadata;
 
 /**

@@ -6,9 +6,11 @@ import { In, Repository } from 'typeorm';
 
 import { ClaimsService } from '../../claims/claims.service';
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
+import { ExpansionService } from '../governance/expansion.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
+import { Proposal } from '@/database/proposal.entity';
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
@@ -20,6 +22,7 @@ import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vau
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { AssetOriginType, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
+import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TokenRegistryStatus } from '@/types/tokenRegistry.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import {
@@ -48,6 +51,8 @@ export class LifecycleService {
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(TokenRegistry)
     private readonly tokenRegistryRepository: Repository<TokenRegistry>,
+    @InjectRepository(Proposal)
+    private readonly proposalRepository: Repository<Proposal>,
     private readonly vaultManagingService: VaultManagingService,
     private readonly distributionCalculationService: DistributionCalculationService,
     private readonly taptoolsService: TaptoolsService,
@@ -56,7 +61,8 @@ export class LifecycleService {
     private readonly claimsService: ClaimsService,
     private readonly transactionsService: TransactionsService,
     private readonly eventEmitter: EventEmitter2,
-    private readonly systemSettingsService: SystemSettingsService
+    private readonly systemSettingsService: SystemSettingsService,
+    private readonly expansionService: ExpansionService
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -66,67 +72,14 @@ export class LifecycleService {
       return;
     }
 
-    this.isRunning = true;
     try {
+      this.isRunning = true;
       await this.handlePublishedToContribution(); // Handle created vault -> contribution transitin
-      await this.handleContributionToAcquire(); // Handle contribution -> acquire transitions
+      await this.handleContributionToAcquire(); // Handle contribution -> acquire transitions (also handles direct contribution -> governance for 0% acquire vaults)
       await this.handleAcquireToGovernance(); // Handle acquire -> governance transitions
+      await this.handleExpansionToLocked(); // Handle expansion -> locked transitions
     } finally {
       this.isRunning = false;
-    }
-  }
-
-  private async queuePhaseTransition(
-    vaultId: string,
-    newStatus: VaultStatus,
-    transitionTime: Date,
-    phaseStartField?: 'contribution_phase_start' | 'acquire_phase_start' | 'governance_phase_start'
-  ): Promise<void> {
-    const now = new Date();
-    const delay = transitionTime.getTime() - now.getTime();
-    const ONE_MINUTE_MS = 60 * 1000;
-
-    if (delay <= 0) {
-      // If transition time is now or in the past, execute immediately
-      let scStatus: SmartContractVaultStatus | undefined;
-
-      if (newStatus === VaultStatus.locked) {
-        scStatus = SmartContractVaultStatus.SUCCESSFUL;
-      } else if (newStatus === VaultStatus.contribution || newStatus === VaultStatus.acquire) {
-        scStatus = SmartContractVaultStatus.OPEN;
-      } else if (newStatus === VaultStatus.failed) {
-        scStatus = SmartContractVaultStatus.CANCELLED;
-
-        const { name, owner } = await this.vaultRepository.findOneBy({ id: vaultId });
-        this.eventEmitter.emit('vault.failed', {
-          address: owner.address,
-          vaultName: name,
-        });
-      } else {
-        scStatus = undefined;
-      }
-
-      await this.executePhaseTransition({ vaultId, newStatus, phaseStartField, newScStatus: scStatus });
-    } else if (delay <= ONE_MINUTE_MS) {
-      // Refactor queue to execute with validation, not just changing status
-      // If transition should happen within the next minute, create a precise delay job
-      // await this.phaseTransitionQueue.add(
-      //   'transitionPhase',
-      //   {
-      //     vaultId,
-      //     newStatus,
-      //     phaseStartField,
-      //   },
-      //   {
-      //     delay,
-      //     // Remove any existing jobs for this vault and phase to avoid duplicates
-      //     jobId: `${vaultId}-${newStatus}`,
-      //     removeOnComplete: 10,
-      //     removeOnFail: 10,
-      //   }
-      // );
-    } else {
-      // If more than 1 minute away, don't queue - let future cron runs handle it
     }
   }
 
@@ -261,6 +214,100 @@ export class LifecycleService {
     }
   }
 
+  /**
+   * Calculate multipliers, update claim amounts, and compute optimal decimals.
+   * This is the single source of truth for the claim recalculation flow.
+   *
+   * Flow:
+   * 1. Calculate acquire multipliers and recalculated claim amounts
+   * 2. Update contributor claims with recalculated VT and lovelace amounts
+   * 3. Calculate optimal decimals based on multiplier values
+   * 4. Update vault decimals if changed
+   *
+   * @returns All data needed for updateVaultMetadataTx call
+   */
+  private async processMultipliersAndUpdateClaims(params: {
+    vault: Vault;
+    contributorClaims: Claim[];
+    acquirerClaims: Claim[];
+  }): Promise<{
+    acquireMultiplier: [string, string | null, number][];
+    adaDistribution: [string, string | null, number][];
+    optimalDecimals: number;
+  }> {
+    const { vault, contributorClaims, acquirerClaims } = params;
+
+    // Step 1: Calculate multipliers (pure calculation, no mutations)
+    const { acquireMultiplier, adaDistribution, recalculatedClaimAmounts, recalculatedLovelaceAmounts } =
+      this.distributionCalculationService.calculateAcquireMultipliers({
+        contributorsClaims: contributorClaims,
+        acquirerClaims: acquirerClaims,
+      });
+
+    // Step 2: Update contributor claims with recalculated amounts to match smart contract calculation (qty × multiplier)
+    if (recalculatedClaimAmounts.size > 0 || recalculatedLovelaceAmounts.size > 0) {
+      const claimsToUpdate: Claim[] = [];
+      for (const claim of contributorClaims) {
+        const recalculatedVt = recalculatedClaimAmounts.get(claim.id);
+        const recalculatedLovelace = recalculatedLovelaceAmounts.get(claim.id);
+        const vtNeedsUpdate = recalculatedVt !== undefined && recalculatedVt !== claim.amount;
+        const lovelaceNeedsUpdate =
+          recalculatedLovelace !== undefined && recalculatedLovelace !== claim.lovelace_amount;
+
+        if (vtNeedsUpdate || lovelaceNeedsUpdate) {
+          if (vtNeedsUpdate) {
+            claim.amount = recalculatedVt;
+          }
+          if (lovelaceNeedsUpdate) {
+            claim.lovelace_amount = recalculatedLovelace;
+          }
+          claimsToUpdate.push(claim);
+        }
+      }
+      if (claimsToUpdate.length > 0) {
+        await this.claimRepository.save(claimsToUpdate);
+        this.logger.log(`Updated ${claimsToUpdate.length} contributor claim amounts to match multiplier calculation`);
+      }
+    }
+
+    // Step 3: Calculate optimal decimals based on multiplier values
+    const maxMultiplier = Math.max(...acquireMultiplier.map(m => m[2]), 0);
+    const minMultiplier = Math.min(...acquireMultiplier.map(m => m[2]).filter(m => m > 0), Infinity);
+    const maxAdaDistribution = Math.max(...adaDistribution.map(d => d[2]), 0);
+    const minAdaDistribution = Math.min(...adaDistribution.map(d => d[2]).filter(d => d > 0), Infinity);
+    const minValue = Math.min(
+      minMultiplier === Infinity ? 1 : minMultiplier,
+      minAdaDistribution === Infinity ? 1 : minAdaDistribution
+    );
+
+    this.logger.log(
+      `Vault ${vault.id} multiplier stats: ` +
+        `maxMultiplier=${maxMultiplier}, minMultiplier=${minMultiplier === Infinity ? 'N/A' : minMultiplier}, ` +
+        `maxAdaDist=${maxAdaDistribution}, minAdaDist=${minAdaDistribution === Infinity ? 'N/A' : minAdaDistribution}`
+    );
+
+    const optimalDecimals = this.distributionCalculationService.calculateOptimalDecimals(
+      vault.ft_token_supply || 1_000_000,
+      minValue === Infinity ? undefined : minValue
+    );
+
+    // Step 4: Update vault decimals if changed
+    if (optimalDecimals !== vault.ft_token_decimals) {
+      this.logger.log(
+        `Updating vault ${vault.id} decimals from ${vault.ft_token_decimals} to ${optimalDecimals} ` +
+          `(maxMultiplier: ${maxMultiplier}, maxAdaDistribution: ${maxAdaDistribution})`
+      );
+      vault.ft_token_decimals = optimalDecimals;
+      await this.vaultRepository.update(vault.id, { ft_token_decimals: optimalDecimals });
+    }
+
+    return {
+      acquireMultiplier,
+      adaDistribution,
+      optimalDecimals,
+    };
+  }
+
   private async handlePublishedToContribution(): Promise<void> {
     // Handle immediate start vaults
     const immediateStartVaults = await this.vaultRepository
@@ -296,12 +343,26 @@ export class LifecycleService {
 
     for (const vault of customStartVaults) {
       const transitionTime = new Date(vault.contribution_open_window_time);
-      await this.queuePhaseTransition(vault.id, VaultStatus.contribution, transitionTime, 'contribution_phase_start');
+      const now = new Date();
+
+      // Only execute if the custom start time has arrived
+      if (now >= transitionTime) {
+        await this.executePhaseTransition({
+          vaultId: vault.id,
+          newStatus: VaultStatus.contribution,
+          phaseStartField: 'contribution_phase_start',
+          newScStatus: SmartContractVaultStatus.OPEN,
+        });
+      }
+      // Otherwise, skip - the cron will pick it up when time arrives
     }
   }
 
   /**
    * Handles transition from Contribution phase to Acquire phase.
+   * Validates contributed assets against vault's asset whitelist and threshold requirements.
+   * If validation fails, vault is marked as Failed and transition to Acquire is blocked.
+   * If vault has 0% tokens for acquirers, it skips Acquire phase and transitions directly to Governance after contribution window ends, while still performing validation and potential failure if requirements are not met.
    *
    * Validation scenarios:
    *
@@ -547,10 +608,8 @@ export class LifecycleService {
             phaseStartField: 'acquire_phase_start',
           });
           await emitContributionCompleteEvent();
-        } else {
-          // Queue for the custom time
-          await this.queuePhaseTransition(vault.id, VaultStatus.acquire, customTime, 'acquire_phase_start');
         }
+        // Otherwise, skip - the cron will pick it up when time arrives
       }
     } catch (error) {
       this.logger.error(`Error executing contribution to acquire transition for vault ${vault.id}`, error);
@@ -561,6 +620,15 @@ export class LifecycleService {
    * Check for vaults in Acquire phase that have reached their deadline
    * Triggers transition to Governance phase (or failure if threshold not met)
    * Skips vaults with too many failed update-vault transaction attempts
+   *
+   * Flow:
+   * 1. Fetch vaults in Acquire phase that have passed their acquire window deadline
+   * 2. For each vault, check if it meets the acquire threshold (total ADA acquired >= required threshold)
+   * 3. If threshold met, calculate distributions, update on-chain metadata, and transition to Governance phase
+   * 4. If threshold not met, update on-chain metadata to Cancelled, create cancellation claims, and transition to Failed status
+   * 5. Emit events for notifications on both success and failure outcomes
+   *
+   * Note: This function is designed to be idempotent and can safely be retried in case of failures, as it checks the current status of the vault before attempting any transitions.
    */
   private async handleAcquireToGovernance(): Promise<void> {
     const now = new Date();
@@ -637,8 +705,8 @@ export class LifecycleService {
    * - Emit failure events for notifications
    *
    * Pricing:
-   * - FT assets: Uses TapTools API (being replaced with DexHunter)
-   * - NFT assets: Uses TapTools API (being replaced with WayUp Marketplace)
+   * - FT assets: Uses DexHunter
+   * - NFT assets:  WayUp Marketplace
    * - Fallback to hardcoded prices if API fails
    */
   private async executeAcquireToGovernanceTransition(vault: Vault): Promise<void> {
@@ -646,19 +714,22 @@ export class LifecycleService {
       // Sync transactions one more time
       await this.transactionsService.syncVaultTransactions(vault.id);
 
+      try {
+        await this.taptoolsService.updateAssetPrices([vault.id]);
+      } catch (error) {
+        this.logger.error(`Failed to update asset prices for vault ${vault.id}:`, error);
+      }
+
       // 1. First get all relevant transactions for this vault
-      const allTransactions = await this.transactionsRepository.find({
+      const acquisitionTransactions = await this.transactionsRepository.find({
         where: {
           vault_id: vault.id,
-          type: In([TransactionType.acquire, TransactionType.contribute]),
+          type: TransactionType.acquire,
           status: TransactionStatus.confirmed,
         },
         relations: ['user'],
         order: { created_at: 'ASC' },
       });
-
-      const acquisitionTransactions = allTransactions.filter(tx => tx.type === TransactionType.acquire);
-      const contributionTransactions = allTransactions.filter(tx => tx.type === TransactionType.contribute);
 
       // Calculate total ADA from acquisitions
       let totalAcquiredAda = 0;
@@ -668,15 +739,24 @@ export class LifecycleService {
       for (const tx of acquisitionTransactions) {
         if (!tx.user_id) continue;
 
-        const adaSent = tx.amount || 0;
-        totalAcquiredAda += adaSent;
+        totalAcquiredAda += tx.amount || 0;
 
         // Track total per user for later calculations
         if (!userAcquiredAdaMap[tx.user_id]) {
           userAcquiredAdaMap[tx.user_id] = 0;
         }
-        userAcquiredAdaMap[tx.user_id] += adaSent;
+        userAcquiredAdaMap[tx.user_id] += tx.amount || 0;
       }
+
+      const contributionTransactions = await this.transactionsRepository.find({
+        where: {
+          vault_id: vault.id,
+          type: TransactionType.contribute,
+          status: TransactionStatus.confirmed,
+        },
+        relations: ['user'],
+        order: { created_at: 'ASC' },
+      });
 
       // Calculate total value of contributed assets
       let totalContributedValueAda = 0;
@@ -835,28 +915,20 @@ export class LifecycleService {
 
         try {
           if (adjustedVtLpAmount > 0 && lpAdaAmount > 0) {
-            // LP meets minimum threshold or LP is not configured - create LP claim
-            if (lpAdaInLovelace < minLpLiquidity) {
-              this.logger.log(
-                `No LP claim created for vault ${vault.id}: ` +
-                  `LP percentage is 0% or LP liquidity ${lpAdaAmount} ADA is below recommended minimum.`
-              );
-            } else {
-              const lpClaimExists = await this.claimRepository.exists({
-                where: { vault: { id: vault.id }, type: ClaimType.LP },
+            const lpClaimExists = await this.claimRepository.exists({
+              where: { vault: { id: vault.id }, type: ClaimType.LP },
+            });
+
+            if (!lpClaimExists) {
+              await this.claimRepository.save({
+                vault: { id: vault.id },
+                type: ClaimType.LP,
+                amount: adjustedVtLpAmount,
+                status: ClaimStatus.AVAILABLE,
+                lovelace_amount: lpAdaInLovelace,
               });
 
-              if (!lpClaimExists) {
-                await this.claimRepository.save({
-                  vault: { id: vault.id },
-                  type: ClaimType.LP,
-                  amount: adjustedVtLpAmount,
-                  status: ClaimStatus.AVAILABLE,
-                  lovelace_amount: lpAdaInLovelace,
-                });
-
-                this.logger.log(`Created LP claim: ${adjustedVtLpAmount} VT tokens, ${lpAdaAmount} ADA`);
-              }
+              this.logger.log(`Created LP claim: ${adjustedVtLpAmount} VT tokens, ${lpAdaAmount} ADA`);
             }
           } else {
             this.logger.log(
@@ -1008,74 +1080,12 @@ export class LifecycleService {
         const finalContributorClaims = finalClaims.filter(cl => cl.type === ClaimType.CONTRIBUTOR);
         const finalAcquirerClaims = finalClaims.filter(cl => cl.type === ClaimType.ACQUIRER);
 
-        const { acquireMultiplier, adaDistribution, recalculatedClaimAmounts, recalculatedLovelaceAmounts } =
-          this.distributionCalculationService.calculateAcquireMultipliers({
-            contributorsClaims: finalContributorClaims,
-            acquirerClaims: finalAcquirerClaims,
-          });
-
-        // Update contributor claim amounts to match smart contract calculation (qty × multiplier)
-        // This ensures the transaction validation will pass
-        if (recalculatedClaimAmounts.size > 0 || recalculatedLovelaceAmounts.size > 0) {
-          const claimsToUpdate = [];
-          for (const claim of finalContributorClaims) {
-            const recalculatedVt = recalculatedClaimAmounts.get(claim.id);
-            const recalculatedLovelace = recalculatedLovelaceAmounts.get(claim.id);
-            const vtNeedsUpdate = recalculatedVt !== undefined && recalculatedVt !== claim.amount;
-            const lovelaceNeedsUpdate =
-              recalculatedLovelace !== undefined && recalculatedLovelace !== claim.lovelace_amount;
-
-            if (vtNeedsUpdate || lovelaceNeedsUpdate) {
-              if (vtNeedsUpdate) {
-                claim.amount = recalculatedVt;
-              }
-              if (lovelaceNeedsUpdate) {
-                claim.lovelace_amount = recalculatedLovelace;
-              }
-              claimsToUpdate.push(claim);
-            }
-          }
-          if (claimsToUpdate.length > 0) {
-            await this.claimRepository.save(claimsToUpdate);
-            this.logger.log(
-              `Updated ${claimsToUpdate.length} contributor claim amounts to match multiplier calculation`
-            );
-          }
-        }
-
-        // Recalculate optimal decimals now that we have final multiplier values
-        // This ensures we don't hit floating point precision issues
-        const maxMultiplier = Math.max(...acquireMultiplier.map(m => m[2]), 0);
-        const minMultiplier = Math.min(...acquireMultiplier.map(m => m[2]).filter(m => m > 0), Infinity);
-        const maxAdaDistribution = Math.max(...adaDistribution.map(d => d[2]), 0);
-        const minAdaDistribution = Math.min(...adaDistribution.map(d => d[2]).filter(d => d > 0), Infinity);
-        const maxValue = Math.max(maxMultiplier, maxAdaDistribution);
-        const minValue = Math.min(
-          minMultiplier === Infinity ? 1 : minMultiplier,
-          minAdaDistribution === Infinity ? 1 : minAdaDistribution
-        );
-
-        this.logger.log(
-          `Vault ${vault.id} multiplier stats: ` +
-            `maxMultiplier=${maxMultiplier}, minMultiplier=${minMultiplier === Infinity ? 'N/A' : minMultiplier}, ` +
-            `maxAdaDist=${maxAdaDistribution}, minAdaDist=${minAdaDistribution === Infinity ? 'N/A' : minAdaDistribution}`
-        );
-
-        const optimalDecimals = this.distributionCalculationService.calculateOptimalDecimals(
-          vault.ft_token_supply || 1_000_000,
-          maxValue,
-          minValue
-        );
-
-        // Update vault decimals if they changed
-        if (optimalDecimals !== vault.ft_token_decimals) {
-          this.logger.log(
-            `Updating vault ${vault.id} decimals from ${vault.ft_token_decimals} to ${optimalDecimals} ` +
-              `(maxMultiplier: ${maxMultiplier}, maxAdaDistribution: ${maxAdaDistribution})`
-          );
-          vault.ft_token_decimals = optimalDecimals;
-          await this.vaultRepository.update(vault.id, { ft_token_decimals: optimalDecimals });
-        }
+        // Single source of truth: calculate multipliers, update claims, and compute decimals
+        const { acquireMultiplier, adaDistribution } = await this.processMultipliersAndUpdateClaims({
+          vault,
+          contributorClaims: finalContributorClaims,
+          acquirerClaims: finalAcquirerClaims,
+        });
 
         // Submit single update transaction with all multipliers
         const response = await this.vaultManagingService.updateVaultMetadataTx({
@@ -1091,19 +1101,15 @@ export class LifecycleService {
           return;
         }
 
+        // Recalculate vault totals with fresh prices after successful metadata update
         try {
-          await this.taptoolsService.updateAssetPrices([vault.id]);
-          // Recalculate vault totals with fresh prices
           await this.taptoolsService.updateMultipleVaultTotals([vault.id]);
         } catch (error) {
-          this.logger.error(`Failed to update prices before locking vault ${vault.id}:`, error);
+          this.logger.error(`Failed to update vault totals for ${vault.id}:`, error);
         }
 
         // Submit token metadata PR now that decimals are finalized
         try {
-          this.logger.log(
-            `Submitting token metadata PR for vault ${vault.id} with finalized decimals: ${optimalDecimals}`
-          );
           await this.metadataRegistryApiService.submitVaultTokenMetadata(vault.id);
         } catch (metadataError) {
           this.logger.error(
@@ -1199,1116 +1205,6 @@ export class LifecycleService {
   }
 
   /**
-   * TEST METHOD: Simulate multiplier calculations for a vault without executing the transition
-   * This is useful for testing and validation of multiplier calculations
-   * @param vaultId - The vault ID to simulate calculations for
-   * @returns Simulated multiplier data and asset pricing information
-   */
-  async simulateVaultMultipliers(vaultId: string): Promise<{
-    vault: {
-      id: string;
-      name: string;
-      status: VaultStatus;
-      totalAssets: number;
-    };
-    calculations: {
-      totalAcquiredAda: number;
-      totalContributedValueAda: number;
-      requiredThresholdAda: number;
-      meetsThreshold: boolean;
-      vtSupply: number;
-      assetsOfferedPercent: number;
-      lpPercent: number;
-    };
-    lpTokens: {
-      lpAdaAmount: number;
-      lpVtAmount: number;
-      vtPrice: number;
-      fdv: number;
-      adjustedVtLpAmount: number;
-      adaPairMultiplier: number;
-    };
-    multipliers: {
-      acquireMultiplier: [string, string, number][];
-      adaDistribution: [string, string, number][];
-      maxMultiplier: number;
-      minMultiplier: number;
-      maxAdaDistribution: number;
-      minAdaDistribution: number;
-    };
-    groupingDetails: {
-      vtMultiplierGroups: {
-        policyId: string;
-        policyName?: string;
-        multiplier: number;
-        maxMultiplier: number;
-        multiplierVariance: number;
-        assetCount: number;
-        isGrouped: boolean;
-        groupingReason: string;
-        assets: Array<{
-          assetName: string;
-          quantity: number;
-          multiplier: number;
-        }>;
-      }[];
-      adaDistributionGroups: {
-        policyId: string;
-        policyName?: string;
-        adaMultiplier: number;
-        maxAdaMultiplier: number;
-        multiplierVariance: number;
-        assetCount: number;
-        isGrouped: boolean;
-        groupingReason: string;
-        assets: Array<{
-          assetName: string;
-          quantity: number;
-          adaMultiplier: number;
-        }>;
-      }[];
-      stats: {
-        totalVtGroups: number;
-        vtGroupedPolicies: number;
-        vtUngroupedAssets: number;
-        vtOriginalAssetCount: number;
-        vtCompressionRatio: number;
-        totalAdaGroups: number;
-        adaGroupedPolicies: number;
-        adaUngroupedAssets: number;
-        adaOriginalAssetCount: number;
-        adaCompressionRatio: number;
-        mixedValuePolicies: Array<{
-          policyId: string;
-          vtMultipliers: number[];
-          adaMultipliers: number[];
-        }>;
-      };
-    };
-    assetPricing: {
-      policyId: string;
-      assetName: string;
-      priceAda: number;
-      quantity: number;
-      totalValueAda: number;
-      isNFT: boolean;
-    }[];
-    decimals: {
-      current: number;
-      optimal: number;
-      needsUpdate: boolean;
-    };
-    transactionSize: {
-      txSizeBytes: number;
-      txSizeKB: number;
-      maxSizeBytes: number;
-      percentOfMax: number;
-      withinLimit: boolean;
-      multiplierCount: number;
-      adaDistributionCount: number;
-      estimatedFee?: number;
-      warning?: string;
-    };
-  }> {
-    this.logger.log(`Simulating multiplier calculations for vault ${vaultId}`);
-
-    // Fetch vault with all necessary relations
-    const vault = await this.vaultRepository.findOne({
-      where: { id: vaultId },
-      relations: ['owner', 'assets'],
-    });
-
-    if (!vault) {
-      throw new Error(`Vault ${vaultId} not found`);
-    }
-
-    // Sync transactions
-    // await this.transactionsService.syncVaultTransactions(vault.id);
-
-    // Get all relevant transactions
-    const allTransactions = await this.transactionsRepository.find({
-      where: {
-        vault_id: vault.id,
-        type: In([TransactionType.acquire, TransactionType.contribute]),
-        status: TransactionStatus.confirmed,
-      },
-      relations: ['user'],
-      order: { created_at: 'ASC' },
-    });
-
-    const acquisitionTransactions = allTransactions.filter(tx => tx.type === TransactionType.acquire);
-    const contributionTransactions = allTransactions.filter(tx => tx.type === TransactionType.contribute);
-
-    this.logger.log(
-      `Found ${allTransactions.length} total transactions: ${acquisitionTransactions.length} acquire, ${contributionTransactions.length} contribute`
-    );
-
-    // Calculate total ADA from acquisitions
-    let totalAcquiredAda = 0;
-    for (const tx of acquisitionTransactions) {
-      totalAcquiredAda += tx.amount || 0;
-    }
-
-    // Calculate total value of contributed assets
-    let totalContributedValueAda = 0;
-    const assetPricing: {
-      policyId: string;
-      assetName: string;
-      priceAda: number;
-      quantity: number;
-      totalValueAda: number;
-      isNFT: boolean;
-    }[] = [];
-
-    for (const tx of contributionTransactions) {
-      if (!tx.user_id) {
-        this.logger.warn(`Skipping transaction ${tx.id} - no user_id`);
-        continue;
-      }
-
-      const txAssets = await this.assetsRepository.find({
-        where: {
-          transaction: { id: tx.id },
-          origin_type: AssetOriginType.CONTRIBUTED,
-          deleted: false,
-        },
-      });
-
-      for (const asset of txAssets) {
-        try {
-          const isNFT = asset.type === AssetType.NFT;
-          // Use floor_price from entity first, fallback to dex_price, then 0
-          const priceAda = asset.floor_price || asset.dex_price || 0;
-
-          const quantity = asset.quantity || 1;
-          const totalValueAda = priceAda * quantity;
-
-          totalContributedValueAda += totalValueAda;
-
-          assetPricing.push({
-            policyId: asset.policy_id,
-            assetName: asset.asset_id,
-            priceAda,
-            quantity,
-            totalValueAda,
-            isNFT,
-          });
-        } catch (error) {
-          this.logger.error(`Error processing asset ${asset.policy_id}.${asset.asset_id}:`, error.message);
-        }
-      }
-    }
-
-    // Use raw units for claim calculations (on-chain minting needs decimal-adjusted amounts)
-    const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
-    const ASSETS_OFFERED_PERCENT = vault.tokens_for_acquires * 0.01;
-    const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
-
-    const requiredThresholdAda =
-      totalContributedValueAda * vault.tokens_for_acquires * 0.01 * vault.acquire_reserve * 0.01;
-    const meetsThreshold = totalAcquiredAda >= requiredThresholdAda;
-
-    // Calculate LP tokens
-    const lpResult = this.distributionCalculationService.calculateLpTokens({
-      vtSupply,
-      totalAcquiredAda,
-      totalContributedValueAda,
-      assetsOfferedPercent: ASSETS_OFFERED_PERCENT,
-      lpPercent: LP_PERCENT,
-    });
-
-    // Simulate claim creation to calculate multipliers
-    const mockContributorClaims: Partial<Claim>[] = [];
-    const mockAcquirerClaims: Partial<Claim>[] = [];
-
-    // Create mock acquirer claims
-    for (const tx of acquisitionTransactions) {
-      if (!tx.user || !tx.user.id) continue;
-      const adaSent = tx.amount || 0;
-      if (adaSent <= 0) continue;
-
-      const { vtReceived, multiplier } = this.distributionCalculationService.calculateAcquirerTokens({
-        adaSent,
-        totalAcquiredValueAda: totalAcquiredAda,
-        lpAdaAmount: lpResult.lpAdaAmount,
-        lpVtAmount: lpResult.lpVtAmount,
-        vtPrice: lpResult.vtPrice,
-        vtSupply,
-        ASSETS_OFFERED_PERCENT,
-      });
-
-      mockAcquirerClaims.push({
-        id: tx.id,
-        amount: vtReceived,
-        multiplier: multiplier,
-        transaction: tx as any,
-      });
-    }
-
-    // Create mock contributor claims
-    const contributionValueByTransaction: Record<string, number> = {};
-    const userContributedValueMap: Record<string, number> = {};
-
-    for (const tx of contributionTransactions) {
-      if (!tx.user_id) continue;
-
-      const txAssets = await this.assetsRepository.find({
-        where: {
-          transaction: { id: tx.id },
-          origin_type: AssetOriginType.CONTRIBUTED,
-          deleted: false,
-        },
-      });
-
-      let transactionValueAda = 0;
-      for (const asset of txAssets) {
-        try {
-          // Use floor_price from entity first, fallback to dex_price, then 0
-          const priceAda = asset.floor_price || asset.dex_price || 0;
-          const quantity = asset.quantity || 1;
-          transactionValueAda += priceAda * quantity;
-        } catch (error) {
-          this.logger.error(`Error processing asset ${asset.policy_id}.${asset.asset_id}:`, error.message);
-        }
-      }
-
-      contributionValueByTransaction[tx.id] = transactionValueAda;
-
-      if (!userContributedValueMap[tx.user.id]) {
-        userContributedValueMap[tx.user.id] = 0;
-      }
-      userContributedValueMap[tx.user.id] += transactionValueAda;
-
-      const txValueAda = contributionValueByTransaction[tx.id] || 0;
-      if (txValueAda <= 0) continue;
-
-      const userTotalValue = userContributedValueMap[tx.user.id] || 0;
-
-      const contributorResult = this.distributionCalculationService.calculateContributorTokens({
-        txContributedValue: txValueAda,
-        userTotalValue,
-        totalAcquiredAda,
-        totalTvl: totalContributedValueAda,
-        lpAdaAmount: lpResult.lpAdaAmount,
-        lpVtAmount: lpResult.lpVtAmount,
-        vtSupply,
-        ASSETS_OFFERED_PERCENT,
-      });
-
-      // Load assets for this transaction
-      tx.assets = txAssets;
-
-      mockContributorClaims.push({
-        id: tx.id,
-        amount: contributorResult.vtAmount,
-        lovelace_amount: contributorResult.lovelaceAmount,
-        transaction: tx as any,
-      });
-    }
-
-    // Calculate multipliers using the distribution service
-    const multiplierResult = this.distributionCalculationService.calculateAcquireMultipliers({
-      contributorsClaims: mockContributorClaims as Claim[],
-      acquirerClaims: mockAcquirerClaims as Claim[],
-    });
-
-    // Analyze grouping details
-    const groupingDetails = this.analyzeMultiplierGrouping(
-      multiplierResult.acquireMultiplier,
-      multiplierResult.adaDistribution,
-      mockContributorClaims as Claim[]
-    );
-
-    // Calculate stats
-    const maxMultiplier = Math.max(...multiplierResult.acquireMultiplier.map(m => m[2]), 0);
-    const minMultiplier = Math.min(...multiplierResult.acquireMultiplier.map(m => m[2]).filter(m => m > 0), Infinity);
-    const maxAdaDistribution = Math.max(...multiplierResult.adaDistribution.map(d => d[2]), 0);
-    const minAdaDistribution = Math.min(
-      ...multiplierResult.adaDistribution.map(d => d[2]).filter(d => d > 0),
-      Infinity
-    );
-
-    const maxValue = Math.max(maxMultiplier, maxAdaDistribution);
-    const minValue = Math.min(
-      minMultiplier === Infinity ? 1 : minMultiplier,
-      minAdaDistribution === Infinity ? 1 : minAdaDistribution
-    );
-
-    const optimalDecimals = this.distributionCalculationService.calculateOptimalDecimals(
-      vault.ft_token_supply || 1_000_000,
-      maxValue,
-      minValue
-    );
-
-    // Estimate transaction size for the update vault transaction
-    let transactionSize: {
-      txSizeBytes: number;
-      txSizeKB: number;
-      maxSizeBytes: number;
-      percentOfMax: number;
-      withinLimit: boolean;
-      multiplierCount: number;
-      adaDistributionCount: number;
-      warning?: string;
-    };
-
-    try {
-      const txSizeEstimate = await this.vaultManagingService.estimateUpdateVaultTxSize({
-        vault: {
-          id: vault.id,
-          asset_vault_name: vault.asset_vault_name,
-          privacy: vault.privacy,
-          contribution_phase_start: vault.contribution_phase_start,
-          contribution_duration: vault.contribution_duration,
-          value_method: vault.value_method,
-        },
-        vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
-        acquireMultiplier: multiplierResult.acquireMultiplier,
-      });
-
-      transactionSize = {
-        ...txSizeEstimate,
-        warning: !txSizeEstimate.withinLimit
-          ? `⚠️ Transaction size (${txSizeEstimate.txSizeKB} KB) exceeds Cardano limit (16 KB). Transaction will fail!`
-          : txSizeEstimate.percentOfMax > 90
-            ? `⚠️ Transaction size is ${txSizeEstimate.percentOfMax}% of max limit. Consider reducing assets.`
-            : undefined,
-      };
-
-      this.logger.log(
-        `Transaction size for vault ${vault.id}: ${txSizeEstimate.txSizeBytes} bytes ` +
-          `(${txSizeEstimate.percentOfMax}% of max)`
-      );
-    } catch (error) {
-      this.logger.error(`Failed to estimate transaction size for vault ${vault.id}:`, error);
-      transactionSize = {
-        txSizeBytes: 0,
-        txSizeKB: 0,
-        maxSizeBytes: 16384,
-        percentOfMax: 0,
-        withinLimit: false,
-        multiplierCount: multiplierResult.acquireMultiplier.length,
-        adaDistributionCount: multiplierResult.adaDistribution.length,
-        warning: `❌ Failed to estimate transaction size: ${error.message}`,
-      };
-    }
-
-    return {
-      vault: {
-        id: vault.id,
-        name: vault.name,
-        status: vault.vault_status,
-        totalAssets: assetPricing.length,
-      },
-      calculations: {
-        totalAcquiredAda,
-        totalContributedValueAda,
-        requiredThresholdAda,
-        meetsThreshold,
-        vtSupply,
-        assetsOfferedPercent: ASSETS_OFFERED_PERCENT,
-        lpPercent: LP_PERCENT,
-      },
-      lpTokens: {
-        lpAdaAmount: lpResult.lpAdaAmount,
-        lpVtAmount: lpResult.lpVtAmount,
-        vtPrice: lpResult.vtPrice,
-        fdv: lpResult.fdv,
-        adjustedVtLpAmount: lpResult.adjustedVtLpAmount,
-        adaPairMultiplier: lpResult.adaPairMultiplier,
-      },
-      multipliers: {
-        acquireMultiplier: multiplierResult.acquireMultiplier,
-        adaDistribution: multiplierResult.adaDistribution,
-        maxMultiplier,
-        minMultiplier: minMultiplier === Infinity ? 0 : minMultiplier,
-        maxAdaDistribution,
-        minAdaDistribution: minAdaDistribution === Infinity ? 0 : minAdaDistribution,
-      },
-      groupingDetails,
-      assetPricing,
-      decimals: {
-        current: vault.ft_token_decimals,
-        optimal: optimalDecimals,
-        needsUpdate: optimalDecimals !== vault.ft_token_decimals,
-      },
-      transactionSize,
-    };
-  }
-
-  /**
-   * TEST METHOD: Simulate multi-batch distribution for a vault
-   * Shows how multipliers would be split across multiple transactions
-   * @param vaultId - The vault ID to simulate batching for
-   * @returns Detailed batching simulation results
-   */
-  async simulateMultiBatchDistribution(vaultId: string): Promise<{
-    vault: {
-      id: string;
-      name: string;
-      status: string;
-    };
-    summary: {
-      totalMultipliers: number;
-      totalAdaDistribution: number;
-      needsBatching: boolean;
-      totalBatches: number;
-      estimatedTimeMinutes: number;
-      totalClaims: number;
-    };
-    singleTransactionAttempt: {
-      withinLimit: boolean;
-      txSizeBytes: number;
-      txSizeKB: number;
-      percentOfMax: number;
-    };
-    batches: Array<{
-      batchNumber: number;
-      multiplierCount: number;
-      adaDistributionCount: number;
-      multiplierRange: {
-        first: [string, string | null, number];
-        last: [string, string | null, number];
-      };
-      estimatedTxSize?: {
-        txSizeBytes: number;
-        txSizeKB: number;
-        percentOfMax: number;
-        withinLimit: boolean;
-      };
-    }>;
-    rawData: {
-      acquireMultiplier: [string, string | null, number][];
-      adaDistribution: [string, string, number][];
-      adaPairMultiplier: number;
-    };
-  }> {
-    this.logger.log(`[TEST] Simulating multi-batch distribution for vault ${vaultId}`);
-
-    // First, run the regular simulation to get multipliers
-    const simulation = await this.simulateVaultMultipliers(vaultId);
-
-    const vault = await this.vaultRepository.findOne({
-      where: { id: vaultId },
-      select: [
-        'id',
-        'name',
-        'asset_vault_name',
-        'privacy',
-        'contribution_phase_start',
-        'contribution_duration',
-        'value_method',
-        'vault_status',
-      ],
-    });
-
-    if (!vault) {
-      throw new Error(`Vault ${vaultId} not found`);
-    }
-
-    const acquireMultiplier = simulation.multipliers.acquireMultiplier;
-    const adaDistribution = simulation.multipliers.adaDistribution;
-    const adaPairMultiplier = simulation.lpTokens.adaPairMultiplier;
-
-    // Single transaction info
-    const singleTxAttempt = {
-      withinLimit: simulation.transactionSize.withinLimit,
-      txSizeBytes: simulation.transactionSize.txSizeBytes,
-      txSizeKB: simulation.transactionSize.txSizeKB,
-      percentOfMax: simulation.transactionSize.percentOfMax,
-    };
-
-    // Always single batch (multi-batch has been removed)
-    const batches = [
-      {
-        batchNumber: 1,
-        multiplierCount: acquireMultiplier.length,
-        adaDistributionCount: adaDistribution.length,
-        multiplierRange: {
-          first: acquireMultiplier[0],
-          last: acquireMultiplier[acquireMultiplier.length - 1],
-        },
-        estimatedTxSize: singleTxAttempt,
-      },
-    ];
-
-    // Simulate claims that would be created
-    const simulatedClaims = await this.simulateClaimsForVault(vaultId, simulation);
-
-    return {
-      vault: {
-        id: vault.id,
-        name: vault.name,
-        status: vault.vault_status,
-      },
-      summary: {
-        totalMultipliers: acquireMultiplier.length,
-        totalAdaDistribution: adaDistribution.length,
-        needsBatching: false, // Multi-batch removed
-        totalBatches: 1,
-        estimatedTimeMinutes: 5,
-        totalClaims: simulatedClaims.summary.totalClaims,
-      },
-      singleTransactionAttempt: singleTxAttempt,
-      batches,
-      claims: simulatedClaims,
-      rawData: {
-        acquireMultiplier,
-        adaDistribution,
-        adaPairMultiplier,
-      },
-    } as any;
-  }
-
-  /**
-   * Simulate claims that would be created for a vault distribution
-   * Does not save anything to the database
-   */
-  private async simulateClaimsForVault(
-    vaultId: string,
-    simulation: Awaited<ReturnType<typeof this.simulateVaultMultipliers>>
-  ): Promise<{
-    summary: {
-      totalClaims: number;
-      acquirerClaimsCount: number;
-      contributorClaimsCount: number;
-      lpClaimCount: number;
-      totalVtDistributed: number;
-      totalAdaDistributed: number;
-    };
-    lpClaim: {
-      type: string;
-      vtAmount: number;
-      adaAmount: number;
-      adaPairMultiplier: number;
-    } | null;
-    acquirerClaims: Array<{
-      userId: string;
-      userAddress: string;
-      transactionId: string;
-      txHash: string;
-      type: string;
-      vtAmount: number;
-      adaSent: number;
-      multiplier: number;
-    }>;
-    contributorClaims: Array<{
-      userId: string;
-      userAddress: string;
-      transactionId: string;
-      txHash: string;
-      type: string;
-      vtAmount: number;
-      adaAmount: number;
-      contributedValueAda: number;
-      assetCount: number;
-      assets: Array<{
-        policyId: string;
-        assetName: string;
-        quantity: number;
-        priceAda: number;
-      }>;
-    }>;
-  }> {
-    const vault = await this.vaultRepository.findOne({
-      where: { id: vaultId },
-      select: ['id', 'tokens_for_acquires', 'liquidity_pool_contribution', 'ft_token_supply', 'ft_token_decimals'],
-    });
-
-    if (!vault) {
-      throw new Error(`Vault ${vaultId} not found`);
-    }
-
-    // Get transactions
-    const allTransactions = await this.transactionsRepository.find({
-      where: {
-        vault_id: vault.id,
-        type: In([TransactionType.acquire, TransactionType.contribute]),
-        status: TransactionStatus.confirmed,
-      },
-      relations: ['user'],
-      order: { created_at: 'ASC' },
-    });
-
-    const acquisitionTransactions = allTransactions.filter(tx => tx.type === TransactionType.acquire);
-    const contributionTransactions = allTransactions.filter(tx => tx.type === TransactionType.contribute);
-
-    // Use raw units for claim calculations (on-chain minting needs decimal-adjusted amounts)
-    const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
-    const ASSETS_OFFERED_PERCENT = (vault.tokens_for_acquires || 0) / 100;
-    const lpResult = simulation.lpTokens;
-    const totalAcquiredAda = simulation.calculations.totalAcquiredAda;
-    const totalContributedValueAda = simulation.calculations.totalContributedValueAda;
-
-    // Simulate acquirer claims
-    const acquirerClaims: Array<{
-      userId: string;
-      userAddress: string;
-      transactionId: string;
-      txHash: string;
-      type: string;
-      vtAmount: number;
-      adaSent: number;
-      multiplier: number;
-    }> = [];
-
-    for (const tx of acquisitionTransactions) {
-      if (!tx.user?.id) continue;
-
-      const adaSent = tx.amount || 0;
-      if (adaSent <= 0) continue;
-
-      const { vtReceived, multiplier } = this.distributionCalculationService.calculateAcquirerTokens({
-        adaSent,
-        totalAcquiredValueAda: totalAcquiredAda,
-        lpAdaAmount: lpResult.lpAdaAmount,
-        lpVtAmount: lpResult.lpVtAmount,
-        vtPrice: lpResult.vtPrice,
-        vtSupply,
-        ASSETS_OFFERED_PERCENT,
-      });
-
-      acquirerClaims.push({
-        userId: tx.user.id,
-        userAddress: tx.user.address || 'unknown',
-        transactionId: tx.id,
-        txHash: tx.tx_hash || 'unknown',
-        type: 'ACQUIRER',
-        vtAmount: vtReceived,
-        adaSent,
-        multiplier,
-      });
-    }
-
-    // Normalize multipliers (use minimum)
-    if (acquirerClaims.length > 0) {
-      const minMultiplier = Math.min(...acquirerClaims.map(c => c.multiplier));
-      for (const claim of acquirerClaims) {
-        claim.vtAmount = minMultiplier * claim.adaSent * 1_000_000;
-        claim.multiplier = minMultiplier;
-      }
-    }
-
-    // Simulate contributor claims
-    const contributorClaims: Array<{
-      userId: string;
-      userAddress: string;
-      transactionId: string;
-      txHash: string;
-      type: string;
-      vtAmount: number;
-      adaAmount: number;
-      contributedValueAda: number;
-      assetCount: number;
-      assets: Array<{
-        policyId: string;
-        assetName: string;
-        quantity: number;
-        priceAda: number;
-      }>;
-    }> = [];
-
-    // Build user value map first
-    const userContributedValueMap: Record<string, number> = {};
-    const contributionValueByTransaction: Record<string, number> = {};
-    const assetsByTransaction: Record<string, any[]> = {};
-
-    for (const tx of contributionTransactions) {
-      if (!tx.user?.id) continue;
-
-      const txAssets = await this.assetsRepository.find({
-        where: {
-          transaction: { id: tx.id },
-          origin_type: AssetOriginType.CONTRIBUTED,
-          deleted: false,
-        },
-      });
-
-      assetsByTransaction[tx.id] = txAssets;
-
-      let transactionValueAda = 0;
-      for (const asset of txAssets) {
-        const priceAda = asset.floor_price || asset.dex_price || 0;
-        const quantity = asset.quantity || 1;
-        transactionValueAda += priceAda * quantity;
-      }
-
-      contributionValueByTransaction[tx.id] = transactionValueAda;
-
-      if (!userContributedValueMap[tx.user.id]) {
-        userContributedValueMap[tx.user.id] = 0;
-      }
-      userContributedValueMap[tx.user.id] += transactionValueAda;
-    }
-
-    // Now create contributor claims
-    for (const tx of contributionTransactions) {
-      if (!tx.user?.id) continue;
-
-      const txValueAda = contributionValueByTransaction[tx.id] || 0;
-      if (txValueAda <= 0) continue;
-
-      const userTotalValue = userContributedValueMap[tx.user.id] || 0;
-
-      const contributorResult = this.distributionCalculationService.calculateContributorTokens({
-        txContributedValue: txValueAda,
-        userTotalValue,
-        totalAcquiredAda,
-        totalTvl: totalContributedValueAda,
-        lpAdaAmount: lpResult.lpAdaAmount,
-        lpVtAmount: lpResult.lpVtAmount,
-        vtSupply,
-        ASSETS_OFFERED_PERCENT,
-      });
-
-      const txAssets = assetsByTransaction[tx.id] || [];
-
-      contributorClaims.push({
-        userId: tx.user.id,
-        userAddress: tx.user.address || 'unknown',
-        transactionId: tx.id,
-        txHash: tx.tx_hash || 'unknown',
-        type: 'CONTRIBUTOR',
-        vtAmount: contributorResult.vtAmount,
-        adaAmount: contributorResult.lovelaceAmount / 1_000_000, // Convert to ADA for readability
-        contributedValueAda: txValueAda,
-        assetCount: txAssets.length,
-        assets: txAssets.map(a => ({
-          policyId: a.policy_id,
-          assetName: a.asset_id,
-          quantity: a.quantity || 1,
-          priceAda: a.floor_price || a.dex_price || 0,
-        })),
-      });
-    }
-
-    // LP claim info
-    const lpClaim =
-      lpResult.lpAdaAmount > 0 && lpResult.lpVtAmount > 0
-        ? {
-            type: 'LP',
-            vtAmount: lpResult.adjustedVtLpAmount,
-            adaAmount: lpResult.lpAdaAmount,
-            adaPairMultiplier: lpResult.adaPairMultiplier,
-          }
-        : null;
-
-    // Calculate totals
-    const totalVtDistributed =
-      acquirerClaims.reduce((sum, c) => sum + c.vtAmount, 0) +
-      contributorClaims.reduce((sum, c) => sum + c.vtAmount, 0) +
-      (lpClaim?.vtAmount || 0);
-
-    const totalAdaDistributed = contributorClaims.reduce((sum, c) => sum + c.adaAmount, 0) + (lpClaim?.adaAmount || 0);
-
-    return {
-      summary: {
-        totalClaims: acquirerClaims.length + contributorClaims.length + (lpClaim ? 1 : 0),
-        acquirerClaimsCount: acquirerClaims.length,
-        contributorClaimsCount: contributorClaims.length,
-        lpClaimCount: lpClaim ? 1 : 0,
-        totalVtDistributed,
-        totalAdaDistributed,
-      },
-      lpClaim,
-      acquirerClaims,
-      contributorClaims,
-    };
-  }
-
-  /**
-   * Analyze multiplier grouping to provide detailed insights
-   * Now uses price-based grouping: assets with the same price within a policy are grouped together
-   */
-  private analyzeMultiplierGrouping(
-    acquireMultiplier: [string, string | null, number][],
-    adaDistribution: [string, string, number][],
-    contributorClaims: Claim[]
-  ): {
-    vtMultiplierGroups: Array<{
-      policyId: string;
-      policyName?: string;
-      multiplier: number;
-      maxMultiplier: number;
-      multiplierVariance: number;
-      assetCount: number;
-      isGrouped: boolean;
-      groupingReason: string;
-      assets: Array<{ assetName: string; quantity: number; multiplier: number }>;
-    }>;
-    adaDistributionGroups: Array<{
-      policyId: string;
-      policyName?: string;
-      adaMultiplier: number;
-      maxAdaMultiplier: number;
-      multiplierVariance: number;
-      assetCount: number;
-      isGrouped: boolean;
-      groupingReason: string;
-      assets: Array<{ assetName: string; quantity: number; adaMultiplier: number }>;
-    }>;
-    stats: {
-      totalVtGroups: number;
-      vtGroupedPolicies: number;
-      vtUngroupedAssets: number;
-      vtOriginalAssetCount: number;
-      vtCompressionRatio: number;
-      totalAdaGroups: number;
-      adaGroupedPolicies: number;
-      adaUngroupedAssets: number;
-      adaOriginalAssetCount: number;
-      adaCompressionRatio: number;
-      mixedValuePolicies: Array<{
-        policyId: string;
-        vtMultipliers: number[];
-        adaMultipliers: number[];
-      }>;
-    };
-  } {
-    const GROUPING_THRESHOLD = 10;
-
-    // Track assets by (policy, price) for price-based analysis
-    interface AssetWithPrice {
-      assetName: string;
-      quantity: number;
-      multiplier: number;
-      adaMultiplier: number;
-      price: number;
-    }
-
-    const assetsByPolicyAndPrice = new Map<string, AssetWithPrice[]>();
-
-    // Collect all assets with their data and prices
-    const allVtAssets = new Map<
-      string,
-      { policyId: string; assetName: string; quantity: number; multiplier: number; price: number }
-    >();
-    const allAdaAssets = new Map<
-      string,
-      { policyId: string; assetName: string; quantity: number; adaMultiplier: number; price: number }
-    >();
-
-    for (const claim of contributorClaims) {
-      if (!claim.transaction?.assets) continue;
-
-      const contributorLovelaceAmount = claim?.lovelace_amount || 0;
-      const baseVtShare = Math.floor(claim.amount / claim.transaction.assets.length);
-      const vtRemainder = claim.amount - baseVtShare * claim.transaction.assets.length;
-      const baseAdaShare = Math.floor(contributorLovelaceAmount / claim.transaction.assets.length);
-      const adaRemainder = contributorLovelaceAmount - baseAdaShare * claim.transaction.assets.length;
-
-      claim.transaction.assets.forEach((asset, index) => {
-        const vtShare = baseVtShare + (index < vtRemainder ? 1 : 0);
-        const assetQuantity = Number(asset.quantity) || 1;
-        const vtSharePerUnit = Math.floor(vtShare / assetQuantity);
-
-        const adaShare = baseAdaShare + (index < adaRemainder ? 1 : 0);
-        const adaSharePerUnit = Math.floor(adaShare / assetQuantity);
-
-        // Get asset price
-        const price = Number(asset.floor_price) || Number(asset.dex_price) || Number(asset.listing_price) || 0;
-        const key = `${asset.policy_id}:${asset.asset_id}`;
-
-        allVtAssets.set(key, {
-          policyId: asset.policy_id,
-          assetName: asset.asset_id,
-          quantity: assetQuantity,
-          multiplier: vtSharePerUnit,
-          price,
-        });
-
-        allAdaAssets.set(key, {
-          policyId: asset.policy_id,
-          assetName: asset.asset_id,
-          quantity: assetQuantity,
-          adaMultiplier: adaSharePerUnit,
-          price,
-        });
-
-        // Group by policy AND price
-        const groupKey = `${asset.policy_id}:${price}`;
-        if (!assetsByPolicyAndPrice.has(groupKey)) {
-          assetsByPolicyAndPrice.set(groupKey, []);
-        }
-        assetsByPolicyAndPrice.get(groupKey)!.push({
-          assetName: asset.asset_id,
-          quantity: assetQuantity,
-          multiplier: vtSharePerUnit,
-          adaMultiplier: adaSharePerUnit,
-          price,
-        });
-      });
-    }
-
-    // Group price buckets by policy
-    const policiesData = new Map<
-      string,
-      {
-        priceGroups: Map<number, AssetWithPrice[]>;
-        totalAssets: number;
-      }
-    >();
-
-    for (const [groupKey, assets] of assetsByPolicyAndPrice.entries()) {
-      const [policyId, priceStr] = groupKey.split(':');
-      const price = Number(priceStr);
-
-      if (!policiesData.has(policyId)) {
-        policiesData.set(policyId, { priceGroups: new Map(), totalAssets: 0 });
-      }
-      const policyData = policiesData.get(policyId)!;
-      policyData.priceGroups.set(price, assets);
-      policyData.totalAssets += assets.length;
-    }
-
-    // Build VT multiplier group details
-    const vtMultiplierGroups: Array<{
-      policyId: string;
-      policyName?: string;
-      multiplier: number;
-      maxMultiplier: number;
-      multiplierVariance: number;
-      assetCount: number;
-      isGrouped: boolean;
-      groupingReason: string;
-      assets: Array<{ assetName: string; quantity: number; multiplier: number }>;
-    }> = [];
-
-    const adaDistributionGroups: Array<{
-      policyId: string;
-      policyName?: string;
-      adaMultiplier: number;
-      maxAdaMultiplier: number;
-      multiplierVariance: number;
-      assetCount: number;
-      isGrouped: boolean;
-      groupingReason: string;
-      assets: Array<{ assetName: string; quantity: number; adaMultiplier: number }>;
-    }> = [];
-
-    for (const [policyId, policyData] of policiesData.entries()) {
-      const { priceGroups, totalAssets } = policyData;
-      const uniquePrices = priceGroups.size;
-      const meetsThreshold = totalAssets >= GROUPING_THRESHOLD;
-
-      // Collect all assets for this policy
-      const allPolicyAssets: AssetWithPrice[] = [];
-      for (const assets of priceGroups.values()) {
-        allPolicyAssets.push(...assets);
-      }
-
-      const vtMultipliers = allPolicyAssets.map(a => a.multiplier);
-      const adaMultipliers = allPolicyAssets.map(a => a.adaMultiplier);
-      const minVtMultiplier = Math.min(...vtMultipliers);
-      const maxVtMultiplier = Math.max(...vtMultipliers);
-      const minAdaMultiplier = Math.min(...adaMultipliers);
-      const maxAdaMultiplier = Math.max(...adaMultipliers);
-      const vtVariance = maxVtMultiplier - minVtMultiplier;
-      const adaVariance = maxAdaMultiplier - minAdaMultiplier;
-
-      // Price-based grouping: group only if single price for all assets in policy
-      const isGrouped = uniquePrices === 1 && meetsThreshold;
-
-      let groupingReason: string;
-      if (isGrouped) {
-        const price = [...priceGroups.keys()][0];
-        groupingReason = `Policy-level grouping (${totalAssets} assets, single price: ${price} ADA)`;
-      } else if (uniquePrices > 1 && meetsThreshold) {
-        const priceList = [...priceGroups.keys()].slice(0, 5).join(', ');
-        groupingReason = `NOT grouped - ${uniquePrices} different prices (${priceList}${uniquePrices > 5 ? '...' : ''})`;
-      } else {
-        groupingReason = `Asset-level entries (${totalAssets} assets < ${GROUPING_THRESHOLD} threshold)`;
-      }
-
-      vtMultiplierGroups.push({
-        policyId,
-        multiplier: minVtMultiplier,
-        maxMultiplier: maxVtMultiplier,
-        multiplierVariance: vtVariance,
-        assetCount: totalAssets,
-        isGrouped,
-        groupingReason,
-        assets: allPolicyAssets.map(a => ({
-          assetName: a.assetName,
-          quantity: a.quantity,
-          multiplier: a.multiplier,
-        })),
-      });
-
-      adaDistributionGroups.push({
-        policyId,
-        adaMultiplier: minAdaMultiplier,
-        maxAdaMultiplier,
-        multiplierVariance: adaVariance,
-        assetCount: totalAssets,
-        isGrouped,
-        groupingReason,
-        assets: allPolicyAssets.map(a => ({
-          assetName: a.assetName,
-          quantity: a.quantity,
-          adaMultiplier: a.adaMultiplier,
-        })),
-      });
-    }
-
-    // Detect mixed-value policies (policies with different prices)
-    const mixedValuePolicies: Array<{
-      policyId: string;
-      vtMultipliers: number[];
-      adaMultipliers: number[];
-    }> = [];
-
-    for (const [policyId, policyData] of policiesData.entries()) {
-      if (policyData.priceGroups.size > 1) {
-        const allAssets: AssetWithPrice[] = [];
-        for (const assets of policyData.priceGroups.values()) {
-          allAssets.push(...assets);
-        }
-        const vtMults = [...new Set(allAssets.map(a => a.multiplier))].sort((a, b) => b - a);
-        const adaMults = [...new Set(allAssets.map(a => a.adaMultiplier))].sort((a, b) => b - a);
-        mixedValuePolicies.push({
-          policyId,
-          vtMultipliers: vtMults,
-          adaMultipliers: adaMults,
-        });
-      }
-    }
-
-    // Calculate compression statistics
-    const vtOriginalAssetCount = allVtAssets.size;
-    const vtFinalEntryCount = acquireMultiplier.filter(m => m[0] !== '').length;
-    const vtGroupedPolicies = vtMultiplierGroups.filter(g => g.isGrouped).length;
-    const vtUngroupedAssets = vtMultiplierGroups.filter(g => !g.isGrouped).reduce((sum, g) => sum + g.assetCount, 0);
-
-    const adaOriginalAssetCount = allAdaAssets.size;
-    const adaFinalEntryCount = adaDistribution.filter(d => d[0] !== '').length;
-    const adaGroupedPolicies = adaDistributionGroups.filter(g => g.isGrouped).length;
-    const adaUngroupedAssets = adaDistributionGroups
-      .filter(g => !g.isGrouped)
-      .reduce((sum, g) => sum + g.assetCount, 0);
-
-    return {
-      vtMultiplierGroups,
-      adaDistributionGroups,
-      stats: {
-        totalVtGroups: policiesData.size,
-        vtGroupedPolicies,
-        vtUngroupedAssets,
-        vtOriginalAssetCount,
-        vtCompressionRatio:
-          vtOriginalAssetCount > 0 ? Math.round((1 - vtFinalEntryCount / vtOriginalAssetCount) * 100) : 0,
-        totalAdaGroups: policiesData.size,
-        adaGroupedPolicies,
-        adaUngroupedAssets,
-        adaOriginalAssetCount,
-        adaCompressionRatio:
-          adaOriginalAssetCount > 0 ? Math.round((1 - adaFinalEntryCount / adaOriginalAssetCount) * 100) : 0,
-        mixedValuePolicies,
-      },
-    };
-  }
-
-  /**
    * Handle direct transition from Contribution to Governance (skip Acquire phase)
    * Used when Acquirers % = 0%
    *
@@ -2321,8 +1217,6 @@ export class LifecycleService {
    */
   private async executeContributionDirectToGovernance(vault: Vault): Promise<void> {
     try {
-      // Check if multi-batch distribution is already in progress for this vault
-      // This prevents race conditions when the cron re-picks up the same vault
       const freshVault = await this.vaultRepository.findOne({
         where: { id: vault.id },
         select: ['id', 'vault_status'],
@@ -2337,11 +1231,16 @@ export class LifecycleService {
         return;
       }
 
-      this.logger.log(
-        `Starting direct contribution to governance transition for vault ${vault.id} ` + `(0% for acquirers)`
-      );
-
       await this.transactionsService.syncVaultTransactions(vault.id);
+
+      // Update asset prices BEFORE calculations to use fresh market data
+      this.logger.log(`Updating asset prices for vault ${vault.id} before distribution calculations`);
+      try {
+        await this.taptoolsService.updateAssetPrices([vault.id]);
+      } catch (error) {
+        this.logger.error(`Failed to update asset prices for vault ${vault.id}:`, error);
+        // Continue with cached prices if update fails
+      }
 
       // Calculate total value of contributed assets (this becomes the FDV)
       const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
@@ -2360,12 +1259,6 @@ export class LifecycleService {
           lpPercent: LP_PERCENT,
           totalContributedValueAda: totalContributedValueAda,
         });
-
-      this.logger.log(
-        `Vault ${vault.id} LP calculation: ` +
-          `VT Price: ${vtPrice} ADA, FDV: ${fdv} ADA (= TVL), ` +
-          `LP VT: ${lpVtAmount}, LP ADA: ${lpAdaAmount}`
-      );
 
       // Check if LP is configured and validate minimum threshold
       const lpAdaInLovelace = Math.floor(lpAdaAmount * 1_000_000);
@@ -2597,75 +1490,18 @@ export class LifecycleService {
         order: { created_at: 'ASC' },
       });
 
-      // Calculate acquire multipliers (only contributors, no acquirers)
-      const { acquireMultiplier, recalculatedClaimAmounts, recalculatedLovelaceAmounts } =
-        this.distributionCalculationService.calculateAcquireMultipliers({
-          contributorsClaims: finalContributorClaims,
-          acquirerClaims: [], // No acquirers
-        });
-
-      // Update contributor claim amounts to match smart contract calculation (qty × multiplier)
-      // This ensures the transaction validation will pass
-      if (recalculatedClaimAmounts.size > 0 || recalculatedLovelaceAmounts.size > 0) {
-        const claimsToUpdate = [];
-        for (const claim of finalContributorClaims) {
-          const recalculatedVt = recalculatedClaimAmounts.get(claim.id);
-          const recalculatedLovelace = recalculatedLovelaceAmounts.get(claim.id);
-          const vtNeedsUpdate = recalculatedVt !== undefined && recalculatedVt !== claim.amount;
-          const lovelaceNeedsUpdate =
-            recalculatedLovelace !== undefined && recalculatedLovelace !== claim.lovelace_amount;
-
-          if (vtNeedsUpdate || lovelaceNeedsUpdate) {
-            if (vtNeedsUpdate) {
-              claim.amount = recalculatedVt;
-            }
-            if (lovelaceNeedsUpdate) {
-              claim.lovelace_amount = recalculatedLovelace;
-            }
-            claimsToUpdate.push(claim);
-          }
-        }
-        if (claimsToUpdate.length > 0) {
-          await this.claimRepository.save(claimsToUpdate);
-          this.logger.log(`Updated ${claimsToUpdate.length} contributor claim amounts to match multiplier calculation`);
-        }
-      }
-
-      this.logger.log(
-        `Calculated acquire multipliers for ${finalContributorClaims.length} contributors ` + `(no acquirers)`
-      );
-
-      // Recalculate optimal decimals now that we have final multiplier values
-      // This ensures we don't hit floating point precision issues
-      const maxMultiplier = Math.max(...acquireMultiplier.map(m => m[2]), 0);
-      const minMultiplier = Math.min(...acquireMultiplier.map(m => m[2]).filter(m => m > 0), Infinity);
-
-      this.logger.log(
-        `Vault ${vault.id} multiplier stats (no acquirers): ` +
-          `maxMultiplier=${maxMultiplier}, minMultiplier=${minMultiplier === Infinity ? 'N/A' : minMultiplier}`
-      );
-
-      const optimalDecimals = this.distributionCalculationService.calculateOptimalDecimals(
-        vault.ft_token_supply || 1_000_000,
-        maxMultiplier,
-        minMultiplier === Infinity ? undefined : minMultiplier
-      );
-
-      // Update vault decimals if they changed
-      if (optimalDecimals !== vault.ft_token_decimals) {
-        this.logger.log(
-          `Updating vault ${vault.id} decimals from ${vault.ft_token_decimals} to ${optimalDecimals} ` +
-            `(maxMultiplier: ${maxMultiplier}, no acquirers scenario)`
-        );
-        vault.ft_token_decimals = optimalDecimals;
-        await this.vaultRepository.update(vault.id, { ft_token_decimals: optimalDecimals });
-      }
+      // Single source of truth: calculate multipliers, update claims, and compute decimals (no acquirers)
+      const { acquireMultiplier, adaDistribution, optimalDecimals } = await this.processMultipliersAndUpdateClaims({
+        vault,
+        contributorClaims: finalContributorClaims,
+        acquirerClaims: [], // No acquirers in direct contribution → governance flow
+      });
 
       // Submit single update transaction with all multipliers
       const response = await this.vaultManagingService.updateVaultMetadataTx({
         vault,
         acquireMultiplier,
-        adaDistribution: [], // No ADA distribution (no acquirers)
+        adaDistribution, // Empty array for no acquirers scenario
         adaPairMultiplier,
         vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
       });
@@ -2675,14 +1511,11 @@ export class LifecycleService {
         throw new Error('Failed to update vault metadata');
       }
 
-      // Update asset prices before locking to ensure accurate initial_total_value_ada
-      this.logger.log(`Updating asset prices before locking vault ${vault.id}`);
+      // Recalculate vault totals with fresh prices after successful metadata update
       try {
-        await this.taptoolsService.updateAssetPrices([vault.id]);
-        // Recalculate vault totals with fresh prices
         await this.taptoolsService.updateMultipleVaultTotals([vault.id]);
       } catch (error) {
-        this.logger.error(`Failed to update prices before locking vault ${vault.id}:`, error);
+        this.logger.error(`Failed to update vault totals for ${vault.id}:`, error);
       }
 
       // Submit token metadata PR now that decimals are finalized
@@ -2707,7 +1540,7 @@ export class LifecycleService {
         newScStatus: SmartContractVaultStatus.SUCCESSFUL,
         txHash: response.txHash,
         acquire_multiplier: acquireMultiplier,
-        ada_distribution: [], // No ADA distribution (no acquirers)
+        ada_distribution: adaDistribution, // Empty for no acquirers scenario
         ada_pair_multiplier: adaPairMultiplier,
         vtPrice,
         fdv,
@@ -2746,10 +1579,124 @@ export class LifecycleService {
   }
 
   /**
-   * @deprecated Multi-batch distribution has been removed. All distributions now use single transactions.
+   * Handle transition from Expansion phase back to Locked (governance) phase
+   * Runs periodically to check for vaults whose expansion duration has expired OR asset max is reached
+   * Calculates and creates claims for new contributors during expansion
    */
-  async handlePendingDistributionBatches(): Promise<void> {
-    // No-op: Multi-batch distribution has been removed
-    // All distributions now use single transactions with policy-level grouping
+  private async handleExpansionToLocked(): Promise<void> {
+    const now = new Date();
+
+    // Find vaults in expansion phase whose expansion duration has expired
+    const durationExpiredVaults = await this.vaultRepository
+      .createQueryBuilder('vault')
+      .where('vault.vault_status = :status', { status: VaultStatus.expansion })
+      .andWhere('vault.expansion_phase_start IS NOT NULL')
+      .andWhere('vault.expansion_duration IS NOT NULL')
+      .andWhere(`vault.expansion_phase_start + (vault.expansion_duration * interval '1 millisecond') <= :now`, { now })
+      .andWhere('vault.id NOT IN (:...processingIds)', {
+        processingIds:
+          this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'],
+      })
+      .getMany();
+
+    if (durationExpiredVaults.length > 0) {
+      this.logger.log(
+        `Found ${durationExpiredVaults.length} vault(s) with expired expansion phase: ${durationExpiredVaults.map(v => v.id).join(', ')}`
+      );
+    }
+
+    // Find vaults in expansion phase whose asset max has been reached
+    const assetMaxReachedVaults = await this.findExpansionVaultsAtAssetMax();
+
+    // Combine both sets, removing duplicates
+    const expansionVaultsMap = new Map<
+      string,
+      Pick<Vault, 'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals'>
+    >();
+    for (const vault of [...durationExpiredVaults, ...assetMaxReachedVaults]) {
+      expansionVaultsMap.set(vault.id, vault);
+    }
+    const expansionVaults = Array.from(expansionVaultsMap.values());
+
+    for (const vault of expansionVaults) {
+      // Skip if vault is already being processed
+      if (this.processingVaults.has(vault.id)) {
+        continue;
+      }
+
+      this.processingVaults.add(vault.id);
+
+      try {
+        await this.expansionService.executeExpansionToLockedTransition(vault);
+      } catch (error) {
+        this.logger.error(
+          `Failed to process expansion->locked transition for vault ${vault.id}: ${error.message}`,
+          error.stack
+        );
+      } finally {
+        this.processingVaults.delete(vault.id);
+      }
+    }
+  }
+
+  /**
+   * Find expansion vaults that have reached their asset maximum
+   * Queries expansion proposals to check if currentAssetCount >= assetMax
+   */
+  private async findExpansionVaultsAtAssetMax(): Promise<
+    Pick<Vault, 'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals'>[]
+  > {
+    // Find all expansion vaults not already being processed
+    const expansionVaults: Pick<
+      Vault,
+      'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals'
+    >[] = await this.vaultRepository.find({
+      where: {
+        vault_status: VaultStatus.expansion,
+      },
+      select: ['id', 'vault_status', 'expansion_phase_start', 'vt_price', 'ft_token_decimals'],
+    });
+
+    const vaultsAtMax: Pick<Vault, 'id' | 'vault_status' | 'expansion_phase_start'>[] = [];
+
+    for (const vault of expansionVaults) {
+      if (this.processingVaults.has(vault.id)) {
+        continue;
+      }
+
+      // Find the active expansion proposal for this vault
+      const expansionProposal: Pick<Proposal, 'id' | 'metadata' | 'executionDate'> =
+        await this.proposalRepository.findOne({
+          where: {
+            vaultId: vault.id,
+            proposalType: ProposalType.EXPANSION,
+            status: ProposalStatus.EXECUTED,
+          },
+          order: { executionDate: 'DESC' },
+          select: ['id', 'metadata', 'executionDate'],
+        });
+
+      if (!expansionProposal?.metadata?.expansion) {
+        continue;
+      }
+
+      const expansionConfig = expansionProposal.metadata.expansion;
+
+      // Skip if no max configured
+      if (expansionConfig.noMax || !expansionConfig.assetMax) {
+        continue;
+      }
+
+      // Check if currentAssetCount >= assetMax
+      const currentAssetCount = expansionConfig.currentAssetCount || 0;
+      if (currentAssetCount >= expansionConfig.assetMax) {
+        this.logger.log(
+          `Vault ${vault.id} reached expansion asset max: ${currentAssetCount}/${expansionConfig.assetMax}`
+        );
+        vaultsAtMax.push(vault);
+      }
+    }
+
+    return vaultsAtMax;
   }
 }

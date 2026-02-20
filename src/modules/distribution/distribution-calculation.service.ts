@@ -1,6 +1,23 @@
 import { Injectable, Logger } from '@nestjs/common';
 
+import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
+
+interface AssetWithData {
+  assetName: string | null;
+  policyId: string;
+  quantity: number;
+  multiplier: number;
+  adaMultiplier?: number;
+  floorPrice: number;
+}
+
+interface MultiplierResult {
+  multipliers: [string, string | null, number][];
+  adaDistribution?: [string, string | null, number][];
+  recalculatedClaimAmounts: Map<string, number>;
+  recalculatedLovelaceAmounts?: Map<string, number>;
+}
 
 interface AcquirerTokenParams {
   /** Amount of ADA sent by the acquirer (in ADA, not lovelace) */
@@ -435,111 +452,319 @@ export class DistributionCalculationService {
   }
 
   /**
-   * Calculate optimal decimals for vault tokens based on token supply and multipliers.
+   * Calculate optimal decimals for vault tokens based on multipliers.
    *
-   * The decimals need to ensure:
-   * 1. vtSupply * 10^decimals fits in JavaScript's safe integer range
-   * 2. Multiplier calculations don't overflow (upper bound)
-   * 3. Multipliers don't underflow to 0 (lower bound) - by increasing decimals
-   * 4. Sufficient precision for token distributions
+   * Rules:
+   * 1. Always use MIN_DECIMALS (6) as baseline - Cardano standard
+   * 2. Increase decimals if small multipliers would floor to 0 (underflow prevention)
+   * 3. Cap at MAX_DECIMALS (8)
+   * 4. Works for any supply from 1M to 1T - bigint storage handles large values
    *
    * Key insight for underflow prevention:
    * - If minMultiplier = 0.74 with 6 decimals, it floors to 0 (bad!)
    * - Increasing to 7 decimals: 0.74 * 10 = 7.4, floors to 7 (good!)
    * - Extra decimals needed = ceil(-log10(minMultiplier))
    *
-   * @param tokenSupply - The token supply (not scaled by decimals)
-   * @param maxMultiplier - Optional maximum multiplier value from acquire_multiplier array
+   * @param tokenSupply - The token supply (not used for overflow checks - bigint handles it)
    * @param minMultiplier - Optional minimum multiplier value (to prevent underflow to 0)
-   * @returns Optimal number of decimals (0-8)
+   * @returns Optimal number of decimals (6-8)
    */
-  calculateOptimalDecimals(tokenSupply: number, maxMultiplier?: number, minMultiplier?: number): number {
-    const MAX_SAFE = Number.MAX_SAFE_INTEGER; // 9,007,199,254,740,991
-    const MIN_VALID_MULTIPLIER = 1; // Minimum multiplier to ensure users get tokens
-    const MAX_DECIMALS = 8; // Absolute maximum decimals allowed
+  calculateOptimalDecimals(tokenSupply: number, minMultiplier?: number): number {
+    const MAX_DECIMALS = 8;
+    const MIN_DECIMALS = 6;
+    const MIN_VALID_MULTIPLIER = 1;
 
-    // Calculate max safe decimals based on token supply alone
-    const maxSafeDecimalsFromSupply = Math.floor(Math.log10(MAX_SAFE / tokenSupply));
-
-    // If we have multiplier data, also consider that for overflow prevention
-    let maxSafeDecimalsFromMultiplier = 15; // Default to high value if no multiplier
-    if (maxMultiplier && maxMultiplier > 0) {
-      // Multipliers are stored as integers representing the ratio
-      // We need to ensure qty * multiplier fits in safe range
-      // Assume max quantity per asset is ~1000 (conservative for NFTs)
-      const assumedMaxQuantity = 1000;
-      maxSafeDecimalsFromMultiplier = Math.floor(Math.log10(MAX_SAFE / (maxMultiplier * assumedMaxQuantity)));
-    }
-
-    // Calculate minimum decimals needed to prevent underflow (multiplier < 1 flooring to 0)
-    let minDecimalsForUnderflow = 0;
+    // Calculate extra decimals needed to prevent underflow (multiplier < 1 flooring to 0)
+    let extraDecimalsForUnderflow = 0;
     if (minMultiplier !== undefined && minMultiplier > 0 && minMultiplier < MIN_VALID_MULTIPLIER) {
-      // We need to increase decimals so that minMultiplier * 10^extraDecimals >= 1
+      // Need to increase decimals so that minMultiplier * 10^extraDecimals >= 1
       // extraDecimals >= -log10(minMultiplier)
-      // Example: minMultiplier = 0.74 → extraDecimals >= 0.13 → need 1 extra decimal
-      // Example: minMultiplier = 0.01 → extraDecimals >= 2 → need 2 extra decimals
-      const extraDecimalsNeeded = Math.ceil(-Math.log10(minMultiplier));
-      minDecimalsForUnderflow = extraDecimalsNeeded;
+      extraDecimalsForUnderflow = Math.ceil(-Math.log10(minMultiplier));
 
       this.logger.warn(
         `Multiplier underflow detected: minMultiplier=${minMultiplier.toFixed(4)}. ` +
-          `Increasing decimals by ${extraDecimalsNeeded} to prevent 0 token distributions.`
+          `Increasing decimals by ${extraDecimalsForUnderflow} to prevent 0 token distributions.`
       );
     }
 
-    // Take the minimum of overflow constraints
-    const maxSafeDecimals = Math.min(maxSafeDecimalsFromSupply, maxSafeDecimalsFromMultiplier);
+    // Final decimals: start at 6, add underflow prevention, cap at 8
+    const finalDecimals = Math.min(MIN_DECIMALS + extraDecimalsForUnderflow, MAX_DECIMALS);
 
-    // Determine target decimals based on token supply tiers
-    let targetDecimals: number;
-    if (tokenSupply >= 900_000_000_000) {
-      targetDecimals = 1;
-    } else if (tokenSupply >= 90_000_000_000) {
-      targetDecimals = 1;
-    } else if (tokenSupply >= 9_000_000_000) {
-      targetDecimals = 2;
-    } else if (tokenSupply >= 900_000_000) {
-      targetDecimals = 3;
-    } else if (tokenSupply >= 90_000_000) {
-      targetDecimals = 4;
-    } else if (tokenSupply >= 9_000_000) {
-      targetDecimals = 5;
-    } else if (tokenSupply >= 1_000_000) {
-      targetDecimals = 6;
-    } else {
-      targetDecimals = 6;
-    }
-
-    // Apply underflow prevention: increase decimals if needed
-    const decimalsWithUnderflowPrevention = Math.max(targetDecimals, targetDecimals + minDecimalsForUnderflow);
-
-    // Apply overflow safety: cap at max safe decimals
-    const finalDecimals = Math.min(decimalsWithUnderflowPrevention, maxSafeDecimals, MAX_DECIMALS);
-
-    // Check if we couldn't prevent underflow due to overflow constraints
-    if (minDecimalsForUnderflow > 0 && finalDecimals < targetDecimals + minDecimalsForUnderflow) {
-      this.logger.error(
-        `CRITICAL: Cannot fully prevent multiplier underflow! ` +
-          `Need ${targetDecimals + minDecimalsForUnderflow} decimals but capped at ${finalDecimals} for overflow safety. ` +
-          `minMultiplier: ${minMultiplier?.toFixed(4)}, maxMultiplier: ${maxMultiplier || 'N/A'}, tokenSupply: ${tokenSupply}. ` +
-          `Some users may receive 0 tokens. Consider reducing token supply.`
-      );
-    }
-
-    if (finalDecimals < targetDecimals) {
-      this.logger.warn(
-        `Token supply ${tokenSupply}: target decimals ${targetDecimals} reduced to ${finalDecimals} for overflow safety ` +
-          `(maxMultiplier: ${maxMultiplier || 'N/A'})`
-      );
-    } else if (finalDecimals > targetDecimals) {
+    if (finalDecimals > MIN_DECIMALS) {
       this.logger.log(
-        `Token supply ${tokenSupply}: decimals increased from ${targetDecimals} to ${finalDecimals} to prevent underflow ` +
-          `(minMultiplier: ${minMultiplier?.toFixed(4)})`
+        `Token supply ${tokenSupply}: decimals increased from ${MIN_DECIMALS} to ${finalDecimals} for underflow prevention ` +
+          `(minMultiplier: ${minMultiplier?.toFixed(4) || 'N/A'})`
       );
     }
 
-    // Database constraint requires decimals between 0 and 9, never return less than 0
-    return Math.max(finalDecimals, 0);
+    return finalDecimals;
+  }
+
+  /**
+   * Calculate multipliers for contributor claims (during acquire phase)
+   * Distributes VT and ADA proportionally based on floor prices
+   * Supports both policy-level and asset-level multiplier grouping
+   */
+  calculateContributorMultipliers(params: {
+    contributorsClaims: Claim[];
+    includeAdaDistribution?: boolean;
+  }): MultiplierResult {
+    const { contributorsClaims, includeAdaDistribution = false } = params;
+
+    const multipliers: [string, string | null, number][] = [];
+    const adaDistribution: [string, string | null, number][] = [];
+    const recalculatedClaimAmounts = new Map<string, number>();
+    const recalculatedLovelaceAmounts = new Map<string, number>();
+
+    // Track assets grouped by (policy, floor_price)
+    const assetsByPolicyAndPrice = new Map<string, AssetWithData[]>();
+
+    // First pass: collect all assets, distribute VT PROPORTIONALLY to floor_price
+    for (const claim of contributorsClaims) {
+      const contributorLovelaceAmount = claim?.lovelace_amount || 0;
+      const assets = claim.transaction.assets;
+
+      // Calculate total transaction value from floor prices
+      const totalTxValue = assets.reduce((sum, asset) => {
+        const qty = Number(asset.quantity) || 1;
+        const price = asset.floor_price ?? 0;
+        return sum + qty * price;
+      }, 0);
+
+      // Track recalculated amounts for this claim
+      let recalculatedVtAmount = 0;
+      let recalculatedLovelace = 0;
+
+      assets.forEach(asset => {
+        const assetQuantity = Number(asset.quantity) || 1;
+        const floorPrice = asset.floor_price ?? 0;
+        const assetValue = assetQuantity * floorPrice;
+
+        // Distribute VT PROPORTIONALLY to floor_price
+        const proportion = totalTxValue > 0 ? assetValue / totalTxValue : 1 / assets.length;
+        const vtShare = Math.floor(proportion * claim.amount);
+        const vtSharePerUnit = Math.floor(vtShare / assetQuantity);
+
+        // Distribute ADA proportionally as well (if needed)
+        const adaShare = includeAdaDistribution ? Math.floor(proportion * contributorLovelaceAmount) : 0;
+        const adaSharePerUnit = includeAdaDistribution ? Math.floor(adaShare / assetQuantity) : 0;
+
+        // Group by (policy, floor_price)
+        const groupKey = `${asset.policy_id}:${floorPrice}`;
+        if (!assetsByPolicyAndPrice.has(groupKey)) {
+          assetsByPolicyAndPrice.set(groupKey, []);
+        }
+        assetsByPolicyAndPrice.get(groupKey)!.push({
+          assetName: asset.asset_id,
+          policyId: asset.policy_id,
+          quantity: assetQuantity,
+          multiplier: vtSharePerUnit,
+          adaMultiplier: adaSharePerUnit,
+          floorPrice,
+        });
+
+        // Recalculate amounts using smart contract formula: qty × multiplier
+        recalculatedVtAmount += assetQuantity * vtSharePerUnit;
+        if (includeAdaDistribution) {
+          recalculatedLovelace += assetQuantity * adaSharePerUnit;
+        }
+      });
+
+      // Store recalculated amounts
+      recalculatedClaimAmounts.set(claim.id, recalculatedVtAmount);
+      if (includeAdaDistribution) {
+        recalculatedLovelaceAmounts.set(claim.id, recalculatedLovelace);
+      }
+    }
+
+    // Group assets by policy to decide grouping strategy
+    const policiesData = new Map<
+      string,
+      {
+        priceGroups: Map<number, AssetWithData[]>;
+        totalAssets: number;
+      }
+    >();
+
+    for (const [groupKey, assets] of assetsByPolicyAndPrice.entries()) {
+      const [policyId, priceStr] = groupKey.split(':');
+      const floorPrice = Number(priceStr);
+
+      if (!policiesData.has(policyId)) {
+        policiesData.set(policyId, { priceGroups: new Map(), totalAssets: 0 });
+      }
+      const policyData = policiesData.get(policyId)!;
+
+      if (!policyData.priceGroups.has(floorPrice)) {
+        policyData.priceGroups.set(floorPrice, []);
+      }
+      policyData.priceGroups.get(floorPrice)!.push(...assets);
+      policyData.totalAssets += assets.length;
+    }
+
+    // Process each policy - single price = policy-level grouping
+    for (const [policyId, policyData] of policiesData.entries()) {
+      const { priceGroups } = policyData;
+      const uniquePrices = priceGroups.size;
+
+      // Case 1: All assets have SAME floor_price → policy-level multiplier
+      if (uniquePrices === 1) {
+        const [floorPrice, assets] = [...priceGroups.entries()][0];
+        const vtMultiplier = assets[0].multiplier;
+        const adaMultiplier = assets[0].adaMultiplier || 0;
+
+        multipliers.push([policyId, null, vtMultiplier]);
+        if (includeAdaDistribution) {
+          adaDistribution.push([policyId, null, adaMultiplier]);
+        }
+
+        this.logger.log(
+          `Policy-level multiplier: ${policyId} → VT=${vtMultiplier}, ADA=${adaMultiplier} (${assets.length} assets, price=${floorPrice})`
+        );
+      } else {
+        // Case 2: Multiple prices → asset-level multipliers
+        for (const [floorPrice, assets] of priceGroups.entries()) {
+          for (const asset of assets) {
+            multipliers.push([asset.policyId, asset.assetName, asset.multiplier]);
+            if (includeAdaDistribution) {
+              adaDistribution.push([asset.policyId, asset.assetName, asset.adaMultiplier || 0]);
+            }
+          }
+
+          this.logger.log(
+            `Asset-level multipliers: ${policyId} (price=${floorPrice}) → ${assets.length} assets with VT=${assets[0].multiplier}, ADA=${assets[0].adaMultiplier || 0}`
+          );
+        }
+      }
+    }
+
+    return {
+      multipliers,
+      adaDistribution: includeAdaDistribution ? adaDistribution : undefined,
+      recalculatedClaimAmounts,
+      recalculatedLovelaceAmounts: includeAdaDistribution ? recalculatedLovelaceAmounts : undefined,
+    };
+  }
+
+  /**
+   * Calculate multipliers for expansion contributions
+   * Uses asset prices and VT price to determine multipliers
+   * Supports both policy-level and asset-level grouping
+   * @param decimals - The vault's ft_token_decimals (default 6 for backward compatibility)
+   */
+  calculateExpansionMultipliers(params: { assets: Asset[]; vtPrice: number; decimals: number }): MultiplierResult {
+    const { assets, vtPrice, decimals = 6 } = params;
+    const decimalMultiplier = Math.pow(10, decimals);
+
+    const multipliers: [string, string | null, number][] = [];
+    const recalculatedClaimAmounts = new Map<string, number>();
+    const assetsByPolicyAndPrice = new Map<string, AssetWithData[]>();
+
+    // Collect and group all assets by policy and price
+    for (const fullAsset of assets) {
+      const price = fullAsset.floor_price || fullAsset.dex_price || 0;
+      if (price === 0) continue;
+
+      // Calculate VT amount for this asset: (assetPrice / vtPrice) * 10^decimals
+      // Example with decimals=1: 250 ADA / 1000 ADA per VT = 0.25 VT = 2.5 base units
+      // Example with decimals=6: 250 ADA / 1000 ADA per VT = 0.25 VT = 250,000 base units
+      const vtPerAsset = (price / vtPrice) * decimalMultiplier;
+      const quantity = fullAsset.quantity || 1;
+      const vtMultiplier = Math.floor(vtPerAsset);
+
+      const groupKey = `${fullAsset.policy_id}:${price}`;
+
+      if (!assetsByPolicyAndPrice.has(groupKey)) {
+        assetsByPolicyAndPrice.set(groupKey, []);
+      }
+
+      assetsByPolicyAndPrice.get(groupKey)!.push({
+        policyId: fullAsset.policy_id,
+        assetName: fullAsset.asset_id || null,
+        quantity,
+        multiplier: vtMultiplier,
+        floorPrice: price,
+      });
+    }
+
+    // Group by policy to determine if we can use policy-level multipliers
+    const policiesData = new Map<
+      string,
+      {
+        priceGroups: Map<number, AssetWithData[]>;
+        totalAssets: number;
+      }
+    >();
+
+    for (const assets of assetsByPolicyAndPrice.values()) {
+      const policyId = assets[0].policyId;
+      const price = assets[0].floorPrice;
+
+      if (!policiesData.has(policyId)) {
+        policiesData.set(policyId, { priceGroups: new Map(), totalAssets: 0 });
+      }
+
+      const policyData = policiesData.get(policyId)!;
+      policyData.priceGroups.set(price, assets);
+      policyData.totalAssets += assets.length;
+    }
+
+    // Process each policy
+    for (const [policyId, policyData] of policiesData.entries()) {
+      // If all assets have same price, use policy-level multiplier
+      if (policyData.priceGroups.size === 1) {
+        const [price, assets] = Array.from(policyData.priceGroups.entries())[0];
+        const multiplier = assets[0].multiplier;
+
+        multipliers.push([policyId, null, multiplier]);
+
+        this.logger.log(
+          `Policy-level multiplier: ${policyId} → ${multiplier} (${assets.length} assets, price=${price})`
+        );
+      } else {
+        // Different prices - need asset-level multipliers
+        for (const [price, assets] of policyData.priceGroups.entries()) {
+          const multiplier = assets[0].multiplier;
+
+          for (const asset of assets) {
+            multipliers.push([asset.policyId, asset.assetName, multiplier]);
+          }
+
+          this.logger.log(
+            `Asset-level multipliers: ${policyId} (price=${price}) → ${multiplier} (${assets.length} assets)`
+          );
+        }
+      }
+    }
+
+    return {
+      multipliers,
+      recalculatedClaimAmounts,
+    };
+  }
+
+  /**
+   * Helper method to apply recalculated amounts to claims
+   * Updates claim.amount and claim.lovelace_amount based on multipliers
+   */
+  applyRecalculatedAmounts(
+    claims: Claim[],
+    recalculatedClaimAmounts: Map<string, number>,
+    recalculatedLovelaceAmounts?: Map<string, number>
+  ): void {
+    for (const claim of claims) {
+      const recalculatedVt = recalculatedClaimAmounts.get(claim.id);
+      if (recalculatedVt !== undefined) {
+        claim.amount = recalculatedVt;
+      }
+
+      if (recalculatedLovelaceAmounts) {
+        const recalculatedAda = recalculatedLovelaceAmounts.get(claim.id);
+        if (recalculatedAda !== undefined) {
+          claim.lovelace_amount = recalculatedAda;
+        }
+      }
+    }
   }
 
   private round25(amount: number): number {

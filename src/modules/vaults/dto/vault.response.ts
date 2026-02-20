@@ -403,6 +403,13 @@ export class VaultFullResponse extends VaultShortResponse {
   @ApiProperty({ description: 'Time elapsed duration in milliseconds', required: false })
   @DtoRepresent({
     transform: ({ value }) => (value ? Number(value) : null),
+    expose: { name: 'expansionDuration' },
+  })
+  expansionDuration?: number;
+
+  @ApiProperty({ description: 'Time elapsed duration in milliseconds', required: false })
+  @DtoRepresent({
+    transform: ({ value }) => (value ? Number(value) : null),
     expose: { name: 'timeElapsedIsEqualToTime' },
   })
   timeElapsedIsEqualToTime?: number;
@@ -619,6 +626,13 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   acquirePhaseStart?: string;
 
+  @ApiProperty({ description: 'Expansion phase start time', required: false })
+  @DtoRepresent({
+    transform: ({ value }) => (value ? new Date(value).toISOString() : null),
+    expose: true,
+  })
+  expansionPhaseStart?: string;
+
   @ApiProperty({ description: 'Locked at time', required: false })
   @DtoRepresent({
     transform: ({ value }) => (value ? new Date(value).toISOString() : null),
@@ -646,6 +660,66 @@ export class VaultFullResponse extends VaultShortResponse {
     expose: true,
   })
   countView: number;
+
+  @ApiProperty({ description: 'Expansion asset count', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'expansionAssetsCount' },
+  })
+  expansionAssetsCount?: number;
+
+  @ApiProperty({ description: 'Expansion asset max limit', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'expansionAssetMax' },
+  })
+  expansionAssetMax?: number;
+
+  @ApiProperty({ description: 'Whether expansion has no asset limit', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'expansionNoMax' },
+  })
+  expansionNoMax?: boolean;
+
+  @ApiProperty({ description: 'Expansion assets grouped by policy', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'expansionAssetsByPolicy' },
+  })
+  expansionAssetsByPolicy?: Array<{ policyId: string; quantity: number }>;
+
+  @ApiProperty({
+    description: 'Expansion whitelisted collections with names',
+    required: false,
+    type: 'array',
+    items: {
+      type: 'object',
+      properties: {
+        policyId: { type: 'string' },
+        collectionName: { type: 'string', nullable: true },
+      },
+    },
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'expansionWhitelist' },
+  })
+  expansionWhitelist?: Array<{ policyId: string; collectionName: string | null }>;
+
+  @ApiProperty({ description: 'Expansion price type (limit or market)', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'expansionPriceType' },
+  })
+  expansionPriceType?: 'limit' | 'market';
+
+  @ApiProperty({ description: 'Expansion limit price (ADA per VT)', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'expansionLimitPrice' },
+  })
+  expansionLimitPrice?: number;
 
   @ApiProperty({ description: 'Owner of the vault', type: () => User })
   @DtoRepresent({

@@ -1,20 +1,24 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { ContributeReq } from './dto/contribute.req';
 
 import { Asset } from '@/database/asset.entity';
+import { Proposal } from '@/database/proposal.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
-import { AssetStatus, AssetOriginType } from '@/types/asset.types';
+import { AssetStatus, AssetOriginType, AssetType } from '@/types/asset.types';
+import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionType } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class ContributionService {
+  private readonly logger = new Logger(ContributionService.name);
+
   constructor(
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
@@ -22,6 +26,8 @@ export class ContributionService {
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
+    @InjectRepository(Proposal)
+    private readonly proposalRepository: Repository<Proposal>,
     private readonly transactionsService: TransactionsService,
     private readonly systemSettingsService: SystemSettingsService
   ) {}
@@ -107,10 +113,17 @@ export class ContributionService {
       throw new NotFoundException('User not found');
     }
 
-    if (vaultData.vault_status !== VaultStatus.contribution) {
-      throw new BadRequestException('Vault is not in contribution phase');
+    // Check if vault is in contribution OR expansion phase
+    if (vaultData.vault_status !== VaultStatus.contribution && vaultData.vault_status !== VaultStatus.expansion) {
+      throw new BadRequestException('Vault is not accepting contributions');
     }
 
+    // Handle expansion mode contributions
+    if (vaultData.vault_status === VaultStatus.expansion) {
+      return this.handleExpansionContribution(vaultId, contributeReq, userId);
+    }
+
+    // Normal contribution flow
     if (currentAssetCount + contributeReq.assets.length > vaultData.max_contribute_assets) {
       throw new BadRequestException(
         `Adding ${contributeReq.assets.length} assets would exceed the vault's maximum capacity of ${vaultData.max_contribute_assets}. ` +
@@ -198,6 +211,110 @@ export class ContributionService {
     return {
       success: true,
       message: 'Contribution request accepted, transaction created',
+      vaultId,
+      txId: transaction.id,
+    };
+  }
+
+  /**
+   * Handle contribution when vault is in expansion mode
+   * Creates transaction only - claims will be created during expansion->locked transition
+   */
+  private async handleExpansionContribution(
+    vaultId: string,
+    contributeReq: any,
+    userId: string
+  ): Promise<{
+    success: boolean;
+    message: string;
+    vaultId: string;
+    txId: string;
+  }> {
+    this.logger.log(`Processing expansion contribution for vault ${vaultId}`);
+
+    // Find the active expansion proposal
+    const expansionProposal = await this.proposalRepository.findOne({
+      where: {
+        vaultId,
+        proposalType: ProposalType.EXPANSION,
+        status: ProposalStatus.EXECUTED,
+      },
+      order: { executionDate: 'DESC' },
+    });
+
+    if (!expansionProposal || !expansionProposal.metadata?.expansion) {
+      throw new BadRequestException('No active expansion configuration found');
+    }
+
+    const expansionConfig = expansionProposal.metadata.expansion;
+
+    // Validate contributed assets are from whitelisted policies
+    const contributedPolicyIds = [...new Set(contributeReq.assets.map(a => a.policyId))];
+    const invalidPolicies = contributedPolicyIds.filter(
+      policyId => !expansionConfig.policyIds.includes(policyId as any)
+    );
+
+    if (invalidPolicies.length > 0) {
+      throw new BadRequestException(
+        `Assets from policies [${invalidPolicies.join(', ')}] are not whitelisted for this expansion. ` +
+          `Allowed policies: [${expansionConfig.policyIds.join(', ')}]`
+      );
+    }
+
+    // Calculate total asset count for this contribution (NFTs = 1 each, FTs = quantity)
+    const contributionAssetCount = contributeReq.assets.reduce((total, asset) => {
+      return total + (Number(asset.quantity) || 1);
+    }, 0);
+
+    // Check asset max if configured - count already CONFIRMED contributions
+    if (!expansionConfig.noMax && expansionConfig.assetMax) {
+      // Count currently locked expansion assets (sum quantities for FTs, count for NFTs)
+      const expansionAssetData = await this.assetRepository
+        .createQueryBuilder('asset')
+        .select('asset.type', 'assetType')
+        .addSelect('COUNT(DISTINCT asset.id)', 'nftCount')
+        .addSelect('COALESCE(SUM(asset.quantity), 0)', 'ftQuantity')
+        .innerJoin('asset.transaction', 'tx')
+        .where('asset.vault_id = :vaultId', { vaultId })
+        .andWhere('asset.status IN (:...statuses)', { statuses: [AssetStatus.LOCKED, AssetStatus.PENDING] })
+        .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
+        .andWhere('tx.created_at >= (SELECT expansion_phase_start FROM vaults WHERE id = :vaultId)', { vaultId })
+        .groupBy('asset.type')
+        .getRawMany();
+
+      const currentAssetCount = expansionAssetData.reduce((total, row) => {
+        const quantity = row.assetType === AssetType.NFT ? Number(row.nftCount) : Number(row.ftQuantity);
+        return total + quantity;
+      }, 0);
+
+      const projectedCount = currentAssetCount + contributionAssetCount;
+
+      if (projectedCount > expansionConfig.assetMax) {
+        throw new BadRequestException(
+          `Adding ${contributionAssetCount} assets would exceed the expansion limit of ${expansionConfig.assetMax}. ` +
+            `Current expansion assets (confirmed + pending): ${currentAssetCount}`
+        );
+      }
+
+      this.logger.log(
+        `Expansion asset check: ${currentAssetCount} (confirmed + pending) + ${contributionAssetCount} new = ${projectedCount}/${expansionConfig.assetMax}`
+      );
+    }
+
+    // Create transaction (claims will be created during expansion->locked transition)
+    const transaction = await this.transactionsService.createTransaction({
+      vault_id: vaultId,
+      type: TransactionType.contribute,
+      assets: [],
+      userId,
+      fee: this.systemSettingsService.protocolContributorsFee,
+      metadata: contributeReq.assets,
+    });
+
+    return {
+      success: true,
+      message:
+        'Expansion contribution request accepted. VT tokens will be calculated and distributed when the expansion phase completes.',
       vaultId,
       txId: transaction.id,
     };

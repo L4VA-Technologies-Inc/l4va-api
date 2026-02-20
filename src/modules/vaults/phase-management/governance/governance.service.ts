@@ -25,6 +25,7 @@ import { VoteRes } from './dto/vote.res';
 import { VoteCountingService } from './vote-counting.service';
 
 import { Asset } from '@/database/asset.entity';
+import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
@@ -71,6 +72,8 @@ export class GovernanceService {
   private readonly votingPowerCache: NodeCache;
   private readonly proposalCreationCache: NodeCache;
   private readonly poolAddress: string;
+  private readonly MIN_VOTING_DURATION = 86400000; // 24 hours in ms
+  private readonly MAX_VOTING_DURATION = 259200000; // 3 days in ms
 
   // private readonly snapshotCache: NodeCache;
 
@@ -95,6 +98,8 @@ export class GovernanceService {
     private readonly voteRepository: Repository<Vote>,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
+    @InjectRepository(AssetsWhitelistEntity)
+    private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly configService: ConfigService,
@@ -127,13 +132,22 @@ export class GovernanceService {
     this.logger.log('Starting daily snapshot creation');
 
     try {
+      // Include both locked and expansion vaults for snapshot creation
       const lockedVaults = await this.vaultRepository.find({
-        where: {
-          vault_status: VaultStatus.locked,
-          asset_vault_name: Not(IsNull()),
-          script_hash: Not(IsNull()),
-          distribution_processed: true,
-        },
+        where: [
+          {
+            vault_status: VaultStatus.locked,
+            asset_vault_name: Not(IsNull()),
+            script_hash: Not(IsNull()),
+            distribution_processed: true,
+          },
+          {
+            vault_status: VaultStatus.expansion,
+            asset_vault_name: Not(IsNull()),
+            script_hash: Not(IsNull()),
+            distribution_processed: true,
+          },
+        ],
         select: ['id', 'asset_vault_name', 'script_hash'],
       });
 
@@ -142,7 +156,7 @@ export class GovernanceService {
         return;
       }
 
-      this.logger.log(`Found ${lockedVaults.length} locked vaults for snapshots`);
+      this.logger.log(`Found ${lockedVaults.length} locked/expansion vaults for snapshots`);
 
       const results = await Promise.allSettled(
         lockedVaults.map(async (vault, index) => {
@@ -263,8 +277,21 @@ export class GovernanceService {
       throw new NotFoundException('Vault not found');
     }
 
-    if (vault.vault_status !== VaultStatus.locked) {
-      throw new BadRequestException('Governance is only available for locked vaults');
+    // Allow governance for both locked and expansion statuses
+    // Expansion windows can be long/indefinite, so governance should continue
+    if (vault.vault_status !== VaultStatus.locked && vault.vault_status !== VaultStatus.expansion) {
+      throw new BadRequestException('Governance is only available for locked or expansion vaults');
+    }
+
+    // During expansion, only Distribution proposals are allowed
+    // All other proposal types involve extracting assets from vault which conflicts with expansion
+    if (vault.vault_status === VaultStatus.expansion) {
+      if (createProposalReq.type !== ProposalType.DISTRIBUTION) {
+        throw new BadRequestException(
+          'During vault expansion, only Distribution proposals are allowed. ' +
+            'Proposals that extract assets (Marketplace Actions, Burning, Termination, or new Expansions) must wait until the current expansion completes.'
+        );
+      }
     }
 
     const latestSnapshot = await this.snapshotRepository.findOne({
@@ -274,7 +301,77 @@ export class GovernanceService {
 
     await this.getVotingPower(vaultId, userId, 'create_proposal');
 
+    if (createProposalReq.duration < this.MIN_VOTING_DURATION) {
+      throw new BadRequestException(
+        `Voting duration must be at least 24 hours (${this.MIN_VOTING_DURATION}ms). Provided: ${createProposalReq.duration}ms`
+      );
+    }
+
+    if (createProposalReq.duration > this.MAX_VOTING_DURATION) {
+      throw new BadRequestException(
+        `Voting duration cannot exceed 3 days (${this.MAX_VOTING_DURATION}ms). Provided: ${createProposalReq.duration}ms`
+      );
+    }
+
+    // ===== PROPOSAL TYPE SPECIFIC CONSTRAINTS =====
     const startDate = new Date(createProposalReq.startDate ?? createProposalReq.proposalStart);
+
+    // Check for only 1 active expansion proposal at a time
+    if (createProposalReq.type === ProposalType.EXPANSION) {
+      const activeExpansionProposal = await this.proposalRepository.findOne({
+        where: {
+          vaultId,
+          proposalType: ProposalType.EXPANSION,
+          status: In([ProposalStatus.ACTIVE, ProposalStatus.UPCOMING]),
+        },
+      });
+
+      if (activeExpansionProposal) {
+        throw new BadRequestException(
+          `Only one expansion proposal can be active at a time. ` +
+            `Please wait for the current expansion proposal "${activeExpansionProposal.title}" to complete before creating a new one.`
+        );
+      }
+    }
+
+    // Check for only 1 active market action proposal for the same asset at a time
+    if (createProposalReq.type === ProposalType.MARKETPLACE_ACTION) {
+      const requestedActions = createProposalReq.marketplaceActions || [];
+      const requestedAssetIds = requestedActions.map(action => action.assetId);
+
+      // Find all active/upcoming marketplace action proposals for this vault
+      const activeMarketProposals = await this.proposalRepository.find({
+        where: {
+          vaultId,
+          proposalType: ProposalType.MARKETPLACE_ACTION,
+          status: In([ProposalStatus.ACTIVE, ProposalStatus.UPCOMING]),
+        },
+      });
+
+      // Check if any of the requested assets are already in an active proposal
+      for (const existingProposal of activeMarketProposals) {
+        const existingActions = existingProposal.metadata?.marketplaceActions || [];
+        const existingAssetIds = existingActions.map((action: any) => action.assetId);
+
+        // Check for overlap
+        const overlappingAssets = requestedAssetIds.filter(assetId => existingAssetIds.includes(assetId));
+
+        if (overlappingAssets.length > 0) {
+          // Get asset names for better error message
+          const overlappingAssetRecords = await this.assetRepository.find({
+            where: { id: In(overlappingAssets) },
+            select: ['id', 'name'],
+          });
+
+          const assetNames = overlappingAssetRecords.map(a => a.name || a.id).join(', ');
+
+          throw new BadRequestException(
+            `Cannot create market action proposal. The following assets are already in an active proposal "${existingProposal.title}": ${assetNames}. ` +
+              `Please wait for that proposal to complete before creating a new one for these assets.`
+          );
+        }
+      }
+    }
 
     // Create the proposal with the appropriate fields based on type
     const proposal = this.proposalRepository.create({
@@ -606,6 +703,72 @@ export class GovernanceService {
 
         // Store only the action data, asset details will be fetched in getProposal
         proposal.metadata.marketplaceActions = actions;
+
+        break;
+      }
+
+      case ProposalType.EXPANSION: {
+        // Validate expansion fields
+        const {
+          expansionPolicyIds,
+          expansionDuration,
+          expansionNoLimit,
+          expansionAssetMax,
+          expansionNoMax,
+          expansionPriceType,
+          expansionLimitPrice,
+        } = createProposalReq;
+
+        if (!expansionPolicyIds || expansionPolicyIds.length === 0) {
+          throw new BadRequestException('At least one policy ID must be selected for expansion');
+        }
+
+        // Validate policy IDs are whitelisted for this vault
+        const whitelistedPolicies = await this.assetsWhitelistRepository.find({
+          where: { vault: { id: vaultId } },
+        });
+
+        const whitelistedPolicyIds = whitelistedPolicies.map(w => w.policy_id);
+
+        for (const policyId of expansionPolicyIds) {
+          if (!whitelistedPolicyIds.includes(policyId)) {
+            throw new BadRequestException(`Policy ID ${policyId} is not whitelisted for this vault`);
+          }
+        }
+
+        // Validate duration if no limit is not set
+        if (!expansionNoLimit && (!expansionDuration || expansionDuration <= 0)) {
+          throw new BadRequestException('Expansion duration is required when "No Limit" is not selected');
+        }
+
+        // Validate asset max if no max is not set
+        if (!expansionNoMax && (!expansionAssetMax || expansionAssetMax <= 0)) {
+          throw new BadRequestException('Asset max is required when "No Max" is not selected');
+        }
+
+        // Validate price type
+        if (!expansionPriceType || !['limit', 'market'].includes(expansionPriceType)) {
+          throw new BadRequestException('Price type must be either "limit" or "market"');
+        }
+
+        // Validate limit price if using limit pricing
+        if (expansionPriceType === 'limit') {
+          if (!expansionLimitPrice || expansionLimitPrice <= 0) {
+            throw new BadRequestException('Limit price is required when using limit pricing');
+          }
+        }
+
+        // Store expansion config in metadata
+        proposal.metadata.expansion = {
+          policyIds: expansionPolicyIds,
+          duration: expansionNoLimit ? undefined : expansionDuration,
+          noLimit: expansionNoLimit || false,
+          assetMax: expansionNoMax ? undefined : expansionAssetMax,
+          noMax: expansionNoMax || false,
+          priceType: expansionPriceType,
+          limitPrice: expansionPriceType === 'limit' ? expansionLimitPrice : undefined,
+          currentAssetCount: 0,
+        };
 
         break;
       }
@@ -1448,7 +1611,8 @@ export class GovernanceService {
     }
 
     try {
-      if (!vault || vault.vault_status !== VaultStatus.locked) {
+      // Allow proposal creation for both locked and expansion vaults
+      if (!vault || (vault.vault_status !== VaultStatus.locked && vault.vault_status !== VaultStatus.expansion)) {
         if (vault?.distribution_processed) {
           this.proposalCreationCache.set(cacheKey, false, this.CACHE_TTL.CAN_CREATE_PROPOSAL);
         }

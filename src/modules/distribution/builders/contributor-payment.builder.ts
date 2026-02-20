@@ -280,10 +280,6 @@ export class ContributorPaymentBuilder {
         address: DISPATCH_ADDRESS,
         lovelace: actualRemainingDispatchLovelace,
       });
-    } else {
-      this.logger.log(
-        `No dispatch funding (0% acquirers/LP). Transaction will only mint vault tokens and return contributed assets to contributors.`
-      );
     }
 
     // Add mint script interaction

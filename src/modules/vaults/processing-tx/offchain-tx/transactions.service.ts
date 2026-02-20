@@ -10,6 +10,7 @@ import { In, IsNull, Not, Repository } from 'typeorm';
 import { TransactionsResponseDto, TransactionsResponseItemsDto } from './dto/transactions-response.dto';
 
 import { Asset } from '@/database/asset.entity';
+import { Proposal } from '@/database/proposal.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
@@ -18,6 +19,8 @@ import {
   GetTransactionsDto,
   GetTransactionType,
 } from '@/modules/vaults/processing-tx/offchain-tx/dto/get-transactions.dto';
+import { ProposalStatus, ProposalType } from '@/types/proposal.types';
+import { VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class TransactionsService {
@@ -33,6 +36,8 @@ export class TransactionsService {
     private readonly assetRepository: Repository<Asset>,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
+    @InjectRepository(Proposal)
+    private readonly proposalRepository: Repository<Proposal>,
     private readonly taptoolsService: TaptoolsService,
     private readonly configService: ConfigService
   ) {
@@ -588,6 +593,9 @@ export class TransactionsService {
       total_acquired_value_ada: assetsPrices.totalAcquiredAda,
     });
 
+    // Update expansion proposal asset count if vault is in expansion
+    await this.updateExpansionProposalAssetCount(transaction.vault_id);
+
     return assets.length;
   }
 
@@ -791,5 +799,66 @@ export class TransactionsService {
         status: TransactionStatus.confirmed,
       },
     });
+  }
+
+  private async updateExpansionProposalAssetCount(vaultId: string): Promise<void> {
+    try {
+      // Check if vault is in expansion status
+      const vault: Pick<Vault, 'id' | 'vault_status' | 'expansion_phase_start'> = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        select: ['id', 'vault_status', 'expansion_phase_start'],
+      });
+
+      if (!vault || vault.vault_status !== VaultStatus.expansion) {
+        // Not in expansion mode, nothing to update
+        return;
+      }
+
+      // Find the active expansion proposal
+      const expansionProposal: Pick<Proposal, 'id' | 'metadata' | 'executionDate'> =
+        await this.proposalRepository.findOne({
+          where: {
+            vaultId,
+            proposalType: ProposalType.EXPANSION,
+            status: ProposalStatus.EXECUTED,
+          },
+          order: { executionDate: 'DESC' },
+          select: ['id', 'metadata', 'executionDate'],
+        });
+
+      if (!expansionProposal || !expansionProposal.metadata?.expansion) {
+        this.logger.warn(`No active expansion proposal found for vault ${vaultId}`);
+        return;
+      }
+
+      // Count locked expansion assets (contributed during expansion)
+      // NFTs counted by record count, FTs counted by quantity sum
+      const expansionAssetData = await this.assetRepository
+        .createQueryBuilder('asset')
+        .select('asset.type', 'assetType')
+        .addSelect('COUNT(DISTINCT asset.id)', 'nftCount')
+        .addSelect('COALESCE(SUM(asset.quantity), 0)', 'ftQuantity')
+        .where('asset.vault_id = :vaultId', { vaultId })
+        .andWhere('asset.status = :status', { status: AssetStatus.LOCKED })
+        .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
+        .andWhere('asset.locked_at >= :expansionStart', { expansionStart: vault.expansion_phase_start })
+        .groupBy('asset.type')
+        .getRawMany();
+
+      const currentAssetCount = expansionAssetData.reduce((total, row) => {
+        const quantity = row.assetType === AssetType.NFT ? Number(row.nftCount) : Number(row.ftQuantity);
+        return total + quantity;
+      }, 0);
+
+      // Update proposal metadata
+      expansionProposal.metadata.expansion.currentAssetCount = currentAssetCount;
+
+      await this.proposalRepository.update({ id: expansionProposal.id }, { metadata: expansionProposal.metadata });
+
+      this.logger.log(`Updated expansion asset count for vault ${vaultId}: ${currentAssetCount}`);
+    } catch (error) {
+      this.logger.error(`Failed to update expansion asset count for vault ${vaultId}:`, error);
+      // Don't throw - this is a secondary operation that shouldn't fail the main transaction
+    }
   }
 }

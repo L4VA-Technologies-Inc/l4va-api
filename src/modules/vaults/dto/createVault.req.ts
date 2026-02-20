@@ -208,14 +208,20 @@ export class CreateVaultReq {
   liquidityPoolContribution: number;
 
   @ApiProperty({
-    description: 'Total supply of FT tokens',
+    description:
+      'Total supply of FT tokens (supported range: 1M to 1T). Decimals auto-adjusted (6-8) to prevent overflow.',
     required: true,
-    default: '100000000',
+    default: '1000000',
   })
   @IsNotEmpty()
   @IsNumber()
+  @Min(1_000_000, { message: 'Token supply must be at least 1,000,000' })
+  @Max(1_000_000_000_000, {
+    message:
+      'Token supply cannot exceed 1,000,000,000,000 (1 trillion). Decimals are automatically adjusted to prevent overflow.',
+  })
   @Expose()
-  ftTokenSupply: number | null = 100000000;
+  ftTokenSupply: number | null = 1_000_000;
 
   @ApiProperty({
     required: true,

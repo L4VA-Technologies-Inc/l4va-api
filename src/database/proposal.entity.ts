@@ -94,6 +94,18 @@ export class Proposal {
     // Burning data
     burnAssets?: string[];
 
+    // Expansion data
+    expansion?: {
+      policyIds: string[];
+      duration?: number;
+      noLimit?: boolean;
+      assetMax?: number;
+      noMax?: boolean;
+      priceType: 'limit' | 'market';
+      limitPrice?: number;
+      currentAssetCount?: number; // Track progress
+    };
+
     // Swap execution results (for DexHunter swaps)
     swapResults?: Array<{
       assetId: string;

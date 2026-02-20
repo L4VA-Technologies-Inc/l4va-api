@@ -1,11 +1,9 @@
-import { Controller, Post, Logger, HttpCode, HttpStatus, UseGuards, Param } from '@nestjs/common';
+import { Controller, Logger, HttpCode, HttpStatus, UseGuards, Param, Get } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 
 import { AdminGuard } from '../auth/admin.guard';
 
-import { Vault } from '@/database/vault.entity';
+import { DiagnosticService } from './diagnostic.service';
 
 /*
  * Manual Distribution Controller
@@ -26,10 +24,7 @@ import { Vault } from '@/database/vault.entity';
 export class DiagnosticController {
   private readonly logger = new Logger(DiagnosticController.name);
 
-  constructor(
-    @InjectRepository(Vault)
-    private readonly vaultRepository: Repository<Vault>
-  ) {}
+  constructor(private readonly diagnosticService: DiagnosticService) {}
 
   // ========================================
   // MANUAL DISTRIBUTION CONTROL ENDPOINTS
@@ -40,49 +35,49 @@ export class DiagnosticController {
    *
    * This stops automatic batch progression and allows manual control.
    */
-  @Post('vault/:vaultId/enable-manual-mode')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Enable manual distribution mode',
-    description: 'Enable manual distribution mode to stop automatic batch progression and allow manual control',
-  })
-  async enableManualMode(@Param('vaultId') vaultId: string): Promise<any> {
-    this.logger.log(`Enabling manual distribution mode for vault ${vaultId}`);
+  // @Post('vault/:vaultId/enable-manual-mode')
+  // @HttpCode(HttpStatus.OK)
+  // @ApiOperation({
+  //   summary: 'Enable manual distribution mode',
+  //   description: 'Enable manual distribution mode to stop automatic batch progression and allow manual control',
+  // })
+  // async enableManualMode(@Param('vaultId') vaultId: string): Promise<any> {
+  //   this.logger.log(`Enabling manual distribution mode for vault ${vaultId}`);
 
-    const vault = await this.vaultRepository.findOne({ where: { id: vaultId } });
-    if (!vault) {
-      return { success: false, message: `Vault ${vaultId} not found` };
-    }
+  //   const vault = await this.vaultRepository.findOne({ where: { id: vaultId } });
+  //   if (!vault) {
+  //     return { success: false, message: `Vault ${vaultId} not found` };
+  //   }
 
-    await this.vaultRepository.update(vaultId, { manual_distribution_mode: true });
+  //   await this.vaultRepository.update(vaultId, { manual_distribution_mode: true });
 
-    return {
-      success: true,
-      message: `Manual distribution mode enabled for vault ${vaultId}`,
-      vaultId,
-    };
-  }
+  //   return {
+  //     success: true,
+  //     message: `Manual distribution mode enabled for vault ${vaultId}`,
+  //     vaultId,
+  //   };
+  // }
 
   /**
    * Disable manual distribution mode
    */
-  @Post('vault/:vaultId/disable-manual-mode')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Disable manual distribution mode',
-    description: 'Disable manual mode and resume automatic distribution',
-  })
-  async disableManualMode(@Param('vaultId') vaultId: string): Promise<any> {
-    this.logger.log(`Disabling manual distribution mode for vault ${vaultId}`);
+  // @Post('vault/:vaultId/disable-manual-mode')
+  // @HttpCode(HttpStatus.OK)
+  // @ApiOperation({
+  //   summary: 'Disable manual distribution mode',
+  //   description: 'Disable manual mode and resume automatic distribution',
+  // })
+  // async disableManualMode(@Param('vaultId') vaultId: string): Promise<any> {
+  //   this.logger.log(`Disabling manual distribution mode for vault ${vaultId}`);
 
-    await this.vaultRepository.update(vaultId, { manual_distribution_mode: false });
+  //   await this.vaultRepository.update(vaultId, { manual_distribution_mode: false });
 
-    return {
-      success: true,
-      message: `Manual distribution mode disabled for vault ${vaultId}. Automatic distribution will resume.`,
-      vaultId,
-    };
-  }
+  //   return {
+  //     success: true,
+  //     message: `Manual distribution mode disabled for vault ${vaultId}. Automatic distribution will resume.`,
+  //     vaultId,
+  //   };
+  // }
 
   /**
    * STEP 3: Prepare vault update for specific claims
@@ -888,4 +883,68 @@ export class DiagnosticController {
   //     extractedToAddress: extractToAddress,
   //   };
   // }
+
+  // ========================================
+  // VAULT SIMULATION & TESTING ENDPOINTS
+  // ========================================
+
+  /**
+   * Simulate multiplier calculations for a vault
+   * Returns detailed breakdown of token distribution without executing any transactions
+   */
+  @Get('vault/:vaultId/simulate-multipliers')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Simulate vault multipliers',
+    description:
+      'Test method: Simulate multiplier calculations for a vault without executing the transition. ' +
+      'Returns detailed multiplier data, asset pricing, and transaction size estimates.',
+  })
+  async simulateVaultMultipliers(@Param('vaultId') vaultId: string): Promise<any> {
+    this.logger.log(`Simulating vault multipliers for vault ${vaultId}`);
+
+    try {
+      const result = await this.diagnosticService.simulateVaultMultipliers(vaultId);
+      return {
+        success: true,
+        data: result,
+      };
+    } catch (error) {
+      this.logger.error(`Error simulating vault multipliers for vault ${vaultId}:`, error);
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  }
+
+  /**
+   * Simulate multi-batch distribution for a vault
+   * Shows how multipliers would be split across multiple transactions
+   */
+  @Get('vault/:vaultId/simulate-distribution')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Simulate vault distribution',
+    description:
+      'Test method: Simulate multi-batch distribution for a vault. ' +
+      'Shows how multipliers would be split across multiple transactions and estimates claims.',
+  })
+  async simulateVaultDistribution(@Param('vaultId') vaultId: string): Promise<any> {
+    this.logger.log(`Simulating vault distribution for vault ${vaultId}`);
+
+    try {
+      const result = await this.diagnosticService.simulateMultiBatchDistribution(vaultId);
+      return {
+        success: true,
+        data: result,
+      };
+    } catch (error) {
+      this.logger.error(`Error simulating vault distribution for vault ${vaultId}:`, error);
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  }
 }

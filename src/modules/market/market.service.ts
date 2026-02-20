@@ -11,7 +11,7 @@ import { GetMarketsDto, MarketSortField, SortOrder, TvlCurrency } from './dto/ge
 import { Market } from '@/database/market.entity';
 import { Vault } from '@/database/vault.entity';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
-import { VaultMarketStatsService } from '@/modules/vaults/phase-management/market-stats/vault-market-stats.service';
+import { VaultMarketStatsService } from '@/modules/vaults/market-stats/vault-market-stats.service';
 
 @Injectable()
 export class MarketService implements OnModuleInit {
