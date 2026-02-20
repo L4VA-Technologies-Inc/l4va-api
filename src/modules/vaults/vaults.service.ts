@@ -716,6 +716,7 @@ export class VaultsService {
     let expansionAssetsCount = 0;
     let expansionAssetMax: number | undefined;
     let expansionNoMax: boolean | undefined;
+    let expansionNoLimit: boolean | undefined;
     let expansionPriceType: 'limit' | 'market' | undefined;
     let expansionLimitPrice: number | undefined;
     let expansionAssetsByPolicy: Array<{ policyId: string; quantity: number }> = [];
@@ -737,6 +738,7 @@ export class VaultsService {
       if (expansionProposal?.metadata?.expansion) {
         expansionAssetMax = expansionProposal.metadata.expansion.assetMax;
         expansionNoMax = expansionProposal.metadata.expansion.noMax;
+        expansionNoLimit = expansionProposal.metadata.expansion.noLimit;
         expansionPriceType = expansionProposal.metadata.expansion.priceType;
         expansionLimitPrice = expansionProposal.metadata.expansion.limitPrice;
         const expansionPolicyIds = expansionProposal.metadata.expansion.policyIds || [];
@@ -870,6 +872,7 @@ export class VaultsService {
       expansionAssetsCount,
       expansionAssetMax,
       expansionNoMax,
+      expansionNoLimit,
       expansionPriceType,
       expansionLimitPrice,
       expansionAssetsByPolicy,
