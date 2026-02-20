@@ -11,13 +11,11 @@ import { OnchainTransactionStatus } from './types/transaction-status.enum';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
-import { Proposal } from '@/database/proposal.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
-import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
+import { AssetType } from '@/types/asset.types';
 import { ClaimStatus } from '@/types/claim.types';
-import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { ContributionWindowType, VaultStatus } from '@/types/vault.types';
 
@@ -45,8 +43,6 @@ export class BlockchainWebhookService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
-    @InjectRepository(Proposal)
-    private readonly proposalRepository: Repository<Proposal>,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>
   ) {
@@ -122,11 +118,6 @@ export class BlockchainWebhookService {
         if (transaction.type === TransactionType.contribute || transaction.type === TransactionType.acquire) {
           const lockedCount = await this.transactionsService.lockAssetsForTransaction(transaction.id);
           this.logger.log(`Locked ${lockedCount} assets for transaction ${tx.hash}`);
-
-          // Update expansion proposal metadata if vault is in expansion mode
-          if (transaction.type === TransactionType.contribute && transaction.vault_id) {
-            await this.updateExpansionProposalAssetCount(transaction.vault_id);
-          }
         }
 
         // NOTE: Token metadata PR submission has been moved to lifecycle.service.ts
@@ -312,76 +303,6 @@ export class BlockchainWebhookService {
     } catch (error) {
       this.logger.error(`WH: Failed to handle createVault confirmation for vault ${vaultId}: ${error.message}`);
       // Don't throw - the cron job will handle it as fallback
-    }
-  }
-
-  /**
-   * Update expansion proposal metadata with current asset count
-   * Called after assets are locked for contribution during expansion
-   */
-  private async updateExpansionProposalAssetCount(vaultId: string): Promise<void> {
-    try {
-      // Check if vault is in expansion status
-      const vault: Pick<Vault, 'id' | 'vault_status' | 'expansion_phase_start'> = await this.vaultRepository.findOne({
-        where: { id: vaultId },
-        select: ['id', 'vault_status', 'expansion_phase_start'],
-      });
-
-      if (!vault || vault.vault_status !== VaultStatus.expansion) {
-        // Not in expansion mode, nothing to update
-        return;
-      }
-
-      // Find the active expansion proposal
-      const expansionProposal: Pick<Proposal, 'id' | 'metadata' | 'executionDate'> =
-        await this.proposalRepository.findOne({
-          where: {
-            vaultId,
-            proposalType: ProposalType.EXPANSION,
-            status: ProposalStatus.EXECUTED,
-          },
-          order: { executionDate: 'DESC' },
-          select: ['id', 'metadata', 'executionDate'],
-        });
-
-      if (!expansionProposal || !expansionProposal.metadata?.expansion) {
-        this.logger.warn(`WH: No active expansion proposal found for vault ${vaultId}`);
-        return;
-      }
-
-      // Count locked expansion assets (contributed during expansion)
-      // NFTs counted by record count, FTs counted by quantity sum
-      const expansionAssetData = await this.assetRepository
-        .createQueryBuilder('asset')
-        .select('asset.type', 'assetType')
-        .addSelect('COUNT(DISTINCT asset.id)', 'nftCount')
-        .addSelect('COALESCE(SUM(asset.quantity), 0)', 'ftQuantity')
-        .where('asset.vault_id = :vaultId', { vaultId })
-        .andWhere('asset.status = :status', { status: AssetStatus.LOCKED })
-        .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
-        .andWhere('asset.locked_at >= :expansionStart', { expansionStart: vault.expansion_phase_start })
-        .groupBy('asset.type')
-        .getRawMany();
-
-      const currentAssetCount = expansionAssetData.reduce((total, row) => {
-        const quantity = row.assetType === AssetType.NFT ? Number(row.nftCount) : Number(row.ftQuantity);
-        return total + quantity;
-      }, 0);
-
-      // Update proposal metadata
-      expansionProposal.metadata.expansion.currentAssetCount = currentAssetCount;
-
-      await this.proposalRepository.update({ id: expansionProposal.id }, { metadata: expansionProposal.metadata });
-
-      this.logger.log(
-        `WH: Updated expansion proposal ${expansionProposal.id} asset count: ${currentAssetCount}/${expansionProposal.metadata.expansion.assetMax || 'unlimited'}`
-      );
-    } catch (error) {
-      this.logger.error(
-        `WH: Failed to update expansion proposal asset count for vault ${vaultId}: ${error.message}`,
-        error.stack
-      );
-      // Don't throw - this is informational update
     }
   }
 }
