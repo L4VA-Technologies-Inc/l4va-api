@@ -103,6 +103,8 @@ export class VaultMarketStatsService {
         'v.ft_token_supply',
         'v.ft_token_decimals',
         'v.liquidity_pool_contribution',
+        'v.has_active_lp',
+        'v.lp_last_checked',
       ])
       .where('v.vault_status IN (:...statuses)', { statuses: [VaultStatus.locked, VaultStatus.expansion] })
       .andWhere('v.script_hash IS NOT NULL')
@@ -121,7 +123,49 @@ export class VaultMarketStatsService {
         const unit = `${vault.script_hash}${vault.asset_vault_name}`;
 
         try {
-          // Try Taptools first
+          // OPTIMIZATION: Use cheaper DexHunter API first to check if LP exists
+          // Only call expensive Taptools API if DexHunter confirms liquidity
+          // Exception: If vault already has confirmed LP, skip DexHunter check and go straight to Taptools
+
+          let shouldCallTaptools = vault.has_active_lp === true;
+
+          if (!shouldCallTaptools) {
+            // Check liquidity using DexHunter (cheaper API)
+            const liquidityCheck = await this.dexHunterPricingService.checkTokenLiquidity(unit);
+
+            if (liquidityCheck?.hasLiquidity) {
+              this.logger.log(
+                `${vault.name}: DexHunter detected liquidity (${liquidityCheck.totalAdaLiquidity.toFixed(2)} ADA across ${liquidityCheck.pools.length} pool(s))`
+              );
+              shouldCallTaptools = true;
+            } else {
+              this.logger.debug(`${vault.name}: No liquidity detected by DexHunter, skipping Taptools API`);
+
+              // Update LP status to false and record check time
+              await this.vaultRepository.update(
+                { id: vault.id },
+                { has_active_lp: false, lp_last_checked: new Date() }
+              );
+
+              // Update market stats with no data
+              await this.upsertMarketData({
+                vault_id: vault.id,
+                circSupply: 0,
+                mcap: 0,
+                totalSupply: 0,
+                price_change_1h: 0,
+                price_change_24h: 0,
+                price_change_7d: 0,
+                price_change_30d: 0,
+                tvl: vault.total_assets_cost_ada || 0,
+                has_market_data: false,
+              });
+
+              return null; // Skip Taptools API call
+            }
+          }
+
+          // Call Taptools API (only if LP exists based on DexHunter or previous confirmation)
           const [{ data: mcapData }, { data: priceChangeData }] = await Promise.all([
             this.axiosTapToolsInstance.get('/token/mcap', { params: { unit } }),
             this.axiosTapToolsInstance.get('/token/prices/chg', {
