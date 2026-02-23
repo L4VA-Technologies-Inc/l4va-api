@@ -244,6 +244,24 @@ export class Vault {
   })
   liquidity_pool_contribution?: number;
 
+  @Expose({ name: 'hasActiveLp' })
+  @Column({
+    name: 'has_active_lp',
+    type: 'boolean',
+    default: false,
+    nullable: false,
+  })
+  has_active_lp?: boolean;
+
+  @Expose({ name: 'lpLastChecked' })
+  @Transform(({ value }) => (value ? new Date(value).getTime() : null))
+  @Column({
+    name: 'lp_last_checked',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  lp_last_checked?: Date;
+
   @Expose({ name: 'ftTokenSupply' })
   @Transform(({ value }) => (value ? Number(value) : null))
   @Column({ name: 'ft_token_supply', type: 'numeric', nullable: true })

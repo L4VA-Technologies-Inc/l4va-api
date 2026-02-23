@@ -34,6 +34,7 @@ import { Vault } from '@/database/vault.entity';
 import { Vote } from '@/database/vote.entity';
 import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
+import { VyfiService } from '@/modules/vyfi/vyfi.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
@@ -74,6 +75,7 @@ export class GovernanceService {
   private readonly poolAddress: string;
   private readonly MIN_VOTING_DURATION = 86400000; // 24 hours in ms
   private readonly MAX_VOTING_DURATION = 259200000; // 3 days in ms
+  private readonly MIN_LP_ADA_FOR_MARKET_PRICING = 5000;
 
   // private readonly snapshotCache: NodeCache;
 
@@ -107,7 +109,8 @@ export class GovernanceService {
     private readonly voteCountingService: VoteCountingService,
     private readonly distributionService: DistributionService,
     private readonly dexHunterPricingService: DexHunterPricingService,
-    private readonly dexHunterService: DexHunterService
+    private readonly dexHunterService: DexHunterService,
+    private readonly vyfiService: VyfiService
   ) {
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
 
@@ -784,6 +787,62 @@ export class GovernanceService {
         if (expansionPriceType === 'limit') {
           if (!expansionLimitPrice || expansionLimitPrice <= 0) {
             throw new BadRequestException('Limit price is required when using limit pricing');
+          }
+        }
+
+        // Validate market pricing requirements
+        if (expansionPriceType === 'market') {
+          // Check if vault has FT token configured (required for market pricing)
+          const vaultForLpCheck = await this.vaultRepository.findOne({
+            where: { id: vaultId },
+            select: ['policy_id', 'asset_vault_name', 'name'],
+          });
+
+          if (!vaultForLpCheck.policy_id || !vaultForLpCheck.asset_vault_name) {
+            throw new BadRequestException(
+              'Market pricing requires vault token configuration. Vault must have a policy_id and asset_vault_name.'
+            );
+          }
+
+          try {
+            const liquidityCheck = await this.dexHunterPricingService.checkTokenLiquidity(
+              `${vaultForLpCheck.policy_id}${vaultForLpCheck.asset_vault_name}`
+            );
+
+            if (!liquidityCheck || !liquidityCheck.hasLiquidity) {
+              throw new BadRequestException(
+                'Market pricing requires an active Liquidity Pool. ' +
+                  'No LP found on any DEX (checked MinSwap, VyFi, SundaeSwap, Spectrum). ' +
+                  'Please use limit pricing or create an LP first.'
+              );
+            }
+
+            if (liquidityCheck.totalAdaLiquidity < this.MIN_LP_ADA_FOR_MARKET_PRICING) {
+              const dexList = liquidityCheck.pools.map(p => `${p.dex} (${p.adaAmount.toFixed(2)} ADA)`).join(', ');
+              throw new BadRequestException(
+                `Market pricing requires LP TVL of at least ${this.MIN_LP_ADA_FOR_MARKET_PRICING.toLocaleString()} ADA across all DEXes. ` +
+                  `Current total LP TVL: ${liquidityCheck.totalAdaLiquidity.toFixed(2)} ADA. ` +
+                  `Found on: ${dexList}. ` +
+                  'Please use limit pricing or wait for LP to accumulate more liquidity.'
+              );
+            }
+
+            // Log success with DEX details
+            const dexList = liquidityCheck.pools.map(p => p.dex).join(', ');
+            this.logger.log(
+              `Expansion proposal validated: Vault ${vaultForLpCheck.name} has active LP on ${liquidityCheck.pools.length} DEX(es): ${dexList}. ` +
+                `Total TVL: ${liquidityCheck.totalAdaLiquidity.toFixed(2)} ADA`
+            );
+          } catch (error) {
+            // If it's already a BadRequestException, re-throw it
+            if (error instanceof BadRequestException) {
+              throw error;
+            }
+            // For other errors (API failures, etc), log and throw a user-friendly error
+            this.logger.error(`Error checking LP status for expansion proposal: ${error.message}`, error.stack);
+            throw new BadRequestException(
+              'Unable to verify Liquidity Pool status. Please try again later or contact support.'
+            );
           }
         }
 

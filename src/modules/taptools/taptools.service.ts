@@ -870,10 +870,19 @@ export class TaptoolsService {
   /**
    * Update cached vault totals for multiple vaults
    * Includes assets with PENDING, LOCKED, EXTRACTED (in treasury), and DISTRIBUTED status
-   * Also calculates user TVL and gains based on:
-   * - For locked vaults: VT token holdings (proportional ownership)
-   * - For active vaults: Contributed asset values
+   *
+   * User TVL and Gains Calculation (ONLY for locked/expansion vaults):
+   * - Locked vaults WITH LP: VT token price appreciation (current_vt_price vs initial_vt_price)
+   * - Locked/Expansion vaults WITHOUT LP: VT token holdings × proportional TVL ownership
+   * - Active vaults (contribution/acquire): NO user gains calculated (users don't have VT tokens yet)
+   *
    * For locked vaults, also calculates FDV/TVL ratio
+   *
+   * GAINS CALCULATION FORMULAS:
+   * - LP vaults: user_gains_ada = (current_vt_price - initial_vt_price) / initial_vt_price * user_token_holdings * current_vt_price
+   * - Non-LP locked/expansion: user_gains_ada = (current_tvl - initial_tvl) * user_ownership_percentage
+   * - Contribution/Acquire: No calculation (users don't own VT tokens yet)
+   *
    * @param vaultIds Array of vault IDs to update
    */
   async updateMultipleVaultTotals(vaultIds: string[]): Promise<void> {

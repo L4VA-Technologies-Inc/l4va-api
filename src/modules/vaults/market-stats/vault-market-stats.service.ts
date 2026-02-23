@@ -8,15 +8,25 @@ import { Repository } from 'typeorm';
 
 import { Market } from '@/database/market.entity';
 import { Vault } from '@/database/vault.entity';
+import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
 import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
-import { VyfiService } from '@/modules/vyfi/vyfi.service';
 import { VaultStatus } from '@/types/vault.types';
 
 /**
- * Service responsible for fetching and updating vault token market statistics
+ * Service responsible for fetching and updating vault token market statistics from Taptools API
  * Runs every 2 hours to get fresh market data from external APIs (Taptools, DexHunter)
  * Updates: FDV, vt_price, market cap, price changes, and checks LP existence
+ * Processes both locked and expansion vaults for comprehensive market data coverage
+ *
+ * IMPORTANT - Gains Calculation for LP Vaults:
+ * For locked vaults with active LP, user gains are calculated from VT token price appreciation,
+ * NOT from underlying asset TVL changes:
+ * - Initial VT price is captured when LP is first created (initial_vt_price)
+ * - Current VT price comes from Taptools API (vt_price)
+ * - Gains % = (current_vt_price - initial_vt_price) / initial_vt_price * 100
+ *
+ * This reflects market perception and token trading value, which can differ from TVL changes.
  */
 @Injectable()
 export class VaultMarketStatsService {
@@ -32,8 +42,8 @@ export class VaultMarketStatsService {
     @InjectRepository(Market)
     private readonly marketRepository: Repository<Market>,
     private readonly configService: ConfigService,
-    private readonly vyfiService: VyfiService,
-    private readonly taptoolsService: TaptoolsService
+    private readonly taptoolsService: TaptoolsService,
+    private readonly dexHunterPricingService: DexHunterPricingService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     const tapToolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
@@ -54,7 +64,7 @@ export class VaultMarketStatsService {
   }
 
   /**
-   * Scheduled task to update market stats for all locked vaults with LPs
+   * Scheduled task to update market stats for all locked and expansion vaults
    * Runs every 2 hours
    */
   @Cron(CronExpression.EVERY_2_HOURS)
@@ -72,7 +82,7 @@ export class VaultMarketStatsService {
   /**
    * Update market statistics for all vault tokens
    * Fetches data from Taptools API with DexHunter fallback for newly created tokens
-   * Only processes locked vaults that have LP configuration (LP % > 0)
+   * Processes both locked and expansion vaults (including those without LP configuration)
    */
   async updateVaultTokensMarketStats(): Promise<void> {
     if (!this.isMainnet) {
@@ -80,7 +90,8 @@ export class VaultMarketStatsService {
       return;
     }
 
-    // Get vaults with LP configuration
+    // Get ALL locked and expansion vaults (including those without LP configuration)
+    // This supports community-created LPs that weren't configured initially
     const vaults = await this.vaultRepository
       .createQueryBuilder('v')
       .select([
@@ -91,9 +102,9 @@ export class VaultMarketStatsService {
         'v.name',
         'v.ft_token_supply',
         'v.ft_token_decimals',
+        'v.liquidity_pool_contribution',
       ])
-      .where('v.vault_status = :status', { status: VaultStatus.locked })
-      .andWhere('v.liquidity_pool_contribution > 0')
+      .where('v.vault_status IN (:...statuses)', { statuses: [VaultStatus.locked, VaultStatus.expansion] })
       .andWhere('v.script_hash IS NOT NULL')
       .andWhere('v.asset_vault_name IS NOT NULL')
       .getMany();
@@ -134,78 +145,19 @@ export class VaultMarketStatsService {
             this.logger.log(
               `${vault.name}: Taptools market data - Price: ${mcapData.price} ADA, FDV: ${mcapData.fdv} ADA`
             );
-          } else {
-            // Taptools doesn't have data yet - check if LP exists on VyFi
-            this.logger.warn(
-              `${vault.name}: No Taptools market data (price: ${mcapData?.price}, fdv: ${mcapData?.fdv}). Checking VyFi...`
-            );
-
-            try {
-              // Check if VyFi pool exists
-              const poolCheck = await this.vyfiService.checkPool({
-                networkId: 1, // mainnet
-                tokenAUnit: unit,
-                tokenBUnit: 'lovelace',
-              });
-
-              if (poolCheck.exists && poolCheck.data && poolCheck.data.length > 0) {
-                this.logger.log(`${vault.name}: VyFi pool exists. Calculating price from reserves...`);
-                hasMarketData = true;
-
-                // Calculate price from VyFi pool reserves
-                const poolData = poolCheck.data[0];
-                const tokenReserve = Number(poolData.tokenAQuantity || 0);
-                const adaReserveLovelace = Number(poolData.tokenBQuantity || 0);
-                const adaReserve = adaReserveLovelace / 1_000_000; // Convert lovelace to ADA
-
-                if (tokenReserve > 0 && adaReserve > 0) {
-                  // Price per token (in smallest unit) = ADA reserve / Token reserve
-                  const pricePerSmallestUnit = adaReserve / tokenReserve;
-
-                  // Adjust for token decimals to get price per whole token
-                  const decimals = vault.ft_token_decimals || 1;
-                  const vtPrice = pricePerSmallestUnit * Math.pow(10, decimals);
-
-                  vaultUpdateData.vt_price = vtPrice;
-
-                  // Calculate FDV = price × total supply
-                  const vtSupply = vault.ft_token_supply || 0;
-                  if (vtSupply > 0) {
-                    // Use raw supply for FDV calculation (decimals are just display metadata)
-                    const fdv = vtPrice * vtSupply;
-                    vaultUpdateData.fdv = fdv;
-
-                    this.logger.log(
-                      `${vault.name}: Calculated from VyFi - Price: ${vtPrice.toFixed(25)} ADA, FDV: ${fdv.toFixed(2)} ADA ` +
-                        `(Reserves: ${tokenReserve} tokens / ${adaReserve.toFixed(2)} ADA)`
-                    );
-                  } else {
-                    this.logger.log(
-                      `${vault.name}: Calculated price from VyFi: ${vtPrice.toFixed(25)} ADA (no supply for FDV)`
-                    );
-                  }
-                } else {
-                  this.logger.warn(
-                    `${vault.name}: VyFi pool exists but has invalid reserves (${tokenReserve} tokens / ${adaReserve} ADA)`
-                  );
-                }
-              } else {
-                // No pool on VyFi yet
-                this.logger.warn(`${vault.name}: No VyFi pool found. LP creation may be pending or failed.`);
-                hasMarketData = false;
-              }
-            } catch (vyfiError) {
-              this.logger.error(
-                `${vault.name}: VyFi pool check failed: ${vyfiError.message}. Cannot determine LP status.`
-              );
-              hasMarketData = false;
-            }
           }
 
           // Update vault if we got any market data
           if (Object.keys(vaultUpdateData).length > 0) {
             await this.vaultRepository.update({ id: vault.id }, vaultUpdateData);
           }
+
+          // Update vault's LP status flag
+          const lpStatusUpdate: Partial<{ has_active_lp: boolean; lp_last_checked: Date }> = {
+            has_active_lp: hasMarketData,
+            lp_last_checked: new Date(),
+          };
+          await this.vaultRepository.update({ id: vault.id }, lpStatusUpdate);
 
           // Always update market stats table (even with null values to track attempts)
           const marketData = {
@@ -258,44 +210,6 @@ export class VaultMarketStatsService {
           error instanceof Error ? error.stack : undefined
         );
       }
-    }
-  }
-
-  /**
-   * Check if a vault token actually has liquidity on DEX (VyFi)
-   * Returns pool info if LP exists, null otherwise
-   * @param policyId Token policy ID
-   * @param assetName Token asset name (hex)
-   */
-  async hasActiveLiquidity(
-    policyId: string,
-    assetName: string
-  ): Promise<{
-    exists: boolean;
-    poolData?: any;
-  }> {
-    if (!this.isMainnet) {
-      return { exists: false };
-    }
-
-    try {
-      const unit = `${policyId}${assetName}`;
-
-      // Check VyFi for pool existence
-      const poolCheck = await this.vyfiService.checkPool({
-        networkId: 1, // mainnet
-        tokenAUnit: unit,
-        tokenBUnit: 'lovelace',
-      });
-
-      if (poolCheck.exists) {
-        return { exists: true, poolData: poolCheck.data };
-      }
-
-      return { exists: false };
-    } catch (error) {
-      this.logger.warn(`Could not check liquidity for ${policyId}.${assetName}: ${error.message}`);
-      return { exists: false };
     }
   }
 
