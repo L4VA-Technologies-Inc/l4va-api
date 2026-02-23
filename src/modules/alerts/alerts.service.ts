@@ -314,7 +314,7 @@ export class AlertsService {
                 type: 'mrkdwn',
                 text:
                   `*⚠️ Critical Data Integrity Issue:*\n` +
-                  `Expansion closing failed due to invalid VT price. Cannot calculate multipliers with price <= 0 or Infinity.\n\n` +
+                  `Expansion closing failed due to invalid VT price. Cannot calculate multipliers with price Infinity.\n\n` +
                   `*Automatic Actions Taken:*\n` +
                   `• Vault set to manual distribution mode\n` +
                   `• Expansion closed without multipliers\n` +

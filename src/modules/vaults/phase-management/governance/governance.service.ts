@@ -184,6 +184,16 @@ export class GovernanceService {
    */
   async createAutomaticSnapshot(vaultId: string, assetId: string): Promise<Snapshot> {
     try {
+      // Fetch vault decimals for proper supply calculation
+      const vault = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        select: ['id', 'ft_token_decimals'],
+      });
+
+      if (!vault) {
+        throw new NotFoundException(`Vault ${vaultId} not found`);
+      }
+
       // First, check if there's at least one claimed contribution or acquisition for this vault
       const claimedContributions = await this.claimRepository.count({
         where: {
@@ -241,6 +251,25 @@ export class GovernanceService {
           hasMorePages = false;
         }
       }
+
+      // Calculate total supply from all address balances (excluding LP)
+      const totalSupplyRaw = Object.values(addressBalances).reduce((sum, balance) => {
+        return sum + BigInt(balance);
+      }, BigInt(0));
+
+      // Adjust for token decimals (divide by 10^decimals)
+      const decimals = vault.ft_token_decimals || 0;
+      const divisor = BigInt(10 ** decimals);
+      const adjustedSupply = Number(totalSupplyRaw / divisor);
+
+      // Update vault supply (without decimals)
+      await this.vaultRepository.update(vaultId, {
+        ft_token_supply: adjustedSupply,
+      });
+
+      this.logger.log(
+        `Updated vault ${vaultId} supply: ${adjustedSupply.toLocaleString()} tokens (raw: ${totalSupplyRaw.toLocaleString()}, decimals: ${decimals}) across ${Object.keys(addressBalances).length} addresses`
+      );
 
       // Create and save the snapshot
       const snapshot = this.snapshotRepository.create({
