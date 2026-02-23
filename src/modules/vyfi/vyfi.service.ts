@@ -117,15 +117,7 @@ export class VyfiService {
     }
   }
 
-  async checkPool({
-    networkId,
-    tokenAUnit,
-    tokenBUnit,
-  }: {
-    networkId: number;
-    tokenAUnit: string;
-    tokenBUnit: string;
-  }): Promise<
+  async checkPool({ tokenAUnit, tokenBUnit }: { tokenAUnit: string; tokenBUnit: string }): Promise<
     | {
         exists: boolean;
         data: VyFiPoolData[];
@@ -133,13 +125,13 @@ export class VyfiService {
       }
     | {
         exists: boolean;
-        error: string;
         data?: undefined;
+        error: string;
       }
   > {
     const url = `${this.vyfiApiUrl}/lp`;
     const queryParams = new URLSearchParams({
-      networkId: networkId.toString(),
+      networkId: this.networkId.toString(),
       tokenAUnit,
       tokenBUnit,
       v2: 'true',
@@ -189,7 +181,6 @@ export class VyfiService {
   } | null> {
     try {
       const poolCheck = await this.checkPool({
-        networkId: this.networkId,
         tokenAUnit,
         tokenBUnit,
       });
@@ -778,7 +769,6 @@ export class VyfiService {
 
     // Check if pool exists
     const poolCheck = await this.checkPool({
-      networkId: this.networkId,
       tokenAUnit: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
       tokenBUnit: 'lovelace',
     });
@@ -979,7 +969,6 @@ export class VyfiService {
 
   //   // First check if pool exists
   //   const poolCheck = await this.checkPool({
-  //     networkId: 0,
   //     tokenAUnit: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
   //     tokenBUnit: 'lovelace',
   //   });
@@ -1086,7 +1075,6 @@ export class VyfiService {
 
   //   // First check if pool exists
   //   const poolCheck = await this.checkPool({
-  //     networkId: 0,
   //     tokenAUnit: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
   //     tokenBUnit: 'lovelace',
   //   });
