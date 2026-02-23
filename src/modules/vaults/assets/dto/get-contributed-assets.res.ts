@@ -17,6 +17,13 @@ export class AssetsStatisticsDto {
   @Expose()
   @ApiProperty({ description: 'Average asset value in USD', example: 50.025 })
   assetsAvgUsd: number;
+
+  @Expose()
+  @ApiProperty({
+    description: 'Total quantity of all contributed assets (sum of quantity per each asset)',
+    example: 150,
+  })
+  totalAssets: number;
 }
 
 export class GetContributedAssetsRes {
