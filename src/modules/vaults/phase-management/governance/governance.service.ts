@@ -723,6 +723,9 @@ export class GovernanceService {
           throw new BadRequestException('At least one policy ID must be selected for expansion');
         }
 
+        const policyIdStrings = expansionPolicyIds.map(p => p.policyId);
+        const policyLabels = expansionPolicyIds.map(p => p.label ?? p.policyId);
+
         // Validate policy IDs are whitelisted for this vault
         const whitelistedPolicies = await this.assetsWhitelistRepository.find({
           where: { vault: { id: vaultId } },
@@ -730,7 +733,7 @@ export class GovernanceService {
 
         const whitelistedPolicyIds = whitelistedPolicies.map(w => w.policy_id);
 
-        for (const policyId of expansionPolicyIds) {
+        for (const policyId of policyIdStrings) {
           if (!whitelistedPolicyIds.includes(policyId)) {
             throw new BadRequestException(`Policy ID ${policyId} is not whitelisted for this vault`);
           }
@@ -760,7 +763,8 @@ export class GovernanceService {
 
         // Store expansion config in metadata
         proposal.metadata.expansion = {
-          policyIds: expansionPolicyIds,
+          policyIds: policyIdStrings,
+          labels: policyLabels,
           duration: expansionNoLimit ? undefined : expansionDuration,
           noLimit: expansionNoLimit || false,
           assetMax: expansionNoMax ? undefined : expansionAssetMax,

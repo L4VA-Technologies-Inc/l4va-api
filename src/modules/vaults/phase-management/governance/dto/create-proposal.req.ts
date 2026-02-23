@@ -233,6 +233,28 @@ export class MarketplaceActionDto {
   }>;
 }
 
+export class ExpansionPolicyIdDto {
+  @ApiProperty({
+    description: 'Policy ID (56-character hexadecimal string)',
+    example: '4d8a6e547e120c6094302e56039938bbe918d459a214b75e8b549fa0',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @Matches(/^[0-9a-fA-F]{56}$/, {
+    message: 'Policy ID must be a 56-character hexadecimal string',
+  })
+  policyId: string;
+
+  @ApiProperty({
+    description: 'Human-readable label for the policy',
+    example: '4d8a6e547e...8b549fa0',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  label?: string;
+}
+
 export class CreateProposalReq {
   @ApiProperty({
     description: 'Title of the proposal',
@@ -342,19 +364,15 @@ export class CreateProposalReq {
   // ===== EXPANSION fields =====
   @ApiProperty({
     description: 'Policy IDs of whitelisted asset collections for expansion',
-    type: [String],
+    type: [ExpansionPolicyIdDto],
     required: false,
-    example: ['abc123', 'def456'],
   })
   @IsOptional()
   @IsArray()
-  @IsString({ each: true })
-  @Matches(/^[0-9a-fA-F]{56}$/, {
-    each: true,
-    message: 'Policy ID must be a 56-character hexadecimal string',
-  })
+  @ValidateNested({ each: true })
+  @Type(() => ExpansionPolicyIdDto)
   @Expose()
-  expansionPolicyIds?: string[];
+  expansionPolicyIds?: ExpansionPolicyIdDto[];
 
   @ApiProperty({
     description: 'Duration in milliseconds for vault expansion period',

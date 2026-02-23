@@ -97,6 +97,7 @@ export class Proposal {
     // Expansion data
     expansion?: {
       policyIds: string[];
+      labels?: string[];
       duration?: number;
       noLimit?: boolean;
       assetMax?: number;
