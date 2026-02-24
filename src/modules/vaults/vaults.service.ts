@@ -508,7 +508,26 @@ export class VaultsService {
         finalVault.acquire_open_window_time
       ) {
         // acquire_open_window_time is already in milliseconds due to @Transform in entity
-        acquireStartTime = Number(finalVault.acquire_open_window_time);
+        const customTime = Number(finalVault.acquire_open_window_time);
+        const currentTime = new Date().getTime();
+        const timeDifference = customTime - currentTime;
+
+        let adjustmentAmount = 1800000; // 30 minutes in milliseconds
+
+        // If custom time is less than 30 minutes in the future, adjust the buffer
+        if (timeDifference < 1800000) {
+          if (timeDifference > 60000) {
+            // If more than 1 minute in future, use half the time difference as buffer (minimum 30 seconds)
+            adjustmentAmount = Math.max(Math.floor(timeDifference / 2), 30000);
+          } else if (timeDifference > 0) {
+            // Less than 1 minute - use minimal 10 second buffer
+            adjustmentAmount = 10000;
+          } else {
+            adjustmentAmount = 0;
+          }
+        }
+
+        acquireStartTime = customTime - adjustmentAmount;
       } else {
         throw new BadRequestException('Invalid acquire window configuration');
       }

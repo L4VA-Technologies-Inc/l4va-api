@@ -117,7 +117,7 @@ export class BlockchainService {
           (buildResponse.message?.includes('Some scripts of the transactions terminated with error') ||
             buildResponse.message?.includes('Some of the scripts failed to evaluate to a positive outcome'))
         ) {
-          this.logger.warn(`Vault validation error during transaction building`);
+          this.logger.warn(`Vault validation error during transaction building`, JSON.stringify(buildResponse));
           throw new VaultValidationException();
         }
 
@@ -125,7 +125,7 @@ export class BlockchainService {
           buildResponse.message?.includes('Maximum transaction size of') &&
           buildResponse.message?.includes('exceeded')
         ) {
-          this.logger.warn(`Transaction size exceeded: ${buildResponse.message}`);
+          this.logger.warn(`Transaction size exceeded: ${buildResponse.message}`, JSON.stringify(buildResponse));
           throw TxSizeExceededException.fromErrorMessage(buildResponse.message);
         }
 
