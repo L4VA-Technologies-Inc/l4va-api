@@ -768,6 +768,13 @@ export class GovernanceService {
           }
         }
 
+        // Validate that at least one limit is set (cannot have both noLimit and noMax true)
+        if (expansionNoLimit && expansionNoMax) {
+          throw new BadRequestException(
+            'At least one limit must be specified. You cannot have both "No Duration Limit" and "No Asset Max" enabled simultaneously.'
+          );
+        }
+
         // Validate duration if no limit is not set
         if (!expansionNoLimit && (!expansionDuration || expansionDuration <= 0)) {
           throw new BadRequestException('Expansion duration is required when "No Limit" is not selected');

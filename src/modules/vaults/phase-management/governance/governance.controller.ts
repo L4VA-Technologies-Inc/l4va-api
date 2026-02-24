@@ -10,8 +10,14 @@ import { AssetBuySellDto } from './dto/get-assets.dto';
 import { GetProposalDetailRes } from './dto/get-proposal-detail.res';
 import { GetProposalsRes, GetProposalsResItem } from './dto/get-proposal.dto';
 import { GetVotingPowerRes } from './dto/get-voting-power.res';
+import {
+  BuildGovernanceFeeTransactionRes,
+  BuildProposalFeeTransactionReq,
+  GetGovernanceFeesRes,
+} from './dto/governance-fee.dto';
 import { VoteReq } from './dto/vote.req';
 import { VoteRes } from './dto/vote.res';
+import { GovernanceFeeService } from './governance-fee.service';
 import { GovernanceService } from './governance.service';
 
 import { AuthGuard } from '@/modules/auth/auth.guard';
@@ -23,7 +29,8 @@ import { OptionalAuthGuard } from '@/modules/auth/optional-auth.guard';
 export class GovernanceController {
   constructor(
     private readonly governanceService: GovernanceService,
-    private readonly distributionService: DistributionService
+    private readonly distributionService: DistributionService,
+    private readonly governanceFeeService: GovernanceFeeService
   ) {}
 
   @Post('vaults/:vaultId/proposals')
@@ -165,5 +172,69 @@ export class GovernanceController {
   @ApiResponse({ status: 200, description: 'List of swappable FT assets with current prices' })
   async getSwappableAssets(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<any[]> {
     return this.governanceService.getSwappableAssets(vaultId);
+  }
+
+  @Get('governance-fees')
+  @ApiOperation({ summary: 'Get all governance fees' })
+  @ApiResponse({ status: 200, description: 'Governance fees for proposals and voting', type: GetGovernanceFeesRes })
+  async getGovernanceFees(): Promise<GetGovernanceFeesRes> {
+    return {
+      proposalFeeStaking: this.governanceFeeService.getProposalFee('staking'),
+      proposalFeeDistribution: this.governanceFeeService.getProposalFee('distribution'),
+      proposalFeeTermination: this.governanceFeeService.getProposalFee('termination'),
+      proposalFeeBurning: this.governanceFeeService.getProposalFee('burning'),
+      proposalFeeMarketplaceAction: this.governanceFeeService.getProposalFee('marketplace_action'),
+      proposalFeeExpansion: this.governanceFeeService.getProposalFee('expansion'),
+      votingFee: this.governanceFeeService.getVotingFee(),
+    };
+  }
+
+  @Post('vaults/:vaultId/proposals/fee-transaction')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Build governance fee transaction for proposal creation' })
+  @ApiResponse({
+    status: 201,
+    description: 'Presigned transaction for fee payment',
+    type: BuildGovernanceFeeTransactionRes,
+  })
+  async buildProposalFeeTransaction(
+    @Req() req: AuthRequest,
+    @Param('vaultId', ParseUUIDPipe) vaultId: string,
+    @Body() data: BuildProposalFeeTransactionReq
+  ): Promise<BuildGovernanceFeeTransactionRes> {
+    const result = await this.governanceFeeService.buildProposalFeeTransaction({
+      userAddress: data.userAddress,
+      proposalType: data.proposalType,
+      vaultId,
+    });
+
+    return {
+      presignedTx: result.presignedTx,
+      feeAmount: result.feeAmount,
+    };
+  }
+
+  @Post('proposals/:proposalId/vote-fee-transaction')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Build governance fee transaction for voting' })
+  @ApiResponse({
+    status: 201,
+    description: 'Presigned transaction for voting fee payment',
+    type: BuildGovernanceFeeTransactionRes,
+  })
+  async buildVoteFeeTransaction(
+    @Req() req: AuthRequest,
+    @Param('proposalId', ParseUUIDPipe) proposalId: string,
+    @Body() data: { userAddress: string }
+  ): Promise<BuildGovernanceFeeTransactionRes> {
+    const result = await this.governanceFeeService.buildVotingFeeTransaction({
+      userAddress: data.userAddress,
+      proposalId,
+    });
+
+    return {
+      presignedTx: result.presignedTx,
+      feeAmount: result.feeAmount,
+    };
   }
 }

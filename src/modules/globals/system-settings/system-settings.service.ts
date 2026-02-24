@@ -17,6 +17,14 @@ export interface SystemSettingsData {
   auto_create_treasury_wallets_testnet: boolean;
   vault_creator_whitelist: string[];
   hidden_mainnet_vault_ids: string[];
+  // Governance fees (in lovelace)
+  governance_fee_proposal_staking: number;
+  governance_fee_proposal_distribution: number;
+  governance_fee_proposal_termination: number;
+  governance_fee_proposal_burning: number;
+  governance_fee_proposal_marketplace_action: number;
+  governance_fee_proposal_expansion: number;
+  governance_fee_voting: number; // Fee per vote
 }
 
 const DEFAULT_SETTINGS: SystemSettingsData = {
@@ -30,6 +38,14 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   lp_recommended_min_liquidity: 500000000, // 500 ADA
   auto_create_treasury_wallets: false, // Disabled by default for mainnet
   auto_create_treasury_wallets_testnet: false, // Disabled by default for testnet
+  // Governance fees (in lovelace)
+  governance_fee_proposal_staking: 5000000, // 5 ADA
+  governance_fee_proposal_distribution: 5000000, // 5 ADA
+  governance_fee_proposal_termination: 10000000, // 10 ADA
+  governance_fee_proposal_burning: 3000000, // 3 ADA
+  governance_fee_proposal_marketplace_action: 5000000, // 5 ADA
+  governance_fee_proposal_expansion: 10000000, // 10 ADA
+  governance_fee_voting: 0, // No voting fee by default
   hidden_mainnet_vault_ids: [
     '1a6e7495-178b-464e-b37e-00997ef1e9c2',
     '2761c805-77c5-443e-b352-f0afaf4860c0',
@@ -151,5 +167,58 @@ export class SystemSettingsService implements OnModuleInit {
       return true;
     }
     return whitelist.includes(address);
+  }
+
+  // Governance fee getters
+  get governanceFeeProposalStaking(): number {
+    return this.settings.governance_fee_proposal_staking || 0;
+  }
+
+  get governanceFeeProposalDistribution(): number {
+    return this.settings.governance_fee_proposal_distribution || 0;
+  }
+
+  get governanceFeeProposalTermination(): number {
+    return this.settings.governance_fee_proposal_termination || 0;
+  }
+
+  get governanceFeeProposalBurning(): number {
+    return this.settings.governance_fee_proposal_burning || 0;
+  }
+
+  get governanceFeeProposalMarketplaceAction(): number {
+    return this.settings.governance_fee_proposal_marketplace_action || 0;
+  }
+
+  get governanceFeeProposalExpansion(): number {
+    return this.settings.governance_fee_proposal_expansion || 0;
+  }
+
+  get governanceFeeVoting(): number {
+    return this.settings.governance_fee_voting || 0;
+  }
+
+  /**
+   * Get the fee for a specific proposal type
+   * @param proposalType - The type of proposal
+   * @returns Fee amount in lovelace
+   */
+  getGovernanceFeeForProposalType(proposalType: string): number {
+    switch (proposalType) {
+      case 'staking':
+        return this.governanceFeeProposalStaking;
+      case 'distribution':
+        return this.governanceFeeProposalDistribution;
+      case 'termination':
+        return this.governanceFeeProposalTermination;
+      case 'burning':
+        return this.governanceFeeProposalBurning;
+      case 'marketplace_action':
+        return this.governanceFeeProposalMarketplaceAction;
+      case 'expansion':
+        return this.governanceFeeProposalExpansion;
+      default:
+        return 0;
+    }
   }
 }
