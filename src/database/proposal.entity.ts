@@ -55,12 +55,12 @@ export class Proposal {
   externalLink: string;
 
   @Expose({ name: 'startDate' })
-  @Column({ name: 'start_date', nullable: false, type: 'timestamptz' })
-  startDate: Date;
+  @Column({ name: 'start_date', nullable: true, type: 'timestamptz' })
+  startDate?: Date;
 
   @Expose({ name: 'endDate' })
-  @Column({ name: 'end_date', nullable: false, type: 'timestamptz' })
-  endDate: Date;
+  @Column({ name: 'end_date', nullable: true, type: 'timestamptz' })
+  endDate?: Date;
 
   @Expose({ name: 'executionDate' })
   @Column({ name: 'execution_date', nullable: true, type: 'timestamptz' })
@@ -120,6 +120,13 @@ export class Proposal {
     _executionRetry?: {
       count: number;
       lastAttempt: string; // ISO date string
+    };
+
+    // Pending payment tracking (for UNPAID proposals)
+    _pendingPayment?: {
+      duration: number; // Voting duration in ms
+      originalStartDate: string; // ISO date string
+      feeAmount: number; // Fee amount in lovelace
     };
 
     // Error tracking

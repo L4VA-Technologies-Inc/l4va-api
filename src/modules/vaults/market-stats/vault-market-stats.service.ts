@@ -8,15 +8,29 @@ import { Repository } from 'typeorm';
 
 import { Market } from '@/database/market.entity';
 import { Vault } from '@/database/vault.entity';
+import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
 import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
-import { VyfiService } from '@/modules/vyfi/vyfi.service';
 import { VaultStatus } from '@/types/vault.types';
 
 /**
- * Service responsible for fetching and updating vault token market statistics
+ * Service responsible for fetching and updating vault token market statistics from Taptools API
  * Runs every 2 hours to get fresh market data from external APIs (Taptools, DexHunter)
  * Updates: FDV, vt_price, market cap, price changes, and checks LP existence
+ * Processes both locked and expansion vaults for comprehensive market data coverage
+ *
+ * IMPORTANT - LP Vault Gains Calculation:
+ * For locked vaults with active LP, user gains are calculated using full historical price data:
+ *
+ * CALCULATION METHOD (Historical OHLCV Data):
+ * - Use getTokenFullHistory() to fetch complete OHLCV data from LP inception
+ * - Initial VT Price = history[0].open (first day LP was created)
+ * - Current VT Price = history[last].close (latest closing price)
+ * - Delta = Current Price - Initial Price
+ * - User Gains (%) = (Delta / Initial Price) * 100
+ * - User Gains (ADA) = Delta * User's VT Token Holdings
+ *
+ * This reflects market perception and token trading value, which can differ from TVL changes.
  */
 @Injectable()
 export class VaultMarketStatsService {
@@ -32,8 +46,8 @@ export class VaultMarketStatsService {
     @InjectRepository(Market)
     private readonly marketRepository: Repository<Market>,
     private readonly configService: ConfigService,
-    private readonly vyfiService: VyfiService,
-    private readonly taptoolsService: TaptoolsService
+    private readonly taptoolsService: TaptoolsService,
+    private readonly dexHunterPricingService: DexHunterPricingService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     const tapToolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
@@ -54,7 +68,7 @@ export class VaultMarketStatsService {
   }
 
   /**
-   * Scheduled task to update market stats for all locked vaults with LPs
+   * Scheduled task to update market stats for all locked and expansion vaults
    * Runs every 2 hours
    */
   @Cron(CronExpression.EVERY_2_HOURS)
@@ -72,7 +86,7 @@ export class VaultMarketStatsService {
   /**
    * Update market statistics for all vault tokens
    * Fetches data from Taptools API with DexHunter fallback for newly created tokens
-   * Only processes locked vaults that have LP configuration (LP % > 0)
+   * Processes both locked and expansion vaults (including those without LP configuration)
    */
   async updateVaultTokensMarketStats(): Promise<void> {
     if (!this.isMainnet) {
@@ -80,7 +94,8 @@ export class VaultMarketStatsService {
       return;
     }
 
-    // Get vaults with LP configuration
+    // Get ALL locked and expansion vaults (including those without LP configuration)
+    // This supports community-created LPs that weren't configured initially
     const vaults = await this.vaultRepository
       .createQueryBuilder('v')
       .select([
@@ -91,9 +106,11 @@ export class VaultMarketStatsService {
         'v.name',
         'v.ft_token_supply',
         'v.ft_token_decimals',
+        'v.liquidity_pool_contribution',
+        'v.has_active_lp',
+        'v.lp_last_checked',
       ])
-      .where('v.vault_status = :status', { status: VaultStatus.locked })
-      .andWhere('v.liquidity_pool_contribution > 0')
+      .where('v.vault_status IN (:...statuses)', { statuses: [VaultStatus.locked, VaultStatus.expansion] })
       .andWhere('v.script_hash IS NOT NULL')
       .andWhere('v.asset_vault_name IS NOT NULL')
       .getMany();
@@ -110,7 +127,49 @@ export class VaultMarketStatsService {
         const unit = `${vault.script_hash}${vault.asset_vault_name}`;
 
         try {
-          // Try Taptools first
+          // OPTIMIZATION: Use cheaper DexHunter API first to check if LP exists
+          // Only call expensive Taptools API if DexHunter confirms liquidity
+          // Exception: If vault already has confirmed LP, skip DexHunter check and go straight to Taptools
+
+          let shouldCallTaptools = vault.has_active_lp === true;
+
+          if (!shouldCallTaptools) {
+            // Check liquidity using DexHunter (cheaper API)
+            const liquidityCheck = await this.dexHunterPricingService.checkTokenLiquidity(unit);
+
+            if (liquidityCheck?.hasLiquidity) {
+              this.logger.log(
+                `${vault.name}: DexHunter detected liquidity (${liquidityCheck.totalAdaLiquidity.toFixed(2)} ADA across ${liquidityCheck.pools.length} pool(s))`
+              );
+              shouldCallTaptools = true;
+            } else {
+              this.logger.debug(`${vault.name}: No liquidity detected by DexHunter, skipping Taptools API`);
+
+              // Update LP status to false and record check time
+              await this.vaultRepository.update(
+                { id: vault.id },
+                { has_active_lp: false, lp_last_checked: new Date() }
+              );
+
+              // Update market stats with no data
+              await this.upsertMarketData({
+                vault_id: vault.id,
+                circSupply: 0,
+                mcap: 0,
+                totalSupply: 0,
+                price_change_1h: 0,
+                price_change_24h: 0,
+                price_change_7d: 0,
+                price_change_30d: 0,
+                tvl: vault.total_assets_cost_ada || 0,
+                has_market_data: false,
+              });
+
+              return null; // Skip Taptools API call
+            }
+          }
+
+          // Call Taptools API (only if LP exists based on DexHunter or previous confirmation)
           const [{ data: mcapData }, { data: priceChangeData }] = await Promise.all([
             this.axiosTapToolsInstance.get('/token/mcap', { params: { unit } }),
             this.axiosTapToolsInstance.get('/token/prices/chg', {
@@ -134,78 +193,19 @@ export class VaultMarketStatsService {
             this.logger.log(
               `${vault.name}: Taptools market data - Price: ${mcapData.price} ADA, FDV: ${mcapData.fdv} ADA`
             );
-          } else {
-            // Taptools doesn't have data yet - check if LP exists on VyFi
-            this.logger.warn(
-              `${vault.name}: No Taptools market data (price: ${mcapData?.price}, fdv: ${mcapData?.fdv}). Checking VyFi...`
-            );
-
-            try {
-              // Check if VyFi pool exists
-              const poolCheck = await this.vyfiService.checkPool({
-                networkId: 1, // mainnet
-                tokenAUnit: unit,
-                tokenBUnit: 'lovelace',
-              });
-
-              if (poolCheck.exists && poolCheck.data && poolCheck.data.length > 0) {
-                this.logger.log(`${vault.name}: VyFi pool exists. Calculating price from reserves...`);
-                hasMarketData = true;
-
-                // Calculate price from VyFi pool reserves
-                const poolData = poolCheck.data[0];
-                const tokenReserve = Number(poolData.tokenAQuantity || 0);
-                const adaReserveLovelace = Number(poolData.tokenBQuantity || 0);
-                const adaReserve = adaReserveLovelace / 1_000_000; // Convert lovelace to ADA
-
-                if (tokenReserve > 0 && adaReserve > 0) {
-                  // Price per token (in smallest unit) = ADA reserve / Token reserve
-                  const pricePerSmallestUnit = adaReserve / tokenReserve;
-
-                  // Adjust for token decimals to get price per whole token
-                  const decimals = vault.ft_token_decimals || 1;
-                  const vtPrice = pricePerSmallestUnit * Math.pow(10, decimals);
-
-                  vaultUpdateData.vt_price = vtPrice;
-
-                  // Calculate FDV = price × total supply
-                  const vtSupply = vault.ft_token_supply || 0;
-                  if (vtSupply > 0) {
-                    // Use raw supply for FDV calculation (decimals are just display metadata)
-                    const fdv = vtPrice * vtSupply;
-                    vaultUpdateData.fdv = fdv;
-
-                    this.logger.log(
-                      `${vault.name}: Calculated from VyFi - Price: ${vtPrice.toFixed(25)} ADA, FDV: ${fdv.toFixed(2)} ADA ` +
-                        `(Reserves: ${tokenReserve} tokens / ${adaReserve.toFixed(2)} ADA)`
-                    );
-                  } else {
-                    this.logger.log(
-                      `${vault.name}: Calculated price from VyFi: ${vtPrice.toFixed(25)} ADA (no supply for FDV)`
-                    );
-                  }
-                } else {
-                  this.logger.warn(
-                    `${vault.name}: VyFi pool exists but has invalid reserves (${tokenReserve} tokens / ${adaReserve} ADA)`
-                  );
-                }
-              } else {
-                // No pool on VyFi yet
-                this.logger.warn(`${vault.name}: No VyFi pool found. LP creation may be pending or failed.`);
-                hasMarketData = false;
-              }
-            } catch (vyfiError) {
-              this.logger.error(
-                `${vault.name}: VyFi pool check failed: ${vyfiError.message}. Cannot determine LP status.`
-              );
-              hasMarketData = false;
-            }
           }
 
           // Update vault if we got any market data
           if (Object.keys(vaultUpdateData).length > 0) {
             await this.vaultRepository.update({ id: vault.id }, vaultUpdateData);
           }
+
+          // Update vault's LP status flag
+          const lpStatusUpdate: Partial<{ has_active_lp: boolean; lp_last_checked: Date }> = {
+            has_active_lp: hasMarketData,
+            lp_last_checked: new Date(),
+          };
+          await this.vaultRepository.update({ id: vault.id }, lpStatusUpdate);
 
           // Always update market stats table (even with null values to track attempts)
           const marketData = {
@@ -262,40 +262,55 @@ export class VaultMarketStatsService {
   }
 
   /**
-   * Check if a vault token actually has liquidity on DEX (VyFi)
-   * Returns pool info if LP exists, null otherwise
-   * @param policyId Token policy ID
-   * @param assetName Token asset name (hex)
+   * Private helper to fetch OHLCV data from TapTools API
+   * Handles the actual API call with caching
+   *
+   * @param policyId - Token policy ID
+   * @param assetName - Token asset name (hex)
+   * @param interval - Time interval (1h, 24h, 7d, 30d, 1d)
+   * @param numIntervals - Optional number of intervals to return (omit for full history)
+   * @param cacheKey - Cache key for storing/retrieving cached data
+   * @returns OHLCV data array or null if unavailable
    */
-  async hasActiveLiquidity(
+  private async _fetchOHLCV(
     policyId: string,
-    assetName: string
-  ): Promise<{
-    exists: boolean;
-    poolData?: any;
-  }> {
-    if (!this.isMainnet) {
-      return { exists: false };
+    assetName: string,
+    interval: string,
+    numIntervals: number | undefined,
+    cacheKey: string
+  ): Promise<MarketOhlcvSeries | null> {
+    // Check cache first
+    const cachedData = this.ohlcvCache.get<MarketOhlcvSeries>(cacheKey);
+    if (cachedData) {
+      return cachedData;
     }
 
     try {
       const unit = `${policyId}${assetName}`;
+      const params: { unit: string; interval: string; numIntervals?: number } = { unit, interval };
 
-      // Check VyFi for pool existence
-      const poolCheck = await this.vyfiService.checkPool({
-        networkId: 1, // mainnet
-        tokenAUnit: unit,
-        tokenBUnit: 'lovelace',
-      });
-
-      if (poolCheck.exists) {
-        return { exists: true, poolData: poolCheck.data };
+      // Only include numIntervals if specified (omitting it returns full history)
+      if (numIntervals !== undefined) {
+        params.numIntervals = numIntervals;
       }
 
-      return { exists: false };
+      const { data } = await this.axiosTapToolsInstance.get<MarketOhlcvSeries>('/token/ohlcv', { params });
+
+      if (!data || data.length === 0) {
+        this.logger.debug(`No OHLCV data available for ${policyId}.${assetName} (${interval})`);
+        return null;
+      }
+
+      // Cache for 5 minutes (same as cache TTL config)
+      this.ohlcvCache.set(cacheKey, data);
+
+      return data;
     } catch (error) {
-      this.logger.warn(`Could not check liquidity for ${policyId}.${assetName}: ${error.message}`);
-      return { exists: false };
+      this.logger.error(
+        `Error fetching OHLCV data from TapTools for ${policyId}.${assetName} (interval: ${interval}):`,
+        error.response?.data || error.message
+      );
+      return null;
     }
   }
 
@@ -316,27 +331,96 @@ export class VaultMarketStatsService {
     }
 
     const cacheKey = `ohlcv_${policyId}_${assetName}_${interval}`;
-    const cachedData = this.ohlcvCache.get<MarketOhlcvSeries>(cacheKey);
+    return this._fetchOHLCV(policyId, assetName, interval, undefined, cacheKey);
+  }
 
-    if (cachedData) {
-      return cachedData;
-    }
-
-    try {
-      const unit = `${policyId}${assetName}`;
-      const { data } = await this.axiosTapToolsInstance.get<MarketOhlcvSeries>('/token/ohlcv', {
-        params: { unit, interval },
-      });
-
-      this.ohlcvCache.set(cacheKey, data);
-      return data;
-    } catch (error) {
-      this.logger.error(
-        `Error fetching OHLCV data from TapTools for ${policyId}.${assetName} (interval: ${interval}):`,
-        error.response?.data || error.message
-      );
+  /**
+   * Get FULL historical OHLCV data for a token from LP inception to present
+   * Uses 1d interval without numIntervals limit to get complete history
+   *
+   * This is used to calculate accurate price delta from the very first LP price
+   * to the current price, which represents true gains since LP creation.
+   *
+   * @param policyId - Token policy ID
+   * @param assetName - Token asset name (hex)
+   * @returns Full OHLCV history array or null if unavailable
+   */
+  async getTokenFullHistory(policyId: string, assetName: string): Promise<MarketOhlcvSeries | null> {
+    if (!this.isMainnet) {
+      this.logger.debug('Not mainnet environment - full OHLCV history not available');
       return null;
     }
+
+    if (!policyId || !assetName) {
+      this.logger.warn('Policy ID and asset name are required for full OHLCV history');
+      return null;
+    }
+
+    const cacheKey = `ohlcv_full_${policyId}_${assetName}`;
+    const data = await this._fetchOHLCV(policyId, assetName, '1d', undefined, cacheKey);
+
+    if (data && data.length > 0) {
+      this.logger.log(
+        `Fetched full OHLCV history for ${policyId}.${assetName}: ` +
+          `${data.length} days of data (${new Date(data[0].time * 1000).toISOString().split('T')[0]} to ${new Date(data[data.length - 1].time * 1000).toISOString().split('T')[0]})`
+      );
+    }
+
+    return data;
+  }
+
+  /**
+   * Calculate price delta from LP inception to current price
+   *
+   * Uses full OHLCV history to determine:
+   * - Initial Price: First day's opening price (when LP was created)
+   * - Current Price: Latest day's closing price (right now)
+   * - Delta: Current - Initial (absolute price change)
+   * - Delta %: (Current - Initial) / Initial * 100 (percentage change)
+   *
+   * Example:
+   * - Full history shows first day open = 0.0007990910179852215 ADA
+   * - Latest day close = 0.08556960047153203 ADA
+   * - Delta = 0.08556960047153203 - 0.0007990910179852215 = 0.0847705 ADA
+   * - Delta % = (0.0847705 / 0.0007990910179852215) * 100 = 10,608% gain
+   *
+   * @param policyId - Token policy ID
+   * @param assetName - Token asset name (hex)
+   * @returns Price delta information or null if data unavailable
+   */
+  async calculateTokenPriceDelta(
+    policyId: string,
+    assetName: string
+  ): Promise<{
+    initialPrice: number;
+    currentPrice: number;
+    delta: number;
+    deltaPercent: number;
+    daysOfHistory: number;
+  } | null> {
+    const history = await this.getTokenFullHistory(policyId, assetName);
+
+    if (!history || history.length === 0) {
+      return null;
+    }
+
+    // Initial price = first day's opening price (LP inception)
+    const initialPrice = history[0].open;
+
+    // Current price = latest day's closing price (now)
+    const currentPrice = history[history.length - 1].close;
+
+    // Calculate delta
+    const delta = currentPrice - initialPrice;
+    const deltaPercent = (delta / initialPrice) * 100;
+
+    return {
+      initialPrice,
+      currentPrice,
+      delta,
+      deltaPercent,
+      daysOfHistory: history.length,
+    };
   }
 
   /**

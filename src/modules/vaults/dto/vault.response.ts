@@ -463,6 +463,20 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   liquidityPoolContribution: number;
 
+  @ApiProperty({ description: 'Whether vault has active liquidity pool on DEXes', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'hasActiveLp' },
+  })
+  hasActiveLp?: boolean;
+
+  @ApiProperty({ description: 'Last time LP status was checked', required: false })
+  @DtoRepresent({
+    transform: ({ value }) => (value ? new Date(value).getTime() : null),
+    expose: { name: 'lpLastChecked' },
+  })
+  lpLastChecked?: number;
+
   @ApiProperty({ description: 'VT token supply' })
   @DtoRepresent({
     transform: false,

@@ -9,7 +9,6 @@ import { TransactionsService } from '../offchain-tx/transactions.service';
 import { BlockchainWebhookDto, BlockfrostTransaction, BlockfrostTransactionEvent } from './dto/webhook.dto';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
 
-import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
@@ -42,9 +41,7 @@ export class BlockchainWebhookService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     @InjectRepository(Vault)
-    private readonly vaultRepository: Repository<Vault>,
-    @InjectRepository(Asset)
-    private readonly assetRepository: Repository<Asset>
+    private readonly vaultRepository: Repository<Vault>
   ) {
     this.webhookAuthToken = this.configService.get<string>('BLOCKFROST_WEBHOOK_AUTH_TOKEN');
     this.maxEventAge = 600; // 10 minutes max age for webhook events

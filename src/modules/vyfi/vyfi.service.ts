@@ -117,15 +117,7 @@ export class VyfiService {
     }
   }
 
-  async checkPool({
-    networkId,
-    tokenAUnit,
-    tokenBUnit,
-  }: {
-    networkId: number;
-    tokenAUnit: string;
-    tokenBUnit: string;
-  }): Promise<
+  async checkPool({ tokenAUnit, tokenBUnit }: { tokenAUnit: string; tokenBUnit: string }): Promise<
     | {
         exists: boolean;
         data: VyFiPoolData[];
@@ -133,13 +125,13 @@ export class VyfiService {
       }
     | {
         exists: boolean;
-        error: string;
         data?: undefined;
+        error: string;
       }
   > {
     const url = `${this.vyfiApiUrl}/lp`;
     const queryParams = new URLSearchParams({
-      networkId: networkId.toString(),
+      networkId: this.networkId.toString(),
       tokenAUnit,
       tokenBUnit,
       v2: 'true',
@@ -189,7 +181,6 @@ export class VyfiService {
   } | null> {
     try {
       const poolCheck = await this.checkPool({
-        networkId: this.networkId,
         tokenAUnit,
         tokenBUnit,
       });
@@ -250,7 +241,11 @@ export class VyfiService {
   buildRemoveLiquidityDatum(returnAddress: string, minTokenA: number = 0, minTokenB: number = 0): string {
     // Convert bech32 address to raw bytes
     const addressObj = Address.from_bech32(returnAddress);
-    const addressBytes = addressObj.to_bytes();
+    const addressBytesWithPrefix = addressObj.to_bytes();
+
+    // VyFi requires address bytes WITHOUT the network prefix byte
+    // Skip the first byte (network/address type) as per VyFi specification
+    const addressBytes = addressBytesWithPrefix.slice(1);
 
     // Build CBOR datum manually
     // Structure: Constructor 0 [ addressBytes, Constructor 1 [ Constructor 0 [ minTokenA, minTokenB ] ] ]
@@ -260,7 +255,7 @@ export class VyfiService {
     // Start outer constructor 0 with indefinite array
     datum += 'd8799f'; // Tag 121 (constructor 0) + 9f (indefinite array start)
 
-    // Add address as byte string
+    // Add address as byte string (without network prefix)
     const addrHex = Buffer.from(addressBytes).toString('hex');
     const addrLength = addressBytes.length;
 
@@ -351,18 +346,16 @@ export class VyfiService {
   }: {
     lpTokenUnit: string;
     lpAmount: number;
+    orderAddress: string;
     returnAddress?: string;
-    orderAddress?: string;
     minTokenA?: number;
     minTokenB?: number;
   }): Promise<{ txHash: string }> {
     const effectiveReturnAddress = returnAddress || this.adminAddress;
-    const effectiveOrderAddress = orderAddress || this.poolAddress;
 
-    this.logger.log(`Removing liquidity: ${lpAmount} LP tokens`);
-    this.logger.log(`LP Token Unit: ${lpTokenUnit}`);
-    this.logger.log(`Order Address: ${effectiveOrderAddress}`);
-    this.logger.log(`Return Address: ${effectiveReturnAddress}`);
+    if (!orderAddress) {
+      throw new Error('Order address is required for removing liquidity');
+    }
 
     // Parse LP token unit into policy ID and asset name
     const lpPolicyId = lpTokenUnit.slice(0, 56);
@@ -385,14 +378,12 @@ export class VyfiService {
     const datumHex = this.buildRemoveLiquidityDatum(effectiveReturnAddress, minTokenA, minTokenB);
     this.logger.log(`Remove liquidity datum: ${datumHex}`);
 
-    // Build the transaction
-    // VyFi requires minimum 3.9 ADA (2 ADA min + 1.9 ADA processor fee) with LP tokens
     const input = {
       changeAddress: this.adminAddress,
       utxos: adminUtxos,
       outputs: [
         {
-          address: effectiveOrderAddress,
+          address: orderAddress,
           assets: [
             {
               assetName: { name: lpAssetName, format: 'hex' as const },
@@ -778,7 +769,6 @@ export class VyfiService {
 
     // Check if pool exists
     const poolCheck = await this.checkPool({
-      networkId: this.networkId,
       tokenAUnit: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
       tokenBUnit: 'lovelace',
     });
@@ -979,7 +969,6 @@ export class VyfiService {
 
   //   // First check if pool exists
   //   const poolCheck = await this.checkPool({
-  //     networkId: 0,
   //     tokenAUnit: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
   //     tokenBUnit: 'lovelace',
   //   });
@@ -1086,7 +1075,6 @@ export class VyfiService {
 
   //   // First check if pool exists
   //   const poolCheck = await this.checkPool({
-  //     networkId: 0,
   //     tokenAUnit: `${claim.vault.script_hash}${claim.vault.asset_vault_name}`,
   //     tokenBUnit: 'lovelace',
   //   });

@@ -19,7 +19,6 @@ import { GovernanceModule } from '@/modules/vaults/phase-management/governance/g
 import { TransactionsModule } from '@/modules/vaults/processing-tx/offchain-tx/transactions.module';
 import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockchain.module';
 import { TreasureWalletModule } from '@/modules/vaults/treasure/treasure-wallet.module';
-import { VaultValuationService } from '@/modules/vaults/vault-valuation/vault-valuation.service';
 import { VyfiModule } from '@/modules/vyfi/vyfi.module';
 
 @Module({
@@ -37,7 +36,7 @@ import { VyfiModule } from '@/modules/vyfi/vyfi.module';
     ScheduleModule.forRoot(),
     BlockchainModule,
   ],
-  providers: [LifecycleService, VaultValuationService],
-  exports: [VaultValuationService, LifecycleService],
+  providers: [LifecycleService],
+  exports: [LifecycleService],
 })
 export class LifecycleModule {}

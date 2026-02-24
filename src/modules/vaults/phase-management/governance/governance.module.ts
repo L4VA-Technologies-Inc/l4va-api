@@ -10,6 +10,7 @@ import { TreasureWalletModule } from '../../treasure/treasure-wallet.module';
 import { DistributionService } from './distribution.service';
 import { ExpansionService } from './expansion.service';
 import { GovernanceExecutionService } from './governance-execution.service';
+import { GovernanceFeeService } from './governance-fee.service';
 import { GovernanceController } from './governance.controller';
 import { GovernanceService } from './governance.service';
 import { ProposalHealthService } from './proposal-health.service';
@@ -64,6 +65,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
   controllers: [GovernanceController, TerminationController],
   providers: [
     GovernanceService,
+    GovernanceFeeService,
     GovernanceExecutionService,
     ProposalSchedulerService,
     ExpansionService,
@@ -83,6 +85,13 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
       inject: [getRepositoryToken(Proposal), EventEmitter2, ProposalSchedulerService, GovernanceExecutionService],
     },
   ],
-  exports: [GovernanceService, GovernanceExecutionService, TerminationService, DistributionService, ExpansionService],
+  exports: [
+    GovernanceService,
+    GovernanceFeeService,
+    GovernanceExecutionService,
+    TerminationService,
+    DistributionService,
+    ExpansionService,
+  ],
 })
 export class GovernanceModule {}

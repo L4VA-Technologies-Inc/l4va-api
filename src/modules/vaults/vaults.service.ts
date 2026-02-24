@@ -1601,8 +1601,12 @@ export class VaultsService {
   }
 
   private async getProposalsActivity(vault_id: string): Promise<ProposalActivityEvent[]> {
+    // Exclude UNPAID proposals from activity feed (they're awaiting payment)
     const proposals = await this.proposalRepository.find({
-      where: { vaultId: vault_id },
+      where: {
+        vaultId: vault_id,
+        status: Not(ProposalStatus.UNPAID),
+      },
       order: { createdAt: 'DESC' },
     });
 

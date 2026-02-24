@@ -1,6 +1,7 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -14,6 +15,8 @@ import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { In, IsNull, Not, Repository } from 'typeorm';
 
+import { BlockchainService } from '../../processing-tx/onchain/blockchain.service';
+
 import { DistributionService } from './distribution.service';
 import { CreateProposalReq, ExecType } from './dto/create-proposal.req';
 import { CreateProposalRes } from './dto/create-proposal.res';
@@ -22,6 +25,7 @@ import { GetProposalDetailRes } from './dto/get-proposal-detail.res';
 import { GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';
 import { VoteRes } from './dto/vote.res';
+import { GovernanceFeeService } from './governance-fee.service';
 import { VoteCountingService } from './vote-counting.service';
 
 import { Asset } from '@/database/asset.entity';
@@ -74,6 +78,7 @@ export class GovernanceService {
   private readonly poolAddress: string;
   private readonly MIN_VOTING_DURATION = 86400000; // 24 hours in ms
   private readonly MAX_VOTING_DURATION = 259200000; // 3 days in ms
+  private readonly MIN_LP_ADA_FOR_MARKET_PRICING = 5000;
 
   // private readonly snapshotCache: NodeCache;
 
@@ -106,8 +111,10 @@ export class GovernanceService {
     private readonly eventEmitter: EventEmitter2,
     private readonly voteCountingService: VoteCountingService,
     private readonly distributionService: DistributionService,
+    private readonly governanceFeeService: GovernanceFeeService,
     private readonly dexHunterPricingService: DexHunterPricingService,
-    private readonly dexHunterService: DexHunterService
+    private readonly dexHunterService: DexHunterService,
+    private readonly blockchainService: BlockchainService
   ) {
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
 
@@ -184,6 +191,16 @@ export class GovernanceService {
    */
   async createAutomaticSnapshot(vaultId: string, assetId: string): Promise<Snapshot> {
     try {
+      // Fetch vault decimals for proper supply calculation
+      const vault = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        select: ['id', 'ft_token_decimals'],
+      });
+
+      if (!vault) {
+        throw new NotFoundException(`Vault ${vaultId} not found`);
+      }
+
       // First, check if there's at least one claimed contribution or acquisition for this vault
       const claimedContributions = await this.claimRepository.count({
         where: {
@@ -242,6 +259,25 @@ export class GovernanceService {
         }
       }
 
+      // Calculate total supply from all address balances (excluding LP)
+      const totalSupplyRaw = Object.values(addressBalances).reduce((sum, balance) => {
+        return sum + BigInt(balance);
+      }, BigInt(0));
+
+      // Adjust for token decimals (divide by 10^decimals)
+      const decimals = vault.ft_token_decimals || 0;
+      const divisor = BigInt(10) ** BigInt(decimals);
+      const adjustedSupply = Number(totalSupplyRaw / divisor);
+
+      // Update vault supply (without decimals)
+      await this.vaultRepository.update(vaultId, {
+        ft_token_supply: adjustedSupply,
+      });
+
+      this.logger.log(
+        `Updated vault ${vaultId} supply: ${adjustedSupply.toLocaleString()} tokens (raw: ${totalSupplyRaw.toLocaleString()}, decimals: ${decimals}) across ${Object.keys(addressBalances).length} addresses`
+      );
+
       // Create and save the snapshot
       const snapshot = this.snapshotRepository.create({
         vaultId,
@@ -294,10 +330,13 @@ export class GovernanceService {
       }
     }
 
-    const latestSnapshot = await this.snapshotRepository.findOne({
-      where: { vaultId },
-      order: { createdAt: 'DESC' },
-    });
+    const latestSnapshot = await this.snapshotRepository.findOne({ where: { vaultId }, order: { createdAt: 'DESC' } });
+
+    // Get user early as we'll need their address for potential fee transaction
+    const user = await this.userRepository.findOneBy({ id: userId });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
 
     await this.getVotingPower(vaultId, userId, 'create_proposal');
 
@@ -739,6 +778,13 @@ export class GovernanceService {
           }
         }
 
+        // Validate that at least one limit is set (cannot have both noLimit and noMax true)
+        if (expansionNoLimit && expansionNoMax) {
+          throw new BadRequestException(
+            'At least one limit must be specified. You cannot have both "No Duration Limit" and "No Asset Max" enabled simultaneously.'
+          );
+        }
+
         // Validate duration if no limit is not set
         if (!expansionNoLimit && (!expansionDuration || expansionDuration <= 0)) {
           throw new BadRequestException('Expansion duration is required when "No Limit" is not selected');
@@ -761,6 +807,62 @@ export class GovernanceService {
           }
         }
 
+        // Validate market pricing requirements
+        if (expansionPriceType === 'market') {
+          // Check if vault has FT token configured (required for market pricing)
+          const vaultForLpCheck = await this.vaultRepository.findOne({
+            where: { id: vaultId },
+            select: ['policy_id', 'asset_vault_name', 'name'],
+          });
+
+          if (!vaultForLpCheck.policy_id || !vaultForLpCheck.asset_vault_name) {
+            throw new BadRequestException(
+              'Market pricing requires vault token configuration. Vault must have a policy_id and asset_vault_name.'
+            );
+          }
+
+          try {
+            const liquidityCheck = await this.dexHunterPricingService.checkTokenLiquidity(
+              `${vaultForLpCheck.policy_id}${vaultForLpCheck.asset_vault_name}`
+            );
+
+            if (!liquidityCheck || !liquidityCheck.hasLiquidity) {
+              throw new BadRequestException(
+                'Market pricing requires an active Liquidity Pool. ' +
+                  'No LP found on any DEX (checked MinSwap, VyFi, SundaeSwap, Spectrum). ' +
+                  'Please use limit pricing or create an LP first.'
+              );
+            }
+
+            if (liquidityCheck.totalAdaLiquidity < this.MIN_LP_ADA_FOR_MARKET_PRICING) {
+              const dexList = liquidityCheck.pools.map(p => `${p.dex} (${p.adaAmount.toFixed(2)} ADA)`).join(', ');
+              throw new BadRequestException(
+                `Market pricing requires LP TVL of at least ${this.MIN_LP_ADA_FOR_MARKET_PRICING.toLocaleString()} ADA across all DEXes. ` +
+                  `Current total LP TVL: ${liquidityCheck.totalAdaLiquidity.toFixed(2)} ADA. ` +
+                  `Found on: ${dexList}. ` +
+                  'Please use limit pricing or wait for LP to accumulate more liquidity.'
+              );
+            }
+
+            // Log success with DEX details
+            const dexList = liquidityCheck.pools.map(p => p.dex).join(', ');
+            this.logger.log(
+              `Expansion proposal validated: Vault ${vaultForLpCheck.name} has active LP on ${liquidityCheck.pools.length} DEX(es): ${dexList}. ` +
+                `Total TVL: ${liquidityCheck.totalAdaLiquidity.toFixed(2)} ADA`
+            );
+          } catch (error) {
+            // If it's already a BadRequestException, re-throw it
+            if (error instanceof BadRequestException) {
+              throw error;
+            }
+            // For other errors (API failures, etc), log and throw a user-friendly error
+            this.logger.error(`Error checking LP status for expansion proposal: ${error.message}`, error.stack);
+            throw new BadRequestException(
+              'Unable to verify Liquidity Pool status. Please try again later or contact support.'
+            );
+          }
+        }
+
         // Store expansion config in metadata
         proposal.metadata.expansion = {
           policyIds: policyIdStrings,
@@ -778,16 +880,26 @@ export class GovernanceService {
       }
     }
 
+    // Check if governance fee is required for this proposal type
+    const feeAmount = this.governanceFeeService.getProposalFee(createProposalReq.type);
+    const requiresPayment = feeAmount > 0;
+
+    // If payment is required, set status to UNPAID and clear dates
+    // Store original duration and start date in metadata so we can set correct dates after payment
+    if (requiresPayment) {
+      proposal.status = ProposalStatus.UNPAID;
+      proposal.metadata._pendingPayment = {
+        duration: createProposalReq.duration,
+        originalStartDate: startDate.toISOString(),
+        feeAmount,
+      };
+      proposal.startDate = null;
+      proposal.endDate = null;
+    }
+
     await this.proposalRepository.save(proposal);
 
-    this.eventEmitter.emit('proposal.created', {
-      proposalId: proposal.id,
-      startDate: proposal.startDate,
-      endDate: proposal.endDate,
-      status: proposal.status,
-    });
-
-    const user = await this.userRepository.findOneBy({ id: proposal.creatorId });
+    // Fetch contributor claims early (needed for both fee and non-fee proposals)
     const finalContributorClaims = await this.claimRepository.find({
       where: {
         vault: { id: vault.id },
@@ -795,6 +907,65 @@ export class GovernanceService {
       },
       relations: ['transaction', 'transaction.assets'],
       order: { created_at: 'ASC' },
+    });
+
+    // If payment is required, build fee transaction BEFORE emitting events
+    // This ensures we don't notify users of proposals that fail to create
+    if (requiresPayment) {
+      try {
+        const feeTransaction = await this.governanceFeeService.buildProposalFeeTransaction({
+          userAddress: user.address,
+          proposalType: createProposalReq.type,
+          vaultId,
+        });
+
+        // Transaction built successfully - now emit events for UNPAID proposal
+        this.eventEmitter.emit('proposal.created', {
+          proposalId: proposal.id,
+          startDate: proposal.startDate,
+          endDate: proposal.endDate,
+          status: proposal.status,
+        });
+
+        this.eventEmitter.emit('governance.proposal_created', {
+          address: user.address,
+          vaultId: vault.id,
+          vaultName: vault.name,
+          proposalName: proposal.title,
+          creatorId: proposal.creatorId,
+        });
+
+        return {
+          success: true,
+          message: 'Proposal created. Please complete payment to activate.',
+          proposal: {
+            id: proposal.id,
+            vaultId,
+            title: proposal.title,
+            description: proposal.description,
+            creatorId: userId,
+            status: proposal.status,
+            createdAt: proposal.createdAt,
+            endDate: proposal.endDate,
+          },
+          requiresPayment: true,
+          presignedTx: feeTransaction.presignedTx,
+          feeAmount: feeTransaction.feeAmount,
+        };
+      } catch (error) {
+        // If fee transaction build fails, delete the proposal and throw error
+        await this.proposalRepository.remove(proposal);
+        this.logger.error(`Failed to build governance fee transaction: ${error.message}`, error.stack);
+        throw new InternalServerErrorException(`Failed to build governance fee transaction: ${error.message}`);
+      }
+    }
+
+    // No payment required - emit proposal.created and proposal.started events
+    this.eventEmitter.emit('proposal.created', {
+      proposalId: proposal.id,
+      startDate: proposal.startDate,
+      endDate: proposal.endDate,
+      status: proposal.status,
     });
 
     this.eventEmitter.emit('governance.proposal_created', {
@@ -805,6 +976,7 @@ export class GovernanceService {
       creatorId: proposal.creatorId,
     });
 
+    // No payment required - emit proposal.started event
     this.eventEmitter.emit('proposal.started', {
       address: user.address,
       vaultId: vault.id,
@@ -839,8 +1011,12 @@ export class GovernanceService {
       throw new NotFoundException('Vault not found');
     }
 
+    // Exclude UNPAID proposals from public list (they're awaiting payment)
     const proposals = await this.proposalRepository.find({
-      where: { vaultId },
+      where: {
+        vaultId,
+        status: Not(ProposalStatus.UNPAID),
+      },
       order: { createdAt: 'DESC' },
     });
 
@@ -854,8 +1030,8 @@ export class GovernanceService {
           creatorId: proposal.creatorId,
           status: proposal.status,
           createdAt: proposal.createdAt,
-          startDate: proposal.startDate.toISOString(),
-          endDate: proposal.endDate.toISOString(),
+          startDate: proposal.startDate ? proposal.startDate.toISOString() : null,
+          endDate: proposal.endDate ? proposal.endDate.toISOString() : null,
           abstain: proposal.abstain,
           executionError: proposal.metadata?.executionError?.userFriendlyMessage
             ? proposal.metadata.executionError.userFriendlyMessage
@@ -924,7 +1100,7 @@ export class GovernanceService {
     let selectedVote: VoteType | null = null;
 
     try {
-      const isActive = proposal.status === ProposalStatus.ACTIVE && new Date() <= proposal.endDate;
+      const isActive = proposal.status === ProposalStatus.ACTIVE && proposal.endDate && new Date() <= proposal.endDate;
 
       if (user?.address && proposal.snapshot) {
         const voteWeight = proposal.snapshot.addressBalances[user.address];
@@ -1231,7 +1407,7 @@ export class GovernanceService {
       throw new BadRequestException('Voting is only allowed on active proposals');
     }
 
-    if (new Date() > proposal.endDate) {
+    if (!proposal.endDate || new Date() > proposal.endDate) {
       throw new BadRequestException('Voting period has ended');
     }
 
@@ -1276,6 +1452,122 @@ export class GovernanceService {
         vote: voteReq.vote,
         timestamp: vote.timestamp,
       },
+    };
+  }
+
+  /**
+   * Submit governance fee payment transaction and activate proposal
+   * Takes signed transaction, submits to blockchain, and activates the proposal
+   * Only the proposal creator can submit the fee payment
+   */
+  async submitProposalFeePayment(
+    proposalId: string,
+    transaction: string,
+    signatures: string[],
+    userId: string
+  ): Promise<{ success: boolean; message: string; txHash: string }> {
+    // Fetch proposal to validate
+    const proposal = await this.proposalRepository.findOne({
+      where: { id: proposalId },
+      relations: ['vault', 'creator'],
+    });
+
+    if (!proposal) {
+      throw new NotFoundException('Proposal not found');
+    }
+
+    // Verify that the authenticated user is the proposal creator
+    if (proposal.creatorId !== userId) {
+      throw new ForbiddenException('Only the proposal creator can submit fee payment');
+    }
+
+    if (proposal.status !== ProposalStatus.UNPAID) {
+      throw new BadRequestException(`Proposal is not in UNPAID status. Current status: ${proposal.status}`);
+    }
+
+    // Submit transaction to blockchain
+    let txHash: string;
+    try {
+      const result = await this.blockchainService.submitTransaction({
+        transaction: transaction,
+        signatures: signatures || [],
+      });
+
+      if (!result.txHash) {
+        throw new Error('No transaction hash returned from blockchain submission');
+      }
+
+      txHash = result.txHash;
+      this.logger.log(`Submitted governance fee transaction: ${txHash} for proposal ${proposalId}`);
+    } catch (error) {
+      const errorMsg = error?.message || error?.toString() || 'Unknown error';
+      this.logger.error(`Failed to submit governance fee transaction: ${errorMsg}`, error?.stack);
+
+      // Delete the UNPAID proposal if blockchain submission fails
+      try {
+        await this.proposalRepository.remove(proposal);
+        this.logger.warn(`Deleted UNPAID proposal ${proposalId} after failed transaction submission`);
+      } catch (deleteError) {
+        this.logger.error(`Failed to delete UNPAID proposal ${proposalId}: ${deleteError.message}`);
+      }
+
+      throw new BadRequestException(`Failed to submit transaction: ${errorMsg}`);
+    }
+
+    // Get pending payment metadata
+    const pendingPayment = proposal.metadata?._pendingPayment;
+    if (!pendingPayment) {
+      throw new InternalServerErrorException('Proposal missing pending payment metadata');
+    }
+
+    // Use originalStartDate from metadata (user's intended start date)
+    const now = new Date();
+    const startDate = new Date(pendingPayment.originalStartDate);
+    const endDate = new Date(startDate.getTime() + pendingPayment.duration);
+
+    // Update proposal status based on originalStartDate
+    // If originalStartDate is in the past or now, proposal is ACTIVE
+    // If originalStartDate is in the future, proposal is UPCOMING
+    if (now >= startDate) {
+      proposal.status = ProposalStatus.ACTIVE;
+    } else {
+      proposal.status = ProposalStatus.UPCOMING;
+    }
+    proposal.startDate = startDate;
+    proposal.endDate = endDate;
+
+    // Clear pending payment metadata
+    delete proposal.metadata._pendingPayment;
+
+    await this.proposalRepository.save(proposal);
+
+    // Emit proposal started event
+    const finalContributorClaims = await this.claimRepository.find({
+      where: {
+        vault: { id: proposal.vault.id },
+        type: ClaimType.CONTRIBUTOR,
+      },
+      relations: ['transaction', 'transaction.assets'],
+      order: { created_at: 'ASC' },
+    });
+
+    this.eventEmitter.emit('proposal.started', {
+      address: proposal.creator.address,
+      vaultId: proposal.vault.id,
+      vaultName: proposal.vault.name,
+      proposalName: proposal.title,
+      creatorId: proposal.creatorId,
+      tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+    });
+
+    this.logger.log(
+      `Proposal ${proposalId} activated after payment submission. TxHash: ${txHash}, Start: ${startDate.toISOString()}, End: ${endDate.toISOString()}`
+    );
+
+    return {
+      success: true,
+      message: 'Payment submitted and proposal activated successfully',
+      txHash,
     };
   }
 
