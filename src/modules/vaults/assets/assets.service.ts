@@ -150,11 +150,17 @@ export class AssetsService {
     const statsQuery = queryBuilder.clone();
     statsQuery
       .select('SUM(asset.quantity * COALESCE(asset.floor_price, asset.dex_price, 0))', 'totalValue')
-      .addSelect('SUM(asset.quantity)', 'totalAssets');
+      .addSelect(`SUM(CASE WHEN asset.type = :nftType THEN asset.quantity ELSE 0 END)`, 'totalNFTAssets')
+      .addSelect(`SUM(CASE WHEN asset.type = :ftType THEN asset.quantity ELSE 0 END)`, 'totalFTAssets')
+      .setParameters({
+        nftType: AssetType.NFT,
+        ftType: AssetType.FT,
+      });
 
     const rawStats = await statsQuery.getRawOne();
     const totalAssetValueAda = parseFloat(rawStats?.totalValue || '0');
-    const totalAssets = parseFloat(rawStats?.totalAssets || '0');
+    const totalNFTAssets = parseFloat(rawStats?.totalNFTAssets || '0');
+    const totalFTAssets = parseFloat(rawStats?.totalFTAssets || '0');
 
     const [assets, total] = await queryBuilder
       .skip((page - 1) * limit)
@@ -189,7 +195,8 @@ export class AssetsService {
         totalAssetValueUsd,
         assetsAvgAda,
         assetsAvgUsd,
-        totalAssets,
+        totalNFTAssets,
+        totalFTAssets,
       },
     };
   }

@@ -20,10 +20,17 @@ export class AssetsStatisticsDto {
 
   @Expose()
   @ApiProperty({
-    description: 'Total quantity of all contributed assets (sum of quantity per each asset)',
-    example: 150,
+    description: 'Total quantity of all contributed NFT assets (count of NFTs)',
+    example: 50,
   })
-  totalAssets: number;
+  totalNFTAssets: number;
+
+  @Expose()
+  @ApiProperty({
+    description: 'Total quantity of all contributed FT assets (sum of quantity per each FT)',
+    example: 100,
+  })
+  totalFTAssets: number;
 }
 
 export class GetContributedAssetsRes {
