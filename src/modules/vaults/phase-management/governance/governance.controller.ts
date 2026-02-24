@@ -13,6 +13,7 @@ import { GetVotingPowerRes } from './dto/get-voting-power.res';
 import {
   BuildGovernanceFeeTransactionRes,
   BuildProposalFeeTransactionReq,
+  ConfirmProposalPaymentReq,
   GetGovernanceFeesRes,
 } from './dto/governance-fee.dto';
 import { VoteReq } from './dto/vote.req';
@@ -43,6 +44,20 @@ export class GovernanceController {
     @Body() data: CreateProposalReq
   ): Promise<CreateProposalRes> {
     return this.governanceService.createProposal(vaultId, data, req.user.sub);
+  }
+
+  @Post('proposals/:proposalId/confirm-payment')
+  @UseGuards(AuthGuard)
+  @ApiOperation({
+    summary: 'Confirm governance fee payment for a proposal',
+    description: 'Verifies the payment transaction and activates the proposal',
+  })
+  @ApiResponse({ status: 200, description: 'Payment confirmed and proposal activated' })
+  async confirmProposalPayment(
+    @Param('proposalId', ParseUUIDPipe) proposalId: string,
+    @Body() data: ConfirmProposalPaymentReq
+  ): Promise<{ success: boolean; message: string }> {
+    return this.governanceService.confirmProposalPayment(proposalId, data.txHash);
   }
 
   @Get('vaults/:vaultId/proposals')

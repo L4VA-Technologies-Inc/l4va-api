@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { FixedTransaction, PrivateKey, Address } from '@emurgo/cardano-serialization-lib-nodejs';
+import { FixedTransaction, Address } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
@@ -29,8 +29,6 @@ export interface GovernanceFeeTransactionResponse {
 export class GovernanceFeeService {
   private readonly logger = new Logger(GovernanceFeeService.name);
   private readonly adminAddress: string;
-  private readonly adminHash: string;
-  private readonly adminSKey: string;
   private readonly isMainnet: boolean;
   private blockfrost: BlockFrostAPI;
 
@@ -41,8 +39,6 @@ export class GovernanceFeeService {
     private readonly blockchainService: BlockchainService
   ) {
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
-    this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
-    this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
@@ -108,7 +104,7 @@ export class GovernanceFeeService {
             lovelace: feeAmount,
           },
         ],
-        requiredSigners: [this.adminHash],
+
         validityInterval: {
           start: true,
           end: true,
@@ -121,7 +117,6 @@ export class GovernanceFeeService {
 
       // Sign the transaction with admin key
       const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
       return {
         presignedTx: txToSubmitOnChain.to_hex(),
@@ -177,7 +172,6 @@ export class GovernanceFeeService {
             lovelace: feeAmount,
           },
         ],
-        requiredSigners: [this.adminHash],
         validityInterval: {
           start: true,
           end: true,
@@ -190,7 +184,6 @@ export class GovernanceFeeService {
 
       // Sign the transaction with admin key
       const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-      txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
 
       return {
         presignedTx: txToSubmitOnChain.to_hex(),

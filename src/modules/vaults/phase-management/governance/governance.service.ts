@@ -22,6 +22,7 @@ import { GetProposalDetailRes } from './dto/get-proposal-detail.res';
 import { GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';
 import { VoteRes } from './dto/vote.res';
+import { GovernanceFeeService } from './governance-fee.service';
 import { VoteCountingService } from './vote-counting.service';
 
 import { Asset } from '@/database/asset.entity';
@@ -108,6 +109,7 @@ export class GovernanceService {
     private readonly eventEmitter: EventEmitter2,
     private readonly voteCountingService: VoteCountingService,
     private readonly distributionService: DistributionService,
+    private readonly governanceFeeService: GovernanceFeeService,
     private readonly dexHunterPricingService: DexHunterPricingService,
     private readonly dexHunterService: DexHunterService,
     private readonly vyfiService: VyfiService
@@ -326,10 +328,13 @@ export class GovernanceService {
       }
     }
 
-    const latestSnapshot = await this.snapshotRepository.findOne({
-      where: { vaultId },
-      order: { createdAt: 'DESC' },
-    });
+    const latestSnapshot = await this.snapshotRepository.findOne({ where: { vaultId }, order: { createdAt: 'DESC' } });
+
+    // Get user early as we'll need their address for potential fee transaction
+    const user = await this.userRepository.findOneBy({ id: userId });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
 
     await this.getVotingPower(vaultId, userId, 'create_proposal');
 
@@ -869,8 +874,26 @@ export class GovernanceService {
       }
     }
 
+    // Check if governance fee is required for this proposal type
+    const feeAmount = this.governanceFeeService.getProposalFee(createProposalReq.type);
+    const requiresPayment = feeAmount > 0;
+
+    // If payment is required, set status to UNPAID and clear dates
+    // Store original duration and start date in metadata so we can set correct dates after payment
+    if (requiresPayment) {
+      proposal.status = ProposalStatus.UNPAID;
+      proposal.metadata._pendingPayment = {
+        duration: createProposalReq.duration,
+        originalStartDate: startDate.toISOString(),
+        feeAmount,
+      };
+      proposal.startDate = null;
+      proposal.endDate = null;
+    }
+
     await this.proposalRepository.save(proposal);
 
+    // Emit proposal.created event for all proposals
     this.eventEmitter.emit('proposal.created', {
       proposalId: proposal.id,
       startDate: proposal.startDate,
@@ -878,7 +901,6 @@ export class GovernanceService {
       status: proposal.status,
     });
 
-    const user = await this.userRepository.findOneBy({ id: proposal.creatorId });
     const finalContributorClaims = await this.claimRepository.find({
       where: {
         vault: { id: vault.id },
@@ -896,6 +918,41 @@ export class GovernanceService {
       creatorId: proposal.creatorId,
     });
 
+    // If payment is required, build fee transaction and return it
+    if (requiresPayment) {
+      try {
+        const feeTransaction = await this.governanceFeeService.buildProposalFeeTransaction({
+          userAddress: user.address,
+          proposalType: createProposalReq.type,
+          vaultId,
+        });
+
+        return {
+          success: true,
+          message: 'Proposal created. Please complete payment to activate.',
+          proposal: {
+            id: proposal.id,
+            vaultId,
+            title: proposal.title,
+            description: proposal.description,
+            creatorId: userId,
+            status: proposal.status,
+            createdAt: proposal.createdAt,
+            endDate: proposal.endDate,
+          },
+          requiresPayment: true,
+          presignedTx: feeTransaction.presignedTx,
+          feeAmount: feeTransaction.feeAmount,
+        };
+      } catch (error) {
+        // If fee transaction build fails, delete the proposal and throw error
+        await this.proposalRepository.remove(proposal);
+        this.logger.error(`Failed to build governance fee transaction: ${error.message}`, error.stack);
+        throw new InternalServerErrorException(`Failed to build governance fee transaction: ${error.message}`);
+      }
+    }
+
+    // No payment required - emit proposal.started event
     this.eventEmitter.emit('proposal.started', {
       address: user.address,
       vaultId: vault.id,
@@ -1367,6 +1424,96 @@ export class GovernanceService {
         vote: voteReq.vote,
         timestamp: vote.timestamp,
       },
+    };
+  }
+
+  /**
+   * Confirm governance fee payment and activate proposal
+   * Verifies transaction on-chain, updates proposal status from UNPAID to UPCOMING/ACTIVE
+   */
+  async confirmProposalPayment(proposalId: string, txHash: string): Promise<{ success: boolean; message: string }> {
+    // Fetch proposal with relations
+    const proposal = await this.proposalRepository.findOne({
+      where: { id: proposalId },
+      relations: ['vault', 'creator'],
+    });
+
+    if (!proposal) {
+      throw new NotFoundException('Proposal not found');
+    }
+
+    if (proposal.status !== ProposalStatus.UNPAID) {
+      throw new BadRequestException(`Proposal is not in UNPAID status. Current status: ${proposal.status}`);
+    }
+
+    // Verify transaction exists on-chain
+    try {
+      const tx = await this.blockfrost.txs(txHash);
+      if (!tx) {
+        throw new BadRequestException('Transaction not found on blockchain');
+      }
+
+      // Verify transaction is confirmed
+      if (!tx.block_height) {
+        throw new BadRequestException('Transaction is not yet confirmed');
+      }
+
+      this.logger.log(`Verified governance fee payment transaction: ${txHash} for proposal ${proposalId}`);
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+      this.logger.error(`Failed to verify transaction ${txHash}: ${error.message}`, error.stack);
+      throw new BadRequestException(`Failed to verify transaction: ${error.message}`);
+    }
+
+    // Get pending payment metadata
+    const pendingPayment = proposal.metadata?._pendingPayment;
+    if (!pendingPayment) {
+      throw new InternalServerErrorException('Proposal missing pending payment metadata');
+    }
+
+    // Calculate new start and end dates based on current time
+    const now = new Date();
+    const startDate = now;
+    const endDate = new Date(now.getTime() + pendingPayment.duration);
+
+    // Update proposal
+    proposal.status = now < endDate ? ProposalStatus.ACTIVE : ProposalStatus.UPCOMING;
+    proposal.startDate = startDate;
+    proposal.endDate = endDate;
+
+    // Clear pending payment metadata
+    delete proposal.metadata._pendingPayment;
+
+    await this.proposalRepository.save(proposal);
+
+    // Emit proposal started event
+    const finalContributorClaims = await this.claimRepository.find({
+      where: {
+        vault: { id: proposal.vault.id },
+        type: ClaimType.CONTRIBUTOR,
+      },
+      relations: ['transaction', 'transaction.assets'],
+      order: { created_at: 'ASC' },
+    });
+
+    this.eventEmitter.emit('proposal.started', {
+      address: proposal.creator.address,
+      vaultId: proposal.vault.id,
+      vaultName: proposal.vault.name,
+      proposalName: proposal.title,
+      creatorId: proposal.creatorId,
+      tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+    });
+
+    this.logger.log(
+      `Proposal ${proposalId} activated after payment confirmation. Start: ${startDate.toISOString()}, End: ${endDate.toISOString()}`
+    );
+
+    return {
+      success: true,
+      message: 'Payment confirmed and proposal activated successfully',
     };
   }
 

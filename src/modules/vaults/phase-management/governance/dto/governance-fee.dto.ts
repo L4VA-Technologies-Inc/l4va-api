@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose } from 'class-transformer';
+import { IsString, IsEnum, IsNotEmpty } from 'class-validator';
 
 /**
  * Response DTO for getting governance fees
@@ -82,7 +83,7 @@ export class BuildProposalFeeTransactionReq {
     description: 'User wallet address',
     example: 'addr1...',
   })
-  @Expose()
+  @IsString()
   userAddress: string;
 
   @ApiProperty({
@@ -90,6 +91,19 @@ export class BuildProposalFeeTransactionReq {
     example: 'staking',
     enum: ['staking', 'distribution', 'termination', 'burning', 'marketplace_action', 'expansion'],
   })
-  @Expose()
+  @IsEnum(['staking', 'distribution', 'termination', 'burning', 'marketplace_action', 'expansion'])
   proposalType: string;
+}
+
+/**
+ * Request DTO for confirming proposal payment
+ */
+export class ConfirmProposalPaymentReq {
+  @ApiProperty({
+    description: 'Transaction hash of the governance fee payment',
+    example: '1a2b3c4d5e6f7890abcdef...',
+  })
+  @IsString()
+  @IsNotEmpty()
+  txHash: string;
 }

@@ -50,4 +50,28 @@ export class CreateProposalRes {
   @ApiProperty({ description: 'Created proposal data', type: CreatedProposalDto })
   @Type(() => CreatedProposalDto)
   proposal: CreatedProposalDto;
+
+  @Expose()
+  @ApiProperty({
+    description: 'Whether payment is required before proposal becomes active',
+    example: false,
+    required: false,
+  })
+  requiresPayment?: boolean;
+
+  @Expose()
+  @ApiProperty({
+    description: 'Presigned transaction hex for governance fee payment (if payment required)',
+    example: '84a4008182...',
+    required: false,
+  })
+  presignedTx?: string;
+
+  @Expose()
+  @ApiProperty({
+    description: 'Fee amount in lovelace (if payment required)',
+    example: 5000000,
+    required: false,
+  })
+  feeAmount?: number;
 }
