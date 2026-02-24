@@ -382,6 +382,8 @@ export class VaultsService {
               collection_name: assetItem.collectionName,
               asset_count_cap_min: assetItem.countCapMin,
               asset_count_cap_max: assetItem.countCapMax,
+              valuation_method: assetItem.valuationMethod || 'market',
+              custom_price_ada: assetItem.customPriceAda || null,
             })
             .orIgnore()
             .execute();
