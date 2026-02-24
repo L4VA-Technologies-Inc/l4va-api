@@ -114,8 +114,6 @@ export class GovernanceFeeService {
 
       // Build the transaction using BlockchainService
       const buildResponse = await this.blockchainService.buildTransaction(input);
-
-      // Sign the transaction with admin key
       const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
 
       return {
@@ -181,8 +179,6 @@ export class GovernanceFeeService {
 
       // Build the transaction using BlockchainService
       const buildResponse = await this.blockchainService.buildTransaction(input);
-
-      // Sign the transaction with admin key
       const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
 
       return {

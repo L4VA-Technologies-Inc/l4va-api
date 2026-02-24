@@ -1,6 +1,7 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -265,7 +266,7 @@ export class GovernanceService {
 
       // Adjust for token decimals (divide by 10^decimals)
       const decimals = vault.ft_token_decimals || 0;
-      const divisor = BigInt(10 ** decimals);
+      const divisor = BigInt(10) ** BigInt(decimals);
       const adjustedSupply = Number(totalSupplyRaw / divisor);
 
       // Update vault supply (without decimals)
@@ -894,14 +895,7 @@ export class GovernanceService {
 
     await this.proposalRepository.save(proposal);
 
-    // Emit proposal.created event for all proposals
-    this.eventEmitter.emit('proposal.created', {
-      proposalId: proposal.id,
-      startDate: proposal.startDate,
-      endDate: proposal.endDate,
-      status: proposal.status,
-    });
-
+    // Fetch contributor claims early (needed for both fee and non-fee proposals)
     const finalContributorClaims = await this.claimRepository.find({
       where: {
         vault: { id: vault.id },
@@ -911,21 +905,30 @@ export class GovernanceService {
       order: { created_at: 'ASC' },
     });
 
-    this.eventEmitter.emit('governance.proposal_created', {
-      address: user.address,
-      vaultId: vault.id,
-      vaultName: vault.name,
-      proposalName: proposal.title,
-      creatorId: proposal.creatorId,
-    });
-
-    // If payment is required, build fee transaction and return it
+    // If payment is required, build fee transaction BEFORE emitting events
+    // This ensures we don't notify users of proposals that fail to create
     if (requiresPayment) {
       try {
         const feeTransaction = await this.governanceFeeService.buildProposalFeeTransaction({
           userAddress: user.address,
           proposalType: createProposalReq.type,
           vaultId,
+        });
+
+        // Transaction built successfully - now emit events for UNPAID proposal
+        this.eventEmitter.emit('proposal.created', {
+          proposalId: proposal.id,
+          startDate: proposal.startDate,
+          endDate: proposal.endDate,
+          status: proposal.status,
+        });
+
+        this.eventEmitter.emit('governance.proposal_created', {
+          address: user.address,
+          vaultId: vault.id,
+          vaultName: vault.name,
+          proposalName: proposal.title,
+          creatorId: proposal.creatorId,
         });
 
         return {
@@ -952,6 +955,22 @@ export class GovernanceService {
         throw new InternalServerErrorException(`Failed to build governance fee transaction: ${error.message}`);
       }
     }
+
+    // No payment required - emit proposal.created and proposal.started events
+    this.eventEmitter.emit('proposal.created', {
+      proposalId: proposal.id,
+      startDate: proposal.startDate,
+      endDate: proposal.endDate,
+      status: proposal.status,
+    });
+
+    this.eventEmitter.emit('governance.proposal_created', {
+      address: user.address,
+      vaultId: vault.id,
+      vaultName: vault.name,
+      proposalName: proposal.title,
+      creatorId: proposal.creatorId,
+    });
 
     // No payment required - emit proposal.started event
     this.eventEmitter.emit('proposal.started', {
@@ -1435,11 +1454,13 @@ export class GovernanceService {
   /**
    * Submit governance fee payment transaction and activate proposal
    * Takes signed transaction, submits to blockchain, and activates the proposal
+   * Only the proposal creator can submit the fee payment
    */
   async submitProposalFeePayment(
     proposalId: string,
     transaction: string,
-    signatures: string[]
+    signatures: string[],
+    userId: string
   ): Promise<{ success: boolean; message: string; txHash: string }> {
     // Fetch proposal to validate
     const proposal = await this.proposalRepository.findOne({
@@ -1449,6 +1470,11 @@ export class GovernanceService {
 
     if (!proposal) {
       throw new NotFoundException('Proposal not found');
+    }
+
+    // Verify that the authenticated user is the proposal creator
+    if (proposal.creatorId !== userId) {
+      throw new ForbiddenException('Only the proposal creator can submit fee payment');
     }
 
     if (proposal.status !== ProposalStatus.UNPAID) {

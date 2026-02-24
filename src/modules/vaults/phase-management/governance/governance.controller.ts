@@ -63,10 +63,11 @@ export class GovernanceController {
     },
   })
   async submitProposalFeePayment(
+    @Req() req: AuthRequest,
     @Param('proposalId', ParseUUIDPipe) proposalId: string,
     @Body() data: SubmitProposalFeePaymentReq
   ): Promise<{ success: boolean; message: string; txHash: string }> {
-    return this.governanceService.submitProposalFeePayment(proposalId, data.transaction, data.signatures);
+    return this.governanceService.submitProposalFeePayment(proposalId, data.transaction, data.signatures, req.user.sub);
   }
 
   @Get('vaults/:vaultId/proposals')

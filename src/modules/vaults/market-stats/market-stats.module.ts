@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { VaultMarketStatsService } from './vault-market-stats.service';
-import { VaultTvlCalculationService } from './vault-tvl-caluation.service';
+import { VaultTvlCalculationService } from './vault-tvl-calculation.service';
 
 import { Market } from '@/database/market.entity';
 import { Vault } from '@/database/vault.entity';

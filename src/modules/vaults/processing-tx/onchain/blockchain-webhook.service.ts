@@ -81,7 +81,7 @@ export class BlockchainWebhookService {
       return [];
     }
 
-    this.logger.log(`Processing ${event.payload.length} transaction(s) from blockchain webhook`);
+    this.logger.debug(`Processing ${event.payload.length} transaction(s) from blockchain webhook`);
 
     const updatedLocalTxIds: string[] = [];
 

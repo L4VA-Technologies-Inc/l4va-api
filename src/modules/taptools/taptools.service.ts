@@ -879,10 +879,13 @@ export class TaptoolsService {
    *
    * For locked vaults, also calculates FDV/TVL ratio
    *
-   * GAINS CALCULATION FORMULAS:
-   * - LP vaults: Uses full OHLCV history (first day open → latest close) from TapTools
-   *   user_gains_ada = ((current_price - initial_price) / initial_price) * user_token_holdings * current_price
-   * - Non-LP locked/expansion: user_gains_ada = (current_tvl - initial_tvl) * user_ownership_percentage
+   * GAINS CALCULATION OVERVIEW:
+   * - LP vaults: Uses full OHLCV history (first day open → latest close) from TapTools to
+   *   derive the percentage change in VT token price from inception, and then applies this
+   *   percentage change to the user's VT token holdings (scaled by the current VT price) to
+   *   compute user_gains_ada.
+   * - Non-LP locked/expansion vaults: user_gains_ada is based on the change in TVL over time,
+   *   multiplied by the user's proportional TVL ownership.
    * - Contribution/Acquire: No calculation (users don't own VT tokens yet)
    *
    * @param vaultIds Array of vault IDs to update
