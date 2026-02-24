@@ -872,14 +872,16 @@ export class TaptoolsService {
    * Includes assets with PENDING, LOCKED, EXTRACTED (in treasury), and DISTRIBUTED status
    *
    * User TVL and Gains Calculation (ONLY for locked/expansion vaults):
-   * - Locked vaults WITH LP: VT token price appreciation (current_vt_price vs initial_vt_price)
+   * - Locked vaults WITH LP: VT token price appreciation from historical OHLCV data
+   *   Uses VaultMarketStatsService.calculateTokenPriceDelta() to get true price from LP inception
    * - Locked/Expansion vaults WITHOUT LP: VT token holdings × proportional TVL ownership
    * - Active vaults (contribution/acquire): NO user gains calculated (users don't have VT tokens yet)
    *
    * For locked vaults, also calculates FDV/TVL ratio
    *
    * GAINS CALCULATION FORMULAS:
-   * - LP vaults: user_gains_ada = (current_vt_price - initial_vt_price) / initial_vt_price * user_token_holdings * current_vt_price
+   * - LP vaults: Uses full OHLCV history (first day open → latest close) from TapTools
+   *   user_gains_ada = ((current_price - initial_price) / initial_price) * user_token_holdings * current_price
    * - Non-LP locked/expansion: user_gains_ada = (current_tvl - initial_tvl) * user_ownership_percentage
    * - Contribution/Acquire: No calculation (users don't own VT tokens yet)
    *

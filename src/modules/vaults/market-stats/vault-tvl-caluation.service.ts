@@ -16,8 +16,9 @@ import { VaultStatus } from '@/types/vault.types';
  * During contribution/acquire phases, users don't own VT tokens yet.
  *
  * Gains calculation by vault type:
- * - Locked vaults WITH LP: User gains = VT token price appreciation (handled by VaultMarketStatsService)
- *   Calculation: (current_vt_price - initial_vt_price) / initial_vt_price
+ * - Locked vaults WITH LP: User gains = VT token price appreciation
+ *   Calculation: Uses full OHLCV history from TapTools (first day open → latest close)
+ *   Formula: (current_price - initial_price) / initial_price * 100
  * - Locked vaults WITHOUT LP or expansion vaults: User gains = TVL-based asset value changes
  *   Calculation: (current_assets_value - initial_assets_value) / initial_assets_value
  */

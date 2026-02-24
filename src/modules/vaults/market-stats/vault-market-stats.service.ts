@@ -19,12 +19,16 @@ import { VaultStatus } from '@/types/vault.types';
  * Updates: FDV, vt_price, market cap, price changes, and checks LP existence
  * Processes both locked and expansion vaults for comprehensive market data coverage
  *
- * IMPORTANT - Gains Calculation for LP Vaults:
- * For locked vaults with active LP, user gains are calculated from VT token price appreciation,
- * NOT from underlying asset TVL changes:
- * - Initial VT price is captured when LP is first created (initial_vt_price)
- * - Current VT price comes from Taptools API (vt_price)
- * - Gains % = (current_vt_price - initial_vt_price) / initial_vt_price * 100
+ * IMPORTANT - LP Vault Gains Calculation:
+ * For locked vaults with active LP, user gains are calculated using full historical price data:
+ *
+ * CALCULATION METHOD (Historical OHLCV Data):
+ * - Use getTokenFullHistory() to fetch complete OHLCV data from LP inception
+ * - Initial VT Price = history[0].open (first day LP was created)
+ * - Current VT Price = history[last].close (latest closing price)
+ * - Delta = Current Price - Initial Price
+ * - User Gains (%) = (Delta / Initial Price) * 100
+ * - User Gains (ADA) = Delta * User's VT Token Holdings
  *
  * This reflects market perception and token trading value, which can differ from TVL changes.
  */
@@ -257,6 +261,59 @@ export class VaultMarketStatsService {
     }
   }
 
+  /**
+   * Private helper to fetch OHLCV data from TapTools API
+   * Handles the actual API call with caching
+   *
+   * @param policyId - Token policy ID
+   * @param assetName - Token asset name (hex)
+   * @param interval - Time interval (1h, 24h, 7d, 30d, 1d)
+   * @param numIntervals - Optional number of intervals to return (omit for full history)
+   * @param cacheKey - Cache key for storing/retrieving cached data
+   * @returns OHLCV data array or null if unavailable
+   */
+  private async _fetchOHLCV(
+    policyId: string,
+    assetName: string,
+    interval: string,
+    numIntervals: number | undefined,
+    cacheKey: string
+  ): Promise<MarketOhlcvSeries | null> {
+    // Check cache first
+    const cachedData = this.ohlcvCache.get<MarketOhlcvSeries>(cacheKey);
+    if (cachedData) {
+      return cachedData;
+    }
+
+    try {
+      const unit = `${policyId}${assetName}`;
+      const params: { unit: string; interval: string; numIntervals?: number } = { unit, interval };
+
+      // Only include numIntervals if specified (omitting it returns full history)
+      if (numIntervals !== undefined) {
+        params.numIntervals = numIntervals;
+      }
+
+      const { data } = await this.axiosTapToolsInstance.get<MarketOhlcvSeries>('/token/ohlcv', { params });
+
+      if (!data || data.length === 0) {
+        this.logger.debug(`No OHLCV data available for ${policyId}.${assetName} (${interval})`);
+        return null;
+      }
+
+      // Cache for 5 minutes (same as cache TTL config)
+      this.ohlcvCache.set(cacheKey, data);
+
+      return data;
+    } catch (error) {
+      this.logger.error(
+        `Error fetching OHLCV data from TapTools for ${policyId}.${assetName} (interval: ${interval}):`,
+        error.response?.data || error.message
+      );
+      return null;
+    }
+  }
+
   async getTokenOHLCV(policyId: string, assetName: string, interval: string = '1h'): Promise<MarketOhlcvSeries | null> {
     if (!this.isMainnet) {
       this.logger.warn('Not mainnet environment - OHLCV data not available');
@@ -274,27 +331,96 @@ export class VaultMarketStatsService {
     }
 
     const cacheKey = `ohlcv_${policyId}_${assetName}_${interval}`;
-    const cachedData = this.ohlcvCache.get<MarketOhlcvSeries>(cacheKey);
+    return this._fetchOHLCV(policyId, assetName, interval, undefined, cacheKey);
+  }
 
-    if (cachedData) {
-      return cachedData;
-    }
-
-    try {
-      const unit = `${policyId}${assetName}`;
-      const { data } = await this.axiosTapToolsInstance.get<MarketOhlcvSeries>('/token/ohlcv', {
-        params: { unit, interval },
-      });
-
-      this.ohlcvCache.set(cacheKey, data);
-      return data;
-    } catch (error) {
-      this.logger.error(
-        `Error fetching OHLCV data from TapTools for ${policyId}.${assetName} (interval: ${interval}):`,
-        error.response?.data || error.message
-      );
+  /**
+   * Get FULL historical OHLCV data for a token from LP inception to present
+   * Uses 1d interval without numIntervals limit to get complete history
+   *
+   * This is used to calculate accurate price delta from the very first LP price
+   * to the current price, which represents true gains since LP creation.
+   *
+   * @param policyId - Token policy ID
+   * @param assetName - Token asset name (hex)
+   * @returns Full OHLCV history array or null if unavailable
+   */
+  async getTokenFullHistory(policyId: string, assetName: string): Promise<MarketOhlcvSeries | null> {
+    if (!this.isMainnet) {
+      this.logger.debug('Not mainnet environment - full OHLCV history not available');
       return null;
     }
+
+    if (!policyId || !assetName) {
+      this.logger.warn('Policy ID and asset name are required for full OHLCV history');
+      return null;
+    }
+
+    const cacheKey = `ohlcv_full_${policyId}_${assetName}`;
+    const data = await this._fetchOHLCV(policyId, assetName, '1d', undefined, cacheKey);
+
+    if (data && data.length > 0) {
+      this.logger.log(
+        `Fetched full OHLCV history for ${policyId}.${assetName}: ` +
+          `${data.length} days of data (${new Date(data[0].time * 1000).toISOString().split('T')[0]} to ${new Date(data[data.length - 1].time * 1000).toISOString().split('T')[0]})`
+      );
+    }
+
+    return data;
+  }
+
+  /**
+   * Calculate price delta from LP inception to current price
+   *
+   * Uses full OHLCV history to determine:
+   * - Initial Price: First day's opening price (when LP was created)
+   * - Current Price: Latest day's closing price (right now)
+   * - Delta: Current - Initial (absolute price change)
+   * - Delta %: (Current - Initial) / Initial * 100 (percentage change)
+   *
+   * Example:
+   * - Full history shows first day open = 0.0007990910179852215 ADA
+   * - Latest day close = 0.08556960047153203 ADA
+   * - Delta = 0.08556960047153203 - 0.0007990910179852215 = 0.0847705 ADA
+   * - Delta % = (0.0847705 / 0.0007990910179852215) * 100 = 10,608% gain
+   *
+   * @param policyId - Token policy ID
+   * @param assetName - Token asset name (hex)
+   * @returns Price delta information or null if data unavailable
+   */
+  async calculateTokenPriceDelta(
+    policyId: string,
+    assetName: string
+  ): Promise<{
+    initialPrice: number;
+    currentPrice: number;
+    delta: number;
+    deltaPercent: number;
+    daysOfHistory: number;
+  } | null> {
+    const history = await this.getTokenFullHistory(policyId, assetName);
+
+    if (!history || history.length === 0) {
+      return null;
+    }
+
+    // Initial price = first day's opening price (LP inception)
+    const initialPrice = history[0].open;
+
+    // Current price = latest day's closing price (now)
+    const currentPrice = history[history.length - 1].close;
+
+    // Calculate delta
+    const delta = currentPrice - initialPrice;
+    const deltaPercent = (delta / initialPrice) * 100;
+
+    return {
+      initialPrice,
+      currentPrice,
+      delta,
+      deltaPercent,
+      daysOfHistory: history.length,
+    };
   }
 
   /**
