@@ -486,7 +486,7 @@ export class ContributorDistributionOrchestrator {
   async arePaymentsComplete(vaultId: string): Promise<boolean> {
     const whereClause: any = {
       vault: { id: vaultId },
-      type: ClaimType.CONTRIBUTOR,
+      type: In([ClaimType.CONTRIBUTOR, ClaimType.EXPANSION]),
       status: In([ClaimStatus.PENDING, ClaimStatus.FAILED]),
     };
 
