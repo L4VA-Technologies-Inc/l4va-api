@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose } from 'class-transformer';
-import { IsString, IsEnum, IsNotEmpty } from 'class-validator';
+import { IsString, IsEnum, IsNotEmpty, IsArray } from 'class-validator';
 
 /**
  * Response DTO for getting governance fees
@@ -96,14 +96,23 @@ export class BuildProposalFeeTransactionReq {
 }
 
 /**
- * Request DTO for confirming proposal payment
+ * Request DTO for submitting governance fee payment transaction
  */
-export class ConfirmProposalPaymentReq {
+export class SubmitProposalFeePaymentReq {
   @ApiProperty({
-    description: 'Transaction hash of the governance fee payment',
-    example: '1a2b3c4d5e6f7890abcdef...',
+    description: 'CBOR encoded transaction',
+    example: '84a400...',
   })
   @IsString()
   @IsNotEmpty()
-  txHash: string;
+  transaction: string;
+
+  @ApiProperty({
+    description: 'Array of CBOR encoded signatures',
+    example: ['84a400...'],
+    required: false,
+  })
+  @IsArray()
+  @IsString({ each: true })
+  signatures: string[];
 }

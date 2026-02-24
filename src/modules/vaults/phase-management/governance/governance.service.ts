@@ -14,6 +14,8 @@ import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { In, IsNull, Not, Repository } from 'typeorm';
 
+import { BlockchainService } from '../../processing-tx/onchain/blockchain.service';
+
 import { DistributionService } from './distribution.service';
 import { CreateProposalReq, ExecType } from './dto/create-proposal.req';
 import { CreateProposalRes } from './dto/create-proposal.res';
@@ -35,7 +37,6 @@ import { Vault } from '@/database/vault.entity';
 import { Vote } from '@/database/vote.entity';
 import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
-import { VyfiService } from '@/modules/vyfi/vyfi.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
@@ -112,7 +113,7 @@ export class GovernanceService {
     private readonly governanceFeeService: GovernanceFeeService,
     private readonly dexHunterPricingService: DexHunterPricingService,
     private readonly dexHunterService: DexHunterService,
-    private readonly vyfiService: VyfiService
+    private readonly blockchainService: BlockchainService
   ) {
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
 
@@ -987,8 +988,12 @@ export class GovernanceService {
       throw new NotFoundException('Vault not found');
     }
 
+    // Exclude UNPAID proposals from public list (they're awaiting payment)
     const proposals = await this.proposalRepository.find({
-      where: { vaultId },
+      where: {
+        vaultId,
+        status: Not(ProposalStatus.UNPAID),
+      },
       order: { createdAt: 'DESC' },
     });
 
@@ -1002,8 +1007,8 @@ export class GovernanceService {
           creatorId: proposal.creatorId,
           status: proposal.status,
           createdAt: proposal.createdAt,
-          startDate: proposal.startDate.toISOString(),
-          endDate: proposal.endDate.toISOString(),
+          startDate: proposal.startDate ? proposal.startDate.toISOString() : null,
+          endDate: proposal.endDate ? proposal.endDate.toISOString() : null,
           abstain: proposal.abstain,
           executionError: proposal.metadata?.executionError?.userFriendlyMessage
             ? proposal.metadata.executionError.userFriendlyMessage
@@ -1072,7 +1077,7 @@ export class GovernanceService {
     let selectedVote: VoteType | null = null;
 
     try {
-      const isActive = proposal.status === ProposalStatus.ACTIVE && new Date() <= proposal.endDate;
+      const isActive = proposal.status === ProposalStatus.ACTIVE && proposal.endDate && new Date() <= proposal.endDate;
 
       if (user?.address && proposal.snapshot) {
         const voteWeight = proposal.snapshot.addressBalances[user.address];
@@ -1379,7 +1384,7 @@ export class GovernanceService {
       throw new BadRequestException('Voting is only allowed on active proposals');
     }
 
-    if (new Date() > proposal.endDate) {
+    if (!proposal.endDate || new Date() > proposal.endDate) {
       throw new BadRequestException('Voting period has ended');
     }
 
@@ -1428,11 +1433,15 @@ export class GovernanceService {
   }
 
   /**
-   * Confirm governance fee payment and activate proposal
-   * Verifies transaction on-chain, updates proposal status from UNPAID to UPCOMING/ACTIVE
+   * Submit governance fee payment transaction and activate proposal
+   * Takes signed transaction, submits to blockchain, and activates the proposal
    */
-  async confirmProposalPayment(proposalId: string, txHash: string): Promise<{ success: boolean; message: string }> {
-    // Fetch proposal with relations
+  async submitProposalFeePayment(
+    proposalId: string,
+    transaction: string,
+    signatures: string[]
+  ): Promise<{ success: boolean; message: string; txHash: string }> {
+    // Fetch proposal to validate
     const proposal = await this.proposalRepository.findOne({
       where: { id: proposalId },
       relations: ['vault', 'creator'],
@@ -1446,25 +1455,33 @@ export class GovernanceService {
       throw new BadRequestException(`Proposal is not in UNPAID status. Current status: ${proposal.status}`);
     }
 
-    // Verify transaction exists on-chain
+    // Submit transaction to blockchain
+    let txHash: string;
     try {
-      const tx = await this.blockfrost.txs(txHash);
-      if (!tx) {
-        throw new BadRequestException('Transaction not found on blockchain');
+      const result = await this.blockchainService.submitTransaction({
+        transaction: transaction,
+        signatures: signatures || [],
+      });
+
+      if (!result.txHash) {
+        throw new Error('No transaction hash returned from blockchain submission');
       }
 
-      // Verify transaction is confirmed
-      if (!tx.block_height) {
-        throw new BadRequestException('Transaction is not yet confirmed');
-      }
-
-      this.logger.log(`Verified governance fee payment transaction: ${txHash} for proposal ${proposalId}`);
+      txHash = result.txHash;
+      this.logger.log(`Submitted governance fee transaction: ${txHash} for proposal ${proposalId}`);
     } catch (error) {
-      if (error instanceof BadRequestException) {
-        throw error;
+      const errorMsg = error?.message || error?.toString() || 'Unknown error';
+      this.logger.error(`Failed to submit governance fee transaction: ${errorMsg}`, error?.stack);
+
+      // Delete the UNPAID proposal if blockchain submission fails
+      try {
+        await this.proposalRepository.remove(proposal);
+        this.logger.warn(`Deleted UNPAID proposal ${proposalId} after failed transaction submission`);
+      } catch (deleteError) {
+        this.logger.error(`Failed to delete UNPAID proposal ${proposalId}: ${deleteError.message}`);
       }
-      this.logger.error(`Failed to verify transaction ${txHash}: ${error.message}`, error.stack);
-      throw new BadRequestException(`Failed to verify transaction: ${error.message}`);
+
+      throw new BadRequestException(`Failed to submit transaction: ${errorMsg}`);
     }
 
     // Get pending payment metadata
@@ -1473,13 +1490,19 @@ export class GovernanceService {
       throw new InternalServerErrorException('Proposal missing pending payment metadata');
     }
 
-    // Calculate new start and end dates based on current time
+    // Use originalStartDate from metadata (user's intended start date)
     const now = new Date();
-    const startDate = now;
-    const endDate = new Date(now.getTime() + pendingPayment.duration);
+    const startDate = new Date(pendingPayment.originalStartDate);
+    const endDate = new Date(startDate.getTime() + pendingPayment.duration);
 
-    // Update proposal
-    proposal.status = now < endDate ? ProposalStatus.ACTIVE : ProposalStatus.UPCOMING;
+    // Update proposal status based on originalStartDate
+    // If originalStartDate is in the past or now, proposal is ACTIVE
+    // If originalStartDate is in the future, proposal is UPCOMING
+    if (now >= startDate) {
+      proposal.status = ProposalStatus.ACTIVE;
+    } else {
+      proposal.status = ProposalStatus.UPCOMING;
+    }
     proposal.startDate = startDate;
     proposal.endDate = endDate;
 
@@ -1508,12 +1531,13 @@ export class GovernanceService {
     });
 
     this.logger.log(
-      `Proposal ${proposalId} activated after payment confirmation. Start: ${startDate.toISOString()}, End: ${endDate.toISOString()}`
+      `Proposal ${proposalId} activated after payment submission. TxHash: ${txHash}, Start: ${startDate.toISOString()}, End: ${endDate.toISOString()}`
     );
 
     return {
       success: true,
-      message: 'Payment confirmed and proposal activated successfully',
+      message: 'Payment submitted and proposal activated successfully',
+      txHash,
     };
   }
 

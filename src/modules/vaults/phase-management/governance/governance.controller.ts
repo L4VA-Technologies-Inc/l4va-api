@@ -12,9 +12,8 @@ import { GetProposalsRes, GetProposalsResItem } from './dto/get-proposal.dto';
 import { GetVotingPowerRes } from './dto/get-voting-power.res';
 import {
   BuildGovernanceFeeTransactionRes,
-  BuildProposalFeeTransactionReq,
-  ConfirmProposalPaymentReq,
   GetGovernanceFeesRes,
+  SubmitProposalFeePaymentReq,
 } from './dto/governance-fee.dto';
 import { VoteReq } from './dto/vote.req';
 import { VoteRes } from './dto/vote.res';
@@ -46,18 +45,28 @@ export class GovernanceController {
     return this.governanceService.createProposal(vaultId, data, req.user.sub);
   }
 
-  @Post('proposals/:proposalId/confirm-payment')
+  @Post('proposals/:proposalId/submit-fee-payment')
   @UseGuards(AuthGuard)
   @ApiOperation({
-    summary: 'Confirm governance fee payment for a proposal',
-    description: 'Verifies the payment transaction and activates the proposal',
+    summary: 'Submit governance fee payment for a proposal',
+    description: 'Submits the signed fee transaction to blockchain and activates the proposal',
   })
-  @ApiResponse({ status: 200, description: 'Payment confirmed and proposal activated' })
-  async confirmProposalPayment(
+  @ApiResponse({
+    status: 200,
+    description: 'Transaction submitted and proposal activated',
+    schema: {
+      properties: {
+        success: { type: 'boolean' },
+        message: { type: 'string' },
+        txHash: { type: 'string' },
+      },
+    },
+  })
+  async submitProposalFeePayment(
     @Param('proposalId', ParseUUIDPipe) proposalId: string,
-    @Body() data: ConfirmProposalPaymentReq
-  ): Promise<{ success: boolean; message: string }> {
-    return this.governanceService.confirmProposalPayment(proposalId, data.txHash);
+    @Body() data: SubmitProposalFeePaymentReq
+  ): Promise<{ success: boolean; message: string; txHash: string }> {
+    return this.governanceService.submitProposalFeePayment(proposalId, data.transaction, data.signatures);
   }
 
   @Get('vaults/:vaultId/proposals')
@@ -201,31 +210,6 @@ export class GovernanceController {
       proposalFeeMarketplaceAction: this.governanceFeeService.getProposalFee('marketplace_action'),
       proposalFeeExpansion: this.governanceFeeService.getProposalFee('expansion'),
       votingFee: this.governanceFeeService.getVotingFee(),
-    };
-  }
-
-  @Post('vaults/:vaultId/proposals/fee-transaction')
-  @UseGuards(AuthGuard)
-  @ApiOperation({ summary: 'Build governance fee transaction for proposal creation' })
-  @ApiResponse({
-    status: 201,
-    description: 'Presigned transaction for fee payment',
-    type: BuildGovernanceFeeTransactionRes,
-  })
-  async buildProposalFeeTransaction(
-    @Req() req: AuthRequest,
-    @Param('vaultId', ParseUUIDPipe) vaultId: string,
-    @Body() data: BuildProposalFeeTransactionReq
-  ): Promise<BuildGovernanceFeeTransactionRes> {
-    const result = await this.governanceFeeService.buildProposalFeeTransaction({
-      userAddress: data.userAddress,
-      proposalType: data.proposalType,
-      vaultId,
-    });
-
-    return {
-      presignedTx: result.presignedTx,
-      feeAmount: result.feeAmount,
     };
   }
 
