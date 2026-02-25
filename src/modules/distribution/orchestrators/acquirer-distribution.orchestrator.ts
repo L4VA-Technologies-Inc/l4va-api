@@ -151,12 +151,16 @@ export class AcquirerDistributionOrchestrator {
       unparametizedDispatchHash: string;
     }
   ): Promise<void> {
-    // Create batch transaction record
+    // Create batch transaction record with claimIds for webhook processing
     const extractionTx = await this.transactionRepository.save({
       vault_id: vaultId,
       user_id: null,
       type: TransactionType.extractDispatch,
       status: TransactionStatus.created,
+      metadata: {
+        claimIds: claims.map(c => c.id),
+        transactionIds: claims.map(c => c.transaction.id),
+      },
     });
 
     this.logger.debug(`Processing batch extraction for ${claims.length} claims, transaction ${extractionTx.id}`);
@@ -252,7 +256,7 @@ export class AcquirerDistributionOrchestrator {
 
     this.logger.log(`Batch extraction transaction ${response.txHash} submitted, waiting for confirmation...`);
 
-    // Wait for confirmation
+    // Wait for confirmation (webhook will update transaction, claims, and assets)
     const confirmed = await this.transactionService.waitForTransactionStatus(
       extractionTx.id,
       TransactionStatus.confirmed,
@@ -260,15 +264,6 @@ export class AcquirerDistributionOrchestrator {
     );
 
     if (confirmed) {
-      await this.claimsService.updateClaimStatus(
-        validClaims.map(c => c.id),
-        ClaimStatus.CLAIMED,
-        { distributionTxId: extractionTx.id }
-      );
-
-      await this.assetService.markAssetsAsDistributedByTransactions(validClaims.map(c => c.transaction.id));
-      await this.transactionService.updateTransactionStatusById(extractionTx.id, TransactionStatus.confirmed);
-
       if (isFirstExtraction) {
         await this.vaultRepository.update({ id: vault.id }, { stake_registered: true });
         this.logger.log(`Marked vault ${vault.id} stake as registered`);
@@ -276,7 +271,6 @@ export class AcquirerDistributionOrchestrator {
 
       this.logger.log(`Batch extraction transaction ${response.txHash} confirmed and processed`);
     } else {
-      await this.transactionService.updateTransactionStatusById(extractionTx.id, TransactionStatus.failed);
       throw new Error(`Transaction ${response.txHash} failed to confirm within timeout period`);
     }
   }

@@ -21,6 +21,9 @@ export class Asset {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
+  @Column({ name: 'vault_id', nullable: true })
+  vault_id: string;
+
   @ManyToOne(() => Vault, vault => vault.assets)
   @JoinColumn({ name: 'vault_id' })
   vault: Vault; // nullable empty if joined to transaction

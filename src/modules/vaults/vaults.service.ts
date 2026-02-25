@@ -382,6 +382,8 @@ export class VaultsService {
               collection_name: assetItem.collectionName,
               asset_count_cap_min: assetItem.countCapMin,
               asset_count_cap_max: assetItem.countCapMax,
+              valuation_method: assetItem.valuationMethod || 'market',
+              custom_price_ada: assetItem.customPriceAda || null,
             })
             .orIgnore()
             .execute();
@@ -846,7 +848,7 @@ export class VaultsService {
         }).length
       : 0;
 
-    const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(vaultId);
+    const assetsPrices = await this.taptoolsService.getVaultAssetsSummary(vaultId);
     const adaPrice = assetsPrices.adaPrice;
     const lpMinLiquidityLovelace = this.systemSettingsService.lpRecommendedMinLiquidity;
     const lpMinLiquidityAda = lpMinLiquidityLovelace / 1_000_000;
@@ -1273,7 +1275,7 @@ export class VaultsService {
 
     // Batch calculate asset values for all vaults at once (fixes N+1 query problem)
     const vaultIds = items.map(vault => vault.id);
-    const assetValuesMap = await this.taptoolsService.batchCalculateVaultAssetsValue(vaultIds);
+    const assetValuesMap = await this.taptoolsService.calculateVaultsTvl(vaultIds);
 
     // Transform vault images to URLs and convert to VaultShortResponse
     const transformedItems = items

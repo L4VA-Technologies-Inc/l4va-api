@@ -322,7 +322,7 @@ export class ContributorDistributionOrchestrator {
       type: TransactionType.claim,
       status: TransactionStatus.created,
       metadata: {
-        claimIds: validClaims.map(c => c.id),
+        claimIds: validClaims.map(c => c.id), // For reference and update claims on confirmation
       },
     });
 
@@ -386,14 +386,12 @@ export class ContributorDistributionOrchestrator {
           signatures: [],
         });
 
-        this.logger.log(`Batch payment transaction submitted: ${response.txHash}`);
-
         await this.transactionRepository.update(
           { id: batchTransaction.id },
           { tx_hash: response.txHash, status: TransactionStatus.submitted }
         );
 
-        // Wait for confirmation
+        // Wait for confirmation (webhook will update transaction and claim statuses)
         const confirmed = await this.transactionService.waitForTransactionStatus(
           batchTransaction.id,
           TransactionStatus.confirmed,
@@ -403,14 +401,6 @@ export class ContributorDistributionOrchestrator {
         if (!confirmed) {
           throw new Error(`Batch payment transaction ${response.txHash} failed to confirm`);
         }
-
-        // Update claims and transaction
-        await this.claimsService.updateClaimStatus(
-          validClaims.map(c => c.id),
-          ClaimStatus.CLAIMED,
-          { distributionTxId: batchTransaction.id }
-        );
-        await this.transactionRepository.update({ id: batchTransaction.id }, { status: TransactionStatus.confirmed });
 
         this.logger.log(
           `Successfully processed batch payment for ${validClaims.length} claims ` + `with tx: ${response.txHash}`
