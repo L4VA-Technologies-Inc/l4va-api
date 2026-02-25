@@ -103,7 +103,7 @@ export class AcquirerExtractionBuilder {
           type: 'inline',
           value: {
             datum_tag: datumTag,
-            ada_paid: undefined,
+            ada_paid: null, // Represents None in Aiken smart contract
           },
           shape: {
             validatorHash: config.unparametizedDispatchHash,
