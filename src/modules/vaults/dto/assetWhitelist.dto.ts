@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose } from 'class-transformer';
-import { IsString, IsNumber, IsOptional, Matches, IsEnum, ValidateIf } from 'class-validator';
+import { IsString, IsNumber, IsOptional, Matches, IsEnum, ValidateIf, Min } from 'class-validator';
 
 import { AssetValuationMethod } from '@/types/asset.types';
 
@@ -70,9 +70,11 @@ export class AssetWhitelistDto {
     description: 'Custom price in ADA (required when valuationMethod is custom)',
     required: false,
     example: 100.5,
+    minimum: 0.000001,
   })
   @ValidateIf(o => o.valuationMethod === AssetValuationMethod.CUSTOM)
   @IsNumber()
+  @Min(0.000001, { message: 'Custom price must be greater than 0' })
   @Expose({ name: 'customPriceAda' })
   customPriceAda?: number;
 }
