@@ -573,9 +573,10 @@ export class LifecycleService {
         try {
           const assets = await this.assetsRepository.find({
             where: { vault: { id: vault.id }, deleted: false },
+            relations: ['added_by'],
           });
 
-          const contributorIds = [...new Set(assets.map(asset => asset.added_by))];
+          const contributorIds = [...new Set(assets.map(asset => asset.added_by?.id).filter(Boolean))];
           this.eventEmitter.emit('vault.contribution_complete', {
             vaultId: vault.id,
             vaultName: vault.name,
