@@ -10,7 +10,6 @@ import { AssetsFilterDto } from './dto/get-contributed-assets.req';
 import { GetContributedAssetsRes } from './dto/get-contributed-assets.res';
 
 import { Asset } from '@/database/asset.entity';
-import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
@@ -26,8 +25,6 @@ export class AssetsService {
   constructor(
     @InjectRepository(Asset)
     private readonly assetsRepository: Repository<Asset>,
-    @InjectRepository(AssetsWhitelistEntity)
-    private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
     @InjectRepository(Claim)
     private readonly claimsRepository: Repository<Claim>,
     @InjectRepository(Snapshot)
@@ -103,11 +100,6 @@ export class AssetsService {
     const queryBuilder = this.assetsRepository
       .createQueryBuilder('asset')
       .leftJoinAndSelect('asset.added_by', 'user')
-      .leftJoin(
-        AssetsWhitelistEntity,
-        'whitelist',
-        'whitelist.vault_id = asset.vault_id AND whitelist.policy_id = asset.policy_id'
-      )
       .select([
         'asset.id',
         'asset.policy_id',
@@ -131,8 +123,6 @@ export class AssetsService {
         'user.id',
         'user.address',
       ])
-      .addSelect('whitelist.valuation_method', 'whitelist_valuation_method')
-      .addSelect('whitelist.custom_price_ada', 'whitelist_custom_price_ada')
       .where('asset.vault_id = :vaultId', { vaultId })
       .andWhere('asset.origin_type IN (:...originTypes)', {
         originTypes: [AssetOriginType.CONTRIBUTED, AssetOriginType.FEE],
@@ -159,14 +149,7 @@ export class AssetsService {
 
     const statsQuery = queryBuilder.clone();
     statsQuery
-      .select(
-        `SUM(asset.quantity * COALESCE(
-          CASE WHEN whitelist.valuation_method = 'custom' THEN whitelist.custom_price_ada
-          ELSE COALESCE(asset.floor_price, asset.dex_price, 0)
-          END, 0
-        ))`,
-        'totalValue'
-      )
+      .select('SUM(asset.quantity * COALESCE(asset.floor_price, asset.dex_price, 0))', 'totalValue')
       .addSelect(`SUM(CASE WHEN asset.type = :nftType THEN asset.quantity ELSE 0 END)`, 'totalNFTAssets')
       .addSelect(`SUM(CASE WHEN asset.type = :ftType THEN asset.quantity ELSE 0 END)`, 'totalFTAssets')
       .setParameters({
@@ -179,13 +162,11 @@ export class AssetsService {
     const totalNFTAssets = parseFloat(rawStats?.totalNFTAssets || '0');
     const totalFTAssets = parseFloat(rawStats?.totalFTAssets || '0');
 
-    const rawAssets = await queryBuilder
+    const [assets, total] = await queryBuilder
       .skip((page - 1) * limit)
       .take(limit)
       .orderBy('asset.added_at', 'DESC')
-      .getRawAndEntities();
-
-    const total = await queryBuilder.getCount();
+      .getManyAndCount();
 
     const adaPrice = await this.priceService.getAdaPrice();
 
@@ -193,41 +174,14 @@ export class AssetsService {
     const assetsAvgAda = total > 0 ? totalAssetValueAda / total : 0;
     const assetsAvgUsd = total > 0 ? totalAssetValueUsd / total : 0;
 
-    type AssetWithWhitelist = Asset & {
-      floorPriceUsd?: number;
-      whitelist_valuation_method?: string;
-      whitelist_custom_price_ada?: string;
-    };
+    const assetsWithUsd = assets as Array<Asset & { floorPriceUsd?: number }>;
 
-    const assetsWithUsd = rawAssets.entities.map((asset, index) => {
-      const raw = rawAssets.raw[index];
-      const assetWithWhitelist = asset as AssetWithWhitelist;
-
-      // Get the effective price based on whitelist configuration
-      let effectivePrice: number | null = null;
-      if (raw.whitelist_valuation_method === 'custom' && raw.whitelist_custom_price_ada) {
-        effectivePrice = parseFloat(raw.whitelist_custom_price_ada);
-        this.logger.debug(
-          `Using custom price for asset ${asset.policy_id}: ${effectivePrice} ADA (market: ${asset.floor_price || asset.dex_price})`
-        );
-      } else {
-        effectivePrice = asset.type === AssetType.NFT ? asset.floor_price : asset.dex_price;
+    assetsWithUsd.forEach(asset => {
+      if (asset.type === AssetType.NFT && asset.floor_price) {
+        asset.floorPriceUsd = asset.floor_price * adaPrice;
+      } else if (asset.type === AssetType.FT && asset.dex_price) {
+        asset.floorPriceUsd = asset.dex_price * adaPrice;
       }
-
-      // Override floor_price or dex_price with custom price if applicable
-      if (raw.whitelist_valuation_method === 'custom' && raw.whitelist_custom_price_ada) {
-        if (asset.type === AssetType.NFT) {
-          assetWithWhitelist.floor_price = parseFloat(raw.whitelist_custom_price_ada);
-        } else {
-          assetWithWhitelist.dex_price = parseFloat(raw.whitelist_custom_price_ada);
-        }
-      }
-
-      if (effectivePrice) {
-        assetWithWhitelist.floorPriceUsd = effectivePrice * adaPrice;
-      }
-
-      return assetWithWhitelist;
     });
 
     return {

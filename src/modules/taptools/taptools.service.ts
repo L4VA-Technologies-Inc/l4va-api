@@ -26,6 +26,24 @@ import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { VaultStatus } from '@/types/vault.types';
 
+/** Map of policyId -> custom price in ADA for vault-specific asset valuations */
+export type CustomPriceMap = Map<string, number>;
+
+interface GetAssetValueParams {
+  policyId: string;
+  assetName: string;
+  isNFT: boolean;
+  /** Optional custom price map for vault-specific overrides */
+  customPriceMap?: CustomPriceMap;
+  /** Optional readable name for trait-based pricing (e.g., Relics of Magma) */
+  name?: string;
+}
+
+interface AssetPriceResult {
+  priceAda: number;
+  priceUsd: number;
+}
+
 @Injectable()
 export class TaptoolsService {
   private readonly logger = new Logger(TaptoolsService.name);
@@ -369,20 +387,32 @@ export class TaptoolsService {
   /**
    * Get the value of an asset in ADA and USD
    * Uses DexHunter for fungible tokens and WayUp for NFT floor prices
-   * @param policyId The policy ID of the asset
-   * @param assetName The asset name (hex encoded)
-   * @param isNFT Whether the asset is an NFT
-   * @param name Optional readable asset name for Relics of Magma trait-based pricing
+   *
+   * Price priority:
+   * 1. Custom price from customPriceMap (vault-specific overrides)
+   * 2. Testnet hardcoded prices (if not mainnet)
+   * 3. External API prices (DexHunter for FTs, WayUp for NFTs)
+   *
    * @returns Promise with the asset value in ADA and USD
    */
-  async getAssetValue(
-    policyId: string,
-    assetName: string,
-    isNFT: boolean,
-    name?: string
-  ): Promise<{ priceAda: number; priceUsd: number }> {
+  async getAssetValue({
+    policyId,
+    assetName,
+    isNFT,
+    customPriceMap,
+    name,
+  }: GetAssetValueParams): Promise<AssetPriceResult> {
     try {
       const adaPrice = await this.priceService.getAdaPrice();
+
+      // Priority 1: Check for custom price override
+      if (customPriceMap?.has(policyId)) {
+        const customPrice = customPriceMap.get(policyId)!;
+        return {
+          priceAda: customPrice,
+          priceUsd: customPrice * adaPrice,
+        };
+      }
 
       if (!this.isMainnet) {
         // Check for asset-specific price first (policyId + assetName)
@@ -537,30 +567,53 @@ export class TaptoolsService {
   }
 
   /**
-   * Update asset prices in database from DexHunter/WayUp APIs
+   * Update asset prices in database from custom vault prices and external APIs (DexHunter/WayUp)
    * Updates dex_price for FTs and floor_price for NFTs
    * Includes assets with PENDING, LOCKED, and EXTRACTED (in treasury wallet) status
    * Uses controlled concurrency to avoid overwhelming external APIs
-   * @param vaultIds Optional array of vault IDs to update assets for. If not provided, updates all active vaults
+   * After updating prices, calculates and returns TVL for affected vaults
+   *
+   * Price priority:
+   * 1. Custom prices from vault whitelist (valuation_method = 'custom')
+   * 2. Testnet hardcoded prices (if not mainnet)
+   * 3. External API prices (DexHunter for FTs, WayUp for NFTs)
+   *
+   * @param vaultIds Array of vault IDs to update assets for.
+   * @returns Map of vaultId -> asset summary with updated prices
    */
-  async updateAssetPrices(vaultIds?: string[]): Promise<void> {
+  async updateAssetPrices(
+    vaultIds: string[]
+  ): Promise<Map<string, { totalValueAda: number; totalValueUsd: number; totalAcquiredAda: number }>> {
     try {
       // Build query to get unique assets across specified vaults
-      let query = this.assetRepository
-        .createQueryBuilder('asset')
-        .select(['asset.policy_id', 'asset.asset_id', 'asset.type', 'asset.name'])
-        .where('asset.status IN (:...statuses)', {
-          statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED],
-        })
-        .andWhere('asset.deleted = false')
-        .groupBy('asset.policy_id, asset.asset_id, asset.type, asset.name');
+      const assets = await this.assetRepository.find({
+        where: {
+          status: In([AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED]),
+          deleted: false,
+          vault: { id: In(vaultIds) },
+        },
+        select: ['policy_id', 'asset_id', 'type', 'name', 'vault_id'],
+      });
 
-      if (vaultIds && vaultIds.length > 0) {
-        query = query.andWhere('asset.vault_id IN (:...vaultIds)', { vaultIds });
+      // Deduplicate by policy_id + asset_id + vault_id
+      const uniqueAssetsMap = new Map<string, (typeof assets)[0]>();
+      for (const asset of assets) {
+        const key = `${asset.policy_id}_${asset.asset_id}_${asset.vault_id}`;
+        if (!uniqueAssetsMap.has(key)) {
+          uniqueAssetsMap.set(key, asset);
+        }
       }
+      const uniqueAssets = Array.from(uniqueAssetsMap.values());
 
-      const uniqueAssets = await query.getRawMany();
-      this.logger.log(`Updating prices for ${uniqueAssets.length} unique assets`);
+      // Load custom prices for all relevant vaults
+      const customPricesByVault = new Map<string, Map<string, number>>();
+
+      for (const vaultId of vaultIds) {
+        const customPrices = await this.getVaultCustomPrices(vaultId);
+        if (customPrices.size > 0) {
+          customPricesByVault.set(vaultId, customPrices);
+        }
+      }
 
       let updatedCount = 0;
 
@@ -569,43 +622,48 @@ export class TaptoolsService {
         uniqueAssets,
         async asset => {
           try {
-            const isNFT = asset.asset_type === AssetType.NFT;
-
             // Skip lovelace
-            if (asset.asset_asset_id === 'lovelace') {
+            if (asset.type === AssetType.ADA) {
               return;
             }
 
+            const isNFT = asset.type === AssetType.NFT;
+
             let priceAda: number | null = null;
 
-            // Use hardcoded testnet prices if available
-            if (!this.isMainnet) {
-              priceAda = this.testnetPrices[asset.asset_policy_id] || 5.0;
-            } else if (isNFT) {
+            // Priority 1: Check for custom price from vault whitelist
+            const vaultCustomPrices = customPricesByVault.get(asset.vault_id);
+            if (vaultCustomPrices && vaultCustomPrices.has(asset.policy_id)) {
+              priceAda = vaultCustomPrices.get(asset.policy_id)!;
+            }
+            // Priority 2: Use hardcoded testnet prices if available
+            else if (!this.isMainnet) {
+              priceAda = this.testnetPrices[asset.policy_id] || 5.0;
+            }
+            // Priority 3: Fetch from external APIs
+            else if (isNFT) {
               // Check for Relics of Magma trait-based pricing first
-              const relicsPrice = await this.getRelicsOfMagmaPrice(asset.asset_policy_id, asset.asset_name);
+              const relicsPrice = await this.getRelicsOfMagmaPrice(asset.policy_id, asset.name);
               if (relicsPrice !== null) {
                 priceAda = relicsPrice;
               } else {
                 // Fall back to WayUp collection floor price for other NFTs
                 try {
-                  const { floorPriceAda } = await this.wayUpPricingService.getCollectionFloorPrice(
-                    asset.asset_policy_id
-                  );
+                  const { floorPriceAda } = await this.wayUpPricingService.getCollectionFloorPrice(asset.policy_id);
                   priceAda = floorPriceAda > 0 ? floorPriceAda : null;
                 } catch (error) {
-                  this.logger.debug(`Failed to get floor price for NFT ${asset.asset_policy_id}: ${error.message}`);
+                  this.logger.debug(`Failed to get floor price for NFT ${asset.policy_id}: ${error.message}`);
                 }
               }
             } else {
               // Get DEX price from DexHunter for FTs
               try {
                 const tokenPriceAda = await this.dexHunterPricingService.getTokenPrice(
-                  `${asset.asset_policy_id}${asset.asset_asset_id}`
+                  `${asset.policy_id}${asset.asset_id}`
                 );
                 priceAda = tokenPriceAda !== null && tokenPriceAda > 0 ? tokenPriceAda : null;
               } catch (error) {
-                this.logger.debug(`Failed to get DEX price for FT ${asset.asset_policy_id}: ${error.message}`);
+                this.logger.debug(`Failed to get DEX price for FT ${asset.policy_id}: ${error.message}`);
               }
             }
 
@@ -613,8 +671,8 @@ export class TaptoolsService {
               // Update all assets with this policy_id and asset_id
               await this.assetRepository.update(
                 {
-                  policy_id: asset.asset_policy_id,
-                  asset_id: asset.asset_asset_id,
+                  policy_id: asset.policy_id,
+                  asset_id: asset.asset_id,
                   deleted: false,
                 },
                 {
@@ -625,10 +683,7 @@ export class TaptoolsService {
               updatedCount++;
             }
           } catch (error) {
-            this.logger.error(
-              `Error updating price for asset ${asset.asset_policy_id}.${asset.asset_asset_id}:`,
-              error.message
-            );
+            this.logger.error(`Error updating price for asset ${asset.policy_id}.${asset.asset_id}:`, error.message);
           }
         },
         5, // Max 5 concurrent API calls
@@ -636,6 +691,9 @@ export class TaptoolsService {
       );
 
       this.logger.log(`Successfully updated prices for ${updatedCount} assets`);
+
+      // Calculate and return TVL for all affected vaults
+      return await this.calculateVaultsTvl(vaultIds);
     } catch (error) {
       this.logger.error('Error in updateAssetPrices:', error.message);
       throw error;
@@ -651,7 +709,7 @@ export class TaptoolsService {
    * @param updatePrices If true, fetches fresh prices from APIs. If false, uses cached prices
    * @returns Promise with the vault assets summary
    */
-  async calculateVaultAssetsValue(vaultId: string, updatePrices: boolean = false): Promise<VaultAssetsSummaryDto> {
+  async getVaultAssetsSummary(vaultId: string, updatePrices: boolean = false): Promise<VaultAssetsSummaryDto> {
     // Get the vault to verify it exists
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
@@ -669,7 +727,6 @@ export class TaptoolsService {
 
     // Load custom prices from vault whitelist
     const customPriceMap = await this.getVaultCustomPrices(vaultId);
-
     const adaPrice = await this.priceService.getAdaPrice();
 
     // Group assets by policyId and assetId to handle quantities
@@ -714,7 +771,6 @@ export class TaptoolsService {
         let cachedPrice: number | undefined;
         if (customPriceMap && customPriceMap.has(asset.policy_id)) {
           cachedPrice = customPriceMap.get(asset.policy_id);
-          this.logger.debug(`Using custom price for ${asset.policy_id}: ${cachedPrice} ADA`);
         } else {
           // Use cached market price from database (dex_price for FTs, floor_price for NFTs)
           cachedPrice = asset.type === AssetType.NFT ? asset.floor_price : asset.dex_price;
@@ -773,7 +829,13 @@ export class TaptoolsService {
           valueAda = asset.cachedPrice;
           valueUsd = valueAda * adaPrice;
         } else {
-          const assetValue = await this.getAssetValue(asset.policyId, asset.assetId, asset.isNft, asset.name);
+          const assetValue = await this.getAssetValue({
+            policyId: asset.policyId,
+            assetName: asset.assetId,
+            isNFT: asset.isNft,
+            customPriceMap,
+            name: asset.name,
+          });
           valueAda = assetValue?.priceAda || 0;
           valueUsd = assetValue?.priceUsd || 0;
         }
@@ -827,7 +889,12 @@ export class TaptoolsService {
               const isNft = asset.quantity === '1';
               const quantity = Number(asset.quantity);
 
-              const assetValue = await this.getAssetValue(asset.policyId, asset.assetName, isNft);
+              const assetValue = await this.getAssetValue({
+                policyId: asset.policyId,
+                assetName: asset.assetName,
+                isNFT: isNft,
+                customPriceMap,
+              });
               const valueAda = assetValue?.priceAda || 0;
 
               totalValueAda += valueAda * quantity;
@@ -879,6 +946,208 @@ export class TaptoolsService {
   }
 
   /**
+   * Batch calculate vault TVL for multiple vaults
+   * Includes assets with PENDING, LOCKED, and EXTRACTED (in treasury wallet) status
+   * Uses cached prices from database (dex_price/floor_price) or custom prices from whitelist
+   * @param vaultIds Array of vault IDs to calculate values for
+   * @returns Map of vaultId -> asset summary
+   */
+  async calculateVaultsTvl(
+    vaultIds: string[]
+  ): Promise<Map<string, { totalValueAda: number; totalValueUsd: number; totalAcquiredAda: number }>> {
+    const resultMap = new Map<string, { totalValueAda: number; totalValueUsd: number; totalAcquiredAda: number }>();
+
+    if (vaultIds.length === 0) {
+      return resultMap;
+    }
+
+    try {
+      // Fetch all vaults at once
+      const vaults = await this.vaultRepository.find({
+        where: { id: In(vaultIds) },
+        relations: ['assets'],
+      });
+
+      // Load custom prices for all vaults
+      const customPricesMap = new Map<string, Map<string, number>>();
+      await Promise.all(
+        vaults.map(async vault => {
+          const customPrices = await this.getVaultCustomPrices(vault.id);
+          if (customPrices && customPrices.size > 0) {
+            customPricesMap.set(vault.id, customPrices);
+          }
+        })
+      );
+
+      const adaPrice = await this.priceService.getAdaPrice();
+
+      // Process each vault
+      for (const vault of vaults) {
+        let totalValueAda = 0;
+        let totalValueUsd = 0;
+        let totalAcquiredAda = 0;
+
+        const vaultCustomPrices = customPricesMap.get(vault.id);
+
+        // Group assets by policyId and assetId with cached prices
+        const assetMap = new Map<
+          string,
+          {
+            policyId: string;
+            assetId: string;
+            quantity: number;
+            isNft: boolean;
+            cachedPrice?: number;
+            name?: string;
+          }
+        >();
+
+        for (const asset of vault.assets) {
+          // Skip invalid statuses
+          // Include PENDING, LOCKED, and EXTRACTED (in treasury wallet)
+          if (
+            asset.status !== AssetStatus.PENDING &&
+            asset.status !== AssetStatus.LOCKED &&
+            asset.status !== AssetStatus.EXTRACTED
+          ) {
+            continue;
+          }
+
+          // Track acquired ADA
+          if (asset.origin_type === AssetOriginType.ACQUIRED && asset.policy_id === 'lovelace') {
+            totalAcquiredAda += Number(asset.quantity);
+          }
+
+          // Only process contributed assets for TVL
+          if (asset.origin_type !== AssetOriginType.CONTRIBUTED) {
+            continue;
+          }
+
+          const key = `${asset.policy_id}_${asset.asset_id}`;
+          const existingAsset = assetMap.get(key);
+
+          if (existingAsset) {
+            if (asset.type === AssetType.NFT) {
+              existingAsset.quantity += 1;
+            } else {
+              existingAsset.quantity += Number(asset.quantity);
+            }
+          } else {
+            // Check for custom price first, then use cached market price
+            let cachedPrice: number | undefined;
+            if (vaultCustomPrices && vaultCustomPrices.has(asset.policy_id)) {
+              cachedPrice = vaultCustomPrices.get(asset.policy_id);
+            } else {
+              // Use cached market price from database
+              const marketPrice = asset.type === AssetType.NFT ? asset.floor_price : asset.dex_price;
+              cachedPrice = marketPrice ? Number(marketPrice) : undefined;
+            }
+
+            assetMap.set(key, {
+              policyId: asset.policy_id,
+              assetId: asset.asset_id,
+              quantity: asset.type === AssetType.NFT ? 1 : Number(asset.quantity),
+              isNft: asset.type === AssetType.NFT,
+              cachedPrice,
+              name: asset.name,
+            });
+          }
+        }
+
+        // Calculate values for all assets using cached prices
+        const assets = Array.from(assetMap.values());
+
+        for (const asset of assets) {
+          try {
+            // Handle ADA specially
+            if (asset.assetId === 'lovelace') {
+              const totalAdaValue = asset.quantity * 1e-6;
+              totalValueAda += totalAdaValue;
+              totalValueUsd += totalAdaValue * adaPrice;
+              continue;
+            }
+
+            // Use cached price if available
+            let valueAda = 0;
+
+            if (asset.cachedPrice !== undefined && asset.cachedPrice > 0) {
+              valueAda = asset.cachedPrice;
+            } else {
+              const assetValue = await this.getAssetValue({
+                policyId: asset.policyId,
+                assetName: asset.assetId,
+                isNFT: asset.isNft,
+                customPriceMap: vaultCustomPrices,
+                name: asset.name,
+              });
+              valueAda = assetValue?.priceAda || 0;
+            }
+
+            totalValueAda += valueAda * asset.quantity;
+            totalValueUsd += valueAda * adaPrice * asset.quantity;
+          } catch (error) {
+            // Skip assets that can't be valued
+            this.logger.debug(`Could not value asset ${asset.policyId}.${asset.assetId}: ${error.message}`);
+          }
+        }
+
+        // Add treasury wallet balance to protocol TVL (if exists)
+        let treasuryAdaValue = 0;
+
+        try {
+          if (this.treasuryWalletService) {
+            const treasuryBalance = await this.treasuryWalletService.getTreasuryWalletBalance(vault.id);
+
+            if (treasuryBalance) {
+              // Add ADA from treasury
+              treasuryAdaValue = treasuryBalance.lovelace * 1e-6;
+              totalValueAda += treasuryAdaValue;
+              totalValueUsd += treasuryAdaValue * adaPrice;
+
+              // Value treasury assets (NFTs and FTs)
+              for (const asset of treasuryBalance.assets) {
+                try {
+                  // Determine if asset is NFT by quantity (1 = NFT, >1 = FT)
+                  const isNft = asset.quantity === '1';
+                  const quantity = Number(asset.quantity);
+
+                  const assetValue = await this.getAssetValue({
+                    policyId: asset.policyId,
+                    assetName: asset.assetName,
+                    isNFT: isNft,
+                    customPriceMap: vaultCustomPrices,
+                  });
+                  const valueAda = assetValue?.priceAda || 0;
+
+                  totalValueAda += valueAda * quantity;
+                  totalValueUsd += valueAda * adaPrice * quantity;
+                } catch (error) {
+                  this.logger.debug(`Could not value treasury asset ${asset.unit}: ${error.message}`);
+                }
+              }
+            }
+          }
+        } catch (error) {
+          // Treasury wallet doesn't exist or error fetching - continue without it
+          this.logger.debug(`No treasury wallet for vault ${vault.id}: ${error.message}`);
+        }
+
+        resultMap.set(vault.id, {
+          totalValueAda: +totalValueAda.toFixed(6),
+          totalValueUsd: +totalValueUsd.toFixed(2),
+          totalAcquiredAda,
+        });
+      }
+
+      return resultMap;
+    } catch (error) {
+      this.logger.error('Error in batch calculate vault assets:', error.message);
+      // Return empty map on error
+      return resultMap;
+    }
+  }
+
+  /**
    * Update cached vault totals for multiple vaults
    * Includes assets with PENDING, LOCKED, EXTRACTED (in treasury), and DISTRIBUTED status
    *
@@ -904,7 +1173,7 @@ export class TaptoolsService {
   async updateMultipleVaultTotals(vaultIds: string[]): Promise<void> {
     if (vaultIds.length === 0) return;
 
-    const batchResults = await this.batchCalculateVaultAssetsValue(vaultIds);
+    const batchResults = await this.calculateVaultsTvl(vaultIds);
     const adaPrice = await this.priceService.getAdaPrice();
 
     const vaults: Pick<
@@ -1044,7 +1313,7 @@ export class TaptoolsService {
 
       // Batch query: Get all vault values at once
       const allVaultIds = allRelevantVaults.map(v => v.id);
-      const allVaultValues = await this.batchCalculateVaultAssetsValue(allVaultIds);
+      const allVaultValues = await this.calculateVaultsTvl(allVaultIds);
 
       // Batch query: Get all snapshots for locked vaults
       const allLockedVaultIds = allRelevantVaults.filter(v => v.vault_status === VaultStatus.locked).map(v => v.id);
@@ -1176,199 +1445,6 @@ export class TaptoolsService {
     }
   }
 
-  /**
-   * Batch calculate vault assets values for multiple vaults
-   * Includes assets with PENDING, LOCKED, and EXTRACTED (in treasury wallet) status
-   * Much more efficient than calling calculateVaultAssetsValue() for each vault
-   * Uses cached prices from database (dex_price/floor_price) or custom prices from whitelist
-   * @param vaultIds Array of vault IDs to calculate values for
-   * @returns Map of vaultId -> asset summary
-   */
-  async batchCalculateVaultAssetsValue(
-    vaultIds: string[]
-  ): Promise<Map<string, { totalValueAda: number; totalValueUsd: number; totalAcquiredAda: number }>> {
-    const resultMap = new Map<string, { totalValueAda: number; totalValueUsd: number; totalAcquiredAda: number }>();
-
-    if (vaultIds.length === 0) {
-      return resultMap;
-    }
-
-    try {
-      // Fetch all vaults at once
-      const vaults = await this.vaultRepository.find({
-        where: { id: In(vaultIds) },
-        relations: ['assets'],
-      });
-
-      // Load custom prices for all vaults
-      const customPricesMap = new Map<string, Map<string, number>>();
-      await Promise.all(
-        vaults.map(async vault => {
-          const customPrices = await this.getVaultCustomPrices(vault.id);
-          if (customPrices && customPrices.size > 0) {
-            customPricesMap.set(vault.id, customPrices);
-          }
-        })
-      );
-
-      const adaPrice = await this.priceService.getAdaPrice();
-
-      // Process each vault
-      for (const vault of vaults) {
-        let totalValueAda = 0;
-        let totalValueUsd = 0;
-        let totalAcquiredAda = 0;
-
-        const vaultCustomPrices = customPricesMap.get(vault.id);
-
-        // Group assets by policyId and assetId with cached prices
-        const assetMap = new Map<
-          string,
-          {
-            policyId: string;
-            assetId: string;
-            quantity: number;
-            isNft: boolean;
-            cachedPrice?: number;
-            name?: string;
-          }
-        >();
-
-        for (const asset of vault.assets) {
-          // Skip invalid statuses
-          // Include PENDING, LOCKED, and EXTRACTED (in treasury wallet)
-          if (
-            asset.status !== AssetStatus.PENDING &&
-            asset.status !== AssetStatus.LOCKED &&
-            asset.status !== AssetStatus.EXTRACTED
-          ) {
-            continue;
-          }
-
-          // Track acquired ADA
-          if (asset.origin_type === AssetOriginType.ACQUIRED && asset.policy_id === 'lovelace') {
-            totalAcquiredAda += Number(asset.quantity);
-          }
-
-          // Only process contributed assets for TVL
-          if (asset.origin_type !== AssetOriginType.CONTRIBUTED) {
-            continue;
-          }
-
-          const key = `${asset.policy_id}_${asset.asset_id}`;
-          const existingAsset = assetMap.get(key);
-
-          if (existingAsset) {
-            if (asset.type === AssetType.NFT) {
-              existingAsset.quantity += 1;
-            } else {
-              existingAsset.quantity += Number(asset.quantity);
-            }
-          } else {
-            // Check for custom price first, then use cached market price
-            let cachedPrice: number | undefined;
-            if (vaultCustomPrices && vaultCustomPrices.has(asset.policy_id)) {
-              cachedPrice = vaultCustomPrices.get(asset.policy_id);
-            } else {
-              // Use cached market price from database
-              const marketPrice = asset.type === AssetType.NFT ? asset.floor_price : asset.dex_price;
-              cachedPrice = marketPrice ? Number(marketPrice) : undefined;
-            }
-
-            assetMap.set(key, {
-              policyId: asset.policy_id,
-              assetId: asset.asset_id,
-              quantity: asset.type === AssetType.NFT ? 1 : Number(asset.quantity),
-              isNft: asset.type === AssetType.NFT,
-              cachedPrice,
-              name: asset.name,
-            });
-          }
-        }
-
-        // Calculate values for all assets using cached prices
-        const assets = Array.from(assetMap.values());
-
-        for (const asset of assets) {
-          try {
-            // Handle ADA specially
-            if (asset.assetId === 'lovelace') {
-              const totalAdaValue = asset.quantity * 1e-6;
-              totalValueAda += totalAdaValue;
-              totalValueUsd += totalAdaValue * adaPrice;
-              continue;
-            }
-
-            // Use cached price if available
-            let valueAda = 0;
-
-            if (asset.cachedPrice !== undefined && asset.cachedPrice > 0) {
-              valueAda = asset.cachedPrice;
-            } else {
-              const assetValue = await this.getAssetValue(asset.policyId, asset.assetId, asset.isNft, asset.name);
-              valueAda = assetValue?.priceAda || 0;
-            }
-
-            totalValueAda += valueAda * asset.quantity;
-            totalValueUsd += valueAda * adaPrice * asset.quantity;
-          } catch (error) {
-            // Skip assets that can't be valued
-            this.logger.debug(`Could not value asset ${asset.policyId}.${asset.assetId}: ${error.message}`);
-          }
-        }
-
-        // Add treasury wallet balance to protocol TVL (if exists)
-        let treasuryAdaValue = 0;
-
-        try {
-          if (this.treasuryWalletService) {
-            const treasuryBalance = await this.treasuryWalletService.getTreasuryWalletBalance(vault.id);
-
-            if (treasuryBalance) {
-              // Add ADA from treasury
-              treasuryAdaValue = treasuryBalance.lovelace * 1e-6;
-              totalValueAda += treasuryAdaValue;
-              totalValueUsd += treasuryAdaValue * adaPrice;
-
-              // Value treasury assets (NFTs and FTs)
-              for (const asset of treasuryBalance.assets) {
-                try {
-                  // THIS IS WRONG
-                  // Determine if asset is NFT by quantity (1 = NFT, >1 = FT)
-                  const isNft = asset.quantity === '1';
-                  const quantity = Number(asset.quantity);
-
-                  const assetValue = await this.getAssetValue(asset.policyId, asset.assetName, isNft);
-                  const valueAda = assetValue?.priceAda || 0;
-
-                  totalValueAda += valueAda * quantity;
-                  totalValueUsd += valueAda * adaPrice * quantity;
-                } catch (error) {
-                  this.logger.debug(`Could not value treasury asset ${asset.unit}: ${error.message}`);
-                }
-              }
-            }
-          }
-        } catch (error) {
-          // Treasury wallet doesn't exist or error fetching - continue without it
-          this.logger.debug(`No treasury wallet for vault ${vault.id}: ${error.message}`);
-        }
-
-        resultMap.set(vault.id, {
-          totalValueAda: +totalValueAda.toFixed(6),
-          totalValueUsd: +totalValueUsd.toFixed(2),
-          totalAcquiredAda,
-        });
-      }
-
-      return resultMap;
-    } catch (error) {
-      this.logger.error('Error in batch calculate vault assets:', error.message);
-      // Return empty map on error
-      return resultMap;
-    }
-  }
-
   async getWalletSummaryPaginated(paginationQuery: PaginationQueryDto): Promise<PaginatedWalletSummaryDto> {
     const { address: walletAddress, page, limit, filter, whitelistedPolicies, search, vaultId } = paginationQuery;
 
@@ -1424,8 +1500,8 @@ export class TaptoolsService {
    * @param vaultId The ID of the vault
    * @returns Map of policy IDs to custom prices in ADA
    */
-  private async getVaultCustomPrices(vaultId: string): Promise<Map<string, number>> {
-    const customPriceMap = new Map<string, number>();
+  private async getVaultCustomPrices(vaultId: string): Promise<CustomPriceMap> {
+    const customPriceMap: CustomPriceMap = new Map();
 
     try {
       const vault = await this.vaultRepository.findOne({
@@ -1443,7 +1519,6 @@ export class TaptoolsService {
         }
       }
 
-      this.logger.log(`Loaded ${customPriceMap.size} custom prices from vault ${vaultId}`);
       return customPriceMap;
     } catch (error) {
       this.logger.error(`Failed to load custom prices for vault ${vaultId}:`, error.message);
@@ -1621,7 +1696,6 @@ export class TaptoolsService {
       const metadata = details.onchain_metadata || details.metadata || {};
       const assetName = this.decodeAssetName(details.asset_name || asset.unit.substring(56));
       const isNFT = this.isNFT(details);
-      const policyId = details.policy_id;
 
       if (filter === 'nfts' && !isNFT) {
         continue;
@@ -1654,26 +1728,15 @@ export class TaptoolsService {
       // Get readable name from metadata for WayUp API (e.g., "Relics of Magma - The Vita #0899")
       const readableName = String((metadata as Record<string, unknown>)?.name || assetName);
 
-      // Check if custom price is set for this policy in vault whitelist
-      let priceAda: number;
-      let priceUsd: number;
-
-      if (customPriceMap && customPriceMap.has(policyId)) {
-        // Use custom price from vault whitelist
-        priceAda = customPriceMap.get(policyId);
-        const adaPriceUsd = await this.priceService.getAdaPrice();
-        priceUsd = priceAda * adaPriceUsd;
-      } else {
-        // Use market price
-        const marketPrice = await this.getAssetValue(
-          assetDetailsResult?.details.policy_id || asset.unit.substring(0, 56),
-          assetDetailsResult?.details.asset_name || asset.unit.substring(56),
-          isNFT,
-          readableName
-        );
-        priceAda = marketPrice.priceAda;
-        priceUsd = marketPrice.priceUsd;
-      }
+      const marketPrice = await this.getAssetValue({
+        policyId: assetDetailsResult?.details.policy_id || asset.unit.substring(0, 56),
+        assetName: assetDetailsResult?.details.asset_name || asset.unit.substring(56),
+        customPriceMap,
+        isNFT,
+        name: readableName,
+      });
+      const priceAda = marketPrice.priceAda;
+      const priceUsd = marketPrice.priceUsd;
 
       const assetData: AssetValueDto = {
         tokenId: asset.unit,

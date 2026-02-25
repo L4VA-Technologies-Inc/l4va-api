@@ -583,7 +583,7 @@ export class TransactionsService {
     );
 
     // Calculate and update vault values
-    const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(transaction.vault_id);
+    const assetsPrices = await this.taptoolsService.getVaultAssetsSummary(transaction.vault_id);
 
     await this.vaultRepository.update(vault.id, {
       require_reserved_cost_ada: assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01),
@@ -667,7 +667,7 @@ export class TransactionsService {
         });
 
         if (vault) {
-          const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(vaultId);
+          const assetsPrices = await this.taptoolsService.getVaultAssetsSummary(vaultId);
 
           await this.vaultRepository.update(vault.id, {
             require_reserved_cost_ada: assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01),

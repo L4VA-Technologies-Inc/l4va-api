@@ -126,6 +126,57 @@ export class BlockchainWebhookService {
           await this.handleCreateVaultConfirmation(transaction.vault_id);
         }
 
+        // Handle claim transactions - update claim status to CLAIMED
+        if (transaction.type === TransactionType.claim && transaction.metadata?.claimIds) {
+          const claimIds = transaction.metadata.claimIds as string[];
+          try {
+            // Update claim status to CLAIMED using repository
+            await this.claimRepository.update(
+              { id: In(claimIds) },
+              {
+                status: ClaimStatus.CLAIMED,
+                updated_at: new Date(),
+              }
+            );
+
+            this.logger.log(`WH: Updated status to CLAIMED for ${claimIds.length} claims`);
+          } catch (claimError) {
+            this.logger.error(
+              `WH: Failed to update claims for transaction ${tx.hash}: ${claimError.message}`,
+              claimError.stack
+            );
+          }
+        }
+
+        // Handle extractDispatch transactions - update claims and mark assets as distributed
+        if (transaction.type === TransactionType.extractDispatch && transaction.metadata?.claimIds) {
+          const claimIds = transaction.metadata.claimIds as string[];
+          const transactionIds = transaction.metadata.transactionIds as string[];
+          try {
+            // Update claim status to CLAIMED
+            await this.claimRepository.update(
+              { id: In(claimIds) },
+              {
+                status: ClaimStatus.CLAIMED,
+                updated_at: new Date(),
+              }
+            );
+
+            // Mark assets as distributed
+            if (transactionIds && transactionIds.length > 0) {
+              await this.assetsService.markAssetsAsDistributedByTransactions(transactionIds);
+              this.logger.log(`WH: Marked assets as distributed for ${transactionIds.length} transactions`);
+            }
+
+            this.logger.log(`WH: Processed extractDispatch for ${claimIds.length} acquirer claims`);
+          } catch (extractError) {
+            this.logger.error(
+              `WH: Failed to process extractDispatch for transaction ${tx.hash}: ${extractError.message}`,
+              extractError.stack
+            );
+          }
+        }
+
         // Handle cancellation transactions - release assets back to contributors
         if (transaction.type === TransactionType.cancel && transaction.metadata?.cancellationClaimIds) {
           const claimIds = transaction.metadata.cancellationClaimIds as string[];

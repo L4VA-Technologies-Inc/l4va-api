@@ -558,8 +558,8 @@ export class LifecycleService {
   private async executeContributionToAcquireTransition(vault: Vault): Promise<void> {
     try {
       // Calculate total value of assets in the vault
-      const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
-
+      const vaultTvl = await this.taptoolsService.calculateVaultsTvl([vault.id]);
+      const assetsValue = vaultTvl.get(vault.id);
       vault.total_assets_cost_ada = assetsValue.totalValueAda;
       vault.total_assets_cost_usd = assetsValue.totalValueUsd;
 
@@ -796,8 +796,8 @@ export class LifecycleService {
 
           try {
             const isNFT = asset.type === AssetType.NFT;
-            const { priceAda } = await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_id, isNFT);
             const quantity = asset.quantity || 1;
+            const priceAda = isNFT ? asset.floor_price : asset.dex_price;
             transactionValueAda += priceAda * quantity;
 
             if (uniqueAssets.has(assetKey)) {
@@ -1233,18 +1233,18 @@ export class LifecycleService {
 
       await this.transactionsService.syncVaultTransactions(vault.id);
 
-      // Update asset prices BEFORE calculations to use fresh market data
-      this.logger.log(`Updating asset prices for vault ${vault.id} before distribution calculations`);
+      // Update asset prices and get TVL
+      let vaultTvl: Map<string, { totalValueAda: number; totalValueUsd: number; totalAcquiredAda: number }>;
       try {
-        await this.taptoolsService.updateAssetPrices([vault.id]);
+        vaultTvl = await this.taptoolsService.updateAssetPrices([vault.id]);
       } catch (error) {
-        this.logger.error(`Failed to update asset prices for vault ${vault.id}:`, error);
-        // Continue with cached prices if update fails
+        this.logger.error(`Failed to update asset prices for vault ${vault.id}, continuing with cached prices:`, error);
+        vaultTvl = await this.taptoolsService.calculateVaultsTvl([vault.id]);
       }
 
       // Calculate total value of contributed assets (this becomes the FDV)
-      const assetsValue = await this.taptoolsService.calculateVaultAssetsValue(vault.id);
-      const totalContributedValueAda = assetsValue.totalValueAda;
+      const assetsValue = vaultTvl.get(vault.id);
+      const totalContributedValueAda = assetsValue?.totalValueAda;
 
       // Use raw units for claim calculations (on-chain minting needs decimal-adjusted amounts)
       const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
@@ -1327,69 +1327,72 @@ export class LifecycleService {
         }
       }
 
-      // Get contribution transactions
+      // Get contribution transactions with their assets
       const contributionTransactions = await this.transactionsRepository.find({
         where: {
           vault_id: vault.id,
           type: TransactionType.contribute,
           status: TransactionStatus.confirmed,
         },
-        relations: ['user'],
+        relations: ['user', 'assets'],
         order: { created_at: 'ASC' },
       });
 
-      // Calculate value of each contribution transaction
-      const contributionValueByTransaction: Record<string, number> = {};
-      const userContributedValueMap: Record<string, number> = {};
+      // Load all contributed assets
+      const allContributedAssets = await this.assetsRepository.find({
+        where: {
+          vault: { id: vault.id },
+          origin_type: AssetOriginType.CONTRIBUTED,
+          deleted: false,
+        },
+        relations: ['transaction'],
+      });
 
-      for (const tx of contributionTransactions) {
-        if (!tx.user_id) continue;
-
-        // Get assets associated with this transaction
-        const txAssets = await this.assetsRepository.find({
-          where: {
-            transaction: { id: tx.id },
-            origin_type: AssetOriginType.CONTRIBUTED,
-            deleted: false,
-          },
+      // STEP 1: Calculate multipliers using centralized distribution-calculation service
+      // This handles policy grouping logic (same price → policy-level, different prices → asset-level)
+      const { acquireMultiplier, adaDistribution, multipliersByAssetId } =
+        this.distributionCalculationService.calculateMultipliersFromAssets({
+          assets: allContributedAssets,
+          totalContributedValueAda,
+          vtSupply,
         });
 
-        let transactionValueAda = 0;
+      this.logger.log(
+        `Vault ${vault.id}: Calculated ${acquireMultiplier.length} multiplier entries ` +
+          `for ${allContributedAssets.length} contributed assets`
+      );
 
-        // Calculate value of assets in this transaction
-        for (const asset of txAssets) {
-          try {
-            const isNFT = asset.type === AssetType.NFT;
-            const { priceAda } = await this.taptoolsService.getAssetValue(asset.policy_id, asset.asset_id, isNFT);
-            const quantity = asset.quantity || 1;
-            transactionValueAda += priceAda * quantity;
-          } catch (error) {
-            this.logger.error(`Error getting price for asset ${asset.policy_id}.${asset.asset_id}:`, error.message);
-          }
-        }
-
-        // Store value of this transaction
-        contributionValueByTransaction[tx.id] = transactionValueAda;
-
-        // Track total per user
-        if (!userContributedValueMap[tx.user.id]) {
-          userContributedValueMap[tx.user.id] = 0;
-        }
-        userContributedValueMap[tx.user.id] += transactionValueAda;
-      }
-
-      // Create contributor claims (VT tokens only, no ADA)
+      // STEP 2: Create claims directly using pre-calculated multipliers
+      // For each transaction, sum up (quantity × vtPerUnit) for all its assets
       const contributorClaims: Partial<Claim>[] = [];
 
       for (const tx of contributionTransactions) {
         if (!tx.user || !tx.user.id) continue;
 
-        const userId = tx.user.id;
-        const txValueAda = contributionValueByTransaction[tx.id] || 0;
+        // Get assets for this transaction
+        const txAssets = allContributedAssets.filter(asset => asset.transaction?.id === tx.id);
 
-        // Skip transactions with zero value
-        if (txValueAda <= 0) {
-          this.logger.warn(`Skipping contribution transaction ${tx.id} with zero value`);
+        if (txAssets.length === 0) {
+          this.logger.warn(`No assets found for contribution transaction ${tx.id}`);
+          continue;
+        }
+
+        // Calculate claim amount: sum of (quantity × vtPerUnit) for all assets
+        let claimAmount = 0;
+        for (const asset of txAssets) {
+          const multiplierData = multipliersByAssetId.get(asset.id);
+          if (!multiplierData) {
+            this.logger.warn(`No multiplier found for asset ${asset.id}`);
+            continue;
+          }
+
+          const quantity = asset.quantity || 1;
+          const vtForThisAsset = quantity * multiplierData.vtPerUnit;
+          claimAmount += vtForThisAsset;
+        }
+
+        if (claimAmount <= 0) {
+          this.logger.warn(`Calculated claim amount is 0 for transaction ${tx.id}`);
           continue;
         }
 
@@ -1407,26 +1410,12 @@ export class LifecycleService {
             continue;
           }
 
-          const userTotalValue = userContributedValueMap[userId] || 0;
-
-          // Calculate contributor tokens (no ADA, only VT)
-          const contributorResult = this.distributionCalculationService.calculateContributorTokens({
-            txContributedValue: txValueAda,
-            userTotalValue,
-            totalAcquiredAda: 0, // No acquirers
-            totalTvl: totalContributedValueAda,
-            lpAdaAmount,
-            lpVtAmount,
-            vtSupply,
-            ASSETS_OFFERED_PERCENT: 0, // 0% for acquirers = 100% for contributors
-          });
-
-          // Create claim with VT tokens only (no ADA distribution)
+          // Create claim with pre-calculated amount (already equals quantity × multiplier)
           const claim = this.claimRepository.create({
-            user: { id: userId },
+            user: { id: tx.user.id },
             vault: { id: vault.id },
             type: ClaimType.CONTRIBUTOR,
-            amount: contributorResult.vtAmount,
+            amount: Math.floor(claimAmount),
             lovelace_amount: 0, // No ADA for 0% acquirers case
             status: ClaimStatus.PENDING,
             transaction: { id: tx.id },
@@ -1437,7 +1426,7 @@ export class LifecycleService {
 
           contributorClaims.push(claim);
         } catch (error) {
-          this.logger.error(`Failed to create contributor claim for user ${userId} transaction ${tx.id}:`, error);
+          this.logger.error(`Failed to create contributor claim for transaction ${tx.id}:`, error);
         }
       }
 
@@ -1445,7 +1434,10 @@ export class LifecycleService {
       if (contributorClaims.length > 0) {
         try {
           await this.claimRepository.save(contributorClaims);
-          this.logger.log(`Saved ${contributorClaims.length} contributor claims for vault ${vault.id}`);
+          this.logger.log(
+            `Saved ${contributorClaims.length} contributor claims for vault ${vault.id} ` +
+              `(amounts pre-calculated using multipliers, no recalculation needed)`
+          );
         } catch (error) {
           this.logger.error(`Failed to save batch of contributor claims for vault ${vault.id}:`, error);
           throw error;
@@ -1480,22 +1472,31 @@ export class LifecycleService {
         }
       }
 
-      // Get final claims for multiplier calculation
-      const finalContributorClaims = await this.claimRepository.find({
-        where: {
-          vault: { id: vault.id },
-          type: ClaimType.CONTRIBUTOR,
-        },
-        relations: ['transaction', 'transaction.assets'],
-        order: { created_at: 'ASC' },
-      });
+      // STEP 3: Calculate optimal decimals based on multiplier values
+      // acquireMultiplier and adaDistribution already calculated by calculateMultipliersFromAssets
+      const maxMultiplier = Math.max(...acquireMultiplier.map(m => m[2]), 0);
+      const minMultiplier = Math.min(...acquireMultiplier.map(m => m[2]).filter(m => m > 0), Infinity);
 
-      // Single source of truth: calculate multipliers, update claims, and compute decimals (no acquirers)
-      const { acquireMultiplier, adaDistribution, optimalDecimals } = await this.processMultipliersAndUpdateClaims({
-        vault,
-        contributorClaims: finalContributorClaims,
-        acquirerClaims: [], // No acquirers in direct contribution → governance flow
-      });
+      this.logger.log(
+        `Vault ${vault.id} multiplier stats: ` +
+          `maxMultiplier=${maxMultiplier}, minMultiplier=${minMultiplier === Infinity ? 'N/A' : minMultiplier}, ` +
+          `acquireMultiplier entries=${acquireMultiplier.length}`
+      );
+
+      const optimalDecimals = this.distributionCalculationService.calculateOptimalDecimals(
+        vault.ft_token_supply || 1_000_000,
+        minMultiplier === Infinity ? undefined : minMultiplier
+      );
+
+      // Update vault decimals if changed
+      if (optimalDecimals !== vault.ft_token_decimals) {
+        this.logger.log(
+          `Updating vault ${vault.id} decimals from ${vault.ft_token_decimals} to ${optimalDecimals} ` +
+            `based on multiplier range [${minMultiplier === Infinity ? 'N/A' : minMultiplier}, ${maxMultiplier}]`
+        );
+        vault.ft_token_decimals = optimalDecimals;
+        await this.vaultRepository.save(vault);
+      }
 
       // Submit single update transaction with all multipliers
       const response = await this.vaultManagingService.updateVaultMetadataTx({
@@ -1554,16 +1555,27 @@ export class LifecycleService {
 
       // Emit events
       try {
+        // Fetch saved claims for event emission
+        const savedClaims = await this.claimRepository.find({
+          where: {
+            vault: { id: vault.id },
+            type: ClaimType.CONTRIBUTOR,
+          },
+          select: ['user_id'],
+        });
+
+        const tokenHolderIds = [...new Set(savedClaims.map(c => c.user_id).filter(Boolean))];
+
         this.eventEmitter.emit('distribution.claim_available', {
           vaultId: vault.id,
           vaultName: vault.name,
-          tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+          tokenHolderIds,
         });
 
         this.eventEmitter.emit('vault.success', {
           vaultId: vault.id,
           vaultName: vault.name,
-          tokenHoldersIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+          tokenHoldersIds: tokenHolderIds,
           adaSpent: 0, // No acquirers
           tokenPercentage: 0, // 0% for acquirers
           tokenTicker: vault.vault_token_ticker,
