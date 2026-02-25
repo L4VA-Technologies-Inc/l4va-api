@@ -9,7 +9,7 @@ export class AddValuationMethodToAssetsWhitelist1771947575965 implements Migrati
     await queryRunner.query(
       `ALTER TABLE "assets_whitelist" ADD "valuation_method" character varying(20) DEFAULT 'market'`
     );
-    await queryRunner.query(`ALTER TABLE "assets_whitelist" ADD "" numeric(20,10)`);
+    await queryRunner.query(`ALTER TABLE "assets_whitelist" ADD "custom_price_ada" numeric(20,10)`);
     await queryRunner.query(`ALTER TABLE "vaults" ALTER COLUMN "acquire_multiplier" SET DEFAULT null`);
     await queryRunner.query(`ALTER TABLE "vaults" ALTER COLUMN "ada_distribution" SET DEFAULT null`);
     await queryRunner.query(`ALTER TABLE "vaults" ALTER COLUMN "apply_params_result" SET DEFAULT null`);
