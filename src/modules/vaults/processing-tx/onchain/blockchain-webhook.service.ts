@@ -130,11 +130,12 @@ export class BlockchainWebhookService {
         if (transaction.type === TransactionType.claim && transaction.metadata?.claimIds) {
           const claimIds = transaction.metadata.claimIds as string[];
           try {
-            // Update claim status to CLAIMED using repository
+            // Update claim status to CLAIMED and set distribution_tx_id
             await this.claimRepository.update(
               { id: In(claimIds) },
               {
                 status: ClaimStatus.CLAIMED,
+                distribution_tx_id: transaction.id,
                 updated_at: new Date(),
               }
             );
@@ -153,11 +154,12 @@ export class BlockchainWebhookService {
           const claimIds = transaction.metadata.claimIds as string[];
           const transactionIds = transaction.metadata.transactionIds as string[];
           try {
-            // Update claim status to CLAIMED
+            // Update claim status to CLAIMED and set distribution_tx_id
             await this.claimRepository.update(
               { id: In(claimIds) },
               {
                 status: ClaimStatus.CLAIMED,
+                distribution_tx_id: transaction.id,
                 updated_at: new Date(),
               }
             );
@@ -211,8 +213,6 @@ export class BlockchainWebhookService {
             );
           }
         }
-
-        // TODO: For extract dispatch transactions, we should mark assets as distributed
       }
 
       this.logger.log(`WH: Transaction ${tx.hash} status updated to ${internalStatus}`);

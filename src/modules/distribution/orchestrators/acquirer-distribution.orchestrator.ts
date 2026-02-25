@@ -233,7 +233,7 @@ export class AcquirerDistributionOrchestrator {
 
     // Build transaction input
     const input = await this.extractionBuilder.buildExtractionInput(vault, validClaims, adminUtxos, config);
-
+    this.logger.debug(JSON.stringify(input));
     // Build and validate transaction size
     const buildResponse = await this.blockchainService.buildTransaction(input);
     const actualTxSize = getTransactionSize(buildResponse.complete);
@@ -266,6 +266,8 @@ export class AcquirerDistributionOrchestrator {
     if (confirmed) {
       if (isFirstExtraction) {
         await this.vaultRepository.update({ id: vault.id }, { stake_registered: true });
+        // Also update in-memory vault object to prevent subsequent batches from trying to register again
+        (vault as { stake_registered: boolean }).stake_registered = true;
         this.logger.log(`Marked vault ${vault.id} stake as registered`);
       }
 
