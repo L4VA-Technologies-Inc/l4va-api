@@ -1612,24 +1612,59 @@ export class TaptoolsService {
     customPriceMap?: Map<string, number>
   ): Promise<{ assets: AssetValueDto[]; pagination: PaginationMetaDto }> {
     try {
-      // Get all asset units (cached)
-      const filteredAssets = await this.getFilteredUnits(walletAddress, whitelistedPolicies);
+      const rawAssets = await this.getFilteredUnits(walletAddress, whitelistedPolicies);
 
-      // Process all assets to apply NFT/Token and search filters
-      const allProcessedAssets = await this.processAssetsPage(filteredAssets, filter, search, customPriceMap);
-
-      // Calculate pagination AFTER filtering
-      const total = allProcessedAssets.length;
-      const totalPages = Math.ceil(total / limit);
       const offset = (page - 1) * limit;
-      const pageAssets = allProcessedAssets.slice(offset, offset + limit);
+      const targetCount = offset + limit;
+
+      const matchedAssets: Array<{
+        asset: { unit: string; quantity: number };
+        detailsResult: { details: BlockfrostAssetResponseDto; cached?: boolean };
+      }> = [];
+      let checkedCount = 0;
+      const CONCURRENCY_LIMIT = 5;
+
+      outer: for (let i = 0; i < rawAssets.length && matchedAssets.length < targetCount; i += CONCURRENCY_LIMIT) {
+        const batch = rawAssets.slice(i, i + CONCURRENCY_LIMIT);
+        const batchResults = await Promise.all(batch.map(asset => this.fetchAssetDetailsFromApi(asset.unit)));
+
+        for (let j = 0; j < batch.length; j++) {
+          const asset = batch[j];
+          const detailsResult = batchResults[j];
+
+          if (!detailsResult) {
+            this.logger.warn(
+              `Skipping asset due to missing details from API. Wallet: ${walletAddress}, Asset unit: ${asset.unit}`
+            );
+            checkedCount++;
+            continue;
+          }
+
+          const isMatch = this.checkAssetMatch(asset, detailsResult.details, filter, search);
+
+          if (isMatch) {
+            matchedAssets.push({ asset, detailsResult });
+            if (matchedAssets.length >= targetCount) {
+              checkedCount++;
+              break outer;
+            }
+          }
+
+          checkedCount++;
+        }
+      }
+
+      const pageAssetsRaw = matchedAssets.slice(offset, targetCount);
+      const pageAssets = await this.formatAndPriceAssets(pageAssetsRaw, customPriceMap);
+
+      const hasNextPage = checkedCount < rawAssets.length && matchedAssets.length >= targetCount;
 
       const paginationData = {
         page,
         limit,
-        total,
-        totalPages,
-        hasNextPage: page < totalPages,
+        total: hasNextPage ? null : matchedAssets.length,
+        totalPages: hasNextPage ? null : page,
+        hasNextPage,
         hasPrevPage: page > 1,
       };
 
@@ -1676,68 +1711,69 @@ export class TaptoolsService {
       : assetUnits;
   }
 
-  private async processAssetsPage(
-    pageAssets: Array<{ unit: string; quantity: number }>,
+  private checkAssetMatch(
+    asset: { unit: string; quantity: number },
+    details: BlockfrostAssetResponseDto,
     filter: 'all' | 'nfts' | 'tokens',
     search?: string,
+  ): boolean {
+    const isNFT = this.isNFT(details);
+
+    if (filter === 'nfts' && !isNFT) return false;
+    if (filter === 'tokens' && isNFT) return false;
+
+    if (search && search.trim()) {
+      const searchLower = search.toLowerCase().trim();
+      const metadata = details.onchain_metadata || details.metadata || {};
+      const assetName = this.decodeAssetName(details.asset_name || asset.unit.substring(56));
+      const displayName = String((metadata as Record<string, unknown>)?.name || assetName).toLowerCase();
+      const ticker = String(details.metadata?.ticker || '').toLowerCase();
+      const policyId = details.policy_id.toLowerCase();
+
+      const matchesSearch =
+        assetName.toLowerCase().includes(searchLower) ||
+        displayName.includes(searchLower) ||
+        ticker.includes(searchLower) ||
+        policyId.includes(searchLower) ||
+        asset.unit.toLowerCase().includes(searchLower);
+
+      if (!matchesSearch) return false;
+    }
+
+    return true;
+  }
+
+  private async formatAndPriceAssets(
+    items: Array<{
+      asset: { unit: string; quantity: number };
+      detailsResult: { details: BlockfrostAssetResponseDto; cached?: boolean };
+    }>,
     customPriceMap?: Map<string, number>
   ): Promise<AssetValueDto[]> {
-    const processedAssets: AssetValueDto[] = [];
-
-    // Process assets directly without batching - pagination already limits the number
-    for (const asset of pageAssets) {
-      const assetDetailsResult = await this.fetchAssetDetailsFromApi(asset.unit);
-
-      if (!assetDetailsResult) {
-        throw new HttpException(`Failed to fetch asset details for ${asset.unit}`, 500);
-      }
-
-      const details = assetDetailsResult.details;
+    const prepared = items.map(({ asset, detailsResult }) => {
+      const details = detailsResult.details;
       const metadata = details.onchain_metadata || details.metadata || {};
       const assetName = this.decodeAssetName(details.asset_name || asset.unit.substring(56));
       const isNFT = this.isNFT(details);
-
-      if (filter === 'nfts' && !isNFT) {
-        continue;
-      }
-
-      if (filter === 'tokens' && isNFT) {
-        continue;
-      }
-
-      // Apply search filter
-      if (search && search.trim()) {
-        const searchLower = search.toLowerCase().trim();
-        const displayName = String((metadata as Record<string, unknown>)?.name || assetName).toLowerCase();
-        const ticker = String(details.metadata?.ticker || '').toLowerCase();
-        const policyId = details.policy_id.toLowerCase();
-        const unit = asset.unit.toLowerCase();
-
-        const matchesSearch =
-          assetName.toLowerCase().includes(searchLower) ||
-          displayName.includes(searchLower) ||
-          ticker.includes(searchLower) ||
-          policyId.includes(searchLower) ||
-          unit.includes(searchLower);
-
-        if (!matchesSearch) {
-          continue;
-        }
-      }
-
-      // Get readable name from metadata for WayUp API (e.g., "Relics of Magma - The Vita #0899")
       const readableName = String((metadata as Record<string, unknown>)?.name || assetName);
+      return { asset, details, metadata, assetName, isNFT, readableName };
+    });
 
-      const marketPrice = await this.getAssetValue({
-        policyId: assetDetailsResult?.details.policy_id || asset.unit.substring(0, 56),
-        assetName: assetDetailsResult?.details.asset_name || asset.unit.substring(56),
+    const prices = await Promise.all(
+      prepared.map(({ asset, details, isNFT, readableName }) =>
+        this.getAssetValue({
+        policyId: details.policy_id || asset.unit.substring(0, 56),
+        assetName: details.asset_name || asset.unit.substring(56),
         customPriceMap,
         isNFT,
         name: readableName,
-      });
-      const priceAda = marketPrice.priceAda;
-      const priceUsd = marketPrice.priceUsd;
+        })
+      )
+    );
 
+
+    return prepared.map(({ asset, details, metadata, assetName, isNFT }, idx) => {
+      const { priceAda, priceUsd } = prices[idx];
       const assetData: AssetValueDto = {
         tokenId: asset.unit,
         name: assetName,
@@ -1759,15 +1795,8 @@ export class TaptoolsService {
           fallback: false,
         },
       };
-
-      const assetDto = plainToInstance(AssetValueDto, assetData, {
-        excludeExtraneousValues: true,
-      });
-
-      processedAssets.push(assetDto);
-    }
-
-    return processedAssets;
+      return plainToInstance(AssetValueDto, assetData, { excludeExtraneousValues: true });
+    });
   }
 
   /**
