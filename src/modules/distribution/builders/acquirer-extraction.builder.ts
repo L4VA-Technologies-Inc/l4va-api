@@ -195,4 +195,102 @@ export class AcquirerExtractionBuilder {
       network: this.isMainnet ? 'mainnet' : 'preprod',
     };
   }
+
+  /**
+   * Extract owner address from contribution UTXO's inline datum
+   * The AssetDatum structure is: { policy_id, asset_name, owner, datum_tag }
+   */
+  // private async getOwnerAddressFromDatum(txHash: string, claimId: string): Promise<string> {
+  //   try {
+  //     const utxos = await this.blockfrost.txsUtxos(txHash);
+  //     const output = utxos.outputs[0];
+
+  //     if (!output) {
+  //       throw new Error(`No output found for transaction ${txHash}`);
+  //     }
+
+  //     if (!output.inline_datum) {
+  //       throw new Error(`No inline datum found for ${txHash}#0`);
+  //     }
+
+  //     // Decode CBOR datum
+  //     const datumBytes = Buffer.from(output.inline_datum, 'hex');
+  //     const plutusData = PlutusData.from_bytes(datumBytes);
+
+  //     // AssetDatum is a ConstrPlutusData with fields: [policy_id, asset_name, owner, datum_tag]
+  //     const constr = plutusData.as_constr_plutus_data();
+  //     if (!constr) {
+  //       throw new Error(`Invalid datum structure for ${txHash}#0`);
+  //     }
+
+  //     const fields = constr.data();
+  //     if (fields.len() < 3) {
+  //       throw new Error(`Datum has insufficient fields for ${txHash}#0`);
+  //     }
+
+  //     // Owner is the 3rd field (index 2) - it's an Address encoded as PlutusData
+  //     const ownerField = fields.get(2);
+  //     const ownerConstr = ownerField.as_constr_plutus_data();
+
+  //     if (!ownerConstr) {
+  //       throw new Error(`Owner field is not a constructor for ${txHash}#0`);
+  //     }
+
+  //     // Cardano Address in Plutus is: Constr 0 [Credential, Option<StakingCredential>]
+  //     // We need to reconstruct the bech32 address from the credentials
+  //     const ownerAddress = this.plutusDataToAddress(ownerConstr);
+
+  //     this.logger.log(`Extracted owner address from datum for claim ${claimId}: ${ownerAddress}`);
+
+  //     return ownerAddress;
+  //   } catch (error) {
+  //     this.logger.error(`Failed to extract owner address from datum for claim ${claimId}: ${error.message}`);
+  //     throw new Error(`Could not decode owner address from contribution UTXO ${txHash}#0: ${error.message}`);
+  //   }
+  // }
+
+  /**
+   * Convert Plutus Address data to bech32 address string
+   */
+  // private plutusDataToAddress(addressData: any): string {
+  //   try {
+  //     const fields = addressData.data();
+  //     const paymentCredField = fields.get(0);
+  //     const stakeCredField = fields.get(1);
+
+  //     // Extract payment credential hash
+  //     const paymentCred = paymentCredField.as_constr_plutus_data();
+  //     const paymentFields = paymentCred.data();
+  //     const paymentHashData = paymentFields.get(0);
+  //     const paymentHash = Buffer.from(paymentHashData.as_bytes()).toString('hex');
+
+  //     // Extract stake credential if present
+  //     let stakeHash: string | null = null;
+  //     const stakeCred = stakeCredField.as_constr_plutus_data();
+  //     // Some variant
+  //     if (stakeCred && stakeCred.alternative().to_str() === '0') {
+  //       const stakeFields = stakeCred.data();
+  //       const innerStake = stakeFields.get(0).as_constr_plutus_data();
+  //       const innerFields = innerStake.data();
+  //       const stakeHashData = innerFields.get(0);
+  //       stakeHash = Buffer.from(stakeHashData.as_bytes()).toString('hex');
+  //     }
+
+  //     // Reconstruct address bytes: [header_byte, payment_hash(28), stake_hash(28)]
+  //     const networkId = this.networkId;
+  //     const headerByte = stakeHash ? (networkId === 1 ? 0x01 : 0x00) : networkId === 1 ? 0x61 : 0x60;
+
+  //     let addressBytes: string;
+  //     if (stakeHash) {
+  //       addressBytes = Buffer.from([headerByte]).toString('hex') + paymentHash + stakeHash;
+  //     } else {
+  //       addressBytes = Buffer.from([headerByte]).toString('hex') + paymentHash;
+  //     }
+
+  //     const address = Address.from_bytes(Buffer.from(addressBytes, 'hex'));
+  //     return address.to_bech32();
+  //   } catch (error) {
+  //     throw new Error(`Failed to convert Plutus address data: ${error.message}`);
+  //   }
+  // }
 }
