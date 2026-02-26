@@ -1715,7 +1715,7 @@ export class TaptoolsService {
     asset: { unit: string; quantity: number },
     details: BlockfrostAssetResponseDto,
     filter: 'all' | 'nfts' | 'tokens',
-    search?: string,
+    search?: string
   ): boolean {
     const isNFT = this.isNFT(details);
 
@@ -1762,15 +1762,14 @@ export class TaptoolsService {
     const prices = await Promise.all(
       prepared.map(({ asset, details, isNFT, readableName }) =>
         this.getAssetValue({
-        policyId: details.policy_id || asset.unit.substring(0, 56),
-        assetName: details.asset_name || asset.unit.substring(56),
-        customPriceMap,
-        isNFT,
-        name: readableName,
+          policyId: details.policy_id || asset.unit.substring(0, 56),
+          assetName: details.asset_name || asset.unit.substring(56),
+          customPriceMap,
+          isNFT,
+          name: readableName,
         })
       )
     );
-
 
     return prepared.map(({ asset, details, metadata, assetName, isNFT }, idx) => {
       const { priceAda, priceUsd } = prices[idx];
