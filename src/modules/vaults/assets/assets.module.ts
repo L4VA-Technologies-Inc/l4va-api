@@ -6,13 +6,14 @@ import { AssetsService } from './assets.service';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
+import { Market } from '@/database/market.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Asset, Vault, Transaction, User, Claim, Snapshot])],
+  imports: [TypeOrmModule.forFeature([Asset, Vault, Transaction, User, Claim, Snapshot, Market])],
   controllers: [AssetsController],
   providers: [AssetsService],
   exports: [AssetsService],

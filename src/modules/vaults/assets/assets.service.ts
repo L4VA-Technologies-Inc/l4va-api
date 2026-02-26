@@ -11,6 +11,7 @@ import { GetContributedAssetsRes } from './dto/get-contributed-assets.res';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
+import { Market } from '@/database/market.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
@@ -33,6 +34,8 @@ export class AssetsService {
     private readonly vaultsRepository: Repository<Vault>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(Market)
+    private readonly marketRepository: Repository<Market>,
     private readonly eventEmitter: EventEmitter2,
     private readonly priceService: PriceService
   ) {}
@@ -279,14 +282,20 @@ export class AssetsService {
     const totalAcquired = parseFloat(statsResult?.totalAcquired || '0');
     const totalAcquirers = parseInt(statsResult?.totalAcquirers || '0', 10);
 
-    const adaPrice = await this.priceService.getAdaPrice();
+    const [adaPrice, marketData, [assets, total]] = await Promise.all([
+      this.priceService.getAdaPrice(),
+      this.marketRepository.findOne({ where: { vault_id: vaultId } }),
+      queryBuilder
+        .skip((page - 1) * limit)
+        .take(limit)
+        .orderBy('asset.added_at', 'DESC')
+        .getManyAndCount(),
+    ]);
+
     const totalAcquiredUsd = totalAcquired * adaPrice;
 
-    const [assets, total] = await queryBuilder
-      .skip((page - 1) * limit)
-      .take(limit)
-      .orderBy('asset.added_at', 'DESC')
-      .getManyAndCount();
+    const totalAdaLiquidityAda = marketData?.totalAdaLiquidity ? Number(marketData.totalAdaLiquidity) : 0;
+    const totalAdaLiquidityUsd = totalAdaLiquidityAda ? totalAdaLiquidityAda * adaPrice : 0;
 
     return {
       items: assets.map(asset => instanceToPlain(asset)),
@@ -297,6 +306,8 @@ export class AssetsService {
       totalAcquired,
       totalAcquiredUsd,
       totalAcquirers,
+      totalAdaLiquidityAda,
+      totalAdaLiquidityUsd,
     };
   }
 
