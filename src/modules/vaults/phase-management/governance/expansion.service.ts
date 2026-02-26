@@ -375,6 +375,7 @@ export class ExpansionService {
             assets: contributedAssets,
             vtPrice,
             decimals,
+            priceType: expansionConfig.priceType,
           });
 
           const expansionMultipliers = multiplierResult.multipliers;

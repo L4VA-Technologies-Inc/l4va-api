@@ -528,9 +528,15 @@ export class DistributionCalculationService {
    * Uses asset prices and VT price to determine multipliers
    * Supports both policy-level and asset-level grouping
    * @param decimals - The vault's ft_token_decimals (default 6 for backward compatibility)
+   * @param priceType - 'market' (divide floor price by VT price) or 'limit' (use vtPrice directly as VT amount)
    */
-  calculateExpansionMultipliers(params: { assets: Asset[]; vtPrice: number; decimals: number }): MultiplierResult {
-    const { assets, vtPrice, decimals = 6 } = params;
+  calculateExpansionMultipliers(params: {
+    assets: Asset[];
+    vtPrice: number;
+    decimals: number;
+    priceType: 'market' | 'limit';
+  }): MultiplierResult {
+    const { assets, vtPrice, decimals = 6, priceType } = params;
     const decimalMultiplier = Math.pow(10, decimals);
 
     const recalculatedClaimAmounts = new Map<string, number>();
@@ -542,8 +548,15 @@ export class DistributionCalculationService {
       const price = asset.floor_price || asset.dex_price || 0;
       if (price === 0) continue;
 
-      // Calculate VT amount for this asset: (assetPrice / vtPrice) * 10^decimals
-      const vtPerAsset = (price / vtPrice) * decimalMultiplier;
+      // Calculate VT amount based on pricing type
+      let vtPerAsset: number;
+      if (priceType === 'limit') {
+        // For limit pricing: vtPrice IS the VT amount per asset (not a divisor!)
+        vtPerAsset = vtPrice * decimalMultiplier;
+      } else {
+        // For market pricing: Calculate VT from asset price / VT market price
+        vtPerAsset = (price / vtPrice) * decimalMultiplier;
+      }
       const vtMultiplier = Math.floor(vtPerAsset);
 
       groupingItems.push({
@@ -554,6 +567,12 @@ export class DistributionCalculationService {
         vtMultiplier,
       });
     }
+
+    this.logger.log(
+      `Expansion multiplier calculation (${priceType} pricing): ` +
+        `${groupingItems.length} assets, vtPrice=${vtPrice}, decimals=${decimals}, ` +
+        `sample VT multiplier=${groupingItems[0]?.vtMultiplier || 0} base units`
+    );
 
     // Use centralized policy grouping logic
     const { policyMultipliers } = this.groupAssetsByPolicy(groupingItems, { includeAda: false });
