@@ -217,7 +217,8 @@ export class GovernanceService {
       }
 
       // Fetch all addresses holding the asset using BlockFrost
-      const addressBalances: Record<string, string> = {};
+      const addressBalances: Record<string, string> = {}; // For snapshot (excludes LP)
+      let totalSupplyRaw = BigInt(0); // Total supply INCLUDING LP tokens
       let page = 1;
       let hasMorePages = true;
 
@@ -228,8 +229,12 @@ export class GovernanceService {
           if (response.length === 0) {
             hasMorePages = false;
           } else {
-            // Add addresses and balances to the mapping, excluding pool address (LP VTs)
+            // Process all addresses
             for (const item of response) {
+              // ALWAYS add to total supply (includes LP tokens)
+              totalSupplyRaw += BigInt(item.quantity);
+
+              // Only add to snapshot if NOT pool address (exclude LP from voting power)
               if (item.address !== this.poolAddress) {
                 addressBalances[item.address] = item.quantity;
               } else {
@@ -259,26 +264,22 @@ export class GovernanceService {
         }
       }
 
-      // Calculate total supply from all address balances (excluding LP)
-      const totalSupplyRaw = Object.values(addressBalances).reduce((sum, balance) => {
-        return sum + BigInt(balance);
-      }, BigInt(0));
-
       // Adjust for token decimals (divide by 10^decimals)
       const decimals = vault.ft_token_decimals || 0;
       const divisor = BigInt(10) ** BigInt(decimals);
       const adjustedSupply = Number(totalSupplyRaw / divisor);
 
-      // Update vault supply (without decimals)
+      // Update vault supply with TOTAL supply (including LP tokens)
       await this.vaultRepository.update(vaultId, {
         ft_token_supply: adjustedSupply,
       });
 
       this.logger.log(
-        `Updated vault ${vaultId} supply: ${adjustedSupply.toLocaleString()} tokens (raw: ${totalSupplyRaw.toLocaleString()}, decimals: ${decimals}) across ${Object.keys(addressBalances).length} addresses`
+        `Updated vault ${vaultId} total supply: ${adjustedSupply.toLocaleString()} tokens (raw: ${totalSupplyRaw.toLocaleString()}, decimals: ${decimals}). ` +
+          `Snapshot created for ${Object.keys(addressBalances).length} addresses (LP tokens excluded from voting power)`
       );
 
-      // Create and save the snapshot
+      // Create and save the snapshot (addressBalances excludes LP for voting power calculation)
       const snapshot = this.snapshotRepository.create({
         vaultId,
         assetId,
@@ -288,7 +289,7 @@ export class GovernanceService {
       await this.snapshotRepository.save(snapshot);
 
       this.logger.log(
-        `Automatic snapshot created for vault ${vaultId} with ${Object.keys(addressBalances).length} addresses`
+        `Automatic snapshot created for vault ${vaultId} with ${Object.keys(addressBalances).length} voting addresses`
       );
 
       return snapshot;
