@@ -129,6 +129,12 @@ export class BlockchainService {
           throw TxSizeExceededException.fromErrorMessage(buildResponse.message);
         }
 
+        // Handle "Not enough ADA leftover" error
+        if (buildResponse.message?.includes('Not enough ADA leftover to include non-ADA assets in a change address')) {
+          this.logger.warn(`Insufficient ADA for change output with assets: ${buildResponse.message}`);
+          throw new UTxOInsufficientException();
+        }
+
         throw new Error('Failed to build complete transaction' + JSON.stringify(buildResponse));
       }
 

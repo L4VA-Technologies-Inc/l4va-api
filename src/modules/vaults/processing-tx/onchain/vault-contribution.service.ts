@@ -12,6 +12,7 @@ import { TransactionsService } from '../offchain-tx/transactions.service';
 import { BlockchainService } from './blockchain.service';
 import { SubmitTransactionDto } from './dto/transaction.dto';
 import { InsufficientAssetsException } from './exceptions/insufficient-assets.exception';
+import { UTxOInsufficientException } from './exceptions/utxo-insufficient.exception';
 import { UtxoSpentException } from './exceptions/utxo-spent.exception';
 import { ValidityIntervalException } from './exceptions/validity-interval.exception';
 import { ValueNotConservedException } from './exceptions/value-not-conserved.exception';
@@ -231,6 +232,11 @@ export class VaultContributionService {
       };
     } catch (error) {
       await this.transactionsService.updateTransactionStatusById(params.txId, TransactionStatus.failed);
+
+      // Handle UTxO Insufficient error - not enough ADA to build transaction
+      if (error instanceof UTxOInsufficientException) {
+        throw new UTxOInsufficientException(error['requiredLovelace']);
+      }
 
       // Handle insufficient assets error with user-friendly message
       if (error.message && error.message.includes('Insufficient assets found')) {
