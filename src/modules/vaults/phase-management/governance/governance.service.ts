@@ -796,6 +796,15 @@ export class GovernanceService {
           throw new BadRequestException('Asset max is required when "No Max" is not selected');
         }
 
+        // Validate asset max is within reasonable limits
+        const MAX_ASSET_LIMIT = 1_000_000_000_000; // 1 trillion
+        if (!expansionNoMax && expansionAssetMax > MAX_ASSET_LIMIT) {
+          throw new BadRequestException(
+            `Asset max cannot exceed ${MAX_ASSET_LIMIT.toLocaleString()} (1 trillion). ` +
+              `For NFTs, 1 million is typically sufficient. For FTs, consider if ${expansionAssetMax.toLocaleString()} is truly needed.`
+          );
+        }
+
         // Validate price type
         if (!expansionPriceType || !['limit', 'market'].includes(expansionPriceType)) {
           throw new BadRequestException('Price type must be either "limit" or "market"');
@@ -805,6 +814,14 @@ export class GovernanceService {
         if (expansionPriceType === 'limit') {
           if (!expansionLimitPrice || expansionLimitPrice <= 0) {
             throw new BadRequestException('Limit price is required when using limit pricing');
+          }
+
+          const MAX_LIMIT_PRICE = 1_000_000; // 1 million VT per asset
+          if (expansionLimitPrice > MAX_LIMIT_PRICE) {
+            throw new BadRequestException(
+              `Limit price cannot exceed ${MAX_LIMIT_PRICE.toLocaleString()} VT per asset. ` +
+                'Please set a reasonable price.'
+            );
           }
         }
 
