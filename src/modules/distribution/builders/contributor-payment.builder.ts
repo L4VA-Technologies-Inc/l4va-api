@@ -70,8 +70,9 @@ export class ContributorPaymentBuilder {
     for (const claim of claims) {
       const { transaction: originalTx, lovelace_amount } = claim;
 
-      // Only count lovelace amounts above minimum threshold in total payment
-      if (hasDispatchFunding && Number(lovelace_amount) >= this.MIN_ADA_PAYMENT) {
+      // Only count lovelace amounts when they exist and meet minimum threshold
+      // Expansion claims have NULL lovelace_amount and only receive vault tokens
+      if (hasDispatchFunding && lovelace_amount != null && Number(lovelace_amount) >= this.MIN_ADA_PAYMENT) {
         totalPaymentAmount += Number(lovelace_amount);
       }
 
@@ -159,9 +160,10 @@ export class ContributorPaymentBuilder {
         address: userAddress,
       };
 
-      // Add ADA payment and datum only if dispatch funding exists AND amount meets minimum threshold
-      // If lovelace_amount is below MIN_ADA_PAYMENT, treat it as if there's no dispatch funding
-      const hasActualPayment = hasDispatchFunding && Number(lovelace_amount) >= this.MIN_ADA_PAYMENT;
+      // Add ADA payment only if lovelace_amount exists and meets minimum threshold
+      // Expansion claims have NULL lovelace_amount and only receive vault tokens
+      const hasActualPayment =
+        hasDispatchFunding && lovelace_amount != null && Number(lovelace_amount) >= this.MIN_ADA_PAYMENT;
 
       if (hasActualPayment) {
         userOutput.lovelace = Number(lovelace_amount);

@@ -98,11 +98,20 @@ export class ContributorDistributionOrchestrator {
 
     this.logger.log(`Found ${readyClaims.length} contributor or expansion claims to process`);
 
-    // Get dispatch UTXOs only if vault has tokens for acquirers
-    const hasDispatchFunding = Number(vault.tokens_for_acquires) > 0;
+    // Check if any claims have lovelace_amount to distribute
+    // Expansion claims have NULL lovelace_amount and only receive vault tokens
+    const claimsWithAda = readyClaims.filter(
+      claim => claim.lovelace_amount != null && Number(claim.lovelace_amount) > 0
+    );
+    const hasExpansionClaims = readyClaims.some(claim => claim.type === ClaimType.EXPANSION);
+
+    // Get dispatch UTXOs only if:
+    // 1. There are claims with lovelace_amount (actual ADA to distribute)
+    // 2. Vault has tokens_for_acquires > 0 (meaning ADA distribution is enabled)
+    const needsDispatchFunding = claimsWithAda.length > 0 && Number(vault.tokens_for_acquires) > 0;
     let dispatchUtxos: AddressesUtxo[] = [];
 
-    if (hasDispatchFunding) {
+    if (needsDispatchFunding) {
       const DISPATCH_ADDRESS = getAddressFromHash(
         vault.dispatch_parametized_hash,
         this.blockchainService.getNetworkId()
@@ -118,9 +127,15 @@ export class ContributorDistributionOrchestrator {
         throw error;
       }
     } else {
-      this.logger.log(
-        `Vault ${vaultId} has 0% for acquirers. No dispatch funding required, processing vault token minting only.`
-      );
+      if (hasExpansionClaims && claimsWithAda.length === 0) {
+        this.logger.log(
+          `Vault ${vaultId} has only expansion claims (no lovelace_amount). No ADA distribution needed, processing vault token minting only.`
+        );
+      } else {
+        this.logger.log(
+          `Vault ${vaultId} has 0% for acquirers. No dispatch funding required, processing vault token minting only.`
+        );
+      }
     }
 
     // Process claims with dynamic batching
