@@ -906,6 +906,8 @@ export class VaultsService {
       protocolAcquiresFeeAda: this.systemSettingsService.protocolAcquiresFee / 1_000_000,
       protocolAcquiresFeeUsd: (this.systemSettingsService.protocolAcquiresFee / 1_000_000) * adaPrice,
       protocolEnabled: this.systemSettingsService.protocolEnabled,
+      // Max acquire amount (vault-specific override or protocol default)
+      maxAcquireAmountAda: vault.max_acquire_amount_ada ?? this.systemSettingsService.maxAcquireAmountAda,
     };
 
     let canCreateProposal = false;

@@ -13,6 +13,7 @@ export interface SystemSettingsData {
   protocol_contributors_fee: number;
   protocol_flat_fee: number;
   lp_recommended_min_liquidity: number;
+  max_acquire_amount_ada: number;
   auto_create_treasury_wallets: boolean;
   auto_create_treasury_wallets_testnet: boolean;
   vault_creator_whitelist: string[];
@@ -36,6 +37,7 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   protocol_contributors_fee: 5000000,
   protocol_flat_fee: 5000000,
   lp_recommended_min_liquidity: 500000000, // 500 ADA
+  max_acquire_amount_ada: 10000000, // 10M ADA default limit
   auto_create_treasury_wallets: false, // Disabled by default for mainnet
   auto_create_treasury_wallets_testnet: false, // Disabled by default for testnet
   // Governance fees (in lovelace)
@@ -140,6 +142,10 @@ export class SystemSettingsService implements OnModuleInit {
 
   get lpRecommendedMinLiquidity(): number {
     return this.settings.lp_recommended_min_liquidity;
+  }
+
+  get maxAcquireAmountAda(): number {
+    return this.settings.max_acquire_amount_ada || 10000000; // 10M ADA default
   }
 
   get autoCreateTreasuryWallets(): boolean {

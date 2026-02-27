@@ -307,6 +307,13 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   protocolEnabled?: boolean;
 
+  @ApiProperty({ description: 'Maximum acquire amount in ADA (vault-specific or protocol default)', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'maxAcquireAmountAda' },
+  })
+  maxAcquireAmountAda?: number;
+
   @ApiProperty({
     description: 'Indicates whether the user can create proposals for this vault',
     type: Boolean,

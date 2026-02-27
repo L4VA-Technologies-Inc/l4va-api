@@ -226,6 +226,15 @@ export class Vault {
   })
   acquire_reserve?: number;
 
+  @Expose({ name: 'maxAcquireAmountAda' })
+  @Transform(({ value }) => (value ? Number(value) : null))
+  @Column({
+    name: 'max_acquire_amount_ada',
+    type: 'integer',
+    nullable: true,
+  })
+  max_acquire_amount_ada?: number;
+
   @Expose({ name: 'maxContributeAssets' })
   @Transform(({ value }) => (value ? Number(value) : null))
   @Column({
