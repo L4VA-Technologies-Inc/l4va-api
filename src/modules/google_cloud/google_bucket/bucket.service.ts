@@ -32,6 +32,9 @@ export class GoogleCloudStorageService {
     private readonly configService: ConfigService
   ) {
     this.appHost = this.configService.get<string>('APP_HOST');
+    if (!this.appHost) {
+      throw new Error('APP_HOST environment variable is required');
+    }
 
     const credentialsPath = process.env.GOOGLE_BUCKET_CREDENTIALS;
     const bucketConfig = process.env.GOOGLE_BUCKET_NAME;
