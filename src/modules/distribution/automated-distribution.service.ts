@@ -220,6 +220,12 @@ export class AutomatedDistributionService {
 
         if (isComplete) {
           this.logger.log(`All contributor payments complete for vault ${vault.id}, finalizing...`);
+
+          // Wait for UTXOs to settle on-chain before attempting LP creation
+          // This prevents "Missing UTxO" errors when Anvil fetches UTXOs that were just spent
+          this.logger.log('Waiting 10 seconds for UTXOs to settle before LP creation...');
+          await new Promise(resolve => setTimeout(resolve, 10000));
+
           await this.finalizeVaultDistribution(vault.id, vault.script_hash, vault.asset_vault_name);
         }
       } catch (error) {

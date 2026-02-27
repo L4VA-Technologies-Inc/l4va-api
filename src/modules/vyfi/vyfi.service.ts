@@ -724,8 +724,10 @@ export class VyfiService {
           excludedUtxos.add(spentUtxoRef);
           utxoRetryCount++;
 
-          // Small delay before retry
-          await new Promise(resolve => setTimeout(resolve, 500));
+          // Wait for Blockfrost to index UTXO changes (5 seconds)
+          // Anvil fetches UTXOs directly from the address, so we need to wait for indexing
+          this.logger.log('Waiting 5 seconds for Blockfrost to index UTXO changes...');
+          await new Promise(resolve => setTimeout(resolve, 5000));
           continue;
         }
 
@@ -875,8 +877,10 @@ export class VyfiService {
           excludedUtxos.add(spentUtxoRef);
           utxoRetryCount++;
 
-          // Small delay before retry
-          await new Promise(resolve => setTimeout(resolve, 500));
+          // Wait for Blockfrost to index UTXO changes (5 seconds)
+          // Lucid fetches UTXOs directly from the address, so we need to wait for indexing
+          this.logger.log('Waiting 5 seconds for Blockfrost to index UTXO changes...');
+          await new Promise(resolve => setTimeout(resolve, 5000));
           continue;
         }
 

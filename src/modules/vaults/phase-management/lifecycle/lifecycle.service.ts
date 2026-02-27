@@ -215,14 +215,13 @@ export class LifecycleService {
   }
 
   /**
-   * Calculate multipliers, update claim amounts, and compute optimal decimals.
-   * This is the single source of truth for the claim recalculation flow.
+   * Calculate multipliers and update claim amounts.
+   * This is called AFTER decimals are finalized and all claims are created.
    *
    * Flow:
    * 1. Calculate acquire multipliers and recalculated claim amounts
    * 2. Update contributor claims with recalculated VT and lovelace amounts
-   * 3. Calculate optimal decimals based on multiplier values
-   * 4. Update vault decimals if changed
+   * 3. Return multipliers for on-chain metadata update
    *
    * @returns All data needed for updateVaultMetadataTx call
    */
@@ -230,13 +229,11 @@ export class LifecycleService {
     vault: Vault;
     contributorClaims: Claim[];
     acquirerClaims: Claim[];
-    lpMultiplierRatio?: number;
   }): Promise<{
     acquireMultiplier: [string, string | null, number][];
     adaDistribution: [string, string | null, number][];
-    optimalDecimals: number;
   }> {
-    const { vault, contributorClaims, acquirerClaims, lpMultiplierRatio } = params;
+    const { vault, contributorClaims, acquirerClaims } = params;
 
     // Step 1: Calculate multipliers (pure calculation, no mutations)
     const { acquireMultiplier, adaDistribution, recalculatedClaimAmounts, recalculatedLovelaceAmounts } =
@@ -271,48 +268,21 @@ export class LifecycleService {
       }
     }
 
-    // Step 3: Calculate optimal decimals based on multiplier values
+    // Step 3: Log multiplier stats for verification
     const maxMultiplier = Math.max(...acquireMultiplier.map(m => m[2]), 0);
     const minMultiplier = Math.min(...acquireMultiplier.map(m => m[2]).filter(m => m > 0), Infinity);
     const maxAdaDistribution = Math.max(...adaDistribution.map(d => d[2]), 0);
     const minAdaDistribution = Math.min(...adaDistribution.map(d => d[2]).filter(d => d > 0), Infinity);
-    const minValue = Math.min(
-      minMultiplier === Infinity ? 1 : minMultiplier,
-      minAdaDistribution === Infinity ? 1 : minAdaDistribution
-    );
 
     this.logger.log(
-      `Vault ${vault.id} multiplier stats: ` +
+      `Vault ${vault.id} final multiplier stats (decimals=${vault.ft_token_decimals}): ` +
         `maxMultiplier=${maxMultiplier}, minMultiplier=${minMultiplier === Infinity ? 'N/A' : minMultiplier}, ` +
         `maxAdaDist=${maxAdaDistribution}, minAdaDist=${minAdaDistribution === Infinity ? 'N/A' : minAdaDistribution}`
     );
 
-    const optimalDecimals = this.distributionCalculationService.calculateOptimalDecimals(
-      vault.ft_token_supply || 1_000_000,
-      minValue === Infinity ? undefined : minValue,
-      lpMultiplierRatio
-    );
-
-    // Step 4: Update vault decimals if needed (only upgrade, never downgrade)
-    // Once decimals are set higher, all multipliers are based on that precision
-    // Downgrading would break the calculation consistency
-    if (optimalDecimals > vault.ft_token_decimals) {
-      this.logger.log(
-        `Upgrading vault ${vault.id} decimals from ${vault.ft_token_decimals} to ${optimalDecimals} ` +
-          `(maxMultiplier: ${maxMultiplier}, maxAdaDistribution: ${maxAdaDistribution})`
-      );
-      vault.ft_token_decimals = optimalDecimals;
-      await this.vaultRepository.update(vault.id, { ft_token_decimals: optimalDecimals });
-    } else if (optimalDecimals < vault.ft_token_decimals) {
-      this.logger.log(
-        `Keeping vault ${vault.id} decimals at ${vault.ft_token_decimals} (optimal: ${optimalDecimals}, but never downgrade)`
-      );
-    }
-
     return {
       acquireMultiplier,
       adaDistribution,
-      optimalDecimals,
     };
   }
 
@@ -922,8 +892,70 @@ export class LifecycleService {
           return;
         }
 
+        // STEP 3.5: Check decimal precision BEFORE creating any claims
+        // This avoids needing to recalculate everything later
+        const minAcquirerMultiplier =
+          vtSupply > 0 && totalAcquiredAda > 0
+            ? Math.floor(((vtSupply - lpVtAmount) * ASSETS_OFFERED_PERCENT) / totalAcquiredAda / 1_000_000)
+            : Infinity;
+
+        this.logger.log(
+          `Vault ${vault.id} pre-claim decimal check: ` +
+            `minAcquirerMultiplier=${minAcquirerMultiplier === Infinity ? 'N/A' : minAcquirerMultiplier}, ` +
+            `lpMultiplierRatio=${lpMultiplierRatio?.toFixed(4) || 'N/A'}, ` +
+            `currentDecimals=${vault.ft_token_decimals}`
+        );
+
+        const optimalDecimals = this.distributionCalculationService.calculateOptimalDecimals(
+          vault.ft_token_supply || 1_000_000,
+          minAcquirerMultiplier === Infinity ? undefined : minAcquirerMultiplier,
+          lpMultiplierRatio
+        );
+
+        // Upgrade decimals if needed (before creating any claims)
+        let finalVtSupply = vtSupply;
+        let finalLpVtAmount = lpVtAmount;
+        let finalAdjustedVtLpAmount = adjustedVtLpAmount;
+
+        if (optimalDecimals > vault.ft_token_decimals) {
+          const oldDecimals = vault.ft_token_decimals;
+          const decimalMultiplier = Math.pow(10, optimalDecimals - oldDecimals);
+
+          this.logger.log(
+            `Upgrading vault ${vault.id} decimals from ${oldDecimals} to ${optimalDecimals} ` +
+              `BEFORE creating claims (multiplier: ${decimalMultiplier}x)`
+          );
+
+          vault.ft_token_decimals = optimalDecimals;
+          await this.vaultRepository.update(vault.id, { ft_token_decimals: optimalDecimals });
+
+          // Recalculate all values with new decimals
+          finalVtSupply = vault.ft_token_supply * Math.pow(10, optimalDecimals);
+
+          const recalculatedLp = this.distributionCalculationService.calculateLpTokens({
+            vtSupply: finalVtSupply,
+            totalAcquiredAda,
+            totalContributedValueAda,
+            assetsOfferedPercent: ASSETS_OFFERED_PERCENT,
+            lpPercent: LP_PERCENT,
+          });
+
+          finalLpVtAmount = recalculatedLp.lpVtAmount;
+          finalAdjustedVtLpAmount = recalculatedLp.adjustedVtLpAmount;
+
+          this.logger.log(
+            `Recalculated with ${optimalDecimals} decimals: ` +
+              `vtSupply=${finalVtSupply}, lpVtAmount=${finalLpVtAmount}, adjustedVtLpAmount=${finalAdjustedVtLpAmount}`
+          );
+        } else if (optimalDecimals < vault.ft_token_decimals) {
+          this.logger.log(
+            `Keeping vault ${vault.id} decimals at ${vault.ft_token_decimals} (optimal: ${optimalDecimals}, but never downgrade)`
+          );
+        }
+
+        // Now create claims with final (correct) decimal values
         try {
-          if (adjustedVtLpAmount > 0 && lpAdaAmount > 0) {
+          if (finalAdjustedVtLpAmount > 0 && lpAdaAmount > 0) {
             const lpClaimExists = await this.claimRepository.exists({
               where: { vault: { id: vault.id }, type: ClaimType.LP },
             });
@@ -932,24 +964,24 @@ export class LifecycleService {
               await this.claimRepository.save({
                 vault: { id: vault.id },
                 type: ClaimType.LP,
-                amount: adjustedVtLpAmount,
+                amount: finalAdjustedVtLpAmount,
                 status: ClaimStatus.AVAILABLE,
                 lovelace_amount: lpAdaInLovelace,
               });
 
-              this.logger.log(`Created LP claim: ${adjustedVtLpAmount} VT tokens, ${lpAdaAmount} ADA`);
+              this.logger.log(`Created LP claim: ${finalAdjustedVtLpAmount} VT tokens, ${lpAdaAmount} ADA`);
             }
           } else {
             this.logger.log(
               `No LP claim created (LP % = ${vault.liquidity_pool_contribution}%, ` +
-                `LP VT: ${adjustedVtLpAmount}, LP ADA: ${lpAdaAmount})`
+                `LP VT: ${finalAdjustedVtLpAmount}, LP ADA: ${lpAdaAmount})`
             );
           }
         } catch (error) {
           this.logger.error(`Failed to create LP claim for vault ${vault.id}:`, error);
         }
 
-        // 4. Create claims for each acquisition transaction
+        // 4. Create claims for each acquisition transaction (using finalVtSupply and finalLpVtAmount)
         const acquirerClaims: Partial<Claim>[] = [];
         for (const tx of acquisitionTransactions) {
           if (!tx.user || !tx.user.id) continue;
@@ -977,9 +1009,9 @@ export class LifecycleService {
               adaSent,
               totalAcquiredValueAda: totalAcquiredAda,
               lpAdaAmount,
-              lpVtAmount,
+              lpVtAmount: finalLpVtAmount,
               vtPrice,
-              vtSupply,
+              vtSupply: finalVtSupply,
               ASSETS_OFFERED_PERCENT,
             });
 
@@ -1047,8 +1079,8 @@ export class LifecycleService {
               totalAcquiredAda,
               totalTvl: totalContributedValueAda,
               lpAdaAmount,
-              lpVtAmount,
-              vtSupply,
+              lpVtAmount: finalLpVtAmount,
+              vtSupply: finalVtSupply,
               ASSETS_OFFERED_PERCENT,
             });
 
@@ -1080,7 +1112,7 @@ export class LifecycleService {
         const finalClaims = await this.claimRepository.find({
           where: {
             vault: { id: vault.id },
-            type: In([ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER]),
+            type: In([ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER, ClaimType.LP]),
           },
           relations: ['transaction', 'transaction.assets'],
           order: { created_at: 'ASC' },
@@ -1089,12 +1121,11 @@ export class LifecycleService {
         const finalContributorClaims = finalClaims.filter(cl => cl.type === ClaimType.CONTRIBUTOR);
         const finalAcquirerClaims = finalClaims.filter(cl => cl.type === ClaimType.ACQUIRER);
 
-        // Single source of truth: calculate multipliers, update claims, and compute decimals
+        // Calculate multipliers and update claim amounts (decimals already finalized)
         const { acquireMultiplier, adaDistribution } = await this.processMultipliersAndUpdateClaims({
           vault,
           contributorClaims: finalContributorClaims,
           acquirerClaims: finalAcquirerClaims,
-          lpMultiplierRatio,
         });
 
         // Submit single update transaction with all multipliers
@@ -1360,19 +1391,93 @@ export class LifecycleService {
 
       // STEP 1: Calculate multipliers using centralized distribution-calculation service
       // This handles policy grouping logic (same price → policy-level, different prices → asset-level)
-      const { acquireMultiplier, adaDistribution, multipliersByAssetId } =
-        this.distributionCalculationService.calculateMultipliersFromAssets({
-          assets: allContributedAssets,
-          totalContributedValueAda,
-          vtSupply,
-        });
+      const calculationResult = this.distributionCalculationService.calculateMultipliersFromAssets({
+        assets: allContributedAssets,
+        totalContributedValueAda,
+        vtSupply,
+      });
+      let acquireMultiplier = calculationResult.acquireMultiplier;
+      let adaDistribution = calculationResult.adaDistribution;
+      const multipliersByAssetId = calculationResult.multipliersByAssetId;
 
       this.logger.log(
         `Vault ${vault.id}: Calculated ${acquireMultiplier.length} multiplier entries ` +
           `for ${allContributedAssets.length} contributed assets`
       );
 
-      // STEP 2: Create claims directly using pre-calculated multipliers
+      // STEP 1.5: Check optimal decimals BEFORE creating claims
+      // Calculate min/max multipliers for optimal decimal determination
+      const maxMultiplier = Math.max(...acquireMultiplier.map(m => m[2]), 0);
+      const minMultiplier = Math.min(...acquireMultiplier.map(m => m[2]).filter(m => m > 0), Infinity);
+
+      this.logger.log(
+        `Vault ${vault.id} multiplier stats: ` +
+          `maxMultiplier=${maxMultiplier}, minMultiplier=${minMultiplier === Infinity ? 'N/A' : minMultiplier}, ` +
+          `acquireMultiplier entries=${acquireMultiplier.length}`
+      );
+
+      const optimalDecimals = this.distributionCalculationService.calculateOptimalDecimals(
+        vault.ft_token_supply || 1_000_000,
+        minMultiplier === Infinity ? undefined : minMultiplier,
+        lpMultiplierRatio
+      );
+
+      // Store final values to use for claim creation (may be recalculated if decimals upgraded)
+      let finalMultipliersByAssetId = multipliersByAssetId;
+      let finalLpVtAmount = lpVtAmount;
+
+      // Update vault decimals and recalculate if needed
+      if (optimalDecimals > vault.ft_token_decimals) {
+        const oldDecimals = vault.ft_token_decimals;
+        const decimalMultiplier = Math.pow(10, optimalDecimals - oldDecimals);
+
+        this.logger.log(
+          `Upgrading vault ${vault.id} decimals from ${oldDecimals} to ${optimalDecimals} ` +
+            `(multiplier: ${decimalMultiplier}x). Recalculating multipliers and LP with new decimals.`
+        );
+
+        vault.ft_token_decimals = optimalDecimals;
+        await this.vaultRepository.save(vault);
+
+        // Recalculate vtSupply with new decimals
+        const recalculatedVtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals;
+
+        // Recalculate multipliers with new decimals
+        const recalculated = this.distributionCalculationService.calculateMultipliersFromAssets({
+          assets: allContributedAssets,
+          totalContributedValueAda,
+          vtSupply: recalculatedVtSupply,
+        });
+
+        // Update to use recalculated values
+        acquireMultiplier = recalculated.acquireMultiplier;
+        adaDistribution = recalculated.adaDistribution;
+        finalMultipliersByAssetId = recalculated.multipliersByAssetId;
+
+        // Recalculate LP with new decimals
+        const recalculatedLp = this.distributionCalculationService.calculateLpTokens({
+          vtSupply: recalculatedVtSupply,
+          totalAcquiredAda: 0,
+          assetsOfferedPercent: 0,
+          lpPercent: LP_PERCENT,
+          totalContributedValueAda: totalContributedValueAda,
+        });
+
+        finalLpVtAmount = recalculatedLp.lpVtAmount;
+
+        this.logger.log(
+          `Recalculated with ${optimalDecimals} decimals: ` +
+            `${acquireMultiplier.length} multipliers, LP VT amount: ${finalLpVtAmount}`
+        );
+      } else if (optimalDecimals < vault.ft_token_decimals) {
+        this.logger.log(
+          `Keeping vault ${vault.id} decimals at ${vault.ft_token_decimals} (optimal: ${optimalDecimals}, but never downgrade)`
+        );
+      } else {
+        this.logger.log(`Vault ${vault.id} decimals already optimal at ${vault.ft_token_decimals}`);
+      }
+
+      // STEP 2: Create claims directly using pre-calculated multipliers (with finalized decimals)
       // For each transaction, sum up (quantity × vtPerUnit) for all its assets
       const contributorClaims: Partial<Claim>[] = [];
 
@@ -1388,9 +1493,10 @@ export class LifecycleService {
         }
 
         // Calculate claim amount: sum of (quantity × vtPerUnit) for all assets
+        // Use finalMultipliersByAssetId which contains correct values with finalized decimals
         let claimAmount = 0;
         for (const asset of txAssets) {
-          const multiplierData = multipliersByAssetId.get(asset.id);
+          const multiplierData = finalMultipliersByAssetId.get(asset.id);
           if (!multiplierData) {
             this.logger.warn(`No multiplier found for asset ${asset.id}`);
             continue;
@@ -1467,49 +1573,24 @@ export class LifecycleService {
           });
 
           if (!lpClaimExists) {
+            // Use finalLpVtAmount which is already calculated with correct decimals
             await this.claimRepository.save({
               vault: { id: vault.id },
               type: ClaimType.LP,
-              amount: lpVtAmount,
+              amount: finalLpVtAmount,
               status: ClaimStatus.AVAILABLE,
               lovelace_amount: lpAdaInLovelace,
             });
 
-            this.logger.log(`Created LP claim: ${lpVtAmount} VT tokens, ${lpAdaAmount} ADA`);
+            this.logger.log(`Created LP claim: ${finalLpVtAmount} VT tokens, ${lpAdaAmount} ADA`);
           }
         } catch (error) {
           this.logger.error(`Failed to create LP claim for vault ${vault.id}:`, error);
         }
       }
 
-      // STEP 3: Calculate optimal decimals based on multiplier values
-      // acquireMultiplier and adaDistribution already calculated by calculateMultipliersFromAssets
-      const maxMultiplier = Math.max(...acquireMultiplier.map(m => m[2]), 0);
-      const minMultiplier = Math.min(...acquireMultiplier.map(m => m[2]).filter(m => m > 0), Infinity);
-
-      this.logger.log(
-        `Vault ${vault.id} multiplier stats: ` +
-          `maxMultiplier=${maxMultiplier}, minMultiplier=${minMultiplier === Infinity ? 'N/A' : minMultiplier}, ` +
-          `acquireMultiplier entries=${acquireMultiplier.length}`
-      );
-
-      const optimalDecimals = this.distributionCalculationService.calculateOptimalDecimals(
-        vault.ft_token_supply || 1_000_000,
-        minMultiplier === Infinity ? undefined : minMultiplier,
-        lpMultiplierRatio
-      );
-
-      // Update vault decimals if changed
-      if (optimalDecimals !== vault.ft_token_decimals) {
-        this.logger.log(
-          `Updating vault ${vault.id} decimals from ${vault.ft_token_decimals} to ${optimalDecimals} ` +
-            `based on multiplier range [${minMultiplier === Infinity ? 'N/A' : minMultiplier}, ${maxMultiplier}]`
-        );
-        vault.ft_token_decimals = optimalDecimals;
-        await this.vaultRepository.save(vault);
-      }
-
-      // Submit single update transaction with all multipliers
+      // STEP 3: Submit single update transaction with all multipliers
+      // (Decimals already finalized in STEP 1.5, all claims created with correct precision)
       const response = await this.vaultManagingService.updateVaultMetadataTx({
         vault,
         acquireMultiplier,
