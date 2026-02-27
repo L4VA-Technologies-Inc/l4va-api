@@ -30,14 +30,17 @@ export const imageUrlTransformer: ValueTransformer = {
   from: (value: string) => {
     if (!value) return value;
 
+    const protocol = process.env.NODE_ENV === 'dev' ? 'http://' : 'https://';
+    const host = process.env.APP_HOST || 'localhost:3000';
+    const baseUrl = `${protocol}${host}/api/v1/asset-image/`;
+
     if (!value.includes('/') && !value.includes(':')) {
-      const protocol = process.env.NODE_ENV === 'dev' ? 'http://' : 'https://';
-      const host = process.env.APP_HOST || 'localhost:3000';
-      return `${protocol}${host}/api/v1/asset-image/${value}`;
+      return `${baseUrl}${value}`;
     }
 
     if (value.startsWith('ipfs://')) {
-      return value.replace('ipfs://', 'https://ipfs.blockfrost.dev/ipfs/');
+      const ipfsHash = value.replace('ipfs://', '');
+      return `${baseUrl}${ipfsHash}`;
     }
 
     return value;

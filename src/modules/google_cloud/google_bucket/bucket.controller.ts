@@ -99,18 +99,16 @@ export class GoogleCloudStorageController {
       res.setHeader('Content-Type', contentType);
       res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
 
-      stream.on('error', error => {
-        this.logger.error(`Error streaming asset image ${id}:`, error);
+      stream.on('error', () => {
         if (!res.headersSent) {
-          res.status(500).json({ message: 'Error streaming asset image' });
+          res.redirect(`https://ipfs.blockfrost.dev/ipfs/${id}`);
         }
       });
 
       stream.pipe(res);
     } catch (error) {
-      this.logger.error(`Error getting asset image ${id}:`, error);
       if (!res.headersSent) {
-        res.status(404).json({ message: error.message || 'Asset image not found' });
+        res.redirect(`https://ipfs.blockfrost.dev/ipfs/${id}`);
       }
     }
   }

@@ -383,7 +383,7 @@ export class GoogleCloudStorageService {
       });
 
       if (existingFile) {
-        return cid;
+        return `ipfs://${cid}`;
       }
 
       const response = await this.httpService.axiosRef.get<ArrayBuffer>(imageUrl, {
@@ -406,8 +406,7 @@ export class GoogleCloudStorageService {
         return null;
       }
 
-      const protocol = process.env.NODE_ENV === 'dev' ? 'http://' : 'https://';
-      const fileUrl = `${protocol}${this.appHost}/api/v1/asset-image/${cid}`;
+      const fileUrl = `ipfs://${cid}`;
 
       const newFile = this.fileRepository.create({
         file_key: bucketKey,
@@ -417,7 +416,7 @@ export class GoogleCloudStorageService {
       });
       await this.fileRepository.save(newFile);
 
-      return cid;
+      return `ipfs://${cid}`;
     } catch (error) {
       return null;
     }
