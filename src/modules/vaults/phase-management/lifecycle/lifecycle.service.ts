@@ -230,12 +230,13 @@ export class LifecycleService {
     vault: Vault;
     contributorClaims: Claim[];
     acquirerClaims: Claim[];
+    lpMultiplierRatio?: number;
   }): Promise<{
     acquireMultiplier: [string, string | null, number][];
     adaDistribution: [string, string | null, number][];
     optimalDecimals: number;
   }> {
-    const { vault, contributorClaims, acquirerClaims } = params;
+    const { vault, contributorClaims, acquirerClaims, lpMultiplierRatio } = params;
 
     // Step 1: Calculate multipliers (pure calculation, no mutations)
     const { acquireMultiplier, adaDistribution, recalculatedClaimAmounts, recalculatedLovelaceAmounts } =
@@ -288,7 +289,8 @@ export class LifecycleService {
 
     const optimalDecimals = this.distributionCalculationService.calculateOptimalDecimals(
       vault.ft_token_supply || 1_000_000,
-      minValue === Infinity ? undefined : minValue
+      minValue === Infinity ? undefined : minValue,
+      lpMultiplierRatio
     );
 
     // Step 4: Update vault decimals if changed
@@ -850,7 +852,7 @@ export class LifecycleService {
         const ASSETS_OFFERED_PERCENT = vault.tokens_for_acquires * 0.01;
         const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
         // 3. Calculate LP Tokens
-        const { lpAdaAmount, lpVtAmount, vtPrice, fdv, adjustedVtLpAmount, adaPairMultiplier } =
+        const { lpAdaAmount, lpVtAmount, vtPrice, fdv, adjustedVtLpAmount, adaPairMultiplier, lpMultiplierRatio } =
           this.distributionCalculationService.calculateLpTokens({
             vtSupply,
             totalAcquiredAda,
@@ -1086,6 +1088,7 @@ export class LifecycleService {
           vault,
           contributorClaims: finalContributorClaims,
           acquirerClaims: finalAcquirerClaims,
+          lpMultiplierRatio,
         });
 
         // Submit single update transaction with all multipliers
@@ -1252,7 +1255,7 @@ export class LifecycleService {
       const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
 
       // Calculate LP tokens with 0% for acquirers
-      const { lpAdaAmount, lpVtAmount, vtPrice, fdv, adaPairMultiplier } =
+      const { lpAdaAmount, lpVtAmount, vtPrice, fdv, adaPairMultiplier, lpMultiplierRatio } =
         this.distributionCalculationService.calculateLpTokens({
           vtSupply,
           totalAcquiredAda: 0, // No acquirers
@@ -1486,7 +1489,8 @@ export class LifecycleService {
 
       const optimalDecimals = this.distributionCalculationService.calculateOptimalDecimals(
         vault.ft_token_supply || 1_000_000,
-        minMultiplier === Infinity ? undefined : minMultiplier
+        minMultiplier === Infinity ? undefined : minMultiplier,
+        lpMultiplierRatio
       );
 
       // Update vault decimals if changed

@@ -116,6 +116,8 @@ interface LiquidityPoolResult {
   adjustedVtLpAmount: number;
   /** Multiplier for on-chain ADA pair calculation */
   adaPairMultiplier: number;
+  /** Raw LP multiplier ratio (before flooring) for decimal optimization */
+  lpMultiplierRatio?: number;
 }
 
 interface AcquireMultiplierParams {
@@ -290,7 +292,8 @@ export class DistributionCalculationService {
     const vtPrice = lpVtValue > 0 ? this.round25(lpAdaAmount / lpVtValue) : 0;
 
     // Calculate multiplier for on-chain representation
-    const adaPairMultiplier = totalAcquiredAda > 0 ? Math.floor(lpVtValue / (totalAcquiredAda * 1_000_000)) : 0;
+    const lpMultiplierRatio = totalAcquiredAda > 0 ? lpVtValue / (totalAcquiredAda * 1_000_000) : 0;
+    const adaPairMultiplier = Math.floor(lpMultiplierRatio);
     const adjustedVtLpAmount = adaPairMultiplier * totalAcquiredAda * 1_000_000;
 
     return {
@@ -300,6 +303,7 @@ export class DistributionCalculationService {
       fdv,
       adjustedVtLpAmount,
       adaPairMultiplier,
+      lpMultiplierRatio,
     };
   }
 
@@ -396,22 +400,26 @@ export class DistributionCalculationService {
    * Rules:
    * 1. Always use MIN_DECIMALS (6) as baseline - Cardano standard
    * 2. Increase decimals if small multipliers would floor to 0 (underflow prevention)
-   * 3. Cap at MAX_DECIMALS (8)
-   * 4. Works for any supply from 1M to 1T - bigint storage handles large values
+   * 3. Increase decimals if LP multiplier has significant rounding loss (precision improvement)
+   * 4. Cap at MAX_DECIMALS (8)
+   * 5. Works for any supply from 1M to 1T - bigint storage handles large values
    *
-   * Key insight for underflow prevention:
-   * - If minMultiplier = 0.74 with 6 decimals, it floors to 0 (bad!)
-   * - Increasing to 7 decimals: 0.74 * 10 = 7.4, floors to 7 (good!)
-   * - Extra decimals needed = ceil(-log10(minMultiplier))
+   * Key insights:
+   * - Underflow: If minMultiplier = 0.74 with 6 decimals, it floors to 0 (bad!)
+   *   Increasing to 7 decimals: 0.74 * 10 = 7.4, floors to 7 (good!)
+   * - LP precision: If lpMultiplier = 13.33 with 6 decimals, loss = 2.5%
+   *   Increasing to 8 decimals: 1333.33, loss = 0.025% (100x better!)
    *
    * @param tokenSupply - The token supply (not used for overflow checks - bigint handles it)
    * @param minMultiplier - Optional minimum multiplier value (to prevent underflow to 0)
+   * @param lpMultiplierRatio - Optional LP multiplier ratio (before flooring) for precision optimization
    * @returns Optimal number of decimals (6-8)
    */
-  calculateOptimalDecimals(tokenSupply: number, minMultiplier?: number): number {
+  calculateOptimalDecimals(tokenSupply: number, minMultiplier?: number, lpMultiplierRatio?: number): number {
     const MAX_DECIMALS = 8;
     const MIN_DECIMALS = 6;
     const MIN_VALID_MULTIPLIER = 1;
+    const LP_ROUNDING_LOSS_THRESHOLD = 0.01; // 1% loss threshold
 
     // Calculate extra decimals needed to prevent underflow (multiplier < 1 flooring to 0)
     let extraDecimalsForUnderflow = 0;
@@ -426,13 +434,31 @@ export class DistributionCalculationService {
       );
     }
 
-    // Final decimals: start at 6, add underflow prevention, cap at 8
-    const finalDecimals = Math.min(MIN_DECIMALS + extraDecimalsForUnderflow, MAX_DECIMALS);
+    // Calculate extra decimals needed to reduce LP rounding loss
+    let extraDecimalsForLpPrecision = 0;
+    if (lpMultiplierRatio !== undefined && lpMultiplierRatio > 0) {
+      const fractionalPart = lpMultiplierRatio - Math.floor(lpMultiplierRatio);
+      const roundingLoss = fractionalPart / lpMultiplierRatio;
+
+      // If rounding loss > 1%, increase decimals by 2 (gives 100x improvement)
+      if (roundingLoss > LP_ROUNDING_LOSS_THRESHOLD) {
+        extraDecimalsForLpPrecision = 2;
+        this.logger.warn(
+          `LP multiplier precision loss detected: ratio=${lpMultiplierRatio.toFixed(4)}, ` +
+            `loss=${(roundingLoss * 100).toFixed(2)}%. Increasing decimals by 2 for better precision.`
+        );
+      }
+    }
+
+    // Final decimals: start at 6, add max of underflow or LP precision needs, cap at 8
+    const extraDecimals = Math.max(extraDecimalsForUnderflow, extraDecimalsForLpPrecision);
+    const finalDecimals = Math.min(MIN_DECIMALS + extraDecimals, MAX_DECIMALS);
 
     if (finalDecimals > MIN_DECIMALS) {
       this.logger.log(
-        `Token supply ${tokenSupply}: decimals increased from ${MIN_DECIMALS} to ${finalDecimals} for underflow prevention ` +
-          `(minMultiplier: ${minMultiplier?.toFixed(4) || 'N/A'})`
+        `Token supply ${tokenSupply}: decimals increased from ${MIN_DECIMALS} to ${finalDecimals} ` +
+          `(underflow: ${extraDecimalsForUnderflow}, LP precision: ${extraDecimalsForLpPrecision}, ` +
+          `minMultiplier: ${minMultiplier?.toFixed(4) || 'N/A'}, lpRatio: ${lpMultiplierRatio?.toFixed(4) || 'N/A'})`
       );
     }
 
