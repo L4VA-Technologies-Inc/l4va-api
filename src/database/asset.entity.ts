@@ -1,5 +1,14 @@
 import { Expose } from 'class-transformer';
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, BeforeInsert, BeforeUpdate } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+  BeforeInsert,
+  BeforeUpdate,
+  ValueTransformer,
+} from 'typeorm';
 
 import { AssetType, AssetStatus, AssetOriginType } from '../types/asset.types';
 
@@ -15,6 +24,28 @@ export class ColumnNumericTransformer {
     return parseFloat(data);
   }
 }
+
+export const imageUrlTransformer: ValueTransformer = {
+  to: (value: string) => value,
+  from: (value: string) => {
+    if (!value) return value;
+
+    const protocol = process.env.NODE_ENV === 'dev' ? 'http://' : 'https://';
+    const host = process.env.APP_HOST || 'localhost:3000';
+    const baseUrl = `${protocol}${host}/api/v1/asset-image/`;
+
+    if (!value.includes('/') && !value.includes(':')) {
+      return `${baseUrl}${value}`;
+    }
+
+    if (value.startsWith('ipfs://')) {
+      const ipfsHash = value.replace('ipfs://', '');
+      return `${baseUrl}${ipfsHash}`;
+    }
+
+    return value;
+  },
+};
 
 @Entity('assets')
 export class Asset {
@@ -122,17 +153,8 @@ export class Asset {
   origin_type?: AssetOriginType;
 
   @Expose({ name: 'image' })
-  @Column({ name: 'image', type: 'text', nullable: true })
-  image?: string; // stores ipfs://...
-
-  @Expose({ name: 'imageUrl' })
-  get imageUrl(): string | null {
-    if (!this.image) return null;
-    if (this.image.startsWith('ipfs://')) {
-      return this.image.replace('ipfs://', 'https://ipfs.io/ipfs/');
-    }
-    return this.image; // already HTTP or other protocol
-  }
+  @Column({ name: 'image', type: 'text', nullable: true, transformer: imageUrlTransformer })
+  image?: string;
 
   @Expose({ name: 'decimals' })
   @Column({ name: 'decimals', type: 'int', nullable: true })

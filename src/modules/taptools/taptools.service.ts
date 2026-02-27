@@ -1786,7 +1786,10 @@ export class TaptoolsService {
         valueAda: priceAda * asset.quantity,
         valueUsd: priceUsd * asset.quantity,
         metadata: {
-          image: String((metadata as Record<string, unknown>)?.image || ''),
+          image: String((metadata as Record<string, unknown>)?.image || '').replace(
+            'ipfs://',
+            'https://ipfs.blockfrost.dev/ipfs/'
+          ),
           policyId: details.policy_id,
           decimals: details.metadata?.decimals || 0,
           description: String((metadata as Record<string, unknown>)?.description || ''),

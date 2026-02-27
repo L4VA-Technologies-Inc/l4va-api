@@ -10,7 +10,6 @@ import {
   ParseFilePipe,
   ParseUUIDPipe,
   Post,
-  Req,
   Res,
   UploadedFile,
   UseGuards,
@@ -18,7 +17,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags } from '@nestjs/swagger';
-import { Express, Response, Request } from 'express';
+import { Express, Response } from 'express';
 
 import { AuthGuard } from '../../auth/auth.guard';
 
@@ -52,14 +51,12 @@ export class GoogleCloudStorageController {
       })
     )
     file: Express.Multer.File,
-    @Req() req: Request,
     @Body() body: UploadImageDto
   ): Promise<FileEntity> {
     if (!file.mimetype?.startsWith('image/')) {
       throw new BadRequestException('Only image files are allowed');
     }
-    const { host } = req.headers;
-    return await this.gcsService.uploadImage(file, host, body);
+    return await this.gcsService.uploadImage(file, body);
   }
 
   @ApiDoc({
@@ -86,6 +83,32 @@ export class GoogleCloudStorageController {
       this.logger.error(`Error getting image ${id}:`, error);
       if (!res.headersSent) {
         res.status(404).json({ message: error.message || 'Image not found' });
+      }
+    }
+  }
+
+  @ApiDoc({
+    summary: 'Get asset image',
+    description: 'Stream a contributed asset image (WebP) stored in the asset-images folder',
+    status: 200,
+  })
+  @Get('/asset-image/:id')
+  async getAssetImageFile(@Param('id') id: string, @Res() res: Response): Promise<void> {
+    try {
+      const { stream, contentType } = await this.gcsService.getAssetImage(id);
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+
+      stream.on('error', () => {
+        if (!res.headersSent) {
+          res.redirect(`https://ipfs.blockfrost.dev/ipfs/${id}`);
+        }
+      });
+
+      stream.pipe(res);
+    } catch (error) {
+      if (!res.headersSent) {
+        res.redirect(`https://ipfs.blockfrost.dev/ipfs/${id}`);
       }
     }
   }
