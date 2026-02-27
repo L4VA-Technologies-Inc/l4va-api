@@ -22,6 +22,7 @@ export class GoogleCloudStorageService {
   private readonly bucketName: string;
   private readonly bucketPrefix: string;
   private readonly appHost: string;
+  private readonly ASSET_IMAGES_FOLDER = 'asset-images';
 
   private readonly logger = new Logger(GoogleCloudStorageService.name);
 
@@ -358,8 +359,6 @@ export class GoogleCloudStorageService {
     }
   }
 
-  static readonly ASSET_IMAGES_FOLDER = 'asset-images';
-
   /**
    * Downloads an asset image from an IPFS URI, converts it to WebP
    * (animated WebP for GIFs) and stores it under the dedicated
@@ -376,7 +375,7 @@ export class GoogleCloudStorageService {
       const cid = imageUrl.split('/').pop()?.split('?')[0];
       if (!cid) return null;
 
-      const bucketKey = `${GoogleCloudStorageService.ASSET_IMAGES_FOLDER}/${cid}`;
+      const bucketKey = `${this.ASSET_IMAGES_FOLDER}/${cid}`;
 
       const existingFile = await this.fileRepository.findOne({
         where: { file_key: bucketKey },
@@ -423,7 +422,7 @@ export class GoogleCloudStorageService {
   }
 
   async getAssetImage(id: string): Promise<{ stream: NodeJS.ReadableStream; contentType: string }> {
-    const bucketKey = `${GoogleCloudStorageService.ASSET_IMAGES_FOLDER}/${id}`;
+    const bucketKey = `${this.ASSET_IMAGES_FOLDER}/${id}`;
     const fileName = this.getFullPath(bucketKey);
 
     try {
