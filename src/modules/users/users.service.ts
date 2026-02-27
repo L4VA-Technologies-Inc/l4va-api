@@ -273,7 +273,7 @@ export class UsersService {
     );
   }
 
-  async uploadProfileImage(userId: string, file: Express.Multer.File, host: string): Promise<User> {
+  async uploadProfileImage(userId: string, file: Express.Multer.File): Promise<User> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
       relations: ['profile_image'],
@@ -283,7 +283,7 @@ export class UsersService {
       throw new BadRequestException('User not found');
     }
 
-    const uploadResult = await this.gcsService.uploadImage(file, host);
+    const uploadResult = await this.gcsService.uploadImage(file);
 
     const fileEntity = this.filesRepository.create({
       file_key: uploadResult.file_key,
@@ -301,7 +301,7 @@ export class UsersService {
     return this.usersRepository.save(user);
   }
 
-  async uploadBannerImage(userId: string, file: Express.Multer.File, host: string): Promise<User> {
+  async uploadBannerImage(userId: string, file: Express.Multer.File): Promise<User> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
       relations: ['banner_image'],
@@ -311,7 +311,7 @@ export class UsersService {
       throw new BadRequestException('User not found');
     }
 
-    const uploadResult = await this.gcsService.uploadImage(file, host);
+    const uploadResult = await this.gcsService.uploadImage(file);
 
     // Create or update file entity
     const fileEntity = this.filesRepository.create({

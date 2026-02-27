@@ -14,6 +14,7 @@ import { Proposal } from '@/database/proposal.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { GoogleCloudStorageService } from '@/modules/google_cloud/google_bucket/bucket.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import {
   GetTransactionsDto,
@@ -39,7 +40,8 @@ export class TransactionsService {
     @InjectRepository(Proposal)
     private readonly proposalRepository: Repository<Proposal>,
     private readonly taptoolsService: TaptoolsService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly gcsService: GoogleCloudStorageService
   ) {
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
@@ -194,6 +196,24 @@ export class TransactionsService {
 
     // Bulk insert all assets in a single transaction
     if (assetsToCreate.length > 0) {
+      const uploadPromises = new Map();
+
+      await Promise.allSettled(
+        assetsToCreate.map(async asset => {
+          if (asset.image) {
+            if (!uploadPromises.has(asset.image)) {
+              uploadPromises.set(asset.image, this.gcsService.uploadAssetImage(asset.image));
+            }
+
+            const bucketUrl = await uploadPromises.get(asset.image);
+
+            if (bucketUrl) {
+              asset.image = bucketUrl;
+            }
+          }
+        })
+      );
+
       await this.assetRepository.save(assetsToCreate);
 
       // Clear metadata after successful asset creation

@@ -5,6 +5,7 @@ import * as process from 'process';
 import { Storage } from '@google-cloud/storage';
 import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as csv from 'csv-parse';
 import sharp from 'sharp';
@@ -17,17 +18,21 @@ import { FileEntity } from '@/database/file.entity';
 
 @Injectable()
 export class GoogleCloudStorageService {
-  private storage: Storage;
-  private bucketName: string;
-  private bucketPrefix: string;
+  private readonly storage: Storage;
+  private readonly bucketName: string;
+  private readonly bucketPrefix: string;
+  private readonly appHost: string;
 
   private readonly logger = new Logger(GoogleCloudStorageService.name);
 
   constructor(
     @InjectRepository(FileEntity)
     private readonly fileRepository: Repository<FileEntity>,
-    private readonly httpService: HttpService
+    private readonly httpService: HttpService,
+    private readonly configService: ConfigService
   ) {
+    this.appHost = this.configService.get<string>('APP_HOST');
+
     const credentialsPath = process.env.GOOGLE_BUCKET_CREDENTIALS;
     const bucketConfig = process.env.GOOGLE_BUCKET_NAME;
 
@@ -301,7 +306,7 @@ export class GoogleCloudStorageService {
     }
   }
 
-  async uploadImage(file: Express.Multer.File, host: string, body?: UploadImageDto): Promise<FileEntity> {
+  async uploadImage(file: Express.Multer.File, body?: UploadImageDto): Promise<FileEntity> {
     try {
       let processedImageBuffer = file.buffer;
       let mimeType = file.mimetype;
@@ -331,7 +336,7 @@ export class GoogleCloudStorageService {
 
       if (!uploadResult) throw new BadRequestException('Failed to upload file to Google Cloud Storage');
 
-      const fileUrl = `${protocol}${host}/api/v1/image/${uploadResult.Key}`;
+      const fileUrl = `${protocol}${this.appHost}/api/v1/image/${uploadResult.Key}`;
       this.logger.log(`File uploaded successfully. Key: ${uploadResult.Key}, URL: ${fileUrl}`);
 
       const newFile = this.fileRepository.create({
@@ -347,6 +352,86 @@ export class GoogleCloudStorageService {
     } catch (error) {
       this.logger.error('Error uploading image file:', error);
       throw new BadRequestException('Failed to upload image file');
+    }
+  }
+
+  static readonly ASSET_IMAGES_FOLDER = 'asset-images';
+
+  /**
+   * Downloads an asset image from an IPFS URI, converts it to WebP
+   * (animated WebP for GIFs) and stores it under the dedicated
+   * `asset-images/` folder in GCS.
+   *
+   * @param imageUrl - Source IPFS image URL (`ipfs://…`).
+   * @returns The full serving URL (e.g. `https://{APP_HOST}/api/v1/asset-image/{uuid}`),
+   *          or `null` when the download / conversion fails (original URL kept as fallback).
+   */
+  async uploadAssetImage(imageUrl: string): Promise<string | null> {
+    try {
+      if (!imageUrl) return null;
+
+      this.logger.log(`Fetching asset image for WebP conversion: ${imageUrl}`);
+
+      const response = await this.httpService.axiosRef.get<ArrayBuffer>(imageUrl, {
+        responseType: 'arraybuffer',
+        timeout: 30_000,
+      });
+
+      const imageBuffer = Buffer.from(response.data);
+      const contentType: string = response.headers['content-type'] ?? '';
+      const isAnimated = contentType.includes('gif') || contentType.includes('webp');
+
+      const webpBuffer = await sharp(imageBuffer, { animated: isAnimated })
+        .resize(128, 128, { fit: 'inside' })
+        .webp({ quality: 80, lossless: false, alphaQuality: 80 })
+        .toBuffer();
+
+      const fileId = uuid();
+      const bucketKey = `${GoogleCloudStorageService.ASSET_IMAGES_FOLDER}/${fileId}`;
+      const uploadResult = await this.uploadFile(webpBuffer, bucketKey, 'image/webp');
+
+      if (!uploadResult) {
+        this.logger.warn(`Failed to upload asset WebP for ${imageUrl}`);
+        return null;
+      }
+
+      const protocol = process.env.NODE_ENV === 'dev' ? 'http://' : 'https://';
+      const fileUrl = `${protocol}${this.appHost}/api/v1/asset-image/${fileId}`;
+
+      const newFile = this.fileRepository.create({
+        file_key: bucketKey,
+        file_url: fileUrl,
+        file_name: `${fileId}.webp`,
+        file_type: 'image/webp',
+      });
+      await this.fileRepository.save(newFile);
+
+      this.logger.log(`Asset image uploaded. Key: ${bucketKey}, URL: ${fileUrl}`);
+      return fileUrl;
+    } catch (error) {
+      this.logger.warn(`uploadAssetImage failed for "${imageUrl}": ${error.message}`);
+      return null;
+    }
+  }
+
+  async getAssetImage(fileId: string): Promise<{ stream: NodeJS.ReadableStream; contentType: string }> {
+    const bucketKey = `${GoogleCloudStorageService.ASSET_IMAGES_FOLDER}/${fileId}`;
+    const fileName = this.getFullPath(bucketKey);
+
+    try {
+      const bucket = this.getStorage().bucket(this.bucketName);
+      const stream = bucket.file(fileName).createReadStream({ validation: false });
+
+      stream.on('error', err => {
+        this.logger.error(`Stream error for asset image ${fileId}:`, err);
+      });
+
+      return { stream, contentType: 'image/webp' };
+    } catch (error) {
+      if (error.code === 404 || error.message?.includes('No such object')) {
+        throw new BadRequestException(`Asset image ${fileId} not found`);
+      }
+      throw new BadRequestException(`Failed to retrieve asset image: ${error.message}`);
     }
   }
 
