@@ -294,8 +294,8 @@ export class AssetsService {
 
     const totalAcquiredUsd = totalAcquired * adaPrice;
 
-    const totalAdaLiquidityAda = marketData?.totalAdaLiquidity ? Number(marketData.totalAdaLiquidity) : 0;
-    const totalAdaLiquidityUsd = totalAdaLiquidityAda ? totalAdaLiquidityAda * adaPrice : 0;
+    const totalAdaLiquidityAda = marketData?.totalAdaLiquidity != null ? Number(marketData.totalAdaLiquidity) : null;
+    const totalAdaLiquidityUsd = totalAdaLiquidityAda != null ? totalAdaLiquidityAda * adaPrice : null;
 
     return {
       items: assets.map(asset => instanceToPlain(asset)),

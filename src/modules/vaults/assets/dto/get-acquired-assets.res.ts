@@ -40,7 +40,7 @@ export class GetAcquiredAssetsRes {
     example: 15000.5,
     nullable: true,
   })
-  totalAdaLiquidityAda: number;
+  totalAdaLiquidityAda: number | null;
 
   @Expose()
   @ApiProperty({
@@ -48,5 +48,5 @@ export class GetAcquiredAssetsRes {
     example: 9750.32,
     nullable: true,
   })
-  totalAdaLiquidityUsd: number;
+  totalAdaLiquidityUsd: number | null;
 }

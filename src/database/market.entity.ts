@@ -47,7 +47,7 @@ export class Market {
   delta: number | null; // Mkt Cap / TVL (%)
 
   @Column({ type: 'decimal', precision: 20, scale: 8, nullable: true, name: 'totalAdaLiquidity' })
-  totalAdaLiquidity: number; // Total ADA liquidity across all DEX pools
+  totalAdaLiquidity: number | null; // Total ADA liquidity across all DEX pools
 
   @CreateDateColumn({ type: 'timestamptz' })
   created_at: Date;

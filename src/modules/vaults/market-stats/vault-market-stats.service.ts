@@ -445,6 +445,7 @@ export class VaultMarketStatsService {
    *   - price_change_30d: Price change percentage over 30 days
    *   - tvl: Optional total value locked (used for delta calculation)
    *   - has_market_data: Optional flag indicating if LP exists on DEX
+   *   - totalAdaLiquidity: Optional total ADA across all DEX pools from DexHunter. Set to null when no LP exists or when DexHunter returns no liquidity. Set to a number (>= 0) when LP exists and liquidity is available.
    * @returns The saved Market entity (either updated or newly created)
    */
   async upsertMarketData(data: {
