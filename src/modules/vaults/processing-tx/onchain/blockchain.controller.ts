@@ -23,7 +23,6 @@ import { VaultContributionService } from './vault-contribution.service';
 
 import { Vault } from '@/database/vault.entity';
 import { AuthGuard } from '@/modules/auth/auth.guard';
-import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
 import { VaultStatus } from '@/types/vault.types';
 
 @ApiTags('blockchain')
@@ -57,10 +56,7 @@ export class BlockchainController {
     type: TransactionSubmitResponseDto,
   })
   @UseGuards(AuthGuard)
-  async submitTransaction(
-    @Request() req: AuthRequest,
-    @Body() params: SubmitTransactionDto
-  ): Promise<TransactionSubmitResponseDto> {
+  async submitTransaction(@Body() params: SubmitTransactionDto): Promise<TransactionSubmitResponseDto> {
     return this.vaultContributionService.submitContributionTransaction(params);
   }
 
