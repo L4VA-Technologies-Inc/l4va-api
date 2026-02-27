@@ -293,14 +293,20 @@ export class LifecycleService {
       lpMultiplierRatio
     );
 
-    // Step 4: Update vault decimals if changed
-    if (optimalDecimals !== vault.ft_token_decimals) {
+    // Step 4: Update vault decimals if needed (only upgrade, never downgrade)
+    // Once decimals are set higher, all multipliers are based on that precision
+    // Downgrading would break the calculation consistency
+    if (optimalDecimals > vault.ft_token_decimals) {
       this.logger.log(
-        `Updating vault ${vault.id} decimals from ${vault.ft_token_decimals} to ${optimalDecimals} ` +
+        `Upgrading vault ${vault.id} decimals from ${vault.ft_token_decimals} to ${optimalDecimals} ` +
           `(maxMultiplier: ${maxMultiplier}, maxAdaDistribution: ${maxAdaDistribution})`
       );
       vault.ft_token_decimals = optimalDecimals;
       await this.vaultRepository.update(vault.id, { ft_token_decimals: optimalDecimals });
+    } else if (optimalDecimals < vault.ft_token_decimals) {
+      this.logger.log(
+        `Keeping vault ${vault.id} decimals at ${vault.ft_token_decimals} (optimal: ${optimalDecimals}, but never downgrade)`
+      );
     }
 
     return {
