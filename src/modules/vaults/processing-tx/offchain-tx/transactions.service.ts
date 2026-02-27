@@ -196,19 +196,13 @@ export class TransactionsService {
 
     // Bulk insert all assets in a single transaction
     if (assetsToCreate.length > 0) {
-      const uploadPromises = new Map();
-
       await Promise.allSettled(
         assetsToCreate.map(async asset => {
           if (asset.image) {
-            if (!uploadPromises.has(asset.image)) {
-              uploadPromises.set(asset.image, this.gcsService.uploadAssetImage(asset.image));
-            }
+            const fileKey = await this.gcsService.uploadAssetImage(asset.image);
 
-            const bucketUrl = await uploadPromises.get(asset.image);
-
-            if (bucketUrl) {
-              asset.image = bucketUrl;
+            if (fileKey) {
+              asset.image = fileKey;
             }
           }
         })

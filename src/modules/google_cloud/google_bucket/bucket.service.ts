@@ -373,7 +373,18 @@ export class GoogleCloudStorageService {
     try {
       if (!imageUrl) return null;
 
-      this.logger.log(`Fetching asset image for WebP conversion: ${imageUrl}`);
+      const cid = imageUrl.split('/').pop()?.split('?')[0];
+      if (!cid) return null;
+
+      const bucketKey = `${GoogleCloudStorageService.ASSET_IMAGES_FOLDER}/${cid}`;
+
+      const existingFile = await this.fileRepository.findOne({
+        where: { file_key: bucketKey },
+      });
+
+      if (existingFile) {
+        return cid;
+      }
 
       const response = await this.httpService.axiosRef.get<ArrayBuffer>(imageUrl, {
         responseType: 'arraybuffer',
@@ -389,36 +400,31 @@ export class GoogleCloudStorageService {
         .webp({ quality: 80, lossless: false, alphaQuality: 80 })
         .toBuffer();
 
-      const fileId = uuid();
-      const bucketKey = `${GoogleCloudStorageService.ASSET_IMAGES_FOLDER}/${fileId}`;
       const uploadResult = await this.uploadFile(webpBuffer, bucketKey, 'image/webp');
 
       if (!uploadResult) {
-        this.logger.warn(`Failed to upload asset WebP for ${imageUrl}`);
         return null;
       }
 
       const protocol = process.env.NODE_ENV === 'dev' ? 'http://' : 'https://';
-      const fileUrl = `${protocol}${this.appHost}/api/v1/asset-image/${fileId}`;
+      const fileUrl = `${protocol}${this.appHost}/api/v1/asset-image/${cid}`;
 
       const newFile = this.fileRepository.create({
         file_key: bucketKey,
         file_url: fileUrl,
-        file_name: `${fileId}.webp`,
+        file_name: `${cid}.webp`,
         file_type: 'image/webp',
       });
       await this.fileRepository.save(newFile);
 
-      this.logger.log(`Asset image uploaded. Key: ${bucketKey}, URL: ${fileUrl}`);
-      return fileUrl;
+      return cid;
     } catch (error) {
-      this.logger.warn(`uploadAssetImage failed for "${imageUrl}": ${error.message}`);
       return null;
     }
   }
 
-  async getAssetImage(fileId: string): Promise<{ stream: NodeJS.ReadableStream; contentType: string }> {
-    const bucketKey = `${GoogleCloudStorageService.ASSET_IMAGES_FOLDER}/${fileId}`;
+  async getAssetImage(id: string): Promise<{ stream: NodeJS.ReadableStream; contentType: string }> {
+    const bucketKey = `${GoogleCloudStorageService.ASSET_IMAGES_FOLDER}/${id}`;
     const fileName = this.getFullPath(bucketKey);
 
     try {
@@ -426,13 +432,13 @@ export class GoogleCloudStorageService {
       const stream = bucket.file(fileName).createReadStream({ validation: false });
 
       stream.on('error', err => {
-        this.logger.error(`Stream error for asset image ${fileId}:`, err);
+        this.logger.error(`Stream error for asset image ${id}:`, err);
       });
 
       return { stream, contentType: 'image/webp' };
     } catch (error) {
       if (error.code === 404 || error.message?.includes('No such object')) {
-        throw new BadRequestException(`Asset image ${fileId} not found`);
+        throw new BadRequestException(`Asset image ${id} not found`);
       }
       throw new BadRequestException(`Failed to retrieve asset image: ${error.message}`);
     }

@@ -93,7 +93,7 @@ export class GoogleCloudStorageController {
     status: 200,
   })
   @Get('/asset-image/:id')
-  async getAssetImageFile(@Param('id', ParseUUIDPipe) id: string, @Res() res: Response): Promise<void> {
+  async getAssetImageFile(@Param('id') id: string, @Res() res: Response): Promise<void> {
     try {
       const { stream, contentType } = await this.gcsService.getAssetImage(id);
       res.setHeader('Content-Type', contentType);

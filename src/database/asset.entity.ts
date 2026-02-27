@@ -25,13 +25,21 @@ export class ColumnNumericTransformer {
   }
 }
 
-const imageUrlTransformer: ValueTransformer = {
+export const imageUrlTransformer: ValueTransformer = {
   to: (value: string) => value,
   from: (value: string) => {
     if (!value) return value;
+
+    if (!value.includes('/') && !value.includes(':')) {
+      const protocol = process.env.NODE_ENV === 'dev' ? 'http://' : 'https://';
+      const host = process.env.APP_HOST || 'localhost:3000';
+      return `${protocol}${host}/api/v1/asset-image/${value}`;
+    }
+
     if (value.startsWith('ipfs://')) {
       return value.replace('ipfs://', 'https://ipfs.blockfrost.dev/ipfs/');
     }
+
     return value;
   },
 };
