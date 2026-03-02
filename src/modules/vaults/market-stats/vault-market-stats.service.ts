@@ -14,10 +14,20 @@ import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { VaultStatus } from '@/types/vault.types';
 
 /**
- * Service responsible for fetching and updating vault token market statistics from Taptools API
- * Runs every 2 hours to get fresh market data from external APIs (Taptools, DexHunter)
- * Updates: FDV, vt_price, market cap, price changes, and checks LP existence
- * Processes both locked and expansion vaults for comprehensive market data coverage
+ * Service responsible for fetching and updating vault token market statistics from external APIs
+ * Runs every 2 hours to get fresh market data from DexHunter and Taptools
+ *
+ * DATA SOURCES & RESPONSIBILITIES:
+ * 1. DexHunter (ALWAYS called): Tracks total ADA liquidity across ALL DEX pools
+ *    - Provides comprehensive cross-DEX liquidity aggregation
+ *    - Returns totalAdaLiquidity (stored in market.totalAdaLiquidity)
+ *    - Determines if any LP exists for the vault token
+ *
+ * 2. Taptools (called if LP exists): Provides OHLCV price data and market metrics
+ *    - FDV, vt_price, market cap, price changes (1h, 24h, 7d, 30d)
+ *    - Historical OHLCV data for gains calculations
+ *
+ * Updates both locked and expansion vaults (including community-created LPs)
  *
  * IMPORTANT - LP Vault Gains Calculation:
  * For locked vaults with active LP, user gains are calculated using full historical price data:
@@ -85,8 +95,13 @@ export class VaultMarketStatsService {
 
   /**
    * Update market statistics for all vault tokens
-   * Fetches data from Taptools API with DexHunter fallback for newly created tokens
+   *
+   * Process:
+   * 1. DexHunter API: Always called first to get totalAdaLiquidity across all DEX pools
+   * 2. Taptools API: Called if DexHunter confirms liquidity exists (for OHLCV/price data)
+   *
    * Processes both locked and expansion vaults (including those without LP configuration)
+   * Supports community-created LPs that weren't configured during vault creation
    */
   async updateVaultTokensMarketStats(): Promise<void> {
     if (!this.isMainnet) {
@@ -127,49 +142,40 @@ export class VaultMarketStatsService {
         const unit = `${vault.script_hash}${vault.asset_vault_name}`;
 
         try {
-          // OPTIMIZATION: Use cheaper DexHunter API first to check if LP exists
-          // Only call expensive Taptools API if DexHunter confirms liquidity
-          // Exception: If vault already has confirmed LP, skip DexHunter check and go straight to Taptools
+          // Step 1: ALWAYS call DexHunter to get comprehensive liquidity data
+          // DexHunter aggregates liquidity across ALL DEX pools and returns totalAdaLiquidity
+          // This data is essential and stored in market.totalAdaLiquidity
+          const liquidityCheck = await this.dexHunterPricingService.checkTokenLiquidity(unit);
 
-          let shouldCallTaptools = vault.has_active_lp === true;
+          if (liquidityCheck?.hasLiquidity) {
+            this.logger.log(
+              `${vault.name}: DexHunter detected liquidity (${liquidityCheck.totalAdaLiquidity.toFixed(2)} ADA across ${liquidityCheck.pools.length} pool(s))`
+            );
+          } else {
+            this.logger.debug(`${vault.name}: No liquidity detected by DexHunter, skipping Taptools API`);
 
-          if (!shouldCallTaptools) {
-            // Check liquidity using DexHunter (cheaper API)
-            const liquidityCheck = await this.dexHunterPricingService.checkTokenLiquidity(unit);
+            // Update LP status to false and record check time
+            await this.vaultRepository.update({ id: vault.id }, { has_active_lp: false, lp_last_checked: new Date() });
 
-            if (liquidityCheck?.hasLiquidity) {
-              this.logger.log(
-                `${vault.name}: DexHunter detected liquidity (${liquidityCheck.totalAdaLiquidity.toFixed(2)} ADA across ${liquidityCheck.pools.length} pool(s))`
-              );
-              shouldCallTaptools = true;
-            } else {
-              this.logger.debug(`${vault.name}: No liquidity detected by DexHunter, skipping Taptools API`);
+            // Update market stats with no market data (but still record the check)
+            await this.upsertMarketData({
+              vault_id: vault.id,
+              circSupply: 0,
+              mcap: 0,
+              totalSupply: 0,
+              price_change_1h: 0,
+              price_change_24h: 0,
+              price_change_7d: 0,
+              price_change_30d: 0,
+              tvl: vault.total_assets_cost_ada || 0,
+              has_market_data: false,
+              totalAdaLiquidity: null,
+            });
 
-              // Update LP status to false and record check time
-              await this.vaultRepository.update(
-                { id: vault.id },
-                { has_active_lp: false, lp_last_checked: new Date() }
-              );
-
-              // Update market stats with no data
-              await this.upsertMarketData({
-                vault_id: vault.id,
-                circSupply: 0,
-                mcap: 0,
-                totalSupply: 0,
-                price_change_1h: 0,
-                price_change_24h: 0,
-                price_change_7d: 0,
-                price_change_30d: 0,
-                tvl: vault.total_assets_cost_ada || 0,
-                has_market_data: false,
-              });
-
-              return null; // Skip Taptools API call
-            }
+            return null; // Skip Taptools since no LP exists
           }
 
-          // Call Taptools API (only if LP exists based on DexHunter or previous confirmation)
+          // Step 2: Call Taptools API for OHLCV/price data (only if DexHunter confirmed liquidity)
           const [{ data: mcapData }, { data: priceChangeData }] = await Promise.all([
             this.axiosTapToolsInstance.get('/token/mcap', { params: { unit } }),
             this.axiosTapToolsInstance.get('/token/prices/chg', {
@@ -207,7 +213,7 @@ export class VaultMarketStatsService {
           };
           await this.vaultRepository.update({ id: vault.id }, lpStatusUpdate);
 
-          // Always update market stats table (even with null values to track attempts)
+          // Update market stats table with combined data from DexHunter + Taptools
           const marketData = {
             vault_id: vault.id,
             circSupply: mcapData?.circSupply || 0,
@@ -218,7 +224,8 @@ export class VaultMarketStatsService {
             price_change_7d: priceChangeData?.['7d'] || 0,
             price_change_30d: priceChangeData?.['30d'] || 0,
             tvl: vault.total_assets_cost_ada || 0, // Pass TVL for delta calculation (Mkt Cap / TVL %)
-            has_market_data: hasMarketData, // Track if LP actually exists on DEX
+            has_market_data: hasMarketData, // Track if LP exists (based on Taptools data)
+            totalAdaLiquidity: liquidityCheck?.totalAdaLiquidity ?? null, // Total ADA across all DEX pools (from DexHunter)
           };
 
           await this.upsertMarketData(marketData);
@@ -438,6 +445,7 @@ export class VaultMarketStatsService {
    *   - price_change_30d: Price change percentage over 30 days
    *   - tvl: Optional total value locked (used for delta calculation)
    *   - has_market_data: Optional flag indicating if LP exists on DEX
+   *   - totalAdaLiquidity: Optional total ADA across all DEX pools from DexHunter. Set to null when no LP exists or when DexHunter returns no liquidity. Set to a number (>= 0) when LP exists and liquidity is available.
    * @returns The saved Market entity (either updated or newly created)
    */
   async upsertMarketData(data: {
@@ -451,6 +459,7 @@ export class VaultMarketStatsService {
     price_change_30d: number;
     tvl?: number;
     has_market_data?: boolean;
+    totalAdaLiquidity?: number | null;
   }): Promise<Market> {
     const calculateDelta = (mcap: number, tvl: number | undefined): number | null => {
       if (!mcap || !tvl || tvl === 0) return null;
