@@ -104,17 +104,19 @@ export async function loadSecrets(): Promise<void> {
       return;
     }
   } else {
-    // Production/Testnet: use environment variable (no file on disk)
-    if (process.env.GCP_SERVICE_ACCOUNT_JSON) {
+    // Production/Testnet: use base64-encoded environment variable (no file on disk)
+    if (process.env.GCP_SERVICE_ACCOUNT_JSON_BASE64) {
       try {
-        credentials = JSON.parse(process.env.GCP_SERVICE_ACCOUNT_JSON);
-        console.log('✅ Using GCP credentials from environment variable (no file on disk)');
+        const base64String = process.env.GCP_SERVICE_ACCOUNT_JSON_BASE64;
+        const jsonString = Buffer.from(base64String, 'base64').toString('utf8');
+        credentials = JSON.parse(jsonString);
+        console.log('✅ Using GCP credentials from base64 env var (no file on disk)');
       } catch (e) {
-        console.warn('Failed to parse GCP_SERVICE_ACCOUNT_JSON:', e.message || e);
+        console.warn('Failed to decode GCP_SERVICE_ACCOUNT_JSON_BASE64:', e.message || e);
         return;
       }
     } else {
-      console.warn('GCP_SERVICE_ACCOUNT_JSON not set for production/testnet, skipping secrets load.');
+      console.warn('GCP_SERVICE_ACCOUNT_JSON_BASE64 not set for production/testnet, skipping secrets load.');
       return;
     }
   }

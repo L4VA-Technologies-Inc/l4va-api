@@ -35,9 +35,9 @@ jobs:
           GOOGLE_BUCKET: ${{ secrets.GOOGLE_BUCKET }}
         run: |
           echo "$TESTNET_ENV_VARS" > .env
-          echo "GCP_SERVICE_ACCOUNT_JSON=$(echo $TESTNET_GOOGLE_SECRETS | base64 -d)" >> .env
-          echo "GOOGLE_BUCKET_CREDENTIALS=$(echo $GOOGLE_BUCKET | base64 -d)" >> .env
-          echo "Created TESTNET .env with GCP credentials"
+          echo "GCP_SERVICE_ACCOUNT_JSON_BASE64=$TESTNET_GOOGLE_SECRETS" >> .env
+          echo "GOOGLE_BUCKET_CREDENTIALS_BASE64=$GOOGLE_BUCKET" >> .env
+          echo "Created TESTNET .env with GCP credentials (base64)"
 
       - name: Save logs before deploy
         run: |
@@ -115,9 +115,9 @@ jobs:
           GOOGLE_BUCKET: ${{ secrets.GOOGLE_BUCKET }}
         run: |
           echo "$MAINNET_ENV_VARS" > .env
-          echo "GCP_SERVICE_ACCOUNT_JSON=$(echo $MAINNET_GOOGLE_SECRETS | base64 -d)" >> .env
-          echo "GOOGLE_BUCKET_CREDENTIALS=$(echo $GOOGLE_BUCKET | base64 -d)" >> .env
-          echo "Created MAINNET .env with GCP credentials"
+          echo "GCP_SERVICE_ACCOUNT_JSON_BASE64=$MAINNET_GOOGLE_SECRETS" >> .env
+          echo "GOOGLE_BUCKET_CREDENTIALS_BASE64=$GOOGLE_BUCKET" >> .env
+          echo "Created MAINNET .env with GCP credentials (base64)"
 
       - name: Save logs before deploy
         run: |

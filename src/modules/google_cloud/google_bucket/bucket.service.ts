@@ -48,13 +48,15 @@ export class GoogleCloudStorageService {
 
     const nodeEnv = process.env.NODE_ENV;
     const isDevelopment = nodeEnv === 'dev' || nodeEnv === 'development';
-    const credentialsJson = process.env.GOOGLE_BUCKET_CREDENTIALS;
 
-    if (!credentialsJson) {
-      throw new Error('GOOGLE_BUCKET_CREDENTIALS environment variable is required');
-    }
-
+    // For development: expect file path in GOOGLE_BUCKET_CREDENTIALS
+    // For production/testnet: expect base64-encoded JSON in GOOGLE_BUCKET_CREDENTIALS_BASE64
     if (isDevelopment) {
+      const credentialsJson = process.env.GOOGLE_BUCKET_CREDENTIALS;
+      if (!credentialsJson) {
+        throw new Error('GOOGLE_BUCKET_CREDENTIALS environment variable is required for development');
+      }
+
       // Local development: treat GOOGLE_BUCKET_CREDENTIALS as a file path
       const resolvedCredentialsPath = path.resolve(process.cwd(), credentialsJson);
 
@@ -70,17 +72,23 @@ export class GoogleCloudStorageService {
       });
       this.logger.log('✅ Initialized Google Cloud Storage from file (dev mode)');
     } else {
-      // Production/Testnet: treat GOOGLE_BUCKET_CREDENTIALS as JSON string (no file on disk)
+      // Production/Testnet: use base64-encoded credentials (no file on disk)
+      const credentialsBase64 = process.env.GOOGLE_BUCKET_CREDENTIALS_BASE64;
+      if (!credentialsBase64) {
+        throw new Error('GOOGLE_BUCKET_CREDENTIALS_BASE64 environment variable is required for production/testnet');
+      }
+
       try {
-        const credentials = JSON.parse(credentialsJson);
+        const jsonString = Buffer.from(credentialsBase64, 'base64').toString('utf8');
+        const credentials = JSON.parse(jsonString);
         this.storage = new Storage({
           credentials: credentials,
           projectId: credentials.project_id,
         });
-        this.logger.log('✅ Initialized Google Cloud Storage from environment variable (no file on disk)');
+        this.logger.log('✅ Initialized Google Cloud Storage from base64 env var (no file)');
       } catch (error) {
-        this.logger.error('Failed to parse GOOGLE_BUCKET_CREDENTIALS as JSON:', error.message);
-        throw new Error('GOOGLE_BUCKET_CREDENTIALS must be valid JSON for production/testnet');
+        this.logger.error('Failed to decode GOOGLE_BUCKET_CREDENTIALS_BASE64:', error.message || error);
+        throw new Error('GOOGLE_BUCKET_CREDENTIALS_BASE64 must be valid base64-encoded JSON for production/testnet');
       }
     }
   }
