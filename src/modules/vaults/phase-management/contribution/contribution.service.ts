@@ -87,7 +87,7 @@ export class ContributionService {
         .addSelect('COALESCE(SUM(asset.quantity), 0)', 'totalQuantity')
         .where('asset.vault_id = :vaultId', { vaultId })
         .andWhere('asset.status IN (:...statuses)', {
-          statuses: [AssetStatus.LOCKED, AssetStatus.PENDING],
+          statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED],
         })
         .andWhere('asset.origin_type = :originType', {
           originType: AssetOriginType.CONTRIBUTED,
@@ -276,7 +276,9 @@ export class ContributionService {
         .addSelect('COALESCE(SUM(asset.quantity), 0)', 'ftQuantity')
         .innerJoin('asset.transaction', 'tx')
         .where('asset.vault_id = :vaultId', { vaultId })
-        .andWhere('asset.status IN (:...statuses)', { statuses: [AssetStatus.LOCKED, AssetStatus.PENDING] })
+        .andWhere('asset.status IN (:...statuses)', {
+          statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED],
+        })
         .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
         .andWhere('tx.created_at >= (SELECT expansion_phase_start FROM vaults WHERE id = :vaultId)', { vaultId })
         .groupBy('asset.type')

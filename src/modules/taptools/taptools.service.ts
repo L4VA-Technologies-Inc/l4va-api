@@ -747,10 +747,6 @@ export class TaptoolsService {
 
     // Group assets and track acquired ADA in one pass
     for (const asset of vault.assets) {
-      if (asset.origin_type === AssetOriginType.ACQUIRED && asset.policy_id === 'lovelace') {
-        totalAcquiredAda += Number(asset.quantity);
-      }
-
       // Skip assets that are not in a valid status for valuation
       // Include PENDING, LOCKED, and EXTRACTED (in treasury wallet)
       if (
@@ -759,6 +755,10 @@ export class TaptoolsService {
         asset.status !== AssetStatus.EXTRACTED
       ) {
         continue;
+      }
+
+      if (asset.origin_type === AssetOriginType.ACQUIRED && asset.policy_id === 'lovelace') {
+        totalAcquiredAda += Number(asset.quantity);
       }
 
       const key = `${asset.policy_id}_${asset.asset_id}`;

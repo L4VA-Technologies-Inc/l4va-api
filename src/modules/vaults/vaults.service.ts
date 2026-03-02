@@ -711,7 +711,7 @@ export class VaultsService {
     vault.assets_whitelist = assetsWhitelist;
     vault.acquirer_whitelist = acquirerWhitelist;
 
-    // Get count of locked assets for this vault
+    // Get count of contributed assets for this vault (PENDING, LOCKED, EXTRACTED)
     const { lockedNFTCount, lockedFTsCount } = await this.assetsRepository
       .createQueryBuilder('asset')
       .select([
@@ -719,7 +719,9 @@ export class VaultsService {
         `SUM(CASE WHEN asset.type = :ftType THEN asset.quantity ELSE 0 END) as "lockedFTsCount"`,
       ])
       .where('asset.vault_id = :vaultId', { vaultId })
-      .andWhere('asset.status = :status', { status: AssetStatus.LOCKED })
+      .andWhere('asset.status IN (:...statuses)', {
+        statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED],
+      })
       .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
       .setParameters({
         nftType: AssetType.NFT,
@@ -778,7 +780,9 @@ export class VaultsService {
           .addSelect('COALESCE(SUM(asset.quantity), 0)', 'ftQuantity')
           .innerJoin('asset.transaction', 'tx')
           .where('asset.vault_id = :vaultId', { vaultId })
-          .andWhere('asset.status = :status', { status: AssetStatus.LOCKED })
+          .andWhere('asset.status IN (:...statuses)', {
+            statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED],
+          })
           .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
           .andWhere('tx.type = :txType', { txType: TransactionType.contribute })
           .andWhere('tx.status = :txStatus', { txStatus: TransactionStatus.confirmed })
