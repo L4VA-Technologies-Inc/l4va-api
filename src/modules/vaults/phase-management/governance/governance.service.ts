@@ -1187,7 +1187,7 @@ export class GovernanceService {
       .map(asset => ({
         id: asset.id,
         name: asset.name || asset.metadata?.name || 'Unknown Asset',
-        imageUrl: asset.imageUrl,
+        imageUrl: asset.image,
         policyId: asset.policy_id,
         assetId: asset.asset_id,
         type: asset.type,
@@ -1250,7 +1250,7 @@ export class GovernanceService {
       .map(asset => ({
         id: asset.id,
         name: asset.name || asset.metadata?.name || 'Unknown Asset',
-        imageUrl: asset.imageUrl,
+        imageUrl: asset.image,
         policyId: asset.policy_id,
         assetId: asset.asset_id,
         type: asset.type,
@@ -1265,7 +1265,7 @@ export class GovernanceService {
       .map(asset => ({
         id: asset.id,
         name: asset.name || asset.metadata?.name || 'Unknown Asset',
-        imageUrl: asset.imageUrl,
+        imageUrl: asset.image,
         policyId: asset.policy_id,
         assetId: asset.asset_id,
         type: asset.type,
@@ -1290,7 +1290,7 @@ export class GovernanceService {
       return {
         ...action,
         assetName: asset?.name || asset?.metadata?.name || 'Unknown Asset',
-        assetImg: asset?.imageUrl,
+        assetImg: asset?.image,
         assetPrice: asset?.floor_price || asset?.dex_price || 0,
         listingPrice: asset?.listing_price,
         assetStatus: asset?.status,

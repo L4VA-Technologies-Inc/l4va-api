@@ -128,7 +128,13 @@ export class AssetsService {
         originTypes: [AssetOriginType.CONTRIBUTED, AssetOriginType.FEE],
       })
       .andWhere('asset.status IN (:...statuses)', {
-        statuses: [AssetStatus.LOCKED, AssetStatus.RELEASED, AssetStatus.LISTED],
+        statuses: [
+          AssetStatus.PENDING,
+          AssetStatus.LOCKED,
+          AssetStatus.EXTRACTED,
+          AssetStatus.RELEASED,
+          AssetStatus.LISTED,
+        ],
       });
 
     if (search) {

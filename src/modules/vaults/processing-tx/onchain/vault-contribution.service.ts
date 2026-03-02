@@ -289,7 +289,7 @@ export class VaultContributionService {
 
   /**
    * Submit a signed transaction to the blockchain
-   * @param signedTx Object containing the transaction and signatures
+   * @param signedTx - Object containing the transaction and signatures
    * @returns Transaction hash
    */
   async submitContributionTransaction(signedTx: SubmitTransactionDto): Promise<TransactionSubmitResponse> {
