@@ -37,12 +37,7 @@ export class GoogleCloudStorageService {
       throw new Error('APP_HOST environment variable is required');
     }
 
-    const credentialsPath = process.env.GOOGLE_BUCKET_CREDENTIALS;
     const bucketConfig = process.env.GOOGLE_BUCKET_NAME;
-
-    if (!credentialsPath) {
-      throw new Error('GOOGLE_BUCKET_CREDENTIALS environment variable is required');
-    }
     if (!bucketConfig) {
       throw new Error('GOOGLE_BUCKET_NAME environment variable is required');
     }
@@ -51,25 +46,42 @@ export class GoogleCloudStorageService {
     this.bucketName = bucket;
     this.bucketPrefix = prefixParts.length > 0 ? prefixParts.join('/') : '';
 
-    const resolvedCredentialsPath = path.resolve(process.cwd(), credentialsPath);
+    const nodeEnv = process.env.NODE_ENV;
+    const isDevelopment = nodeEnv === 'dev' || nodeEnv === 'development';
+    const credentialsJson = process.env.GOOGLE_BUCKET_CREDENTIALS;
 
-    if (!fs.existsSync(resolvedCredentialsPath)) {
-      throw new Error(
-        `GOOGLE_BUCKET_CREDENTIALS file not found at ${resolvedCredentialsPath}. Please ensure the credentials file exists.`
-      );
+    if (!credentialsJson) {
+      throw new Error('GOOGLE_BUCKET_CREDENTIALS environment variable is required');
     }
 
-    try {
+    if (isDevelopment) {
+      // Local development: treat GOOGLE_BUCKET_CREDENTIALS as a file path
+      const resolvedCredentialsPath = path.resolve(process.cwd(), credentialsJson);
+
+      if (!fs.existsSync(resolvedCredentialsPath)) {
+        throw new Error(`GOOGLE_BUCKET_CREDENTIALS file not found at ${resolvedCredentialsPath} (development mode)`);
+      }
+
       const credentialsContent = fs.readFileSync(resolvedCredentialsPath, 'utf8');
       const credentials = JSON.parse(credentialsContent);
       this.storage = new Storage({
         credentials: credentials,
         projectId: credentials.project_id,
       });
-    } catch (error) {
-      this.storage = new Storage({
-        keyFilename: resolvedCredentialsPath,
-      });
+      this.logger.log('✅ Initialized Google Cloud Storage from file (dev mode)');
+    } else {
+      // Production/Testnet: treat GOOGLE_BUCKET_CREDENTIALS as JSON string (no file on disk)
+      try {
+        const credentials = JSON.parse(credentialsJson);
+        this.storage = new Storage({
+          credentials: credentials,
+          projectId: credentials.project_id,
+        });
+        this.logger.log('✅ Initialized Google Cloud Storage from environment variable (no file on disk)');
+      } catch (error) {
+        this.logger.error('Failed to parse GOOGLE_BUCKET_CREDENTIALS as JSON:', error.message);
+        throw new Error('GOOGLE_BUCKET_CREDENTIALS must be valid JSON for production/testnet');
+      }
     }
   }
 

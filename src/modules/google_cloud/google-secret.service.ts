@@ -25,13 +25,37 @@ export class GoogleSecretService {
    */
   private ensureSecretClient(): void {
     if (!this.secretClient) {
-      const credentialsPath = this.configService.get('GOOGLE_APPLICATION_CREDENTIALS');
-      this.secretClient = new SecretManagerServiceClient({
-        keyFilename: credentialsPath,
-      });
-      this.logger.log(
-        `Initialized Secret Manager client for ${this.isMainnet ? 'mainnet' : 'testnet'}, project: ${this.projectId}`
-      );
+      const nodeEnv = this.configService.get('NODE_ENV');
+      const isDevelopment = nodeEnv === 'dev' || nodeEnv === 'development';
+      
+      if (isDevelopment) {
+        // Local development: use file-based credentials
+        const credentialsPath = this.configService.get('GOOGLE_APPLICATION_CREDENTIALS');
+        this.secretClient = new SecretManagerServiceClient({
+          keyFilename: credentialsPath,
+        });
+        this.logger.log(
+          `Initialized Secret Manager client from file (dev mode) for ${this.isMainnet ? 'mainnet' : 'testnet'}, project: ${this.projectId}`
+        );
+      } else {
+        // Production/Testnet: use environment variable (no file on disk)
+        const gcpServiceAccountJson = this.configService.get('GCP_SERVICE_ACCOUNT_JSON');
+        
+        if (gcpServiceAccountJson) {
+          try {
+            const credentials = JSON.parse(gcpServiceAccountJson);
+            this.secretClient = new SecretManagerServiceClient({ credentials });
+            this.logger.log(
+              `Initialized Secret Manager client from env var (no file) for ${this.isMainnet ? 'mainnet' : 'testnet'}, project: ${this.projectId}`
+            );
+          } catch (e) {
+            this.logger.error('Failed to parse GCP_SERVICE_ACCOUNT_JSON:', e.message || e);
+            throw new Error('GCP_SERVICE_ACCOUNT_JSON is required but invalid');
+          }
+        } else {
+          throw new Error('GCP_SERVICE_ACCOUNT_JSON environment variable is required for production/testnet');
+        }
+      }
     }
   }
 
