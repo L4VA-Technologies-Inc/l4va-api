@@ -410,7 +410,9 @@ export class ContributorDistributionOrchestrator {
         const confirmed = await this.transactionService.waitForTransactionStatus(
           batchTransaction.id,
           TransactionStatus.confirmed,
-          120000
+          120000,
+          5000,
+          true
         );
 
         if (!confirmed) {

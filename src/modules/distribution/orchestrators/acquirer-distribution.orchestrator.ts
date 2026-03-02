@@ -27,7 +27,7 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 export class AcquirerDistributionOrchestrator {
   private readonly logger = new Logger(AcquirerDistributionOrchestrator.name);
   private readonly MAX_TX_SIZE = 16360;
-  private readonly MAX_BATCH_SIZE = 30;
+  private readonly MAX_BATCH_SIZE = 17;
 
   constructor(
     @InjectRepository(Transaction)
@@ -121,7 +121,7 @@ export class AcquirerDistributionOrchestrator {
       await this.processAcquirerBatch(vault, batchClaims, vaultId, config);
 
       if (i + this.MAX_BATCH_SIZE < claims.length) {
-        await new Promise(resolve => setTimeout(resolve, 10000));
+        await new Promise(resolve => setTimeout(resolve, 20000));
       }
     }
   }
@@ -177,7 +177,20 @@ export class AcquirerDistributionOrchestrator {
         return;
       }
 
-      // Split and retry
+      // Don't split if error is due to missing UTxO reference (admin wallet issue, not batch size issue)
+      const isMissingUtxoError =
+        error.message?.toLowerCase().includes('missing utxo') ||
+        error.message?.toLowerCase().includes("doesn't exist or has already been spent");
+
+      if (isMissingUtxoError) {
+        this.logger.warn(
+          `Skipping batch split for ${claims.length} claims - error is due to missing/spent UTxO reference, ` +
+            `not batch size. This likely indicates an admin wallet UTxO issue.`
+        );
+        return;
+      }
+
+      // Split and retry for other errors (e.g., transaction too large)
       await this.splitAndRetryBatch(vault, claims, vaultId, config);
     }
   }
@@ -233,8 +246,6 @@ export class AcquirerDistributionOrchestrator {
 
     // Build transaction input
     const input = await this.extractionBuilder.buildExtractionInput(vault, validClaims, adminUtxos, config);
-    this.logger.debug(JSON.stringify(input));
-    // Build and validate transaction size
     const buildResponse = await this.blockchainService.buildTransaction(input);
     const actualTxSize = getTransactionSize(buildResponse.complete);
 
@@ -260,7 +271,9 @@ export class AcquirerDistributionOrchestrator {
     const confirmed = await this.transactionService.waitForTransactionStatus(
       extractionTx.id,
       TransactionStatus.confirmed,
-      120000
+      120000,
+      5000,
+      true
     );
 
     if (confirmed) {
@@ -304,7 +317,7 @@ export class AcquirerDistributionOrchestrator {
     this.logger.log(`Splitting batch into two smaller batches: ${firstHalf.length} and ${secondHalf.length} claims`);
 
     await this.processAcquirerBatch(vault, firstHalf, vaultId, config);
-    await new Promise(resolve => setTimeout(resolve, 5000));
+    await new Promise(resolve => setTimeout(resolve, 15000));
     await this.processAcquirerBatch(vault, secondHalf, vaultId, config);
   }
 }

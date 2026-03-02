@@ -309,7 +309,8 @@ export class TransactionsService {
     transactionId: string,
     targetStatus: TransactionStatus,
     maxWaitTime: number = 120000,
-    checkInterval: number = 5000
+    checkInterval: number = 5000,
+    shouldWaitPostConfirmation: boolean = false
   ): Promise<boolean> {
     const startTime = Date.now();
     this.logger.log(`Waiting for transaction ${transactionId} to reach status: ${targetStatus}`);
@@ -327,6 +328,9 @@ export class TransactionsService {
 
       if (transaction.status === targetStatus) {
         this.logger.log(`Transaction ${transactionId} reached status: ${targetStatus}`);
+        if (shouldWaitPostConfirmation) {
+          await new Promise(resolve => setTimeout(resolve, 65000)); // Wait additional time to ensure all post-confirmation processing is complete
+        }
         return true;
       }
 

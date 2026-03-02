@@ -32,6 +32,26 @@ interface Amount {
   quantity: string | number;
 }
 
+/**
+ * Blockfrost UTXO response type
+ * Returned by blockfrost.addressesUtxosAll()
+ */
+export interface BlockfrostUtxo {
+  address: string;
+  tx_hash: string;
+  tx_index: number;
+  output_index: number;
+  amount: Array<{
+    unit: string;
+    quantity: string;
+  }>;
+  block: string;
+  data_hash: string | null;
+  inline_datum: string | null;
+  reference_script_hash: string | null;
+  consumed_by_tx?: string;
+}
+
 interface TargetAsset {
   /** Token unit (policyId + assetName hex) */
   token: string;
@@ -216,7 +236,7 @@ export const getUtxosExtract = async (
     });
   });
 
-  let utxos = [];
+  let utxos: BlockfrostUtxo[] = [];
   try {
     utxos = await blockfrost.addressesUtxosAll(address.to_bech32());
   } catch (error) {

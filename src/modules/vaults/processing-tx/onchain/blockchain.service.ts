@@ -200,7 +200,6 @@ export class BlockchainService {
         );
         this.logger.error('Full Error Response:', JSON.stringify(error.response.data, null, 2));
         this.logger.error('Response Status:', error.response.status);
-        this.logger.error('Response Headers:', JSON.stringify(error.response.headers, null, 2));
         this.logger.error('========================');
       }
 
