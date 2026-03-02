@@ -16,14 +16,15 @@ import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.enti
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
 import { Proposal } from '@/database/proposal.entity';
+import { Snapshot } from '@/database/snapshot.entity';
 import { TagEntity } from '@/database/tag.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { DistributionModule } from '@/modules/distribution/distribution.module';
+import { MarketStatsModule } from '@/modules/vaults/market-stats/market-stats.module';
 import { GovernanceModule } from '@/modules/vaults/phase-management/governance/governance.module';
 import { LifecycleModule } from '@/modules/vaults/phase-management/lifecycle/lifecycle.module';
-import { MarketStatsModule } from '@/modules/vaults/phase-management/market-stats/market-stats.module';
 import { TransactionsModule } from '@/modules/vaults/processing-tx/offchain-tx/transactions.module';
 import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockchain.module';
 import { StatisticsService } from '@/modules/vaults/statistics/statistics.service';
@@ -50,6 +51,7 @@ import { StatisticsService } from '@/modules/vaults/statistics/statistics.servic
       ContributorWhitelistEntity,
       Transaction,
       Proposal,
+      Snapshot,
     ]),
     HttpModule,
   ],

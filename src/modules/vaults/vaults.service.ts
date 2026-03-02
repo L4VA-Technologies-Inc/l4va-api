@@ -40,6 +40,7 @@ import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.enti
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
 import { Proposal } from '@/database/proposal.entity';
+import { Snapshot } from '@/database/snapshot.entity';
 import { TagEntity } from '@/database/tag.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
@@ -48,7 +49,7 @@ import { transformToSnakeCase } from '@/helpers';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
-import { ProposalStatus } from '@/types/proposal.types';
+import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import {
   ContributionWindowType,
@@ -108,6 +109,8 @@ export class VaultsService {
     private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(Proposal)
     private readonly proposalRepository: Repository<Proposal>,
+    @InjectRepository(Snapshot)
+    private readonly snapshotRepository: Repository<Snapshot>,
     private readonly gcsService: GoogleCloudStorageService,
     private readonly vaultContractService: VaultManagingService,
     private readonly blockchainService: BlockchainService,
@@ -379,6 +382,8 @@ export class VaultsService {
               collection_name: assetItem.collectionName,
               asset_count_cap_min: assetItem.countCapMin,
               asset_count_cap_max: assetItem.countCapMax,
+              valuation_method: assetItem.valuationMethod || 'market',
+              custom_price_ada: assetItem.customPriceAda || null,
             })
             .orIgnore()
             .execute();
@@ -505,7 +510,26 @@ export class VaultsService {
         finalVault.acquire_open_window_time
       ) {
         // acquire_open_window_time is already in milliseconds due to @Transform in entity
-        acquireStartTime = Number(finalVault.acquire_open_window_time);
+        const customTime = Number(finalVault.acquire_open_window_time);
+        const currentTime = new Date().getTime();
+        const timeDifference = customTime - currentTime;
+
+        let adjustmentAmount = 1800000; // 30 minutes in milliseconds
+
+        // If custom time is less than 30 minutes in the future, adjust the buffer
+        if (timeDifference < 1800000) {
+          if (timeDifference > 60000) {
+            // If more than 1 minute in future, use half the time difference as buffer (minimum 30 seconds)
+            adjustmentAmount = Math.max(Math.floor(timeDifference / 2), 30000);
+          } else if (timeDifference > 0) {
+            // Less than 1 minute - use minimal 10 second buffer
+            adjustmentAmount = 10000;
+          } else {
+            adjustmentAmount = 0;
+          }
+        }
+
+        acquireStartTime = customTime - adjustmentAmount;
       } else {
         throw new BadRequestException('Invalid acquire window configuration');
       }
@@ -533,11 +557,7 @@ export class VaultsService {
       finalVault.asset_vault_name = vaultAssetName;
       finalVault.script_hash = scriptHash;
       finalVault.apply_params_result = applyParamsResult;
-      // Set initial decimals based on token supply only
-      // Final decimals will be recalculated after multipliers are known in lifecycle.service.ts
-      finalVault.ft_token_decimals = this.distributionCalculationService.calculateOptimalDecimals(
-        finalVault.ft_token_supply || 1_000_000
-      );
+      finalVault.ft_token_decimals = 6; //Default decimals, can be updated later based on asset properties
 
       await this.vaultsRepository.save(finalVault);
 
@@ -691,53 +711,148 @@ export class VaultsService {
     vault.assets_whitelist = assetsWhitelist;
     vault.acquirer_whitelist = acquirerWhitelist;
 
-    // Get count of locked assets for this vault
-    const assetCounts = await this.assetsRepository
+    // Get count of contributed assets for this vault (PENDING, LOCKED, EXTRACTED)
+    const { lockedNFTCount, lockedFTsCount } = await this.assetsRepository
       .createQueryBuilder('asset')
-      .select(['asset.type', 'COUNT(asset.id) as count', 'SUM(asset.quantity) as totalQuantity'])
-      .where('asset.vault_id = :vaultId', { vaultId: vaultId })
-      .andWhere('asset.status = :status', { status: AssetStatus.LOCKED })
+      .select([
+        `SUM(CASE WHEN asset.type = :nftType THEN 1 ELSE 0 END) as "lockedNFTCount"`,
+        `SUM(CASE WHEN asset.type = :ftType THEN asset.quantity ELSE 0 END) as "lockedFTsCount"`,
+      ])
+      .where('asset.vault_id = :vaultId', { vaultId })
+      .andWhere('asset.status IN (:...statuses)', {
+        statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED],
+      })
       .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
-      .groupBy('asset.type')
-      .getRawMany();
-
-    let lockedNFTCount = 0;
-    let lockedFTsCount = 0;
-
-    assetCounts.forEach(result => {
-      if (result.asset_type === AssetType.NFT) {
-        lockedNFTCount = parseInt(result.count);
-      } else if (result.asset_type === AssetType.FT) {
-        lockedFTsCount = parseInt(result.totalquantity);
-      }
-    });
+      .setParameters({
+        nftType: AssetType.NFT,
+        ftType: AssetType.FT,
+      })
+      .getRawOne()
+      .then(result => ({
+        lockedNFTCount: Number(result?.lockedNFTCount || 0),
+        lockedFTsCount: Number(result?.lockedFTsCount || 0),
+      }));
 
     const lockedAssetsCount = lockedNFTCount + lockedFTsCount;
 
-    const membersFromTransactions = await this.transactionRepository
+    // Calculate expansion asset data if vault is in expansion or has had expansion
+    let expansionAssetsCount = 0;
+    let expansionAssetMax: number | undefined;
+    let expansionNoMax: boolean | undefined;
+    let expansionNoLimit: boolean | undefined;
+    let expansionPriceType: 'limit' | 'market' | undefined;
+    let expansionLimitPrice: number | undefined;
+    let expansionAssetsByPolicy: Array<{ policyId: string; quantity: number }> = [];
+    let expansionWhitelist: Array<{ policyId: string; collectionName: string | null }> = [];
+
+    // Only check vault_status to determine if vault is currently in expansion
+    // expansion_phase_start is preserved as a historical timestamp
+    if (vault.vault_status === VaultStatus.expansion) {
+      // Find the latest expansion proposal
+      const expansionProposal = await this.proposalRepository.findOne({
+        where: {
+          vaultId: vault.id,
+          proposalType: ProposalType.EXPANSION,
+          status: ProposalStatus.EXECUTED,
+        },
+        order: { executionDate: 'DESC' },
+      });
+
+      if (expansionProposal?.metadata?.expansion) {
+        expansionAssetMax = expansionProposal.metadata.expansion.assetMax;
+        expansionNoMax = expansionProposal.metadata.expansion.noMax;
+        expansionNoLimit = expansionProposal.metadata.expansion.noLimit;
+        expansionPriceType = expansionProposal.metadata.expansion.priceType;
+        expansionLimitPrice = expansionProposal.metadata.expansion.limitPrice;
+        const expansionPolicyIds = expansionProposal.metadata.expansion.policyIds || [];
+
+        // Fetch collection names for expansion policies
+        if (expansionPolicyIds.length > 0) {
+          expansionWhitelist = await this.getCollectionNamesByPolicyIds(expansionPolicyIds);
+        }
+
+        // Count confirmed expansion contributions
+        const expansionAssetData = await this.assetsRepository
+          .createQueryBuilder('asset')
+          .select('asset.policy_id', 'policyId')
+          .addSelect('asset.type', 'assetType')
+          .addSelect('COUNT(DISTINCT asset.id)', 'nftCount')
+          .addSelect('COALESCE(SUM(asset.quantity), 0)', 'ftQuantity')
+          .innerJoin('asset.transaction', 'tx')
+          .where('asset.vault_id = :vaultId', { vaultId })
+          .andWhere('asset.status IN (:...statuses)', {
+            statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED],
+          })
+          .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
+          .andWhere('tx.type = :txType', { txType: TransactionType.contribute })
+          .andWhere('tx.status = :txStatus', { txStatus: TransactionStatus.confirmed })
+          .andWhere('tx.created_at >= :expansionStart', { expansionStart: vault.expansion_phase_start })
+          .groupBy('asset.policy_id, asset.type')
+          .getRawMany();
+
+        // Group by policy and sum quantities
+        const policyMap = new Map<string, number>();
+
+        for (const row of expansionAssetData) {
+          const policyId = row.policyId;
+          const quantity = row.assetType === AssetType.NFT ? Number(row.nftCount) : Number(row.ftQuantity);
+
+          if (policyMap.has(policyId)) {
+            policyMap.set(policyId, policyMap.get(policyId)! + quantity);
+          } else {
+            policyMap.set(policyId, quantity);
+          }
+        }
+
+        expansionAssetsByPolicy = Array.from(policyMap.entries()).map(([policyId, quantity]) => ({
+          policyId,
+          quantity,
+        }));
+
+        expansionAssetsCount = Array.from(policyMap.values()).reduce((sum, qty) => sum + qty, 0);
+      }
+    }
+
+    const rawStats = await this.transactionRepository
       .createQueryBuilder('transaction')
-      .select('COUNT(DISTINCT transaction.user_id)', 'count')
+      .select([
+        `COUNT(DISTINCT CASE WHEN transaction.type = :contribute THEN transaction.user_id END) AS "contributorsCount"`,
+        `COUNT(DISTINCT CASE WHEN transaction.type = :acquire THEN transaction.user_id END) AS "acquirersCount"`,
+      ])
       .where('transaction.vault_id = :vaultId', { vaultId })
+      .andWhere('transaction.status = :status', { status: TransactionStatus.confirmed })
       .andWhere('transaction.type IN (:...types)', {
         types: [TransactionType.contribute, TransactionType.acquire],
       })
-      .andWhere('transaction.status = :status', { status: TransactionStatus.confirmed })
       .andWhere('transaction.user_id IS NOT NULL')
-      .getRawOne()
-      .then(result => Number(result?.count || 0));
+      .setParameters({
+        ownerId: vault.owner.id,
+        contribute: TransactionType.contribute,
+        acquire: TransactionType.acquire,
+      })
+      .getRawOne();
 
-    const ownerHasTransactions = await this.transactionRepository.exists({
-      where: {
-        vault_id: vaultId,
-        user_id: vault.owner.id,
-        type: In([TransactionType.contribute, TransactionType.acquire]),
-        status: TransactionStatus.confirmed,
-      },
+    const vaultContributorsCount = Number(rawStats?.contributorsCount || 0);
+    const vaultAcquirersCount = Number(rawStats?.acquirersCount || 0);
+
+    const latestSnapshot = await this.snapshotRepository.findOne({
+      where: { vaultId },
+      order: { createdAt: 'DESC' },
+      select: ['addressBalances'],
     });
 
-    const vaultMembersCount = ownerHasTransactions ? membersFromTransactions : membersFromTransactions + 1;
+    const tokenHolders = latestSnapshot?.addressBalances
+      ? Object.keys(latestSnapshot.addressBalances).filter(addr => {
+          const balance = latestSnapshot.addressBalances[addr];
+          try {
+            return BigInt(balance) > 0n;
+          } catch {
+            return parseFloat(balance) > 0;
+          }
+        }).length
+      : 0;
 
-    const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(vaultId);
+    const assetsPrices = await this.taptoolsService.getVaultAssetsSummary(vaultId);
     const adaPrice = assetsPrices.adaPrice;
     const lpMinLiquidityLovelace = this.systemSettingsService.lpRecommendedMinLiquidity;
     const lpMinLiquidityAda = lpMinLiquidityLovelace / 1_000_000;
@@ -775,7 +890,18 @@ export class VaultsService {
       assetsCount: lockedAssetsCount,
       assetsPrices,
       fdvUsd: vault.fdv * adaPrice,
-      vaultMembersCount,
+      tokenHolders,
+      vaultContributorsCount,
+      vaultAcquirersCount,
+      // Expansion data
+      expansionAssetsCount,
+      expansionAssetMax,
+      expansionNoMax,
+      expansionNoLimit,
+      expansionPriceType,
+      expansionLimitPrice,
+      expansionAssetsByPolicy,
+      expansionWhitelist,
       // Protocol fees
       protocolContributorsFeeLovelace: this.systemSettingsService.protocolContributorsFee,
       protocolContributorsFeeAda: this.systemSettingsService.protocolContributorsFee / 1_000_000,
@@ -784,6 +910,8 @@ export class VaultsService {
       protocolAcquiresFeeAda: this.systemSettingsService.protocolAcquiresFee / 1_000_000,
       protocolAcquiresFeeUsd: (this.systemSettingsService.protocolAcquiresFee / 1_000_000) * adaPrice,
       protocolEnabled: this.systemSettingsService.protocolEnabled,
+      // Max acquire amount (vault-specific override or protocol default)
+      maxAcquireAmountAda: vault.max_acquire_amount_ada ?? this.systemSettingsService.maxAcquireAmountAda,
     };
 
     let canCreateProposal = false;
@@ -1014,14 +1142,17 @@ export class VaultsService {
         case VaultFilter.contribution:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.contribution });
           break;
+        case VaultFilter.expansion:
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.expansion });
+          break;
         case VaultFilter.acquire:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.acquire });
           break;
         case VaultFilter.locked:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.locked });
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked });
           break;
         case VaultFilter.govern:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultFilter.locked }).andWhere(
+          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.locked }).andWhere(
             `
               EXISTS (
                 SELECT 1
@@ -1051,6 +1182,7 @@ export class VaultsService {
         case VaultFilter.all: {
           const statuses = [
             VaultStatus.published,
+            VaultStatus.expansion,
             VaultStatus.contribution,
             VaultStatus.acquire,
             VaultStatus.locked,
@@ -1149,7 +1281,7 @@ export class VaultsService {
 
     // Batch calculate asset values for all vaults at once (fixes N+1 query problem)
     const vaultIds = items.map(vault => vault.id);
-    const assetValuesMap = await this.taptoolsService.batchCalculateVaultAssetsValue(vaultIds);
+    const assetValuesMap = await this.taptoolsService.calculateVaultsTvl(vaultIds);
 
     // Transform vault images to URLs and convert to VaultShortResponse
     const transformedItems = items
@@ -1496,8 +1628,12 @@ export class VaultsService {
   }
 
   private async getProposalsActivity(vault_id: string): Promise<ProposalActivityEvent[]> {
+    // Exclude UNPAID proposals from activity feed (they're awaiting payment)
     const proposals = await this.proposalRepository.find({
-      where: { vaultId: vault_id },
+      where: {
+        vaultId: vault_id,
+        status: Not(ProposalStatus.UNPAID),
+      },
       order: { createdAt: 'DESC' },
     });
 

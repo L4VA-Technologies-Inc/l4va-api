@@ -1,9 +1,8 @@
-import { Injectable } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Novu } from '@novu/api';
 import { EventsControllerTriggerResponse } from '@novu/api/models/operations';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 
 import { User } from '@/database/user.entity';
 
@@ -31,8 +30,9 @@ export interface IEmailNotificationBody {
 @Injectable()
 export class NotificationService {
   private readonly novu: Novu;
+  private readonly logger = new Logger(NotificationService.name);
 
-  constructor(private readonly eventEmitter: EventEmitter2) {
+  constructor() {
     this.novu = new Novu({
       secretKey: process.env['NOVU_API_KEY'],
     });
@@ -41,7 +41,7 @@ export class NotificationService {
   @InjectRepository(User)
   private readonly userRepository: Repository<User>;
 
-  async sendNotification(body: INotificationBody) {
+  async sendNotification(body: INotificationBody): Promise<any> {
     try {
       const res = await this.novu.trigger({
         workflowId: 'l4va',
@@ -55,11 +55,26 @@ export class NotificationService {
   }
 
   async sendBulkNotification(body: INotificationBody, bulkOptions: string[]): Promise<void> {
+    if (!bulkOptions || !Array.isArray(bulkOptions) || bulkOptions.length === 0) {
+      this.logger.warn('Bulk options are empty or invalid. No notifications will be sent.');
+      return;
+    }
+
+    const users = await this.userRepository.findBy({
+      id: In(bulkOptions),
+    });
+
+    if (users.length === 0) {
+      this.logger.warn('No valid users found for bulk notification.');
+      return;
+    }
+
     await Promise.all(
-      bulkOptions.map(async item => {
-        const { address } = await this.userRepository.findOneBy({ id: item });
-        body.address = address;
-        await this.sendNotification({ ...body });
+      users.map(async user => {
+        if (!user.address) {
+          return;
+        }
+        await this.sendNotification({ ...body, address: user.address });
       })
     );
   }

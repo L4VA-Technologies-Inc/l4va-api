@@ -91,7 +91,7 @@ export class UsersController {
     file: Express.Multer.File
   ): Promise<UploadImageRes> {
     const userId = req.user.sub;
-    const user = await this.usersService.uploadProfileImage(userId, file, req.get('host'));
+    const user = await this.usersService.uploadProfileImage(userId, file);
     return { user };
   }
 
@@ -117,7 +117,7 @@ export class UsersController {
     file: Express.Multer.File
   ): Promise<UploadImageRes> {
     const userId = req.user.sub;
-    const user = await this.usersService.uploadBannerImage(userId, file, req.get('host'));
+    const user = await this.usersService.uploadBannerImage(userId, file);
     return { user };
   }
 }

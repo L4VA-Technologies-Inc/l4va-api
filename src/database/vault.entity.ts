@@ -167,6 +167,24 @@ export class Vault {
   })
   contribution_duration?: number;
 
+  @Expose({ name: 'expansionPhaseStart' })
+  @Transform(({ value }) => (value ? new Date(value).getTime() : null))
+  @Column({
+    name: 'expansion_phase_start',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  expansion_phase_start?: Date;
+
+  @Expose({ name: 'expansionDuration' })
+  @Transform(({ value }) => (value ? Number(value) : null))
+  @Column({
+    name: 'expansion_duration',
+    type: 'bigint',
+    nullable: true,
+  })
+  expansion_duration?: number;
+
   @Expose({ name: 'acquireWindowDuration' })
   @Transform(({ value }) => (value ? Number(value) : null))
   @Column({ name: 'acquire_window_duration', type: 'bigint', nullable: true })
@@ -208,6 +226,15 @@ export class Vault {
   })
   acquire_reserve?: number;
 
+  @Expose({ name: 'maxAcquireAmountAda' })
+  @Transform(({ value }) => (value ? Number(value) : null))
+  @Column({
+    name: 'max_acquire_amount_ada',
+    type: 'integer',
+    nullable: true,
+  })
+  max_acquire_amount_ada?: number;
+
   @Expose({ name: 'maxContributeAssets' })
   @Transform(({ value }) => (value ? Number(value) : null))
   @Column({
@@ -225,6 +252,24 @@ export class Vault {
     nullable: true,
   })
   liquidity_pool_contribution?: number;
+
+  @Expose({ name: 'hasActiveLp' })
+  @Column({
+    name: 'has_active_lp',
+    type: 'boolean',
+    default: false,
+    nullable: false,
+  })
+  has_active_lp?: boolean;
+
+  @Expose({ name: 'lpLastChecked' })
+  @Transform(({ value }) => (value ? new Date(value).getTime() : null))
+  @Column({
+    name: 'lp_last_checked',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  lp_last_checked?: Date;
 
   @Expose({ name: 'ftTokenSupply' })
   @Transform(({ value }) => (value ? Number(value) : null))

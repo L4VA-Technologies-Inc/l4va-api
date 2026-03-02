@@ -598,24 +598,27 @@ export class VaultManagingService {
               // contributor_whitelist: vaultConfig.allowedContributors || [],
               asset_window: {
                 lower_bound: {
-                  bound_type: new Date(asset_window?.start || vault.contribution_phase_start).getTime(),
+                  bound_type: asset_window?.start
+                    ? asset_window.start
+                    : new Date(vault.contribution_phase_start).getTime(),
                   is_inclusive: true,
                 },
                 upper_bound: {
-                  bound_type: new Date(
-                    (asset_window?.end ? new Date(asset_window.end) : vault.contribution_phase_start).getTime() +
-                      Number(vault.contribution_duration)
-                  ).getTime(),
+                  bound_type: asset_window?.end
+                    ? asset_window?.end
+                    : new Date(
+                        new Date(vault.contribution_phase_start).getTime() + Number(vault.contribution_duration)
+                      ).getTime(),
                   is_inclusive: true,
                 },
               },
               acquire_window: {
                 lower_bound: {
-                  bound_type: acquire_window?.start ? new Date(acquire_window.start).getTime() : new Date().getTime(),
+                  bound_type: acquire_window?.start ? acquire_window.start : new Date().getTime(),
                   is_inclusive: true,
                 },
                 upper_bound: {
-                  bound_type: acquire_window?.end ? new Date(acquire_window.end).getTime() : new Date().getTime(),
+                  bound_type: acquire_window?.end ? acquire_window.end : new Date().getTime(),
                   is_inclusive: true,
                 },
               },

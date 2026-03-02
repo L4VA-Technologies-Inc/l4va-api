@@ -57,6 +57,20 @@ export class AcquireService {
       throw new BadRequestException('At least one asset is required');
     }
 
+    // Validate acquire amount limit for ADA
+    const adaAsset = acquireReq.assets.find(asset => asset.assetName === 'lovelace' && asset.policyId === 'lovelace');
+    if (adaAsset) {
+      const acquireAmountAda = adaAsset.quantity; // Already in ADA
+      // Use vault-specific limit if set, otherwise use protocol default
+      const maxAcquireAmountAda = vault.max_acquire_amount_ada ?? this.systemSettingsService.maxAcquireAmountAda;
+
+      if (acquireAmountAda > maxAcquireAmountAda) {
+        throw new BadRequestException(
+          `Acquire amount exceeds maximum limit of ${maxAcquireAmountAda.toLocaleString()} ADA per transaction`
+        );
+      }
+    }
+
     // Allow vault owner to bypass whitelist check
     if (vault.owner.id !== userId) {
       // Check whitelist only for non-owners

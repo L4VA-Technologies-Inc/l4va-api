@@ -27,7 +27,7 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 export class AcquirerDistributionOrchestrator {
   private readonly logger = new Logger(AcquirerDistributionOrchestrator.name);
   private readonly MAX_TX_SIZE = 16360;
-  private readonly MAX_BATCH_SIZE = 30;
+  private readonly MAX_BATCH_SIZE = 17;
 
   constructor(
     @InjectRepository(Transaction)
@@ -121,7 +121,7 @@ export class AcquirerDistributionOrchestrator {
       await this.processAcquirerBatch(vault, batchClaims, vaultId, config);
 
       if (i + this.MAX_BATCH_SIZE < claims.length) {
-        await new Promise(resolve => setTimeout(resolve, 10000));
+        await new Promise(resolve => setTimeout(resolve, 20000));
       }
     }
   }
@@ -151,12 +151,16 @@ export class AcquirerDistributionOrchestrator {
       unparametizedDispatchHash: string;
     }
   ): Promise<void> {
-    // Create batch transaction record
+    // Create batch transaction record with claimIds for webhook processing
     const extractionTx = await this.transactionRepository.save({
       vault_id: vaultId,
       user_id: null,
       type: TransactionType.extractDispatch,
       status: TransactionStatus.created,
+      metadata: {
+        claimIds: claims.map(c => c.id),
+        transactionIds: claims.map(c => c.transaction.id),
+      },
     });
 
     this.logger.debug(`Processing batch extraction for ${claims.length} claims, transaction ${extractionTx.id}`);
@@ -173,7 +177,20 @@ export class AcquirerDistributionOrchestrator {
         return;
       }
 
-      // Split and retry
+      // Don't split if error is due to missing UTxO reference (admin wallet issue, not batch size issue)
+      const isMissingUtxoError =
+        error.message?.toLowerCase().includes('missing utxo') ||
+        error.message?.toLowerCase().includes("doesn't exist or has already been spent");
+
+      if (isMissingUtxoError) {
+        this.logger.warn(
+          `Skipping batch split for ${claims.length} claims - error is due to missing/spent UTxO reference, ` +
+            `not batch size. This likely indicates an admin wallet UTxO issue.`
+        );
+        return;
+      }
+
+      // Split and retry for other errors (e.g., transaction too large)
       await this.splitAndRetryBatch(vault, claims, vaultId, config);
     }
   }
@@ -229,8 +246,6 @@ export class AcquirerDistributionOrchestrator {
 
     // Build transaction input
     const input = await this.extractionBuilder.buildExtractionInput(vault, validClaims, adminUtxos, config);
-
-    // Build and validate transaction size
     const buildResponse = await this.blockchainService.buildTransaction(input);
     const actualTxSize = getTransactionSize(buildResponse.complete);
 
@@ -252,31 +267,25 @@ export class AcquirerDistributionOrchestrator {
 
     this.logger.log(`Batch extraction transaction ${response.txHash} submitted, waiting for confirmation...`);
 
-    // Wait for confirmation
+    // Wait for confirmation (webhook will update transaction, claims, and assets)
     const confirmed = await this.transactionService.waitForTransactionStatus(
       extractionTx.id,
       TransactionStatus.confirmed,
-      120000
+      120000,
+      5000,
+      true
     );
 
     if (confirmed) {
-      await this.claimsService.updateClaimStatus(
-        validClaims.map(c => c.id),
-        ClaimStatus.CLAIMED,
-        { distributionTxId: extractionTx.id }
-      );
-
-      await this.assetService.markAssetsAsDistributedByTransactions(validClaims.map(c => c.transaction.id));
-      await this.transactionService.updateTransactionStatusById(extractionTx.id, TransactionStatus.confirmed);
-
       if (isFirstExtraction) {
         await this.vaultRepository.update({ id: vault.id }, { stake_registered: true });
+        // Also update in-memory vault object to prevent subsequent batches from trying to register again
+        (vault as { stake_registered: boolean }).stake_registered = true;
         this.logger.log(`Marked vault ${vault.id} stake as registered`);
       }
 
       this.logger.log(`Batch extraction transaction ${response.txHash} confirmed and processed`);
     } else {
-      await this.transactionService.updateTransactionStatusById(extractionTx.id, TransactionStatus.failed);
       throw new Error(`Transaction ${response.txHash} failed to confirm within timeout period`);
     }
   }
@@ -308,7 +317,7 @@ export class AcquirerDistributionOrchestrator {
     this.logger.log(`Splitting batch into two smaller batches: ${firstHalf.length} and ${secondHalf.length} claims`);
 
     await this.processAcquirerBatch(vault, firstHalf, vaultId, config);
-    await new Promise(resolve => setTimeout(resolve, 5000));
+    await new Promise(resolve => setTimeout(resolve, 15000));
     await this.processAcquirerBatch(vault, secondHalf, vaultId, config);
   }
 }

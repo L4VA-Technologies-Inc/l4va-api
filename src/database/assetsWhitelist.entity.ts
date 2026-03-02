@@ -46,6 +46,26 @@ export class AssetsWhitelistEntity {
   })
   asset_count_cap_max?: number;
 
+  @Expose({ name: 'valuationMethod' })
+  @Column({
+    name: 'valuation_method',
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+    default: 'market',
+  })
+  valuation_method?: string;
+
+  @Expose({ name: 'customPriceAda' })
+  @Column({
+    name: 'custom_price_ada',
+    type: 'decimal',
+    precision: 20,
+    scale: 10,
+    nullable: true,
+  })
+  custom_price_ada?: number;
+
   @ManyToOne(() => Vault, (vault: Vault) => vault.assets_whitelist, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'vault_id' })
   public vault: Vault;

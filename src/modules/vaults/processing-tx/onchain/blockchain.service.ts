@@ -117,7 +117,7 @@ export class BlockchainService {
           (buildResponse.message?.includes('Some scripts of the transactions terminated with error') ||
             buildResponse.message?.includes('Some of the scripts failed to evaluate to a positive outcome'))
         ) {
-          this.logger.warn(`Vault validation error during transaction building`);
+          this.logger.warn(`Vault validation error during transaction building`, JSON.stringify(buildResponse));
           throw new VaultValidationException();
         }
 
@@ -125,8 +125,14 @@ export class BlockchainService {
           buildResponse.message?.includes('Maximum transaction size of') &&
           buildResponse.message?.includes('exceeded')
         ) {
-          this.logger.warn(`Transaction size exceeded: ${buildResponse.message}`);
+          this.logger.warn(`Transaction size exceeded: ${buildResponse.message}`, JSON.stringify(buildResponse));
           throw TxSizeExceededException.fromErrorMessage(buildResponse.message);
+        }
+
+        // Handle "Not enough ADA leftover" error
+        if (buildResponse.message?.includes('Not enough ADA leftover to include non-ADA assets in a change address')) {
+          this.logger.warn(`Insufficient ADA for change output with assets: ${buildResponse.message}`);
+          throw new UTxOInsufficientException();
         }
 
         throw new Error('Failed to build complete transaction' + JSON.stringify(buildResponse));
@@ -194,7 +200,6 @@ export class BlockchainService {
         );
         this.logger.error('Full Error Response:', JSON.stringify(error.response.data, null, 2));
         this.logger.error('Response Status:', error.response.status);
-        this.logger.error('Response Headers:', JSON.stringify(error.response.headers, null, 2));
         this.logger.error('========================');
       }
 

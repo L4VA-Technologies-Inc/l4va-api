@@ -220,6 +220,12 @@ export class AutomatedDistributionService {
 
         if (isComplete) {
           this.logger.log(`All contributor payments complete for vault ${vault.id}, finalizing...`);
+
+          // Wait for UTXOs to settle on-chain before attempting LP creation
+          // This prevents "Missing UTxO" errors when Anvil fetches UTXOs that were just spent
+          this.logger.log('Waiting 10 seconds for UTXOs to settle before LP creation...');
+          await new Promise(resolve => setTimeout(resolve, 10000));
+
           await this.finalizeVaultDistribution(vault.id, vault.script_hash, vault.asset_vault_name);
         }
       } catch (error) {
@@ -275,6 +281,7 @@ export class AutomatedDistributionService {
 
   /**
    * Finalize vault distribution: create LP and governance snapshot
+   * Note: LP creation is SKIPPED for expansion distributions (LP was created during initial distribution)
    */
   private async finalizeVaultDistribution(
     vaultId: string,
@@ -294,26 +301,38 @@ export class AutomatedDistributionService {
         throw new Error(`Vault ${vaultId} not found`);
       }
 
-      const lpPercent = vault.liquidity_pool_contribution || 0;
-
-      // Check if LP claim exists for this vault
-      const lpClaim = await this.claimRepository.findOne({
-        where: { vault: { id: vaultId }, type: ClaimType.LP, status: ClaimStatus.AVAILABLE },
+      // Check if this is an expansion distribution (has EXPANSION claims)
+      // If so, skip LP creation - LP was already created during initial distribution
+      const hasExpansionClaims = await this.claimRepository.exist({
+        where: { vault: { id: vaultId }, type: ClaimType.EXPANSION },
       });
 
-      // Create LP if LP percentage > 0 AND LP claim exists
-      if (lpPercent > 0 && lpClaim) {
-        const { withdrawalTxHash, lpCreationTxHash } =
-          await this.vyfiService.createLiquidityPoolWithWithdrawal(vaultId);
+      if (hasExpansionClaims) {
         this.logger.log(
-          `LP created for vault ${vaultId}. ` + `Withdrawal: ${withdrawalTxHash}, LP Creation: ${lpCreationTxHash}`
-        );
-      } else if (lpPercent > 0 && !lpClaim) {
-        this.logger.log(
-          `Vault ${vaultId} has LP contribution but no LP claim (likely ADA < 500). Skipping LP creation.`
+          `Vault ${vaultId} has expansion claims - this is an expansion distribution. Skipping LP creation.`
         );
       } else {
-        this.logger.log(`Vault ${vaultId} has 0% LP contribution. Skipping liquidity pool creation.`);
+        const lpPercent = vault.liquidity_pool_contribution || 0;
+
+        // Check if LP claim exists for this vault
+        const lpClaim = await this.claimRepository.findOne({
+          where: { vault: { id: vaultId }, type: ClaimType.LP, status: ClaimStatus.AVAILABLE },
+        });
+
+        // Create LP if LP percentage > 0 AND LP claim exists
+        if (lpPercent > 0 && lpClaim) {
+          const { withdrawalTxHash, lpCreationTxHash } =
+            await this.vyfiService.createLiquidityPoolWithWithdrawal(vaultId);
+          this.logger.log(
+            `LP created for vault ${vaultId}. ` + `Withdrawal: ${withdrawalTxHash}, LP Creation: ${lpCreationTxHash}`
+          );
+        } else if (lpPercent > 0 && !lpClaim) {
+          this.logger.log(
+            `Vault ${vaultId} has LP contribution but no LP claim (likely ADA < 500). Skipping LP creation.`
+          );
+        } else {
+          this.logger.log(`Vault ${vaultId} has 0% LP contribution. Skipping liquidity pool creation.`);
+        }
       }
 
       // Mark vault as fully processed
@@ -333,7 +352,8 @@ export class AutomatedDistributionService {
       }
 
       this.logger.log(
-        `Vault ${vaultId} distribution finalized successfully ` + `(LP: ${lpPercent > 0 ? 'created' : 'skipped'})`
+        `Vault ${vaultId} distribution finalized successfully ` +
+          `(${hasExpansionClaims ? 'expansion distribution' : vault.liquidity_pool_contribution > 0 ? 'LP created' : 'no LP'})`
       );
     } catch (error) {
       this.logger.error(`Failed to finalize vault distribution for ${vaultId}:`, error);

@@ -5,6 +5,7 @@ import * as process from 'process';
 import { Storage } from '@google-cloud/storage';
 import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as csv from 'csv-parse';
 import sharp from 'sharp';
@@ -17,23 +18,26 @@ import { FileEntity } from '@/database/file.entity';
 
 @Injectable()
 export class GoogleCloudStorageService {
-  private storage: Storage;
-  private bucketName: string;
-  private bucketPrefix: string;
+  private readonly storage: Storage;
+  private readonly bucketName: string;
+  private readonly bucketPrefix: string;
+  private readonly appHost: string;
+  private readonly ASSET_IMAGES_FOLDER = 'asset-images';
 
   private readonly logger = new Logger(GoogleCloudStorageService.name);
 
   constructor(
     @InjectRepository(FileEntity)
     private readonly fileRepository: Repository<FileEntity>,
-    private readonly httpService: HttpService
+    private readonly httpService: HttpService,
+    private readonly configService: ConfigService
   ) {
-    const credentialsPath = process.env.GOOGLE_BUCKET_CREDENTIALS;
-    const bucketConfig = process.env.GOOGLE_BUCKET_NAME;
-
-    if (!credentialsPath) {
-      throw new Error('GOOGLE_BUCKET_CREDENTIALS environment variable is required');
+    this.appHost = this.configService.get<string>('APP_HOST');
+    if (!this.appHost) {
+      throw new Error('APP_HOST environment variable is required');
     }
+
+    const bucketConfig = process.env.GOOGLE_BUCKET_NAME;
     if (!bucketConfig) {
       throw new Error('GOOGLE_BUCKET_NAME environment variable is required');
     }
@@ -42,25 +46,50 @@ export class GoogleCloudStorageService {
     this.bucketName = bucket;
     this.bucketPrefix = prefixParts.length > 0 ? prefixParts.join('/') : '';
 
-    const resolvedCredentialsPath = path.resolve(process.cwd(), credentialsPath);
+    const nodeEnv = process.env.NODE_ENV;
+    const isDevelopment = nodeEnv === 'dev' || nodeEnv === 'development';
 
-    if (!fs.existsSync(resolvedCredentialsPath)) {
-      throw new Error(
-        `GOOGLE_BUCKET_CREDENTIALS file not found at ${resolvedCredentialsPath}. Please ensure the credentials file exists.`
-      );
-    }
+    // For development: expect file path in GOOGLE_BUCKET_CREDENTIALS
+    // For production/testnet: expect base64-encoded JSON in GOOGLE_BUCKET_CREDENTIALS_BASE64
+    if (isDevelopment) {
+      const credentialsJson = process.env.GOOGLE_BUCKET_CREDENTIALS;
+      if (!credentialsJson) {
+        throw new Error('GOOGLE_BUCKET_CREDENTIALS environment variable is required for development');
+      }
 
-    try {
+      // Local development: treat GOOGLE_BUCKET_CREDENTIALS as a file path
+      const resolvedCredentialsPath = path.resolve(process.cwd(), credentialsJson);
+
+      if (!fs.existsSync(resolvedCredentialsPath)) {
+        throw new Error(`GOOGLE_BUCKET_CREDENTIALS file not found at ${resolvedCredentialsPath} (development mode)`);
+      }
+
       const credentialsContent = fs.readFileSync(resolvedCredentialsPath, 'utf8');
       const credentials = JSON.parse(credentialsContent);
       this.storage = new Storage({
         credentials: credentials,
         projectId: credentials.project_id,
       });
-    } catch (error) {
-      this.storage = new Storage({
-        keyFilename: resolvedCredentialsPath,
-      });
+      this.logger.log('✅ Initialized Google Cloud Storage from file (dev mode)');
+    } else {
+      // Production/Testnet: use base64-encoded credentials (no file on disk)
+      const credentialsBase64 = process.env.GOOGLE_BUCKET_CREDENTIALS_BASE64;
+      if (!credentialsBase64) {
+        throw new Error('GOOGLE_BUCKET_CREDENTIALS_BASE64 environment variable is required for production/testnet');
+      }
+
+      try {
+        const jsonString = Buffer.from(credentialsBase64, 'base64').toString('utf8');
+        const credentials = JSON.parse(jsonString);
+        this.storage = new Storage({
+          credentials: credentials,
+          projectId: credentials.project_id,
+        });
+        this.logger.log('✅ Initialized Google Cloud Storage from base64 env var (no file)');
+      } catch (error) {
+        this.logger.error('Failed to decode GOOGLE_BUCKET_CREDENTIALS_BASE64:', error.message || error);
+        throw new Error('GOOGLE_BUCKET_CREDENTIALS_BASE64 must be valid base64-encoded JSON for production/testnet');
+      }
     }
   }
 
@@ -301,7 +330,7 @@ export class GoogleCloudStorageService {
     }
   }
 
-  async uploadImage(file: Express.Multer.File, host: string, body?: UploadImageDto): Promise<FileEntity> {
+  async uploadImage(file: Express.Multer.File, body?: UploadImageDto): Promise<FileEntity> {
     try {
       let processedImageBuffer = file.buffer;
       let mimeType = file.mimetype;
@@ -331,7 +360,7 @@ export class GoogleCloudStorageService {
 
       if (!uploadResult) throw new BadRequestException('Failed to upload file to Google Cloud Storage');
 
-      const fileUrl = `${protocol}${host}/api/v1/image/${uploadResult.Key}`;
+      const fileUrl = `${protocol}${this.appHost}/api/v1/image/${uploadResult.Key}`;
       this.logger.log(`File uploaded successfully. Key: ${uploadResult.Key}, URL: ${fileUrl}`);
 
       const newFile = this.fileRepository.create({
@@ -347,6 +376,89 @@ export class GoogleCloudStorageService {
     } catch (error) {
       this.logger.error('Error uploading image file:', error);
       throw new BadRequestException('Failed to upload image file');
+    }
+  }
+
+  /**
+   * Downloads an asset image from an IPFS URI, converts it to WebP
+   * (animated WebP for GIFs) and stores it under the dedicated
+   * `asset-images/` folder in GCS.
+   *
+   * @param imageUrl - Source IPFS image URL (`ipfs://…`).
+   * @returns The full serving URL (e.g. `https://{APP_HOST}/api/v1/asset-image/{uuid}`),
+   *          or `null` when the download / conversion fails (original URL kept as fallback).
+   */
+  async uploadAssetImage(imageUrl: string): Promise<string | null> {
+    try {
+      if (!imageUrl) return null;
+
+      const cid = imageUrl.split('/').pop()?.split('?')[0];
+      if (!cid) return null;
+
+      const bucketKey = `${this.ASSET_IMAGES_FOLDER}/${cid}`;
+
+      const existingFile = await this.fileRepository.findOne({
+        where: { file_key: bucketKey },
+      });
+
+      if (existingFile) {
+        return `ipfs://${cid}`;
+      }
+
+      const response = await this.httpService.axiosRef.get<ArrayBuffer>(imageUrl, {
+        responseType: 'arraybuffer',
+        timeout: 30_000,
+      });
+
+      const imageBuffer = Buffer.from(response.data);
+      const contentType: string = response.headers['content-type'] ?? '';
+      const isAnimated = contentType.includes('gif') || contentType.includes('webp');
+
+      const webpBuffer = await sharp(imageBuffer, { animated: isAnimated })
+        .resize(128, 128, { fit: 'inside' })
+        .webp({ quality: 80, lossless: false, alphaQuality: 80 })
+        .toBuffer();
+
+      const uploadResult = await this.uploadFile(webpBuffer, bucketKey, 'image/webp');
+
+      if (!uploadResult) {
+        return null;
+      }
+
+      const fileUrl = `ipfs://${cid}`;
+
+      const newFile = this.fileRepository.create({
+        file_key: bucketKey,
+        file_url: fileUrl,
+        file_name: `${cid}.webp`,
+        file_type: 'image/webp',
+      });
+      await this.fileRepository.save(newFile);
+
+      return `ipfs://${cid}`;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  async getAssetImage(id: string): Promise<{ stream: NodeJS.ReadableStream; contentType: string }> {
+    const bucketKey = `${this.ASSET_IMAGES_FOLDER}/${id}`;
+    const fileName = this.getFullPath(bucketKey);
+
+    try {
+      const bucket = this.getStorage().bucket(this.bucketName);
+      const stream = bucket.file(fileName).createReadStream({ validation: false });
+
+      stream.on('error', err => {
+        this.logger.error(`Stream error for asset image ${id}:`, err);
+      });
+
+      return { stream, contentType: 'image/webp' };
+    } catch (error) {
+      if (error.code === 404 || error.message?.includes('No such object')) {
+        throw new BadRequestException(`Asset image ${id} not found`);
+      }
+      throw new BadRequestException(`Failed to retrieve asset image: ${error.message}`);
     }
   }
 

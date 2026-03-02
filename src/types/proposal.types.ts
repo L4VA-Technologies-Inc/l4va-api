@@ -1,4 +1,6 @@
 export enum ProposalStatus {
+  /** Proposal is created but governance fee payment is pending */
+  UNPAID = 'unpaid',
   /** Proposal is created but not yet active */
   UPCOMING = 'upcoming',
   /** Proposal is currently active and open for voting */
@@ -21,6 +23,7 @@ export enum ProposalType {
   BURNING = 'burning',
   BUY_SELL = 'buy_sell', // Deprecated
   MARKETPLACE_ACTION = 'marketplace_action',
+  EXPANSION = 'expansion',
 }
 
 export enum MarketplaceAction {

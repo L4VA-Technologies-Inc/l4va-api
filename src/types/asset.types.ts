@@ -25,3 +25,8 @@ export enum AssetOriginType {
   CONTRIBUTED = 'contributed',
   FEE = 'fee',
 }
+
+export enum AssetValuationMethod {
+  MARKET = 'market',
+  CUSTOM = 'custom',
+}

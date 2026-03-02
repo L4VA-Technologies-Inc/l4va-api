@@ -25,13 +25,38 @@ export class GoogleSecretService {
    */
   private ensureSecretClient(): void {
     if (!this.secretClient) {
-      const credentialsPath = this.configService.get('GOOGLE_APPLICATION_CREDENTIALS');
-      this.secretClient = new SecretManagerServiceClient({
-        keyFilename: credentialsPath,
-      });
-      this.logger.log(
-        `Initialized Secret Manager client for ${this.isMainnet ? 'mainnet' : 'testnet'}, project: ${this.projectId}`
-      );
+      const nodeEnv = this.configService.get('NODE_ENV');
+      const isDevelopment = nodeEnv === 'dev' || nodeEnv === 'development';
+
+      if (isDevelopment) {
+        // Local development: use file-based credentials
+        const credentialsPath = this.configService.get('GOOGLE_APPLICATION_CREDENTIALS');
+        this.secretClient = new SecretManagerServiceClient({
+          keyFilename: credentialsPath,
+        });
+        this.logger.log(
+          `Initialized Secret Manager client from file (dev mode) for ${this.isMainnet ? 'mainnet' : 'testnet'}, project: ${this.projectId}`
+        );
+      } else {
+        // Production/Testnet: use base64-encoded environment variable (no file on disk)
+        const gcpServiceAccountBase64 = this.configService.get('GCP_SERVICE_ACCOUNT_JSON_BASE64');
+
+        if (gcpServiceAccountBase64) {
+          try {
+            const jsonString = Buffer.from(gcpServiceAccountBase64, 'base64').toString('utf8');
+            const credentials = JSON.parse(jsonString);
+            this.secretClient = new SecretManagerServiceClient({ credentials });
+            this.logger.log(
+              `Initialized Secret Manager client from base64 env var (no file) for ${this.isMainnet ? 'mainnet' : 'testnet'}, project: ${this.projectId}`
+            );
+          } catch (e) {
+            this.logger.error('Failed to decode GCP_SERVICE_ACCOUNT_JSON_BASE64:', e.message || e);
+            throw new Error('GCP_SERVICE_ACCOUNT_JSON_BASE64 is required but invalid');
+          }
+        } else {
+          throw new Error('GCP_SERVICE_ACCOUNT_JSON_BASE64 environment variable is required for production/testnet');
+        }
+      }
     }
   }
 

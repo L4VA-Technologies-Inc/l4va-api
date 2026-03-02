@@ -8,6 +8,7 @@ import { In, Repository } from 'typeorm';
 
 import { DistributionService } from './distribution.service';
 import { ExecType, MarketplaceActionDto } from './dto/create-proposal.req';
+import { ExpansionService } from './expansion.service';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
 import { TerminationService } from './termination.service';
 import { VoteCountingService } from './vote-counting.service';
@@ -15,7 +16,7 @@ import { VoteCountingService } from './vote-counting.service';
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
-import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
+import { Vault } from '@/database/vault.entity';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
@@ -25,6 +26,7 @@ import { AssetStatus } from '@/types/asset.types';
 import { ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionStatus } from '@/types/transaction.types';
+import { VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class GovernanceExecutionService {
@@ -47,6 +49,8 @@ export class GovernanceExecutionService {
     private readonly claimRepository: Repository<Claim>,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
+    @InjectRepository(Vault)
+    private readonly vaultRepository: Repository<Vault>,
     private readonly eventEmitter: EventEmitter2,
     private readonly assetsService: AssetsService,
     private readonly wayUpService: WayUpService,
@@ -58,7 +62,7 @@ export class GovernanceExecutionService {
     private readonly terminationService: TerminationService,
     private readonly distributionService: DistributionService,
     private readonly dexHunterService: DexHunterService,
-    private readonly dexHunterPricingService: DexHunterPricingService
+    private readonly expansionService: ExpansionService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
@@ -524,6 +528,50 @@ export class GovernanceExecutionService {
       order: { created_at: 'ASC' },
     });
 
+    // Get vault to check status for extraction-based proposals
+    const vault = await this.vaultRepository.findOne({
+      where: { id: proposal.vaultId },
+      select: ['id', 'vault_status'],
+    });
+
+    if (!vault) {
+      this.logger.error(`Vault ${proposal.vaultId} not found`);
+      return false;
+    }
+
+    // Proposals that involve asset extraction from vault can only execute when vault is LOCKED
+    // During EXPANSION, assets are being added and extraction would conflict with the expansion mechanics
+    const extractionProposalTypes = [
+      ProposalType.MARKETPLACE_ACTION,
+      ProposalType.BUY_SELL,
+      ProposalType.BURNING,
+      ProposalType.TERMINATION,
+    ];
+
+    if (extractionProposalTypes.includes(proposal.proposalType)) {
+      if (vault.vault_status !== VaultStatus.locked) {
+        this.logger.warn(
+          `Cannot execute ${proposal.proposalType} proposal ${proposal.id}: Vault must be in LOCKED status for asset extraction. Current status: ${vault.vault_status}`
+        );
+        // Store error in metadata so it can be retried later
+        await this.proposalRepository.update(
+          { id: proposal.id },
+          {
+            metadata: {
+              ...proposal.metadata,
+              executionError: {
+                message: `Vault must be in LOCKED status to execute this proposal. Current status: ${vault.vault_status}.`,
+                timestamp: new Date().toISOString(),
+                errorCode: 'VAULT_STATUS_NOT_LOCKED',
+                userFriendlyMessage: 'This proposal will automatically retry when vault returns to LOCKED status.',
+              },
+            },
+          }
+        );
+        return false;
+      }
+    }
+
     try {
       switch (proposal.proposalType) {
         case ProposalType.MARKETPLACE_ACTION:
@@ -543,6 +591,9 @@ export class GovernanceExecutionService {
 
         case ProposalType.TERMINATION:
           return await this.executeTerminationProposal(proposal);
+
+        case ProposalType.EXPANSION:
+          return await this.executeExpansionProposal(proposal);
 
         default:
           this.logger.warn(`Unknown proposal type: ${proposal.proposalType}`);
@@ -1703,10 +1754,23 @@ export class GovernanceExecutionService {
   }
 
   /**
+   * Execute EXPANSION proposal actions
+   * Delegates to ExpansionService for all expansion logic
+   */
+  async executeExpansionProposal(proposal: Proposal): Promise<boolean> {
+    try {
+      return await this.expansionService.executeExpansion(proposal);
+    } catch (error) {
+      await this.storeExecutionError(proposal, error);
+      throw error;
+    }
+  }
+
+  /**
    * Store execution error in proposal metadata
    * Tracks error details including message, timestamp, error code, user-friendly message, and attempt count
    */
-  private async storeExecutionError(proposal: Proposal, error: Error): Promise<void> {
+  async storeExecutionError(proposal: Proposal, error: Error): Promise<void> {
     try {
       const metadata = proposal.metadata || {};
 

@@ -10,14 +10,18 @@ import { In, IsNull, Not, Repository } from 'typeorm';
 import { TransactionsResponseDto, TransactionsResponseItemsDto } from './dto/transactions-response.dto';
 
 import { Asset } from '@/database/asset.entity';
+import { Proposal } from '@/database/proposal.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { GoogleCloudStorageService } from '@/modules/google_cloud/google_bucket/bucket.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import {
   GetTransactionsDto,
   GetTransactionType,
 } from '@/modules/vaults/processing-tx/offchain-tx/dto/get-transactions.dto';
+import { ProposalStatus, ProposalType } from '@/types/proposal.types';
+import { VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class TransactionsService {
@@ -33,8 +37,11 @@ export class TransactionsService {
     private readonly assetRepository: Repository<Asset>,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
+    @InjectRepository(Proposal)
+    private readonly proposalRepository: Repository<Proposal>,
     private readonly taptoolsService: TaptoolsService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly gcsService: GoogleCloudStorageService
   ) {
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
@@ -189,6 +196,18 @@ export class TransactionsService {
 
     // Bulk insert all assets in a single transaction
     if (assetsToCreate.length > 0) {
+      await Promise.allSettled(
+        assetsToCreate.map(async asset => {
+          if (asset.image) {
+            const fileKey = await this.gcsService.uploadAssetImage(asset.image);
+
+            if (fileKey) {
+              asset.image = fileKey;
+            }
+          }
+        })
+      );
+
       await this.assetRepository.save(assetsToCreate);
 
       // Clear metadata after successful asset creation
@@ -290,7 +309,8 @@ export class TransactionsService {
     transactionId: string,
     targetStatus: TransactionStatus,
     maxWaitTime: number = 120000,
-    checkInterval: number = 5000
+    checkInterval: number = 5000,
+    shouldWaitPostConfirmation: boolean = false
   ): Promise<boolean> {
     const startTime = Date.now();
     this.logger.log(`Waiting for transaction ${transactionId} to reach status: ${targetStatus}`);
@@ -308,6 +328,9 @@ export class TransactionsService {
 
       if (transaction.status === targetStatus) {
         this.logger.log(`Transaction ${transactionId} reached status: ${targetStatus}`);
+        if (shouldWaitPostConfirmation) {
+          await new Promise(resolve => setTimeout(resolve, 65000)); // Wait additional time to ensure all post-confirmation processing is complete
+        }
         return true;
       }
 
@@ -395,11 +418,10 @@ export class TransactionsService {
       case GetTransactionType.all:
         queryBuilder.andWhere('transaction.type IN (:...types)', {
           types: [
+            TransactionType.createVault,
             TransactionType.contribute,
             TransactionType.burn,
             TransactionType.acquire,
-            TransactionType.extractDispatch,
-            TransactionType.claim,
           ],
         });
         break;
@@ -421,11 +443,6 @@ export class TransactionsService {
       case GetTransactionType.createVault:
         queryBuilder.andWhere('transaction.type = (:type)', {
           type: TransactionType.createVault,
-        });
-        break;
-      case GetTransactionType.distribution:
-        queryBuilder.andWhere('transaction.type IN (:...types)', {
-          types: [TransactionType.extractDispatch, TransactionType.claim],
         });
         break;
     }
@@ -578,7 +595,7 @@ export class TransactionsService {
     );
 
     // Calculate and update vault values
-    const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(transaction.vault_id);
+    const assetsPrices = await this.taptoolsService.getVaultAssetsSummary(transaction.vault_id);
 
     await this.vaultRepository.update(vault.id, {
       require_reserved_cost_ada: assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01),
@@ -587,6 +604,9 @@ export class TransactionsService {
       total_assets_cost_usd: assetsPrices.totalValueUsd,
       total_acquired_value_ada: assetsPrices.totalAcquiredAda,
     });
+
+    // Update expansion proposal asset count if vault is in expansion
+    await this.updateExpansionProposalAssetCount(transaction.vault_id);
 
     return assets.length;
   }
@@ -659,7 +679,7 @@ export class TransactionsService {
         });
 
         if (vault) {
-          const assetsPrices = await this.taptoolsService.calculateVaultAssetsValue(vaultId);
+          const assetsPrices = await this.taptoolsService.getVaultAssetsSummary(vaultId);
 
           await this.vaultRepository.update(vault.id, {
             require_reserved_cost_ada: assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01),
@@ -791,5 +811,66 @@ export class TransactionsService {
         status: TransactionStatus.confirmed,
       },
     });
+  }
+
+  private async updateExpansionProposalAssetCount(vaultId: string): Promise<void> {
+    try {
+      // Check if vault is in expansion status
+      const vault: Pick<Vault, 'id' | 'vault_status' | 'expansion_phase_start'> = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        select: ['id', 'vault_status', 'expansion_phase_start'],
+      });
+
+      if (!vault || vault.vault_status !== VaultStatus.expansion) {
+        // Not in expansion mode, nothing to update
+        return;
+      }
+
+      // Find the active expansion proposal
+      const expansionProposal: Pick<Proposal, 'id' | 'metadata' | 'executionDate'> =
+        await this.proposalRepository.findOne({
+          where: {
+            vaultId,
+            proposalType: ProposalType.EXPANSION,
+            status: ProposalStatus.EXECUTED,
+          },
+          order: { executionDate: 'DESC' },
+          select: ['id', 'metadata', 'executionDate'],
+        });
+
+      if (!expansionProposal || !expansionProposal.metadata?.expansion) {
+        this.logger.warn(`No active expansion proposal found for vault ${vaultId}`);
+        return;
+      }
+
+      // Count locked expansion assets (contributed during expansion)
+      // NFTs counted by record count, FTs counted by quantity sum
+      const expansionAssetData = await this.assetRepository
+        .createQueryBuilder('asset')
+        .select('asset.type', 'assetType')
+        .addSelect('COUNT(DISTINCT asset.id)', 'nftCount')
+        .addSelect('COALESCE(SUM(asset.quantity), 0)', 'ftQuantity')
+        .where('asset.vault_id = :vaultId', { vaultId })
+        .andWhere('asset.status = :status', { status: AssetStatus.LOCKED })
+        .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
+        .andWhere('asset.locked_at >= :expansionStart', { expansionStart: vault.expansion_phase_start })
+        .groupBy('asset.type')
+        .getRawMany();
+
+      const currentAssetCount = expansionAssetData.reduce((total, row) => {
+        const quantity = row.assetType === AssetType.NFT ? Number(row.nftCount) : Number(row.ftQuantity);
+        return total + quantity;
+      }, 0);
+
+      // Update proposal metadata
+      expansionProposal.metadata.expansion.currentAssetCount = currentAssetCount;
+
+      await this.proposalRepository.update({ id: expansionProposal.id }, { metadata: expansionProposal.metadata });
+
+      this.logger.log(`Updated expansion asset count for vault ${vaultId}: ${currentAssetCount}`);
+    } catch (error) {
+      this.logger.error(`Failed to update expansion asset count for vault ${vaultId}:`, error);
+      // Don't throw - this is a secondary operation that shouldn't fail the main transaction
+    }
   }
 }

@@ -300,6 +300,8 @@ export class DraftVaultsService {
               policy_id: whitelistItem.policyId,
               asset_count_cap_min: whitelistItem?.countCapMin,
               asset_count_cap_max: whitelistItem?.countCapMax,
+              valuation_method: whitelistItem?.valuationMethod || 'market',
+              custom_price_ada: whitelistItem?.customPriceAda || null,
             });
           })
         );

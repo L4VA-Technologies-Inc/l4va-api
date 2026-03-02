@@ -6,10 +6,12 @@ import { Repository, In } from 'typeorm';
 
 import { CreateAssetDto } from './dto/create-asset.dto';
 import { GetAcquiredAssetsRes } from './dto/get-acquired-assets.res';
+import { AssetsFilterDto } from './dto/get-contributed-assets.req';
 import { GetContributedAssetsRes } from './dto/get-contributed-assets.res';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
+import { Market } from '@/database/market.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
@@ -32,6 +34,8 @@ export class AssetsService {
     private readonly vaultsRepository: Repository<Vault>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(Market)
+    private readonly marketRepository: Repository<Market>,
     private readonly eventEmitter: EventEmitter2,
     private readonly priceService: PriceService
   ) {}
@@ -91,10 +95,14 @@ export class AssetsService {
     vaultId: string,
     page: number = 1,
     limit: number = 10,
-    search: string = ''
+    search: string = '',
+    filter?: AssetsFilterDto
   ): Promise<GetContributedAssetsRes> {
-    let queryBuilder = this.assetsRepository
+    const { policyId, type } = filter || {};
+
+    const queryBuilder = this.assetsRepository
       .createQueryBuilder('asset')
+      .leftJoinAndSelect('asset.added_by', 'user')
       .select([
         'asset.id',
         'asset.policy_id',
@@ -115,18 +123,53 @@ export class AssetsService {
         'asset.description',
         'asset.added_at',
         'asset.updated_at',
+        'user.id',
+        'user.address',
       ])
       .where('asset.vault_id = :vaultId', { vaultId })
       .andWhere('asset.origin_type IN (:...originTypes)', {
         originTypes: [AssetOriginType.CONTRIBUTED, AssetOriginType.FEE],
       })
       .andWhere('asset.status IN (:...statuses)', {
-        statuses: [AssetStatus.LOCKED, AssetStatus.RELEASED, AssetStatus.LISTED],
+        statuses: [
+          AssetStatus.PENDING,
+          AssetStatus.LOCKED,
+          AssetStatus.EXTRACTED,
+          AssetStatus.RELEASED,
+          AssetStatus.LISTED,
+        ],
       });
 
     if (search) {
-      queryBuilder = queryBuilder.andWhere('asset.name ILIKE :search', { search: `%${search}%` });
+      queryBuilder.andWhere('(asset.name ILIKE :search OR user.address ILIKE :search)', {
+        search: `%${search}%`,
+      });
     }
+
+    if (policyId && policyId.length > 0) {
+      queryBuilder.andWhere('asset.policy_id IN (:...policyIds)', {
+        policyIds: policyId,
+      });
+    }
+
+    if (type) {
+      queryBuilder.andWhere('asset.type = :type', { type });
+    }
+
+    const statsQuery = queryBuilder.clone();
+    statsQuery
+      .select('SUM(asset.quantity * COALESCE(asset.floor_price, asset.dex_price, 0))', 'totalValue')
+      .addSelect(`SUM(CASE WHEN asset.type = :nftType THEN asset.quantity ELSE 0 END)`, 'totalNFTAssets')
+      .addSelect(`SUM(CASE WHEN asset.type = :ftType THEN asset.quantity ELSE 0 END)`, 'totalFTAssets')
+      .setParameters({
+        nftType: AssetType.NFT,
+        ftType: AssetType.FT,
+      });
+
+    const rawStats = await statsQuery.getRawOne();
+    const totalAssetValueAda = parseFloat(rawStats?.totalValue || '0');
+    const totalNFTAssets = parseFloat(rawStats?.totalNFTAssets || '0');
+    const totalFTAssets = parseFloat(rawStats?.totalFTAssets || '0');
 
     const [assets, total] = await queryBuilder
       .skip((page - 1) * limit)
@@ -135,6 +178,10 @@ export class AssetsService {
       .getManyAndCount();
 
     const adaPrice = await this.priceService.getAdaPrice();
+
+    const totalAssetValueUsd = totalAssetValueAda * adaPrice;
+    const assetsAvgAda = total > 0 ? totalAssetValueAda / total : 0;
+    const assetsAvgUsd = total > 0 ? totalAssetValueUsd / total : 0;
 
     const assetsWithUsd = assets as Array<Asset & { floorPriceUsd?: number }>;
 
@@ -152,11 +199,25 @@ export class AssetsService {
       page,
       limit,
       totalPages: Math.ceil(total / limit),
+      statistics: {
+        totalAssetValueAda,
+        totalAssetValueUsd,
+        assetsAvgAda,
+        assetsAvgUsd,
+        totalNFTAssets,
+        totalFTAssets,
+      },
     };
   }
 
-  async getAcquiredAssets(vaultId: string, page: number = 1, limit: number = 10): Promise<GetAcquiredAssetsRes> {
-    // Verify vault ownership
+  async getAcquiredAssets(
+    vaultId: string,
+    page: number = 1,
+    limit: number = 10,
+    search?: string,
+    minQuantity?: number,
+    maxQuantity?: number
+  ): Promise<GetAcquiredAssetsRes> {
     const vault = await this.vaultsRepository.exists({
       where: { id: vaultId },
     });
@@ -165,41 +226,82 @@ export class AssetsService {
       throw new BadRequestException('Vault not found or access denied');
     }
 
-    const [assets, total] = await this.assetsRepository.findAndCount({
-      where: {
-        vault: {
-          id: vaultId,
-        },
-        origin_type: AssetOriginType.ACQUIRED,
-        status: In([AssetStatus.LOCKED, AssetStatus.RELEASED, AssetStatus.DISTRIBUTED]),
-      },
-      select: {
-        id: true,
-        policy_id: true,
-        asset_id: true,
-        type: true,
-        quantity: true,
-        floor_price: true,
-        dex_price: true,
-        deleted: true,
-        last_valuation: true,
-        status: true,
-        locked_at: true,
-        released_at: true,
-        origin_type: true,
-        image: true,
-        decimals: true,
-        name: true,
-        description: true,
-        added_at: true,
-        updated_at: true,
-      },
-      skip: (page - 1) * limit,
-      take: limit,
-      order: {
-        added_at: 'DESC',
-      },
-    });
+    const queryBuilder = this.assetsRepository
+      .createQueryBuilder('asset')
+      .leftJoin('asset.transaction', 'transaction')
+      .leftJoin('transaction.user', 'user')
+      .select([
+        'asset.id',
+        'asset.policy_id',
+        'asset.asset_id',
+        'asset.type',
+        'asset.quantity',
+        'asset.floor_price',
+        'asset.dex_price',
+        'asset.deleted',
+        'asset.last_valuation',
+        'asset.status',
+        'asset.locked_at',
+        'asset.released_at',
+        'asset.origin_type',
+        'asset.image',
+        'asset.decimals',
+        'asset.name',
+        'asset.description',
+        'asset.added_at',
+        'asset.updated_at',
+        'user.id',
+        'user.address',
+      ])
+      .where('asset.vault_id = :vaultId', { vaultId })
+      .andWhere('asset.origin_type = :originType', {
+        originType: AssetOriginType.ACQUIRED,
+      })
+      .andWhere('asset.status IN (:...statuses)', {
+        statuses: [AssetStatus.LOCKED, AssetStatus.RELEASED, AssetStatus.DISTRIBUTED],
+      });
+
+    if (search) {
+      queryBuilder.andWhere('user.address ILIKE :search', {
+        search: `%${search}%`,
+      });
+    }
+
+    if (minQuantity) {
+      queryBuilder.andWhere('asset.quantity >= :minQuantity', {
+        minQuantity,
+      });
+    }
+
+    if (maxQuantity) {
+      queryBuilder.andWhere('asset.quantity <= :maxQuantity', {
+        maxQuantity,
+      });
+    }
+
+    const statsResult = await queryBuilder
+      .clone()
+      .select('SUM(asset.quantity)', 'totalAcquired')
+      .addSelect('COUNT(DISTINCT transaction.user_id)', 'totalAcquirers')
+      .getRawOne();
+
+    const totalAcquired = parseFloat(statsResult?.totalAcquired || '0');
+    const totalAcquirers = parseInt(statsResult?.totalAcquirers || '0', 10);
+
+    const [adaPrice, marketData, [assets, total]] = await Promise.all([
+      this.priceService.getAdaPrice(),
+      this.marketRepository.findOne({ where: { vault_id: vaultId } }),
+      queryBuilder
+        .skip((page - 1) * limit)
+        .take(limit)
+        .orderBy('asset.added_at', 'DESC')
+        .getManyAndCount(),
+    ]);
+
+    const totalAcquiredUsd = totalAcquired * adaPrice;
+
+    const totalAdaLiquidityAda = marketData?.totalAdaLiquidity != null ? Number(marketData.totalAdaLiquidity) : null;
+    const totalAdaLiquidityUsd = totalAdaLiquidityAda != null ? totalAdaLiquidityAda * adaPrice : null;
 
     return {
       items: assets.map(asset => instanceToPlain(asset)),
@@ -207,6 +309,11 @@ export class AssetsService {
       page,
       limit,
       totalPages: Math.ceil(total / limit),
+      totalAcquired,
+      totalAcquiredUsd,
+      totalAcquirers,
+      totalAdaLiquidityAda,
+      totalAdaLiquidityUsd,
     };
   }
 

@@ -9,7 +9,7 @@ import { TransactionsModule } from '../vaults/processing-tx/offchain-tx/transact
 import { AutomatedDistributionService } from './automated-distribution.service';
 import { AcquirerExtractionBuilder } from './builders/acquirer-extraction.builder';
 import { ContributorPaymentBuilder } from './builders/contributor-payment.builder';
-import { DistributionCalculationService } from './distribution-calculation.service';
+import { DistributionCalculationModule } from './distribution-calculation.module';
 import { MultiBatchDistributionService } from './multi-batch-distribution.service';
 import { AcquirerDistributionOrchestrator } from './orchestrators/acquirer-distribution.orchestrator';
 import { ContributorDistributionOrchestrator } from './orchestrators/contributor-distribution.orchestrator';
@@ -38,9 +38,9 @@ import { VyfiModule } from '@/modules/vyfi/vyfi.module';
     VyfiModule,
     TransactionsModule,
     AlertsModule,
+    DistributionCalculationModule,
   ],
   providers: [
-    DistributionCalculationService,
     AutomatedDistributionService,
     MultiBatchDistributionService,
     AcquirerExtractionBuilder,
@@ -58,7 +58,7 @@ import { VyfiModule } from '@/modules/vyfi/vyfi.module';
     },
   ],
   exports: [
-    DistributionCalculationService,
+    DistributionCalculationModule,
     MultiBatchDistributionService,
     ContributorDistributionOrchestrator,
     ContributorPaymentBuilder,

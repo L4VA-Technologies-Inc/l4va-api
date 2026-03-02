@@ -45,6 +45,14 @@ export class PaginationQueryDto {
   @IsString()
   @IsOptional()
   search?: string;
+
+  @ApiProperty({
+    description: 'Vault ID to get custom asset prices from whitelist',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  vaultId?: string;
 }
 
 export class PaginationMetaDto {
@@ -56,13 +64,19 @@ export class PaginationMetaDto {
   @Expose()
   limit: number;
 
-  @ApiProperty({ description: 'Total number of items' })
+  @ApiProperty({
+    description: 'Total number of items, or null when the full count is unknown (more pages exist)',
+    nullable: true,
+  })
   @Expose()
-  total: number;
+  total: number | null;
 
-  @ApiProperty({ description: 'Total number of pages' })
+  @ApiProperty({
+    description: 'Total number of pages, or null when the full count is unknown (more pages exist)',
+    nullable: true,
+  })
   @Expose()
-  totalPages: number;
+  totalPages: number | null;
 
   @ApiProperty({ description: 'Whether there is a next page' })
   @Expose()

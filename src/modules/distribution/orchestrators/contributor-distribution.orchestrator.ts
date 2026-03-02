@@ -59,7 +59,7 @@ export class ContributorDistributionOrchestrator {
   ) {}
 
   /**
-   * Process all contributor payments for a vault
+   * Process all contributor and expansion payments for a vault
    */
   async processContributorPayments(
     vaultId: string,
@@ -85,24 +85,33 @@ export class ContributorDistributionOrchestrator {
     const readyClaims: Claim[] = await this.claimRepository.find({
       where: {
         vault: { id: vaultId },
-        type: ClaimType.CONTRIBUTOR,
+        type: In([ClaimType.CONTRIBUTOR, ClaimType.EXPANSION]),
         status: ClaimStatus.PENDING,
       },
       relations: ['user', 'transaction'],
     });
 
     if (readyClaims.length === 0) {
-      this.logger.log(`No ready contributor claims for vault ${vaultId}`);
+      this.logger.log(`No ready contributor or expansion claims for vault ${vaultId}`);
       return;
     }
 
-    this.logger.log(`Found ${readyClaims.length} contributor claims to process`);
+    this.logger.log(`Found ${readyClaims.length} contributor or expansion claims to process`);
 
-    // Get dispatch UTXOs only if vault has tokens for acquirers
-    const hasDispatchFunding = Number(vault.tokens_for_acquires) > 0;
+    // Check if any claims have lovelace_amount to distribute
+    // Expansion claims have NULL lovelace_amount and only receive vault tokens
+    const claimsWithAda = readyClaims.filter(
+      claim => claim.lovelace_amount != null && Number(claim.lovelace_amount) > 0
+    );
+    const hasExpansionClaims = readyClaims.some(claim => claim.type === ClaimType.EXPANSION);
+
+    // Get dispatch UTXOs only if:
+    // 1. There are claims with lovelace_amount (actual ADA to distribute)
+    // 2. Vault has tokens_for_acquires > 0 (meaning ADA distribution is enabled)
+    const needsDispatchFunding = claimsWithAda.length > 0 && Number(vault.tokens_for_acquires) > 0;
     let dispatchUtxos: AddressesUtxo[] = [];
 
-    if (hasDispatchFunding) {
+    if (needsDispatchFunding) {
       const DISPATCH_ADDRESS = getAddressFromHash(
         vault.dispatch_parametized_hash,
         this.blockchainService.getNetworkId()
@@ -118,9 +127,15 @@ export class ContributorDistributionOrchestrator {
         throw error;
       }
     } else {
-      this.logger.log(
-        `Vault ${vaultId} has 0% for acquirers. No dispatch funding required, processing vault token minting only.`
-      );
+      if (hasExpansionClaims && claimsWithAda.length === 0) {
+        this.logger.log(
+          `Vault ${vaultId} has only expansion claims (no lovelace_amount). No ADA distribution needed, processing vault token minting only.`
+        );
+      } else {
+        this.logger.log(
+          `Vault ${vaultId} has 0% for acquirers. No dispatch funding required, processing vault token minting only.`
+        );
+      }
     }
 
     // Process claims with dynamic batching
@@ -218,9 +233,7 @@ export class ContributorDistributionOrchestrator {
     dispatchUtxos: AddressesUtxo[],
     config: any
   ): Promise<BatchSizeResult> {
-    // Start with batch size 1 due to high script execution memory per claim
-    // Each claim uses ~12-13M memory units, Cardano limit is 14M per tx
-    // This means only 1 claim per transaction is safe
+    // Start with batch size 1 and increase until we hit limits
     let testBatchSize = 1;
     let lastSuccessfulSize = 1;
     let lastSuccessfulClaims = claims.slice(0, 1);
@@ -238,16 +251,13 @@ export class ContributorDistributionOrchestrator {
       minAda: 4_000_000,
     });
 
-    // Test increasing batch sizes (conservatively, max 1 due to ExUnits)
-    // Note: We keep the loop structure for future optimization if script memory reduces
-    const effectiveMaxBatch = Math.min(1, this.MAX_BATCH_SIZE, claims.length); // Limit to 1 for now
+    // Test increasing batch sizes up to MAX_BATCH_SIZE or available claims
+    const effectiveMaxBatch = Math.min(this.MAX_BATCH_SIZE, claims.length);
 
     while (testBatchSize <= effectiveMaxBatch) {
       const testClaims = claims.slice(0, testBatchSize);
 
       try {
-        this.logger.debug(`Testing batch size ${testBatchSize}...`);
-
         const input = await this.paymentBuilder.buildPaymentInput(vault, testClaims, adminUtxos, dispatchUtxos, config);
 
         const buildResponse = await this.blockchainService.buildTransaction(input);
@@ -327,7 +337,7 @@ export class ContributorDistributionOrchestrator {
       type: TransactionType.claim,
       status: TransactionStatus.created,
       metadata: {
-        claimIds: validClaims.map(c => c.id),
+        claimIds: validClaims.map(c => c.id), // For reference and update claims on confirmation
       },
     });
 
@@ -391,31 +401,23 @@ export class ContributorDistributionOrchestrator {
           signatures: [],
         });
 
-        this.logger.log(`Batch payment transaction submitted: ${response.txHash}`);
-
         await this.transactionRepository.update(
           { id: batchTransaction.id },
           { tx_hash: response.txHash, status: TransactionStatus.submitted }
         );
 
-        // Wait for confirmation
+        // Wait for confirmation (webhook will update transaction and claim statuses)
         const confirmed = await this.transactionService.waitForTransactionStatus(
           batchTransaction.id,
           TransactionStatus.confirmed,
-          120000
+          120000,
+          5000,
+          true
         );
 
         if (!confirmed) {
           throw new Error(`Batch payment transaction ${response.txHash} failed to confirm`);
         }
-
-        // Update claims and transaction
-        await this.claimsService.updateClaimStatus(
-          validClaims.map(c => c.id),
-          ClaimStatus.CLAIMED,
-          { distributionTxId: batchTransaction.id }
-        );
-        await this.transactionRepository.update({ id: batchTransaction.id }, { status: TransactionStatus.confirmed });
 
         this.logger.log(
           `Successfully processed batch payment for ${validClaims.length} claims ` + `with tx: ${response.txHash}`
@@ -491,7 +493,7 @@ export class ContributorDistributionOrchestrator {
   async arePaymentsComplete(vaultId: string): Promise<boolean> {
     const whereClause: any = {
       vault: { id: vaultId },
-      type: ClaimType.CONTRIBUTOR,
+      type: In([ClaimType.CONTRIBUTOR, ClaimType.EXPANSION]),
       status: In([ClaimStatus.PENDING, ClaimStatus.FAILED]),
     };
 
