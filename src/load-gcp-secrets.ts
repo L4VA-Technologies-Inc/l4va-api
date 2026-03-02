@@ -68,124 +68,40 @@ export async function loadSecrets(): Promise<void> {
 
   // Support both testnet and mainnet
   const isDevelopment = nodeEnv === 'dev' || nodeEnv === 'development';
-  const shouldLoadGcpSecrets = nodeEnv === 'mainnet' || nodeEnv === 'testnet' || isDevelopment;
 
-  if (!shouldLoadGcpSecrets) {
-    console.log(`Skipping GCP secrets load because NODE_ENV is "${nodeEnv}" (expected "mainnet", "testnet", or "dev")`);
+  // For production/testnet: Just verify base64 credentials exist
+  // The actual decoding is done by each GCP service (KMS, Secret Manager, Bucket)
+  if (!isDevelopment) {
+    if (process.env.GCP_SERVICE_ACCOUNT_JSON_BASE64 && process.env.GOOGLE_BUCKET_CREDENTIALS_BASE64) {
+      // eslint-disable-next-line no-console
+      console.log('✅ GCP credentials available in environment (base64, memory-only)');
+    } else {
+      console.warn(
+        'GCP_SERVICE_ACCOUNT_JSON_BASE64 or GOOGLE_BUCKET_CREDENTIALS_BASE64 not set for production/testnet'
+      );
+    }
+    // No need to decode here - each GCP service handles its own decoding
     return;
   }
 
-  let credentials: any = null;
+  // Development only: Set up file-based credentials path
+  let credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
 
-  // For local development, use file-based credentials
-  // For testnet/mainnet, use environment variable (more secure, no files on VM)
-  if (isDevelopment) {
-    let credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-
-    if (!credentialsPath) {
-      const credentialsFile = 'gcp-service-account.json';
-      credentialsPath = path.join(process.cwd(), credentialsFile);
-    } else {
-      if (!path.isAbsolute(credentialsPath)) {
-        credentialsPath = path.join(process.cwd(), credentialsPath);
-      }
-    }
-
-    if (!fs.existsSync(credentialsPath)) {
-      console.warn('Credentials file not found for development, skipping secrets load.');
-      return;
-    }
-
-    process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
-
-    try {
-      credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
-      console.log('✅ Using GCP credentials from file (development mode)');
-    } catch (e) {
-      console.warn('Failed to read credentials file:', e.message || e);
-      return;
-    }
+  if (!credentialsPath) {
+    const credentialsFile = 'gcp-service-account.json';
+    credentialsPath = path.join(process.cwd(), credentialsFile);
   } else {
-    // Production/Testnet: use environment variable (no file on disk)
-    if (process.env.GCP_SERVICE_ACCOUNT_JSON) {
-      try {
-        credentials = JSON.parse(process.env.GCP_SERVICE_ACCOUNT_JSON);
-        console.log('✅ Using GCP credentials from environment variable (no file on disk)');
-      } catch (e) {
-        console.warn('Failed to parse GCP_SERVICE_ACCOUNT_JSON:', e.message || e);
-        return;
-      }
-    } else {
-      console.warn('GCP_SERVICE_ACCOUNT_JSON not set for production/testnet, skipping secrets load.');
-      return;
+    if (!path.isAbsolute(credentialsPath)) {
+      credentialsPath = path.join(process.cwd(), credentialsPath);
     }
   }
 
-  if (!process.env.GCP_PROJECT_ID && credentials?.project_id) {
-    process.env.GCP_PROJECT_ID = credentials.project_id;
-  }
-
-  // For development, skip GCP Secret Manager and just use local .env file
-  if (isDevelopment) {
-    console.log('⚙️  Development mode: Using local .env file only (skipping GCP Secret Manager)');
+  if (!fs.existsSync(credentialsPath)) {
+    console.warn('Credentials file not found for development, skipping GCP setup.');
     return;
   }
 
-  if (!process.env.GCP_PROJECT_ID) {
-    console.warn('GCP_PROJECT_ID not set, skipping secrets load.');
-    return;
-  }
-
-  const secretName = nodeEnv === 'mainnet' ? 'mainnet' : 'testnet';
-  const projectId = process.env.GCP_PROJECT_ID;
-
-  try {
-    const { SecretManagerServiceClient } = await import('@google-cloud/secret-manager');
-
-    const client = new SecretManagerServiceClient();
-    const secretPath = `projects/${projectId}/secrets/${secretName}/versions/latest`;
-
-    const [version] = await client.accessSecretVersion({ name: secretPath });
-
-    const secrets = version.payload?.data?.toString() || '';
-
-    const parsed = dotenv.parse(secrets);
-
-    // Separate sensitive and non-sensitive secrets
-    let sensitiveSecretsCount = 0;
-    const nonSensitiveSecrets: Record<string, string> = {};
-
-    Object.entries(parsed).forEach(([key, value]) => {
-      if (SENSITIVE_KEYS.includes(key)) {
-        sensitiveSecretsCount++;
-      } else {
-        nonSensitiveSecrets[key] = value;
-      }
-    });
-
-    // Load ALL secrets into process.env (memory)
-    Object.assign(process.env, parsed);
-
-    // Only write non-sensitive secrets to .env file
-    const existingEnv = dotenv.parse(envExists ? fs.readFileSync(envFilePath, 'utf8') : '');
-
-    // Filter out sensitive keys from existing .env to ensure they are removed from disk
-    const filteredExistingEnv = Object.fromEntries(
-      Object.entries(existingEnv).filter(([key]) => !SENSITIVE_KEYS.includes(key))
-    );
-
-    const mergedEnv = { ...filteredExistingEnv, ...nonSensitiveSecrets };
-
-    const envContent = Object.entries(mergedEnv)
-      .map(([key, value]) => `${key}=${value}`)
-      .join('\n');
-    fs.writeFileSync(envFilePath, envContent, 'utf8');
-
-    console.log(
-      `✅ Loaded ${Object.keys(parsed).length} secrets from GCP (${sensitiveSecretsCount} kept in memory only)`
-    );
-  } catch (e) {
-    console.error('Failed to load GCP secrets:', e.stack || e.message || e);
-    console.warn('Falling back to .env file only');
-  }
+  process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
+  // eslint-disable-next-line no-console
+  console.log('✅ Using GCP credentials from file (development mode)');
 }
