@@ -65,40 +65,68 @@ export async function loadSecrets(): Promise<void> {
   }
 
   // Support both testnet and mainnet
-  const shouldLoadGcpSecrets = nodeEnv === 'mainnet' || nodeEnv === 'testnet';
+  const isDevelopment = nodeEnv === 'dev' || nodeEnv === 'development';
+  const shouldLoadGcpSecrets = nodeEnv === 'mainnet' || nodeEnv === 'testnet' || isDevelopment;
 
   if (!shouldLoadGcpSecrets) {
-    console.log(`Skipping GCP secrets load because NODE_ENV is "${nodeEnv}" (expected "mainnet" or "testnet")`);
+    console.log(`Skipping GCP secrets load because NODE_ENV is "${nodeEnv}" (expected "mainnet", "testnet", or "dev")`);
     return;
   }
 
-  let credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  let credentials: any = null;
 
-  if (!credentialsPath) {
-    const credentialsFile = 'gcp-service-account.json';
-    credentialsPath = path.join(process.cwd(), credentialsFile);
-  } else {
-    if (!path.isAbsolute(credentialsPath)) {
-      credentialsPath = path.join(process.cwd(), credentialsPath);
-    }
-  }
+  // For local development, use file-based credentials
+  // For testnet/mainnet, use environment variable (more secure, no files on VM)
+  if (isDevelopment) {
+    let credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
 
-  if (!fs.existsSync(credentialsPath)) {
-    console.warn('Credentials file not found, skipping secrets load.');
-    return;
-  }
-
-  process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
-
-  if (!process.env.GCP_PROJECT_ID) {
-    try {
-      const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
-      if (credentials.project_id) {
-        process.env.GCP_PROJECT_ID = credentials.project_id;
+    if (!credentialsPath) {
+      const credentialsFile = 'gcp-service-account.json';
+      credentialsPath = path.join(process.cwd(), credentialsFile);
+    } else {
+      if (!path.isAbsolute(credentialsPath)) {
+        credentialsPath = path.join(process.cwd(), credentialsPath);
       }
-    } catch (e) {
-      console.warn('Failed to read project_id from credentials:', e.message || e);
     }
+
+    if (!fs.existsSync(credentialsPath)) {
+      console.warn('Credentials file not found for development, skipping secrets load.');
+      return;
+    }
+
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
+
+    try {
+      credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
+      console.log('✅ Using GCP credentials from file (development mode)');
+    } catch (e) {
+      console.warn('Failed to read credentials file:', e.message || e);
+      return;
+    }
+  } else {
+    // Production/Testnet: use environment variable (no file on disk)
+    if (process.env.GCP_SERVICE_ACCOUNT_JSON) {
+      try {
+        credentials = JSON.parse(process.env.GCP_SERVICE_ACCOUNT_JSON);
+        console.log('✅ Using GCP credentials from environment variable (no file on disk)');
+      } catch (e) {
+        console.warn('Failed to parse GCP_SERVICE_ACCOUNT_JSON:', e.message || e);
+        return;
+      }
+    } else {
+      console.warn('GCP_SERVICE_ACCOUNT_JSON not set for production/testnet, skipping secrets load.');
+      return;
+    }
+  }
+
+  if (!process.env.GCP_PROJECT_ID && credentials?.project_id) {
+    process.env.GCP_PROJECT_ID = credentials.project_id;
+  }
+
+  // For development, skip GCP Secret Manager and just use local .env file
+  if (isDevelopment) {
+    console.log('⚙️  Development mode: Using local .env file only (skipping GCP Secret Manager)');
+    return;
   }
 
   if (!process.env.GCP_PROJECT_ID) {
