@@ -916,6 +916,7 @@ export class LifecycleService {
         let finalVtSupply = vtSupply;
         let finalLpVtAmount = lpVtAmount;
         let finalAdjustedVtLpAmount = adjustedVtLpAmount;
+        let finalAdaPairMultiplier = adaPairMultiplier;
 
         if (optimalDecimals > vault.ft_token_decimals) {
           const oldDecimals = vault.ft_token_decimals;
@@ -942,10 +943,12 @@ export class LifecycleService {
 
           finalLpVtAmount = recalculatedLp.lpVtAmount;
           finalAdjustedVtLpAmount = recalculatedLp.adjustedVtLpAmount;
+          finalAdaPairMultiplier = recalculatedLp.adaPairMultiplier;
 
           this.logger.log(
             `Recalculated with ${optimalDecimals} decimals: ` +
-              `vtSupply=${finalVtSupply}, lpVtAmount=${finalLpVtAmount}, adjustedVtLpAmount=${finalAdjustedVtLpAmount}`
+              `vtSupply=${finalVtSupply}, lpVtAmount=${finalLpVtAmount}, ` +
+              `adjustedVtLpAmount=${finalAdjustedVtLpAmount}, adaPairMultiplier=${finalAdaPairMultiplier}`
           );
         } else if (optimalDecimals < vault.ft_token_decimals) {
           this.logger.log(
@@ -1133,7 +1136,7 @@ export class LifecycleService {
           vault,
           acquireMultiplier,
           adaDistribution,
-          adaPairMultiplier,
+          adaPairMultiplier: finalAdaPairMultiplier,
           vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
         });
 
@@ -1168,7 +1171,7 @@ export class LifecycleService {
           txHash: response.txHash,
           acquire_multiplier: acquireMultiplier,
           ada_distribution: adaDistribution,
-          ada_pair_multiplier: adaPairMultiplier,
+          ada_pair_multiplier: finalAdaPairMultiplier,
           vtPrice,
           fdv,
           fdvTvl: +(fdv / totalContributedValueAda).toFixed(2) || 0,
@@ -1425,6 +1428,7 @@ export class LifecycleService {
       // Store final values to use for claim creation (may be recalculated if decimals upgraded)
       let finalMultipliersByAssetId = multipliersByAssetId;
       let finalLpVtAmount = lpVtAmount;
+      let finalAdaPairMultiplier = adaPairMultiplier;
 
       // Update vault decimals and recalculate if needed
       if (optimalDecimals > vault.ft_token_decimals) {
@@ -1464,10 +1468,12 @@ export class LifecycleService {
         });
 
         finalLpVtAmount = recalculatedLp.lpVtAmount;
+        finalAdaPairMultiplier = recalculatedLp.adaPairMultiplier;
 
         this.logger.log(
           `Recalculated with ${optimalDecimals} decimals: ` +
-            `${acquireMultiplier.length} multipliers, LP VT amount: ${finalLpVtAmount}`
+            `${acquireMultiplier.length} multipliers, LP VT amount: ${finalLpVtAmount}, ` +
+            `adaPairMultiplier: ${finalAdaPairMultiplier}`
         );
       } else if (optimalDecimals < vault.ft_token_decimals) {
         this.logger.log(
@@ -1595,7 +1601,7 @@ export class LifecycleService {
         vault,
         acquireMultiplier,
         adaDistribution, // Empty array for no acquirers scenario
-        adaPairMultiplier,
+        adaPairMultiplier: finalAdaPairMultiplier,
         vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
       });
 
@@ -1634,7 +1640,7 @@ export class LifecycleService {
         txHash: response.txHash,
         acquire_multiplier: acquireMultiplier,
         ada_distribution: adaDistribution, // Empty for no acquirers scenario
-        ada_pair_multiplier: adaPairMultiplier,
+        ada_pair_multiplier: finalAdaPairMultiplier,
         vtPrice,
         fdv,
         fdvTvl: 1, // FDV = TVL when no acquirers
