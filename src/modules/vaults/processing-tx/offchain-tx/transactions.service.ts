@@ -414,11 +414,10 @@ export class TransactionsService {
       case GetTransactionType.all:
         queryBuilder.andWhere('transaction.type IN (:...types)', {
           types: [
+            TransactionType.createVault,
             TransactionType.contribute,
             TransactionType.burn,
             TransactionType.acquire,
-            TransactionType.extractDispatch,
-            TransactionType.claim,
           ],
         });
         break;
@@ -440,11 +439,6 @@ export class TransactionsService {
       case GetTransactionType.createVault:
         queryBuilder.andWhere('transaction.type = (:type)', {
           type: TransactionType.createVault,
-        });
-        break;
-      case GetTransactionType.distribution:
-        queryBuilder.andWhere('transaction.type IN (:...types)', {
-          types: [TransactionType.extractDispatch, TransactionType.claim],
         });
         break;
     }
