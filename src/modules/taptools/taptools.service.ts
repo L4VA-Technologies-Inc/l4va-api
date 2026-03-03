@@ -261,7 +261,6 @@ export class TaptoolsService {
 
     try {
       const endpoint = `/nft/collection/traits/price?policy=${policyId}`;
-      this.logger.debug(`Fetching trait prices from TapTools: ${endpoint}`);
 
       const response = await this.axiosTapToolsInstance.get(endpoint, {
         timeout: 10000,
@@ -273,7 +272,6 @@ export class TaptoolsService {
       if (response.data && typeof response.data === 'object') {
         // Cache the result
         this.traitPricesCache.set(cacheKey, response.data);
-        this.logger.debug(`Successfully fetched and cached trait prices for policy ${policyId}`);
         return response.data;
       }
 
@@ -295,7 +293,6 @@ export class TaptoolsService {
   private async fetchRelicsCharacterFromWayUp(policyId: string, name: string): Promise<string | null> {
     // Only works on mainnet - WayUp doesn't support testnet
     if (!this.isMainnet) {
-      this.logger.debug('Skipping WayUp character fetch for testnet');
       return null;
     }
 
@@ -349,7 +346,6 @@ export class TaptoolsService {
       }
 
       // Fallback to fixed price if WayUp fails or no listings
-      this.logger.debug(`Using fallback price for Porta: ${this.RELICS_PORTA_PRICE_FALLBACK} ADA`);
       return this.RELICS_PORTA_PRICE_FALLBACK;
     }
 
@@ -363,15 +359,11 @@ export class TaptoolsService {
         const traitPrices = await this.fetchTraitPricesFromTapTools(policyId);
 
         if (traitPrices && traitPrices.Character && traitPrices.Character[character]) {
-          this.logger.debug(`Using TapTools price for Vita ${character}: ${traitPrices.Character[character]} ADA`);
           return traitPrices.Character[character];
         }
 
         // Fallback to hardcoded prices if TapTools fails
         if (this.RELICS_CHARACTER_PRICES_FALLBACK[character]) {
-          this.logger.debug(
-            `Using fallback price for Vita ${character}: ${this.RELICS_CHARACTER_PRICES_FALLBACK[character]} ADA`
-          );
           return this.RELICS_CHARACTER_PRICES_FALLBACK[character];
         }
       }
@@ -1164,8 +1156,8 @@ export class TaptoolsService {
    *   derive the percentage change in VT token price from inception, and then applies this
    *   percentage change to the user's VT token holdings (scaled by the current VT price) to
    *   compute user_gains_ada.
-   * - Non-LP locked/expansion vaults: user_gains_ada is based on the change in TVL over time,
-   *   multiplied by the user's proportional TVL ownership.
+   * - Non-LP locked/expansion vaults: DO NOT use historical TVL snapshots for gains calculation. Instead, calculate the user's
+   * proportional ownership of the vault based on their VT token holdings relative to total supply, and then apply this ownership percentage to the current TVL to derive user_gains_ada. This approach avoids inaccuracies that can arise from using historical snapshots in volatile markets.
    * - Contribution/Acquire: No calculation (users don't own VT tokens yet)
    *
    * @param vaultIds Array of vault IDs to update
@@ -1174,7 +1166,6 @@ export class TaptoolsService {
     if (vaultIds.length === 0) return;
 
     const batchResults = await this.calculateVaultsTvl(vaultIds);
-    const adaPrice = await this.priceService.getAdaPrice();
 
     const vaults: Pick<
       Vault,
@@ -1190,19 +1181,10 @@ export class TaptoolsService {
     // Update vault totals
     const updatePromises = Array.from(batchResults.entries()).map(([vaultId, summary]) => {
       const vault = vaultMap.get(vaultId);
-      let gainsAda = 0;
-      let gainsUsd = 0;
 
-      if (vault?.initial_total_value_ada && vault.initial_total_value_ada > 0) {
-        gainsAda = summary.totalValueAda - vault.initial_total_value_ada;
-        gainsUsd = gainsAda * adaPrice;
-      }
-
-      const updateData: any = {
+      const updateData: Partial<Vault> = {
         total_assets_cost_ada: summary.totalValueAda,
         total_assets_cost_usd: summary.totalValueUsd,
-        gains_ada: gainsAda,
-        gains_usd: gainsUsd,
         last_valuation_update: new Date(),
       };
 

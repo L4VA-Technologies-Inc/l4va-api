@@ -154,13 +154,6 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   type: VaultType;
 
-  @ApiProperty({ description: 'Hash of publication tx' })
-  @DtoRepresent({
-    transform: false,
-    expose: { name: 'publicationHash' },
-  })
-  publicationHash: string;
-
   @ApiProperty({ description: 'Required values cost for success acquire phase in ada' })
   @DtoRepresent({
     transform: false,
@@ -209,13 +202,6 @@ export class VaultFullResponse extends VaultShortResponse {
     expose: { name: 'maxContributeAssets' },
   })
   maxContributeAssets: number;
-
-  @ApiProperty({ description: 'Fdv in USD value' })
-  @DtoRepresent({
-    transform: false,
-    expose: { name: 'fdvUsd' },
-  })
-  fdvUsd: number;
 
   @ApiProperty({ description: 'Required values cost for success acquire phase in usd' })
   @DtoRepresent({
@@ -386,6 +372,13 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   policyId?: string;
 
+  @ApiProperty({ description: 'Asset vault name', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'assetVaultName' },
+  })
+  assetVaultName?: string;
+
   @ApiProperty({ description: 'Valuation amount', required: false })
   @DtoRepresent({
     transform: ({ value }) => (value ? Number(value) : null),
@@ -498,6 +491,13 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   fdv: number;
 
+  @ApiProperty({ description: 'Fdv in USD value' })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'fdvUsd' },
+  })
+  fdvUsd: number;
+
   @ApiProperty({ description: 'FDV TVL' })
   @DtoRepresent({
     transform: false,
@@ -511,6 +511,13 @@ export class VaultFullResponse extends VaultShortResponse {
     expose: { name: 'vtPrice' },
   })
   vtPrice?: number;
+
+  @ApiProperty({ description: 'Vault Token (VT) price in USD', required: false })
+  @DtoRepresent({
+    transform: ({ value }) => (value ? Number(value) : null),
+    expose: { name: 'vtPriceUsd' },
+  })
+  vtPriceUsd?: number;
 
   @ApiProperty({ description: 'VT gains' })
   @DtoRepresent({
