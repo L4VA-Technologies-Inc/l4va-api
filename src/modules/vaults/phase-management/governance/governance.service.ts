@@ -76,7 +76,8 @@ export class GovernanceService {
   private readonly votingPowerCache: NodeCache;
   private readonly proposalCreationCache: NodeCache;
   private readonly poolAddress: string;
-  private readonly MIN_VOTING_DURATION = 86400000; // 24 hours in ms
+  // private readonly MIN_VOTING_DURATION = 86400000; // 24 hours in ms
+  private readonly MIN_VOTING_DURATION = 0; // 24 hours in ms
   private readonly MAX_VOTING_DURATION = 259200000; // 3 days in ms
   private readonly MIN_LP_ADA_FOR_MARKET_PRICING = 5000;
 
