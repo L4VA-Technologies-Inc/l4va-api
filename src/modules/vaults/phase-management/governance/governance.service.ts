@@ -930,30 +930,14 @@ export class GovernanceService {
       order: { created_at: 'ASC' },
     });
 
-    // If payment is required, build fee transaction BEFORE emitting events
-    // This ensures we don't notify users of proposals that fail to create
+    // If payment is required, build fee transaction and return WITHOUT emitting events
+    // Events will be emitted when user submits payment via submitProposalFeePayment
     if (requiresPayment) {
       try {
         const feeTransaction = await this.governanceFeeService.buildProposalFeeTransaction({
           userAddress: user.address,
           proposalType: createProposalReq.type,
           vaultId,
-        });
-
-        // Transaction built successfully - now emit events for UNPAID proposal
-        this.eventEmitter.emit('proposal.created', {
-          proposalId: proposal.id,
-          startDate: proposal.startDate,
-          endDate: proposal.endDate,
-          status: proposal.status,
-        });
-
-        this.eventEmitter.emit('governance.proposal_created', {
-          address: user.address,
-          vaultId: vault.id,
-          vaultName: vault.name,
-          proposalName: proposal.title,
-          creatorId: proposal.creatorId,
         });
 
         return {
@@ -981,7 +965,8 @@ export class GovernanceService {
       }
     }
 
-    // No payment required - emit proposal.created and proposal.started events
+    // No payment required - emit all events to schedule and notify
+    // 1. proposal.created - triggers scheduling in governance-execution service
     this.eventEmitter.emit('proposal.created', {
       proposalId: proposal.id,
       startDate: proposal.startDate,
@@ -989,6 +974,7 @@ export class GovernanceService {
       status: proposal.status,
     });
 
+    // 2. governance.proposal_created - sends notifications
     this.eventEmitter.emit('governance.proposal_created', {
       address: user.address,
       vaultId: vault.id,
@@ -997,7 +983,7 @@ export class GovernanceService {
       creatorId: proposal.creatorId,
     });
 
-    // No payment required - emit proposal.started event
+    // 3. proposal.started - notifies token holders
     this.eventEmitter.emit('proposal.started', {
       address: user.address,
       vaultId: vault.id,
@@ -1562,7 +1548,7 @@ export class GovernanceService {
 
     await this.proposalRepository.save(proposal);
 
-    // Emit proposal started event
+    // Fetch contributor claims for notifications
     const finalContributorClaims = await this.claimRepository.find({
       where: {
         vault: { id: proposal.vault.id },
@@ -1572,6 +1558,25 @@ export class GovernanceService {
       order: { created_at: 'ASC' },
     });
 
+    // Emit all events after payment is confirmed (same as non-payment flow)
+    // 1. proposal.created - triggers scheduling in governance-execution service
+    this.eventEmitter.emit('proposal.created', {
+      proposalId: proposal.id,
+      startDate: proposal.startDate,
+      endDate: proposal.endDate,
+      status: proposal.status,
+    });
+
+    // 2. governance.proposal_created - sends notifications
+    this.eventEmitter.emit('governance.proposal_created', {
+      address: proposal.creator.address,
+      vaultId: proposal.vault.id,
+      vaultName: proposal.vault.name,
+      proposalName: proposal.title,
+      creatorId: proposal.creatorId,
+    });
+
+    // 3. proposal.started - notifies token holders
     this.eventEmitter.emit('proposal.started', {
       address: proposal.creator.address,
       vaultId: proposal.vault.id,
@@ -1582,7 +1587,7 @@ export class GovernanceService {
     });
 
     this.logger.log(
-      `Proposal ${proposalId} activated after payment submission. TxHash: ${txHash}, Start: ${startDate.toISOString()}, End: ${endDate.toISOString()}`
+      `Proposal ${proposalId} activated after payment submission. TxHash: ${txHash}, Status: ${proposal.status}, Start: ${startDate.toISOString()}, End: ${endDate.toISOString()}`
     );
 
     return {
