@@ -893,7 +893,10 @@ export class VaultsService {
       assetsPrices,
       fdv: vault.vault_status === VaultStatus.acquire ? projectedFdvAda : vault.fdv,
       fdvUsd: (vault.vault_status === VaultStatus.acquire ? projectedFdvAda : vault.fdv) * adaPrice,
-      fdvTvl: vault.vault_status === VaultStatus.acquire ? projectedFdvAda / assetsPrices.totalValueAda : vault.fdv_tvl,
+      fdvTvl:
+        vault.vault_status === VaultStatus.acquire
+          ? Number(projectedFdvAda / assetsPrices.totalValueAda)
+          : Number(vault.fdv_tvl),
       tokenHolders,
       vaultContributorsCount,
       vaultAcquirersCount,
