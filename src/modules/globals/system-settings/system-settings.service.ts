@@ -26,6 +26,9 @@ export interface SystemSettingsData {
   governance_fee_proposal_marketplace_action: number;
   governance_fee_proposal_expansion: number;
   governance_fee_voting: number; // Fee per vote
+  // Voting duration constraints (in milliseconds)
+  min_voting_duration: number;
+  max_voting_duration: number;
 }
 
 const DEFAULT_SETTINGS: SystemSettingsData = {
@@ -48,6 +51,9 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   governance_fee_proposal_marketplace_action: 5000000, // 5 ADA
   governance_fee_proposal_expansion: 10000000, // 10 ADA
   governance_fee_voting: 0, // No voting fee by default
+  // Voting duration constraints (in milliseconds)
+  min_voting_duration: 86400000, // 24 hours in ms
+  max_voting_duration: 259200000, // 3 days in ms
   hidden_mainnet_vault_ids: [
     '1a6e7495-178b-464e-b37e-00997ef1e9c2',
     '2761c805-77c5-443e-b352-f0afaf4860c0',
@@ -202,6 +208,14 @@ export class SystemSettingsService implements OnModuleInit {
 
   get governanceFeeVoting(): number {
     return this.settings.governance_fee_voting || 0;
+  }
+
+  get minVotingDuration(): number {
+    return this.settings.min_voting_duration || 86400000; // 24 hours default
+  }
+
+  get maxVotingDuration(): number {
+    return this.settings.max_voting_duration || 259200000; // 3 days default
   }
 
   /**

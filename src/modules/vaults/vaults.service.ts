@@ -867,8 +867,9 @@ export class VaultsService {
     const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
 
     let projectedLpAdaAmount = 0;
+    let projectedFdvAda = 0;
     if (LP_PERCENT > 0 && assetsPrices.totalValueAda > 0) {
-      const { lpAdaAmount } = this.distributionCalculationService.calculateLpTokens({
+      const { lpAdaAmount, fdv } = this.distributionCalculationService.calculateLpTokens({
         vtSupply,
         totalAcquiredAda: assetsPrices.totalAcquiredAda,
         totalContributedValueAda: assetsPrices.totalValueAda,
@@ -876,6 +877,7 @@ export class VaultsService {
         lpPercent: LP_PERCENT,
       });
       projectedLpAdaAmount = lpAdaAmount;
+      projectedFdvAda = fdv;
     }
 
     const additionalData = {
@@ -889,7 +891,9 @@ export class VaultsService {
       projectedLpUsdAmount: projectedLpAdaAmount * adaPrice,
       assetsCount: lockedAssetsCount,
       assetsPrices,
-      fdvUsd: vault.fdv * adaPrice,
+      fdv: vault.vault_status === VaultStatus.acquire ? projectedFdvAda : vault.fdv,
+      fdvUsd: (vault.vault_status === VaultStatus.acquire ? projectedFdvAda : vault.fdv) * adaPrice,
+      fdvTvl: vault.vault_status === VaultStatus.acquire ? projectedFdvAda / assetsPrices.totalValueAda : vault.fdv_tvl,
       tokenHolders,
       vaultContributorsCount,
       vaultAcquirersCount,

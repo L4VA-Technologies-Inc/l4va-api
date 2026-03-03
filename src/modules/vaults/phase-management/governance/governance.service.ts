@@ -38,6 +38,7 @@ import { Vault } from '@/database/vault.entity';
 import { Vote } from '@/database/vote.entity';
 import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
+import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
@@ -76,9 +77,6 @@ export class GovernanceService {
   private readonly votingPowerCache: NodeCache;
   private readonly proposalCreationCache: NodeCache;
   private readonly poolAddress: string;
-  // private readonly MIN_VOTING_DURATION = 86400000; // 24 hours in ms
-  private readonly MIN_VOTING_DURATION = 0; // 24 hours in ms
-  private readonly MAX_VOTING_DURATION = 259200000; // 3 days in ms
   private readonly MIN_LP_ADA_FOR_MARKET_PRICING = 5000;
 
   // private readonly snapshotCache: NodeCache;
@@ -115,7 +113,8 @@ export class GovernanceService {
     private readonly governanceFeeService: GovernanceFeeService,
     private readonly dexHunterPricingService: DexHunterPricingService,
     private readonly dexHunterService: DexHunterService,
-    private readonly blockchainService: BlockchainService
+    private readonly blockchainService: BlockchainService,
+    private readonly systemSettingsService: SystemSettingsService
   ) {
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
 
@@ -342,15 +341,18 @@ export class GovernanceService {
 
     await this.getVotingPower(vaultId, userId, 'create_proposal');
 
-    if (createProposalReq.duration < this.MIN_VOTING_DURATION) {
+    const minVotingDuration = this.systemSettingsService.minVotingDuration;
+    const maxVotingDuration = this.systemSettingsService.maxVotingDuration;
+
+    if (createProposalReq.duration < minVotingDuration) {
       throw new BadRequestException(
-        `Voting duration must be at least 24 hours (${this.MIN_VOTING_DURATION}ms). Provided: ${createProposalReq.duration}ms`
+        `Voting duration must be at least ${minVotingDuration / 3600000} hours (${minVotingDuration}ms). Provided: ${createProposalReq.duration}ms`
       );
     }
 
-    if (createProposalReq.duration > this.MAX_VOTING_DURATION) {
+    if (createProposalReq.duration > maxVotingDuration) {
       throw new BadRequestException(
-        `Voting duration cannot exceed 3 days (${this.MAX_VOTING_DURATION}ms). Provided: ${createProposalReq.duration}ms`
+        `Voting duration cannot exceed ${maxVotingDuration / 3600000} hours (${maxVotingDuration}ms). Provided: ${createProposalReq.duration}ms`
       );
     }
 
