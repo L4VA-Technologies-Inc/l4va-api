@@ -39,6 +39,7 @@ import { Vote } from '@/database/vote.entity';
 import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
+import { VyfiService } from '@/modules/vyfi/vyfi.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
@@ -114,7 +115,8 @@ export class GovernanceService {
     private readonly dexHunterPricingService: DexHunterPricingService,
     private readonly dexHunterService: DexHunterService,
     private readonly blockchainService: BlockchainService,
-    private readonly systemSettingsService: SystemSettingsService
+    private readonly systemSettingsService: SystemSettingsService,
+    private readonly vyfiService: VyfiService
   ) {
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
 
@@ -191,11 +193,12 @@ export class GovernanceService {
    */
   async createAutomaticSnapshot(vaultId: string, assetId: string): Promise<Snapshot> {
     try {
-      // Fetch vault decimals for proper supply calculation
-      const vault = await this.vaultRepository.findOne({
-        where: { id: vaultId },
-        select: ['id', 'ft_token_decimals'],
-      });
+      // Fetch vault info including token unit for LP detection
+      const vault: Pick<Vault, 'id' | 'ft_token_decimals' | 'policy_id' | 'asset_vault_name' | 'has_active_lp'> =
+        await this.vaultRepository.findOne({
+          where: { id: vaultId },
+          select: ['id', 'ft_token_decimals', 'policy_id', 'asset_vault_name', 'has_active_lp'],
+        });
 
       if (!vault) {
         throw new NotFoundException(`Vault ${vaultId} not found`);
@@ -216,6 +219,19 @@ export class GovernanceService {
         );
       }
 
+      const lpAddresses: string[] = [];
+
+      if (vault.has_active_lp) {
+        // Get vault-specific LP addresses to exclude from voting power
+        const poolInfo = await this.vyfiService.getPoolByTokens(`${vault.policy_id}${vault.asset_vault_name}`);
+        if (poolInfo) {
+          lpAddresses.push(poolInfo.poolAddress);
+          this.logger.log(
+            `Found VyFi pool for vault ${vaultId} with asset ${assetId}. Pool address: ${poolInfo.poolAddress}`
+          );
+        }
+      }
+
       // Fetch all addresses holding the asset using BlockFrost
       const addressBalances: Record<string, string> = {}; // For snapshot (excludes LP)
       let totalSupplyRaw = BigInt(0); // Total supply INCLUDING LP tokens
@@ -234,11 +250,13 @@ export class GovernanceService {
               // ALWAYS add to total supply (includes LP tokens)
               totalSupplyRaw += BigInt(item.quantity);
 
-              // Only add to snapshot if NOT pool address (exclude LP from voting power)
-              if (item.address !== this.poolAddress) {
+              // Only add to snapshot if NOT an LP-related address (exclude LP from voting power)
+              if (item.address !== this.poolAddress && !lpAddresses.includes(item.address)) {
                 addressBalances[item.address] = item.quantity;
               } else {
-                this.logger.log(`Excluded pool address ${this.poolAddress} from snapshot (${item.quantity} VT in LP)`);
+                this.logger.log(
+                  `Excluded LP address ${item.address} from snapshot (${item.quantity} VT in liquidity pool)`
+                );
               }
             }
             page++;
