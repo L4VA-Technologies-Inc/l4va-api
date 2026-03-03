@@ -891,9 +891,15 @@ export class VaultsService {
       projectedLpUsdAmount: projectedLpAdaAmount * adaPrice,
       assetsCount: lockedAssetsCount,
       assetsPrices,
-      fdv: vault.vault_status === VaultStatus.acquire ? projectedFdvAda : vault.fdv,
-      fdvUsd: (vault.vault_status === VaultStatus.acquire ? projectedFdvAda : vault.fdv) * adaPrice,
-      fdvTvl: vault.vault_status === VaultStatus.acquire ? projectedFdvAda / assetsPrices.totalValueAda : vault.fdv_tvl,
+      fdv: vault.vault_status === VaultStatus.acquire ? Number(projectedFdvAda) : Number(vault.fdv),
+      fdvUsd: (vault.vault_status === VaultStatus.acquire ? Number(projectedFdvAda) : Number(vault.fdv)) * adaPrice,
+      fdvTvl:
+        vault.vault_status === VaultStatus.acquire
+          ? assetsPrices.totalValueAda > 0
+            ? Number(projectedFdvAda / assetsPrices.totalValueAda)
+            : Number(vault.fdv_tvl)
+          : Number(vault.fdv_tvl),
+      vtPriceUsd: vault.vt_price ? Number(vault.vt_price) * adaPrice : undefined,
       tokenHolders,
       vaultContributorsCount,
       vaultAcquirersCount,
