@@ -144,8 +144,6 @@ export class ExpansionService {
         acquireMultiplier: expansionMultipliers,
       });
 
-      this.logger.log(`On-chain vault closure successful. TX: ${onChainResult.txHash}`);
-
       // Update vault status back to LOCKED in database and save merged multipliers
       // Clear expansion phase fields to indicate expansion is complete
       await this.vaultRepository.update(
