@@ -121,6 +121,71 @@ export class VaultManagingService {
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
+
+    // Validate critical environment variables
+    this.validateEnvironmentVariables();
+  }
+
+  /**
+   * Validates that all required environment variables are present
+   * Logs warnings for missing critical configuration
+   */
+  private validateEnvironmentVariables(): void {
+    this.logger.log('=== Validating VaultManaging Service Configuration ===');
+
+    const requiredVars = [
+      { key: 'VAULT_SCRIPT_ADDRESS', value: this.vaultScriptAddress, critical: true },
+      { key: 'ADMIN_S_KEY', value: this.adminSKey, critical: true, sensitive: true },
+      { key: 'ADMIN_ADDRESS', value: this.adminAddress, critical: true },
+      { key: 'ADMIN_KEY_HASH', value: this.adminHash, critical: true },
+      { key: 'SC_POLICY_ID', value: this.scPolicyId, critical: true },
+      { key: 'CONTRIBUTION_SCRIPT_HASH', value: this.unparametizedScriptHash, critical: true },
+      { key: 'BLUEPRINT_TITLE', value: this.blueprintTitle, critical: true },
+      { key: 'VLRM_POLICY_ID', value: this.VLRM_POLICY_ID, critical: true },
+      { key: 'VLRM_HEX_ASSET_NAME', value: this.VLRM_HEX_ASSET_NAME, critical: true },
+      {
+        key: 'BLOCKFROST_API_KEY',
+        value: this.configService.get<string>('BLOCKFROST_API_KEY'),
+        critical: true,
+        sensitive: true,
+      },
+      { key: 'NETWORK_ID', value: this.networkId?.toString(), critical: true },
+      { key: 'POOL_ADDRESS', value: this.configService.get<string>('POOL_ADDRESS'), critical: false },
+    ];
+
+    let missingCritical = 0;
+    let missingOptional = 0;
+
+    requiredVars.forEach(({ key, value, critical, sensitive }) => {
+      if (!value || value === '' || value === 'undefined') {
+        if (critical) {
+          this.logger.error(`❌ MISSING CRITICAL: ${key}`);
+          missingCritical++;
+        } else {
+          this.logger.warn(`⚠️  MISSING OPTIONAL: ${key}`);
+          missingOptional++;
+        }
+      } else {
+        const displayValue = sensitive ? '***REDACTED***' : value.length > 50 ? `${value.substring(0, 20)}...` : value;
+        this.logger.log(`✅ ${key}: ${displayValue}`);
+      }
+    });
+
+    if (missingCritical > 0) {
+      this.logger.error(
+        `❌ ${missingCritical} critical environment variable(s) missing. Service may not function correctly.`
+      );
+    }
+    if (missingOptional > 0) {
+      this.logger.warn(
+        `⚠️  ${missingOptional} optional environment variable(s) missing. Some features may be limited.`
+      );
+    }
+    if (missingCritical === 0 && missingOptional === 0) {
+      this.logger.log('✅ All required environment variables are configured');
+    }
+
+    this.logger.log('=== Configuration Validation Complete ===');
   }
 
   /**

@@ -50,6 +50,65 @@ export class BlockchainService {
       'x-api-key': this.configService.get<string>('ANVIL_API_KEY'),
       'Content-Type': 'application/json',
     };
+
+    // Validate critical environment variables
+    this.validateEnvironmentVariables();
+  }
+
+  /**
+   * Validates that all required environment variables are present
+   * Logs warnings for missing critical configuration
+   */
+  private validateEnvironmentVariables(): void {
+    this.logger.log('=== Validating Blockchain Service Configuration ===');
+
+    const requiredVars = [
+      { key: 'ANVIL_API_URL', value: this.configService.get<string>('ANVIL_API_URL'), critical: true },
+      { key: 'ANVIL_API_KEY', value: this.configService.get<string>('ANVIL_API_KEY'), critical: true, sensitive: true },
+      { key: 'DISPATCH_SCRIPT_HASH', value: this.unparametizedDispatchHash, critical: true },
+      { key: 'BLUEPRINT_TITLE', value: this.blueprintTitle, critical: true },
+      { key: 'NETWORK_ID', value: this.networkId?.toString(), critical: true },
+      {
+        key: 'BLOCKFROST_API_KEY',
+        value: this.configService.get<string>('BLOCKFROST_API_KEY'),
+        critical: true,
+        sensitive: true,
+      },
+    ];
+
+    let missingCritical = 0;
+    let missingOptional = 0;
+
+    requiredVars.forEach(({ key, value, critical, sensitive }) => {
+      if (!value || value === '' || value === 'undefined') {
+        if (critical) {
+          this.logger.error(`❌ MISSING CRITICAL: ${key}`);
+          missingCritical++;
+        } else {
+          this.logger.warn(`⚠️  MISSING OPTIONAL: ${key}`);
+          missingOptional++;
+        }
+      } else {
+        const displayValue = sensitive ? '***REDACTED***' : value.length > 50 ? `${value.substring(0, 20)}...` : value;
+        this.logger.log(`✅ ${key}: ${displayValue}`);
+      }
+    });
+
+    if (missingCritical > 0) {
+      this.logger.error(
+        `❌ ${missingCritical} critical environment variable(s) missing. Service may not function correctly.`
+      );
+    }
+    if (missingOptional > 0) {
+      this.logger.warn(
+        `⚠️  ${missingOptional} optional environment variable(s) missing. Some features may be limited.`
+      );
+    }
+    if (missingCritical === 0 && missingOptional === 0) {
+      this.logger.log('✅ All required environment variables are configured');
+    }
+
+    this.logger.log('=== Configuration Validation Complete ===');
   }
 
   getNetworkId(): number {
