@@ -386,12 +386,18 @@ export class VaultContributionService {
    */
   async validateContributionLimits(transaction: Transaction, vault: Vault): Promise<void> {
     const contributingAssets = (transaction.metadata as any[]) || [];
-    const contributingAssetCount = contributingAssets.length;
+    // Count actual asset quantities: NFTs = 1 each, FTs = quantity
+    const contributingAssetCount = contributingAssets.reduce((sum, asset: any) => {
+      const rawQuantity = Number(asset?.quantity);
+      const assetCount = rawQuantity && !Number.isNaN(rawQuantity) ? rawQuantity : 1;
+      return sum + assetCount;
+    }, 0);
 
     if (vault.vault_status === VaultStatus.expansion) {
-      await this.validateExpansionLimits(transaction.vault_id, contributingAssetCount);
+      await this.validateExpansionLimits(transaction.id, transaction.vault_id, contributingAssetCount);
     } else if (vault.vault_status === VaultStatus.contribution) {
       await this.validateNormalContributionLimits(
+        transaction.id,
         transaction.vault_id,
         vault.max_contribute_assets,
         contributingAssetCount
@@ -403,6 +409,7 @@ export class VaultContributionService {
    * Validate limits for normal contribution phase
    */
   private async validateNormalContributionLimits(
+    currentTxId: string,
     vaultId: string,
     maxContributeAssets: number,
     contributingAssetCount: number
@@ -422,11 +429,21 @@ export class VaultContributionService {
 
     const currentAssetCount = Number(confirmedAssets?.totalQuantity || 0);
 
-    // Count pending contribution transactions (excluding this one)
+    // Count pending contribution transactions (excluding current transaction)
+    // Sum actual quantities from JSON metadata: NFTs = 1, FTs = quantity
     const pendingContributions = await this.transactionRepository
       .createQueryBuilder('t')
-      .select('COALESCE(SUM(CAST(jsonb_array_length(t.metadata) AS INTEGER)), 0)', 'pendingAssetCount')
+      .select(
+        `COALESCE(
+          SUM(
+            (SELECT SUM(COALESCE((elem->>'quantity')::numeric, 1))
+             FROM jsonb_array_elements(t.metadata) AS elem)
+          ), 0
+        )`,
+        'pendingAssetCount'
+      )
       .where('t.vault_id = :vaultId', { vaultId })
+      .andWhere('t.id != :currentTxId', { currentTxId })
       .andWhere('t.type = :type', { type: TransactionType.contribute })
       .andWhere('t.status IN (:...statuses)', {
         statuses: [TransactionStatus.created, TransactionStatus.pending],
@@ -453,7 +470,11 @@ export class VaultContributionService {
   /**
    * Validate limits for expansion phase
    */
-  private async validateExpansionLimits(vaultId: string, contributingAssetCount: number): Promise<void> {
+  private async validateExpansionLimits(
+    currentTxId: string,
+    vaultId: string,
+    contributingAssetCount: number
+  ): Promise<void> {
     // Get expansion configuration
     const expansionProposal = await this.proposalRepository.findOne({
       where: {
@@ -496,12 +517,22 @@ export class VaultContributionService {
       return total + quantity;
     }, 0);
 
-    // Count pending expansion transactions
+    // Count pending expansion transactions (excluding current transaction)
+    // Sum actual quantities from JSON metadata: NFTs = 1, FTs = quantity
     const pendingExpansionContributions = await this.transactionRepository
       .createQueryBuilder('t')
       .innerJoin('vaults', 'v', 't.vault_id = v.id')
-      .select('COALESCE(SUM(CAST(jsonb_array_length(t.metadata) AS INTEGER)), 0)', 'pendingAssetCount')
+      .select(
+        `COALESCE(
+          SUM(
+            (SELECT SUM(COALESCE((elem->>'quantity')::numeric, 1))
+             FROM jsonb_array_elements(t.metadata) AS elem)
+          ), 0
+        )`,
+        'pendingAssetCount'
+      )
       .where('t.vault_id = :vaultId', { vaultId })
+      .andWhere('t.id != :currentTxId', { currentTxId })
       .andWhere('t.type = :type', { type: TransactionType.contribute })
       .andWhere('t.status IN (:...statuses)', {
         statuses: [TransactionStatus.created, TransactionStatus.pending],
