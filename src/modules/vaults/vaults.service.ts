@@ -874,14 +874,16 @@ export class VaultsService {
         }).length
       : 0;
 
+    const adaPrice = await this.priceService.getAdaPrice();
+    const totalAcquiredAda = Number(vault.total_acquired_value_ada ?? 0);
     const assetsPrices = {
-      adaPrice: await this.priceService.getAdaPrice(),
+      adaPrice,
       totalValueAda: Number(vault.total_assets_cost_ada ?? 0),
       totalValueUsd: Number(vault.total_assets_cost_usd ?? 0),
-      totalAcquiredAda: Number(vault.total_acquired_value_ada ?? 0),
+      totalAcquiredAda,
+      totalAcquiredUsd: totalAcquiredAda * adaPrice,
       assetsByPolicy,
     };
-    const adaPrice = assetsPrices.adaPrice;
     const lpMinLiquidityLovelace = this.systemSettingsService.lpRecommendedMinLiquidity;
     const lpMinLiquidityAda = lpMinLiquidityLovelace / 1_000_000;
     const lpMinLiquidityUsd = lpMinLiquidityAda * adaPrice;
