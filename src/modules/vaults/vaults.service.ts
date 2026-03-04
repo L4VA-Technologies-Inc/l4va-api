@@ -735,6 +735,28 @@ export class VaultsService {
 
     const lockedAssetsCount = lockedNFTCount + lockedFTsCount;
 
+    const rawAssetsByPolicy = await this.assetsRepository
+      .createQueryBuilder('asset')
+      .select('asset.policy_id', 'policyId')
+      .addSelect(`SUM(CASE WHEN asset.type = :nftType THEN 1 ELSE asset.quantity END)`, 'quantity')
+      .where('asset.vault_id = :vaultId', { vaultId })
+      .andWhere('asset.status IN (:...statuses)', {
+        statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED],
+      })
+      .andWhere('asset.deleted = false')
+      .andWhere(`asset.policy_id != 'lovelace'`)
+      .andWhere(`COALESCE(asset.metadata->>'purpose', '') != 'vault_creation_fee'`)
+      .setParameters({
+        nftType: AssetType.NFT,
+      })
+      .groupBy('asset.policy_id')
+      .getRawMany();
+
+    const assetsByPolicy: Array<{ policyId: string; quantity: number }> = rawAssetsByPolicy.map(row => ({
+      policyId: row.policyId,
+      quantity: Number(row.quantity || 0),
+    }));
+
     // Calculate expansion asset data if vault is in expansion or has had expansion
     let expansionAssetsCount = 0;
     let expansionAssetMax: number | undefined;
@@ -852,7 +874,13 @@ export class VaultsService {
         }).length
       : 0;
 
-    const assetsPrices = await this.taptoolsService.getVaultAssetsSummary(vaultId);
+    const assetsPrices = {
+      adaPrice: await this.priceService.getAdaPrice(),
+      totalValueAda: Number(vault.total_assets_cost_ada ?? 0),
+      totalValueUsd: Number(vault.total_assets_cost_usd ?? 0),
+      totalAcquiredAda: Number(vault.total_acquired_value_ada ?? 0),
+      assetsByPolicy,
+    };
     const adaPrice = assetsPrices.adaPrice;
     const lpMinLiquidityLovelace = this.systemSettingsService.lpRecommendedMinLiquidity;
     const lpMinLiquidityAda = lpMinLiquidityLovelace / 1_000_000;
@@ -1289,12 +1317,8 @@ export class VaultsService {
       .take(limit)
       .getManyAndCount();
 
-    // Batch calculate asset values for all vaults at once (fixes N+1 query problem)
-    const vaultIds = items.map(vault => vault.id);
-    const assetValuesMap = await this.taptoolsService.calculateVaultsTvl(vaultIds);
-
-    // Transform vault images to URLs and convert to VaultShortResponse
-    const transformedItems = items
+    // Transform vaults to DTOs and enrich with TVL data from stored fields
+    const filteredItems = items
       .map(vault => {
         // Create plain object from entity
         const plainVault = instanceToPlain(vault);
@@ -1306,11 +1330,11 @@ export class VaultsService {
         const endTime = phaseEndTime ? new Date(phaseEndTime) : null;
         const timeRemaining = endTime ? Math.max(0, endTime.getTime() - now.getTime()) : null;
 
-        // Get pre-calculated asset values from batch result
-        const assetsPrices = assetValuesMap.get(vault.id) || {
-          totalValueAda: 0,
-          totalValueUsd: 0,
-          totalAcquiredAda: 0,
+        // Use stored TVL and acquired values from vault entity (consistent with getVaultById)
+        const assetsPrices = {
+          totalValueAda: Number(vault.total_assets_cost_ada ?? 0),
+          totalValueUsd: Number(vault.total_assets_cost_usd ?? 0),
+          totalAcquiredAda: Number(vault.total_acquired_value_ada ?? 0),
         };
 
         // Apply reserveMet filter if needed
@@ -1340,8 +1364,6 @@ export class VaultsService {
         });
       })
       .filter(vault => vault !== null);
-
-    const filteredItems = transformedItems;
 
     return {
       items: filteredItems,
