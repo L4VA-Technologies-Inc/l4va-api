@@ -959,11 +959,21 @@ export class LifecycleService {
         // Now create claims with final (correct) decimal values
         try {
           if (finalAdjustedVtLpAmount > 0 && lpAdaAmount > 0) {
-            const lpClaimExists = await this.claimRepository.exists({
+            const existingLpClaim = await this.claimRepository.findOne({
               where: { vault: { id: vault.id }, type: ClaimType.LP },
             });
 
-            if (!lpClaimExists) {
+            if (existingLpClaim) {
+              // Update existing claim with recalculated amounts (handles decimal upgrades)
+              await this.claimRepository.update(existingLpClaim.id, {
+                amount: finalAdjustedVtLpAmount,
+                lovelace_amount: lpAdaInLovelace,
+              });
+              this.logger.log(
+                `Updated existing LP claim: ${finalAdjustedVtLpAmount} VT tokens, ${lpAdaAmount} ADA ` +
+                  `(decimals=${vault.ft_token_decimals})`
+              );
+            } else {
               await this.claimRepository.save({
                 vault: { id: vault.id },
                 type: ClaimType.LP,
@@ -1292,84 +1302,15 @@ export class LifecycleService {
 
       // Use raw units for claim calculations (on-chain minting needs decimal-adjusted amounts)
       const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
-      const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
 
-      // Calculate LP tokens with 0% for acquirers
-      const { lpAdaAmount, lpVtAmount, vtPrice, fdv, adaPairMultiplier, lpMultiplierRatio } =
-        this.distributionCalculationService.calculateLpTokens({
-          vtSupply,
-          totalAcquiredAda: 0, // No acquirers
-          assetsOfferedPercent: 0, // 0% for acquirers
-          lpPercent: LP_PERCENT,
-          totalContributedValueAda: totalContributedValueAda,
-        });
+      // Calculate FDV and VT price directly (no LP in 0% acquirer scenario)
+      const fdv = totalContributedValueAda; // FDV = TVL when no acquirers
+      const vtPrice = fdv > 0 ? fdv / vtSupply : 0;
 
-      // Check if LP is configured and validate minimum threshold
-      const lpAdaInLovelace = Math.floor(lpAdaAmount * 1_000_000);
-      const minLpLiquidity = this.systemSettingsService.lpRecommendedMinLiquidity;
-      const hasLpConfigured = vault.liquidity_pool_contribution > 0;
-      let shouldCreateLpClaim = false;
-
-      if (hasLpConfigured && lpAdaInLovelace < minLpLiquidity) {
-        // Vault has LP configured but doesn't meet minimum threshold - FAIL the vault
-        this.logger.error(
-          `Vault ${vault.id} FAILED: LP configured but insufficient liquidity. ` +
-            `LP ADA: ${lpAdaAmount} ADA (${lpAdaInLovelace} lovelace) is below ` +
-            `required minimum ${minLpLiquidity / 1_000_000} ADA (${minLpLiquidity} lovelace). ` +
-            `Vault will transition to FAILED status and users will be refunded.`
-        );
-
-        // Transition vault to failed status
-        const cancellationResponse = await this.vaultManagingService.updateVaultMetadataTx({
-          vault,
-          acquireMultiplier: [],
-          adaDistribution: [],
-          adaPairMultiplier: 0,
-          vaultStatus: SmartContractVaultStatus.CANCELLED,
-        });
-
-        if (!cancellationResponse.txHash) {
-          this.logger.error(`Failed to get txHash for vault ${vault.id} cancellation transaction`);
-          return;
-        }
-
-        await this.claimsService.createCancellationClaims(vault, 'insufficient_lp_liquidity');
-
-        await this.executePhaseTransition({
-          vaultId: vault.id,
-          newStatus: VaultStatus.failed,
-          txHash: cancellationResponse.txHash,
-          failureReason: VaultFailureReason.INSUFFICIENT_LP_LIQUIDITY,
-          failureDetails: {
-            lpAdaAmount,
-            lpAdaInLovelace,
-            minLpLiquidity,
-            minLpLiquidityAda: minLpLiquidity / 1_000_000,
-            message: `LP liquidity ${lpAdaAmount} ADA is below required minimum ${minLpLiquidity / 1_000_000} ADA`,
-          },
-        });
-
-        this.eventEmitter.emit('vault.failed', {
-          vaultId: vault.id,
-          vaultName: vault.name,
-          reason: VaultFailureReason.INSUFFICIENT_LP_LIQUIDITY,
-          lpAdaAmount,
-          minLpLiquidityAda: minLpLiquidity / 1_000_000,
-        });
-
-        return;
-      }
-
-      if (lpVtAmount > 0 && lpAdaAmount > 0) {
-        if (lpAdaInLovelace < minLpLiquidity) {
-          this.logger.log(
-            `No LP claim created for vault ${vault.id}: ` +
-              `LP percentage is 0% or LP liquidity ${lpAdaAmount} ADA is below recommended minimum.`
-          );
-        } else {
-          shouldCreateLpClaim = true;
-        }
-      }
+      this.logger.log(
+        `Vault ${vault.id} (0% acquirers): FDV = ${fdv} ADA (from TVL), ` +
+          `VT Price = ${vtPrice} ADA, No LP created (no incoming ADA)`
+      );
 
       // Get contribution transactions with their assets
       const contributionTransactions = await this.transactionsRepository.find({
@@ -1422,13 +1363,11 @@ export class LifecycleService {
       const optimalDecimals = this.distributionCalculationService.calculateOptimalDecimals(
         vault.ft_token_supply || 1_000_000,
         minMultiplier === Infinity ? undefined : minMultiplier,
-        lpMultiplierRatio
+        undefined // No LP multiplier in 0% acquirer scenario
       );
 
       // Store final values to use for claim creation (may be recalculated if decimals upgraded)
       let finalMultipliersByAssetId = multipliersByAssetId;
-      let finalLpVtAmount = lpVtAmount;
-      let finalAdaPairMultiplier = adaPairMultiplier;
 
       // Update vault decimals and recalculate if needed
       if (optimalDecimals > vault.ft_token_decimals) {
@@ -1437,7 +1376,7 @@ export class LifecycleService {
 
         this.logger.log(
           `Upgrading vault ${vault.id} decimals from ${oldDecimals} to ${optimalDecimals} ` +
-            `(multiplier: ${decimalMultiplier}x). Recalculating multipliers and LP with new decimals.`
+            `(multiplier: ${decimalMultiplier}x). Recalculating multipliers with new decimals.`
         );
 
         vault.ft_token_decimals = optimalDecimals;
@@ -1458,22 +1397,9 @@ export class LifecycleService {
         adaDistribution = recalculated.adaDistribution;
         finalMultipliersByAssetId = recalculated.multipliersByAssetId;
 
-        // Recalculate LP with new decimals
-        const recalculatedLp = this.distributionCalculationService.calculateLpTokens({
-          vtSupply: recalculatedVtSupply,
-          totalAcquiredAda: 0,
-          assetsOfferedPercent: 0,
-          lpPercent: LP_PERCENT,
-          totalContributedValueAda: totalContributedValueAda,
-        });
-
-        finalLpVtAmount = recalculatedLp.lpVtAmount;
-        finalAdaPairMultiplier = recalculatedLp.adaPairMultiplier;
-
         this.logger.log(
           `Recalculated with ${optimalDecimals} decimals: ` +
-            `${acquireMultiplier.length} multipliers, LP VT amount: ${finalLpVtAmount}, ` +
-            `adaPairMultiplier: ${finalAdaPairMultiplier}`
+            `${acquireMultiplier.length} multipliers (no LP in 0% acquirer scenario)`
         );
       } else if (optimalDecimals < vault.ft_token_decimals) {
         this.logger.log(
@@ -1571,37 +1497,13 @@ export class LifecycleService {
         );
       }
 
-      // Create LP claim if it meets minimum liquidity threshold
-      if (shouldCreateLpClaim) {
-        try {
-          const lpClaimExists = await this.claimRepository.exists({
-            where: { vault: { id: vault.id }, type: ClaimType.LP },
-          });
-
-          if (!lpClaimExists) {
-            // Use finalLpVtAmount which is already calculated with correct decimals
-            await this.claimRepository.save({
-              vault: { id: vault.id },
-              type: ClaimType.LP,
-              amount: finalLpVtAmount,
-              status: ClaimStatus.AVAILABLE,
-              lovelace_amount: lpAdaInLovelace,
-            });
-
-            this.logger.log(`Created LP claim: ${finalLpVtAmount} VT tokens, ${lpAdaAmount} ADA`);
-          }
-        } catch (error) {
-          this.logger.error(`Failed to create LP claim for vault ${vault.id}:`, error);
-        }
-      }
-
       // STEP 3: Submit single update transaction with all multipliers
       // (Decimals already finalized in STEP 1.5, all claims created with correct precision)
       const response = await this.vaultManagingService.updateVaultMetadataTx({
         vault,
         acquireMultiplier,
         adaDistribution, // Empty array for no acquirers scenario
-        adaPairMultiplier: finalAdaPairMultiplier,
+        adaPairMultiplier: 0, // No LP in 0% acquirer scenario
         vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
       });
 
@@ -1640,7 +1542,7 @@ export class LifecycleService {
         txHash: response.txHash,
         acquire_multiplier: acquireMultiplier,
         ada_distribution: adaDistribution, // Empty for no acquirers scenario
-        ada_pair_multiplier: finalAdaPairMultiplier,
+        ada_pair_multiplier: 0, // No LP in 0% acquirer scenario
         vtPrice,
         fdv,
         fdvTvl: 1, // FDV = TVL when no acquirers
