@@ -78,6 +78,7 @@ export class GovernanceService {
   private readonly votingPowerCache: NodeCache;
   private readonly proposalCreationCache: NodeCache;
   private readonly poolAddress: string;
+  private readonly adminAddress: string;
   private readonly MIN_LP_ADA_FOR_MARKET_PRICING = 5000;
 
   // private readonly snapshotCache: NodeCache;
@@ -119,6 +120,7 @@ export class GovernanceService {
     private readonly vyfiService: VyfiService
   ) {
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
+    this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
 
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
@@ -251,7 +253,11 @@ export class GovernanceService {
               totalSupplyRaw += BigInt(item.quantity);
 
               // Only add to snapshot if NOT an LP-related address (exclude LP from voting power)
-              if (item.address !== this.poolAddress && !lpAddresses.includes(item.address)) {
+              if (
+                item.address !== this.poolAddress &&
+                item.address !== this.adminAddress &&
+                !lpAddresses.includes(item.address)
+              ) {
                 addressBalances[item.address] = item.quantity;
               } else {
                 this.logger.log(
