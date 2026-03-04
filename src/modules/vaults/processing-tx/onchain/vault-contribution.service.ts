@@ -20,10 +20,15 @@ import { BuildTransactionParams, TransactionSubmitResponse } from './types/trans
 import { Redeemer } from './types/type';
 import { getUtxosExtract } from './utils/lib';
 
+import { Asset } from '@/database/asset.entity';
+import { Proposal } from '@/database/proposal.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { ContributionInput } from '@/modules/distribution/distribution.types';
-import { TransactionStatus } from '@/types/transaction.types';
+import { AssetStatus, AssetOriginType, AssetType } from '@/types/asset.types';
+import { ProposalStatus, ProposalType } from '@/types/proposal.types';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
+import { VaultStatus } from '@/types/vault.types';
 
 // Acquire and Contribution
 
@@ -41,6 +46,10 @@ export class VaultContributionService {
     private readonly vaultsRepository: Repository<Vault>,
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
+    @InjectRepository(Asset)
+    private readonly assetRepository: Repository<Asset>,
+    @InjectRepository(Proposal)
+    private readonly proposalRepository: Repository<Proposal>,
     private readonly transactionsService: TransactionsService,
     private readonly configService: ConfigService,
     @Inject(BlockchainService)
@@ -106,6 +115,12 @@ export class VaultContributionService {
       if (!vault.script_hash) {
         throw new BadRequestException('Vault script hash is missing - vault may not be properly configured');
       }
+
+      // ========== CONCURRENCY CHECK ==========
+      // Validate asset limits at build time to prevent race conditions
+      // This prevents multiple users from contributing simultaneously and exceeding limits
+      await this.validateContributionLimits(transaction, vault);
+      // =======================================
 
       const VAULT_ID = vault.asset_vault_name;
       const CONTRIBUTION_SCRIPT_HASH = vault.script_hash;
@@ -302,6 +317,21 @@ export class VaultContributionService {
     }
 
     try {
+      // ========== CONCURRENCY CHECK (SUBMIT TIME) ==========
+      // Extra validation layer: re-check limits at submit time
+      // Guards against cases where user built transaction but someone else contributed before they submitted
+      const transaction = await this.transactionsService.validateTransactionExists(signedTx.txId);
+      const vault = await this.vaultsRepository.findOne({
+        where: { id: transaction.vault_id },
+      });
+
+      if (!vault) {
+        throw new BadRequestException('Vault not found');
+      }
+
+      await this.validateContributionLimits(transaction, vault);
+      // =====================================================
+
       // Submit the transaction using BlockchainService
       const result = await this.blockchainService.submitTransaction({
         transaction: signedTx.transaction,
@@ -346,6 +376,153 @@ export class VaultContributionService {
       }
 
       throw new BadRequestException(`Failed to submit contribution transaction: ${error.message}`);
+    }
+  }
+
+  /**
+   * Validate contribution limits at build time (optimistic concurrency control)
+   * Counts confirmed assets + pending transactions to prevent race conditions
+   * This is the critical checkpoint that prevents multiple simultaneous contributions from exceeding limits
+   */
+  async validateContributionLimits(transaction: Transaction, vault: Vault): Promise<void> {
+    const contributingAssets = (transaction.metadata as any[]) || [];
+    const contributingAssetCount = contributingAssets.length;
+
+    if (vault.vault_status === VaultStatus.expansion) {
+      await this.validateExpansionLimits(transaction.vault_id, contributingAssetCount);
+    } else if (vault.vault_status === VaultStatus.contribution) {
+      await this.validateNormalContributionLimits(
+        transaction.vault_id,
+        vault.max_contribute_assets,
+        contributingAssetCount
+      );
+    }
+  }
+
+  /**
+   * Validate limits for normal contribution phase
+   */
+  private async validateNormalContributionLimits(
+    vaultId: string,
+    maxContributeAssets: number,
+    contributingAssetCount: number
+  ): Promise<void> {
+    // Count confirmed assets
+    const confirmedAssets = await this.assetRepository
+      .createQueryBuilder('asset')
+      .select('COALESCE(SUM(asset.quantity), 0)', 'totalQuantity')
+      .where('asset.vault_id = :vaultId', { vaultId })
+      .andWhere('asset.status IN (:...statuses)', {
+        statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED],
+      })
+      .andWhere('asset.origin_type = :originType', {
+        originType: AssetOriginType.CONTRIBUTED,
+      })
+      .getRawOne();
+
+    const currentAssetCount = Number(confirmedAssets?.totalQuantity || 0);
+
+    // Count pending contribution transactions (excluding this one)
+    const pendingContributions = await this.transactionRepository
+      .createQueryBuilder('t')
+      .select('COALESCE(SUM(CAST(jsonb_array_length(t.metadata) AS INTEGER)), 0)', 'pendingAssetCount')
+      .where('t.vault_id = :vaultId', { vaultId })
+      .andWhere('t.type = :type', { type: TransactionType.contribute })
+      .andWhere('t.status IN (:...statuses)', {
+        statuses: [TransactionStatus.created, TransactionStatus.pending],
+      })
+      .getRawOne();
+
+    const pendingAssetCount = Number(pendingContributions?.pendingAssetCount || 0);
+    const totalAssetCount = currentAssetCount + pendingAssetCount;
+    const projectedCount = totalAssetCount + contributingAssetCount;
+
+    this.logger.log(
+      `[BUILD VALIDATION] Vault ${vaultId}: ${currentAssetCount} confirmed + ${pendingAssetCount} pending + ${contributingAssetCount} new = ${projectedCount}/${maxContributeAssets}`
+    );
+
+    if (projectedCount > maxContributeAssets) {
+      throw new BadRequestException(
+        `Cannot build transaction: Adding ${contributingAssetCount} assets would exceed vault capacity. ` +
+          `Current: ${currentAssetCount} confirmed + ${pendingAssetCount} pending. Max: ${maxContributeAssets}. ` +
+          `Another user may have contributed before you. Please refresh and try again.`
+      );
+    }
+  }
+
+  /**
+   * Validate limits for expansion phase
+   */
+  private async validateExpansionLimits(vaultId: string, contributingAssetCount: number): Promise<void> {
+    // Get expansion configuration
+    const expansionProposal = await this.proposalRepository.findOne({
+      where: {
+        vaultId,
+        proposalType: ProposalType.EXPANSION,
+        status: ProposalStatus.EXECUTED,
+      },
+      order: { executionDate: 'DESC' },
+    });
+
+    if (!expansionProposal || !expansionProposal.metadata?.expansion) {
+      throw new BadRequestException('No active expansion configuration found');
+    }
+
+    const expansionConfig = expansionProposal.metadata.expansion;
+
+    // Skip limit check if noMax is enabled
+    if (expansionConfig.noMax || !expansionConfig.assetMax) {
+      return;
+    }
+
+    // Count confirmed expansion assets
+    const expansionAssetData = await this.assetRepository
+      .createQueryBuilder('asset')
+      .select('asset.type', 'assetType')
+      .addSelect('COUNT(DISTINCT asset.id)', 'nftCount')
+      .addSelect('COALESCE(SUM(asset.quantity), 0)', 'ftQuantity')
+      .innerJoin('asset.transaction', 'tx')
+      .where('asset.vault_id = :vaultId', { vaultId })
+      .andWhere('asset.status IN (:...statuses)', {
+        statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED],
+      })
+      .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
+      .andWhere('tx.created_at >= (SELECT expansion_phase_start FROM vaults WHERE id = :vaultId)', { vaultId })
+      .groupBy('asset.type')
+      .getRawMany();
+
+    const currentAssetCount = expansionAssetData.reduce((total, row) => {
+      const quantity = row.assetType === AssetType.NFT ? Number(row.nftCount) : Number(row.ftQuantity);
+      return total + quantity;
+    }, 0);
+
+    // Count pending expansion transactions
+    const pendingExpansionContributions = await this.transactionRepository
+      .createQueryBuilder('t')
+      .innerJoin('vaults', 'v', 't.vault_id = v.id')
+      .select('COALESCE(SUM(CAST(jsonb_array_length(t.metadata) AS INTEGER)), 0)', 'pendingAssetCount')
+      .where('t.vault_id = :vaultId', { vaultId })
+      .andWhere('t.type = :type', { type: TransactionType.contribute })
+      .andWhere('t.status IN (:...statuses)', {
+        statuses: [TransactionStatus.created, TransactionStatus.pending],
+      })
+      .andWhere('t.created_at >= v.expansion_phase_start')
+      .getRawOne();
+
+    const pendingAssetCount = Number(pendingExpansionContributions?.pendingAssetCount || 0);
+    const totalAssetCount = currentAssetCount + pendingAssetCount;
+    const projectedCount = totalAssetCount + contributingAssetCount;
+
+    this.logger.log(
+      `[EXPANSION BUILD VALIDATION] Vault ${vaultId}: ${currentAssetCount} confirmed + ${pendingAssetCount} pending + ${contributingAssetCount} new = ${projectedCount}/${expansionConfig.assetMax}`
+    );
+
+    if (projectedCount > expansionConfig.assetMax) {
+      throw new BadRequestException(
+        `Cannot build transaction: Adding ${contributingAssetCount} assets would exceed expansion limit. ` +
+          `Current: ${currentAssetCount} confirmed + ${pendingAssetCount} pending. Max: ${expansionConfig.assetMax}. ` +
+          `Another user may have contributed before you. Please refresh and try again.`
+      );
     }
   }
 }

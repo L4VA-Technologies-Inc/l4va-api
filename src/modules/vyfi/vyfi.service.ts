@@ -165,13 +165,14 @@ export class VyfiService {
 
   /**
    * Get pool info by token pair
-   * Returns pool data including order validator address, LP token unit, and reserves
+   * Returns pool data including pool validator address, order validator address, LP token unit, and reserves
    */
   async getPoolByTokens(
     tokenAUnit: string,
     tokenBUnit: string = 'lovelace'
   ): Promise<{
     poolId: string;
+    poolAddress: string;
     orderAddress: string;
     lpTokenUnit: string;
     reserveA: string;
@@ -202,7 +203,8 @@ export class VyfiService {
 
       return {
         poolId: poolData.unitsPair || '',
-        orderAddress: poolData.orderValidatorUtxoAddress, // Critical: Use orderValidatorUtxoAddress for LP removal
+        poolAddress: poolData.poolValidatorUtxoAddress, // Where vault tokens are locked in the pool
+        orderAddress: poolData.orderValidatorUtxoAddress, // Where add/remove liquidity orders are sent
         lpTokenUnit: lpTokenUnit,
         reserveA: poolData.tokenAQuantity?.toString() || '0',
         reserveB: poolData.tokenBQuantity?.toString() || '0',

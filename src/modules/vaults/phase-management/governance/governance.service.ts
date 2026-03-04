@@ -39,6 +39,7 @@ import { Vote } from '@/database/vote.entity';
 import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
+import { VyfiService } from '@/modules/vyfi/vyfi.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
@@ -77,6 +78,7 @@ export class GovernanceService {
   private readonly votingPowerCache: NodeCache;
   private readonly proposalCreationCache: NodeCache;
   private readonly poolAddress: string;
+  private readonly adminAddress: string;
   private readonly MIN_LP_ADA_FOR_MARKET_PRICING = 5000;
 
   // private readonly snapshotCache: NodeCache;
@@ -114,9 +116,11 @@ export class GovernanceService {
     private readonly dexHunterPricingService: DexHunterPricingService,
     private readonly dexHunterService: DexHunterService,
     private readonly blockchainService: BlockchainService,
-    private readonly systemSettingsService: SystemSettingsService
+    private readonly systemSettingsService: SystemSettingsService,
+    private readonly vyfiService: VyfiService
   ) {
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
+    this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
 
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
@@ -191,11 +195,12 @@ export class GovernanceService {
    */
   async createAutomaticSnapshot(vaultId: string, assetId: string): Promise<Snapshot> {
     try {
-      // Fetch vault decimals for proper supply calculation
-      const vault = await this.vaultRepository.findOne({
-        where: { id: vaultId },
-        select: ['id', 'ft_token_decimals'],
-      });
+      // Fetch vault info including token unit for LP detection
+      const vault: Pick<Vault, 'id' | 'ft_token_decimals' | 'policy_id' | 'asset_vault_name' | 'has_active_lp'> =
+        await this.vaultRepository.findOne({
+          where: { id: vaultId },
+          select: ['id', 'ft_token_decimals', 'policy_id', 'asset_vault_name', 'has_active_lp'],
+        });
 
       if (!vault) {
         throw new NotFoundException(`Vault ${vaultId} not found`);
@@ -216,6 +221,19 @@ export class GovernanceService {
         );
       }
 
+      const lpAddresses: string[] = [];
+
+      if (vault.has_active_lp) {
+        // Get vault-specific LP addresses to exclude from voting power
+        const poolInfo = await this.vyfiService.getPoolByTokens(`${vault.policy_id}${vault.asset_vault_name}`);
+        if (poolInfo) {
+          lpAddresses.push(poolInfo.poolAddress);
+          this.logger.log(
+            `Found VyFi pool for vault ${vaultId} with asset ${assetId}. Pool address: ${poolInfo.poolAddress}`
+          );
+        }
+      }
+
       // Fetch all addresses holding the asset using BlockFrost
       const addressBalances: Record<string, string> = {}; // For snapshot (excludes LP)
       let totalSupplyRaw = BigInt(0); // Total supply INCLUDING LP tokens
@@ -234,11 +252,17 @@ export class GovernanceService {
               // ALWAYS add to total supply (includes LP tokens)
               totalSupplyRaw += BigInt(item.quantity);
 
-              // Only add to snapshot if NOT pool address (exclude LP from voting power)
-              if (item.address !== this.poolAddress) {
+              // Only add to snapshot if NOT an LP-related address (exclude LP from voting power)
+              if (
+                item.address !== this.poolAddress &&
+                item.address !== this.adminAddress &&
+                !lpAddresses.includes(item.address)
+              ) {
                 addressBalances[item.address] = item.quantity;
               } else {
-                this.logger.log(`Excluded pool address ${this.poolAddress} from snapshot (${item.quantity} VT in LP)`);
+                this.logger.log(
+                  `Excluded LP address ${item.address} from snapshot (${item.quantity} VT in liquidity pool)`
+                );
               }
             }
             page++;
@@ -930,30 +954,14 @@ export class GovernanceService {
       order: { created_at: 'ASC' },
     });
 
-    // If payment is required, build fee transaction BEFORE emitting events
-    // This ensures we don't notify users of proposals that fail to create
+    // If payment is required, build fee transaction and return WITHOUT emitting events
+    // Events will be emitted when user submits payment via submitProposalFeePayment
     if (requiresPayment) {
       try {
         const feeTransaction = await this.governanceFeeService.buildProposalFeeTransaction({
           userAddress: user.address,
           proposalType: createProposalReq.type,
           vaultId,
-        });
-
-        // Transaction built successfully - now emit events for UNPAID proposal
-        this.eventEmitter.emit('proposal.created', {
-          proposalId: proposal.id,
-          startDate: proposal.startDate,
-          endDate: proposal.endDate,
-          status: proposal.status,
-        });
-
-        this.eventEmitter.emit('governance.proposal_created', {
-          address: user.address,
-          vaultId: vault.id,
-          vaultName: vault.name,
-          proposalName: proposal.title,
-          creatorId: proposal.creatorId,
         });
 
         return {
@@ -981,7 +989,8 @@ export class GovernanceService {
       }
     }
 
-    // No payment required - emit proposal.created and proposal.started events
+    // No payment required - emit all events to schedule and notify
+    // 1. proposal.created - triggers scheduling in governance-execution service
     this.eventEmitter.emit('proposal.created', {
       proposalId: proposal.id,
       startDate: proposal.startDate,
@@ -989,6 +998,7 @@ export class GovernanceService {
       status: proposal.status,
     });
 
+    // 2. governance.proposal_created - sends notifications
     this.eventEmitter.emit('governance.proposal_created', {
       address: user.address,
       vaultId: vault.id,
@@ -997,7 +1007,7 @@ export class GovernanceService {
       creatorId: proposal.creatorId,
     });
 
-    // No payment required - emit proposal.started event
+    // 3. proposal.started - notifies token holders
     this.eventEmitter.emit('proposal.started', {
       address: user.address,
       vaultId: vault.id,
@@ -1562,7 +1572,7 @@ export class GovernanceService {
 
     await this.proposalRepository.save(proposal);
 
-    // Emit proposal started event
+    // Fetch contributor claims for notifications
     const finalContributorClaims = await this.claimRepository.find({
       where: {
         vault: { id: proposal.vault.id },
@@ -1572,6 +1582,25 @@ export class GovernanceService {
       order: { created_at: 'ASC' },
     });
 
+    // Emit all events after payment is confirmed (same as non-payment flow)
+    // 1. proposal.created - triggers scheduling in governance-execution service
+    this.eventEmitter.emit('proposal.created', {
+      proposalId: proposal.id,
+      startDate: proposal.startDate,
+      endDate: proposal.endDate,
+      status: proposal.status,
+    });
+
+    // 2. governance.proposal_created - sends notifications
+    this.eventEmitter.emit('governance.proposal_created', {
+      address: proposal.creator.address,
+      vaultId: proposal.vault.id,
+      vaultName: proposal.vault.name,
+      proposalName: proposal.title,
+      creatorId: proposal.creatorId,
+    });
+
+    // 3. proposal.started - notifies token holders
     this.eventEmitter.emit('proposal.started', {
       address: proposal.creator.address,
       vaultId: proposal.vault.id,
@@ -1582,7 +1611,7 @@ export class GovernanceService {
     });
 
     this.logger.log(
-      `Proposal ${proposalId} activated after payment submission. TxHash: ${txHash}, Start: ${startDate.toISOString()}, End: ${endDate.toISOString()}`
+      `Proposal ${proposalId} activated after payment submission. TxHash: ${txHash}, Status: ${proposal.status}, Start: ${startDate.toISOString()}, End: ${endDate.toISOString()}`
     );
 
     return {

@@ -381,13 +381,13 @@ export class VaultMarketStatsService {
    *
    * Uses full OHLCV history to determine:
    * - Initial Price: First day's opening price (when LP was created)
-   * - Current Price: Latest day's closing price (right now)
+   * - Current Price: Latest day's opening price (current open trading price)
    * - Delta: Current - Initial (absolute price change)
    * - Delta %: (Current - Initial) / Initial * 100 (percentage change)
    *
    * Example:
    * - Full history shows first day open = 0.0007990910179852215 ADA
-   * - Latest day close = 0.08556960047153203 ADA
+   * - Latest day open = 0.08556960047153203 ADA
    * - Delta = 0.08556960047153203 - 0.0007990910179852215 = 0.0847705 ADA
    * - Delta % = (0.0847705 / 0.0007990910179852215) * 100 = 10,608% gain
    *
@@ -414,8 +414,8 @@ export class VaultMarketStatsService {
     // Initial price = first day's opening price (LP inception)
     const initialPrice = history[0].open;
 
-    // Current price = latest day's closing price (now)
-    const currentPrice = history[history.length - 1].close;
+    // Current price = latest day's opening price (current open trading price)
+    const currentPrice = history[history.length - 1].open;
 
     // Calculate delta
     const delta = currentPrice - initialPrice;
