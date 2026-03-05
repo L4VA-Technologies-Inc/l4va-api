@@ -6,8 +6,8 @@ services:
     build:
       context: ./l4va-api
       dockerfile: Dockerfile
-    expose:
-      - "3000:3000"
+    ports:
+      - "127.0.0.1:3000:3000" 
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       DB_HOST: postgres
