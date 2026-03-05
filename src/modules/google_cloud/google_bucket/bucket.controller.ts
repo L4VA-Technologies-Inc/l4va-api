@@ -94,6 +94,7 @@ export class GoogleCloudStorageController {
   })
   @Get('/asset-image/:id')
   async getAssetImageFile(@Param('id') id: string, @Res() res: Response): Promise<void> {
+    const cleanId = id.replace(/^ipfs\//, '');
     try {
       const { stream, contentType } = await this.gcsService.getAssetImage(id);
       res.setHeader('Content-Type', contentType);
@@ -101,14 +102,14 @@ export class GoogleCloudStorageController {
 
       stream.on('error', () => {
         if (!res.headersSent) {
-          res.redirect(`https://ipfs.blockfrost.dev/ipfs/${id}`);
+          res.redirect(`https://ipfs.blockfrost.dev/ipfs/${cleanId}`);
         }
       });
 
       stream.pipe(res);
     } catch (error) {
       if (!res.headersSent) {
-        res.redirect(`https://ipfs.blockfrost.dev/ipfs/${id}`);
+        res.redirect(`https://ipfs.blockfrost.dev/ipfs/${cleanId}`);
       }
     }
   }

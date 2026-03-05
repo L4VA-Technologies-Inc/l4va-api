@@ -405,7 +405,9 @@ export class GoogleCloudStorageService {
         return `ipfs://${cid}`;
       }
 
-      const response = await this.httpService.axiosRef.get<ArrayBuffer>(imageUrl, {
+      const fetchUrl = imageUrl.startsWith('ipfs://') ? `https://ipfs.blockfrost.dev/ipfs/${cid}` : imageUrl;
+
+      const response = await this.httpService.axiosRef.get<ArrayBuffer>(fetchUrl, {
         responseType: 'arraybuffer',
         timeout: 30_000,
       });
