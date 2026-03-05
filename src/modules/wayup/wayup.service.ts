@@ -33,9 +33,6 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 export class WayUpService {
   private readonly logger = new Logger(WayUpService.name);
   private readonly blockfrost: BlockFrostAPI;
-  private readonly adminAddress: string;
-  private readonly adminSKey: string;
-
   private readonly MIN_PRICE_ADA = 5; // Validate minimum price (5 ADA minimum per WayUp requirements)
 
   constructor(
@@ -49,8 +46,6 @@ export class WayUpService {
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
-    this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
-    this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
   }
 
   /**
@@ -103,7 +98,6 @@ export class WayUpService {
       this.blockfrost,
       {
         targetAssets,
-        minAda: 5_000_000, // Treasury pays for fees (ensure 5 ADA available)
         maxUtxos: 20,
       }
     );
@@ -148,8 +142,8 @@ export class WayUpService {
       // Build the transaction
       const buildResponse = await this.blockchainService.buildWayUpTransaction(listingPayload);
 
-      // Sign the transaction with both treasury and admin wallet keys
-      const signedTx = await this.signTransactionWithBothWallets(vaultId, buildResponse.transactions[0]);
+      // Sign the transaction with treasury wallet keys
+      const signedTx = await this.signTransactionWithTreasuryWallet(vaultId, buildResponse.transactions[0]);
 
       // Submit the transaction
       this.logger.log('Submitting listing transaction to blockchain');
@@ -218,22 +212,20 @@ export class WayUpService {
 
       const treasuryAddress = vault.treasury_wallet.treasury_address;
       this.logger.log(`Treasury wallet address (NFTs will return here): ${treasuryAddress}`);
-      this.logger.log(`Using admin wallet for fees: ${this.adminAddress}`);
 
-      // Get admin UTXOs for transaction fees
-      const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
-        minAda: 2_000_000, // 2 ADA for fees
-        maxUtxos: 5,
+      // Get treasury UTXOs for transaction fees
+      const { utxos: treasuryUtxos } = await getUtxosExtract(Address.from_bech32(treasuryAddress), this.blockfrost, {
+        maxUtxos: 10,
       });
 
-      if (adminUtxos.length === 0) {
-        throw new Error('Insufficient funds in admin wallet for unlist transaction fees');
+      if (treasuryUtxos.length === 0) {
+        throw new Error('Insufficient funds in treasury wallet for transaction fees');
       }
 
-      // Create unlist payload with admin as change address
+      // Create unlist payload with treasury as change address
       const unlistPayload: UnlistPayload = {
-        changeAddress: this.adminAddress,
-        utxos: adminUtxos,
+        changeAddress: treasuryAddress,
+        utxos: treasuryUtxos,
         unlist: unlistings,
       };
 
@@ -243,9 +235,9 @@ export class WayUpService {
       // Build the transaction
       const buildResponse = await this.blockchainService.buildWayUpTransaction(unlistPayload);
 
-      // Sign the transaction with both treasury and admin wallet
+      // Sign the transaction with treasury wallet
       // Treasury signature needed because the listing was created by treasury wallet
-      const signedTx = await this.signTransactionWithBothWallets(vaultId, buildResponse.transactions[0]);
+      const signedTx = await this.signTransactionWithTreasuryWallet(vaultId, buildResponse.transactions[0]);
 
       // Submit the transaction
       this.logger.log('Submitting unlist transaction to blockchain');
@@ -318,22 +310,20 @@ export class WayUpService {
 
       const treasuryAddress = vault.treasury_wallet.treasury_address;
       this.logger.log(`Treasury wallet address: ${treasuryAddress}`);
-      this.logger.log(`Using admin wallet for fees: ${this.adminAddress}`);
 
-      // Get admin UTXOs for transaction fees
-      const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
-        minAda: 2_000_000, // 2 ADA for fees
-        maxUtxos: 5,
+      // Get treasury UTXOs for transaction fees
+      const { utxos: treasuryUtxos } = await getUtxosExtract(Address.from_bech32(treasuryAddress), this.blockfrost, {
+        maxUtxos: 10,
       });
 
-      if (adminUtxos.length === 0) {
-        throw new Error('Insufficient funds in admin wallet for update transaction fees');
+      if (treasuryUtxos.length === 0) {
+        throw new Error('Insufficient funds in treasury wallet for transaction fees');
       }
 
-      // Create update payload with admin as change address
+      // Create update payload with treasury as change address
       const updatePayload: UpdateListingPayload = {
-        changeAddress: this.adminAddress,
-        utxos: adminUtxos,
+        changeAddress: treasuryAddress,
+        utxos: treasuryUtxos,
         update: updates,
       };
 
@@ -343,9 +333,9 @@ export class WayUpService {
       // Build the transaction
       const buildResponse = await this.blockchainService.buildWayUpTransaction(updatePayload);
 
-      // Sign the transaction with both treasury and admin wallet
+      // Sign the transaction with treasury wallet
       // Treasury signature needed because the listing was created by treasury wallet
-      const signedTx = await this.signTransactionWithBothWallets(vaultId, buildResponse.transactions[0]);
+      const signedTx = await this.signTransactionWithTreasuryWallet(vaultId, buildResponse.transactions[0]);
 
       // Submit the transaction
       this.logger.log('Submitting update listing transaction to blockchain');
@@ -418,7 +408,6 @@ export class WayUpService {
 
       const treasuryAddress = vault.treasury_wallet.treasury_address;
       this.logger.log(`Using treasury wallet for offer funds: ${treasuryAddress}`);
-      this.logger.log(`Using admin wallet for fees: ${this.adminAddress}`);
 
       // Calculate total ADA needed for all offers (in lovelace)
       const totalOfferAda = offers.reduce((sum, offer) => sum + offer.priceAda, 0);
@@ -441,23 +430,12 @@ export class WayUpService {
 
       this.logger.log(`Collected ${totalAdaCollected} lovelace from treasury for offers`);
 
-      // Get admin UTXOs for transaction fees
-      const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
-        minAda: 2_000_000, // 2 ADA for fees
-        maxUtxos: 5,
-      });
-
-      if (adminUtxos.length === 0) {
-        throw new Error('Insufficient funds in admin wallet for transaction fees');
-      }
-
       // Combine UTXOs from both wallets
-      const combinedUtxos = [...treasuryUtxos, ...adminUtxos];
 
       // Create offer payload with admin as change address
       const offerPayload: MakeOfferPayload = {
-        changeAddress: this.adminAddress,
-        utxos: combinedUtxos,
+        changeAddress: treasuryAddress,
+        utxos: treasuryUtxos,
         createOffer: offers,
       };
 
@@ -467,8 +445,8 @@ export class WayUpService {
       // Build the transaction
       const buildResponse = await this.blockchainService.buildWayUpTransaction(offerPayload);
 
-      // Sign the transaction with both treasury and admin wallet keys
-      const signedTx = await this.signTransactionWithBothWallets(vaultId, buildResponse.transactions[0]);
+      // Sign the transaction with treasury wallet keys
+      const signedTx = await this.signTransactionWithTreasuryWallet(vaultId, buildResponse.transactions[0]);
 
       // Submit the transaction
       this.logger.log('Submitting offer transaction to blockchain');
@@ -540,7 +518,6 @@ export class WayUpService {
 
       const treasuryAddress = vault.treasury_wallet.treasury_address;
       this.logger.log(`Using treasury wallet for purchase funds: ${treasuryAddress}`);
-      this.logger.log(`Using admin wallet for fees: ${this.adminAddress}`);
 
       // Calculate total ADA needed for all purchases (in lovelace)
       const totalPurchaseAda = purchases.reduce((sum, purchase) => sum + purchase.priceAda, 0);
@@ -563,23 +540,10 @@ export class WayUpService {
 
       this.logger.log(`Collected ${totalAdaCollected} lovelace from treasury for purchases`);
 
-      // Get admin UTXOs for transaction fees
-      const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
-        minAda: 2_000_000, // 2 ADA for fees
-        maxUtxos: 5,
-      });
-
-      if (adminUtxos.length === 0) {
-        throw new Error('Insufficient funds in admin wallet for transaction fees');
-      }
-
-      // Combine UTXOs from both wallets
-      const combinedUtxos = [...treasuryUtxos, ...adminUtxos];
-
-      // Create buy payload with admin as change address
+      // Create buy payload with treasury as change address
       const buyPayload: BuyNFTPayload = {
-        changeAddress: this.adminAddress,
-        utxos: combinedUtxos,
+        changeAddress: treasuryAddress,
+        utxos: treasuryUtxos,
         buy: purchases,
       };
 
@@ -589,8 +553,8 @@ export class WayUpService {
       // Build the transaction
       const buildResponse = await this.blockchainService.buildWayUpTransaction(buyPayload);
 
-      // Sign the transaction with both treasury and admin wallet keys
-      const signedTx = await this.signTransactionWithBothWallets(vaultId, buildResponse.transactions[0]);
+      // Sign the transaction with treasury wallet keys
+      const signedTx = await this.signTransactionWithTreasuryWallet(vaultId, buildResponse.transactions[0]);
 
       // Submit the transaction
       this.logger.log('Submitting purchase transaction to blockchain');
@@ -718,7 +682,6 @@ export class WayUpService {
 
       const treasuryAddress = vault.treasury_wallet.treasury_address;
       this.logger.log(`Using treasury wallet address: ${treasuryAddress}`);
-      this.logger.log(`Using admin wallet for fees: ${this.adminAddress}`);
 
       // Collect target NFTs for listings if any
       const targetAssets =
@@ -732,37 +695,17 @@ export class WayUpService {
       const purchaseAmount = (actions.purchases?.reduce((sum, p) => sum + p.priceAda, 0) ?? 0) * 1_000_000;
       const totalTreasuryAda = offerAmount + purchaseAmount;
 
-      let treasuryUtxos: string[] = [];
-      let needsTreasuryUtxos = false;
-
-      // Get treasury UTXOs if we need NFTs or ADA for offers/purchases
-      if (targetAssets.length > 0 || totalTreasuryAda > 0) {
-        needsTreasuryUtxos = true;
-        const result = await getUtxosExtract(Address.from_bech32(treasuryAddress), this.blockfrost, {
-          targetAssets: targetAssets.length > 0 ? targetAssets : undefined,
-          targetAdaAmount: totalTreasuryAda > 0 ? totalTreasuryAda : undefined,
-          minAda: 0,
-          maxUtxos: 20,
-        });
-        treasuryUtxos = result.utxos;
-
-        if (treasuryUtxos.length === 0) {
-          throw new Error('Required assets not found in treasury wallet');
-        }
-      }
-
-      // Get admin UTXOs for transaction fees
-      const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
-        minAda: 2_000_000,
-        maxUtxos: 5,
+      // Get treasury UTXOs - treasury provides NFTs, ADA for offers/purchases, and transaction fees
+      const result = await getUtxosExtract(Address.from_bech32(treasuryAddress), this.blockfrost, {
+        targetAssets: targetAssets.length > 0 ? targetAssets : undefined,
+        targetAdaAmount: totalTreasuryAda > 0 ? totalTreasuryAda : undefined,
+        maxUtxos: 20,
       });
+      const treasuryUtxos = result.utxos;
 
-      if (adminUtxos.length === 0) {
-        throw new Error('Insufficient funds in admin wallet for transaction fees');
+      if (treasuryUtxos.length === 0) {
+        throw new Error('Required assets or insufficient funds in treasury wallet');
       }
-
-      // Combine UTXOs from both wallets
-      const combinedUtxos = needsTreasuryUtxos ? [...treasuryUtxos, ...adminUtxos] : adminUtxos;
 
       // Build action summary for message
       const actionParts: string[] = [];
@@ -772,10 +715,10 @@ export class WayUpService {
       if (actions.offers?.length) actionParts.push(`offering on ${actions.offers.length}`);
       if (actions.purchases?.length) actionParts.push(`buying ${actions.purchases.length}`);
 
-      // Build combined payload
+      // Build combined payload with treasury as change address
       const combinedPayload: WayUpTransactionInput = {
-        changeAddress: this.adminAddress,
-        utxos: combinedUtxos,
+        changeAddress: treasuryAddress,
+        utxos: treasuryUtxos,
       };
 
       // Add listings if provided
@@ -860,9 +803,8 @@ export class WayUpService {
       // Build the transaction
       const buildResponse = await this.blockchainService.buildWayUpTransaction(combinedPayload);
 
-      // Sign the transaction with appropriate keys
-      // Always sign with both wallets for any marketplace operation involving vault listings
-      const signedTx = await this.signTransactionWithBothWallets(vaultId, buildResponse.transactions[0]);
+      // Sign the transaction with treasury wallet keys
+      const signedTx = await this.signTransactionWithTreasuryWallet(vaultId, buildResponse.transactions[0]);
 
       // Submit the transaction - try standard endpoint first, fallback to WayUp-specific endpoint
       this.logger.log('Submitting combined marketplace transaction to blockchain');
@@ -937,23 +879,23 @@ export class WayUpService {
   }
 
   /**
-   * Sign a transaction using both the vault's treasury wallet and admin wallet private keys
+   * Sign a transaction using the vault's treasury wallet private keys
    *
    * @param vaultId - The vault ID
    * @param txHex - Transaction hex to sign
    * @returns Signed transaction hex
    */
-  private async signTransactionWithBothWallets(vaultId: string, txHex: string): Promise<string> {
+  private async signTransactionWithTreasuryWallet(vaultId: string, txHex: string): Promise<string> {
     try {
       const { privateKey, stakePrivateKey } = await this.treasuryWalletService.getTreasuryWalletPrivateKey(vaultId);
 
       const txToSign = FixedTransaction.from_bytes(Buffer.from(txHex, 'hex'));
 
-      // Sign with all three keys (treasury payment, treasury staking, admin payment)
+      // Sign with treasury payment and staking keys
       txToSign.sign_and_add_vkey_signature(privateKey);
       txToSign.sign_and_add_vkey_signature(stakePrivateKey);
 
-      this.logger.log(`Transaction signed with treasury payment, staking, and admin keys for vault ${vaultId}`);
+      this.logger.log(`Transaction signed with treasury payment and staking keys for vault ${vaultId}`);
 
       // Return the signed transaction as hex
       return Buffer.from(txToSign.to_bytes()).toString('hex');
