@@ -151,12 +151,16 @@ export class TransactionsService {
           decodedName ||
           null;
 
-        const finalImage =
+        let cleanImage =
           assetItem.image ||
           assetItem.metadata?.image ||
           assetItem.metadata?.files?.[0]?.src ||
           (blockfrostMetadata?.onchain_metadata as any)?.image ||
           null;
+
+        if (typeof cleanImage === 'string') {
+          cleanImage = cleanImage.replace(/^ipfs:\/\/(ipfs\/)+/, 'ipfs://');
+        }
 
         const finalDescription =
           assetItem.description ||
@@ -179,7 +183,7 @@ export class TransactionsService {
           status: AssetStatus.PENDING,
           origin_type: AssetOriginType.CONTRIBUTED,
           added_by: user,
-          image: finalImage,
+          image: cleanImage,
           decimals:
             assetItem.decimals ??
             assetItem.metadata?.decimals ??

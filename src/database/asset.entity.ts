@@ -39,8 +39,8 @@ export const imageUrlTransformer: ValueTransformer = {
     }
 
     if (value.startsWith('ipfs://')) {
-      const ipfsHash = value.replace('ipfs://', '');
-      return `${baseUrl}${ipfsHash}`;
+      const cid = value.split('/').pop();
+      return `${baseUrl}${cid}`;
     }
 
     return value;

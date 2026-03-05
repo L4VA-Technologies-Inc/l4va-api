@@ -1769,7 +1769,7 @@ export class TaptoolsService {
         valueUsd: priceUsd * asset.quantity,
         metadata: {
           image: String((metadata as Record<string, unknown>)?.image || '').replace(
-            'ipfs://',
+            /^ipfs:\/\/(?:ipfs\/)*/i,
             'https://ipfs.blockfrost.dev/ipfs/'
           ),
           policyId: details.policy_id,
