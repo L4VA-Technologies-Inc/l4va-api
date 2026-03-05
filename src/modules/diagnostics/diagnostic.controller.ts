@@ -19,7 +19,7 @@ import { AdminGuard } from '../auth/admin.guard';
 import { DiagnosticService } from './diagnostic.service';
 
 /*
- * Manual Distribution Controller
+ * Diagnostic Controller
  *
  * Provides manual control over vault distribution process.
  * Use these endpoints when manual_distribution_mode is enabled.
@@ -31,9 +31,9 @@ import { DiagnosticService } from './diagnostic.service';
  * 4. Submit vault update with multipliers
  * 5. Trigger claim processing
  */
-@ApiTags('manual-distribution')
+@ApiTags('diagnostics')
 @UseGuards(AdminGuard)
-@Controller('manual-distribution')
+@Controller('diagnostics')
 export class DiagnosticController {
   private readonly logger = new Logger(DiagnosticController.name);
 
