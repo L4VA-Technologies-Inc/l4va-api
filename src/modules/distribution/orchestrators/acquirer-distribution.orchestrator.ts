@@ -11,7 +11,6 @@ import { AcquirerExtractionBuilder } from '../builders/acquirer-extraction.build
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
-import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
@@ -26,8 +25,8 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 @Injectable()
 export class AcquirerDistributionOrchestrator {
   private readonly logger = new Logger(AcquirerDistributionOrchestrator.name);
-  private readonly MAX_TX_SIZE = 16360;
-  private readonly MAX_BATCH_SIZE = 17;
+  private readonly MAX_TX_SIZE = 16384;
+  private readonly MAX_BATCH_SIZE = 16;
 
   constructor(
     @InjectRepository(Transaction)
@@ -36,7 +35,6 @@ export class AcquirerDistributionOrchestrator {
     private readonly vaultRepository: Repository<Vault>,
     private readonly blockchainService: BlockchainService,
     private readonly claimsService: ClaimsService,
-    private readonly assetService: AssetsService,
     private readonly transactionService: TransactionsService,
     private readonly extractionBuilder: AcquirerExtractionBuilder,
     private readonly blockfrost: BlockFrostAPI

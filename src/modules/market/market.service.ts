@@ -6,11 +6,12 @@ import { Repository } from 'typeorm';
 import { transformImageToUrl } from '../../helpers';
 
 import { GetMarketsResponse, MarketItem, MarketItemWithOHLCV } from './dto/get-markets-response.dto';
-import { GetMarketsDto, MarketSortField, SortOrder, TvlCurrency } from './dto/get-markets.dto';
+import { Currency, GetMarketsDto, MarketSortField, SortOrder } from './dto/get-markets.dto';
 
 import { Market } from '@/database/market.entity';
 import { Vault } from '@/database/vault.entity';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
+import { PriceService } from '@/modules/price/price.service';
 import { VaultMarketStatsService } from '@/modules/vaults/market-stats/vault-market-stats.service';
 
 @Injectable()
@@ -23,6 +24,7 @@ export class MarketService implements OnModuleInit {
     private readonly marketRepository: Repository<Market>,
     private readonly configService: ConfigService,
     private readonly systemSettingsService: SystemSettingsService,
+    private readonly priceService: PriceService,
     private readonly vaultMarketStatsService: VaultMarketStatsService
   ) {}
 
@@ -39,16 +41,18 @@ export class MarketService implements OnModuleInit {
       ticker,
       minPrice,
       maxPrice,
-      minMcap,
-      maxMcap,
+      minFdv,
+      maxFdv,
       minTvl,
       maxTvl,
       minDelta,
       maxDelta,
-      tvlCurrency = TvlCurrency.ADA,
+      currency = Currency.ADA,
     } = query;
 
     const queryBuilder = this.marketRepository.createQueryBuilder('market');
+
+    const adaPrice = await this.priceService.getAdaPrice();
 
     queryBuilder
       .leftJoinAndSelect('market.vault', 'vault')
@@ -71,28 +75,48 @@ export class MarketService implements OnModuleInit {
       });
     }
 
-    if (minPrice || maxPrice) {
-      if (minPrice && maxPrice) {
-        queryBuilder.andWhere('vault.vt_price BETWEEN :minPrice AND :maxPrice', { minPrice, maxPrice });
-      } else if (minPrice) {
-        queryBuilder.andWhere('vault.vt_price >= :minPrice', { minPrice });
-      } else if (maxPrice) {
-        queryBuilder.andWhere('vault.vt_price <= :maxPrice', { maxPrice });
+    if (minPrice != null || maxPrice != null) {
+      let minPriceFilter: number | null = minPrice ?? null;
+      let maxPriceFilter: number | null = maxPrice ?? null;
+      if (currency === Currency.USD) {
+        const safeAdaPrice = adaPrice > 0 ? adaPrice : 1;
+        minPriceFilter = minPrice != null ? minPrice / safeAdaPrice : null;
+        maxPriceFilter = maxPrice != null ? maxPrice / safeAdaPrice : null;
+      }
+      if (minPriceFilter != null && maxPriceFilter != null) {
+        queryBuilder.andWhere('vault.vt_price BETWEEN :minPrice AND :maxPrice', {
+          minPrice: minPriceFilter,
+          maxPrice: maxPriceFilter,
+        });
+      } else if (minPriceFilter != null) {
+        queryBuilder.andWhere('vault.vt_price >= :minPrice', { minPrice: minPriceFilter });
+      } else if (maxPriceFilter != null) {
+        queryBuilder.andWhere('vault.vt_price <= :maxPrice', { maxPrice: maxPriceFilter });
       }
     }
 
-    if (minMcap || maxMcap) {
-      if (minMcap && maxMcap) {
-        queryBuilder.andWhere('market.mcap BETWEEN :minMcap AND :maxMcap', { minMcap, maxMcap });
-      } else if (minMcap) {
-        queryBuilder.andWhere('market.mcap >= :minMcap', { minMcap });
-      } else if (maxMcap) {
-        queryBuilder.andWhere('market.mcap <= :maxMcap', { maxMcap });
+    if (minFdv != null || maxFdv != null) {
+      let minFdvFilter: number | null = minFdv ?? null;
+      let maxFdvFilter: number | null = maxFdv ?? null;
+      if (currency === Currency.USD) {
+        const safeAdaPrice = adaPrice > 0 ? adaPrice : 1;
+        minFdvFilter = minFdv != null ? minFdv / safeAdaPrice : null;
+        maxFdvFilter = maxFdv != null ? maxFdv / safeAdaPrice : null;
+      }
+      if (minFdvFilter != null && maxFdvFilter != null) {
+        queryBuilder.andWhere('vault.fdv BETWEEN :minFdv AND :maxFdv', {
+          minFdv: minFdvFilter,
+          maxFdv: maxFdvFilter,
+        });
+      } else if (minFdvFilter != null) {
+        queryBuilder.andWhere('vault.fdv >= :minFdv', { minFdv: minFdvFilter });
+      } else if (maxFdvFilter != null) {
+        queryBuilder.andWhere('vault.fdv <= :maxFdv', { maxFdv: maxFdvFilter });
       }
     }
 
     if (minTvl || maxTvl) {
-      const tvlField = tvlCurrency === TvlCurrency.USD ? 'vault.total_assets_cost_usd' : 'vault.total_assets_cost_ada';
+      const tvlField = currency === Currency.USD ? 'vault.total_assets_cost_usd' : 'vault.total_assets_cost_ada';
       if (minTvl && maxTvl) {
         queryBuilder.andWhere(`${tvlField} BETWEEN :minTvl AND :maxTvl`, { minTvl, maxTvl });
       } else if (minTvl) {
@@ -104,25 +128,25 @@ export class MarketService implements OnModuleInit {
 
     if (minDelta || maxDelta) {
       if (minDelta && maxDelta) {
-        queryBuilder.andWhere('market.delta BETWEEN :minDelta AND :maxDelta', { minDelta, maxDelta });
+        queryBuilder.andWhere('vault.fdv_tvl BETWEEN :minDelta AND :maxDelta', { minDelta, maxDelta });
       } else if (minDelta) {
-        queryBuilder.andWhere('market.delta >= :minDelta', { minDelta });
+        queryBuilder.andWhere('vault.fdv_tvl >= :minDelta', { minDelta });
       } else if (maxDelta) {
-        queryBuilder.andWhere('market.delta <= :maxDelta', { maxDelta });
+        queryBuilder.andWhere('vault.fdv_tvl <= :maxDelta', { maxDelta });
       }
     }
 
     if (sortBy) {
       const sortField = this.mapSortField(sortBy);
 
-      if (['ticker', 'price', 'tvl', 'fdv'].includes(sortField)) {
-        const tvlField =
-          tvlCurrency === TvlCurrency.USD ? 'vault.total_assets_cost_usd' : 'vault.total_assets_cost_ada';
+      if (['ticker', 'price', 'tvl', 'fdv', 'supply'].includes(sortField)) {
+        const tvlField = currency === Currency.USD ? 'vault.total_assets_cost_usd' : 'vault.total_assets_cost_ada';
         const vaultFieldMap: Record<string, string> = {
           ticker: 'vault.vault_token_ticker',
           price: 'vault.vt_price',
           tvl: tvlField,
           fdv: 'vault.fdv',
+          supply: 'vault.ft_token_supply',
         };
         queryBuilder.orderBy(vaultFieldMap[sortField], sortOrder);
       } else {
@@ -136,7 +160,7 @@ export class MarketService implements OnModuleInit {
 
     const [items, total] = await queryBuilder.getManyAndCount();
 
-    const mappedItems: MarketItem[] = items.map(item => this.mapMarketToItem(item));
+    const mappedItems: MarketItem[] = items.map(item => this.mapMarketToItem(item, adaPrice));
 
     return {
       items: mappedItems,
@@ -155,7 +179,8 @@ export class MarketService implements OnModuleInit {
    */
   async getMarketById(vaultId: string): Promise<MarketItem> {
     const rawItem = await this.getRawMarketByVaultId(vaultId);
-    return this.mapMarketToItem(rawItem);
+    const adaPrice = await this.priceService.getAdaPrice();
+    return this.mapMarketToItem(rawItem, adaPrice);
   }
 
   /**
@@ -168,11 +193,19 @@ export class MarketService implements OnModuleInit {
    */
   async getMarketByIdWithOHLCV(vaultId: string, interval: string = '1h'): Promise<MarketItemWithOHLCV> {
     const rawMarket = await this.getRawMarketByVaultId(vaultId);
+    const adaPrice = await this.priceService.getAdaPrice();
+
+    const baseMarketData = this.mapMarketToItem(rawMarket, adaPrice);
+
+    const detailedMarketData = {
+      ...baseMarketData,
+      circSupply: rawMarket.circSupply,
+      mcap: rawMarket.mcap,
+      totalSupply: rawMarket.totalSupply,
+    };
 
     const policyId = rawMarket.vault?.policy_id;
     const assetName = rawMarket.vault?.asset_vault_name;
-
-    const marketData = this.mapMarketToItem(rawMarket);
 
     let ohlcvData = null;
     if (policyId && assetName) {
@@ -182,36 +215,43 @@ export class MarketService implements OnModuleInit {
     }
 
     return {
-      ...marketData,
+      ...detailedMarketData,
       ohlcv: ohlcvData,
     };
   }
 
-  private mapMarketToItem(item: Market): MarketItem {
+  private mapMarketToItem(item: Market, adaPrice: number = 0): MarketItem {
     const vault: Vault | null = item.vault || null;
 
     const vaultImage = vault?.vault_image ? transformImageToUrl(vault.vault_image as any) : null;
     const tokenImage = vault?.ft_token_img ? transformImageToUrl(vault.ft_token_img as any) : null;
 
+    const priceAda = vault?.vt_price ?? null;
+    const priceUsd = priceAda != null && adaPrice > 0 ? priceAda * adaPrice : null;
+    const fdvAda = vault?.fdv ?? null;
+    const fdvUsd = fdvAda != null ? fdvAda * adaPrice : null;
+    const tvlAda = vault?.total_assets_cost_ada ?? null;
+    const tvlUsd = vault?.total_assets_cost_usd ?? null;
+
     return {
       id: item.id,
       vault_id: item.vault_id,
-      circSupply: item.circSupply,
-      mcap: item.mcap,
-      totalSupply: item.totalSupply,
+      supply: vault?.ft_token_supply,
       price_change_1h: item.price_change_1h,
       price_change_24h: item.price_change_24h,
       price_change_7d: item.price_change_7d,
       price_change_30d: item.price_change_30d,
-      delta: item.delta,
+      delta: vault?.fdv_tvl ?? null,
       created_at: item.created_at,
       updated_at: item.updated_at,
 
       ticker: vault?.vault_token_ticker || null,
-      price: vault?.vt_price || null,
-      tvl_ada: vault?.total_assets_cost_ada || null,
-      tvl_usd: vault?.total_assets_cost_usd || null,
-      fdv: vault?.fdv || null,
+      price_ada: priceAda,
+      price_usd: priceUsd,
+      tvl_ada: tvlAda,
+      tvl_usd: tvlUsd,
+      fdv_ada: fdvAda,
+      fdv_usd: fdvUsd,
       vault_image: vaultImage,
       token_image: tokenImage,
       social_links: vault?.social_links || [],
@@ -241,12 +281,9 @@ export class MarketService implements OnModuleInit {
 
   private mapSortField(sortBy: MarketSortField): string {
     const fieldMap: Record<MarketSortField, string> = {
-      [MarketSortField.circSupply]: 'circSupply',
       [MarketSortField.fdv]: 'fdv',
-      [MarketSortField.mcap]: 'mcap',
       [MarketSortField.price]: 'price',
       [MarketSortField.ticker]: 'ticker',
-      [MarketSortField.totalSupply]: 'totalSupply',
       [MarketSortField.priceChange1h]: 'price_change_1h',
       [MarketSortField.priceChange24h]: 'price_change_24h',
       [MarketSortField.priceChange7d]: 'price_change_7d',
@@ -255,6 +292,7 @@ export class MarketService implements OnModuleInit {
       [MarketSortField.delta]: 'delta',
       [MarketSortField.createdAt]: 'created_at',
       [MarketSortField.updatedAt]: 'updated_at',
+      [MarketSortField.supply]: 'supply',
     };
 
     return fieldMap[sortBy] || 'created_at';

@@ -1,13 +1,17 @@
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
+import { PlutusData } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
+
+import { getVaultUtxo } from '../vaults/processing-tx/onchain/utils/lib';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
-import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
 import { AssetOriginType, AssetType } from '@/types/asset.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -23,6 +27,8 @@ import { SmartContractVaultStatus, VaultStatus } from '@/types/vault.types';
 export class DiagnosticService {
   private readonly logger = new Logger(DiagnosticService.name);
   private readonly GROUPING_THRESHOLD = 1;
+  private readonly scPolicyId: string;
+  private readonly blockfrost: BlockFrostAPI;
 
   constructor(
     @InjectRepository(Asset)
@@ -32,9 +38,15 @@ export class DiagnosticService {
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     private readonly distributionCalculationService: DistributionCalculationService,
-    private readonly systemSettingsService: SystemSettingsService,
-    private readonly vaultManagingService: VaultManagingService
-  ) {}
+    private readonly vaultManagingService: VaultManagingService,
+    private readonly configService: ConfigService
+  ) {
+    this.blockfrost = new BlockFrostAPI({
+      projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
+    });
+
+    this.scPolicyId = this.configService.get<string>('SC_POLICY_ID');
+  }
 
   /**
    * TEST METHOD: Simulate multiplier calculations for a vault without executing the transition
@@ -1165,5 +1177,398 @@ export class DiagnosticService {
         mixedValuePolicies,
       },
     };
+  }
+
+  /**
+   * Inspect and retrieve the on-chain datum of a vault from a transaction or vault UTXO
+   * This is useful for debugging and verifying vault creation/updates
+   *
+   * @param params - Either txHash or vaultAssetName to locate the vault
+   * @returns The vault datum and metadata
+   */
+  async inspectVaultDatumOnChain(params: { txHash?: string; vaultAssetName?: string }): Promise<{
+    datum: any;
+    datumHash?: string;
+    utxoRef?: string;
+    address?: string;
+    assets?: any[];
+    rawDatumCbor?: string;
+  }> {
+    try {
+      let utxoToInspect: any;
+
+      if (params.vaultAssetName) {
+        // Find the vault UTXO by asset name
+        this.logger.log(`Looking up vault UTXO for asset: ${params.vaultAssetName}`);
+        const vaultUtxo = await getVaultUtxo(this.scPolicyId, params.vaultAssetName, this.blockfrost);
+
+        if (!vaultUtxo) {
+          throw new Error(`Vault UTXO not found for asset name: ${params.vaultAssetName}`);
+        }
+
+        // Get full UTXO details
+        const utxoDetails = await this.blockfrost.txsUtxos(vaultUtxo.txHash);
+        utxoToInspect = utxoDetails.outputs[vaultUtxo.index];
+
+        this.logger.log(`Found vault UTXO at: ${vaultUtxo.txHash}#${vaultUtxo.index}`);
+      } else if (params.txHash) {
+        // Get UTXO from transaction hash
+        this.logger.log(`Looking up transaction: ${params.txHash}`);
+        const txUtxos = await this.blockfrost.txsUtxos(params.txHash);
+
+        // Find the output with the vault policy ID
+        utxoToInspect = txUtxos.outputs.find(output =>
+          output.amount.some(asset => asset.unit.startsWith(this.scPolicyId))
+        );
+
+        if (!utxoToInspect) {
+          throw new Error(`No vault UTXO found in transaction: ${params.txHash}`);
+        }
+
+        this.logger.log(`Found vault output in transaction`);
+      } else {
+        throw new Error('Either txHash or vaultAssetName must be provided');
+      }
+
+      // Extract datum information
+      let datum: any = null;
+      let datumHash: string | undefined;
+      let rawDatumCbor: string | undefined;
+
+      if (utxoToInspect.inline_datum) {
+        // Inline datum - decode it
+        rawDatumCbor = utxoToInspect.inline_datum;
+        this.logger.log(`Found inline datum (CBOR): ${rawDatumCbor.substring(0, 100)}...`);
+
+        // You can decode this using plutus-data decoder if needed
+        // For now, we'll return the raw CBOR
+        datum = {
+          type: 'inline',
+          cbor: rawDatumCbor,
+          note: 'Decode this CBOR to see the full datum structure',
+        };
+      } else if (utxoToInspect.data_hash) {
+        // Datum hash - need to look it up
+        datumHash = utxoToInspect.data_hash;
+        this.logger.log(`Found datum hash: ${datumHash}`);
+
+        try {
+          const datumCbor = await this.blockfrost.scriptsDatumCbor(datumHash);
+          rawDatumCbor = datumCbor.cbor;
+          datum = {
+            type: 'hash',
+            hash: datumHash,
+            cbor: rawDatumCbor,
+            note: 'Decode this CBOR to see the full datum structure',
+          };
+        } catch (error) {
+          this.logger.warn(`Could not retrieve datum by hash: ${error.message}`);
+          datum = {
+            type: 'hash',
+            hash: datumHash,
+            error: 'Datum not found in blockchain',
+          };
+        }
+      }
+
+      // Extract asset information
+      const assets = utxoToInspect.amount.map((asset: any) => ({
+        unit: asset.unit,
+        quantity: asset.quantity,
+        isAda: asset.unit === 'lovelace',
+        policyId: asset.unit !== 'lovelace' ? asset.unit.slice(0, 56) : null,
+        assetName: asset.unit !== 'lovelace' ? asset.unit.slice(56) : null,
+      }));
+
+      return {
+        datum,
+        datumHash,
+        utxoRef: params.txHash ? `${params.txHash}#${utxoToInspect.output_index}` : undefined,
+        address: utxoToInspect.address,
+        assets,
+        rawDatumCbor,
+      };
+    } catch (error) {
+      this.logger.error('Failed to inspect vault datum:', error);
+      throw new Error(`Failed to inspect vault datum: ${error.message}`);
+    }
+  }
+
+  /**
+   * Helper method to decode vault datum CBOR into human-readable format
+   * Uses the expected VaultParams structure
+   */
+  async decodeVaultDatum(datumCbor: string): Promise<any> {
+    try {
+      this.logger.log(`Decoding vault datum CBOR: ${datumCbor.substring(0, 100)}...`);
+
+      // Decode the CBOR using PlutusData
+      const plutusData = PlutusData.from_hex(datumCbor);
+      const constr = plutusData.as_constr_plutus_data();
+
+      if (!constr) {
+        throw new Error('Datum is not a constructor');
+      }
+
+      const fields = constr.data();
+
+      // VaultParams structure (from blueprint):
+      // Field 0: vault_status (Int)
+      // Field 1: contract_type (Int)
+      // Field 2: asset_whitelist (List of PolicyId)
+      // Field 3: contributor_whitelist (Option List VerificationKeyHash)
+      // Field 4: asset_window (Interval)
+      // Field 5: acquire_window (Interval)
+      // Field 6: valuation_type (Int)
+      // Field 7: fractionalization (Option)
+      // Field 8: custom_metadata (List Pair ByteArray ByteArray)
+      // Field 9: termination (Option)
+      // Field 10: acquire (Option)
+      // Field 11: acquire_multiplier (Option List Tuple)
+      // Field 12: ada_pair_multipler (Option Int)
+      // Field 13: ada_distribution (Option List Tuple)
+      // Field 14: admin (VerificationKeyHash)
+      // Field 15: minting_key (VerificationKeyHash)
+
+      const vaultStatus = this.getIntFromField(fields.get(0));
+      const contractType = this.getIntFromField(fields.get(1));
+      const assetWhitelist = this.getListOfBytesFromField(fields.get(2));
+      const assetWindow = this.getIntervalFromField(fields.get(4));
+      const acquireWindow = this.getIntervalFromField(fields.get(5));
+      const valuationType = this.getIntFromField(fields.get(6));
+      const admin = this.getBytesFromField(fields.get(14));
+      const mintingKey = this.getBytesFromField(fields.get(15));
+
+      // Optional fields
+      const acquireMultiplier = this.getOptionalListFromField(fields.get(11));
+      const adaPairMultiplier = this.getOptionalIntFromField(fields.get(12));
+      const adaDistribution = this.getOptionalListFromField(fields.get(13));
+
+      return {
+        cbor: datumCbor,
+        decoded: {
+          vault_status: {
+            value: Number(vaultStatus),
+            label: vaultStatus === '0' ? 'OPEN' : vaultStatus === '1' ? 'SUCCESSFUL' : 'CANCELLED',
+          },
+          contract_type: {
+            value: Number(contractType),
+            label: contractType === '0' ? 'PRIVATE' : contractType === '1' ? 'PUBLIC' : 'SEMI_PRIVATE',
+          },
+          asset_whitelist: assetWhitelist,
+          asset_window: {
+            lower_bound: {
+              timestamp: Number(assetWindow.lowerBound),
+              date: new Date(Number(assetWindow.lowerBound)).toISOString(),
+              is_inclusive: assetWindow.lowerInclusive,
+            },
+            upper_bound: {
+              timestamp: Number(assetWindow.upperBound),
+              date: new Date(Number(assetWindow.upperBound)).toISOString(),
+              is_inclusive: assetWindow.upperInclusive,
+            },
+          },
+          acquire_window: {
+            lower_bound: {
+              timestamp: Number(acquireWindow.lowerBound),
+              date: new Date(Number(acquireWindow.lowerBound)).toISOString(),
+              is_inclusive: acquireWindow.lowerInclusive,
+            },
+            upper_bound: {
+              timestamp: Number(acquireWindow.upperBound),
+              date: new Date(Number(acquireWindow.upperBound)).toISOString(),
+              is_inclusive: acquireWindow.upperInclusive,
+            },
+          },
+          valuation_type: {
+            value: Number(valuationType),
+            label: valuationType === '0' ? 'FIXED' : 'LBE',
+          },
+          admin: admin,
+          minting_key: mintingKey,
+          acquire_multiplier: acquireMultiplier || null,
+          ada_pair_multiplier: adaPairMultiplier !== null ? Number(adaPairMultiplier) : null,
+          ada_distribution: adaDistribution || null,
+        },
+        raw: this.plutusDataToJson(plutusData),
+      };
+    } catch (error) {
+      this.logger.error('Failed to decode vault datum:', error);
+      throw new Error(`Failed to decode vault datum: ${error.message}`);
+    }
+  }
+
+  /**
+   * Convert PlutusData to JSON for debugging
+   */
+  private plutusDataToJson(data: PlutusData): any {
+    try {
+      // Try to parse as constructor
+      const constr = data.as_constr_plutus_data();
+      if (constr) {
+        const fields = constr.data();
+        const fieldArray: any[] = [];
+        for (let i = 0; i < fields.len(); i++) {
+          fieldArray.push(this.plutusDataToJson(fields.get(i)));
+        }
+        return {
+          constructor: Number(constr.alternative().to_str()),
+          fields: fieldArray,
+        };
+      }
+
+      // Try to parse as bytes
+      const bytes = data.as_bytes();
+      if (bytes) {
+        return { bytes: Buffer.from(bytes).toString('hex') };
+      }
+
+      // Try to parse as integer
+      const int = data.as_integer();
+      if (int) {
+        return { int: int.to_str() };
+      }
+
+      // Try to parse as list
+      const list = data.as_list();
+      if (list) {
+        const listArray: any[] = [];
+        for (let i = 0; i < list.len(); i++) {
+          listArray.push(this.plutusDataToJson(list.get(i)));
+        }
+        return listArray;
+      }
+
+      // Note: Map parsing omitted as it requires different handling with PlutusMapValues
+      // VaultParams doesn't use maps at the top level
+
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  private getIntFromField(field: PlutusData | undefined): string {
+    if (!field) return '0';
+    const int = field.as_integer();
+    return int ? int.to_str() : '0';
+  }
+
+  private getBytesFromField(field: PlutusData | undefined): string {
+    if (!field) return '';
+    const bytes = field.as_bytes();
+    return bytes ? Buffer.from(bytes).toString('hex') : '';
+  }
+
+  private getListOfBytesFromField(field: PlutusData | undefined): string[] {
+    if (!field) return [];
+    const list = field.as_list();
+    if (!list) return [];
+
+    const result: string[] = [];
+    for (let i = 0; i < list.len(); i++) {
+      const item = list.get(i);
+      const bytes = item.as_bytes();
+      if (bytes) {
+        result.push(Buffer.from(bytes).toString('hex'));
+      }
+    }
+    return result;
+  }
+
+  private getIntervalFromField(field: PlutusData | undefined): {
+    lowerBound: string;
+    lowerInclusive: boolean;
+    upperBound: string;
+    upperInclusive: boolean;
+  } {
+    if (!field) {
+      return { lowerBound: '0', lowerInclusive: true, upperBound: '0', upperInclusive: true };
+    }
+
+    const constr = field.as_constr_plutus_data();
+    if (!constr) {
+      return { lowerBound: '0', lowerInclusive: true, upperBound: '0', upperInclusive: true };
+    }
+
+    const fields = constr.data();
+    const lowerBoundField = fields.get(0);
+    const upperBoundField = fields.get(1);
+
+    const parseBound = (boundField: PlutusData | undefined): { value: string; inclusive: boolean } => {
+      if (!boundField) return { value: '0', inclusive: true };
+      const boundConstr = boundField.as_constr_plutus_data();
+      if (!boundConstr) return { value: '0', inclusive: true };
+
+      const boundFields = boundConstr.data();
+      const boundTypeField = boundFields.get(0);
+      const isInclusiveField = boundFields.get(1);
+
+      // bound_type can be constructor 0 (NegativeInfinity), 1 (Finite with value), 2 (PositiveInfinity)
+      const boundTypeConstr = boundTypeField?.as_constr_plutus_data();
+      let value = '0';
+      if (boundTypeConstr) {
+        const alt = Number(boundTypeConstr.alternative().to_str());
+        if (alt === 1) {
+          // Finite - has a value
+          const valueFields = boundTypeConstr.data();
+          const int = valueFields.get(0)?.as_integer();
+          value = int ? int.to_str() : '0';
+        }
+      }
+
+      // is_inclusive is constructor 1 for True, 0 for False (or just get the integer)
+      const inclusiveConstr = isInclusiveField?.as_constr_plutus_data();
+      const inclusive = inclusiveConstr ? Number(inclusiveConstr.alternative().to_str()) === 1 : true;
+
+      return { value, inclusive };
+    };
+
+    const lower = parseBound(lowerBoundField);
+    const upper = parseBound(upperBoundField);
+
+    return {
+      lowerBound: lower.value,
+      lowerInclusive: lower.inclusive,
+      upperBound: upper.value,
+      upperInclusive: upper.inclusive,
+    };
+  }
+
+  private getOptionalIntFromField(field: PlutusData | undefined): string | null {
+    if (!field) return null;
+    const constr = field.as_constr_plutus_data();
+    if (!constr) return null;
+
+    // Constructor 0 = Some, Constructor 1 = None
+    const alt = Number(constr.alternative().to_str());
+    if (alt === 1) return null; // None
+
+    const fields = constr.data();
+    const valueField = fields.get(0);
+    return this.getIntFromField(valueField);
+  }
+
+  private getOptionalListFromField(field: PlutusData | undefined): any[] | null {
+    if (!field) return null;
+    const constr = field.as_constr_plutus_data();
+    if (!constr) return null;
+
+    // Constructor 0 = Some, Constructor 1 = None
+    const alt = Number(constr.alternative().to_str());
+    if (alt === 1) return null; // None
+
+    const fields = constr.data();
+    const listField = fields.get(0);
+    if (!listField) return null;
+
+    const list = listField.as_list();
+    if (!list) return null;
+
+    const result: any[] = [];
+    for (let i = 0; i < list.len(); i++) {
+      result.push(this.plutusDataToJson(list.get(i)));
+    }
+    return result;
   }
 }

@@ -1,12 +1,25 @@
-import { Controller, Logger, HttpCode, HttpStatus, UseGuards, Param, Get } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  Controller,
+  Logger,
+  HttpCode,
+  HttpStatus,
+  UseGuards,
+  Param,
+  Get,
+  Post,
+  Query,
+  BadRequestException,
+  NotFoundException,
+  Body,
+} from '@nestjs/common';
+import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { AdminGuard } from '../auth/admin.guard';
 
 import { DiagnosticService } from './diagnostic.service';
 
 /*
- * Manual Distribution Controller
+ * Diagnostic Controller
  *
  * Provides manual control over vault distribution process.
  * Use these endpoints when manual_distribution_mode is enabled.
@@ -18,9 +31,9 @@ import { DiagnosticService } from './diagnostic.service';
  * 4. Submit vault update with multipliers
  * 5. Trigger claim processing
  */
-@ApiTags('manual-distribution')
+@ApiTags('diagnostics')
 @UseGuards(AdminGuard)
-@Controller('manual-distribution')
+@Controller('diagnostics')
 export class DiagnosticController {
   private readonly logger = new Logger(DiagnosticController.name);
 
@@ -946,5 +959,112 @@ export class DiagnosticController {
         error: error.message,
       };
     }
+  }
+
+  @Get('vault/inspect-datum')
+  @ApiOperation({
+    summary: 'Inspect vault datum on-chain',
+    description:
+      'Retrieves the on-chain datum of a vault by transaction hash or vault asset name. Useful for debugging and verifying vault state.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Vault datum retrieved successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        datum: {
+          type: 'object',
+          description: 'The datum object with type and CBOR representation',
+        },
+        datumHash: { type: 'string', description: 'Datum hash if using datum hash reference' },
+        utxoRef: { type: 'string', description: 'UTXO reference (txHash#index)' },
+        address: { type: 'string', description: 'Address of the vault UTXO' },
+        assets: {
+          type: 'array',
+          description: 'List of assets in the UTXO',
+          items: {
+            type: 'object',
+            properties: {
+              unit: { type: 'string' },
+              quantity: { type: 'string' },
+              isAda: { type: 'boolean' },
+              policyId: { type: 'string', nullable: true },
+              assetName: { type: 'string', nullable: true },
+            },
+          },
+        },
+        rawDatumCbor: { type: 'string', description: 'Raw CBOR hex string of the datum' },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid request parameters',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Vault UTXO not found',
+  })
+  async inspectVaultDatum(
+    @Query('txHash') txHash?: string,
+    @Query('vaultAssetName') vaultAssetName?: string
+  ): Promise<{
+    datum: any;
+    datumHash?: string;
+    utxoRef?: string;
+    address?: string;
+    assets?: any[];
+    rawDatumCbor?: string;
+  }> {
+    if (!txHash && !vaultAssetName) {
+      throw new BadRequestException('Either txHash or vaultAssetName must be provided');
+    }
+
+    try {
+      return await this.diagnosticService.inspectVaultDatumOnChain({
+        txHash,
+        vaultAssetName,
+      });
+    } catch (error) {
+      if (error.message.includes('not found')) {
+        throw new NotFoundException(error.message);
+      }
+      throw new BadRequestException(error.message);
+    }
+  }
+
+  @Post('vault/decode-datum')
+  @ApiOperation({
+    summary: 'Decode vault datum CBOR',
+    description:
+      'Provides guidance and expected structure for decoding a vault datum CBOR. Returns tools and instructions for manual decoding.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Datum decoding information returned',
+    schema: {
+      type: 'object',
+      properties: {
+        note: { type: 'string' },
+        cbor: { type: 'string' },
+        expectedStructure: {
+          type: 'object',
+          description: 'Expected structure of the vault datum',
+        },
+        decodingTools: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'List of tools/websites for CBOR decoding',
+        },
+      },
+    },
+  })
+  async decodeVaultDatum(@Body() body: { datumCbor: string }): Promise<any> {
+    if (!body.datumCbor) {
+      throw new BadRequestException('datumCbor is required in request body');
+    }
+
+    return await this.diagnosticService.decodeVaultDatum(body.datumCbor);
   }
 }

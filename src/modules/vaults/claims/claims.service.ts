@@ -715,7 +715,7 @@ export class ClaimsService {
 
     const input: CancellationInput = {
       changeAddress: this.adminAddress,
-      message: `Batch cancel ${claims.length} claims - return assets to contributors`,
+      message: `Refund assets to ${validClaims.length} contributor${validClaims.length === 1 ? '' : 's'}`,
       scriptInteractions,
       utxos: adminUtxos,
       mint: mintAssets,
