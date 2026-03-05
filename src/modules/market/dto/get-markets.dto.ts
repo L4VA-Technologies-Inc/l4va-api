@@ -4,18 +4,16 @@ import { IsEnum, IsNumber, IsOptional, IsString, Min } from 'class-validator';
 
 import { PaginationDto } from '../../vaults/dto/pagination.dto';
 
-export enum TvlCurrency {
+export enum Currency {
   ADA = 'ada',
   USD = 'usd',
 }
 
 export enum MarketSortField {
-  circSupply = 'circSupply',
+  supply = 'supply',
   fdv = 'fdv',
-  mcap = 'mcap',
   price = 'price',
   ticker = 'ticker',
-  totalSupply = 'totalSupply',
   priceChange1h = 'price_change_1h',
   priceChange24h = 'price_change_24h',
   priceChange7d = 'price_change_7d',
@@ -94,10 +92,10 @@ export class GetMarketsDto extends PaginationDto {
   @ApiProperty({
     type: Number,
     required: false,
-    description: 'Minimum market cap',
+    description: 'Minimum fdv',
   })
   @Expose()
-  minMcap?: number;
+  minFdv?: number;
 
   @IsNumber()
   @IsOptional()
@@ -106,10 +104,10 @@ export class GetMarketsDto extends PaginationDto {
   @ApiProperty({
     type: Number,
     required: false,
-    description: 'Maximum market cap',
+    description: 'Maximum fdv',
   })
   @Expose()
-  maxMcap?: number;
+  maxFdv?: number;
 
   @IsNumber()
   @IsOptional()
@@ -142,7 +140,7 @@ export class GetMarketsDto extends PaginationDto {
   @ApiProperty({
     type: Number,
     required: false,
-    description: 'Minimum Mkt Cap / TVL (%)',
+    description: 'Minimum FDV / TVL (%)',
   })
   @Expose()
   minDelta?: number;
@@ -154,19 +152,19 @@ export class GetMarketsDto extends PaginationDto {
   @ApiProperty({
     type: Number,
     required: false,
-    description: 'Maximum Mkt Cap / TVL (%)',
+    description: 'Maximum FDV / TVL (%)',
   })
   @Expose()
   maxDelta?: number;
 
-  @IsEnum(TvlCurrency)
+  @IsEnum(Currency)
   @IsOptional()
   @ApiProperty({
-    enum: TvlCurrency,
+    enum: Currency,
     required: false,
-    default: TvlCurrency.ADA,
-    description: 'Currency for TVL filtering and sorting (ada or usd)',
+    default: Currency.ADA,
+    description: 'Currency for filtering and sorting (ada or usd)',
   })
   @Expose()
-  tvlCurrency?: TvlCurrency = TvlCurrency.ADA;
+  currency?: Currency = Currency.ADA;
 }
