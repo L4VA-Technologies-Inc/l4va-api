@@ -235,6 +235,8 @@ export class SystemSettingsService implements OnModuleInit {
         return this.governanceFeeProposalBurning;
       case 'marketplace_action':
         return this.governanceFeeProposalMarketplaceAction;
+      case 'buy_sell':
+        return this.governanceFeeProposalMarketplaceAction;
       case 'expansion':
         return this.governanceFeeProposalExpansion;
       default:
