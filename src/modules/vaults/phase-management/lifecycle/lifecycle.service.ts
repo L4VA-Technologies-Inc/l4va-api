@@ -9,6 +9,7 @@ import { TransactionsService } from '../../processing-tx/offchain-tx/transaction
 import { ExpansionService } from '../governance/expansion.service';
 
 import { Asset } from '@/database/asset.entity';
+import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
@@ -53,6 +54,8 @@ export class LifecycleService {
     private readonly tokenRegistryRepository: Repository<TokenRegistry>,
     @InjectRepository(Proposal)
     private readonly proposalRepository: Repository<Proposal>,
+    @InjectRepository(AssetsWhitelistEntity)
+    private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
     private readonly vaultManagingService: VaultManagingService,
     private readonly distributionCalculationService: DistributionCalculationService,
     private readonly taptoolsService: TaptoolsService,
@@ -284,6 +287,36 @@ export class LifecycleService {
       acquireMultiplier,
       adaDistribution,
     };
+  }
+
+  /**
+   * Switch all custom price entries in asset whitelist to market pricing
+   * Called when Contribution phase ends to ensure market-based valuations going forward
+   *
+   * @param vaultId - The ID of the vault
+   */
+  private async switchCustomPricesToMarket(vaultId: string): Promise<void> {
+    try {
+      const result = await this.assetsWhitelistRepository.update(
+        {
+          vault: { id: vaultId },
+          valuation_method: 'custom',
+        },
+        {
+          valuation_method: 'market',
+          custom_price_ada: null, // Clear custom price since we're switching to market
+        }
+      );
+
+      if (result.affected && result.affected > 0) {
+        this.logger.log(
+          `Vault ${vaultId}: Switched ${result.affected} asset whitelist entries from custom to market pricing`
+        );
+      }
+    } catch (error) {
+      this.logger.error(`Failed to switch custom prices to market for vault ${vaultId}:`, error);
+      // Don't throw - continue with price update even if this fails
+    }
   }
 
   private async handlePublishedToContribution(): Promise<void> {
@@ -535,17 +568,33 @@ export class LifecycleService {
 
   private async executeContributionToAcquireTransition(vault: Vault): Promise<void> {
     try {
-      // Calculate total value of assets in the vault
-      const vaultTvl = await this.taptoolsService.calculateVaultsTvl([vault.id]);
-      const assetsValue = vaultTvl.get(vault.id);
-      vault.total_assets_cost_ada = assetsValue.totalValueAda;
-      vault.total_assets_cost_usd = assetsValue.totalValueUsd;
+      // Step 1: Switch all custom prices to market prices in the asset whitelist
+      await this.switchCustomPricesToMarket(vault.id);
+
+      // Step 2: Update asset prices from market (DexHunter for FTs, WayUp for NFTs)
+      try {
+        await this.taptoolsService.updateAssetPrices([vault.id]);
+      } catch (error) {
+        this.logger.error(`Failed to update asset prices for vault ${vault.id}:`, error);
+      }
+
+      // Step 3: Recalculate and persist vault TVL with updated market prices
+      await this.taptoolsService.updateMultipleVaultTotals([vault.id]);
+
+      // Reload vault to get fresh TVL values
+      const freshVault = await this.vaultRepository.findOne({
+        where: { id: vault.id },
+        select: ['id', 'total_assets_cost_ada', 'total_assets_cost_usd', 'tokens_for_acquires', 'acquire_reserve'],
+      });
+
+      vault.total_assets_cost_ada = freshVault.total_assets_cost_ada;
+      vault.total_assets_cost_usd = freshVault.total_assets_cost_usd;
 
       // Calculate threshold Price
       vault.require_reserved_cost_ada =
-        assetsValue.totalValueAda * (vault.tokens_for_acquires * 0.01) * (vault.acquire_reserve * 0.01);
+        vault.total_assets_cost_ada * (vault.tokens_for_acquires * 0.01) * (vault.acquire_reserve * 0.01);
       vault.require_reserved_cost_usd =
-        assetsValue.totalValueUsd * (vault.tokens_for_acquires * 0.01) * (vault.acquire_reserve * 0.01);
+        vault.total_assets_cost_usd * (vault.tokens_for_acquires * 0.01) * (vault.acquire_reserve * 0.01);
 
       const emitContributionCompleteEvent = async (): Promise<void> => {
         try {
@@ -1287,18 +1336,27 @@ export class LifecycleService {
 
       await this.transactionsService.syncVaultTransactions(vault.id);
 
-      // Update asset prices and get TVL
-      let vaultTvl: Map<string, { totalValueAda: number; totalValueUsd: number; totalAcquiredAda: number }>;
+      // Step 1: Switch all custom prices to market prices in the asset whitelist
+      await this.switchCustomPricesToMarket(vault.id);
+
+      // Step 2: Update asset prices from market (DexHunter for FTs, WayUp for NFTs)
       try {
-        vaultTvl = await this.taptoolsService.updateAssetPrices([vault.id]);
+        await this.taptoolsService.updateAssetPrices([vault.id]);
       } catch (error) {
-        this.logger.error(`Failed to update asset prices for vault ${vault.id}, continuing with cached prices:`, error);
-        vaultTvl = await this.taptoolsService.calculateVaultsTvl([vault.id]);
+        this.logger.error(`Failed to update asset prices for vault ${vault.id}:`, error);
       }
 
+      // Step 3: Recalculate and persist vault TVL with updated market prices
+      await this.taptoolsService.updateMultipleVaultTotals([vault.id]);
+
+      // Reload vault to get fresh TVL values
+      const updatedVault = await this.vaultRepository.findOne({
+        where: { id: vault.id },
+        select: ['id', 'total_assets_cost_ada', 'total_assets_cost_usd', 'ft_token_supply', 'ft_token_decimals'],
+      });
+
       // Calculate total value of contributed assets (this becomes the FDV)
-      const assetsValue = vaultTvl.get(vault.id);
-      const totalContributedValueAda = assetsValue?.totalValueAda;
+      const totalContributedValueAda = updatedVault.total_assets_cost_ada;
 
       // Use raw units for claim calculations (on-chain minting needs decimal-adjusted amounts)
       const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;

@@ -5,6 +5,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { LifecycleService } from './lifecycle.service';
 
 import { Asset } from '@/database/asset.entity';
+import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
@@ -32,7 +33,7 @@ import { VyfiModule } from '@/modules/vyfi/vyfi.module';
     MarketModule,
     VyfiModule,
     GovernanceModule,
-    TypeOrmModule.forFeature([Vault, Asset, Claim, Transaction, TokenRegistry, Proposal]),
+    TypeOrmModule.forFeature([Vault, Asset, Claim, Transaction, TokenRegistry, Proposal, AssetsWhitelistEntity]),
     ScheduleModule.forRoot(),
     BlockchainModule,
   ],
