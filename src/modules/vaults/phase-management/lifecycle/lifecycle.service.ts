@@ -582,7 +582,10 @@ export class LifecycleService {
       await this.taptoolsService.updateMultipleVaultTotals([vault.id]);
 
       // Reload vault to get fresh TVL values
-      const freshVault = await this.vaultRepository.findOne({
+      const freshVault: Pick<
+        Vault,
+        'id' | 'total_assets_cost_ada' | 'total_assets_cost_usd' | 'tokens_for_acquires' | 'acquire_reserve'
+      > = await this.vaultRepository.findOne({
         where: { id: vault.id },
         select: ['id', 'total_assets_cost_ada', 'total_assets_cost_usd', 'tokens_for_acquires', 'acquire_reserve'],
       });

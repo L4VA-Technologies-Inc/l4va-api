@@ -265,10 +265,21 @@ export class BlockchainService {
       if (error.response?.status === 422 && error.response?.data?.message) {
         const errorMessage = error.response.data.message;
 
-        // NOTE: Error checking order matters! Check BadInputsUTxO first because when a UTXO is already spent,
-        // it often causes ValueNotConservedUTxO as a side effect. We want to report the root cause.
+        // NOTE: Error checking order matters! Check transaction already included first as it's the most specific case.
 
-        // Check for BadInputsUTxO error (UTXO already spent) - HIGHEST PRIORITY
+        // Check for "All inputs are spent. Transaction has probably already been included" - HIGHEST PRIORITY
+        if (
+          errorMessage.includes('All inputs are spent') &&
+          errorMessage.includes('Transaction has probably already been included')
+        ) {
+          throw new UtxoSpentException(
+            'already-submitted',
+            0,
+            'This transaction has already been submitted and included on the blockchain. '
+          );
+        }
+
+        // Check for BadInputsUTxO error (UTXO already spent)
         if (errorMessage.includes('BadInputsUTxO')) {
           const utxoMatch = errorMessage.match(
             /TxIn \(TxId \{unTxId = SafeHash "([a-f0-9]+)"\}\) \(TxIx \{unTxIx = (\d+)\}\)/
