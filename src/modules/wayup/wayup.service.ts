@@ -92,7 +92,7 @@ export class WayUpService {
     }));
 
     // Get UTXOs from treasury wallet - treasury provides both NFTs and ADA for fees
-    // This ensures the marketplace script uses treasury's staking credential, not admin's
+    // This ensures the marketplace script uses treasury's staking credential
     const { utxos: treasuryUtxos, requiredInputs } = await getUtxosExtract(
       Address.from_bech32(treasuryAddress),
       this.blockfrost,
@@ -430,9 +430,7 @@ export class WayUpService {
 
       this.logger.log(`Collected ${totalAdaCollected} lovelace from treasury for offers`);
 
-      // Combine UTXOs from both wallets
-
-      // Create offer payload with admin as change address
+      // Create offer payload with treasury as change address
       const offerPayload: MakeOfferPayload = {
         changeAddress: treasuryAddress,
         utxos: treasuryUtxos,

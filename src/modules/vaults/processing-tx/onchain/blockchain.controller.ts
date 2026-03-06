@@ -141,11 +141,11 @@ export class BlockchainController {
       throw new NotFoundException(`Vault ${vaultId} not found`);
     }
 
-    if (vault.vault_status !== VaultStatus.locked) {
-      throw new BadRequestException(
-        `Vault must be in locked status to submit token metadata. Current status: ${vault.vault_status}`
-      );
-    }
+    // if (vault.vault_status !== VaultStatus.locked) {
+    //   throw new BadRequestException(
+    //     `Vault must be in locked status to submit token metadata. Current status: ${vault.vault_status}`
+    //   );
+    // }
 
     const result = await this.metadataRegistryApiService.submitVaultTokenMetadata(vaultId);
 
