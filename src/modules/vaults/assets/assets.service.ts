@@ -395,9 +395,14 @@ export class AssetsService {
     return assetsToRelease.length;
   }
 
-  async markAssetsAsDistributedByTransactions(transactionIds: string[]): Promise<void> {
+  /**
+   * Mark assets as distributed for given transactions
+   * Idempotent - only updates assets that are LOCKED
+   * Returns the number of assets actually updated
+   */
+  async markAssetsAsDistributedByTransactions(transactionIds: string[]): Promise<number> {
     if (transactionIds.length === 0) {
-      return;
+      return 0;
     }
 
     const assets = await this.assetsRepository.find({
@@ -409,10 +414,12 @@ export class AssetsService {
     });
 
     if (assets.length === 0) {
-      throw new BadRequestException(`No locked assets found for ${transactionIds.length} transactions`);
+      // This is expected if assets were already marked via UTXO validation
+      // Don't throw - just return 0
+      return 0;
     }
 
-    await this.assetsRepository.update(
+    const result = await this.assetsRepository.update(
       {
         transaction: { id: In(transactionIds) },
         status: AssetStatus.LOCKED,
@@ -422,6 +429,8 @@ export class AssetsService {
         status: AssetStatus.DISTRIBUTED,
       }
     );
+
+    return result.affected || 0;
   }
 
   async markAssetsAsListed(

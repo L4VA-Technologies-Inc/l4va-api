@@ -269,17 +269,22 @@ export class AcquirerDistributionOrchestrator {
     const confirmed = await this.transactionService.waitForTransactionStatus(
       extractionTx.id,
       TransactionStatus.confirmed,
-      120000,
+      300000, // 5 minutes - increased from 120s to handle blockchain delays
       5000,
       true
     );
 
     if (confirmed) {
       if (isFirstExtraction) {
-        await this.vaultRepository.update({ id: vault.id }, { stake_registered: true });
-        // Also update in-memory vault object to prevent subsequent batches from trying to register again
-        (vault as { stake_registered: boolean }).stake_registered = true;
-        this.logger.log(`Marked vault ${vault.id} stake as registered`);
+        try {
+          await this.vaultRepository.update({ id: vault.id }, { stake_registered: true });
+          // Also update in-memory vault object to prevent subsequent batches from trying to register again
+          (vault as { stake_registered: boolean }).stake_registered = true;
+          this.logger.log(`Marked vault ${vault.id} stake as registered`);
+        } catch (stakeError) {
+          // If another batch already registered, that's fine - just log and continue
+          this.logger.warn(`Failed to mark stake as registered (may already be set): ${stakeError.message}`);
+        }
       }
 
       this.logger.log(`Batch extraction transaction ${response.txHash} confirmed and processed`);
