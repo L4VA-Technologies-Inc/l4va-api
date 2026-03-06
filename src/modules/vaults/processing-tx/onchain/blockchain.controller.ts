@@ -24,7 +24,6 @@ import { VaultContributionService } from './vault-contribution.service';
 import { Vault } from '@/database/vault.entity';
 import { AdminGuard } from '@/modules/auth/admin.guard';
 import { AuthGuard } from '@/modules/auth/auth.guard';
-import { VaultStatus } from '@/types/vault.types';
 
 @ApiTags('blockchain')
 @Controller('blockchain')
@@ -141,11 +140,11 @@ export class BlockchainController {
       throw new NotFoundException(`Vault ${vaultId} not found`);
     }
 
-    if (vault.vault_status !== VaultStatus.locked) {
-      throw new BadRequestException(
-        `Vault must be in locked status to submit token metadata. Current status: ${vault.vault_status}`
-      );
-    }
+    // if (vault.vault_status !== VaultStatus.locked) {
+    //   throw new BadRequestException(
+    //     `Vault must be in locked status to submit token metadata. Current status: ${vault.vault_status}`
+    //   );
+    // }
 
     const result = await this.metadataRegistryApiService.submitVaultTokenMetadata(vaultId);
 
