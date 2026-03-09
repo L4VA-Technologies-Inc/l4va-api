@@ -1830,7 +1830,7 @@ export class TaptoolsService {
     const deletedOverview = this.cache.del(overviewCacheKey);
 
     this.logger.log(
-      `Cache invalidated for wallet ${walletAddress}. ` +
+      `Cache invalidated for wallet ${walletAddress.slice(0, 6)}...${walletAddress.slice(-6)}. ` +
         `Assets deleted: ${deletedAssets > 0}, Overview deleted: ${deletedOverview > 0}`
     );
   }
