@@ -1133,17 +1133,41 @@ export class GovernanceExecutionService {
         }
       }
 
-      // Calculate required quantities from resolvedAssets
-      const requiredQuantities = new Map<string, number>(); // tokenUnit -> total required quantity
+      // Calculate required quantities from resolvedAssets (new format) or fallback to action.quantity (old format)
+      const requiredQuantities = new Map<string, { amount: number; name: string }>(); // tokenUnit -> {amount, name}
 
       for (const action of actions) {
         if (action.resolvedAssets && Array.isArray(action.resolvedAssets)) {
+          // New format: use resolvedAssets array
           for (const resolved of action.resolvedAssets) {
             const asset = assetMap.get(resolved.assetId);
             if (asset) {
               const tokenUnit = asset.policy_id + asset.asset_id;
-              const current = requiredQuantities.get(tokenUnit) || 0;
-              requiredQuantities.set(tokenUnit, current + resolved.quantity);
+              const existing = requiredQuantities.get(tokenUnit);
+              if (existing) {
+                existing.amount += resolved.quantity;
+              } else {
+                requiredQuantities.set(tokenUnit, {
+                  amount: resolved.quantity,
+                  name: asset.name || 'Unknown Token',
+                });
+              }
+            }
+          }
+        } else if (action.assetId) {
+          // Old format (backwards compatibility): use action.assetId and action.quantity
+          const asset = assetMap.get(action.assetId);
+          if (asset) {
+            const tokenUnit = asset.policy_id + asset.asset_id;
+            const requestedAmount = parseFloat(action.quantity || asset.quantity.toString());
+            const existing = requiredQuantities.get(tokenUnit);
+            if (existing) {
+              existing.amount += requestedAmount;
+            } else {
+              requiredQuantities.set(tokenUnit, {
+                amount: requestedAmount,
+                name: asset.name || 'Unknown Token',
+              });
             }
           }
         }
@@ -1152,18 +1176,18 @@ export class GovernanceExecutionService {
       // Calculate deficit quantities - only extract what's missing from treasury
       const deficitQuantities = new Map<string, number>(); // tokenUnit -> quantity to extract
 
-      for (const [tokenUnit, requiredQty] of requiredQuantities) {
+      for (const [tokenUnit, required] of requiredQuantities) {
         const treasuryQty = treasuryBalances.get(tokenUnit) || 0;
-        const deficit = Math.max(0, requiredQty - treasuryQty);
+        const deficit = Math.max(0, required.amount - treasuryQty);
 
         if (deficit > 0) {
           deficitQuantities.set(tokenUnit, deficit);
           this.logger.log(
-            `Token ${tokenUnit}: Required ${requiredQty}, In Treasury ${treasuryQty}, Need to Extract: ${deficit}`
+            `Token ${tokenUnit}: Required ${required.amount}, In Treasury ${treasuryQty}, Need to Extract: ${deficit}`
           );
         } else {
           this.logger.log(
-            `Token ${tokenUnit}: Required ${requiredQty}, In Treasury ${treasuryQty}, Sufficient in treasury (no extraction needed)`
+            `Token ${tokenUnit}: Required ${required.amount}, In Treasury ${treasuryQty}, Sufficient in treasury (no extraction needed)`
           );
         }
       }
@@ -1250,27 +1274,7 @@ export class GovernanceExecutionService {
       }
 
       // Validate treasury wallet has the required FTs before executing swaps
-      const requiredTokens = new Map<string, { amount: number; name: string }>();
-
-      for (const action of actions) {
-        const asset = assetMap.get(action.assetId);
-        if (!asset) continue;
-
-        const tokenUnit = asset.policy_id + asset.asset_id;
-        const requestedAmount = parseFloat(action.quantity || asset.quantity.toString());
-
-        const existing = requiredTokens.get(tokenUnit);
-        if (existing) {
-          existing.amount += requestedAmount;
-        } else {
-          requiredTokens.set(tokenUnit, {
-            amount: requestedAmount,
-            name: asset.name || 'Unknown Token',
-          });
-        }
-      }
-
-      // Query treasury wallet to verify current balances
+      // Re-query treasury wallet to verify current balances (after any extraction)
       this.logger.log('Validating treasury wallet has required FT amounts...');
       const treasuryAddressInfo = await this.blockfrost.addresses(treasuryAddress);
       const currentTreasuryTokens = new Map<string, number>();
@@ -1281,7 +1285,8 @@ export class GovernanceExecutionService {
         }
       }
 
-      for (const [tokenUnit, required] of requiredTokens.entries()) {
+      // Use the already-calculated requiredQuantities for validation (consistent with extraction logic)
+      for (const [tokenUnit, required] of requiredQuantities.entries()) {
         const actualAmount = currentTreasuryTokens.get(tokenUnit) || 0;
 
         if (actualAmount < required.amount) {
@@ -1325,19 +1330,45 @@ export class GovernanceExecutionService {
           continue;
         }
 
-        const asset = assetMap.get(action.assetId);
-        if (!asset) {
-          this.logger.warn(`Asset ${action.assetId} not found, skipping swap`);
+        // Determine token info and amount based on format
+        let tokenIn: string;
+        let requestedAmount: number;
+        let tokenName: string;
+        let primaryAssetId: string;
+
+        if (action.resolvedAssets && Array.isArray(action.resolvedAssets) && action.resolvedAssets.length > 0) {
+          // New format: use resolvedAssets - aggregate quantities for the same token
+          const firstResolved = action.resolvedAssets[0];
+          const firstAsset = assetMap.get(firstResolved.assetId);
+          if (!firstAsset) {
+            this.logger.warn(`Asset ${firstResolved.assetId} not found, skipping swap`);
+            continue;
+          }
+          tokenIn = firstAsset.policy_id + firstAsset.asset_id;
+          requestedAmount = action.resolvedAssets.reduce((sum, r) => sum + r.quantity, 0);
+          tokenName = firstAsset.name || 'Unknown Token';
+          primaryAssetId = firstResolved.assetId;
+        } else if (action.assetId) {
+          // Old format: use action.assetId and action.quantity
+          const asset = assetMap.get(action.assetId);
+          if (!asset) {
+            this.logger.warn(`Asset ${action.assetId} not found, skipping swap`);
+            continue;
+          }
+          tokenIn = asset.policy_id + asset.asset_id;
+          requestedAmount = parseFloat(action.quantity || asset.quantity.toString());
+          tokenName = asset.name || 'Unknown Token';
+          primaryAssetId = action.assetId;
+        } else {
+          this.logger.warn(`Action has no valid asset reference, skipping`);
           continue;
         }
 
-        const tokenIn = asset.policy_id + asset.asset_id;
-        const requestedAmount = parseFloat(action.quantity || asset.quantity.toString());
         const slippage = action.slippage || 0.5;
 
         // Find all assets of this token to handle multi-asset swaps
         const sameTokenAssets = assets
-          .filter(a => a.policy_id === asset.policy_id && a.asset_id === asset.asset_id)
+          .filter(a => a.policy_id + a.asset_id === tokenIn)
           .sort((a, b) => a.quantity - b.quantity); // Start with smaller quantities (FIFO-ish)
 
         let remainingToSwap = requestedAmount;
@@ -1366,7 +1397,7 @@ export class GovernanceExecutionService {
         }
 
         this.logger.log(
-          `Swapping ${requestedAmount} of ${asset.name} (${tokenIn}) across ${affectedAssets.length} asset(s) with ${slippage}% slippage`
+          `Swapping ${requestedAmount} of ${tokenName} (${tokenIn}) across ${affectedAssets.length} asset(s) with ${slippage}% slippage`
         );
 
         const swapResult = await this.dexHunterService.executeSwap(proposal.vaultId, {
@@ -1398,9 +1429,9 @@ export class GovernanceExecutionService {
 
         // Store detailed swap result (keeping backward compatibility with assetId field)
         swapResults.push({
-          assetId: action.assetId, // Keep for backward compatibility
+          assetId: primaryAssetId, // Keep for backward compatibility
           actionIndex: actions.indexOf(action),
-          tokenName: asset.name || 'Unknown Token',
+          tokenName,
           tokenUnit: tokenIn,
           totalSwapped: requestedAmount,
           txHash: swapResult.txHash,

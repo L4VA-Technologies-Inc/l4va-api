@@ -155,8 +155,9 @@ export class BlockchainWebhookService {
           const transactionIds = transaction.metadata.transactionIds as string[];
           try {
             // Update claim status to CLAIMED and set distribution_tx_id
-            await this.claimRepository.update(
-              { id: In(claimIds) },
+            // Only update claims that are still PENDING (avoid overwriting already-processed claims)
+            const updateResult = await this.claimRepository.update(
+              { id: In(claimIds), status: ClaimStatus.PENDING },
               {
                 status: ClaimStatus.CLAIMED,
                 distribution_tx_id: transaction.id,
@@ -164,17 +165,22 @@ export class BlockchainWebhookService {
               }
             );
 
-            // Mark assets as distributed
+            // Mark assets as distributed (idempotent - will only update LOCKED assets)
             if (transactionIds && transactionIds.length > 0) {
-              await this.assetsService.markAssetsAsDistributedByTransactions(transactionIds);
-              this.logger.log(`WH: Marked assets as distributed for ${transactionIds.length} transactions`);
+              const markedCount = await this.assetsService.markAssetsAsDistributedByTransactions(transactionIds);
+              if (markedCount > 0) {
+                this.logger.log(`WH: Marked assets as distributed for ${markedCount} transactions`);
+              }
             }
 
-            this.logger.log(`WH: Processed extractDispatch for ${claimIds.length} acquirer claims`);
+            this.logger.log(
+              `WH: Processed extractDispatch for ${claimIds.length} acquirer claims ` +
+                `(${updateResult.affected || 0} claims updated)`
+            );
           } catch (extractError) {
-            this.logger.error(
-              `WH: Failed to process extractDispatch for transaction ${tx.hash}: ${extractError.message}`,
-              extractError.stack
+            // Don't throw - this is expected if claims were already processed via UTXO validation
+            this.logger.warn(
+              `WH: Partial processing for extractDispatch transaction ${tx.hash}: ${extractError.message}`
             );
           }
         }

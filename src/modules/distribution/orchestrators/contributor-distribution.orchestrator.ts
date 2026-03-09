@@ -410,7 +410,7 @@ export class ContributorDistributionOrchestrator {
         const confirmed = await this.transactionService.waitForTransactionStatus(
           batchTransaction.id,
           TransactionStatus.confirmed,
-          120000,
+          300000, // 5 minutes - increased from 120s to handle blockchain delays
           5000,
           true
         );
