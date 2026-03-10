@@ -15,6 +15,7 @@ export interface MarketItem {
   price_change_7d: number;
   price_change_30d: number;
   delta: number | null;
+  fdv_per_asset: number | null;
   created_at: Date;
   updated_at: Date;
   ticker: string | null;
