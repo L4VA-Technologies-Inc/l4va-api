@@ -6,11 +6,13 @@ import axios, { AxiosInstance } from 'axios';
 import NodeCache from 'node-cache';
 import { Repository } from 'typeorm';
 
+import { Asset } from '@/database/asset.entity';
 import { Market } from '@/database/market.entity';
 import { Vault } from '@/database/vault.entity';
 import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
 import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
+import { AssetType } from '@/types/asset.types';
 import { VaultStatus } from '@/types/vault.types';
 
 /**
@@ -55,6 +57,8 @@ export class VaultMarketStatsService {
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(Market)
     private readonly marketRepository: Repository<Market>,
+    @InjectRepository(Asset)
+    private readonly assetRepository: Repository<Asset>,
     private readonly configService: ConfigService,
     private readonly taptoolsService: TaptoolsService,
     private readonly dexHunterPricingService: DexHunterPricingService
@@ -137,6 +141,22 @@ export class VaultMarketStatsService {
 
     this.logger.log(`Found ${vaults.length} vaults to update market stats`);
 
+    const vaultIds = vaults.map(v => v.id);
+    const assetsStatsRows = await this.assetRepository
+      .createQueryBuilder('a')
+      .select('a.vault_id', 'vault_id')
+      .addSelect('COUNT(*)::int', 'count')
+      .addSelect(`COUNT(CASE WHEN a.type = :ftType THEN 1 END)::int`, 'ft_count')
+      .where('a.vault_id IN (:...vaultIds)', { vaultIds })
+      .andWhere('a.deleted = false')
+      .setParameter('ftType', AssetType.FT)
+      .groupBy('a.vault_id')
+      .getRawMany<{ vault_id: string; count: string; ft_count: string }>();
+    const assetsCountByVault = new Map(assetsStatsRows.map(r => [r.vault_id, parseInt(r.count, 10)]));
+    const isNftOnlyByVault = new Map(
+      assetsStatsRows.map(r => [r.vault_id, parseInt(r.ft_count, 10) === 0 && parseInt(r.count, 10) > 0])
+    );
+
     const tokensMarketData = await Promise.all(
       vaults.map(async vault => {
         const unit = `${vault.script_hash}${vault.asset_vault_name}`;
@@ -170,6 +190,7 @@ export class VaultMarketStatsService {
               tvl: vault.total_assets_cost_ada || 0,
               has_market_data: false,
               totalAdaLiquidity: null,
+              fdv_per_asset: null,
             });
 
             return null; // Skip Taptools since no LP exists
@@ -213,6 +234,12 @@ export class VaultMarketStatsService {
           };
           await this.vaultRepository.update({ id: vault.id }, lpStatusUpdate);
 
+          // FDV/Asset: only for NFT-only vaults (no FT by asset.type). Use vault.fdv. null for FT vaults.
+          const isNftOnlyVault = isNftOnlyByVault.get(vault.id) ?? false;
+          const fdv = vaultUpdateData.fdv != null ? Number(vaultUpdateData.fdv) : null;
+          const assetsCount = assetsCountByVault.get(vault.id) ?? 0;
+          const fdvPerAsset = isNftOnlyVault && fdv != null && fdv > 0 && assetsCount > 0 ? fdv / assetsCount : null;
+
           // Update market stats table with combined data from DexHunter + Taptools
           const marketData = {
             vault_id: vault.id,
@@ -226,6 +253,7 @@ export class VaultMarketStatsService {
             tvl: vault.total_assets_cost_ada || 0, // Pass TVL for delta calculation (Mkt Cap / TVL %)
             has_market_data: hasMarketData, // Track if LP exists (based on Taptools data)
             totalAdaLiquidity: liquidityCheck?.totalAdaLiquidity ?? null, // Total ADA across all DEX pools (from DexHunter)
+            fdv_per_asset: fdvPerAsset, // FDV / assets count. Only for NFT-only vaults
           };
 
           await this.upsertMarketData(marketData);
@@ -446,6 +474,7 @@ export class VaultMarketStatsService {
    *   - tvl: Optional total value locked (used for delta calculation)
    *   - has_market_data: Optional flag indicating if LP exists on DEX
    *   - totalAdaLiquidity: Optional total ADA across all DEX pools from DexHunter. Set to null when no LP exists or when DexHunter returns no liquidity. Set to a number (>= 0) when LP exists and liquidity is available.
+   *   - fdv_per_asset: Optional FDV / assets count. Only for NFT-only vaults; null for FT vaults.
    * @returns The saved Market entity (either updated or newly created)
    */
   async upsertMarketData(data: {
@@ -460,6 +489,7 @@ export class VaultMarketStatsService {
     tvl?: number;
     has_market_data?: boolean;
     totalAdaLiquidity?: number | null;
+    fdv_per_asset?: number | null;
   }): Promise<Market> {
     const calculateDelta = (mcap: number, tvl: number | undefined): number | null => {
       if (!mcap || !tvl || tvl === 0) return null;

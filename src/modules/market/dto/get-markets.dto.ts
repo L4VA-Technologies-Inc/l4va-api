@@ -20,6 +20,7 @@ export enum MarketSortField {
   priceChange30d = 'price_change_30d',
   tvl = 'tvl',
   delta = 'delta',
+  fdvPerAsset = 'fdv_per_asset',
   createdAt = 'created_at',
   updatedAt = 'updated_at',
 }
@@ -156,6 +157,30 @@ export class GetMarketsDto extends PaginationDto {
   })
   @Expose()
   maxDelta?: number;
+
+  @IsNumber()
+  @IsOptional()
+  @Type(() => Number)
+  @Min(0)
+  @ApiProperty({
+    type: Number,
+    required: false,
+    description: 'Minimum FDV / Asset (for NFT-only vaults)',
+  })
+  @Expose()
+  minFdvPerAsset?: number;
+
+  @IsNumber()
+  @IsOptional()
+  @Type(() => Number)
+  @Min(0)
+  @ApiProperty({
+    type: Number,
+    required: false,
+    description: 'Maximum FDV / Asset (for NFT-only vaults)',
+  })
+  @Expose()
+  maxFdvPerAsset?: number;
 
   @IsEnum(Currency)
   @IsOptional()
