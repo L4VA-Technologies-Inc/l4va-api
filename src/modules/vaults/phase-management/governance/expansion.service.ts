@@ -242,7 +242,7 @@ export class ExpansionService {
             let vtAmount: string;
 
             if (expansionConfig.priceType === 'limit') {
-              // Limit price: fixed VT per asset
+              // Limit price: fixed VT per asset unit (NFTs count as 1, FTs use their quantity)
               if (
                 !expansionConfig.limitPrice ||
                 expansionConfig.limitPrice <= 0 ||
@@ -254,14 +254,16 @@ export class ExpansionService {
                 continue;
               }
 
-              // VT amount = Limit Price (VT per asset) * asset count * 10^decimals
-              const assetCount = transaction.assets.length;
-              const vtAmountRaw = expansionConfig.limitPrice * assetCount;
+              // Calculate total quantity: NFTs count as 1 each, FTs use their quantity
+              const totalQuantity = this.calculateTotalQuantity(transaction.assets);
+
+              // VT amount = Limit Price (VT per unit) * total quantity * 10^decimals
+              const vtAmountRaw = expansionConfig.limitPrice * totalQuantity;
 
               // Validate result before using it
               if (!Number.isFinite(vtAmountRaw) || vtAmountRaw < 0) {
                 this.logger.error(
-                  `Invalid VT calculation result for transaction ${transaction.id}: ${vtAmountRaw} (assetCount: ${assetCount}, limitPrice: ${expansionConfig.limitPrice})`
+                  `Invalid VT calculation result for transaction ${transaction.id}: ${vtAmountRaw} (totalQuantity: ${totalQuantity}, limitPrice: ${expansionConfig.limitPrice})`
                 );
                 continue;
               }
@@ -434,5 +436,20 @@ export class ExpansionService {
     }
 
     return totalValueAda;
+  }
+
+  /**
+   * Calculate the total quantity of contributed assets
+   * NFTs count as 1 each, FTs use their quantity field
+   */
+  private calculateTotalQuantity(assets: Asset[]): number {
+    let totalQuantity = 0;
+
+    for (const asset of assets) {
+      const quantity = asset.quantity || 1;
+      totalQuantity += quantity;
+    }
+
+    return totalQuantity;
   }
 }
