@@ -637,7 +637,7 @@ export class GovernanceService {
                     });
                     // If higher amount works, the issue is insufficient swap amount
                     throw new BadRequestException(
-                      `Swap amount too low for token ${asset.policy_id}${asset.asset_id}. ` +
+                      `Swap amount too low for token ${asset.policy_id.slice(0, 8)}...${asset.asset_id.slice(0, 8)}. ` +
                         `Quantity ${swapQuantity} is below the minimum liquidity threshold. ` +
                         `Try using the maximum available amount (${asset.quantity}) or check DexHunter for minimum swap requirements.`
                     );
@@ -647,7 +647,7 @@ export class GovernanceService {
                       throw maxError; // Re-throw our custom error
                     }
                     throw new BadRequestException(
-                      `No liquidity pool available for token ${asset.policy_id}${asset.asset_id}. ` +
+                      `No liquidity pool available for token ${asset.policy_id.slice(0, 8)}...${asset.asset_id.slice(0, 8)}. ` +
                         `This token cannot be swapped via DexHunter.`
                     );
                   }
