@@ -55,7 +55,7 @@ export class MarketService implements OnModuleInit {
   }
 
   async getMarketById(vaultId: string): Promise<MarketItem> {
-    const rawItem = await this.getRawMarketByVaultId(vaultId);
+    const rawItem = await this.getRawMarketByVaultIdWithRelations(vaultId);
     const adaPrice = await this.priceService.getAdaPrice();
     return this.mapMarketToItem(rawItem, adaPrice);
   }
@@ -65,20 +65,46 @@ export class MarketService implements OnModuleInit {
     const adaPrice = await this.priceService.getAdaPrice();
     const baseMarketData = this.mapMarketToItem(rawMarket, adaPrice);
 
-    const { policy_id, asset_vault_name } = rawMarket.vault || {};
+    const { script_hash, asset_vault_name } = rawMarket.vault || {};
     let ohlcv = null;
 
-    if (policy_id && asset_vault_name) {
-      ohlcv = await this.vaultMarketStatsService.getTokenOHLCV(policy_id, asset_vault_name, interval);
+    if (script_hash && asset_vault_name) {
+      ohlcv = await this.vaultMarketStatsService.getTokenOHLCV(script_hash, asset_vault_name, interval);
     } else {
-      this.logger.warn(`Missing policy_id or asset_vault_name for vault ${vaultId}, skipping OHLCV`);
+      this.logger.warn(`Missing script_hash or asset_vault_name for vault ${vaultId}, skipping OHLCV`);
     }
+    const {
+      id,
+      vault_id,
+      supply,
+      price_change_24h,
+      price_change_7d,
+      price_change_30d,
+      price_ada,
+      price_usd,
+      tvl_ada,
+      tvl_usd,
+      fdv_ada,
+      fdv_usd,
+      delta,
+    } = baseMarketData;
 
     return {
-      ...baseMarketData,
-      circSupply: rawMarket.circSupply,
+      id,
+      vault_id,
+      supply,
       mcap: rawMarket.mcap,
-      totalSupply: rawMarket.totalSupply,
+      price_change_24h,
+      price_change_7d,
+      price_change_30d,
+      price_ada,
+      price_usd,
+      tvl_ada,
+      tvl_usd,
+      fdv_ada,
+      fdv_usd,
+      adaPrice,
+      fdv_tvl: delta,
       ohlcv,
     };
   }
@@ -185,7 +211,23 @@ export class MarketService implements OnModuleInit {
     queryBuilder.orderBy(dbField, sortOrder);
   }
 
+  /** Minimal load: only market + vault. Use for OHLCV endpoint where relations are not needed. */
   private async getRawMarketByVaultId(vaultId: string): Promise<Market> {
+    const item = await this.marketRepository
+      .createQueryBuilder('market')
+      .leftJoinAndSelect('market.vault', 'vault')
+      .where('market.vault_id = :vaultId', { vaultId })
+      .getOne();
+
+    if (!item) {
+      throw new NotFoundException(`Market not found for vault ${vaultId}`);
+    }
+
+    return item;
+  }
+
+  /** Full load: vault + social_links, vault_image, ft_token_img, tags. Use for getMarketById. */
+  private async getRawMarketByVaultIdWithRelations(vaultId: string): Promise<Market> {
     const item = await this.createBaseQuery().where('market.vault_id = :vaultId', { vaultId }).getOne();
 
     if (!item) {
