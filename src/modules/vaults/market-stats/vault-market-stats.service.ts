@@ -300,7 +300,7 @@ export class VaultMarketStatsService {
    * Private helper to fetch OHLCV data from TapTools API
    * Handles the actual API call with caching
    *
-   * @param policyId - Token policy ID
+   * @param scriptHash - is policyId for vault and its tokens
    * @param assetName - Token asset name (hex)
    * @param interval - Time interval (1h, 24h, 7d, 30d, 1d)
    * @param numIntervals - Optional number of intervals to return (omit for full history)
@@ -308,7 +308,7 @@ export class VaultMarketStatsService {
    * @returns OHLCV data array or null if unavailable
    */
   private async _fetchOHLCV(
-    policyId: string,
+    scriptHash: string,
     assetName: string,
     interval: string,
     numIntervals: number | undefined,
@@ -321,7 +321,7 @@ export class VaultMarketStatsService {
     }
 
     try {
-      const unit = `${policyId}${assetName}`;
+      const unit = `${scriptHash}${assetName}`;
       const params: { unit: string; interval: string; numIntervals?: number } = { unit, interval };
 
       // Only include numIntervals if specified (omitting it returns full history)
@@ -332,7 +332,7 @@ export class VaultMarketStatsService {
       const { data } = await this.axiosTapToolsInstance.get<MarketOhlcvSeries>('/token/ohlcv', { params });
 
       if (!data || data.length === 0) {
-        this.logger.debug(`No OHLCV data available for ${policyId}.${assetName} (${interval})`);
+        this.logger.debug(`No OHLCV data available for ${scriptHash}.${assetName} (${interval})`);
         return null;
       }
 
@@ -342,20 +342,24 @@ export class VaultMarketStatsService {
       return data;
     } catch (error) {
       this.logger.error(
-        `Error fetching OHLCV data from TapTools for ${policyId}.${assetName} (interval: ${interval}):`,
+        `Error fetching OHLCV data from TapTools for ${scriptHash}.${assetName} (interval: ${interval}):`,
         error.response?.data || error.message
       );
       return null;
     }
   }
 
-  async getTokenOHLCV(policyId: string, assetName: string, interval: string = '1h'): Promise<MarketOhlcvSeries | null> {
+  async getTokenOHLCV(
+    scriptHash: string,
+    assetName: string,
+    interval: string = '1h'
+  ): Promise<MarketOhlcvSeries | null> {
     if (!this.isMainnet) {
       this.logger.warn('Not mainnet environment - OHLCV data not available');
       return null;
     }
 
-    if (!policyId || !assetName) {
+    if (!scriptHash || !assetName) {
       this.logger.warn('Policy ID and asset name are required for OHLCV data');
       return null;
     }
@@ -365,8 +369,8 @@ export class VaultMarketStatsService {
       return null;
     }
 
-    const cacheKey = `ohlcv_${policyId}_${assetName}_${interval}`;
-    return this._fetchOHLCV(policyId, assetName, interval, undefined, cacheKey);
+    const cacheKey = `ohlcv_${scriptHash}_${assetName}_${interval}`;
+    return this._fetchOHLCV(scriptHash, assetName, interval, undefined, cacheKey);
   }
 
   /**
