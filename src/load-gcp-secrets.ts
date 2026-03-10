@@ -5,7 +5,7 @@ import * as dotenv from 'dotenv';
 
 // Define sensitive secrets that this script should avoid adding or updating in .env.
 // Note: If these keys already exist in the .env file, they may still be preserved by merges.
-const SENSITIVE_KEYS = ['ADMIN_S_KEY', 'VAULT_SCRIPT_SKEY', 'TAPTOOLS_API_KEY', 'ADMIN_SERVICE_TOKEN', 'GITHUB_TOKEN'];
+const SENSITIVE_KEYS = ['ADMIN_S_KEY', 'VAULT_SCRIPT_SKEY'];
 
 export async function loadSecrets(): Promise<void> {
   // Step 1: Load .env file first (from git repository)
@@ -23,47 +23,9 @@ export async function loadSecrets(): Promise<void> {
 
   // Support both testnet and mainnet
   const shouldLoadGcpSecrets = nodeEnv === 'mainnet';
-  const shouldRemoveSecretsFromEnv = nodeEnv === 'mainnet' || nodeEnv === 'testnet';
 
   if (!shouldLoadGcpSecrets) {
-    if (!shouldRemoveSecretsFromEnv) {
-      console.log(
-        `Skipping GCP secrets load because NODE_ENV is "${nodeEnv}" (expected "mainnet" or "testnet"), keeping existing .env as is.`
-      );
-      return;
-    }
-
-    console.log(
-      `Skipping GCP secrets load because NODE_ENV is "${nodeEnv}" (expected "mainnet"), just removing any existing sensitive secrets from .env if present.`
-    );
-
-    const existingEnv = dotenv.parse(envExists ? fs.readFileSync(envFilePath, 'utf8') : '');
-
-    // Separate sensitive and non-sensitive keys
-    let sensitiveSecretsCount = 0;
-    const nonSensitiveEnv: Record<string, string> = {};
-
-    Object.entries(existingEnv).forEach(([key, value]) => {
-      if (SENSITIVE_KEYS.includes(key)) {
-        sensitiveSecretsCount++;
-      } else {
-        nonSensitiveEnv[key] = value;
-      }
-    });
-
-    // Load ALL env vars into process.env (including sensitive ones in memory)
-    Object.assign(process.env, existingEnv);
-
-    // Only write non-sensitive keys to .env file
-    const envContent = Object.entries(nonSensitiveEnv)
-      .map(([key, value]) => `${key}=${value}`)
-      .join('\n');
-    fs.writeFileSync(envFilePath, envContent, 'utf8');
-
-    if (sensitiveSecretsCount > 0) {
-      console.log(`✅ Filtered ${sensitiveSecretsCount} sensitive key(s) from .env (kept in memory only)`);
-    }
-
+    console.log(`Skipping GCP secrets load because NODE_ENV is "${nodeEnv}" (expected "mainnet")`);
     return;
   }
 
