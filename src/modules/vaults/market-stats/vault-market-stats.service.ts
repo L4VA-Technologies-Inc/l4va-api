@@ -6,11 +6,13 @@ import axios, { AxiosInstance } from 'axios';
 import NodeCache from 'node-cache';
 import { Repository } from 'typeorm';
 
+import { Asset } from '@/database/asset.entity';
 import { Market } from '@/database/market.entity';
 import { Vault } from '@/database/vault.entity';
 import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
 import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
+import { AssetType } from '@/types/asset.types';
 import { VaultStatus } from '@/types/vault.types';
 
 /**
@@ -55,6 +57,8 @@ export class VaultMarketStatsService {
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(Market)
     private readonly marketRepository: Repository<Market>,
+    @InjectRepository(Asset)
+    private readonly assetRepository: Repository<Asset>,
     private readonly configService: ConfigService,
     private readonly taptoolsService: TaptoolsService,
     private readonly dexHunterPricingService: DexHunterPricingService
@@ -137,6 +141,22 @@ export class VaultMarketStatsService {
 
     this.logger.log(`Found ${vaults.length} vaults to update market stats`);
 
+    const vaultIds = vaults.map(v => v.id);
+    const assetsStatsRows = await this.assetRepository
+      .createQueryBuilder('a')
+      .select('a.vault_id', 'vault_id')
+      .addSelect('COUNT(*)::int', 'count')
+      .addSelect(`COUNT(CASE WHEN a.type = :ftType THEN 1 END)::int`, 'ft_count')
+      .where('a.vault_id IN (:...vaultIds)', { vaultIds })
+      .andWhere('a.deleted = false')
+      .setParameter('ftType', AssetType.FT)
+      .groupBy('a.vault_id')
+      .getRawMany<{ vault_id: string; count: string; ft_count: string }>();
+    const assetsCountByVault = new Map(assetsStatsRows.map(r => [r.vault_id, parseInt(r.count, 10)]));
+    const isNftOnlyByVault = new Map(
+      assetsStatsRows.map(r => [r.vault_id, parseInt(r.ft_count, 10) === 0 && parseInt(r.count, 10) > 0])
+    );
+
     const tokensMarketData = await Promise.all(
       vaults.map(async vault => {
         const unit = `${vault.script_hash}${vault.asset_vault_name}`;
@@ -170,6 +190,7 @@ export class VaultMarketStatsService {
               tvl: vault.total_assets_cost_ada || 0,
               has_market_data: false,
               totalAdaLiquidity: null,
+              fdv_per_asset: null,
             });
 
             return null; // Skip Taptools since no LP exists
@@ -213,6 +234,12 @@ export class VaultMarketStatsService {
           };
           await this.vaultRepository.update({ id: vault.id }, lpStatusUpdate);
 
+          // FDV/Asset: only for NFT-only vaults (no FT by asset.type). Use vault.fdv. null for FT vaults.
+          const isNftOnlyVault = isNftOnlyByVault.get(vault.id) ?? false;
+          const fdv = vaultUpdateData.fdv != null ? Number(vaultUpdateData.fdv) : null;
+          const assetsCount = assetsCountByVault.get(vault.id) ?? 0;
+          const fdvPerAsset = isNftOnlyVault && fdv != null && fdv > 0 && assetsCount > 0 ? fdv / assetsCount : null;
+
           // Update market stats table with combined data from DexHunter + Taptools
           const marketData = {
             vault_id: vault.id,
@@ -226,6 +253,7 @@ export class VaultMarketStatsService {
             tvl: vault.total_assets_cost_ada || 0, // Pass TVL for delta calculation (Mkt Cap / TVL %)
             has_market_data: hasMarketData, // Track if LP exists (based on Taptools data)
             totalAdaLiquidity: liquidityCheck?.totalAdaLiquidity ?? null, // Total ADA across all DEX pools (from DexHunter)
+            fdv_per_asset: fdvPerAsset, // FDV / assets count. Only for NFT-only vaults
           };
 
           await this.upsertMarketData(marketData);
@@ -272,7 +300,7 @@ export class VaultMarketStatsService {
    * Private helper to fetch OHLCV data from TapTools API
    * Handles the actual API call with caching
    *
-   * @param policyId - Token policy ID
+   * @param scriptHash - is policyId for vault and its tokens
    * @param assetName - Token asset name (hex)
    * @param interval - Time interval (1h, 24h, 7d, 30d, 1d)
    * @param numIntervals - Optional number of intervals to return (omit for full history)
@@ -280,7 +308,7 @@ export class VaultMarketStatsService {
    * @returns OHLCV data array or null if unavailable
    */
   private async _fetchOHLCV(
-    policyId: string,
+    scriptHash: string,
     assetName: string,
     interval: string,
     numIntervals: number | undefined,
@@ -293,7 +321,7 @@ export class VaultMarketStatsService {
     }
 
     try {
-      const unit = `${policyId}${assetName}`;
+      const unit = `${scriptHash}${assetName}`;
       const params: { unit: string; interval: string; numIntervals?: number } = { unit, interval };
 
       // Only include numIntervals if specified (omitting it returns full history)
@@ -304,7 +332,7 @@ export class VaultMarketStatsService {
       const { data } = await this.axiosTapToolsInstance.get<MarketOhlcvSeries>('/token/ohlcv', { params });
 
       if (!data || data.length === 0) {
-        this.logger.debug(`No OHLCV data available for ${policyId}.${assetName} (${interval})`);
+        this.logger.debug(`No OHLCV data available for ${scriptHash}.${assetName} (${interval})`);
         return null;
       }
 
@@ -314,20 +342,24 @@ export class VaultMarketStatsService {
       return data;
     } catch (error) {
       this.logger.error(
-        `Error fetching OHLCV data from TapTools for ${policyId}.${assetName} (interval: ${interval}):`,
+        `Error fetching OHLCV data from TapTools for ${scriptHash}.${assetName} (interval: ${interval}):`,
         error.response?.data || error.message
       );
       return null;
     }
   }
 
-  async getTokenOHLCV(policyId: string, assetName: string, interval: string = '1h'): Promise<MarketOhlcvSeries | null> {
+  async getTokenOHLCV(
+    scriptHash: string,
+    assetName: string,
+    interval: string = '1h'
+  ): Promise<MarketOhlcvSeries | null> {
     if (!this.isMainnet) {
       this.logger.warn('Not mainnet environment - OHLCV data not available');
       return null;
     }
 
-    if (!policyId || !assetName) {
+    if (!scriptHash || !assetName) {
       this.logger.warn('Policy ID and asset name are required for OHLCV data');
       return null;
     }
@@ -337,8 +369,8 @@ export class VaultMarketStatsService {
       return null;
     }
 
-    const cacheKey = `ohlcv_${policyId}_${assetName}_${interval}`;
-    return this._fetchOHLCV(policyId, assetName, interval, undefined, cacheKey);
+    const cacheKey = `ohlcv_${scriptHash}_${assetName}_${interval}`;
+    return this._fetchOHLCV(scriptHash, assetName, interval, undefined, cacheKey);
   }
 
   /**
@@ -446,6 +478,7 @@ export class VaultMarketStatsService {
    *   - tvl: Optional total value locked (used for delta calculation)
    *   - has_market_data: Optional flag indicating if LP exists on DEX
    *   - totalAdaLiquidity: Optional total ADA across all DEX pools from DexHunter. Set to null when no LP exists or when DexHunter returns no liquidity. Set to a number (>= 0) when LP exists and liquidity is available.
+   *   - fdv_per_asset: Optional FDV / assets count. Only for NFT-only vaults; null for FT vaults.
    * @returns The saved Market entity (either updated or newly created)
    */
   async upsertMarketData(data: {
@@ -460,6 +493,7 @@ export class VaultMarketStatsService {
     tvl?: number;
     has_market_data?: boolean;
     totalAdaLiquidity?: number | null;
+    fdv_per_asset?: number | null;
   }): Promise<Market> {
     const calculateDelta = (mcap: number, tvl: number | undefined): number | null => {
       if (!mcap || !tvl || tvl === 0) return null;
