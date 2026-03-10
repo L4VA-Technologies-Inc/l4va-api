@@ -24,6 +24,33 @@ export class DexHunterPricingService {
   }
 
   /**
+   * Sanitize error response text - detect HTML error pages and extract concise error info
+   * Prevents massive HTML dumps in logs when external APIs return error pages
+   */
+  private sanitizeErrorText(text: string, statusCode: number): string {
+    // Detect HTML error pages (Cloudflare, nginx, etc.)
+    if (text.includes('<!DOCTYPE') || text.includes('<html')) {
+      // Extract error code if present (e.g., "Error code 520")
+      const errorCodeMatch = text.match(/Error code (\d+)/i);
+      const errorCode = errorCodeMatch ? errorCodeMatch[1] : statusCode;
+
+      // Extract title if present
+      const titleMatch = text.match(/<title>(.*?)<\/title>/i);
+      const title = titleMatch ? titleMatch[1].replace(/\s+/g, ' ').trim() : 'HTML Error Page';
+
+      // Check for Cloudflare-specific errors
+      if (text.includes('cloudflare')) {
+        return `Cloudflare error ${errorCode}: ${title} (upstream server issue)`;
+      }
+
+      return `HTML error page (${errorCode}): ${title}`;
+    }
+
+    // Not HTML - return original text (truncated if very long)
+    return text.length > 500 ? text.substring(0, 500) + '... (truncated)' : text;
+  }
+
+  /**
    * Get current token price in ADA using DexHunter API
    * Uses the average price endpoint to get the current market price
    *
@@ -52,7 +79,8 @@ export class DexHunterPricingService {
           return null;
         }
         const errorText = await response.text();
-        throw new Error(`DexHunter API error: ${response.status} - ${errorText}`);
+        const sanitizedError = this.sanitizeErrorText(errorText, response.status);
+        throw new Error(`DexHunter API error: ${response.status} - ${sanitizedError}`);
       }
 
       const data = await response.json();
@@ -139,7 +167,8 @@ export class DexHunterPricingService {
           };
         }
         const errorText = await response.text();
-        throw new Error(`DexHunter API error: ${response.status} - ${errorText}`);
+        const sanitizedError = this.sanitizeErrorText(errorText, response.status);
+        throw new Error(`DexHunter API error: ${response.status} - ${sanitizedError}`);
       }
 
       const data: Array<{
