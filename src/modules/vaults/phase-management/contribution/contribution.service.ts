@@ -292,7 +292,7 @@ export class ContributionService {
       const projectedCount = currentAssetCount + contributionAssetCount;
 
       if (projectedCount > expansionConfig.assetMax) {
-        const availableSlots = expansionConfig.assetMax - currentAssetCount;
+        const availableSlots = Math.max(0, expansionConfig.assetMax - currentAssetCount);
         throw new BadRequestException(
           `This vault can only accept ${availableSlots} more asset${availableSlots !== 1 ? 's' : ''} during expansion. ` +
             `You're trying to contribute ${contributionAssetCount}, but the vault already has ${currentAssetCount} of ${expansionConfig.assetMax} total allowed.`
