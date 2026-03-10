@@ -145,7 +145,7 @@ export class MarketService implements OnModuleInit {
     this.addRangeCondition(queryBuilder, 'vault.vt_price', 'Price', query.minPrice, query.maxPrice, priceDivider);
     this.addRangeCondition(queryBuilder, 'vault.fdv', 'Fdv', query.minFdv, query.maxFdv, priceDivider);
     this.addRangeCondition(queryBuilder, tvlField, 'Tvl', query.minTvl, query.maxTvl);
-    this.addRangeCondition(queryBuilder, 'vault.fdv_tvl', 'Delta', query.minDelta, query.maxDelta, priceDivider);
+    this.addRangeCondition(queryBuilder, 'vault.fdv_tvl', 'Delta', query.minDelta, query.maxDelta);
     this.addRangeCondition(
       queryBuilder,
       'market.fdv_per_asset',
