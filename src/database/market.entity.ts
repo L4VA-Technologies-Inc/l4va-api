@@ -49,6 +49,15 @@ export class Market {
   @Column({ type: 'decimal', precision: 20, scale: 8, nullable: true, name: 'totalAdaLiquidity' })
   totalAdaLiquidity: number | null; // Total ADA liquidity across all DEX pools
 
+  @Column({
+    type: 'decimal',
+    precision: 20,
+    scale: 8,
+    nullable: true,
+    name: 'fdv_per_asset',
+  })
+  fdv_per_asset: number | null; // FDV / assets count. Only for NFT-only vaults; null for FT vaults
+
   @CreateDateColumn({ type: 'timestamptz' })
   created_at: Date;
 
