@@ -151,7 +151,8 @@ export class MarketService implements OnModuleInit {
       'market.fdv_per_asset',
       'FdvPerAsset',
       query.minFdvPerAsset,
-      query.maxFdvPerAsset
+      query.maxFdvPerAsset,
+      priceDivider
     );
   }
 
@@ -245,6 +246,7 @@ export class MarketService implements OnModuleInit {
     const fdvAda = vault?.fdv ?? null;
     const tvlAda = vault?.total_assets_cost_ada ?? null;
     const tvlUsd = vault?.total_assets_cost_usd ?? null;
+    const fdvPerAssetAda = item.fdv_per_asset ?? null;
 
     return {
       id: item.id,
@@ -255,7 +257,8 @@ export class MarketService implements OnModuleInit {
       price_change_7d: item.price_change_7d,
       price_change_30d: item.price_change_30d,
       delta: vault?.fdv_tvl ?? null,
-      fdv_per_asset: item.fdv_per_asset,
+      fdv_per_asset_ada: fdvPerAssetAda,
+      fdv_per_asset_usd: fdvPerAssetAda != null && hasAdaPrice ? fdvPerAssetAda * adaPrice : null,
       created_at: item.created_at,
       updated_at: item.updated_at,
 
