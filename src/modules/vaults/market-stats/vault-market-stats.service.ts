@@ -4,7 +4,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import axios, { AxiosInstance } from 'axios';
 import NodeCache from 'node-cache';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 
 import { Asset } from '@/database/asset.entity';
 import { Market } from '@/database/market.entity';
@@ -83,9 +83,9 @@ export class VaultMarketStatsService {
 
   /**
    * Scheduled task to update market stats for all locked and expansion vaults
-   * Runs every 2 hours
+   * Runs every 10 minutes
    */
-  @Cron(CronExpression.EVERY_2_HOURS)
+  @Cron(CronExpression.EVERY_10_MINUTES)
   async scheduledUpdateVaultTokensMarketStats(): Promise<void> {
     try {
       await this.updateVaultTokensMarketStats();
@@ -142,20 +142,29 @@ export class VaultMarketStatsService {
     this.logger.log(`Found ${vaults.length} vaults to update market stats`);
 
     const vaultIds = vaults.map(v => v.id);
-    const assetsStatsRows = await this.assetRepository
-      .createQueryBuilder('a')
-      .select('a.vault_id', 'vault_id')
-      .addSelect('COUNT(*)::int', 'count')
-      .addSelect(`COUNT(CASE WHEN a.type = :ftType THEN 1 END)::int`, 'ft_count')
-      .where('a.vault_id IN (:...vaultIds)', { vaultIds })
-      .andWhere('a.deleted = false')
-      .setParameter('ftType', AssetType.FT)
-      .groupBy('a.vault_id')
-      .getRawMany<{ vault_id: string; count: string; ft_count: string }>();
-    const assetsCountByVault = new Map(assetsStatsRows.map(r => [r.vault_id, parseInt(r.count, 10)]));
-    const isNftOnlyByVault = new Map(
-      assetsStatsRows.map(r => [r.vault_id, parseInt(r.ft_count, 10) === 0 && parseInt(r.count, 10) > 0])
-    );
+
+    const assets = await this.assetRepository.find({
+      where: {
+        vault_id: In(vaultIds),
+        type: In([AssetType.NFT, AssetType.FT]),
+      },
+    });
+
+    const nftOnlyVaults = new Map<string, number>();
+    const vaultsWithFt = new Set<string>();
+
+    for (const asset of assets) {
+      if (asset.type === AssetType.FT) {
+        vaultsWithFt.add(asset.vault_id);
+        nftOnlyVaults.delete(asset.vault_id);
+        continue;
+      }
+
+      if (asset.type === AssetType.NFT && !vaultsWithFt.has(asset.vault_id)) {
+        const currentCount = nftOnlyVaults.get(asset.vault_id) || 0;
+        nftOnlyVaults.set(asset.vault_id, currentCount + 1);
+      }
+    }
 
     const tokensMarketData = await Promise.all(
       vaults.map(async vault => {
@@ -234,11 +243,12 @@ export class VaultMarketStatsService {
           };
           await this.vaultRepository.update({ id: vault.id }, lpStatusUpdate);
 
-          // FDV/Asset: only for NFT-only vaults (no FT by asset.type). Use vault.fdv. null for FT vaults.
-          const isNftOnlyVault = isNftOnlyByVault.get(vault.id) ?? false;
+          // FDV/Asset: only for NFT-only vaults (any FT asset → null). Divides by NFT assets count.
+          const isNftOnlyVault = nftOnlyVaults.get(vault.id) ?? false;
           const fdv = vaultUpdateData.fdv != null ? Number(vaultUpdateData.fdv) : null;
-          const assetsCount = assetsCountByVault.get(vault.id) ?? 0;
-          const fdvPerAsset = isNftOnlyVault && fdv != null && fdv > 0 && assetsCount > 0 ? fdv / assetsCount : null;
+          const nftAssetsCount = nftOnlyVaults.get(vault.id) ?? 0;
+          const fdvPerAsset =
+            isNftOnlyVault && fdv != null && fdv > 0 && nftAssetsCount > 0 ? fdv / nftAssetsCount : null;
 
           // Update market stats table with combined data from DexHunter + Taptools
           const marketData = {
@@ -478,7 +488,7 @@ export class VaultMarketStatsService {
    *   - tvl: Optional total value locked (used for delta calculation)
    *   - has_market_data: Optional flag indicating if LP exists on DEX
    *   - totalAdaLiquidity: Optional total ADA across all DEX pools from DexHunter. Set to null when no LP exists or when DexHunter returns no liquidity. Set to a number (>= 0) when LP exists and liquidity is available.
-   *   - fdv_per_asset: Optional FDV / assets count. Only for NFT-only vaults; null for FT vaults.
+   *   - fdv_per_asset: Optional FDV / NFT assets count. Null for FT-only vaults (no NFT assets).
    * @returns The saved Market entity (either updated or newly created)
    */
   async upsertMarketData(data: {
