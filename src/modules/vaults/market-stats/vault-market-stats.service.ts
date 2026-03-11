@@ -83,9 +83,9 @@ export class VaultMarketStatsService {
 
   /**
    * Scheduled task to update market stats for all locked and expansion vaults
-   * Runs every 2 hours
+   * Runs every 10 minutes
    */
-  @Cron(CronExpression.EVERY_2_HOURS)
+  @Cron(CronExpression.EVERY_10_MINUTES)
   async scheduledUpdateVaultTokensMarketStats(): Promise<void> {
     try {
       await this.updateVaultTokensMarketStats();
