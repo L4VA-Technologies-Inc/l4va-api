@@ -9,9 +9,10 @@ import { VyfiService } from './vyfi.service';
 
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
+import { Vault } from '@/database/vault.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Claim, Transaction]), HttpModule, ConfigModule, BlockchainModule],
+  imports: [TypeOrmModule.forFeature([Claim, Transaction, Vault]), HttpModule, ConfigModule, BlockchainModule],
   providers: [VyfiService],
   exports: [VyfiService],
 })
