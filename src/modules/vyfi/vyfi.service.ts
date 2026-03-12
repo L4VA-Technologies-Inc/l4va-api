@@ -16,6 +16,7 @@ import { getAddressFromHash, getUtxosExtract } from '../vaults/processing-tx/onc
 
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
+import { Vault } from '@/database/vault.entity';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
@@ -76,7 +77,8 @@ const VYFI_CONSTANTS = {
   MIN_POOL_ADA: 2_000_000, // 2 ADA in lovelace
   MIN_RETURN_ADA: 2_000_000, // 2 ADA in lovelace
   TOTAL_REQUIRED_ADA: 5_900_000, // 5.9 ADA in lovelace
-  MIN_REMOVAL_LP_ADA: 3_900_000, // 3.9 ADA in lovelace
+  MIN_REMOVAL_LP_ADA: 3_900_000, // 3.9 ADA in lovelace (fee + return minimum for remove/zap operations)
+  MIN_ZAP_ADA: 3_900_000, // 3.9 ADA minimum for ZAP operations (same as removal)
   METADATA_LABEL: '53554741',
 };
 
@@ -97,6 +99,8 @@ export class VyfiService {
     private claimRepository: Repository<Claim>,
     @InjectRepository(Transaction)
     private transactionRepository: Repository<Transaction>,
+    @InjectRepository(Vault)
+    private vaultRepository: Repository<Vault>,
     private readonly httpService: HttpService,
     private readonly blockchainService: BlockchainService,
     private readonly configService: ConfigService
@@ -359,76 +363,53 @@ export class VyfiService {
       throw new Error('Order address is required for removing liquidity');
     }
 
-    // Parse LP token unit into policy ID and asset name
-    const lpPolicyId = lpTokenUnit.slice(0, 56);
-    const lpAssetName = lpTokenUnit.slice(56);
-
-    // Get admin UTXOs containing LP tokens
-    const { utxos: adminUtxos, requiredInputs } = await getUtxosExtract(
-      Address.from_bech32(this.adminAddress),
-      this.blockfrost,
-      {
-        targetAssets: [{ token: lpTokenUnit, amount: Number(lpAmount) }],
-      }
-    );
-
-    if (adminUtxos.length === 0) {
-      throw new Error(`No UTXOs found with LP tokens in admin wallet`);
-    }
-
     // Build the remove liquidity datum
     const datumHex = this.buildRemoveLiquidityDatum(effectiveReturnAddress, minTokenA, minTokenB);
     this.logger.log(`Remove liquidity datum: ${datumHex}`);
 
-    const input = {
-      changeAddress: this.adminAddress,
-      utxos: adminUtxos,
-      outputs: [
-        {
-          address: orderAddress,
-          assets: [
-            {
-              assetName: { name: lpAssetName, format: 'hex' as const },
-              policyId: lpPolicyId,
-              quantity: lpAmount,
-            },
-          ],
-          lovelace: VYFI_CONSTANTS.MIN_REMOVAL_LP_ADA, // 3.9 ADA required for LP removal
-          datum: {
-            type: 'inline' as const,
-            value: datumHex,
-          },
-        },
-      ],
-      requiredSigners: [this.adminHash],
-      requiredInputs,
-      validityInterval: {
-        start: true,
-        end: true,
-      },
-      metadata: {
-        [674]: 'VyFi: LP Remove Liquidity Order Request',
-      },
-      network: this.isMainnet ? 'mainnet' : 'preprod',
+    // Initialize Lucid with Blockfrost provider
+    const network = this.networkId === 1 ? 'Mainnet' : 'Preprod';
+
+    const lucid = await Lucid(
+      new Blockfrost(
+        `https://cardano-${network.toLowerCase()}.blockfrost.io/api/v0`,
+        this.configService.get<string>('BLOCKFROST_API_KEY')
+      ),
+      network
+    );
+
+    const adminUtxos = await lucid.utxosAt(this.adminAddress);
+    lucid.selectWallet.fromAddress(this.adminAddress, adminUtxos);
+
+    // Prepare metadata
+    const metadata = {
+      msg: ['VyFi: LP Remove Liquidity Order Request'],
     };
 
-    this.logger.debug(JSON.stringify(input));
+    // Build transaction using Lucid Evolution
+    const tx = await lucid
+      .newTx()
+      .pay.ToAddressWithData(
+        orderAddress,
+        { kind: 'asHash', value: datumHex },
+        {
+          lovelace: BigInt(VYFI_CONSTANTS.MIN_REMOVAL_LP_ADA),
+          [lpTokenUnit]: BigInt(lpAmount),
+        }
+      )
+      .attachMetadata(674, metadata)
+      .complete({ changeAddress: this.adminAddress });
 
-    const buildResponse = await this.blockchainService.buildTransaction(input);
-    this.logger.debug(JSON.stringify(buildResponse));
+    // Sign the transaction with admin key
+    const signedTx = await tx.sign.withPrivateKey(this.adminSKey).complete();
 
-    const txToSubmit = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-    txToSubmit.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
+    // Submit the transaction
+    const txHash = await signedTx.submit();
 
-    const submitResponse = await this.blockchainService.submitTransaction({
-      transaction: txToSubmit.to_hex(),
-      signatures: [],
-    });
-
-    this.logger.log(`Remove liquidity transaction submitted: ${submitResponse.txHash}`);
+    this.logger.log(`Remove liquidity transaction submitted successfully: ${txHash}`);
 
     return {
-      txHash: submitResponse.txHash,
+      txHash: txHash,
     };
   }
 
@@ -501,6 +482,413 @@ export class VyfiService {
     return {
       txHash: result.txHash,
       lpAmount: lpBalance.toString(),
+      poolInfo,
+    };
+  }
+
+  /**
+   * Build CBOR datum for VyFi ZapA (add liquidity with ADA only)
+   *
+   * Datum structure:
+   * Constructor 0 [
+   *   address_bytes,
+   *   Constructor 5 [ minLpOut ]
+   * ]
+   *
+   * @param returnAddress - Bech32 address where LP tokens should be returned
+   * @param minLpOut - Minimum LP tokens to receive (0 for no slippage protection)
+   */
+  buildZapADatum(returnAddress: string, minLpOut: number = 0): string {
+    // Convert bech32 address to raw bytes (without network prefix)
+    const addressObj = Address.from_bech32(returnAddress);
+    const addressBytesWithPrefix = addressObj.to_bytes();
+    const addressBytes = addressBytesWithPrefix.slice(1);
+
+    let datum = '';
+
+    // Start outer constructor 0
+    datum += 'd8799f'; // Tag 121 (constructor 0) + 9f (indefinite array)
+
+    // Add address bytes
+    const addrHex = Buffer.from(addressBytes).toString('hex');
+    const addrLength = addressBytes.length;
+
+    if (addrLength <= 23) {
+      datum += (0x40 + addrLength).toString(16).padStart(2, '0');
+    } else if (addrLength <= 255) {
+      datum += '58' + addrLength.toString(16).padStart(2, '0');
+    } else {
+      datum += '59' + addrLength.toString(16).padStart(4, '0');
+    }
+    datum += addrHex;
+
+    // Constructor 5 (ZapA action) with indefinite array
+    datum += 'd87e9f'; // Tag 125 (constructor 5) + 9f (indefinite array)
+
+    // Add minLpOut as unsigned integer
+    if (minLpOut === 0) {
+      datum += '00';
+    } else if (minLpOut <= 23) {
+      datum += minLpOut.toString(16).padStart(2, '0');
+    } else if (minLpOut <= 255) {
+      datum += '18' + minLpOut.toString(16).padStart(2, '0');
+    } else if (minLpOut <= 65535) {
+      datum += '19' + minLpOut.toString(16).padStart(4, '0');
+    } else if (minLpOut <= 4294967295) {
+      datum += '1a' + minLpOut.toString(16).padStart(8, '0');
+    } else {
+      datum += '1b' + BigInt(minLpOut).toString(16).padStart(16, '0');
+    }
+
+    // Close constructor 5
+    datum += 'ff';
+
+    // Close outer constructor 0
+    datum += 'ff';
+
+    return datum;
+  }
+
+  /**
+   * Build CBOR datum for VyFi ZapB (add liquidity with Token only)
+   *
+   * Datum structure:
+   * Constructor 0 [
+   *   address_bytes,
+   *   Constructor 6 [ minLpOut ]
+   * ]
+   *
+   * @param returnAddress - Bech32 address where LP tokens should be returned
+   * @param minLpOut - Minimum LP tokens to receive (0 for no slippage protection)
+   */
+  buildZapBDatum(returnAddress: string, minLpOut: number = 0): string {
+    // Convert bech32 address to raw bytes (without network prefix)
+    const addressObj = Address.from_bech32(returnAddress);
+    const addressBytesWithPrefix = addressObj.to_bytes();
+    const addressBytes = addressBytesWithPrefix.slice(1);
+
+    let datum = '';
+
+    // Start outer constructor 0
+    datum += 'd8799f'; // Tag 121 (constructor 0) + 9f (indefinite array)
+
+    // Add address bytes
+    const addrHex = Buffer.from(addressBytes).toString('hex');
+    const addrLength = addressBytes.length;
+
+    if (addrLength <= 23) {
+      datum += (0x40 + addrLength).toString(16).padStart(2, '0');
+    } else if (addrLength <= 255) {
+      datum += '58' + addrLength.toString(16).padStart(2, '0');
+    } else {
+      datum += '59' + addrLength.toString(16).padStart(4, '0');
+    }
+    datum += addrHex;
+
+    // Constructor 6 (ZapB action) with indefinite array
+    datum += 'd87f9f'; // Tag 126 (constructor 6) + 9f (indefinite array)
+
+    // Add minLpOut as unsigned integer
+    if (minLpOut === 0) {
+      datum += '00';
+    } else if (minLpOut <= 23) {
+      datum += minLpOut.toString(16).padStart(2, '0');
+    } else if (minLpOut <= 255) {
+      datum += '18' + minLpOut.toString(16).padStart(2, '0');
+    } else if (minLpOut <= 65535) {
+      datum += '19' + minLpOut.toString(16).padStart(4, '0');
+    } else if (minLpOut <= 4294967295) {
+      datum += '1a' + minLpOut.toString(16).padStart(8, '0');
+    } else {
+      datum += '1b' + BigInt(minLpOut).toString(16).padStart(16, '0');
+    }
+
+    // Close constructor 6
+    datum += 'ff';
+
+    // Close outer constructor 0
+    datum += 'ff';
+
+    return datum;
+  }
+
+  /**
+   * ZapA: Add liquidity to VyFi pool using ADA only
+   *
+   * VyFi will automatically:
+   * 1. Split the ADA in half
+   * 2. Swap half for the token
+   * 3. Add both as liquidity
+   * 4. Return LP tokens to returnAddress
+   *
+   * Requirements:
+   * - Must send to pool's orderValidatorUtxoAddress
+   * - Must include minimum 2 ADA + 1.9 ADA processor fee = 3.9 ADA total + zap amount
+   *
+   * @param adaAmount - Amount of ADA to zap (in lovelace)
+   * @param orderAddress - Pool's order validator address
+   * @param returnAddress - Address where LP tokens should be returned (defaults to admin)
+   * @param minLpOut - Minimum LP tokens to receive (0 = no slippage protection)
+   */
+  async zapInAda({
+    adaAmount,
+    orderAddress,
+    returnAddress,
+    minLpOut = 0,
+  }: {
+    adaAmount: number;
+    orderAddress: string;
+    returnAddress?: string;
+    minLpOut?: number;
+  }): Promise<{ txHash: string }> {
+    const effectiveReturnAddress = returnAddress || this.adminAddress;
+
+    if (!orderAddress) {
+      throw new Error('Order address is required for ZapA');
+    }
+
+    // Build the ZapA datum
+    const datumHex = this.buildZapADatum(effectiveReturnAddress, minLpOut);
+    this.logger.log(`ZapA datum: ${datumHex}`);
+
+    // Initialize Lucid with Blockfrost provider
+    const network = this.networkId === 1 ? 'Mainnet' : 'Preprod';
+
+    const lucid = await Lucid(
+      new Blockfrost(
+        `https://cardano-${network.toLowerCase()}.blockfrost.io/api/v0`,
+        this.configService.get<string>('BLOCKFROST_API_KEY')
+      ),
+      network
+    );
+
+    const adminUtxos = await lucid.utxosAt(this.adminAddress);
+    lucid.selectWallet.fromAddress(this.adminAddress, adminUtxos);
+
+    // Total ADA = zap amount + processor fee + return minimum
+    const totalAdaRequired = adaAmount + VYFI_CONSTANTS.MIN_REMOVAL_LP_ADA;
+
+    // Prepare metadata
+    const metadata = {
+      msg: ['VyFi: ZapA Order Request'],
+    };
+
+    // Build transaction using Lucid Evolution
+    const tx = await lucid
+      .newTx()
+      .pay.ToAddressWithData(
+        orderAddress,
+        { kind: 'asHash', value: datumHex },
+        {
+          lovelace: BigInt(totalAdaRequired),
+        }
+      )
+      .attachMetadata(674, metadata)
+      .complete({ changeAddress: this.adminAddress });
+
+    // Sign the transaction with admin key
+    const signedTx = await tx.sign.withPrivateKey(this.adminSKey).complete();
+
+    // Submit the transaction
+    const txHash = await signedTx.submit();
+
+    this.logger.log(`ZapA transaction submitted successfully: ${txHash}`);
+
+    return {
+      txHash: txHash,
+    };
+  }
+
+  /**
+   * ZapB: Add liquidity to VyFi pool using Token only
+   *
+   * VyFi will automatically:
+   * 1. Split the tokens in half
+   * 2. Swap half for ADA
+   * 3. Add both as liquidity
+   * 4. Return LP tokens to returnAddress
+   *
+   * Requirements:
+   * - Must send to pool's orderValidatorUtxoAddress
+   * - Must include minimum 2 ADA + 1.9 ADA processor fee = 3.9 ADA total
+   * - Must send the token amount to zap
+   *
+   * @param tokenUnit - Full unit of token to zap (policyId + assetName)
+   * @param tokenAmount - Amount of tokens to zap
+   * @param orderAddress - Pool's order validator address
+   * @param returnAddress - Address where LP tokens should be returned (defaults to admin)
+   * @param minLpOut - Minimum LP tokens to receive (0 = no slippage protection)
+   */
+  async zapInToken({
+    tokenUnit,
+    tokenAmount,
+    orderAddress,
+    returnAddress,
+    minLpOut = 0,
+  }: {
+    tokenUnit: string;
+    tokenAmount: number;
+    orderAddress: string;
+    returnAddress?: string;
+    minLpOut?: number;
+  }): Promise<{ txHash: string }> {
+    const effectiveReturnAddress = returnAddress || this.adminAddress;
+
+    if (!orderAddress) {
+      throw new Error('Order address is required for ZapB');
+    }
+
+    // Build the ZapB datum
+    const datumHex = this.buildZapBDatum(effectiveReturnAddress, minLpOut);
+    this.logger.log(`ZapB datum: ${datumHex}`);
+
+    // Initialize Lucid with Blockfrost provider
+    const network = this.networkId === 1 ? 'Mainnet' : 'Preprod';
+
+    const lucid = await Lucid(
+      new Blockfrost(
+        `https://cardano-${network.toLowerCase()}.blockfrost.io/api/v0`,
+        this.configService.get<string>('BLOCKFROST_API_KEY')
+      ),
+      network
+    );
+
+    const adminUtxos = await lucid.utxosAt(this.adminAddress);
+    lucid.selectWallet.fromAddress(this.adminAddress, adminUtxos);
+
+    // Prepare metadata
+    const metadata = {
+      msg: ['VyFi: ZapB Order Request'],
+    };
+
+    // Build transaction using Lucid Evolution
+    const tx = await lucid
+      .newTx()
+      .pay.ToAddressWithData(
+        orderAddress,
+        { kind: 'asHash', value: datumHex },
+        {
+          lovelace: BigInt(VYFI_CONSTANTS.MIN_REMOVAL_LP_ADA),
+          [tokenUnit]: BigInt(tokenAmount),
+        }
+      )
+      .attachMetadata(674, metadata)
+      .complete({ changeAddress: this.adminAddress });
+
+    // Sign the transaction with admin key
+    const signedTx = await tx.sign.withPrivateKey(this.adminSKey).complete();
+
+    // Submit the transaction
+    const txHash = await signedTx.submit();
+
+    this.logger.log(`ZapB transaction submitted successfully: ${txHash}`);
+
+    return {
+      txHash: txHash,
+    };
+  }
+
+  /**
+   * ZapA for vault: Add liquidity using ADA only
+   *
+   * Convenience method that looks up the pool and zaps with ADA
+   *
+   * @param vaultId - The vault ID
+   * @param adaAmount - Amount of ADA to zap (in lovelace, excluding the 3.9 ADA fees)
+   * @param minLpOut - Minimum LP tokens to receive (optional)
+   */
+  async zapInAdaForVault(
+    vaultId: string,
+    adaAmount: number,
+    minLpOut: number = 0
+  ): Promise<{
+    txHash: string;
+    poolInfo: any;
+  }> {
+    // Get vault to find pool
+    const vault: Pick<Vault, 'id' | 'script_hash' | 'asset_vault_name'> = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: ['id', 'script_hash', 'asset_vault_name'],
+    });
+
+    if (!vault) {
+      throw new NotFoundException(`Vault not found for ID ${vaultId}`);
+    }
+
+    // Get pool info by token pair
+    const vtUnit = `${vault.script_hash}${vault.asset_vault_name}`;
+    const poolInfo = await this.getPoolByTokens(vtUnit);
+
+    if (!poolInfo) {
+      throw new Error(`Pool not found for vault token ${vtUnit}`);
+    }
+
+    this.logger.log(`ZapA for vault ${vaultId} with ${adaAmount} lovelace`);
+    this.logger.log(`Pool order address: ${poolInfo.orderAddress}`);
+
+    // Execute ZapA
+    const result = await this.zapInAda({
+      adaAmount,
+      orderAddress: poolInfo.orderAddress,
+      returnAddress: this.adminAddress,
+      minLpOut,
+    });
+
+    return {
+      txHash: result.txHash,
+      poolInfo,
+    };
+  }
+
+  /**
+   * ZapB for vault: Add liquidity using Vault Tokens only
+   *
+   * Convenience method that looks up the pool and zaps with vault tokens
+   *
+   * @param vaultId - The vault ID
+   * @param tokenAmount - Amount of vault tokens to zap
+   * @param minLpOut - Minimum LP tokens to receive (optional)
+   */
+  async zapInTokenForVault(
+    vaultId: string,
+    tokenAmount: number,
+    minLpOut: number = 0
+  ): Promise<{
+    txHash: string;
+    poolInfo: any;
+  }> {
+    // Get vault to find pool
+    const vault: Pick<Vault, 'id' | 'script_hash' | 'asset_vault_name'> = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: ['id', 'script_hash', 'asset_vault_name'],
+    });
+
+    if (!vault) {
+      throw new NotFoundException(`Vault not found for ID ${vaultId}`);
+    }
+
+    // Get pool info by token pair
+    const vtUnit = `${vault.script_hash}${vault.asset_vault_name}`;
+    const poolInfo = await this.getPoolByTokens(vtUnit);
+
+    if (!poolInfo) {
+      throw new Error(`Pool not found for vault token ${vtUnit}`);
+    }
+
+    this.logger.log(`ZapB for vault ${vaultId} with ${tokenAmount} tokens`);
+    this.logger.log(`Pool order address: ${poolInfo.orderAddress}`);
+
+    // Execute ZapB
+    const result = await this.zapInToken({
+      tokenUnit: vtUnit,
+      tokenAmount,
+      orderAddress: poolInfo.orderAddress,
+      returnAddress: this.adminAddress,
+      minLpOut,
+    });
+
+    return {
+      txHash: result.txHash,
       poolInfo,
     };
   }
