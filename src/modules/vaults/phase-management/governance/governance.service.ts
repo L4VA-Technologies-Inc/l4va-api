@@ -42,6 +42,7 @@ import { Vote } from '@/database/vote.entity';
 import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
+import { ActivityEventService } from '@/modules/rewards/services/activity-event.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { GetAssetsToListRes } from '@/modules/vaults/phase-management/governance/dto/get-assets-to-list.res';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
@@ -49,6 +50,7 @@ import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
+import { RewardActivityType } from '@/types/rewards.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';
 import { VoteType } from '@/types/vote.types';
@@ -131,7 +133,9 @@ export class GovernanceService {
     private readonly systemSettingsService: SystemSettingsService,
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly taptoolsService: TaptoolsService,
-    private readonly treasuryWalletService: TreasuryWalletService
+    private readonly treasuryWalletService: TreasuryWalletService,
+    private readonly activityEventService: ActivityEventService
+
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
@@ -246,7 +250,10 @@ export class GovernanceService {
 
       while (hasMorePages) {
         try {
-          const response = await this.blockfrost.assetsAddresses(assetId, { page, order: 'desc' });
+          const response = await this.blockfrost.assetsAddresses(assetId, {
+            page,
+            order: 'desc',
+          });
 
           if (response.length === 0) {
             hasMorePages = false;
@@ -431,7 +438,10 @@ export class GovernanceService {
       }
     }
 
-    const latestSnapshot = await this.snapshotRepository.findOne({ where: { vaultId }, order: { createdAt: 'DESC' } });
+    const latestSnapshot = await this.snapshotRepository.findOne({
+      where: { vaultId },
+      order: { createdAt: 'DESC' },
+    });
 
     // Get user early as we'll need their address for potential fee transaction
     const user = await this.userRepository.findOneBy({ id: userId });
@@ -1279,6 +1289,18 @@ export class GovernanceService {
       tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
     });
 
+    // Index reward event for proposal creation
+    this.activityEventService.indexEvent({
+      walletAddress: user.address,
+      vaultId: vault.id,
+      eventType: RewardActivityType.GOVERNANCE_PROPOSAL,
+      units: 1,
+      metadata: {
+        proposalId: proposal.id,
+        proposalType: proposal.proposalType,
+      },
+    });
+
     return {
       success: true,
       message: 'Proposal created successfully',
@@ -1757,6 +1779,15 @@ export class GovernanceService {
 
     await this.voteRepository.save(vote);
 
+    // Index reward event for governance vote
+    this.activityEventService.indexEvent({
+      walletAddress: voteReq.voterAddress,
+      vaultId: proposal.vaultId,
+      eventType: RewardActivityType.GOVERNANCE_VOTE,
+      units: 1,
+      metadata: { proposalId, voteType: voteReq.vote },
+    });
+
     return {
       success: true,
       message: 'Vote recorded successfully',
@@ -1934,6 +1965,19 @@ export class GovernanceService {
       proposalName: proposal.title,
       creatorId: proposal.creatorId,
       tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+    });
+
+    // Index reward event for proposal creation (paid path)
+    this.activityEventService.indexEvent({
+      walletAddress: proposal.creator.address,
+      vaultId: proposal.vault.id,
+      eventType: RewardActivityType.GOVERNANCE_PROPOSAL,
+      txHash,
+      units: 1,
+      metadata: {
+        proposalId: proposal.id,
+        proposalType: proposal.proposalType,
+      },
     });
 
     this.logger.log(
@@ -2308,7 +2352,13 @@ export class GovernanceService {
     try {
       // Get all listed assets in the vault
       const assets = await this.assetRepository.find({
-        where: [{ vault: { id: vaultId }, type: In([AssetType.NFT, AssetType.FT]), status: AssetStatus.LISTED }],
+        where: [
+          {
+            vault: { id: vaultId },
+            type: In([AssetType.NFT, AssetType.FT]),
+            status: AssetStatus.LISTED,
+          },
+        ],
         select: [
           'id',
           'name',
@@ -2339,7 +2389,13 @@ export class GovernanceService {
     try {
       // Get all listed assets in the vault that can have their listing updated
       const assets = await this.assetRepository.find({
-        where: [{ vault: { id: vaultId }, type: In([AssetType.NFT, AssetType.FT]), status: AssetStatus.LISTED }],
+        where: [
+          {
+            vault: { id: vaultId },
+            type: In([AssetType.NFT, AssetType.FT]),
+            status: AssetStatus.LISTED,
+          },
+        ],
         select: [
           'id',
           'name',

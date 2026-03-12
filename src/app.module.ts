@@ -41,6 +41,7 @@ import { AlertsModule } from '@/modules/alerts/alerts.module';
 import { NotificationModule } from '@/modules/notification/notification.module';
 import { OgModule } from '@/modules/og/og.module';
 import { PresetsModule } from '@/modules/presets/presets.module';
+import { RewardsModule } from '@/modules/rewards/rewards.module';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
 
 @Module({
@@ -113,6 +114,7 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     EventEmitterModule.forRoot(),
     PresetsModule,
     OgModule,
+    RewardsModule,
   ],
   controllers: [AppController],
   providers: [
