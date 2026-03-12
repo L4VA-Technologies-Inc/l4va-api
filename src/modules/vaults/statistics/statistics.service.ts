@@ -36,9 +36,9 @@ export class StatisticsService {
    */
   async getVaultStatistics(): Promise<VaultStatisticsResponse> {
     try {
-      // Count active vaults (published, contribution, acquire, locked), excluding hidden vaults on mainnet
+      // Count active vaults (published, contribution, acquire, locked, expansion), excluding hidden vaults on mainnet
       const activeVaultsWhere: any = {
-        vault_status: In([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked]),
+        vault_status: In([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked, VaultStatus.expansion]),
         deleted: false,
       };
       if (this.isMainnet) {
@@ -63,7 +63,7 @@ export class StatisticsService {
       const totalVaultsCount = await this.vaultsRepository.count({
         where: totalVaultsWhere,
       });
-      // Get sum of total assets value for locked vaults only, excluding hidden vaults on mainnet
+      // Get sum of total assets value for locked and expansion vaults only, excluding hidden vaults on mainnet
       const totalValueQuery = this.vaultsRepository
         .createQueryBuilder('vault')
         .select('SUM(vault.total_assets_cost_usd)', 'totalValueUsd')
