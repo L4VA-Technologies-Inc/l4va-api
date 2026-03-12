@@ -445,11 +445,115 @@ export class TreasuryExtractionService {
 
     await this.transactionsService.updateTransactionHash(transaction.id, response.txHash);
 
-    // Update all assets to EXTRACTED status
-    const allAssetIds = utxoGroups.flatMap(g => g.assets.map(a => a.id));
-    await this.assetsRepository.update({ id: In(allAssetIds) }, { status: AssetStatus.EXTRACTED });
+    // CRITICAL: Verify actual extracted quantities vs requested quantities
+    // Only mark assets as EXTRACTED if their full quantity was actually moved on-chain
 
-    this.logger.log(`Successfully extracted ${allAssetIds.length} assets in transaction ${response.txHash}`);
+    // 1. Build map of actual extracted quantities by tokenUnit
+    const actualExtractedByToken = new Map<string, number>();
+    for (const asset of allAssetsToExtract) {
+      const tokenUnit = `${asset.policyId}${asset.assetName.name}`;
+      const current = actualExtractedByToken.get(tokenUnit) || 0;
+      actualExtractedByToken.set(tokenUnit, current + asset.quantity);
+    }
+
+    // 2. Build map of requested quantities and track assets by token
+    const requestedByToken = new Map<string, number>();
+    const allDbAssets = utxoGroups.flatMap(g => g.assets);
+
+    for (const asset of allDbAssets) {
+      const tokenUnit = `${asset.policy_id}${asset.asset_id}`;
+      const assetQuantity = typeof asset.quantity === 'string' ? parseFloat(asset.quantity) : Number(asset.quantity);
+      const current = requestedByToken.get(tokenUnit) || 0;
+      requestedByToken.set(tokenUnit, current + assetQuantity);
+    }
+
+    // 3. Handle partial extractions by marking assets proportionally
+    const assetsToMarkExtracted: string[] = [];
+    const assetsToKeepLocked: Array<{ id: string; newQuantity: number }> = [];
+    const partialExtractionWarnings: string[] = [];
+
+    for (const [tokenUnit, requested] of requestedByToken) {
+      const extracted = actualExtractedByToken.get(tokenUnit) || 0;
+
+      // Get all DB assets for this token type (in same order they were selected)
+      const tokenAssets = allDbAssets.filter(a => `${a.policy_id}${a.asset_id}` === tokenUnit);
+
+      if (extracted >= requested) {
+        // Full extraction - mark all assets as EXTRACTED
+        assetsToMarkExtracted.push(...tokenAssets.map(a => a.id));
+        continue;
+      }
+
+      // Partial extraction detected - allocate proportionally
+      const shortfall = requested - extracted;
+      partialExtractionWarnings.push(
+        `${tokenUnit}: requested ${requested}, extracted ${extracted}, shortfall ${shortfall}`
+      );
+
+      this.logger.warn(
+        `Partial extraction for token ${tokenUnit}: extracted ${extracted}/${requested} (${((extracted / requested) * 100).toFixed(1)}%)`
+      );
+
+      // Allocate extracted quantity across asset records (FIFO approach)
+      let remainingToAllocate = extracted;
+
+      for (const asset of tokenAssets) {
+        const assetQty = typeof asset.quantity === 'string' ? parseFloat(asset.quantity) : Number(asset.quantity);
+
+        if (remainingToAllocate >= assetQty) {
+          // This asset is fully extracted
+          assetsToMarkExtracted.push(asset.id);
+          remainingToAllocate -= assetQty;
+          this.logger.log(`  → Asset ${asset.id}: Fully extracted (${assetQty} tokens)`);
+        } else if (remainingToAllocate > 0) {
+          // This asset is partially extracted - reduce its quantity and keep as LOCKED
+          const newQuantity = assetQty - remainingToAllocate;
+          assetsToKeepLocked.push({ id: asset.id, newQuantity });
+          this.logger.log(
+            `  → Asset ${asset.id}: Partially extracted (${remainingToAllocate}/${assetQty}), keeping ${newQuantity} as LOCKED`
+          );
+          remainingToAllocate = 0;
+        } else {
+          // No more extracted quantity to allocate - keep as LOCKED with original quantity
+          this.logger.log(`  → Asset ${asset.id}: Not extracted, keeping ${assetQty} as LOCKED`);
+          // Asset remains LOCKED with original quantity (no update needed)
+        }
+      }
+    }
+
+    // 4. Apply status updates to database
+    if (assetsToMarkExtracted.length > 0) {
+      await this.assetsRepository.update({ id: In(assetsToMarkExtracted) }, { status: AssetStatus.EXTRACTED });
+      this.logger.log(`Marked ${assetsToMarkExtracted.length} assets as EXTRACTED`);
+    }
+
+    for (const { id, newQuantity } of assetsToKeepLocked) {
+      await this.assetsRepository.update({ id }, { quantity: newQuantity, status: AssetStatus.LOCKED });
+      this.logger.log(`Updated asset ${id} quantity to ${newQuantity} (kept as LOCKED)`);
+    }
+
+    // 5. Update transaction metadata with extraction details
+    const finalMetadata: any = {
+      ...transaction.metadata,
+      fullyExtractedAssets: assetsToMarkExtracted.length,
+      partiallyExtractedAssets: assetsToKeepLocked.length,
+      totalDbAssets: allDbAssets.length,
+    };
+
+    if (partialExtractionWarnings.length > 0) {
+      finalMetadata.partialExtractionWarnings = partialExtractionWarnings;
+      this.logger.warn('Partial extraction handled with proportional allocation:');
+      partialExtractionWarnings.forEach(w => this.logger.warn(`  ${w}`));
+    }
+
+    await this.transactionsService.updateTransactionHash(transaction.id, response.txHash, finalMetadata);
+
+    this.logger.log(`Successfully processed extraction in transaction ${response.txHash}`);
+    if (partialExtractionWarnings.length === 0) {
+      this.logger.log('✓ All requested quantities were fully extracted');
+    } else {
+      this.logger.log('⚠ Partial extraction completed - some assets remain LOCKED with reduced quantities');
+    }
 
     return {
       success: true,

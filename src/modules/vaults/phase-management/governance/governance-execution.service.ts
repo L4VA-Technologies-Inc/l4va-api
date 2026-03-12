@@ -1196,54 +1196,67 @@ export class GovernanceExecutionService {
       const assetsNeedingExtraction = [];
 
       for (const [tokenUnit, deficitQty] of deficitQuantities) {
-        // Check how many are already EXTRACTED (from previous attempts)
-        const alreadyExtracted = assets
-          .filter(asset => asset.policy_id + asset.asset_id === tokenUnit && asset.status === AssetStatus.EXTRACTED)
-          .reduce((sum, asset) => sum + asset.quantity, 0);
-
-        // Adjust deficit by subtracting what's already extracted
-        const adjustedDeficit = Math.max(0, deficitQty - alreadyExtracted);
-
-        if (adjustedDeficit === 0) {
-          this.logger.log(
-            `Token ${tokenUnit}: Deficit of ${deficitQty} already covered by ${alreadyExtracted} EXTRACTED assets, skipping extraction`
-          );
-          continue;
-        }
+        // NOTE: We rely on actual on-chain treasury balance (already checked above)
+        // Do NOT check EXTRACTED status in DB - it may not reflect actual on-chain state
+        // after partial extractions. The deficitQty already accounts for on-chain balance.
 
         // Get all LOCKED assets for this token type, sorted by quantity descending
         const lockedAssets = assets
           .filter(asset => asset.policy_id + asset.asset_id === tokenUnit && asset.status === AssetStatus.LOCKED)
           .sort((a, b) => b.quantity - a.quantity);
 
-        // Greedy selection: pick LOCKED assets to cover the adjusted deficit
-        let remaining = adjustedDeficit;
+        if (lockedAssets.length === 0) {
+          // Check if we have EXTRACTED assets that might not have made it to treasury yet
+          const extractedAssets = assets.filter(
+            asset => asset.policy_id + asset.asset_id === tokenUnit && asset.status === AssetStatus.EXTRACTED
+          );
+
+          if (extractedAssets.length > 0) {
+            const extractedTotal = extractedAssets.reduce((sum, a) => sum + a.quantity, 0);
+            this.logger.warn(
+              `Token ${tokenUnit}: No LOCKED assets available, but ${extractedTotal} in EXTRACTED status. ` +
+                `On-chain treasury has less than expected - may indicate partial extraction issue. ` +
+                `Consider re-extracting these assets.`
+            );
+
+            // Try to re-extract EXTRACTED assets if they're not actually in the treasury
+            // This handles the case where assets were marked EXTRACTED but didn't fully make it to treasury
+            this.logger.log(
+              `  → Re-selecting ${extractedAssets.length} EXTRACTED asset(s) to ensure they reach treasury`
+            );
+            assetsNeedingExtraction.push(...extractedAssets);
+            continue;
+          }
+
+          throw new Error(
+            `Insufficient assets for token ${tokenUnit}. ` +
+              `Need to extract ${deficitQty}, but no LOCKED or EXTRACTED assets available. ` +
+              `Assets may have been consumed or are unavailable.`
+          );
+        }
+
+        // Greedy selection: pick LOCKED assets to cover the deficit
+        let remaining = deficitQty;
         for (const asset of lockedAssets) {
           if (remaining <= 0) break;
 
           assetsNeedingExtraction.push(asset);
-          this.logger.log(`  → Selecting asset ${asset.id} (${asset.quantity} tokens) to cover adjusted deficit`);
+          this.logger.log(`  → Selecting asset ${asset.id} (${asset.quantity} tokens) to cover deficit`);
           remaining -= asset.quantity;
         }
 
-        // Verify we have enough LOCKED assets to cover the adjusted deficit
+        // Verify we have enough LOCKED assets to cover the deficit
         if (remaining > 0) {
-          const totalExtracted = alreadyExtracted;
-          const totalLocked = adjustedDeficit - remaining;
-          const totalAvailable = totalLocked + totalExtracted;
+          const totalLocked = deficitQty - remaining;
 
           throw new Error(
-            `Insufficient assets for token ${tokenUnit}. ` +
-              `Need ${deficitQty}, Found LOCKED: ${totalLocked}, EXTRACTED: ${totalExtracted}, Total: ${totalAvailable}. ` +
+            `Insufficient LOCKED assets for token ${tokenUnit}. ` +
+              `Need ${deficitQty}, Found LOCKED: ${totalLocked}. ` +
               `Still missing: ${remaining}. Assets may have been consumed or are unavailable.`
           );
         }
 
-        if (alreadyExtracted > 0) {
-          this.logger.log(
-            `Token ${tokenUnit}: Using ${alreadyExtracted} already EXTRACTED + ${adjustedDeficit} newly LOCKED to cover deficit of ${deficitQty}`
-          );
-        }
+        this.logger.log(`Token ${tokenUnit}: Selected ${assetsNeedingExtraction.length} LOCKED assets to extract`);
       }
 
       // Extract assets that are not yet in treasury wallet (or insufficient quantity)
