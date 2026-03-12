@@ -253,6 +253,17 @@ export class Vault {
   })
   liquidity_pool_contribution?: number;
 
+  @Expose({ name: 'vaultWeight' })
+  @Column({
+    name: 'vault_weight',
+    type: 'numeric',
+    precision: 10,
+    scale: 4,
+    default: 1.0,
+    nullable: false,
+  })
+  vault_weight: number;
+
   @Expose({ name: 'hasActiveLp' })
   @Column({
     name: 'has_active_lp',

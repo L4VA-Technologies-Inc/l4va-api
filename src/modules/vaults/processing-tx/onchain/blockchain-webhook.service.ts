@@ -12,9 +12,11 @@ import { OnchainTransactionStatus } from './types/transaction-status.enum';
 import { Claim } from '@/database/claim.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { ActivityEventService } from '@/modules/rewards/services/activity-event.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { AssetType } from '@/types/asset.types';
 import { ClaimStatus } from '@/types/claim.types';
+import { RewardActivityType } from '@/types/rewards.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { ContributionWindowType, VaultStatus } from '@/types/vault.types';
 
@@ -36,6 +38,7 @@ export class BlockchainWebhookService {
     private readonly transactionsService: TransactionsService,
     private readonly configService: ConfigService,
     private readonly assetsService: AssetsService,
+    private readonly activityEventService: ActivityEventService,
     @InjectRepository(Claim)
     private readonly claimRepository: Repository<Claim>,
     @InjectRepository(User)
@@ -115,6 +118,9 @@ export class BlockchainWebhookService {
         if (transaction.type === TransactionType.contribute || transaction.type === TransactionType.acquire) {
           const lockedCount = await this.transactionsService.lockAssetsForTransaction(transaction.id);
           this.logger.log(`Locked ${lockedCount} assets for transaction ${tx.hash}`);
+
+          // Index reward activity events for confirmed on-chain transactions
+          await this.indexRewardEvent(transaction, tx.hash);
         }
 
         // NOTE: Token metadata PR submission has been moved to lifecycle.service.ts
@@ -229,6 +235,77 @@ export class BlockchainWebhookService {
     }
   }
 
+  /**
+   * Index a reward activity event when a contribution or acquisition is confirmed on-chain.
+   */
+  private async indexRewardEvent(transaction: any, txHash: string): Promise<void> {
+    try {
+      // Look up the user's wallet address
+      const user = await this.userRepository.findOne({
+        where: { id: transaction.user_id },
+        select: ['id', 'address'],
+      });
+      if (!user?.address) return;
+
+      // Look up the vault to determine expansion vs normal
+      const vault = await this.vaultRepository.findOne({
+        where: { id: transaction.vault_id },
+        select: ['id', 'vault_status'],
+      });
+      if (!vault) return;
+
+      const isExpansion = vault.vault_status === VaultStatus.expansion;
+
+      if (transaction.type === TransactionType.contribute) {
+        // Count contributed assets from transaction metadata
+        const assets = transaction.metadata as any[];
+        const units = Array.isArray(assets) ? assets.reduce((sum, a) => sum + (Number(a.quantity) || 1), 0) : 1;
+
+        await this.activityEventService.indexEvent({
+          walletAddress: user.address,
+          vaultId: transaction.vault_id,
+          eventType: isExpansion
+            ? RewardActivityType.EXPANSION_ASSET_CONTRIBUTION
+            : RewardActivityType.ASSET_CONTRIBUTION,
+          txHash,
+          units,
+          metadata: { transactionId: transaction.id },
+        });
+      } else if (transaction.type === TransactionType.acquire) {
+        // Acquire: use ADA amount as units (in lovelace)
+        const units = transaction.amount || 1;
+
+        await this.activityEventService.indexEvent({
+          walletAddress: user.address,
+          vaultId: transaction.vault_id,
+          eventType: RewardActivityType.TOKEN_ACQUIRE,
+          txHash,
+          units,
+          metadata: {
+            transactionId: transaction.id,
+            amount: transaction.amount,
+          },
+        });
+
+        // Also emit acquire phase purchase bonus
+        await this.activityEventService.indexEvent({
+          walletAddress: user.address,
+          vaultId: transaction.vault_id,
+          eventType: RewardActivityType.ACQUIRE_PHASE_PURCHASE,
+          txHash,
+          units,
+          metadata: {
+            transactionId: transaction.id,
+            amount: transaction.amount,
+          },
+        });
+      }
+    } catch (error) {
+      // Non-blocking: reward indexing failure should not break webhook processing
+      this.logger.warn(`Failed to index reward event for tx ${txHash}: ${error.message}`);
+    }
+  }
+
   private determineInternalTransactionStatus(tx: BlockfrostTransaction): TransactionStatus {
     if (!tx.block || !tx.block_height) {
       return this.STATUS_MAP[OnchainTransactionStatus.PENDING];
@@ -298,7 +375,10 @@ export class BlockchainWebhookService {
 
     // Batch update user TVLs
     const updatePromises = Array.from(userDeductions.entries()).map(async ([userId, deduction]) => {
-      const user = await this.userRepository.findOne({ where: { id: userId }, select: ['id', 'tvl', 'gains'] });
+      const user = await this.userRepository.findOne({
+        where: { id: userId },
+        select: ['id', 'tvl', 'gains'],
+      });
 
       if (user) {
         const currentTvl = Number(user.tvl || 0);
