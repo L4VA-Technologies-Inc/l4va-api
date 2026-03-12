@@ -1,9 +1,7 @@
-import { HttpService } from '@nestjs/axios';
-import { Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { plainToInstance } from 'class-transformer';
-import { firstValueFrom } from 'rxjs';
 import { In, Not, Repository } from 'typeorm';
 
 import { VaultStatisticsResponse } from '../dto/get-vaults-statistics.dto';
@@ -12,14 +10,11 @@ import { Asset } from '@/database/asset.entity';
 import { Vault } from '@/database/vault.entity';
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { PriceService } from '@/modules/price/price.service';
-import { GetVTPriceRes, GetVTStatisticRes, GetVTHistoryRes } from '@/modules/vaults/statistics/dto/get-statistic.res';
 import { VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class StatisticsService {
   private readonly logger = new Logger(StatisticsService.name);
-  private readonly charli3Key: string;
-  private readonly charli3ApiUrl: string;
   private readonly isMainnet: boolean;
 
   constructor(
@@ -28,12 +23,9 @@ export class StatisticsService {
     @InjectRepository(Asset)
     private readonly assetsRepository: Repository<Asset>,
     private readonly configService: ConfigService,
-    private readonly httpService: HttpService,
     private readonly priceService: PriceService,
     private readonly systemSettingsService: SystemSettingsService
   ) {
-    this.charli3Key = this.configService.get<string>('CHARLI3_API_KEY');
-    this.charli3ApiUrl = this.configService.get<string>('CHARLI3_API_URL');
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
   }
 
@@ -66,7 +58,7 @@ export class StatisticsService {
         where: totalVaultsWhere,
       });
       // Get sum of total assets value for locked vaults only, excluding hidden vaults on mainnet
-      const totalValueQuery = await this.vaultsRepository
+      const totalValueQuery = this.vaultsRepository
         .createQueryBuilder('vault')
         .select('SUM(vault.total_assets_cost_usd)', 'totalValueUsd')
         .addSelect('SUM(vault.total_assets_cost_ada)', 'totalValueAda')
@@ -80,12 +72,18 @@ export class StatisticsService {
       const totalValueResult = await totalValueQuery.getRawOne();
 
       // Count total assets contributed across all vaults, excluding hidden vaults on mainnet
-      const totalContributedQuery = await this.vaultsRepository
+      const totalContributedQuery = this.vaultsRepository
         .createQueryBuilder('vault')
         .select('SUM(vault.total_assets_cost_usd)', 'totalValueUsd')
         .addSelect('SUM(vault.total_assets_cost_ada)', 'totalValueAda')
         .where('vault.vault_status IN (:...statuses)', {
-          statuses: [VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked, VaultStatus.failed],
+          statuses: [
+            VaultStatus.contribution,
+            VaultStatus.acquire,
+            VaultStatus.locked,
+            VaultStatus.failed,
+            VaultStatus.expansion,
+          ],
         })
         .andWhere('vault.deleted = :deleted', { deleted: false });
       if (this.isMainnet) {
@@ -107,7 +105,7 @@ export class StatisticsService {
       const totalAssetsQuery = await totalAssetsQueryBuilder.getRawOne();
 
       // Get total acquired value (both ADA and USD) across all vaults, excluding hidden vaults on mainnet
-      const totalAcquiredQuery = await this.vaultsRepository
+      const totalAcquiredQuery = this.vaultsRepository
         .createQueryBuilder('vault')
         .select('SUM(vault.total_acquired_value_ada)', 'totalAcquiredAda');
       if (this.isMainnet) {
@@ -281,89 +279,5 @@ export class StatisticsService {
         semiPrivate: { percentage: 0, valueAda: 0, valueUsd: 0 },
       };
     }
-  }
-
-  async getTokenPrice(vaultId: string): Promise<GetVTPriceRes> {
-    const policyId = '95a427e384527065f2f8946f5e86320d0117839a5e98ea2c0b55fb0048554e54';
-
-    try {
-      this.logger.log(`Fetching statistics from Charli3 for vault ${vaultId} with policy ${policyId}`);
-
-      const response = await firstValueFrom(
-        this.httpService.get(`${this.charli3ApiUrl}/tokens/current`, {
-          params: { policy: policyId },
-          headers: {
-            Authorization: `Bearer ${this.charli3Key}`,
-          },
-        })
-      );
-
-      this.logger.log(`Fetched price for vault ${vaultId}: ${JSON.stringify(response.data)}`);
-
-      return response.data;
-    } catch (error) {
-      this.logger.error('Error getting vault token statistics', error);
-      throw error;
-    }
-  }
-
-  async getTokenHistory(vaultId: string): Promise<GetVTHistoryRes> {
-    const symbol =
-      'fa8dee6cf0627a82a2610019596758fc36c1ebc4b7e389fdabc44857fdf5c9b0e29ac56f1a584bccd487c445ad45383c6347d03d39869f759daad68284781723';
-    const resolution = '60min';
-    const days = 3;
-
-    const to = Math.floor(Date.now() / 1000);
-    const from = to - days * 24 * 60 * 60;
-
-    try {
-      this.logger.log(`Fetching token history for ${symbol} (Hardcoded)`);
-
-      const params = {
-        symbol: symbol,
-        resolution: resolution,
-        from: from,
-        to: to,
-      };
-
-      const response = await firstValueFrom(
-        this.httpService.get(`${this.charli3ApiUrl}/history`, {
-          params,
-          headers: {
-            Authorization: `Bearer ${this.charli3Key}`,
-          },
-        })
-      );
-
-      this.logger.log(`Fetched history for vault ${vaultId}: ${JSON.stringify(response.data)}`);
-
-      return response.data;
-    } catch (error) {
-      this.logger.error(`Error getting token history for vault ${vaultId}`, error);
-      throw error;
-    }
-  }
-
-  async getVaultTokenStatistics(vaultId: string): Promise<GetVTStatisticRes> {
-    const vault = await this.vaultsRepository.findOneBy({ id: vaultId });
-
-    if (!vault) {
-      throw new NotFoundException(`Vault with id ${vaultId} not found.`);
-    }
-
-    // const policyId = vault.policy_id;
-    //
-    // if (!policyId) {
-    //   this.logger.warn(`Vault ${vaultId} does not have a policy ID configured.`);
-    //   throw new NotFoundException(`Policy ID for vault ${vaultId} not found.`);
-    // }
-
-    const tokenPrice = await this.getTokenPrice(vaultId);
-    const tokenHistory = await this.getTokenHistory(vaultId);
-
-    return {
-      tokenPrice,
-      tokenHistory,
-    };
   }
 }
