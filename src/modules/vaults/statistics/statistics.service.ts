@@ -160,7 +160,13 @@ export class StatisticsService {
         .addSelect('COUNT(vault.id)', 'count')
         .where('vault.deleted = :deleted', { deleted: false })
         .andWhere('vault.vault_status IN (:...statuses)', {
-          statuses: ['contribution', 'acquire', 'locked', 'burned'],
+          statuses: [
+            VaultStatus.contribution,
+            VaultStatus.acquire,
+            VaultStatus.locked,
+            VaultStatus.burned,
+            VaultStatus.expansion,
+          ],
         });
       if (this.isMainnet) {
         statusQuery.andWhere('vault.id NOT IN (:...hiddenIds)', {
@@ -177,6 +183,7 @@ export class StatisticsService {
         acquire: { percentage: 0, valueAda: '0', valueUsd: '0' },
         locked: { percentage: 0, valueAda: '0', valueUsd: '0' },
         terminated: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        expansion: { percentage: 0, valueAda: '0', valueUsd: '0' },
       };
 
       const statusMap = {
@@ -184,6 +191,7 @@ export class StatisticsService {
         acquire: 'acquire',
         locked: 'locked',
         burned: 'terminated',
+        expansion: 'expansion',
       };
 
       statusResults.forEach(item => {
@@ -208,6 +216,7 @@ export class StatisticsService {
         acquire: { percentage: 0, valueAda: '0', valueUsd: '0' },
         locked: { percentage: 0, valueAda: '0', valueUsd: '0' },
         terminated: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        expansion: { percentage: 0, valueAda: '0', valueUsd: '0' },
       };
     }
   }
