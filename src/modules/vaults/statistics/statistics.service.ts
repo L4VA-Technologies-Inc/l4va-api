@@ -49,7 +49,13 @@ export class StatisticsService {
       });
 
       const totalVaultsWhere: any = {
-        vault_status: In([VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked]),
+        vault_status: In([
+          VaultStatus.published,
+          VaultStatus.contribution,
+          VaultStatus.acquire,
+          VaultStatus.locked,
+          VaultStatus.expansion,
+        ]),
       };
       if (this.isMainnet) {
         totalVaultsWhere.id = Not(In(this.systemSettingsService.hiddenMainnetVaultIds));
@@ -62,7 +68,7 @@ export class StatisticsService {
         .createQueryBuilder('vault')
         .select('SUM(vault.total_assets_cost_usd)', 'totalValueUsd')
         .addSelect('SUM(vault.total_assets_cost_ada)', 'totalValueAda')
-        .where('vault.vault_status = :status', { status: VaultStatus.locked })
+        .where('vault.vault_status IN (:...statuses)', { statuses: [VaultStatus.locked, VaultStatus.expansion] })
         .andWhere('vault.deleted = :deleted', { deleted: false });
       if (this.isMainnet) {
         totalValueQuery.andWhere('vault.id NOT IN (:...hiddenIds)', {
