@@ -36,12 +36,10 @@ import { PublishVaultDto } from './dto/publish-vault.dto';
 import { SaveDraftReq } from './dto/saveDraft.req';
 import { VaultActivityItem } from './dto/vault-activity.dto';
 import { VaultAcquireResponse, VaultFullResponse, VaultShortResponse } from './dto/vault.response';
-import { LifecycleService } from './phase-management/lifecycle/lifecycle.service';
 import { TransactionsService } from './processing-tx/offchain-tx/transactions.service';
 import { VaultsService } from './vaults.service';
 
 import { Transaction } from '@/database/transaction.entity';
-import { GetVTStatisticRes } from '@/modules/vaults/statistics/dto/get-statistic.res';
 import { StatisticsService } from '@/modules/vaults/statistics/statistics.service';
 
 @ApiTags('vaults')
@@ -52,8 +50,7 @@ export class VaultsController {
     private readonly vaultsService: VaultsService,
     private readonly draftVaultsService: DraftVaultsService,
     private readonly transactionsService: TransactionsService,
-    private readonly statisticsService: StatisticsService,
-    private readonly lifecycleService: LifecycleService
+    private readonly statisticsService: StatisticsService
   ) {}
 
   @ApiDoc({
@@ -273,20 +270,6 @@ export class VaultsController {
   ): Promise<{ success: boolean }> {
     const userId = req.user.sub;
     return this.draftVaultsService.deleteDraftedVault(userId, id);
-  }
-
-  @ApiDoc({
-    summary: 'Get VT statistics',
-    description: 'Get the current price of a pool or token. Provide either pool or policy, but not both.',
-    status: 200,
-  })
-  @UseGuards(AuthGuard)
-  @Get('vt-statistics/:id')
-  getVaultTokenStatistics(
-    @Request() req: AuthRequest,
-    @Param('id', new ParseUUIDPipe()) id: string
-  ): Promise<GetVTStatisticRes> {
-    return this.statisticsService.getVaultTokenStatistics(id);
   }
 
   @ApiDoc({
