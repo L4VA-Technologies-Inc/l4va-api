@@ -635,20 +635,20 @@ export class GovernanceExecutionService {
       return false;
     }
 
+    // Handle marketplace (existing logic)
+    if (!this.isMainnet) {
+      this.logger.log(
+        `[TESTNET] BUY_SELL proposal ${proposal.id} marked as completed (no actual execution on testnet)`
+      );
+      return true;
+    }
+
     // Check which market this proposal uses
     const market = proposal.metadata.marketplaceActions[0]?.market;
 
     // Handle DexHunter FT swaps
     if (market === 'DexHunter') {
       return this.executeDexHunterSwapProposal(proposal);
-    }
-
-    // Handle WayUp NFT marketplace (existing logic)
-    if (!this.isMainnet) {
-      this.logger.log(
-        `[TESTNET] BUY_SELL proposal ${proposal.id} marked as completed (no actual execution on testnet)`
-      );
-      return true;
     }
 
     // Collect all unique asset IDs to fetch from database
