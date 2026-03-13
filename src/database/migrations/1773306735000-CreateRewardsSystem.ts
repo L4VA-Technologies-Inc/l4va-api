@@ -185,7 +185,7 @@ export class CreateRewardsSystem1773306735000 implements MigrationInterface {
         "immediate_amount" bigint NOT NULL DEFAULT 0,
         "vested_amount" bigint NOT NULL DEFAULT 0,
         "status" "public"."reward_claims_status_enum" NOT NULL DEFAULT 'available',
-        "claim_tx_hash" character varying,
+        "claim_transaction_id" uuid,
         "claimed_at" TIMESTAMP WITH TIME ZONE,
         "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
         "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
@@ -195,6 +195,7 @@ export class CreateRewardsSystem1773306735000 implements MigrationInterface {
     `);
     await queryRunner.query(`CREATE INDEX "IDX_rc_epoch_id" ON "reward_claims" ("epoch_id")`);
     await queryRunner.query(`CREATE INDEX "IDX_rc_wallet_address" ON "reward_claims" ("wallet_address")`);
+    await queryRunner.query(`CREATE INDEX "IDX_rc_claim_transaction_id" ON "reward_claims" ("claim_transaction_id")`);
 
     // --- Foreign keys ---
     await queryRunner.query(
@@ -221,6 +222,9 @@ export class CreateRewardsSystem1773306735000 implements MigrationInterface {
     await queryRunner.query(
       `ALTER TABLE "reward_claims" ADD CONSTRAINT "FK_rc_epoch" FOREIGN KEY ("epoch_id") REFERENCES "reward_epochs"("id") ON DELETE CASCADE`
     );
+    await queryRunner.query(
+      `ALTER TABLE "reward_claims" ADD CONSTRAINT "FK_rc_claim_transaction" FOREIGN KEY ("claim_transaction_id") REFERENCES "transactions"("id") ON DELETE SET NULL`
+    );
 
     // --- Add vault_weight to vaults ---
     await queryRunner.query(`ALTER TABLE "vaults" ADD "vault_weight" numeric(10,4) NOT NULL DEFAULT '1'`);
@@ -245,6 +249,7 @@ export class CreateRewardsSystem1773306735000 implements MigrationInterface {
     await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN "vault_weight"`);
 
     // Drop foreign keys
+    await queryRunner.query(`ALTER TABLE "reward_claims" DROP CONSTRAINT "FK_rc_claim_transaction"`);
     await queryRunner.query(`ALTER TABLE "reward_claims" DROP CONSTRAINT "FK_rc_epoch"`);
     await queryRunner.query(`ALTER TABLE "reward_lp_positions" DROP CONSTRAINT "FK_rlp_vault"`);
     await queryRunner.query(`ALTER TABLE "reward_balance_snapshots" DROP CONSTRAINT "FK_rbs_vault"`);
