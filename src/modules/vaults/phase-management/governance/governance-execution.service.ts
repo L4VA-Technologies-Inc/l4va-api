@@ -21,6 +21,7 @@ import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { TreasuryExtractionService } from '@/modules/vaults/treasure/treasury-extraction.service';
+import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
 import { WayUpService } from '@/modules/wayup/wayup.service';
 import { AssetStatus } from '@/types/asset.types';
 import { ClaimType } from '@/types/claim.types';
@@ -62,7 +63,8 @@ export class GovernanceExecutionService {
     private readonly terminationService: TerminationService,
     private readonly distributionService: DistributionService,
     private readonly dexHunterService: DexHunterService,
-    private readonly expansionService: ExpansionService
+    private readonly expansionService: ExpansionService,
+    private readonly wayUpPricingService: WayUpPricingService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
@@ -508,6 +510,12 @@ export class GovernanceExecutionService {
         return;
       }
 
+      // Check if this is a handled rejection due to buy price being exceeded
+      if (error.message === 'PROPOSAL_REJECTED_PRICE_EXCEEDED') {
+        this.logger.log(`Proposal ${proposalId}: REJECTED - NFT listing price exceeds proposal max price`);
+        return;
+      }
+
       // Store execution error in proposal metadata
       if (proposal) {
         await this.storeExecutionError(proposal, error);
@@ -604,7 +612,8 @@ export class GovernanceExecutionService {
         error.message === 'PROPOSAL_REJECTED_LISTING_NOT_FOUND' ||
         error.message === 'PROPOSAL_REJECTED_NO_VALID_OPERATIONS' ||
         error.message === 'PROPOSAL_REJECTED_ASSET_ALREADY_LISTED' ||
-        error.message === 'PROPOSAL_REJECTED_ASSETS_NOT_LOCKED'
+        error.message === 'PROPOSAL_REJECTED_ASSETS_NOT_LOCKED' ||
+        error.message === 'PROPOSAL_REJECTED_PRICE_EXCEEDED'
       ) {
         throw error;
       }
@@ -709,24 +718,7 @@ export class GovernanceExecutionService {
         // Check if asset is already listed (has listing_tx_hash) - reject entire proposal
         if (asset.listing_tx_hash) {
           const reason = `Asset "${asset.name || option.assetId}" is already listed on marketplace`;
-          this.logger.warn(`Marketplace proposal ${proposal.id} rejected: ${reason}`);
-
-          // Store execution error before rejecting so users can see the reason
-          await this.storeExecutionError(proposal, new Error(reason));
-
-          await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
-
-          this.eventEmitter.emit('proposal.rejected', {
-            address: proposal.vault?.owner?.address || null,
-            vaultId: proposal.vaultId,
-            vaultName: proposal.vault?.name || null,
-            proposalName: proposal.title,
-            creatorId: proposal.creatorId,
-            tokenHolderIds: [],
-            reason,
-          });
-
-          throw new Error('PROPOSAL_REJECTED_ASSET_ALREADY_LISTED');
+          await this.rejectMarketplaceProposal(proposal, reason, 'PROPOSAL_REJECTED_ASSET_ALREADY_LISTED');
         }
 
         const policyId = asset.policy_id;
@@ -800,27 +792,46 @@ export class GovernanceExecutionService {
         updateAssetInfos.push({ assetId: option.assetId, newPrice: newPriceAda });
       }
 
-      // Process BUY operations
+      // Process BUY operations (Step 1 from docs: find exact asset listing)
       for (const option of operations.buys) {
-        const asset = assetMap.get(option.assetId);
-        if (!asset) {
-          this.logger.warn(`Asset not found for assetId: ${option.assetId}`);
-          skipped.buys.push(option.assetId);
-          continue;
-        }
+        const policyId = option.assetId.length >= 56 ? option.assetId.slice(0, 56) : option.assetId;
+        const assetNameHex = option.assetId.length > 56 ? option.assetId.slice(56) : '';
 
-        const txHashIndex = asset.listing_tx_hash;
-        if (!txHashIndex) {
-          this.logger.warn(`Cannot buy NFT - missing txHashIndex for ${option.assetId}`);
-          skipped.buys.push(option.assetId);
-          continue;
-        }
-
-        purchases.push({
-          policyId: asset.policy_id,
-          txHashIndex,
-          priceAda: parseFloat(option.price),
+        const collectionResponse = await this.wayUpPricingService.getCollectionAssets({
+          policyId,
+          saleType: 'list' as const,
+          orderBy: 'priceAsc' as const,
         });
+
+        const exactAsset = assetNameHex
+          ? collectionResponse.results?.find(r => r.assetName === assetNameHex)
+          : collectionResponse.results?.[0];
+
+        if (!exactAsset?.listing) {
+          this.logger.warn(`Cannot buy NFT ${option.assetId} - no active listing found`);
+          skipped.buys.push(option.assetId);
+          continue;
+        }
+
+        const { txHashIndex, price: priceLovelace } = exactAsset.listing;
+        const priceAda = priceLovelace / 1_000_000;
+        const maxPriceAda = option.price ? parseFloat(option.price) : null;
+
+        if (maxPriceAda != null && priceAda > maxPriceAda) {
+          this.logger.warn(
+            `Cannot buy NFT ${option.assetId} - listing price ${priceAda} ADA exceeds proposal max ${maxPriceAda} ADA`
+          );
+          skipped.buys.push(option.assetId);
+          continue;
+        }
+
+        purchases.push({ policyId: exactAsset.policyId, txHashIndex, priceAda });
+      }
+
+      // If any buy was requested but skipped — reject entire proposal
+      if (operations.buys.length > 0 && skipped.buys.length > 0) {
+        const reason = `Cannot execute all buy operations: ${skipped.buys.join(', ')}`;
+        await this.rejectMarketplaceProposal(proposal, reason, 'PROPOSAL_REJECTED_PRICE_EXCEEDED');
       }
 
       // Log skipped operations
@@ -863,25 +874,7 @@ export class GovernanceExecutionService {
           reason = `All operations skipped: ${reasons.join(', ')}`;
         }
 
-        this.logger.warn(`Marketplace proposal ${proposal.id} rejected: ${reason}`);
-
-        // Store execution error before rejecting so users can see the reason
-        await this.storeExecutionError(proposal, new Error(reason));
-
-        await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
-
-        this.eventEmitter.emit('proposal.rejected', {
-          address: proposal.vault?.owner?.address || null,
-          vaultId: proposal.vaultId,
-          vaultName: proposal.vault?.name || null,
-          proposalName: proposal.title,
-          creatorId: proposal.creatorId,
-          tokenHolderIds: [],
-          reason,
-        });
-
-        // Throw specific error so processProposal knows the proposal was already handled
-        throw new Error('PROPOSAL_REJECTED_NO_VALID_OPERATIONS');
+        await this.rejectMarketplaceProposal(proposal, reason, 'PROPOSAL_REJECTED_NO_VALID_OPERATIONS');
       }
 
       // STEP 1: Extract assets to treasury if there are listings (only for assets not already in treasury)
@@ -1966,5 +1959,24 @@ export class GovernanceExecutionService {
   onModuleDestroy(): void {
     // Clean up all proposal-related cron jobs
     this.schedulerService.cleanupAllJobs();
+  }
+
+  private async rejectMarketplaceProposal(proposal: Proposal, reason: string, errorCode: string): Promise<never> {
+    this.logger.warn(`Marketplace proposal ${proposal.id} rejected: ${reason}`);
+
+    await this.storeExecutionError(proposal, new Error(reason));
+    await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
+
+    this.eventEmitter.emit('proposal.rejected', {
+      address: proposal.vault?.owner?.address || null,
+      vaultId: proposal.vaultId,
+      vaultName: proposal.vault?.name || null,
+      proposalName: proposal.title,
+      creatorId: proposal.creatorId,
+      tokenHolderIds: [],
+      reason,
+    });
+
+    throw new Error(errorCode);
   }
 }

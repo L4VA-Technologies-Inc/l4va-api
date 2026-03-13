@@ -35,6 +35,7 @@ import { DistributionCalculationModule } from '@/modules/distribution/distributi
 import { RedisModule } from '@/modules/redis/redis.module';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
 import { VyfiModule } from '@/modules/vyfi/vyfi.module';
+import { WayUpPricingModule } from '@/modules/wayup/wayup-pricing.module';
 import { WayUpModule } from '@/modules/wayup/wayup.module';
 
 @Module({
@@ -61,6 +62,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     VyfiModule,
     AlertsModule,
     DistributionCalculationModule,
+    WayUpPricingModule,
   ],
   controllers: [GovernanceController, TerminationController],
   providers: [
