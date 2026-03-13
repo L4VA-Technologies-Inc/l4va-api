@@ -163,7 +163,7 @@ export interface GetCollectionAssetsQuery {
   orderBy?: 'priceAsc' | 'priceDesc' | 'nameAsc' | 'idxAsc' | 'recentlyListed' | 'rarityAsc' | 'recentlyMinted';
   term?: string; // Full-text search term (name / attributes)
   listingType?: 'jpgstore' | 'wayup' | 'spacebudz';
-  saleType?: 'all' | 'listedOnly' | 'bundles' | 'list';
+  saleType?: 'all' | 'listedOnly' | 'bundles';
   properties?: Array<{ key: string; value: string }>;
 }
 
