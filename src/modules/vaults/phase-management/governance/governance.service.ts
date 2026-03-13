@@ -40,6 +40,7 @@ import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.s
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { VyfiService } from '@/modules/vyfi/vyfi.service';
+import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
@@ -117,7 +118,8 @@ export class GovernanceService {
     private readonly dexHunterService: DexHunterService,
     private readonly blockchainService: BlockchainService,
     private readonly systemSettingsService: SystemSettingsService,
-    private readonly vyfiService: VyfiService
+    private readonly vyfiService: VyfiService,
+    private readonly wayUpPricingService: WayUpPricingService
   ) {
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
@@ -560,6 +562,47 @@ export class GovernanceService {
         // Validate all assets exist and handle market-specific validation
         await Promise.all(
           actions.map(async action => {
+            // BUY actions target external NFTs (not in our DB) — skip DB lookup, validate via WayUp API below
+            if (action.exec === ExecType.BUY) {
+              if (market === 'WayUp') {
+                const policyId = action.assetId.length >= 56 ? action.assetId.slice(0, 56) : action.assetId;
+                const assetNameHex = action.assetId.length > 56 ? action.assetId.slice(56) : '';
+                let term = assetNameHex ? Buffer.from(assetNameHex, 'hex').toString('utf8') : undefined;
+
+                if (term) {
+                  term = term.replace(/([a-z])([A-Z])/g, '$1 $2');
+                  term = term.replace(/([a-zA-Z])(\d+)/g, '$1 #$2');
+                }
+
+                const collectionResponse = await this.wayUpPricingService.getCollectionAssets({
+                  policyId,
+                  saleType: 'listedOnly',
+                  orderBy: 'priceAsc',
+                  ...(term && { term }),
+                  limit: 1,
+                });
+
+                const exactAsset = collectionResponse.results?.[0];
+
+                if (!exactAsset?.listing) {
+                  throw new BadRequestException(
+                    `NFT ${term} is not available for purchase — no active listing found on WayUp.`
+                  );
+                }
+
+                const listingPriceAda = exactAsset.listing.price / 1_000_000;
+                const maxPriceAda = action.price ? parseFloat(action.price) : null;
+
+                if (maxPriceAda != null && listingPriceAda > maxPriceAda) {
+                  throw new BadRequestException(
+                    `NFT ${term} current listing price is ${listingPriceAda} ADA, ` +
+                      `but proposal max price is ${maxPriceAda} ADA. Update the price or choose a different asset.`
+                  );
+                }
+              }
+              return;
+            }
+
             const asset: Pick<Asset, 'id' | 'status' | 'type' | 'policy_id' | 'asset_id' | 'quantity' | 'name'> =
               await this.assetRepository.findOne({
                 where: { id: action.assetId },

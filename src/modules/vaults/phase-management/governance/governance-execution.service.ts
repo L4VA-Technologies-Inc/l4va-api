@@ -796,16 +796,22 @@ export class GovernanceExecutionService {
       for (const option of operations.buys) {
         const policyId = option.assetId.length >= 56 ? option.assetId.slice(0, 56) : option.assetId;
         const assetNameHex = option.assetId.length > 56 ? option.assetId.slice(56) : '';
+        let term = assetNameHex ? Buffer.from(assetNameHex, 'hex').toString('utf8') : undefined;
+
+        if (term) {
+          term = term.replace(/([a-z])([A-Z])/g, '$1 $2');
+          term = term.replace(/([a-zA-Z])(\d+)/g, '$1 #$2');
+        }
 
         const collectionResponse = await this.wayUpPricingService.getCollectionAssets({
           policyId,
-          saleType: 'list' as const,
+          saleType: 'listedOnly' as const,
           orderBy: 'priceAsc' as const,
+          ...(term && { term }),
+          limit: 1,
         });
 
-        const exactAsset = assetNameHex
-          ? collectionResponse.results?.find(r => r.assetName === assetNameHex)
-          : collectionResponse.results?.[0];
+        const exactAsset = collectionResponse.results?.[0];
 
         if (!exactAsset?.listing) {
           this.logger.warn(`Cannot buy NFT ${option.assetId} - no active listing found`);
