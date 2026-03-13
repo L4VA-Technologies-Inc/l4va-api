@@ -14,6 +14,7 @@ import {
 import { RewardClaimStatus } from '../types/rewards.types';
 
 import { RewardEpoch } from './rewardEpoch.entity';
+import { Transaction } from './transaction.entity';
 
 @Entity('reward_claims')
 @Unique(['epoch_id', 'wallet_address'])
@@ -55,9 +56,14 @@ export class RewardClaim {
   })
   status: RewardClaimStatus;
 
-  @Expose({ name: 'claimTxHash' })
-  @Column({ name: 'claim_tx_hash', nullable: true })
-  claim_tx_hash: string;
+  @Expose({ name: 'claimTransaction' })
+  @ManyToOne(() => Transaction, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'claim_transaction_id' })
+  claim_transaction: Transaction;
+
+  @Column({ name: 'claim_transaction_id', nullable: true })
+  @Index()
+  claim_transaction_id: string;
 
   @Expose({ name: 'claimedAt' })
   @Column({ name: 'claimed_at', type: 'timestamptz', nullable: true })
