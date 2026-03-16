@@ -1349,7 +1349,7 @@ export class GovernanceService {
     const fungibleTokenIds = proposal.metadata?.fungibleTokens?.map(ft => ft.id) || [];
     const nonFungibleTokenIds = proposal.metadata?.nonFungibleTokens?.map(nft => nft.id) || [];
     const marketplaceActionIds =
-      proposal.metadata?.marketplaceActions?.filter(ma => ma.exec !== 'BUY').map(ma => ma.assetId) || [];
+      proposal.metadata?.marketplaceActions?.filter(ma => ma.exec !== ExecType.BUY).map(ma => ma.assetId) || [];
 
     [...burnAssetIds, ...fungibleTokenIds, ...nonFungibleTokenIds, ...marketplaceActionIds].forEach(id =>
       allAssetIds.add(id)
@@ -1499,7 +1499,7 @@ export class GovernanceService {
         };
       }
 
-      // 2. Обробка внутрішніх активів (які є в базі даних)
+      // Handling internal assets (those that exist in the database)
       const asset = assetMap.get(action.assetId);
 
       let wayupUrl: string | undefined;

@@ -525,6 +525,14 @@ export class GovernanceExecutionService {
         return;
       }
 
+      // Check if this is a handled rejection due to skipped buy operations (listing missing or other issues)
+      if (error.message === 'PROPOSAL_REJECTED_BUY_OPERATION_SKIPPED') {
+        this.logger.log(
+          `Proposal ${proposalId}: REJECTED - One or more buy operations could not be executed (listing missing or invalid)`
+        );
+        return;
+      }
+
       // Check if this is a handled rejection due to insufficient treasury ADA for buys
       if (error.message === 'PROPOSAL_REJECTED_INSUFFICIENT_TREASURY_ADA') {
         this.logger.log(
@@ -631,6 +639,7 @@ export class GovernanceExecutionService {
         error.message === 'PROPOSAL_REJECTED_ASSET_ALREADY_LISTED' ||
         error.message === 'PROPOSAL_REJECTED_ASSETS_NOT_LOCKED' ||
         error.message === 'PROPOSAL_REJECTED_PRICE_EXCEEDED' ||
+        error.message === 'PROPOSAL_REJECTED_BUY_OPERATION_SKIPPED' ||
         error.message === 'PROPOSAL_REJECTED_INSUFFICIENT_TREASURY_ADA'
       ) {
         throw error;
@@ -860,11 +869,15 @@ export class GovernanceExecutionService {
             await this.rejectMarketplaceProposal(proposal, reason, 'PROPOSAL_REJECTED_INSUFFICIENT_TREASURY_ADA');
           }
         } catch (error) {
+          if (error?.message === 'PROPOSAL_REJECTED_INSUFFICIENT_TREASURY_ADA') {
+            throw error;
+          }
+
           this.logger.error(
             `Failed to validate treasury balance for buy operations in proposal ${proposal.id}: ${error.message}`,
             error.stack
           );
-          // Store detailed execution error and rethrow so it surfaces to users
+
           await this.storeExecutionError(proposal, error);
           throw error;
         }
@@ -873,7 +886,7 @@ export class GovernanceExecutionService {
       // If any buy was requested but skipped — reject entire proposal
       if (operations.buys.length > 0 && skipped.buys.length > 0) {
         const reason = `Cannot execute all buy operations: ${skipped.buys.join(', ')}`;
-        await this.rejectMarketplaceProposal(proposal, reason, 'PROPOSAL_REJECTED_PRICE_EXCEEDED');
+        await this.rejectMarketplaceProposal(proposal, reason, 'PROPOSAL_REJECTED_BUY_OPERATION_SKIPPED');
       }
 
       // Log skipped operations
