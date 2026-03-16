@@ -476,38 +476,64 @@ export class GovernanceService {
     // Check for only 1 active market action proposal for the same asset at a time
     if (createProposalReq.type === ProposalType.MARKETPLACE_ACTION) {
       const requestedActions = createProposalReq.marketplaceActions || [];
-      const requestedAssetIds = requestedActions.map(action => action.assetId);
 
-      // Find all active/upcoming marketplace action proposals for this vault
-      const activeMarketProposals = await this.proposalRepository.find({
-        where: {
-          vaultId,
-          proposalType: ProposalType.MARKETPLACE_ACTION,
-          status: In([ProposalStatus.ACTIVE, ProposalStatus.UPCOMING]),
-        },
-      });
+      if (requestedActions.length > 0) {
+        const requestedAssetIds = requestedActions
+          .filter(action => action.exec !== ExecType.BUY)
+          .map(action => action.assetId);
 
-      // Check if any of the requested assets are already in an active proposal
-      for (const existingProposal of activeMarketProposals) {
-        const existingActions = existingProposal.metadata?.marketplaceActions || [];
-        const existingAssetIds = existingActions.map((action: any) => action.assetId);
+        const requestedBuyAssetIds = requestedActions
+          .filter(action => action.exec === ExecType.BUY)
+          .map(action => action.assetId);
 
-        // Check for overlap
-        const overlappingAssets = requestedAssetIds.filter(assetId => existingAssetIds.includes(assetId));
+        const activeMarketProposals = await this.proposalRepository.find({
+          where: {
+            vaultId,
+            proposalType: ProposalType.MARKETPLACE_ACTION,
+            status: In([ProposalStatus.ACTIVE, ProposalStatus.UPCOMING]),
+          },
+        });
 
-        if (overlappingAssets.length > 0) {
-          // Get asset names for better error message
-          const overlappingAssetRecords = await this.assetRepository.find({
-            where: { id: In(overlappingAssets) },
-            select: ['id', 'name'],
-          });
+        for (const existingProposal of activeMarketProposals) {
+          const existingActions = existingProposal.metadata?.marketplaceActions || [];
 
-          const assetNames = overlappingAssetRecords.map(a => a.name || a.id).join(', ');
+          // Check DB assets (SELL / UNLIST / UPDATE_LISTING)
+          if (requestedAssetIds.length > 0) {
+            const existingDbAssetIds = existingActions
+              .filter((a: any) => a.exec !== ExecType.BUY)
+              .map((a: any) => a.assetId);
 
-          throw new BadRequestException(
-            `Cannot create market action proposal. The following assets are already in an active proposal "${existingProposal.title}": ${assetNames}. ` +
-              `Please wait for that proposal to complete before creating a new one for these assets.`
-          );
+            const overlapping = requestedAssetIds.filter(id => existingDbAssetIds.includes(id));
+
+            if (overlapping.length > 0) {
+              const records = await this.assetRepository.find({
+                where: { id: In(overlapping) },
+                select: ['id', 'name'],
+              });
+              const assetNames = records.map(a => a.name || a.id).join(', ');
+
+              throw new BadRequestException(
+                `Cannot create market action proposal. The following assets are already in an active proposal "${existingProposal.title}": ${assetNames}. ` +
+                  `Please wait for that proposal to complete before creating a new one for these assets.`
+              );
+            }
+          }
+
+          // Check BUY assets (external NFTs matched by assetId unit)
+          if (requestedBuyAssetIds.length > 0) {
+            const existingBuyAssetIds = existingActions
+              .filter((a: any) => a.exec === ExecType.BUY)
+              .map((a: any) => a.assetId);
+
+            const overlappingBuys = requestedBuyAssetIds.filter(id => existingBuyAssetIds.includes(id));
+
+            if (overlappingBuys.length > 0) {
+              throw new BadRequestException(
+                `Cannot create buy proposal. Some of the following NFTs are already in an active proposal "${existingProposal.title}". ` +
+                  `Please wait for that proposal to complete before creating a new one for these NFTs.`
+              );
+            }
+          }
         }
       }
     }
@@ -669,6 +695,15 @@ export class GovernanceService {
                       `but proposal max price is ${maxPriceAda} ADA. Update the price or choose a different asset.`
                   );
                 }
+
+                action.nftSnapshot = {
+                  name: exactAsset.name,
+                  image: exactAsset.image ?? null,
+                  listingPriceAda,
+                  policyId: exactAsset.policyId,
+                  assetName: exactAsset.assetName,
+                  collectionName: exactAsset.collection?.name ?? null,
+                };
               }
               return;
             }
@@ -1275,7 +1310,8 @@ export class GovernanceService {
     const burnAssetIds = proposal.metadata?.burnAssets || [];
     const fungibleTokenIds = proposal.metadata?.fungibleTokens?.map(ft => ft.id) || [];
     const nonFungibleTokenIds = proposal.metadata?.nonFungibleTokens?.map(nft => nft.id) || [];
-    const marketplaceActionIds = proposal.metadata?.marketplaceActions?.map(ma => ma.assetId) || [];
+    const marketplaceActionIds =
+      proposal.metadata?.marketplaceActions?.filter(ma => ma.exec !== 'BUY').map(ma => ma.assetId) || [];
 
     [...burnAssetIds, ...fungibleTokenIds, ...nonFungibleTokenIds, ...marketplaceActionIds].forEach(id =>
       allAssetIds.add(id)
@@ -1402,12 +1438,32 @@ export class GovernanceService {
     // Transform marketplace actions with enriched asset data and WayUp URLs
     // For DexHunter swaps, combine quantities by token (policy_id + asset_id)
     const marketplaceActions = (proposal.metadata?.marketplaceActions || []).map(action => {
-      const asset = assetMap.get(action.assetId);
-
-      // Check if this is a DexHunter swap action (has slippage field)
+      const isBuy = action.exec === 'BUY';
       const isSwapAction = action.slippage !== undefined || action.market === 'DexHunter';
 
-      // Generate WayUp URL only for non-swap actions (NFT marketplace actions)
+      if (isBuy) {
+        let wayupUrl: string | undefined;
+        if (!isSwapAction && action.nftSnapshot) {
+          wayupUrl = `https://www.wayup.io/collection/${action.nftSnapshot.policyId}/asset/${action.nftSnapshot.assetName}?tab=activity`;
+        }
+
+        const cleanId = action.nftSnapshot?.image?.split('/').pop()?.split('?')[0];
+        const assetImg = cleanId ? `https://ipfs.blockfrost.dev/ipfs/${cleanId}` : undefined;
+
+        return {
+          ...action,
+          assetName: action.nftSnapshot?.name ?? action.assetId,
+          assetImg,
+          assetPrice: action.nftSnapshot?.listingPriceAda ?? 0,
+          listingPrice: null,
+          assetStatus: null,
+          wayupUrl,
+        };
+      }
+
+      // 2. Обробка внутрішніх активів (які є в базі даних)
+      const asset = assetMap.get(action.assetId);
+
       let wayupUrl: string | undefined;
       if (!isSwapAction && asset?.policy_id && asset?.asset_id) {
         wayupUrl = `https://www.wayup.io/collection/${asset.policy_id}/asset/${asset.asset_id}?tab=activity`;
