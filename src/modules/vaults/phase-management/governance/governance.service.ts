@@ -334,10 +334,10 @@ export class GovernanceService {
     createProposalReq: CreateProposalReq,
     userId: string
   ): Promise<CreateProposalRes> {
-    const vault: Pick<Vault, 'id' | 'vault_status' | 'policy_id' | 'asset_vault_name' | 'name'> =
+    const vault: Pick<Vault, 'id' | 'vault_status' | 'policy_id' | 'asset_vault_name' | 'name' | 'assets_whitelist'> =
       await this.vaultRepository.findOne({
         where: { id: vaultId },
-        select: ['id', 'vault_status', 'policy_id', 'asset_vault_name', 'name'],
+        select: ['id', 'vault_status', 'policy_id', 'asset_vault_name', 'name', 'assets_whitelist'],
       });
 
     if (!vault) {
@@ -634,6 +634,16 @@ export class GovernanceService {
             if (action.exec === ExecType.BUY) {
               if (market === 'WayUp') {
                 const policyId = action.assetId.length >= 56 ? action.assetId.slice(0, 56) : action.assetId;
+
+                const isWhitelisted = vault.assets_whitelist?.some(
+                  whitelistItem => whitelistItem.policy_id === policyId
+                );
+
+                if (!isWhitelisted) {
+                  throw new BadRequestException(
+                    `Policy ID ${policyId.substring(0, 6)}...${policyId.substring(policyId.length - 6)} is not whitelisted for this vault.`
+                  );
+                }
 
                 const collectionResponse = await this.wayUpPricingService.getCollectionAssets({
                   policyId,
