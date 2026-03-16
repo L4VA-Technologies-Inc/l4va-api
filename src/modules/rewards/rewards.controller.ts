@@ -7,7 +7,7 @@ import { ScoringService } from './services/scoring.service';
 import { AdminGuard } from '@/modules/auth/admin.guard';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
-import { RewardActivityType, WidgetSwapEventData } from '@/types/rewards.types';
+import { RewardActivityType, WidgetSwapEventData, WidgetSwapItemData } from '@/types/rewards.types';
 
 @Controller('rewards')
 export class RewardsController {
@@ -64,21 +64,35 @@ export class RewardsController {
   @UseGuards(AuthGuard)
   @Post('widget-swap')
   async trackWidgetSwap(@Request() req: AuthRequest, @Body() body: WidgetSwapEventData): Promise<any> {
-    if (body.status !== 'success') {
+    const swaps: WidgetSwapItemData[] = Array.isArray(body?.data)
+      ? body.data
+      : body?.tx_hash
+        ? [body as WidgetSwapItemData]
+        : [];
+
+    const successfulSwap = swaps.find(swap => {
+      const status = String(swap?.status ?? '').toLowerCase();
+      return !!swap?.tx_hash && (status === 'submitted' || status === 'success');
+    });
+
+    if (!successfulSwap) {
       return { indexed: false, reason: 'swap not successful' };
     }
 
     const event = await this.activityEventService.indexEvent({
-      walletAddress: body.user_address || req.user.address,
+      walletAddress: successfulSwap.user_address || req.user.address,
       eventType: RewardActivityType.WIDGET_SWAP,
-      txHash: body.tx_hash,
+      txHash: successfulSwap.tx_hash,
       units: 1,
       metadata: {
-        dex: body.dex,
-        tokenIn: body.token_id_in,
-        tokenOut: body.token_id_out,
-        amountIn: body.amount_in,
-        expectedOutput: body.expected_output,
+        dex: successfulSwap.dex,
+        tokenIn: successfulSwap.token_id_in,
+        tokenOut: successfulSwap.token_id_out,
+        amountIn: successfulSwap.amount_in,
+        expectedOutput: successfulSwap.expected_output,
+        expectedOutputWithoutSlippage: (successfulSwap as any).expected_output_without_slippage,
+        poolId: (successfulSwap as any).pool_id,
+        type: successfulSwap.type,
       },
     });
 
