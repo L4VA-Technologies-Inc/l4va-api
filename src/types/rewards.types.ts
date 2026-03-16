@@ -115,7 +115,7 @@ export interface ScoreBreakdown {
   governance_vote?: number;
 }
 
-export interface WidgetSwapEventData {
+export interface WidgetSwapItemData {
   amount_in: string;
   expected_output: number;
   dex: string;
@@ -127,4 +127,21 @@ export interface WidgetSwapEventData {
   user_address: string;
   type: string;
   is_dexhunter: boolean;
+}
+
+export interface WidgetSwapEventData {
+  data?: WidgetSwapItemData[];
+
+  // Backward compatibility for flat payloads
+  amount_in?: string;
+  expected_output?: number;
+  dex?: string;
+  tx_hash?: string;
+  status?: string;
+  token_id_in?: string;
+  token_id_out?: string;
+  submission_time?: string;
+  user_address?: string;
+  type?: string;
+  is_dexhunter?: boolean;
 }
