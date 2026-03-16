@@ -127,6 +127,14 @@ export class MarketplaceActionDto {
   @IsEnum(ExecType)
   exec: ExecType;
 
+  @ApiProperty({
+    description: 'Asset name to buy',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  assetName?: string;
+
   // ===== SELL fields =====
   @ApiProperty({
     description: 'Quantity to buy/sell',

@@ -20,6 +20,7 @@ import { Vault } from '@/database/vault.entity';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
+import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { TreasuryExtractionService } from '@/modules/vaults/treasure/treasury-extraction.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
 import { WayUpService } from '@/modules/wayup/wayup.service';
@@ -64,7 +65,8 @@ export class GovernanceExecutionService {
     private readonly distributionService: DistributionService,
     private readonly dexHunterService: DexHunterService,
     private readonly expansionService: ExpansionService,
-    private readonly wayUpPricingService: WayUpPricingService
+    private readonly wayUpPricingService: WayUpPricingService,
+    private readonly treasuryWalletService: TreasuryWalletService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
@@ -516,6 +518,14 @@ export class GovernanceExecutionService {
         return;
       }
 
+      // Check if this is a handled rejection due to insufficient treasury ADA for buys
+      if (error.message === 'PROPOSAL_REJECTED_INSUFFICIENT_TREASURY_ADA') {
+        this.logger.log(
+          `Proposal ${proposalId}: REJECTED - Treasury wallet has insufficient ADA to execute buy operations`
+        );
+        return;
+      }
+
       // Store execution error in proposal metadata
       if (proposal) {
         await this.storeExecutionError(proposal, error);
@@ -613,7 +623,8 @@ export class GovernanceExecutionService {
         error.message === 'PROPOSAL_REJECTED_NO_VALID_OPERATIONS' ||
         error.message === 'PROPOSAL_REJECTED_ASSET_ALREADY_LISTED' ||
         error.message === 'PROPOSAL_REJECTED_ASSETS_NOT_LOCKED' ||
-        error.message === 'PROPOSAL_REJECTED_PRICE_EXCEEDED'
+        error.message === 'PROPOSAL_REJECTED_PRICE_EXCEEDED' ||
+        error.message === 'PROPOSAL_REJECTED_INSUFFICIENT_TREASURY_ADA'
       ) {
         throw error;
       }
@@ -795,26 +806,19 @@ export class GovernanceExecutionService {
       // Process BUY operations (Step 1 from docs: find exact asset listing)
       for (const option of operations.buys) {
         const policyId = option.assetId.length >= 56 ? option.assetId.slice(0, 56) : option.assetId;
-        const assetNameHex = option.assetId.length > 56 ? option.assetId.slice(56) : '';
-        let term = assetNameHex ? Buffer.from(assetNameHex, 'hex').toString('utf8') : undefined;
-
-        if (term) {
-          term = term.replace(/([a-z])([A-Z])/g, '$1 $2');
-          term = term.replace(/([a-zA-Z])(\d+)/g, '$1 #$2');
-        }
 
         const collectionResponse = await this.wayUpPricingService.getCollectionAssets({
           policyId,
           saleType: 'listedOnly' as const,
           orderBy: 'priceAsc' as const,
-          ...(term && { term }),
+          term: option.assetName,
           limit: 1,
         });
 
         const exactAsset = collectionResponse.results?.[0];
 
         if (!exactAsset?.listing) {
-          this.logger.warn(`Cannot buy NFT ${option.assetId} - no active listing found`);
+          this.logger.warn(`Cannot buy NFT ${option.assetName} - no active listing found`);
           skipped.buys.push(option.assetId);
           continue;
         }
@@ -825,13 +829,38 @@ export class GovernanceExecutionService {
 
         if (maxPriceAda != null && priceAda > maxPriceAda) {
           this.logger.warn(
-            `Cannot buy NFT ${option.assetId} - listing price ${priceAda} ADA exceeds proposal max ${maxPriceAda} ADA`
+            `Cannot buy NFT ${option.assetName} - listing price ${priceAda} ADA exceeds proposal max ${maxPriceAda} ADA`
           );
-          skipped.buys.push(option.assetId);
+          skipped.buys.push(option.assetName);
           continue;
         }
 
         purchases.push({ policyId: exactAsset.policyId, txHashIndex, priceAda });
+      }
+
+      // If there are BUY operations, ensure treasury has enough ADA to cover total purchase cost
+      if (purchases.length > 0) {
+        const totalRequiredAda = purchases.reduce((sum, p) => sum + p.priceAda, 0);
+
+        try {
+          const balance = await this.treasuryWalletService.getTreasuryWalletBalance(proposal.vaultId);
+          const adaBalance = balance.lovelace / 1_000_000;
+
+          if (adaBalance < totalRequiredAda) {
+            const reason =
+              `Treasury wallet has insufficient ADA to execute buy operations. ` +
+              `Required ${totalRequiredAda} ADA, available: ${adaBalance.toFixed(2)} ADA.`;
+            await this.rejectMarketplaceProposal(proposal, reason, 'PROPOSAL_REJECTED_INSUFFICIENT_TREASURY_ADA');
+          }
+        } catch (error) {
+          this.logger.error(
+            `Failed to validate treasury balance for buy operations in proposal ${proposal.id}: ${error.message}`,
+            error.stack
+          );
+          // Store detailed execution error and rethrow so it surfaces to users
+          await this.storeExecutionError(proposal, error);
+          throw error;
+        }
       }
 
       // If any buy was requested but skipped — reject entire proposal
@@ -1852,6 +1881,10 @@ export class GovernanceExecutionService {
       TRANSACTION_ERROR: 'Transaction failed to submit. Will retry automatically.',
       WALLET_ERROR: 'Error accessing treasury wallet. Check configuration.',
       INVALID_ASSET_STATUS: 'Assets must be locked in vault first.',
+      NO_VALID_OPERATIONS:
+        'This marketplace proposal cannot be executed because all requested operations became invalid (assets already listed/unlisted or not available).',
+      PRICE_EXCEEDED:
+        'One or more NFTs now have a listing price higher than the maximum price specified in the proposal.',
       CONTRACT_ERROR: 'Smart contract validation error.',
       EXECUTION_ERROR: 'Unexpected error. Review details or contact support.',
     };
@@ -1947,6 +1980,22 @@ export class GovernanceExecutionService {
       errorMessage.includes('ASSETS_NOT_LOCKED')
     ) {
       return 'INVALID_ASSET_STATUS';
+    }
+
+    // No valid marketplace operations (all skipped)
+    if (
+      errorMessage.toLowerCase().includes('no valid marketplace operations') ||
+      errorMessage.toLowerCase().includes('all operations skipped')
+    ) {
+      return 'NO_VALID_OPERATIONS';
+    }
+
+    // Buy price exceeded max from proposal
+    if (
+      errorMessage.toLowerCase().includes('exceeds proposal max') ||
+      errorMessage.toLowerCase().includes('price exceeded')
+    ) {
+      return 'PRICE_EXCEEDED';
     }
 
     // Contract/Smart contract errors

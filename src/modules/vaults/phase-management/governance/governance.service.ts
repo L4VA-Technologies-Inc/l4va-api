@@ -39,6 +39,7 @@ import { Vote } from '@/database/vote.entity';
 import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
+import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { VyfiService } from '@/modules/vyfi/vyfi.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
@@ -76,6 +77,7 @@ import { VoteType } from '@/types/vote.types';
 export class GovernanceService {
   private readonly logger = new Logger(GovernanceService.name);
   private blockfrost: BlockFrostAPI;
+  private readonly isMainnet: boolean;
   private readonly votingPowerCache: NodeCache;
   private readonly proposalCreationCache: NodeCache;
   private readonly poolAddress: string;
@@ -119,8 +121,10 @@ export class GovernanceService {
     private readonly blockchainService: BlockchainService,
     private readonly systemSettingsService: SystemSettingsService,
     private readonly vyfiService: VyfiService,
-    private readonly wayUpPricingService: WayUpPricingService
+    private readonly wayUpPricingService: WayUpPricingService,
+    private readonly treasuryWalletService: TreasuryWalletService
   ) {
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
 
@@ -558,6 +562,44 @@ export class GovernanceService {
 
         const market = actions[0]?.market;
 
+        // Pre-check (mainnet only): ensure treasury has enough ADA for WayUp BUY operations
+        if (this.isMainnet && market === 'WayUp') {
+          const buyActions = actions.filter(a => a.exec === ExecType.BUY);
+          if (buyActions.length > 0) {
+            const totalMaxAda = buyActions.reduce((sum, a) => {
+              const maxPrice = a.price ? parseFloat(a.price) : 0;
+              return sum + (isNaN(maxPrice) ? 0 : maxPrice);
+            }, 0);
+
+            if (totalMaxAda > 0) {
+              try {
+                const balance = await this.treasuryWalletService.getTreasuryWalletBalance(vaultId);
+                const adaBalance = balance.lovelace / 1_000_000;
+
+                if (adaBalance < totalMaxAda) {
+                  throw new BadRequestException(
+                    `Treasury wallet has insufficient ADA for this purchase proposal. ` +
+                      `Required up to ${totalMaxAda} ADA for WayUp buys, available: ${adaBalance.toFixed(2)} ADA.`
+                  );
+                }
+              } catch (error) {
+                this.logger.error(
+                  `Failed to validate treasury balance for vault ${vaultId}: ${error.message}`,
+                  error.stack
+                );
+
+                if (error instanceof BadRequestException) {
+                  throw error;
+                }
+
+                throw new BadRequestException(
+                  'Unable to validate treasury wallet balance for this proposal. Please try again later.'
+                );
+              }
+            }
+          }
+        }
+
         // For DexHunter, fetch all assets and aggregate by token to allow multi-asset swaps
         const assetsByToken = new Map<
           string,
@@ -592,27 +634,22 @@ export class GovernanceService {
             if (action.exec === ExecType.BUY) {
               if (market === 'WayUp') {
                 const policyId = action.assetId.length >= 56 ? action.assetId.slice(0, 56) : action.assetId;
-                const assetNameHex = action.assetId.length > 56 ? action.assetId.slice(56) : '';
-                let term = assetNameHex ? Buffer.from(assetNameHex, 'hex').toString('utf8') : undefined;
-
-                if (term) {
-                  term = term.replace(/([a-z])([A-Z])/g, '$1 $2');
-                  term = term.replace(/([a-zA-Z])(\d+)/g, '$1 #$2');
-                }
 
                 const collectionResponse = await this.wayUpPricingService.getCollectionAssets({
                   policyId,
                   saleType: 'listedOnly',
                   orderBy: 'priceAsc',
-                  ...(term && { term }),
+                  term: action.assetName,
                   limit: 1,
                 });
 
                 const exactAsset = collectionResponse.results?.[0];
 
+                const displayName = exactAsset?.name || action.assetName || action.assetId;
+
                 if (!exactAsset?.listing) {
                   throw new BadRequestException(
-                    `NFT ${term} is not available for purchase — no active listing found on WayUp.`
+                    `NFT ${displayName} is not available for purchase — no active listing found on WayUp.`
                   );
                 }
 
@@ -621,7 +658,7 @@ export class GovernanceService {
 
                 if (maxPriceAda != null && listingPriceAda > maxPriceAda) {
                   throw new BadRequestException(
-                    `NFT ${term} current listing price is ${listingPriceAda} ADA, ` +
+                    `NFT ${displayName} current listing price is ${listingPriceAda} ADA, ` +
                       `but proposal max price is ${maxPriceAda} ADA. Update the price or choose a different asset.`
                   );
                 }
