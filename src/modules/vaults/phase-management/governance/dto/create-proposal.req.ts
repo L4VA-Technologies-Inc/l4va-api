@@ -231,6 +231,20 @@ export class MarketplaceActionDto {
     assetId: string;
     quantity: number;
   }>;
+
+  @ApiProperty({
+    description: 'NFT metadata snapshot at proposal creation time (auto-populated for BUY actions)',
+    required: false,
+  })
+  @IsOptional()
+  nftSnapshot?: {
+    name: string;
+    image: string | null;
+    listingPriceAda: number;
+    policyId: string;
+    assetName: string;
+    collectionName: string | null;
+  };
 }
 
 export class ExpansionPolicyIdDto {
