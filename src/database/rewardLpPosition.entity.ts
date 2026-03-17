@@ -11,7 +11,7 @@ import {
   Unique,
 } from 'typeorm';
 
-import { LpDex, LpPoolType } from '../types/rewards.types';
+import { LpPoolType } from '../types/rewards.types';
 
 import { Vault } from './vault.entity';
 
@@ -44,11 +44,8 @@ export class RewardLpPosition {
   pool_type: LpPoolType;
 
   @Expose({ name: 'dex' })
-  @Column({
-    type: 'enum',
-    enum: LpDex,
-  })
-  dex: LpDex;
+  @Column({ type: 'varchar' })
+  dex: string;
 
   @Expose({ name: 'lpTokens' })
   @Column({ name: 'lp_tokens', type: 'bigint', default: 0 })

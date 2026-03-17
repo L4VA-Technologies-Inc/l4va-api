@@ -1,9 +1,11 @@
+import { HttpModule } from '@nestjs/axios';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { RewardsController } from './rewards.controller';
 import { ActivityEventService } from './services/activity-event.service';
 import { EpochService } from './services/epoch.service';
+import { LpTrackingService } from './services/lp-tracking.service';
 import { ScoringService } from './services/scoring.service';
 
 import { RewardActivityEvent } from '@/database/rewardActivityEvent.entity';
@@ -18,6 +20,7 @@ import { Vault } from '@/database/vault.entity';
 
 @Module({
   imports: [
+    HttpModule,
     TypeOrmModule.forFeature([
       RewardEpoch,
       RewardActivityEvent,
@@ -31,7 +34,7 @@ import { Vault } from '@/database/vault.entity';
     ]),
   ],
   controllers: [RewardsController],
-  providers: [EpochService, ActivityEventService, ScoringService],
-  exports: [ActivityEventService, EpochService, ScoringService],
+  providers: [EpochService, ActivityEventService, ScoringService, LpTrackingService],
+  exports: [ActivityEventService, EpochService, ScoringService, LpTrackingService],
 })
 export class RewardsModule {}
