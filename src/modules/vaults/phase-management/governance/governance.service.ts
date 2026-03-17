@@ -39,6 +39,7 @@ import { Vote } from '@/database/vote.entity';
 import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
+import { GetAssetsToListRes } from '@/modules/vaults/phase-management/governance/dto/get-assets-to-list.res';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { VyfiService } from '@/modules/vyfi/vyfi.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
@@ -1984,7 +1985,7 @@ export class GovernanceService {
     }
   }
 
-  async getAssetsToList(vaultId: string): Promise<AssetBuySellDto[]> {
+  async getAssetsToList(vaultId: string): Promise<GetAssetsToListRes> {
     try {
       // Get all assets in the vault
       const assets: Pick<
@@ -2015,9 +2016,16 @@ export class GovernanceService {
         ],
       });
 
-      return plainToInstance(AssetBuySellDto, assets, {
-        excludeExtraneousValues: true,
-      });
+      const treasuryWalletBalance = this.isMainnet
+        ? await this.treasuryWalletService.getTreasuryWalletBalance(vaultId)
+        : null;
+
+      return {
+        assets: plainToInstance(AssetBuySellDto, assets, {
+          excludeExtraneousValues: true,
+        }),
+        treasuryWalletBalance,
+      };
     } catch (error) {
       this.logger.error(`Error getting assets for buy-sell proposals for vault ${vaultId}: ${error.message}`);
       throw new InternalServerErrorException('Error getting assets for buying/selling');
