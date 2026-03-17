@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { classToPlain, instanceToPlain, plainToInstance } from 'class-transformer';
 import { Brackets, Repository } from 'typeorm';
@@ -9,6 +9,7 @@ import { PriceService } from '../price/price.service';
 
 import { PublicProfileRes } from './dto/public-profile.res';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { ImageType as UploadProfileImageType } from './dto/upload-profile-image.dto';
 
 import { Asset } from '@/database/asset.entity';
 import { FileEntity } from '@/database/file.entity';
@@ -94,8 +95,6 @@ export class UsersService {
 
     user.total_vaults = vaultsCount || 0;
     const plainUser = instanceToPlain(user);
-    plainUser.banner_image = user.banner_image?.file_url || null;
-    plainUser.profile_image = user.profile_image?.file_url || null;
 
     delete plainUser.gains;
     delete plainUser.vaults;
@@ -273,60 +272,34 @@ export class UsersService {
     );
   }
 
-  async uploadProfileImage(userId: string, file: Express.Multer.File): Promise<User> {
+  async uploadProfileImage(
+    userId: string,
+    file: Express.Multer.File,
+    imageType: UploadProfileImageType
+  ): Promise<User> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
-      relations: ['profile_image'],
+      relations: ['profile_image', 'banner_image'],
     });
 
     if (!user) {
-      throw new BadRequestException('User not found');
+      throw new NotFoundException('User not found');
     }
 
-    const uploadResult = await this.gcsService.uploadImage(file);
+    const targetField = imageType === UploadProfileImageType.BANNER ? 'banner_image' : 'profile_image';
+    const previousFile = user[targetField];
 
-    const fileEntity = this.filesRepository.create({
-      file_key: uploadResult.file_key,
-      file_url: uploadResult.file_url,
-      file_type: file.mimetype,
-      file_name: file.originalname,
-      metadata: {
-        size: file.size,
-      },
-    });
-    await this.filesRepository.save(fileEntity);
+    const uploadedFile = await this.gcsService.uploadImage(file, { imageType });
+    user[targetField] = uploadedFile;
 
-    // Update user's profile image
-    user.profile_image = fileEntity;
-    return this.usersRepository.save(user);
-  }
+    const savedUser = await this.usersRepository.save(user);
 
-  async uploadBannerImage(userId: string, file: Express.Multer.File): Promise<User> {
-    const user = await this.usersRepository.findOne({
-      where: { id: userId },
-      relations: ['banner_image'],
-    });
-
-    if (!user) {
-      throw new BadRequestException('User not found');
+    if (previousFile?.file_key && previousFile.file_key !== uploadedFile.file_key) {
+      this.gcsService.deleteFile(previousFile.file_key).catch(error => {
+        this.logger.warn(`Failed to delete previous image ${previousFile.file_key}: ${error?.message ?? error}`);
+      });
     }
 
-    const uploadResult = await this.gcsService.uploadImage(file);
-
-    // Create or update file entity
-    const fileEntity = this.filesRepository.create({
-      file_key: uploadResult.file_key,
-      file_url: uploadResult.file_url,
-      file_type: file.mimetype,
-      file_name: file.originalname,
-      metadata: {
-        size: file.size,
-      },
-    });
-    await this.filesRepository.save(fileEntity);
-
-    // Update user's banner image
-    user.banner_image = fileEntity;
-    return this.usersRepository.save(user);
+    return instanceToPlain(savedUser, { excludeExtraneousValues: true }) as User;
   }
 }

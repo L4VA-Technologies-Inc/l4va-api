@@ -1,4 +1,4 @@
-import { Exclude, Expose } from 'class-transformer';
+import { Exclude, Expose, Transform } from 'class-transformer';
 import {
   Entity,
   PrimaryGeneratedColumn,
@@ -14,6 +14,8 @@ import { Claim } from './claim.entity';
 import { FileEntity } from './file.entity';
 import { LinkEntity } from './link.entity';
 import { Vault } from './vault.entity';
+
+import { transformImageToUrl } from '@/helpers';
 
 @Entity('users')
 export class User {
@@ -52,11 +54,13 @@ export class User {
   @Expose({ name: 'profileImage' })
   @OneToOne(() => FileEntity)
   @JoinColumn({ name: 'profile_image_id' })
+  @Transform(({ value }) => (value ? transformImageToUrl(value) : null))
   profile_image: FileEntity;
 
   @Expose({ name: 'bannerImage' })
   @OneToOne(() => FileEntity)
   @JoinColumn({ name: 'banner_image_id' })
+  @Transform(({ value }) => (value ? transformImageToUrl(value) : null))
   banner_image: FileEntity;
 
   @Expose({ name: 'socialLinks' })

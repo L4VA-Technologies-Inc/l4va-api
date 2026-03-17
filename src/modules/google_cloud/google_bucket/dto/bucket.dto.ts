@@ -3,6 +3,8 @@ import { IsEnum, IsOptional } from 'class-validator';
 export enum ImageType {
   BACKGROUND = 'background',
   TICKER = 'ticker',
+  AVATAR = 'avatar',
+  BANNER = 'banner',
 }
 
 export class UploadImageDto {
@@ -22,4 +24,6 @@ interface ImageResizeParams {
 export const ImageResizeMap: Record<ImageType, ImageResizeParams> = {
   [ImageType.BACKGROUND]: { width: 640, height: 640 },
   [ImageType.TICKER]: { width: 256, height: 256 },
+  [ImageType.AVATAR]: { width: 128, height: 128 },
+  [ImageType.BANNER]: { width: 1170, height: 200 },
 };
