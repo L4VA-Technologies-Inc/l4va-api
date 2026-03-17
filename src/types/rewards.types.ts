@@ -34,11 +34,6 @@ export enum LpPoolType {
   VT_USDCX = 'vt_usdcx',
 }
 
-export enum LpDex {
-  VYFI = 'vyfi',
-  MINSWAP = 'minswap',
-}
-
 export enum RewardClaimStatus {
   AVAILABLE = 'available',
   CLAIMED = 'claimed',
