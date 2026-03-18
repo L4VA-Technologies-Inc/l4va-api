@@ -687,28 +687,35 @@ export class GovernanceExecutionService {
       return this.executeDexHunterSwapProposal(proposal);
     }
 
-    // Collect all unique asset IDs to fetch from database
-    const assetIds = [...new Set(proposal.metadata.marketplaceActions.map(opt => opt.assetId))];
-
-    // Fetch all assets from database in one query (including floor_price for Market sellType)
-    const assets: Pick<
-      Asset,
-      'id' | 'policy_id' | 'asset_id' | 'name' | 'metadata' | 'listing_tx_hash' | 'floor_price'
-    >[] = await this.assetRepository.find({
-      where: assetIds.map(id => ({ id })),
-      select: ['id', 'policy_id', 'asset_id', 'name', 'metadata', 'listing_tx_hash', 'floor_price'],
-    });
-
-    // Create a map for quick asset lookup
-    const assetMap = new Map(assets.map(asset => [asset.id, asset]));
     const groupedOperations = this.groupBuySellOperations(proposal.metadata.marketplaceActions);
 
-    // For now, we only support WayUp marketplace
     const operations = groupedOperations['wayup'];
     if (!operations) {
       this.logger.warn(`No WayUp marketplace operations found for proposal ${proposal.id}`);
       return false;
     }
+
+    const dbAssetIds = [
+      ...(operations.sells?.map(opt => opt.assetId) || []),
+      ...(operations.unlists?.map(opt => opt.assetId) || []),
+      ...(operations.updates?.map(opt => opt.assetId) || []),
+    ];
+
+    const uniqueDbAssetIds = [...new Set(dbAssetIds)];
+
+    let assets: Pick<
+      Asset,
+      'id' | 'policy_id' | 'asset_id' | 'name' | 'metadata' | 'listing_tx_hash' | 'floor_price'
+    >[] = [];
+
+    if (uniqueDbAssetIds.length > 0) {
+      assets = await this.assetRepository.find({
+        where: uniqueDbAssetIds.map(id => ({ id })),
+        select: ['id', 'policy_id', 'asset_id', 'name', 'metadata', 'listing_tx_hash', 'floor_price'],
+      });
+    }
+
+    const assetMap = new Map(assets.map(asset => [asset.id, asset]));
 
     try {
       this.logger.log(
