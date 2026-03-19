@@ -172,15 +172,15 @@ export class VaultsController {
   }
 
   @ApiDoc({
-    summary: 'Get collection names by policy IDs',
+    summary: 'Get collection info for whitelist items',
     description:
-      'Fetches collection names (or token tickers) for the given policy IDs from the Ada Anvil marketplace API.',
+      'Resolves collection metadata for provided whitelist items and returns policyId, collectionName, and isVerified.',
     status: 200,
   })
   @UseGuards(AuthGuard)
   @Post('collection-names')
   async getCollectionNames(@Body() body: GetCollectionNamesReq): Promise<CollectionNameItem[]> {
-    return this.vaultsService.getCollectionNamesByPolicyIds(body.policyIds);
+    return this.vaultsService.getCollections(body.collections);
   }
 
   @ApiDoc({

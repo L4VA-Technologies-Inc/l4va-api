@@ -48,6 +48,7 @@ import { Vault } from '@/database/vault.entity';
 import { transformToSnakeCase } from '@/helpers';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings';
+import { CollectionItemDto } from '@/modules/vaults/dto/get-collection-names.dto';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -85,6 +86,9 @@ export class VaultsService {
   private readonly scVersion: string;
   private readonly isMainnet: boolean;
   private readonly collectionNameCache: NodeCache;
+  private readonly dexHunterBaseUrl: string;
+  private readonly dexHunterApiKey: string;
+  private dexHunterConfigWarningLogged = false;
 
   constructor(
     @InjectRepository(Vault)
@@ -131,6 +135,8 @@ export class VaultsService {
       checkperiod: 300,
       useClones: false,
     });
+    this.dexHunterBaseUrl = this.configService.get<string>('DEXHUNTER_BASE_URL');
+    this.dexHunterApiKey = this.configService.get<string>('DEXHUNTER_API_KEY');
   }
 
   /**
@@ -259,6 +265,28 @@ export class VaultsService {
         });
         if (existingVaultWithTicker) {
           throw new BadRequestException('Ticker is already in use by another active vault');
+        }
+      }
+
+      const uniqueWhitelistItems = Array.from(
+        new Map((data.assetsWhitelist || []).map(item => [`${item.policyId}:${item.assetName || ''}`, item])).values()
+      );
+      if (uniqueWhitelistItems.length > 0) {
+        const whitelistCollections = await this.getCollections(
+          uniqueWhitelistItems.map(item => ({
+            policyId: item.policyId,
+            assetName: item.assetName || '',
+            name: item.name || item.collectionName || item.policyName || '',
+            count: item.count || 1,
+          }))
+        );
+
+        const unverifiedCollections = whitelistCollections.filter(item => !item.isVerified);
+        if (unverifiedCollections.length > 0) {
+          const unverifiedPolicies = unverifiedCollections.map(item => item.policyId);
+          throw new BadRequestException(
+            `All whitelist tokens must be verified. Unverified policy IDs: ${unverifiedPolicies.join(', ')}`
+          );
         }
       }
 
@@ -787,10 +815,26 @@ export class VaultsService {
         expansionPriceType = expansionProposal.metadata.expansion.priceType;
         expansionLimitPrice = expansionProposal.metadata.expansion.limitPrice;
         const expansionPolicyIds = expansionProposal.metadata.expansion.policyIds || [];
+        const expansionLabels = expansionProposal.metadata.expansion.labels || [];
 
         // Fetch collection names for expansion policies
         if (expansionPolicyIds.length > 0) {
-          expansionWhitelist = await this.getCollectionNamesByPolicyIds(expansionPolicyIds);
+          if (expansionLabels.length > 0 && expansionLabels.length === expansionPolicyIds.length) {
+            expansionWhitelist = expansionPolicyIds.map((policyId, index) => ({
+              policyId,
+              collectionName: expansionLabels[index],
+              isVerified: true,
+            }));
+          } else {
+            const collectionsToFetch = expansionPolicyIds.map(policyId => ({
+              policyId,
+              assetName: '',
+              name: '',
+              count: 0,
+            }));
+
+            expansionWhitelist = await this.getCollections(collectionsToFetch);
+          }
         }
 
         // Count confirmed expansion contributions
@@ -1724,50 +1768,120 @@ export class VaultsService {
   }
 
   /**
-   * Fetches collection names for given policy IDs from Ada Anvil marketplace API.
-   * For each policy ID, retrieves the collection name or ticker from the first asset.
-   * Uses cache to avoid redundant API calls for the same policy ID.
-   * @param policyIds - Array of policy IDs to look up
-   * @returns Array of { policyId, collectionName } objects
+   * Fetches collection names and verification status for given policies.
+   * Uses cache to avoid redundant API calls.
+   * @param collections - Array of policy objects to look up
+   * @returns Array of objects containing policyId, collectionName, and isVerified status
    */
-  async getCollectionNamesByPolicyIds(
-    policyIds: string[]
-  ): Promise<{ policyId: string; collectionName: string | null }[]> {
-    return await Promise.all(
-      policyIds.map(async policyId => {
-        const cacheKey = `collection_name_${policyId}`;
-        const cached = this.collectionNameCache.get<string | null>(cacheKey);
+  async getCollections(
+    collections: CollectionItemDto[]
+  ): Promise<{ policyId: string; collectionName: string | null; isVerified: boolean }[]> {
+    return await Promise.all(collections.map(collection => this.getCollectionInfoByCollectionItem(collection)));
+  }
 
-        if (cached !== undefined) {
-          return { policyId, collectionName: cached };
-        }
+  private async getCollectionInfoByCollectionItem(
+    collection: CollectionItemDto
+  ): Promise<{ policyId: string; collectionName: string | null; isVerified: boolean }> {
+    const { policyId, assetName } = collection;
 
-        try {
-          const response = await firstValueFrom(
-            this.httpService.get<{
-              count: number;
-              results: Array<{
-                collection: { name: string | null };
-                attributes: Record<string, string> | null;
-              }>;
-            }>(`https://prod.api.ada-anvil.app/marketplace/api/get-collection-assets`, {
-              params: { policyId },
-              timeout: 10000,
-            })
-          );
+    if (!this.isMainnet) {
+      return { policyId, collectionName: null, isVerified: true };
+    }
 
-          const firstAsset = response.data?.results?.[0];
-          const collectionName = firstAsset?.collection?.name || firstAsset?.attributes?.Ticker || null;
+    const tokenId = `${policyId}${assetName}`;
+    const tokenCacheKey = `collection_info_unit_${tokenId}`;
 
-          this.collectionNameCache.set(cacheKey, collectionName);
+    const cachedToken = this.collectionNameCache.get<{ collectionName: string | null; isVerified: boolean }>(
+      tokenCacheKey
+    );
+    if (cachedToken !== undefined) {
+      return { policyId, ...cachedToken };
+    }
 
-          return { policyId, collectionName };
-        } catch (error) {
-          this.logger.warn(`Failed to fetch collection name for policyId ${policyId}: ${error.message}`);
-          const collectionName = null;
-          return { policyId, collectionName };
-        }
+    const dexHunterData = await this.fetchDexHunterVerification(tokenId);
+    if (dexHunterData !== null) {
+      this.collectionNameCache.set(tokenCacheKey, dexHunterData);
+      return { policyId, ...dexHunterData };
+    }
+
+    const policyCacheKey = `collection_info_${policyId}`;
+    const cachedPolicy = this.collectionNameCache.get<{ collectionName: string | null; isVerified: boolean }>(
+      policyCacheKey
+    );
+    if (cachedPolicy !== undefined) {
+      return { policyId, ...cachedPolicy };
+    }
+
+    try {
+      const adaAnvilData = await this.fetchCollectionInfoFromApi(policyId);
+      this.collectionNameCache.set(policyCacheKey, adaAnvilData);
+      return { policyId, ...adaAnvilData };
+    } catch (error) {
+      this.logger.warn(`Failed to fetch collection info for policyId ${policyId}: ${error.message}`);
+
+      return { policyId, collectionName: null, isVerified: false };
+    }
+  }
+
+  private async fetchDexHunterVerification(
+    tokenId: string
+  ): Promise<{ isVerified: boolean; collectionName: string | null } | null> {
+    if (!this.dexHunterBaseUrl || !this.dexHunterApiKey) {
+      if (!this.dexHunterConfigWarningLogged) {
+        this.logger.warn(
+          'DexHunter configuration missing (DEXHUNTER_BASE_URL or DEXHUNTER_API_KEY); skipping DexHunter verification and falling back to Ada Anvil.'
+        );
+        this.dexHunterConfigWarningLogged = true;
+      }
+      return null;
+    }
+
+    try {
+      const response = await firstValueFrom(
+        this.httpService.get<{ is_verified?: boolean; token_ascii?: string }>(
+          `${this.dexHunterBaseUrl}/swap/token/${tokenId}`,
+          {
+            headers: {
+              'X-Partner-Id': this.dexHunterApiKey,
+            },
+            timeout: 10000,
+          }
+        )
+      );
+
+      if (typeof response.data?.is_verified === 'boolean') {
+        return {
+          isVerified: response.data.is_verified,
+          collectionName: response.data.token_ascii || null,
+        };
+      }
+
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async fetchCollectionInfoFromApi(
+    policyId: string
+  ): Promise<{ collectionName: string | null; isVerified: boolean }> {
+    const response = await firstValueFrom(
+      this.httpService.get<{
+        count: number;
+        results: Array<{
+          collection: { name: string | null; verified?: boolean };
+          attributes: Record<string, string> | null;
+        }>;
+      }>(`https://prod.api.ada-anvil.app/marketplace/api/get-collection-assets`, {
+        params: { policyId },
+        timeout: 10000,
       })
     );
+
+    const firstAsset = response.data?.results?.[0];
+    const collectionName = firstAsset?.collection?.name || firstAsset?.attributes?.Ticker || null;
+    const isVerified: boolean = firstAsset?.collection?.verified || false;
+
+    return { collectionName, isVerified };
   }
 }
