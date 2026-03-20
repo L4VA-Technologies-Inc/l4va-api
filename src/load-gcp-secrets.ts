@@ -29,40 +29,38 @@ export async function loadSecrets(): Promise<void> {
     return;
   }
 
-  // Check for GCP_PROJECT_ID
-  if (!process.env.GCP_PROJECT_ID) {
-    const actualEnv = process.env.NODE_ENV;
-    const isDevelopment = actualEnv === 'dev' || actualEnv === 'development';
-
-    if (isDevelopment) {
-      // DEVELOPMENT ONLY: Try to load from local credentials file
-      const credentialsFile = 'gcp-service-account.json';
-      const credentialsPath = path.join(process.cwd(), credentialsFile);
-
-      if (fs.existsSync(credentialsPath)) {
-        try {
-          const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
-          if (credentials.project_id) {
-            process.env.GCP_PROJECT_ID = credentials.project_id;
-            process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
-            // eslint-disable-next-line no-console
-            console.log('✅ Using local credentials file for GCP (development mode)');
-          }
-        } catch (e) {
-          console.warn('Failed to read project_id from credentials:', e.message || e);
-        }
-      } else {
-        console.warn('GCP_PROJECT_ID not set and no credentials file found in development mode');
-      }
-    } else {
-      // PRODUCTION/TESTNET: GCP_PROJECT_ID must be in .env, ADC will be used automatically
-      console.warn('GCP_PROJECT_ID not set. It must be provided in .env for production/testnet (uses ADC).');
-    }
-  }
-
   if (!process.env.GCP_PROJECT_ID) {
     console.warn('GCP_PROJECT_ID not set, skipping secrets load.');
     return;
+  }
+
+  // Check for GCP_PROJECT_ID
+  const actualEnv = process.env.NODE_ENV;
+  const isDevelopment = actualEnv === 'dev' || actualEnv === 'development';
+
+  if (isDevelopment) {
+    // DEVELOPMENT ONLY: Try to load from local credentials file
+    const credentialsFile = 'gcp-service-account.json';
+    const credentialsPath = path.join(process.cwd(), credentialsFile);
+
+    if (fs.existsSync(credentialsPath)) {
+      try {
+        const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
+        if (credentials.project_id) {
+          process.env.GCP_PROJECT_ID = credentials.project_id;
+          process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
+          // eslint-disable-next-line no-console
+          console.log('✅ Using local credentials file for GCP (development mode)');
+        }
+      } catch (e) {
+        console.warn('Failed to read project_id from credentials:', e.message || e);
+      }
+    } else {
+      console.warn('GCP_PROJECT_ID not set and no credentials file found in development mode');
+    }
+  } else {
+    // PRODUCTION/TESTNET: GCP_PROJECT_ID must be in .env, ADC will be used automatically
+    console.warn('GCP_PROJECT_ID not set. It must be provided in .env for production/testnet (uses ADC).');
   }
 
   const secretName = nodeEnv === 'mainnet' ? 'mainnet' : 'testnet';

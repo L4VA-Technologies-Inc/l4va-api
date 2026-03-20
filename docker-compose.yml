@@ -14,17 +14,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@host.docker.internal:5432/${POSTGRES_DB}
       DB_HOST: host.docker.internal
       DB_PORT: 5432
-      DB_USERNAME: ${POSTGRES_USER}
-      DB_PASSWORD: ${POSTGRES_PASSWORD}
-      DB_NAME: ${POSTGRES_DB}
-      JWT_SECRET: ${JWT_SECRET}
       REDIS_HOST: l4va-redis
       REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
       PORT: 3000
-      NODE_ENV: ${NODE_ENV:-production}
-      BLOCKFROST_API_KEY: ${BLOCKFROST_API_KEY}
-      BLOCKFROST_NETWORK: ${BLOCKFROST_NETWORK}
     networks:
       - l4va-network
     restart: unless-stopped
@@ -47,17 +39,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@host.docker.internal:5432/${POSTGRES_DB}
       DB_HOST: host.docker.internal
       DB_PORT: 5432
-      DB_USERNAME: ${POSTGRES_USER}
-      DB_PASSWORD: ${POSTGRES_PASSWORD}
-      DB_NAME: ${POSTGRES_DB}
-      JWT_SECRET: ${JWT_SECRET}
       REDIS_HOST: l4va-redis
       REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
       PORT: 3000
-      NODE_ENV: ${NODE_ENV:-production}
-      BLOCKFROST_API_KEY: ${BLOCKFROST_API_KEY}
-      BLOCKFROST_NETWORK: ${BLOCKFROST_NETWORK}
     networks:
       - l4va-network
     restart: unless-stopped
