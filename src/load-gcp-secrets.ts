@@ -5,7 +5,28 @@ import * as dotenv from 'dotenv';
 
 // Define sensitive secrets that this script should avoid adding or updating in .env.
 // Note: If these keys already exist in the .env file, they may still be preserved by merges.
-const SENSITIVE_KEYS = ['ADMIN_S_KEY', 'VAULT_SCRIPT_SKEY'];
+const SENSITIVE_KEYS = [
+  'ADMIN_S_KEY',
+  'VAULT_SCRIPT_SKEY',
+  'TAPTOOLS_API_KEY',
+  'CHARLI3_API_KEY',
+  'GOOGLE_BUCKET_CREDENTIALS',
+  'GCP_KMS_KEY',
+  'GCP_KMS_KEYRING',
+  'SENTRY_DNS_KEY',
+  'SLACK_BOT_TOKEN',
+  'NOVU_API_KEY',
+  'REDIS_PASSWORD',
+  'DB_PASSWORD',
+  'DB_USERNAME',
+  'DB_NAME',
+  'JWT_SECRET',
+  'ANVIL_API_KEY',
+  'GITHUB_TOKEN',
+  'BLOCKFROST_WEBHOOK_AUTH_TOKEN',
+  'BLOCKFROST_API_KEY',
+  'ADMIN_SERVICE_TOKEN',
+];
 
 export async function loadSecrets(): Promise<void> {
   // Step 1: Load .env file first (from git repository)
@@ -22,10 +43,10 @@ export async function loadSecrets(): Promise<void> {
   }
 
   // Support both testnet and mainnet
-  const shouldLoadGcpSecrets = nodeEnv === 'mainnet';
+  const shouldLoadGcpSecrets = nodeEnv === 'mainnet' || nodeEnv === 'testnet';
 
   if (!shouldLoadGcpSecrets) {
-    console.log(`Skipping GCP secrets load because NODE_ENV is "${nodeEnv}" (expected "mainnet")`);
+    console.log(`Skipping GCP secrets load because NODE_ENV is "${nodeEnv}" (expected "mainnet" or "testnet")`);
     return;
   }
 
