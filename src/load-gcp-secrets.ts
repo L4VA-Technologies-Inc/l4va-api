@@ -22,39 +22,41 @@ export async function loadSecrets(): Promise<void> {
   }
 
   // Support both testnet and mainnet
-  const shouldLoadGcpSecrets = nodeEnv === 'mainnet';
+  const shouldLoadGcpSecrets = nodeEnv === 'mainnet' || nodeEnv === 'testnet';
 
   if (!shouldLoadGcpSecrets) {
-    console.log(`Skipping GCP secrets load because NODE_ENV is "${nodeEnv}" (expected "mainnet")`);
+    console.log(`Skipping GCP secrets load because NODE_ENV is "${nodeEnv}" (expected "mainnet" or "testnet")`);
     return;
   }
 
-  let credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-
-  if (!credentialsPath) {
-    const credentialsFile = 'gcp-service-account.json';
-    credentialsPath = path.join(process.cwd(), credentialsFile);
-  } else {
-    if (!path.isAbsolute(credentialsPath)) {
-      credentialsPath = path.join(process.cwd(), credentialsPath);
-    }
-  }
-
-  if (!fs.existsSync(credentialsPath)) {
-    console.warn('Credentials file not found, skipping secrets load.');
-    return;
-  }
-
-  process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
-
+  // Check for GCP_PROJECT_ID
   if (!process.env.GCP_PROJECT_ID) {
-    try {
-      const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
-      if (credentials.project_id) {
-        process.env.GCP_PROJECT_ID = credentials.project_id;
+    const actualEnv = process.env.NODE_ENV;
+    const isDevelopment = actualEnv === 'dev' || actualEnv === 'development';
+
+    if (isDevelopment) {
+      // DEVELOPMENT ONLY: Try to load from local credentials file
+      const credentialsFile = 'gcp-service-account.json';
+      const credentialsPath = path.join(process.cwd(), credentialsFile);
+
+      if (fs.existsSync(credentialsPath)) {
+        try {
+          const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
+          if (credentials.project_id) {
+            process.env.GCP_PROJECT_ID = credentials.project_id;
+            process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
+            // eslint-disable-next-line no-console
+            console.log('✅ Using local credentials file for GCP (development mode)');
+          }
+        } catch (e) {
+          console.warn('Failed to read project_id from credentials:', e.message || e);
+        }
+      } else {
+        console.warn('GCP_PROJECT_ID not set and no credentials file found in development mode');
       }
-    } catch (e) {
-      console.warn('Failed to read project_id from credentials:', e.message || e);
+    } else {
+      // PRODUCTION/TESTNET: GCP_PROJECT_ID must be in .env, ADC will be used automatically
+      console.warn('GCP_PROJECT_ID not set. It must be provided in .env for production/testnet (uses ADC).');
     }
   }
 
@@ -108,6 +110,7 @@ export async function loadSecrets(): Promise<void> {
       .join('\n');
     fs.writeFileSync(envFilePath, envContent, 'utf8');
 
+    // eslint-disable-next-line no-console
     console.log(
       `✅ Loaded ${Object.keys(parsed).length} secrets from GCP (${sensitiveSecretsCount} kept in memory only)`
     );

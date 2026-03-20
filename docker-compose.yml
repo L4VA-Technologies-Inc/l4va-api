@@ -1,27 +1,72 @@
 version: "3.9"
 
 services:
-  l4va-api:
-    container_name: l4va-api
+  l4va-api-blue:
+    container_name: l4va-api-blue
     build:
-      context: ./l4va-api
+      context: .
       dockerfile: Dockerfile
     ports:
-      - "127.0.0.1:3000:3000" 
+      - "127.0.0.1:3000:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      DB_HOST: postgres
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@host.docker.internal:5432/${POSTGRES_DB}
+      DB_HOST: host.docker.internal
       DB_PORT: 5432
       DB_USERNAME: ${POSTGRES_USER}
       DB_PASSWORD: ${POSTGRES_PASSWORD}
       DB_NAME: ${POSTGRES_DB}
       JWT_SECRET: ${JWT_SECRET}
-    depends_on:
-      - postgres
-      - redis
+      REDIS_HOST: l4va-redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      PORT: 3000
+      NODE_ENV: ${NODE_ENV:-production}
+      BLOCKFROST_API_KEY: ${BLOCKFROST_API_KEY}
+      BLOCKFROST_NETWORK: ${BLOCKFROST_NETWORK}
     networks:
       - l4va-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  l4va-api-green:
+    container_name: l4va-api-green
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:3001:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@host.docker.internal:5432/${POSTGRES_DB}
+      DB_HOST: host.docker.internal
+      DB_PORT: 5432
+      DB_USERNAME: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB}
+      JWT_SECRET: ${JWT_SECRET}
+      REDIS_HOST: l4va-redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      PORT: 3000
+      NODE_ENV: ${NODE_ENV:-production}
+      BLOCKFROST_API_KEY: ${BLOCKFROST_API_KEY}
+      BLOCKFROST_NETWORK: ${BLOCKFROST_NETWORK}
+    networks:
+      - l4va-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
 networks:
   l4va-network:
-    driver: bridge
-
+    external: true
