@@ -22,10 +22,10 @@ export async function loadSecrets(): Promise<void> {
   }
 
   // Support both testnet and mainnet
-  const shouldLoadGcpSecrets = nodeEnv === 'mainnet' || nodeEnv === 'testnet';
+  const shouldLoadGcpSecrets = nodeEnv === 'mainnet';
 
   if (!shouldLoadGcpSecrets) {
-    console.log(`Skipping GCP secrets load because NODE_ENV is "${nodeEnv}" (expected "mainnet" or "testnet")`);
+    console.log(`Skipping GCP secrets load because NODE_ENV is "${nodeEnv}" (expected "mainnet")`);
     return;
   }
 
@@ -34,7 +34,7 @@ export async function loadSecrets(): Promise<void> {
     return;
   }
 
-  // Check for GCP_PROJECT_ID
+  // GCP_PROJECT_ID is already validated above, now configure authentication
   const actualEnv = process.env.NODE_ENV;
   const isDevelopment = actualEnv === 'dev' || actualEnv === 'development';
 
@@ -59,8 +59,9 @@ export async function loadSecrets(): Promise<void> {
       console.warn('GCP_PROJECT_ID not set and no credentials file found in development mode');
     }
   } else {
-    // PRODUCTION/TESTNET: GCP_PROJECT_ID must be in .env, ADC will be used automatically
-    console.warn('GCP_PROJECT_ID not set. It must be provided in .env for production/testnet (uses ADC).');
+    // PRODUCTION/TESTNET: Using Application Default Credentials (ADC)
+    // eslint-disable-next-line no-console
+    console.log(`✅ Using ADC for GCP authentication (${nodeEnv}), project: ${process.env.GCP_PROJECT_ID}`);
   }
 
   const secretName = nodeEnv === 'mainnet' ? 'mainnet' : 'testnet';
@@ -114,6 +115,34 @@ export async function loadSecrets(): Promise<void> {
     );
   } catch (e) {
     console.error('Failed to load GCP secrets:', e.stack || e.message || e);
-    console.warn('Falling back to .env file only');
+
+    // Provide helpful guidance based on the error
+    if (e.message?.includes('NOT_FOUND')) {
+      console.error(`\n🔴 Secret "${secretName}" not found in project ${projectId}`);
+      console.error('To fix this:');
+      console.error(`1. Create the secret: gcloud secrets create ${secretName} --project=${projectId}`);
+      console.error(
+        `2. Add a version: echo -n "KEY=value" | gcloud secrets versions add ${secretName} --data-file=- --project=${projectId}`
+      );
+      console.error(
+        `3. Grant access: gcloud secrets add-iam-policy-binding ${secretName} --member="serviceAccount:YOUR_SA@PROJECT.iam.gserviceaccount.com" --role="roles/secretmanager.secretAccessor" --project=${projectId}`
+      );
+    } else if (e.message?.includes('PERMISSION_DENIED')) {
+      console.error('\n🔴 Permission denied accessing GCP Secret Manager');
+      console.error('To fix this:');
+      console.error('1. Ensure ADC is configured on the VM (it should be automatic for Compute Engine)');
+      console.error('2. Grant the Compute Engine service account the "Secret Manager Secret Accessor" role');
+      console.error(
+        `3. Run: gcloud secrets add-iam-policy-binding ${secretName} --member="serviceAccount:COMPUTE_ENGINE_SA" --role="roles/secretmanager.secretAccessor" --project=${projectId}`
+      );
+    } else if (e.message?.includes('Could not load the default credentials')) {
+      console.error('\n🔴 Application Default Credentials (ADC) not configured');
+      console.error('To fix this on a GCP VM:');
+      console.error('1. Ensure the VM has the correct service account attached');
+      console.error('2. Ensure the service account has "Secret Manager Secret Accessor" role');
+      console.error('3. ADC should work automatically on Compute Engine VMs');
+    }
+
+    console.warn('\n⚠️  Falling back to .env file only\n');
   }
 }
