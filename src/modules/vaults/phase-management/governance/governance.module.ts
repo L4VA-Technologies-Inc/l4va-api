@@ -33,6 +33,7 @@ import { AlertsModule } from '@/modules/alerts/alerts.module';
 import { DexHunterModule } from '@/modules/dexhunter/dexhunter.module';
 import { DistributionCalculationModule } from '@/modules/distribution/distribution-calculation.module';
 import { RedisModule } from '@/modules/redis/redis.module';
+import { TaptoolsModule } from '@/modules/taptools/taptools.module';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
 import { VyfiModule } from '@/modules/vyfi/vyfi.module';
 import { WayUpModule } from '@/modules/wayup/wayup.module';
@@ -58,6 +59,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     TransactionsModule,
     BlockchainModule,
     DexHunterModule,
+    TaptoolsModule,
     VyfiModule,
     AlertsModule,
     DistributionCalculationModule,

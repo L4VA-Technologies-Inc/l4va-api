@@ -39,6 +39,7 @@ import { Vote } from '@/database/vote.entity';
 import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
+import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { VyfiService } from '@/modules/vyfi/vyfi.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
@@ -117,6 +118,7 @@ export class GovernanceService {
     private readonly dexHunterService: DexHunterService,
     private readonly blockchainService: BlockchainService,
     private readonly systemSettingsService: SystemSettingsService,
+    private readonly taptoolsService: TaptoolsService,
     private readonly vyfiService: VyfiService
   ) {
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
@@ -202,9 +204,7 @@ export class GovernanceService {
           select: ['id', 'ft_token_decimals', 'policy_id', 'asset_vault_name', 'has_active_lp'],
         });
 
-      if (!vault) {
-        throw new NotFoundException(`Vault ${vaultId} not found`);
-      }
+      if (!vault) throw new NotFoundException(`Vault ${vaultId} not found`);
 
       // First, check if there's at least one claimed contribution or acquisition for this vault
       const claimedContributions = await this.claimRepository.count({
@@ -216,9 +216,7 @@ export class GovernanceService {
       });
 
       if (claimedContributions === 0) {
-        throw new BadRequestException(
-          `No claimed contributions or acquisitions found for vault ${vaultId}. Cannot create snapshot.`
-        );
+        throw new BadRequestException(`No claimed contributions found for vault ${vaultId}. Cannot create snapshot.`);
       }
 
       const lpAddresses: string[] = [];
@@ -228,15 +226,13 @@ export class GovernanceService {
         const poolInfo = await this.vyfiService.getPoolByTokens(`${vault.policy_id}${vault.asset_vault_name}`);
         if (poolInfo) {
           lpAddresses.push(poolInfo.poolAddress);
-          this.logger.log(
-            `Found VyFi pool for vault ${vaultId} with asset ${assetId}. Pool address: ${poolInfo.poolAddress}`
-          );
+          this.logger.log(`Found VyFi pool for vault ${vaultId}. Pool address: ${poolInfo.poolAddress}`);
         }
       }
 
       // Fetch all addresses holding the asset using BlockFrost
-      const addressBalances: Record<string, string> = {}; // For snapshot (excludes LP)
-      let totalSupplyRaw = BigInt(0); // Total supply INCLUDING LP tokens
+      const finalVotingPower = new Map<string, bigint>();
+      let totalSupplyRaw = 0n;
       let page = 1;
       let hasMorePages = true;
 
@@ -249,61 +245,90 @@ export class GovernanceService {
           } else {
             // Process all addresses
             for (const item of response) {
-              // ALWAYS add to total supply (includes LP tokens)
-              totalSupplyRaw += BigInt(item.quantity);
+              const quantity = BigInt(item.quantity);
+              totalSupplyRaw += quantity;
 
-              // Only add to snapshot if NOT an LP-related address (exclude LP from voting power)
+              // Only add to snapshot if NOT an LP-related address (exclude LP contract from voting power)
               if (
                 item.address !== this.poolAddress &&
                 item.address !== this.adminAddress &&
                 !lpAddresses.includes(item.address)
               ) {
-                addressBalances[item.address] = item.quantity;
+                finalVotingPower.set(item.address, quantity);
               } else {
-                this.logger.log(
-                  `Excluded LP address ${item.address} from snapshot (${item.quantity} VT in liquidity pool)`
-                );
+                this.logger.log(`Excluded configured LP/Admin address ${item.address} from wallet snapshot`);
               }
             }
             page++;
           }
         } catch (error) {
           if (error.message.includes('not been found') || error.status_code === 404) {
-            this.logger.warn(`Asset ${assetId} not found on blockchain. Verify policy ID and asset name are correct.`);
-
-            if (Object.keys(addressBalances).length === 0) {
+            this.logger.warn(`Asset ${assetId} not found on blockchain.`);
+            if (finalVotingPower.size === 0) {
               try {
                 await this.blockfrost.assetsById(assetId);
-              } catch (assetError) {
-                this.logger.error(`Asset ${assetId} does not exist on blockchain: ${assetError.message}`);
-                throw new NotFoundException(
-                  `Asset ${assetId} not found on blockchain. Check policy ID and asset name.`
-                );
+              } catch {
+                throw new NotFoundException(`Asset ${assetId} not found on blockchain.`);
               }
             }
           }
-
-          // Stop fetching more pages on any error
           hasMorePages = false;
         }
       }
 
-      // Adjust for token decimals (divide by 10^decimals)
+      if (vault.has_active_lp) {
+        try {
+          const decimals = vault.ft_token_decimals || 0;
+          const { balances: tapToolsBalances, poolAddresses: tapToolsPools } =
+            await this.taptoolsService.getLpPositionsFromTapTools(assetId, decimals);
+
+          tapToolsPools.forEach(poolAddr => {
+            if (!lpAddresses.includes(poolAddr)) lpAddresses.push(poolAddr);
+          });
+
+          for (const poolAddr of tapToolsPools) {
+            if (finalVotingPower.delete(poolAddr)) {
+              this.logger.log(`Removed newly discovered TapTools pool address ${poolAddr} from voting power`);
+            }
+          }
+
+          let lpUsersMerged = 0;
+
+          for (const [walletAddress, underlyingTokens] of tapToolsBalances.entries()) {
+            if (
+              walletAddress === this.poolAddress ||
+              walletAddress === this.adminAddress ||
+              lpAddresses.includes(walletAddress)
+            ) {
+              this.logger.log(`Excluded LP-derived voting power for contract/admin address ${walletAddress}`);
+              continue;
+            }
+
+            const currentWalletBalance = finalVotingPower.get(walletAddress) || 0n;
+            finalVotingPower.set(walletAddress, currentWalletBalance + underlyingTokens);
+            lpUsersMerged++;
+          }
+
+          this.logger.log(`Successfully merged ${lpUsersMerged} LP positions into voting power for vault ${vaultId}`);
+        } catch (error) {
+          this.logger.error(`Failed to fetch or merge LP positions: ${error.message}`);
+          throw new BadRequestException(`Cannot complete snapshot. TapTools API failed: ${error.message}`);
+        }
+      }
+
+      const addressBalances: Record<string, string> = {};
+      for (const [address, balance] of finalVotingPower.entries()) {
+        if (balance > 0n) {
+          addressBalances[address] = balance.toString();
+        }
+      }
+
       const decimals = vault.ft_token_decimals || 0;
-      const divisor = BigInt(10) ** BigInt(decimals);
+      const divisor = 10n ** BigInt(decimals);
       const adjustedSupply = Number(totalSupplyRaw / divisor);
 
-      // Update vault supply with TOTAL supply (including LP tokens)
-      await this.vaultRepository.update(vaultId, {
-        ft_token_supply: adjustedSupply,
-      });
+      await this.vaultRepository.update(vaultId, { ft_token_supply: adjustedSupply });
 
-      this.logger.log(
-        `Updated vault ${vaultId} total supply: ${adjustedSupply.toLocaleString()} tokens (raw: ${totalSupplyRaw.toLocaleString()}, decimals: ${decimals}). ` +
-          `Snapshot created for ${Object.keys(addressBalances).length} addresses (LP tokens excluded from voting power)`
-      );
-
-      // Create and save the snapshot (addressBalances excludes LP for voting power calculation)
       const snapshot = this.snapshotRepository.create({
         vaultId,
         assetId,
@@ -311,7 +336,6 @@ export class GovernanceService {
       });
 
       await this.snapshotRepository.save(snapshot);
-
       this.logger.log(
         `Automatic snapshot created for vault ${vaultId} with ${Object.keys(addressBalances).length} voting addresses`
       );
