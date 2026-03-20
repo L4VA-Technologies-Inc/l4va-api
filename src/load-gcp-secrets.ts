@@ -46,6 +46,7 @@ export async function loadSecrets(): Promise<void> {
   const shouldLoadGcpSecrets = nodeEnv === 'mainnet' || nodeEnv === 'testnet';
 
   if (!shouldLoadGcpSecrets) {
+    // eslint-disable-next-line no-console
     console.log(`Skipping GCP secrets load because NODE_ENV is "${nodeEnv}" (expected "mainnet" or "testnet")`);
     return;
   }
@@ -114,6 +115,13 @@ export async function loadSecrets(): Promise<void> {
 
     // Load ALL secrets into process.env (memory)
     Object.assign(process.env, parsed);
+
+    // Debug: verify critical secrets are loaded (without exposing values)
+    const criticalKeys = ['DB_HOST', 'DB_USERNAME', 'DB_PASSWORD', 'DB_NAME', 'REDIS_PASSWORD'];
+    const missingKeys = criticalKeys.filter(key => !process.env[key]);
+    if (missingKeys.length > 0) {
+      console.warn(`⚠️  Missing critical secrets in process.env: ${missingKeys.join(', ')}`);
+    }
 
     // Only write non-sensitive secrets to .env file
     const existingEnv = dotenv.parse(envExists ? fs.readFileSync(envFilePath, 'utf8') : '');
