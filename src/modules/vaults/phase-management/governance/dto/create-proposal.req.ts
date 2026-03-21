@@ -127,6 +127,14 @@ export class MarketplaceActionDto {
   @IsEnum(ExecType)
   exec: ExecType;
 
+  @ApiProperty({
+    description: 'Asset name to buy',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  assetName?: string;
+
   // ===== SELL fields =====
   @ApiProperty({
     description: 'Quantity to buy/sell',
@@ -231,6 +239,20 @@ export class MarketplaceActionDto {
     assetId: string;
     quantity: number;
   }>;
+
+  @ApiProperty({
+    description: 'NFT metadata snapshot at proposal creation time (auto-populated for BUY actions)',
+    required: false,
+  })
+  @IsOptional()
+  nftSnapshot?: {
+    name: string;
+    image: string | null;
+    listingPriceAda: number;
+    policyId: string;
+    assetName: string;
+    collectionName: string | null;
+  };
 }
 
 export class ExpansionPolicyIdDto {

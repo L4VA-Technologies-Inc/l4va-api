@@ -20,7 +20,9 @@ import { Vault } from '@/database/vault.entity';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
+import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { TreasuryExtractionService } from '@/modules/vaults/treasure/treasury-extraction.service';
+import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
 import { WayUpService } from '@/modules/wayup/wayup.service';
 import { AssetStatus } from '@/types/asset.types';
 import { ClaimType } from '@/types/claim.types';
@@ -62,7 +64,9 @@ export class GovernanceExecutionService {
     private readonly terminationService: TerminationService,
     private readonly distributionService: DistributionService,
     private readonly dexHunterService: DexHunterService,
-    private readonly expansionService: ExpansionService
+    private readonly expansionService: ExpansionService,
+    private readonly wayUpPricingService: WayUpPricingService,
+    private readonly treasuryWalletService: TreasuryWalletService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
@@ -508,6 +512,28 @@ export class GovernanceExecutionService {
         return;
       }
 
+      // Check if this is a handled rejection due to buy price being exceeded
+      if (error.message === 'PROPOSAL_REJECTED_PRICE_EXCEEDED') {
+        this.logger.log(`Proposal ${proposalId}: REJECTED - NFT listing price exceeds proposal max price`);
+        return;
+      }
+
+      // Check if this is a handled rejection due to skipped buy operations (listing missing or other issues)
+      if (error.message === 'PROPOSAL_REJECTED_BUY_OPERATION_SKIPPED') {
+        this.logger.log(
+          `Proposal ${proposalId}: REJECTED - One or more buy operations could not be executed (listing missing or invalid)`
+        );
+        return;
+      }
+
+      // Check if this is a handled rejection due to insufficient treasury ADA for buys
+      if (error.message === 'PROPOSAL_REJECTED_INSUFFICIENT_TREASURY_ADA') {
+        this.logger.log(
+          `Proposal ${proposalId}: REJECTED - Treasury wallet has insufficient ADA to execute buy operations`
+        );
+        return;
+      }
+
       // Store execution error in proposal metadata
       if (proposal) {
         await this.storeExecutionError(proposal, error);
@@ -604,7 +630,10 @@ export class GovernanceExecutionService {
         error.message === 'PROPOSAL_REJECTED_LISTING_NOT_FOUND' ||
         error.message === 'PROPOSAL_REJECTED_NO_VALID_OPERATIONS' ||
         error.message === 'PROPOSAL_REJECTED_ASSET_ALREADY_LISTED' ||
-        error.message === 'PROPOSAL_REJECTED_ASSETS_NOT_LOCKED'
+        error.message === 'PROPOSAL_REJECTED_ASSETS_NOT_LOCKED' ||
+        error.message === 'PROPOSAL_REJECTED_PRICE_EXCEEDED' ||
+        error.message === 'PROPOSAL_REJECTED_BUY_OPERATION_SKIPPED' ||
+        error.message === 'PROPOSAL_REJECTED_INSUFFICIENT_TREASURY_ADA'
       ) {
         throw error;
       }
@@ -651,28 +680,35 @@ export class GovernanceExecutionService {
       return this.executeDexHunterSwapProposal(proposal);
     }
 
-    // Collect all unique asset IDs to fetch from database
-    const assetIds = [...new Set(proposal.metadata.marketplaceActions.map(opt => opt.assetId))];
-
-    // Fetch all assets from database in one query (including floor_price for Market sellType)
-    const assets: Pick<
-      Asset,
-      'id' | 'policy_id' | 'asset_id' | 'name' | 'metadata' | 'listing_tx_hash' | 'floor_price'
-    >[] = await this.assetRepository.find({
-      where: assetIds.map(id => ({ id })),
-      select: ['id', 'policy_id', 'asset_id', 'name', 'metadata', 'listing_tx_hash', 'floor_price'],
-    });
-
-    // Create a map for quick asset lookup
-    const assetMap = new Map(assets.map(asset => [asset.id, asset]));
     const groupedOperations = this.groupBuySellOperations(proposal.metadata.marketplaceActions);
 
-    // For now, we only support WayUp marketplace
     const operations = groupedOperations['wayup'];
     if (!operations) {
       this.logger.warn(`No WayUp marketplace operations found for proposal ${proposal.id}`);
       return false;
     }
+
+    const dbAssetIds = [
+      ...(operations.sells?.map(opt => opt.assetId) || []),
+      ...(operations.unlists?.map(opt => opt.assetId) || []),
+      ...(operations.updates?.map(opt => opt.assetId) || []),
+    ];
+
+    const uniqueDbAssetIds = [...new Set(dbAssetIds)];
+
+    let assets: Pick<
+      Asset,
+      'id' | 'policy_id' | 'asset_id' | 'name' | 'metadata' | 'listing_tx_hash' | 'floor_price'
+    >[] = [];
+
+    if (uniqueDbAssetIds.length > 0) {
+      assets = await this.assetRepository.find({
+        where: uniqueDbAssetIds.map(id => ({ id })),
+        select: ['id', 'policy_id', 'asset_id', 'name', 'metadata', 'listing_tx_hash', 'floor_price'],
+      });
+    }
+
+    const assetMap = new Map(assets.map(asset => [asset.id, asset]));
 
     try {
       this.logger.log(
@@ -709,24 +745,7 @@ export class GovernanceExecutionService {
         // Check if asset is already listed (has listing_tx_hash) - reject entire proposal
         if (asset.listing_tx_hash) {
           const reason = `Asset "${asset.name || option.assetId}" is already listed on marketplace`;
-          this.logger.warn(`Marketplace proposal ${proposal.id} rejected: ${reason}`);
-
-          // Store execution error before rejecting so users can see the reason
-          await this.storeExecutionError(proposal, new Error(reason));
-
-          await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
-
-          this.eventEmitter.emit('proposal.rejected', {
-            address: proposal.vault?.owner?.address || null,
-            vaultId: proposal.vaultId,
-            vaultName: proposal.vault?.name || null,
-            proposalName: proposal.title,
-            creatorId: proposal.creatorId,
-            tokenHolderIds: [],
-            reason,
-          });
-
-          throw new Error('PROPOSAL_REJECTED_ASSET_ALREADY_LISTED');
+          await this.rejectMarketplaceProposal(proposal, reason, 'PROPOSAL_REJECTED_ASSET_ALREADY_LISTED');
         }
 
         const policyId = asset.policy_id;
@@ -800,27 +819,74 @@ export class GovernanceExecutionService {
         updateAssetInfos.push({ assetId: option.assetId, newPrice: newPriceAda });
       }
 
-      // Process BUY operations
+      // Process BUY operations (Step 1 from docs: find exact asset listing)
       for (const option of operations.buys) {
-        const asset = assetMap.get(option.assetId);
-        if (!asset) {
-          this.logger.warn(`Asset not found for assetId: ${option.assetId}`);
-          skipped.buys.push(option.assetId);
-          continue;
-        }
+        const policyId = option.assetId.length >= 56 ? option.assetId.slice(0, 56) : option.assetId;
 
-        const txHashIndex = asset.listing_tx_hash;
-        if (!txHashIndex) {
-          this.logger.warn(`Cannot buy NFT - missing txHashIndex for ${option.assetId}`);
-          skipped.buys.push(option.assetId);
-          continue;
-        }
-
-        purchases.push({
-          policyId: asset.policy_id,
-          txHashIndex,
-          priceAda: parseFloat(option.price),
+        const collectionResponse = await this.wayUpPricingService.getCollectionAssets({
+          policyId,
+          saleType: 'listedOnly' as const,
+          orderBy: 'priceAsc' as const,
+          term: option.assetName,
+          limit: 1,
         });
+
+        const exactAsset = collectionResponse.results?.[0];
+
+        if (!exactAsset?.listing) {
+          this.logger.warn(`Cannot buy NFT ${option.assetName} - no active listing found`);
+          skipped.buys.push(option.assetId);
+          continue;
+        }
+
+        const { txHashIndex, price: priceLovelace } = exactAsset.listing;
+        const priceAda = priceLovelace / 1_000_000;
+        const maxPriceAda = option.price ? parseFloat(option.price) : null;
+
+        if (maxPriceAda != null && priceAda > maxPriceAda) {
+          this.logger.warn(
+            `Cannot buy NFT ${option.assetName} - listing price ${priceAda} ADA exceeds proposal max ${maxPriceAda} ADA`
+          );
+          skipped.buys.push(option.assetName);
+          continue;
+        }
+
+        purchases.push({ policyId: exactAsset.policyId, txHashIndex, priceAda });
+      }
+
+      // If there are BUY operations, ensure treasury has enough ADA to cover total purchase cost
+      if (purchases.length > 0) {
+        const totalRequiredAda = purchases.reduce((sum, p) => sum + p.priceAda, 0);
+
+        try {
+          const balance = await this.treasuryWalletService.getTreasuryWalletBalance(proposal.vaultId);
+          const adaBalance = balance.lovelace / 1_000_000;
+
+          if (adaBalance < totalRequiredAda) {
+            const reason =
+              `Treasury wallet has insufficient ADA to execute buy operations. ` +
+              `Required ${totalRequiredAda} ADA, available: ${adaBalance.toFixed(2)} ADA.`;
+            await this.rejectMarketplaceProposal(proposal, reason, 'PROPOSAL_REJECTED_INSUFFICIENT_TREASURY_ADA');
+          }
+        } catch (error) {
+          if (error?.message === 'PROPOSAL_REJECTED_INSUFFICIENT_TREASURY_ADA') {
+            throw error;
+          }
+
+          this.logger.error(
+            `Failed to validate treasury balance for buy operations in proposal ${proposal.id}: ${error.message}`,
+            error.stack
+          );
+
+          await this.storeExecutionError(proposal, error);
+          throw error;
+        }
+      }
+
+      // If any buy was requested but skipped — reject entire proposal
+      if (operations.buys.length > 0 && skipped.buys.length > 0) {
+        const reason = `Cannot execute all buy operations: ${skipped.buys.join(', ')}`;
+        await this.rejectMarketplaceProposal(proposal, reason, 'PROPOSAL_REJECTED_BUY_OPERATION_SKIPPED');
       }
 
       // Log skipped operations
@@ -863,25 +929,7 @@ export class GovernanceExecutionService {
           reason = `All operations skipped: ${reasons.join(', ')}`;
         }
 
-        this.logger.warn(`Marketplace proposal ${proposal.id} rejected: ${reason}`);
-
-        // Store execution error before rejecting so users can see the reason
-        await this.storeExecutionError(proposal, new Error(reason));
-
-        await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
-
-        this.eventEmitter.emit('proposal.rejected', {
-          address: proposal.vault?.owner?.address || null,
-          vaultId: proposal.vaultId,
-          vaultName: proposal.vault?.name || null,
-          proposalName: proposal.title,
-          creatorId: proposal.creatorId,
-          tokenHolderIds: [],
-          reason,
-        });
-
-        // Throw specific error so processProposal knows the proposal was already handled
-        throw new Error('PROPOSAL_REJECTED_NO_VALID_OPERATIONS');
+        await this.rejectMarketplaceProposal(proposal, reason, 'PROPOSAL_REJECTED_NO_VALID_OPERATIONS');
       }
 
       // STEP 1: Extract assets to treasury if there are listings (only for assets not already in treasury)
@@ -1853,6 +1901,10 @@ export class GovernanceExecutionService {
       TRANSACTION_ERROR: 'Transaction failed to submit. Will retry automatically.',
       WALLET_ERROR: 'Error accessing treasury wallet. Check configuration.',
       INVALID_ASSET_STATUS: 'Assets must be locked in vault first.',
+      NO_VALID_OPERATIONS:
+        'This marketplace proposal cannot be executed because all requested operations became invalid (assets already listed/unlisted or not available).',
+      PRICE_EXCEEDED:
+        'One or more NFTs now have a listing price higher than the maximum price specified in the proposal.',
       CONTRACT_ERROR: 'Smart contract validation error.',
       EXECUTION_ERROR: 'Unexpected error. Review details or contact support.',
     };
@@ -1950,6 +2002,22 @@ export class GovernanceExecutionService {
       return 'INVALID_ASSET_STATUS';
     }
 
+    // No valid marketplace operations (all skipped)
+    if (
+      errorMessage.toLowerCase().includes('no valid marketplace operations') ||
+      errorMessage.toLowerCase().includes('all operations skipped')
+    ) {
+      return 'NO_VALID_OPERATIONS';
+    }
+
+    // Buy price exceeded max from proposal
+    if (
+      errorMessage.toLowerCase().includes('exceeds proposal max') ||
+      errorMessage.toLowerCase().includes('price exceeded')
+    ) {
+      return 'PRICE_EXCEEDED';
+    }
+
     // Contract/Smart contract errors
     if (
       errorMessage.toLowerCase().includes('script') ||
@@ -1966,5 +2034,24 @@ export class GovernanceExecutionService {
   onModuleDestroy(): void {
     // Clean up all proposal-related cron jobs
     this.schedulerService.cleanupAllJobs();
+  }
+
+  private async rejectMarketplaceProposal(proposal: Proposal, reason: string, errorCode: string): Promise<never> {
+    this.logger.warn(`Marketplace proposal ${proposal.id} rejected: ${reason}`);
+
+    await this.storeExecutionError(proposal, new Error(reason));
+    await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
+
+    this.eventEmitter.emit('proposal.rejected', {
+      address: proposal.vault?.owner?.address || null,
+      vaultId: proposal.vaultId,
+      vaultName: proposal.vault?.name || null,
+      proposalName: proposal.title,
+      creatorId: proposal.creatorId,
+      tokenHolderIds: [],
+      reason,
+    });
+
+    throw new Error(errorCode);
   }
 }
