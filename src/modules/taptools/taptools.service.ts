@@ -1,5 +1,5 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { HttpException, Inject, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import { HttpException, HttpStatus, Inject, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import axios, { AxiosInstance } from 'axios';
@@ -280,6 +280,106 @@ export class TaptoolsService {
     } catch (error) {
       this.logger.warn(`Failed to fetch trait prices from TapTools: ${error.message}`);
       return null;
+    }
+  }
+
+  /**
+   * Get LP positions for a token from TapTools API.
+   * @param assetId Token unit (policyId + assetName)
+   * @param decimals Token decimals for conversion
+   * @returns Object containing merged balances map and an array of pool contract addresses
+   */
+  async getLpPositionsFromTapTools(
+    assetId: string,
+    decimals: number
+  ): Promise<{ balances: Map<string, bigint>; poolAddresses: string[] }> {
+    const balances = new Map<string, bigint>();
+    const poolAddresses: string[] = [];
+
+    if (!this.isMainnet) {
+      this.logger.log(`Skipping TapTools LP fetch on non-mainnet environment for ${assetId}`);
+      return { balances, poolAddresses };
+    }
+
+    const tapToolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
+    if (!tapToolsApiKey) {
+      this.logger.error('TAPTOOLS_API_KEY is missing');
+      throw new Error('Missing TapTools API Key');
+    }
+
+    try {
+      this.logger.log(`Fetching active liquidity pools for ${assetId} from TapTools...`);
+
+      const { data: pools } = await this.axiosTapToolsInstance.get('/token/pools', {
+        params: { unit: assetId },
+        timeout: 10000,
+      });
+
+      if (!pools || pools.length === 0) {
+        this.logger.log(`No active pools found for asset ${assetId}`);
+        return { balances, poolAddresses };
+      }
+
+      for (const pool of pools) {
+        const lpTokenUnit = pool.lpTokenUnit;
+        if (!lpTokenUnit) continue;
+
+        if (pool.onchainID) {
+          poolAddresses.push(pool.onchainID);
+        }
+
+        const isTokenA = pool.tokenA === assetId;
+        const lockedFloat = isTokenA ? pool.tokenALocked : pool.tokenBLocked;
+
+        if (!lockedFloat || lockedFloat <= 0) continue;
+
+        const lockedString = lockedFloat.toFixed(decimals);
+        const totalLockedInPool = BigInt(lockedString.replace('.', ''));
+
+        try {
+          const lpAssetInfo = await this.blockfrost.assetsById(lpTokenUnit);
+          const totalLpSupply = BigInt(lpAssetInfo.quantity);
+
+          if (totalLpSupply === 0n) continue;
+
+          let page = 1;
+          let hasMorePages = true;
+
+          while (hasMorePages) {
+            const lpHolders = await this.blockfrost.assetsAddresses(lpTokenUnit, { page, order: 'desc' });
+
+            if (lpHolders.length === 0) {
+              hasMorePages = false;
+            } else {
+              for (const holder of lpHolders) {
+                const userLpBalance = BigInt(holder.quantity);
+                const underlyingTokens = (userLpBalance * totalLockedInPool) / totalLpSupply;
+
+                if (underlyingTokens > 0n) {
+                  // Агрегуємо баланси прямо тут (вирішує проблему пам'яті та дублікатів)
+                  const currentBalance = balances.get(holder.address) || 0n;
+                  balances.set(holder.address, currentBalance + underlyingTokens);
+                }
+              }
+              page++;
+            }
+          }
+        } catch (bfError) {
+          this.logger.warn(`Failed to process LP token ${lpTokenUnit}: ${bfError.message}`);
+        }
+      }
+
+      return { balances, poolAddresses };
+    } catch (error: any) {
+      const underlyingMessage = error?.response?.data?.message || error?.message || 'Unknown error from TapTools';
+      const statusCode = error?.response?.status ?? HttpStatus.INTERNAL_SERVER_ERROR;
+
+      this.logger.error(`Error fetching pools from TapTools: ${underlyingMessage}`);
+
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      throw new HttpException(`Failed to fetch liquidity pool data: ${underlyingMessage}`, statusCode);
     }
   }
 
