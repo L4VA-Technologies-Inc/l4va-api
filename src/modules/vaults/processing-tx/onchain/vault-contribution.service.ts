@@ -454,10 +454,6 @@ export class VaultContributionService {
     const totalAssetCount = currentAssetCount + pendingAssetCount;
     const projectedCount = totalAssetCount + contributingAssetCount;
 
-    this.logger.log(
-      `[BUILD VALIDATION] Vault ${vaultId}: ${currentAssetCount} confirmed + ${pendingAssetCount} pending + ${contributingAssetCount} new = ${projectedCount}/${maxContributeAssets}`
-    );
-
     if (projectedCount > maxContributeAssets) {
       throw new BadRequestException(
         `Cannot build transaction: Adding ${contributingAssetCount} assets would exceed vault capacity. ` +
@@ -543,10 +539,6 @@ export class VaultContributionService {
     const pendingAssetCount = Number(pendingExpansionContributions?.pendingAssetCount || 0);
     const totalAssetCount = currentAssetCount + pendingAssetCount;
     const projectedCount = totalAssetCount + contributingAssetCount;
-
-    this.logger.log(
-      `[EXPANSION BUILD VALIDATION] Vault ${vaultId}: ${currentAssetCount} confirmed + ${pendingAssetCount} pending + ${contributingAssetCount} new = ${projectedCount}/${expansionConfig.assetMax}`
-    );
 
     if (projectedCount > expansionConfig.assetMax) {
       throw new BadRequestException(

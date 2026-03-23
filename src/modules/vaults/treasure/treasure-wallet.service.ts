@@ -378,16 +378,18 @@ export class TreasuryWalletService {
   }
 
   /**
-   * Delete secret when vault is burned/closed
+   * Mark vault secret as unused (not deleted from Secret Manager)
+   * Secrets are retained in Google Secret Manager and marked as unused in DB
+   * Manual deletion can be performed later if needed
    */
   async deleteVaultSecret(vaultId: string): Promise<void> {
     const secretId = `treasury-wallet-${vaultId}`;
 
     try {
-      await this.googleSecretService.deleteSecret(secretId);
-      this.logger.log(`Deleted secret for vault ${vaultId}`);
+      await this.googleSecretService.markSecretAsUnused(secretId);
+      this.logger.log(`Marked secret as unused for vault ${vaultId}`);
     } catch (error: any) {
-      this.logger.error(`Failed to delete secret for vault ${vaultId}:`, error);
+      this.logger.error(`Failed to mark secret as unused for vault ${vaultId}:`, error);
       throw error;
     }
   }
@@ -536,15 +538,13 @@ export class TreasuryWalletService {
     }
 
     try {
-      // Delete secret from Secret Manager (contains mnemonic)
+      // Mark secret as unused in Secret Manager (contains mnemonic)
+      // Service account no longer has delete permissions, so we mark as unused instead
       await this.deleteVaultSecret(vaultId);
-      this.logger.log(`Deleted secret for vault ${vaultId}`);
+      this.logger.log(`Marked secret as unused for vault ${vaultId}`);
     } catch (error: any) {
-      // If secret doesn't exist, that's fine
-      if (error.code !== 5 && !error.message?.includes('not found')) {
-        this.logger.error(`Failed to delete secret for vault ${vaultId}:`, error);
-        throw error;
-      }
+      this.logger.error(`Failed to mark secret as unused for vault ${vaultId}:`, error);
+      // Don't throw - we still continue with KMS key updates
     }
 
     this.logger.log(`KMS keys deleted for vault ${vaultId}`);

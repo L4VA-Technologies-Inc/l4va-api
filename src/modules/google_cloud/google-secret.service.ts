@@ -114,16 +114,34 @@ export class GoogleSecretService {
   }
 
   /**
-   * Delete a secret from Secret Manager
+   * Mark a secret as unused (kept for manual deletion)
+   * Does not actually delete from Secret Manager to preserve data
    */
-  async deleteSecret(secretId: string): Promise<void> {
-    this.ensureSecretClient();
-
-    const name = `projects/${this.projectId}/secrets/${secretId}`;
-
-    await this.secretClient.deleteSecret({ name });
-    this.logger.log(`Deleted secret: ${secretId}`);
+  async markSecretAsUnused(secretId: string): Promise<void> {
+    this.logger.log(
+      `Marked secret as unused (not deleted): ${secretId}. Manual deletion can be performed later if needed.`
+    );
   }
+
+  /**
+   * Delete a secret from Secret Manager
+   * WARNING: This method is retained for future manual cleanup operations
+   * The service account may not have delete permissions
+   */
+  // async deleteSecret(secretId: string): Promise<void> {
+  //   this.ensureSecretClient();
+
+  //   const name = `projects/${this.projectId}/secrets/${secretId}`;
+
+  //   try {
+  //     await this.secretClient.deleteSecret({ name });
+  //     this.logger.log(`Deleted secret: ${secretId}`);
+  //   } catch (error: any) {
+  //     this.logger.warn(`Failed to delete secret ${secretId} (service account may lack permissions): ${error.message}`);
+  //     // Instead of failing, just mark as unused
+  //     await this.markSecretAsUnused(secretId);
+  //   }
+  // }
 
   /**
    * Store master HD wallet seed

@@ -976,9 +976,9 @@ export class TerminationService {
         this.logger.log(`Treasury wallet is empty - proceeding to key deletion`);
       }
 
-      // Delete KMS encryption keys
-      await this.treasuryWalletService.deleteTreasuryWalletKeys(vault.id);
-      this.logger.log(`KMS keys deleted for treasury wallet ${treasuryWallet.id}`);
+      // We currently keep the KMS keys for record-keeping and manual cleanup later if needed
+      // await this.treasuryWalletService.deleteTreasuryWalletKeys(vault.id);
+      // this.logger.log(`KMS keys deleted for treasury wallet ${treasuryWallet.id}`);
 
       // Mark treasury wallet as deleted in database
       await this.treasuryWalletService.markTreasuryWalletAsDeleted(vault.id);
