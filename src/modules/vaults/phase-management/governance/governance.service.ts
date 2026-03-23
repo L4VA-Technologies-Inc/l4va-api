@@ -529,33 +529,20 @@ export class GovernanceService {
             }
           }
 
-          // Check BUY assets (external NFTs matched by assetId unit)
-          if (requestedBuyAssetIds.length > 0) {
-            const existingBuyAssetIds = existingActions
-              .filter((a: any) => a.exec === ExecType.BUY)
+          // Check BUY and OFFER assets — they are mutually exclusive for the same NFT
+          // (cannot BUY if an active OFFER exists for it, and vice versa)
+          const allRequestedExternalIds = [...requestedBuyAssetIds, ...requestedOfferAssetIds];
+
+          if (allRequestedExternalIds.length > 0) {
+            const existingExternalIds = existingActions
+              .filter((a: any) => a.exec === ExecType.BUY || a.exec === ExecType.OFFER)
               .map((a: any) => a.assetId);
 
-            const overlappingBuys = requestedBuyAssetIds.filter(id => existingBuyAssetIds.includes(id));
+            const overlapping = allRequestedExternalIds.filter(id => existingExternalIds.includes(id));
 
-            if (overlappingBuys.length > 0) {
+            if (overlapping.length > 0) {
               throw new BadRequestException(
-                `Cannot create buy proposal. Some of the following NFTs are already in an active proposal "${existingProposal.title}". ` +
-                  `Please wait for that proposal to complete before creating a new one for these NFTs.`
-              );
-            }
-          }
-
-          // Check OFFER assets (external NFTs matched by assetId unit)
-          if (requestedOfferAssetIds.length > 0) {
-            const existingOfferAssetIds = existingActions
-              .filter((a: any) => a.exec === ExecType.OFFER)
-              .map((a: any) => a.assetId);
-
-            const overlappingOffers = requestedOfferAssetIds.filter(id => existingOfferAssetIds.includes(id));
-
-            if (overlappingOffers.length > 0) {
-              throw new BadRequestException(
-                `Cannot create offer proposal. Some of the following NFTs are already in an active offer proposal "${existingProposal.title}". ` +
+                `Cannot create proposal. Some NFTs already have an active buy or offer proposal "${existingProposal.title}". ` +
                   `Please wait for that proposal to complete before creating a new one for these NFTs.`
               );
             }
@@ -1440,7 +1427,9 @@ export class GovernanceService {
     const fungibleTokenIds = proposal.metadata?.fungibleTokens?.map(ft => ft.id) || [];
     const nonFungibleTokenIds = proposal.metadata?.nonFungibleTokens?.map(nft => nft.id) || [];
     const marketplaceActionIds =
-      proposal.metadata?.marketplaceActions?.filter(ma => ma.exec !== ExecType.BUY).map(ma => ma.assetId) || [];
+      proposal.metadata?.marketplaceActions
+        ?.filter(ma => ma.exec !== ExecType.BUY && ma.exec !== ExecType.OFFER)
+        .map(ma => ma.assetId) || [];
 
     [...burnAssetIds, ...fungibleTokenIds, ...nonFungibleTokenIds, ...marketplaceActionIds].forEach(id =>
       allAssetIds.add(id)
@@ -1568,9 +1557,10 @@ export class GovernanceService {
     // For DexHunter swaps, combine quantities by token (policy_id + asset_id)
     const marketplaceActions = (proposal.metadata?.marketplaceActions || []).map(action => {
       const isBuy = action.exec === 'BUY';
+      const isOffer = action.exec === 'OFFER';
       const isSwapAction = action.slippage !== undefined || action.market === 'DexHunter';
 
-      if (isBuy) {
+      if (isBuy || isOffer) {
         let wayupUrl: string | undefined;
         if (!isSwapAction && action.nftSnapshot) {
           wayupUrl = `https://www.wayup.io/collection/${action.nftSnapshot.policyId}/asset/${action.nftSnapshot.assetName}?tab=activity`;
