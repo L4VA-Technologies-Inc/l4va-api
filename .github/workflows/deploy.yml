@@ -31,7 +31,6 @@ jobs:
       - name: Create .env for Testnet
         env:
           TESTNET_ENV_VARS: ${{ secrets.TESTNET_ENV_VARS }}
-          GOOGLE_BUCKET: ${{ secrets.GOOGLE_BUCKET }}
         run: |
           echo "$TESTNET_ENV_VARS" > .env
           echo "Created TESTNET .env (GCP Secret Manager disabled, Bucket enabled)"
@@ -110,11 +109,9 @@ jobs:
       - name: Create .env for Mainnet
         env:
           MAINNET_ENV_VARS: ${{ secrets.MAINNET_ENV_VARS }}
-          MAINNET_GOOGLE_SECRETS: ${{ secrets.MAINNET_GOOGLE_SECRETS }}
-          GOOGLE_BUCKET: ${{ secrets.GOOGLE_BUCKET }}
         run: |
           echo "$MAINNET_ENV_VARS" > .env
-          echo "Created MAINNET .env with GCP credentials (base64)"
+          echo "Created MAINNET .env"
 
       - name: Save logs before deploy
         run: |
