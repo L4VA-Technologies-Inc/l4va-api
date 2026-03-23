@@ -87,6 +87,8 @@ jobs:
               echo "Health check failed after $MAX_ATTEMPTS attempts"
               echo "Container logs:"
               docker logs $NEW_CONTAINER --tail 100
+              echo "Stopping failed container..."
+              docker stop $NEW_CONTAINER || true
               exit 1
             fi
             echo "Attempt $ATTEMPT/$MAX_ATTEMPTS - waiting..."
@@ -165,6 +167,8 @@ jobs:
               echo "Health check failed after $MAX_ATTEMPTS attempts"
               echo "Container logs:"
               docker logs $NEW_CONTAINER --tail 100
+              echo "Stopping failed container..."
+              docker stop $NEW_CONTAINER || true
               exit 1
             fi
             echo "Attempt $ATTEMPT/$MAX_ATTEMPTS - waiting..."

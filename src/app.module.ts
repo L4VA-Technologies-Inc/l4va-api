@@ -63,28 +63,18 @@ import { AssetsModule } from '@/modules/vaults/assets/assets.module';
     }),
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => {
-        const dbConfig = {
-          type: 'postgres' as const,
-          host: configService.get<string>('DB_HOST'),
-          port: parseInt(configService.get<string>('DB_PORT', '5432'), 10),
-          username: configService.get<string>('DB_USERNAME'),
-          password: configService.get<string>('DB_PASSWORD'),
-          database: configService.get<string>('DB_NAME'),
-          synchronize: false,
-          entities: [__dirname + '/database/core/**/*.entity{.ts,.js}', __dirname + '/database/**/*.entity{.ts,.js}'],
-          autoLoadEntities: true,
-          namingStrategy: new SnakeNamingStrategy(),
-        };
-
-        // Debug log (without exposing password)
-        // eslint-disable-next-line no-console
-        console.log(
-          `📊 TypeORM Config: host=${dbConfig.host}, port=${dbConfig.port}, user=${dbConfig.username}, db=${dbConfig.database}`
-        );
-
-        return dbConfig;
-      },
+      useFactory: (configService: ConfigService) => ({
+        type: 'postgres' as const,
+        host: configService.get<string>('DB_HOST'),
+        port: parseInt(configService.get<string>('DB_PORT', '5432'), 10),
+        username: configService.get<string>('DB_USERNAME'),
+        password: configService.get<string>('DB_PASSWORD'),
+        database: configService.get<string>('DB_NAME'),
+        synchronize: false,
+        entities: [__dirname + '/database/core/**/*.entity{.ts,.js}', __dirname + '/database/**/*.entity{.ts,.js}'],
+        autoLoadEntities: true,
+        namingStrategy: new SnakeNamingStrategy(),
+      }),
     }),
     ThrottlerModule.forRoot({
       throttlers: [
