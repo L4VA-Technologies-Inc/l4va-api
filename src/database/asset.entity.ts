@@ -194,9 +194,9 @@ export class Asset {
   public transaction: Transaction;
 
   @Expose({ name: 'addedBy' })
-  @ManyToOne(() => User, (addedBy: User) => addedBy.id)
+  @ManyToOne(() => User, (addedBy: User) => addedBy.id, { nullable: true })
   @JoinColumn({ name: 'added_by' })
-  public added_by: User; // added user owner
+  public added_by: User | null;
 
   @Expose({ name: 'addedAt' })
   @Column({

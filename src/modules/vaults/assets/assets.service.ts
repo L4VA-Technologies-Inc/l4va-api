@@ -687,6 +687,39 @@ export class AssetsService {
     }
   }
 
+  async recordBoughtAsset(params: {
+    vaultId: string;
+    policyId: string;
+    assetId: string;
+    name: string;
+    image?: string;
+    floorPrice: number;
+    metadata?: any;
+  }): Promise<Asset> {
+    const vault = await this.vaultsRepository.findOne({ where: { id: params.vaultId } });
+
+    if (!vault) {
+      throw new Error(`Vault ${params.vaultId} not found`);
+    }
+
+    const asset = this.assetsRepository.create({
+      vault,
+      policy_id: params.policyId,
+      asset_id: params.assetId,
+      name: params.name,
+      image: params.image ?? null,
+      type: AssetType.NFT,
+      quantity: 1,
+      floor_price: params.floorPrice,
+      status: AssetStatus.EXTRACTED,
+      origin_type: AssetOriginType.BOUGHT,
+      added_by: null,
+      metadata: params.metadata ?? null,
+    });
+
+    return this.assetsRepository.save(asset);
+  }
+
   async softDeleteAsset(assetId: string, userId: string): Promise<void> {
     const asset = await this.assetsRepository.findOne({
       where: { id: assetId, added_by: { id: userId }, deleted: false },

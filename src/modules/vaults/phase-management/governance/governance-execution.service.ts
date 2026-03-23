@@ -731,7 +731,15 @@ export class GovernanceExecutionService {
       const unlistedAssetIds: string[] = [];
       const updates: { policyId: string; assetName: string; txHashIndex: string; newPriceAda: number }[] = [];
       const updateAssetInfos: { assetId: string; newPrice: number }[] = [];
-      const purchases: { policyId: string; txHashIndex: string; priceAda: number }[] = [];
+      const purchases: {
+        policyId: string;
+        txHashIndex: string;
+        priceAda: number;
+        assetName: string;
+        name: string;
+        image?: string;
+        metadata?: any;
+      }[] = [];
 
       const skipped: { sells: string[]; buys: string[]; unlists: string[]; updates: string[] } = {
         sells: [],
@@ -858,7 +866,15 @@ export class GovernanceExecutionService {
           continue;
         }
 
-        purchases.push({ policyId: exactAsset.policyId, txHashIndex, priceAda });
+        purchases.push({
+          policyId: exactAsset.policyId,
+          txHashIndex,
+          priceAda,
+          assetName: exactAsset.assetName,
+          name: exactAsset.name,
+          image: exactAsset.image,
+          metadata: exactAsset.attributes ? { attributes: exactAsset.attributes } : undefined,
+        });
       }
 
       // If there are BUY operations, ensure treasury has enough ADA to cover total purchase cost
@@ -1068,6 +1084,28 @@ export class GovernanceExecutionService {
           this.logger.log(`Updated listing prices for ${updateAssetInfos.length} asset(s)`);
         } catch (statusError) {
           this.logger.warn(`Failed to update listing prices: ${statusError.message}`);
+        }
+      }
+
+      // Record bought assets to the vault with origin_type BOUGHT and added_by null
+      if (purchases.length > 0) {
+        for (const purchase of purchases) {
+          try {
+            await this.assetsService.recordBoughtAsset({
+              vaultId: proposal.vaultId,
+              policyId: purchase.policyId,
+              assetId: purchase.assetName,
+              name: purchase.name,
+              image: purchase.image,
+              floorPrice: purchase.priceAda,
+              metadata: purchase.metadata,
+            });
+            this.logger.log(
+              `Recorded bought asset "${purchase.name}" (${purchase.policyId}) to vault ${proposal.vaultId}`
+            );
+          } catch (recordError) {
+            this.logger.warn(`Failed to record bought asset "${purchase.name}": ${recordError.message}`);
+          }
         }
       }
 
