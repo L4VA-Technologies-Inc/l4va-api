@@ -105,13 +105,15 @@ export class TreasuryExtractionService {
     }
 
     // 2. Get assets to extract
+    const extractableStatuses = [AssetStatus.LOCKED, AssetStatus.EXTRACTED, AssetStatus.OFFERED];
+
     const assets = await this.assetsRepository.find({
       where:
         config.assetIds.length > 0
           ? {
               id: In(config.assetIds),
               vault: { id: config.vaultId },
-              status: AssetStatus.LOCKED,
+              status: In(extractableStatuses),
             }
           : {
               vault: { id: config.vaultId },
@@ -121,7 +123,7 @@ export class TreasuryExtractionService {
     });
 
     if (assets.length === 0) {
-      throw new BadRequestException(`No locked assets found for vault ${config.vaultId}`);
+      throw new BadRequestException(`No extractable assets found for vault ${config.vaultId}`);
     }
 
     // 3. Get all claim transactions for this vault

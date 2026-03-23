@@ -485,11 +485,15 @@ export class GovernanceService {
 
       if (requestedActions.length > 0) {
         const requestedAssetIds = requestedActions
-          .filter(action => action.exec !== ExecType.BUY)
+          .filter(action => action.exec !== ExecType.BUY && action.exec !== ExecType.OFFER)
           .map(action => action.assetId);
 
         const requestedBuyAssetIds = requestedActions
           .filter(action => action.exec === ExecType.BUY)
+          .map(action => action.assetId);
+
+        const requestedOfferAssetIds = requestedActions
+          .filter(action => action.exec === ExecType.OFFER)
           .map(action => action.assetId);
 
         const activeMarketProposals = await this.proposalRepository.find({
@@ -536,6 +540,22 @@ export class GovernanceService {
             if (overlappingBuys.length > 0) {
               throw new BadRequestException(
                 `Cannot create buy proposal. Some of the following NFTs are already in an active proposal "${existingProposal.title}". ` +
+                  `Please wait for that proposal to complete before creating a new one for these NFTs.`
+              );
+            }
+          }
+
+          // Check OFFER assets (external NFTs matched by assetId unit)
+          if (requestedOfferAssetIds.length > 0) {
+            const existingOfferAssetIds = existingActions
+              .filter((a: any) => a.exec === ExecType.OFFER)
+              .map((a: any) => a.assetId);
+
+            const overlappingOffers = requestedOfferAssetIds.filter(id => existingOfferAssetIds.includes(id));
+
+            if (overlappingOffers.length > 0) {
+              throw new BadRequestException(
+                `Cannot create offer proposal. Some of the following NFTs are already in an active offer proposal "${existingProposal.title}". ` +
                   `Please wait for that proposal to complete before creating a new one for these NFTs.`
               );
             }
@@ -634,40 +654,47 @@ export class GovernanceService {
 
         const market = actions[0]?.market;
 
-        // Pre-check (mainnet only): ensure treasury has enough ADA for WayUp BUY operations
+        // Pre-check (mainnet only): ensure treasury has enough ADA for WayUp BUY and OFFER operations
         if (this.isMainnet && market === 'WayUp') {
           const buyActions = actions.filter(a => a.exec === ExecType.BUY);
-          if (buyActions.length > 0) {
-            const totalMaxAda = buyActions.reduce((sum, a) => {
-              const maxPrice = a.price ? parseFloat(a.price) : 0;
-              return sum + (isNaN(maxPrice) ? 0 : maxPrice);
-            }, 0);
+          const offerActions = actions.filter(a => a.exec === ExecType.OFFER);
 
-            if (totalMaxAda > 0) {
-              try {
-                const balance = await this.treasuryWalletService.getTreasuryWalletBalance(vaultId);
-                const adaBalance = balance.lovelace / 1_000_000;
+          const totalBuyAda = buyActions.reduce((sum, a) => {
+            const maxPrice = a.price ? parseFloat(a.price) : 0;
+            return sum + (isNaN(maxPrice) ? 0 : maxPrice);
+          }, 0);
 
-                if (adaBalance < totalMaxAda) {
-                  throw new BadRequestException(
-                    `Treasury wallet has insufficient ADA for this purchase proposal. ` +
-                      `Required up to ${totalMaxAda} ADA for WayUp buys, available: ${adaBalance.toFixed(2)} ADA.`
-                  );
-                }
-              } catch (error) {
-                this.logger.error(
-                  `Failed to validate treasury balance for vault ${vaultId}: ${error.message}`,
-                  error.stack
-                );
+          const totalOfferAda = offerActions.reduce((sum, a) => {
+            const offerPrice = a.price ? parseFloat(a.price) : 0;
+            return sum + (isNaN(offerPrice) ? 0 : offerPrice);
+          }, 0);
 
-                if (error instanceof BadRequestException) {
-                  throw error;
-                }
+          const totalMaxAda = totalBuyAda + totalOfferAda;
 
+          if (totalMaxAda > 0) {
+            try {
+              const balance = await this.treasuryWalletService.getTreasuryWalletBalance(vaultId);
+              const adaBalance = balance.lovelace / 1_000_000;
+
+              if (adaBalance < totalMaxAda) {
                 throw new BadRequestException(
-                  'Unable to validate treasury wallet balance for this proposal. Please try again later.'
+                  `Treasury wallet has insufficient ADA for this proposal. ` +
+                    `Required up to ${totalMaxAda} ADA for WayUp buys/offers, available: ${adaBalance.toFixed(2)} ADA.`
                 );
               }
+            } catch (error) {
+              this.logger.error(
+                `Failed to validate treasury balance for vault ${vaultId}: ${error.message}`,
+                error.stack
+              );
+
+              if (error instanceof BadRequestException) {
+                throw error;
+              }
+
+              throw new BadRequestException(
+                'Unable to validate treasury wallet balance for this proposal. Please try again later.'
+              );
             }
           }
         }
@@ -749,6 +776,59 @@ export class GovernanceService {
                   name: exactAsset.name,
                   image: exactAsset.image ?? null,
                   listingPriceAda,
+                  policyId: exactAsset.policyId,
+                  assetName: exactAsset.assetName,
+                  collectionName: exactAsset.collection?.name ?? null,
+                };
+              }
+              return;
+            }
+
+            // OFFER actions target external NFTs — validate policy whitelist and NFT existence via WayUp API
+            if (action.exec === ExecType.OFFER) {
+              if (market === 'WayUp') {
+                const policyId = action.assetId.length >= 56 ? action.assetId.slice(0, 56) : action.assetId;
+
+                const isWhitelisted = vault.assets_whitelist?.some(
+                  whitelistItem => whitelistItem.policy_id === policyId
+                );
+
+                if (!isWhitelisted) {
+                  throw new BadRequestException(
+                    `Policy ID ${policyId.substring(0, 6)}...${policyId.substring(policyId.length - 6)} is not whitelisted for this vault.`
+                  );
+                }
+
+                if (!action.price || isNaN(parseFloat(action.price)) || parseFloat(action.price) <= 0) {
+                  throw new BadRequestException(
+                    `Offer price is required and must be greater than 0 for OFFER action on NFT ${action.assetName || action.assetId}.`
+                  );
+                }
+
+                // Query WayUp to confirm the NFT exists and resolve hex assetName for nftSnapshot
+                // Unlike BUY, the NFT doesn't need to be listed — we can offer on any NFT in the collection
+                const collectionResponse = await this.wayUpPricingService.getCollectionAssets({
+                  policyId,
+                  term: action.assetName,
+                  limit: 1,
+                });
+
+                const exactAsset = collectionResponse.results?.[0];
+                const displayName = exactAsset?.name || action.assetName || action.assetId;
+
+                if (!exactAsset) {
+                  throw new BadRequestException(
+                    `NFT ${displayName} was not found in collection ${policyId.substring(0, 8)}... on WayUp. Cannot place an offer.`
+                  );
+                }
+
+                const offerPriceAda = parseFloat(action.price);
+                const currentListingPriceAda = exactAsset.listing ? exactAsset.listing.price / 1_000_000 : null;
+
+                action.nftSnapshot = {
+                  name: exactAsset.name,
+                  image: exactAsset.image ?? null,
+                  listingPriceAda: currentListingPriceAda ?? offerPriceAda,
                   policyId: exactAsset.policyId,
                   assetName: exactAsset.assetName,
                   collectionName: exactAsset.collection?.name ?? null,

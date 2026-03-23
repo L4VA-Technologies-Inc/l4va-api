@@ -695,6 +695,7 @@ export class AssetsService {
     image?: string;
     floorPrice: number;
     metadata?: any;
+    status?: AssetStatus;
   }): Promise<Asset> {
     const vault = await this.vaultsRepository.findOne({ where: { id: params.vaultId } });
 
@@ -711,7 +712,7 @@ export class AssetsService {
       type: AssetType.NFT,
       quantity: 1,
       floor_price: params.floorPrice,
-      status: AssetStatus.EXTRACTED,
+      status: params.status ?? AssetStatus.LOCKED,
       origin_type: AssetOriginType.BOUGHT,
       added_by: null,
       metadata: params.metadata ?? null,

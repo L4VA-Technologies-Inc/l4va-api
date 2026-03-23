@@ -720,7 +720,8 @@ export class GovernanceExecutionService {
     try {
       this.logger.log(
         `Processing ${operations.sells.length} sell(s), ${operations.buys.length} buy(s), ` +
-          `${operations.unlists.length} unlist(s), and ${operations.updates.length} update(s) for WayUp`
+          `${operations.offers.length} offer(s), ${operations.unlists.length} unlist(s), ` +
+          `and ${operations.updates.length} update(s) for WayUp`
       );
 
       // Prepare all action inputs
@@ -741,9 +742,19 @@ export class GovernanceExecutionService {
         metadata?: any;
       }[] = [];
 
-      const skipped: { sells: string[]; buys: string[]; unlists: string[]; updates: string[] } = {
+      const offers: {
+        policyId: string;
+        assetName: string;
+        priceAda: number;
+        name: string;
+        image?: string;
+        metadata?: any;
+      }[] = [];
+
+      const skipped: { sells: string[]; buys: string[]; offers: string[]; unlists: string[]; updates: string[] } = {
         sells: [],
         buys: [],
+        offers: [],
         unlists: [],
         updates: [],
       };
@@ -877,17 +888,80 @@ export class GovernanceExecutionService {
         });
       }
 
-      // If there are BUY operations, ensure treasury has enough ADA to cover total purchase cost
-      if (purchases.length > 0) {
-        const totalRequiredAda = purchases.reduce((sum, p) => sum + p.priceAda, 0);
+      // Process OFFER operations
+      for (const option of operations.offers) {
+        const policyId = option.assetId.length >= 56 ? option.assetId.slice(0, 56) : option.assetId;
+        const priceAda = option.price ? parseFloat(option.price) : null;
 
+        if (!priceAda || isNaN(priceAda) || priceAda <= 0) {
+          this.logger.warn(`Cannot place offer for ${option.assetName} - missing or invalid offer price`);
+          skipped.offers.push(option.assetName || option.assetId);
+          continue;
+        }
+
+        // Resolve hex assetName and metadata from nftSnapshot (set at proposal creation) or WayUp query
+        let hexAssetName: string | null = null;
+        let nftName = option.assetName || 'Unknown NFT';
+        let nftImage: string | undefined;
+        let nftAttributes: any;
+
+        if (option.nftSnapshot?.assetName) {
+          hexAssetName = option.nftSnapshot.assetName;
+          nftName = option.nftSnapshot.name || nftName;
+          nftImage = option.nftSnapshot.image ?? undefined;
+        } else {
+          // Fallback: query WayUp to resolve hex assetName
+          try {
+            const collectionResponse = await this.wayUpPricingService.getCollectionAssets({
+              policyId,
+              term: option.assetName,
+              limit: 1,
+            });
+
+            const exactAsset = collectionResponse.results?.[0];
+
+            if (!exactAsset) {
+              this.logger.warn(`Cannot place offer for ${option.assetName} - NFT not found on WayUp`);
+              skipped.offers.push(option.assetName || option.assetId);
+              continue;
+            }
+
+            hexAssetName = exactAsset.assetName;
+            nftName = exactAsset.name || nftName;
+            nftImage = exactAsset.image;
+            nftAttributes = exactAsset.attributes;
+          } catch (lookupError) {
+            this.logger.warn(
+              `Cannot place offer for ${option.assetName} - WayUp lookup failed: ${lookupError.message}`
+            );
+            skipped.offers.push(option.assetName || option.assetId);
+            continue;
+          }
+        }
+
+        offers.push({
+          policyId,
+          assetName: hexAssetName,
+          priceAda,
+          name: nftName,
+          image: nftImage,
+          metadata: nftAttributes ? { attributes: nftAttributes } : undefined,
+        });
+      }
+
+      // If there are BUY or OFFER operations, ensure treasury has enough ADA to cover total cost
+      const totalPurchasesAda = purchases.reduce((sum, p) => sum + p.priceAda, 0);
+      const totalOffersAda = offers.reduce((sum, o) => sum + o.priceAda, 0);
+      const totalRequiredAda = totalPurchasesAda + totalOffersAda;
+
+      if (totalRequiredAda > 0) {
         try {
           const balance = await this.treasuryWalletService.getTreasuryWalletBalance(proposal.vaultId);
           const adaBalance = balance.lovelace / 1_000_000;
 
           if (adaBalance < totalRequiredAda) {
             const reason =
-              `Treasury wallet has insufficient ADA to execute buy operations. ` +
+              `Treasury wallet has insufficient ADA to execute buy/offer operations. ` +
               `Required ${totalRequiredAda} ADA, available: ${adaBalance.toFixed(2)} ADA.`;
             await this.rejectMarketplaceProposal(proposal, reason, 'PROPOSAL_REJECTED_INSUFFICIENT_TREASURY_ADA');
           }
@@ -897,7 +971,7 @@ export class GovernanceExecutionService {
           }
 
           this.logger.error(
-            `Failed to validate treasury balance for buy operations in proposal ${proposal.id}: ${error.message}`,
+            `Failed to validate treasury balance for buy/offer operations in proposal ${proposal.id}: ${error.message}`,
             error.stack
           );
 
@@ -912,12 +986,21 @@ export class GovernanceExecutionService {
         await this.rejectMarketplaceProposal(proposal, reason, 'PROPOSAL_REJECTED_BUY_OPERATION_SKIPPED');
       }
 
+      // If any offer was requested but skipped — reject entire proposal
+      if (operations.offers.length > 0 && skipped.offers.length > 0) {
+        const reason = `Cannot execute all offer operations: ${skipped.offers.join(', ')}`;
+        await this.rejectMarketplaceProposal(proposal, reason, 'PROPOSAL_REJECTED_BUY_OPERATION_SKIPPED');
+      }
+
       // Log skipped operations
       if (skipped.sells.length > 0) {
         this.logger.warn(`Skipped ${skipped.sells.length} sell(s): ${skipped.sells.join(', ')}`);
       }
       if (skipped.buys.length > 0) {
         this.logger.warn(`Skipped ${skipped.buys.length} buy(s): ${skipped.buys.join(', ')}`);
+      }
+      if (skipped.offers.length > 0) {
+        this.logger.warn(`Skipped ${skipped.offers.length} offer(s): ${skipped.offers.join(', ')}`);
       }
       if (skipped.unlists.length > 0) {
         this.logger.warn(`Skipped ${skipped.unlists.length} unlist(s): ${skipped.unlists.join(', ')}`);
@@ -927,12 +1010,16 @@ export class GovernanceExecutionService {
       }
 
       // Check if there are any valid operations
-      const hasOperations = listings.length > 0 || unlistings.length > 0 || updates.length > 0 || purchases.length > 0;
+      const hasOperations =
+        listings.length > 0 || unlistings.length > 0 || updates.length > 0 || purchases.length > 0 || offers.length > 0;
 
       if (!hasOperations) {
-        // Determine the reason for no valid operations
         const totalSkipped =
-          skipped.sells.length + skipped.buys.length + skipped.unlists.length + skipped.updates.length;
+          skipped.sells.length +
+          skipped.buys.length +
+          skipped.offers.length +
+          skipped.unlists.length +
+          skipped.updates.length;
         let reason = 'No valid marketplace operations to execute';
 
         if (totalSkipped > 0) {
@@ -948,6 +1035,9 @@ export class GovernanceExecutionService {
           }
           if (skipped.buys.length > 0) {
             reasons.push(`${skipped.buys.length} asset(s) not available for purchase`);
+          }
+          if (skipped.offers.length > 0) {
+            reasons.push(`${skipped.offers.length} asset(s) could not be offered on`);
           }
           reason = `All operations skipped: ${reasons.join(', ')}`;
         }
@@ -1030,7 +1120,7 @@ export class GovernanceExecutionService {
       // STEP 2: Execute all marketplace actions in a single atomic transaction
       this.logger.log(
         `Executing combined marketplace actions: ${listings.length} listings, ${unlistings.length} unlistings, ` +
-          `${updates.length} updates, ${purchases.length} purchases`
+          `${updates.length} updates, ${purchases.length} purchases, ${offers.length} offers`
       );
 
       const result = await this.wayUpService.executeCombinedMarketplaceActions(proposal.vaultId, {
@@ -1038,6 +1128,7 @@ export class GovernanceExecutionService {
         unlistings: unlistings.length > 0 ? unlistings : undefined,
         updates: updates.length > 0 ? updates : undefined,
         purchases: purchases.length > 0 ? purchases : undefined,
+        offers: offers.length > 0 ? offers : undefined,
       });
 
       this.logger.log(`Combined marketplace transaction completed. TxHash: ${result.txHash}`);
@@ -1087,7 +1178,7 @@ export class GovernanceExecutionService {
         }
       }
 
-      // Record bought assets to the vault with origin_type BOUGHT and added_by null
+      // Record bought assets to the vault with origin_type BOUGHT, status EXTRACTED, added_by null
       if (purchases.length > 0) {
         for (const purchase of purchases) {
           try {
@@ -1099,12 +1190,34 @@ export class GovernanceExecutionService {
               image: purchase.image,
               floorPrice: purchase.priceAda,
               metadata: purchase.metadata,
+              status: AssetStatus.EXTRACTED,
             });
             this.logger.log(
               `Recorded bought asset "${purchase.name}" (${purchase.policyId}) to vault ${proposal.vaultId}`
             );
           } catch (recordError) {
             this.logger.warn(`Failed to record bought asset "${purchase.name}": ${recordError.message}`);
+          }
+        }
+      }
+
+      // Record offered assets to the vault with origin_type BOUGHT, status OFFERED, added_by null
+      if (offers.length > 0) {
+        for (const offer of offers) {
+          try {
+            await this.assetsService.recordBoughtAsset({
+              vaultId: proposal.vaultId,
+              policyId: offer.policyId,
+              assetId: offer.assetName,
+              name: offer.name,
+              image: offer.image,
+              floorPrice: offer.priceAda,
+              metadata: offer.metadata,
+              status: AssetStatus.OFFERED,
+            });
+            this.logger.log(`Recorded offered asset "${offer.name}" (${offer.policyId}) to vault ${proposal.vaultId}`);
+          } catch (recordError) {
+            this.logger.warn(`Failed to record offered asset "${offer.name}": ${recordError.message}`);
           }
         }
       }
@@ -1596,6 +1709,7 @@ export class GovernanceExecutionService {
     {
       sells: MarketplaceActionDto[];
       buys: MarketplaceActionDto[];
+      offers: MarketplaceActionDto[];
       unlists: MarketplaceActionDto[];
       updates: MarketplaceActionDto[];
     }
@@ -1605,6 +1719,7 @@ export class GovernanceExecutionService {
       {
         sells: MarketplaceActionDto[];
         buys: MarketplaceActionDto[];
+        offers: MarketplaceActionDto[];
         unlists: MarketplaceActionDto[];
         updates: MarketplaceActionDto[];
       }
@@ -1613,13 +1728,15 @@ export class GovernanceExecutionService {
     for (const option of options) {
       const market = (option.market || 'wayup').toLowerCase(); // Normalize to lowercase
       if (!grouped[market]) {
-        grouped[market] = { sells: [], buys: [], unlists: [], updates: [] };
+        grouped[market] = { sells: [], buys: [], offers: [], unlists: [], updates: [] };
       }
 
       if (option.exec === ExecType.SELL) {
         grouped[market].sells.push(option);
       } else if (option.exec === ExecType.BUY) {
         grouped[market].buys.push(option);
+      } else if (option.exec === ExecType.OFFER) {
+        grouped[market].offers.push(option);
       } else if (option.exec === ExecType.UNLIST) {
         grouped[market].unlists.push(option);
       } else if (option.exec === ExecType.UPDATE_LISTING) {

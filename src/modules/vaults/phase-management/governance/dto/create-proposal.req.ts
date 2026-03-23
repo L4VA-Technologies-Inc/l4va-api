@@ -100,6 +100,7 @@ export class MarketplaceAssetDto {
 
 export enum ExecType {
   BUY = 'BUY',
+  OFFER = 'OFFER',
   SELL = 'SELL',
   UNLIST = 'UNLIST',
   UPDATE_LISTING = 'UPDATE_LISTING',
