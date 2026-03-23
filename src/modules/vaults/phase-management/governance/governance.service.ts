@@ -39,7 +39,7 @@ import { Vote } from '@/database/vote.entity';
 import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
-import { VyfiService } from '@/modules/vyfi/vyfi.service';
+import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
@@ -80,6 +80,8 @@ export class GovernanceService {
   private readonly poolAddress: string;
   private readonly adminAddress: string;
   private readonly MIN_LP_ADA_FOR_MARKET_PRICING = 5000;
+  /** LP tokens held by DEX AMM contracts; balances this large are contract-locked liquidity, not user positions */
+  private readonly LP_CONTRACT_BALANCE_THRESHOLD = BigInt('1000000000000000000');
 
   // private readonly snapshotCache: NodeCache;
 
@@ -117,7 +119,7 @@ export class GovernanceService {
     private readonly dexHunterService: DexHunterService,
     private readonly blockchainService: BlockchainService,
     private readonly systemSettingsService: SystemSettingsService,
-    private readonly vyfiService: VyfiService
+    private readonly taptoolsService: TaptoolsService
   ) {
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
@@ -221,21 +223,10 @@ export class GovernanceService {
         );
       }
 
-      const lpAddresses: string[] = [];
+      const decimals = vault.ft_token_decimals || 0;
 
-      if (vault.has_active_lp) {
-        // Get vault-specific LP addresses to exclude from voting power
-        const poolInfo = await this.vyfiService.getPoolByTokens(`${vault.policy_id}${vault.asset_vault_name}`);
-        if (poolInfo) {
-          lpAddresses.push(poolInfo.poolAddress);
-          this.logger.log(
-            `Found VyFi pool for vault ${vaultId} with asset ${assetId}. Pool address: ${poolInfo.poolAddress}`
-          );
-        }
-      }
-
-      // Fetch all addresses holding the asset using BlockFrost
-      const addressBalances: Record<string, string> = {}; // For snapshot (excludes LP)
+      // Balances stored as bigint to avoid JS safe-integer precision loss for large on-chain quantities
+      const addressBalances: Record<string, bigint> = {};
       let totalSupplyRaw = BigInt(0); // Total supply INCLUDING LP tokens
       let page = 1;
       let hasMorePages = true;
@@ -253,12 +244,8 @@ export class GovernanceService {
               totalSupplyRaw += BigInt(item.quantity);
 
               // Only add to snapshot if NOT an LP-related address (exclude LP from voting power)
-              if (
-                item.address !== this.poolAddress &&
-                item.address !== this.adminAddress &&
-                !lpAddresses.includes(item.address)
-              ) {
-                addressBalances[item.address] = item.quantity;
+              if (item.address !== this.poolAddress && item.address !== this.adminAddress) {
+                addressBalances[item.address] = BigInt(item.quantity);
               } else {
                 this.logger.log(
                   `Excluded LP address ${item.address} from snapshot (${item.quantity} VT in liquidity pool)`
@@ -288,8 +275,79 @@ export class GovernanceService {
         }
       }
 
-      // Adjust for token decimals (divide by 10^decimals)
-      const decimals = vault.ft_token_decimals || 0;
+      if (vault.has_active_lp) {
+        const pools = await this.taptoolsService.getTokenPools(assetId);
+
+        // Collect locked VT raw amounts per pool to identify DEX pool contract addresses later
+        const lpPoolLockedAmounts = new Set<bigint>();
+
+        for (const pool of pools) {
+          try {
+            const lpAssetId = pool.lpTokenUnit;
+
+            // Convert TapTools float (human-readable) to raw bigint units without floating-point drift
+            const lockedVaultTokensRaw = this.floatToRawBigInt(
+              pool.tokenA === assetId ? pool.tokenALocked : pool.tokenBLocked,
+              decimals
+            );
+            lpPoolLockedAmounts.add(lockedVaultTokensRaw);
+
+            let lpPage = 1;
+            let lpHasMore = true;
+
+            let activeLpSupply = BigInt(0);
+            const realLpHolders: { address: string; lpBalance: bigint }[] = [];
+
+            while (lpHasMore) {
+              const lpHolders = await this.blockfrost.assetsAddresses(lpAssetId, { page: lpPage, order: 'desc' });
+
+              if (lpHolders.length === 0) {
+                lpHasMore = false;
+              } else {
+                for (const holder of lpHolders) {
+                  if (holder.address === this.poolAddress || holder.address === this.adminAddress) continue;
+
+                  const holderLpBalance = BigInt(holder.quantity);
+
+                  // Skip balances that belong to DEX AMM contracts (not real user positions)
+                  if (holderLpBalance > this.LP_CONTRACT_BALANCE_THRESHOLD) {
+                    continue;
+                  }
+
+                  activeLpSupply += holderLpBalance;
+                  realLpHolders.push({ address: holder.address, lpBalance: holderLpBalance });
+                }
+                lpPage++;
+              }
+            }
+
+            if (activeLpSupply === BigInt(0)) continue;
+
+            for (const user of realLpHolders) {
+              // Integer division: (userLp * lockedVaultTokens) / totalLpSupply — no float rounding
+              const underlyingTokens = (user.lpBalance * lockedVaultTokensRaw) / activeLpSupply;
+              addressBalances[user.address] = (addressBalances[user.address] ?? BigInt(0)) + underlyingTokens;
+            }
+            this.logger.log(`Processed LP pool ${pool.exchange} successfully.`);
+          } catch (poolError) {
+            this.logger.error(`Failed to process pool ${pool.exchange}: ${poolError.message}`);
+          }
+        }
+
+        // Remove DEX pool contract addresses from the snapshot.
+        // Each pool contract holds VT equal to its lockedVaultTokensRaw — these tokens are
+        // already redistributed proportionally to LP holders above, so keeping the pool
+        // address would double-count that VT in voting power.
+        for (const [address, balance] of Object.entries(addressBalances)) {
+          if (lpPoolLockedAmounts.has(balance)) {
+            this.logger.log(
+              `Excluded DEX pool contract ${address} from snapshot (${balance}n VT redistributed to LP holders)`
+            );
+            delete addressBalances[address];
+          }
+        }
+      }
+
       const divisor = BigInt(10) ** BigInt(decimals);
       const adjustedSupply = Number(totalSupplyRaw / divisor);
 
@@ -303,11 +361,15 @@ export class GovernanceService {
           `Snapshot created for ${Object.keys(addressBalances).length} addresses (LP tokens excluded from voting power)`
       );
 
-      // Create and save the snapshot (addressBalances excludes LP for voting power calculation)
+      const addressBalancesForSnapshot: Record<string, string> = {};
+      for (const [address, balance] of Object.entries(addressBalances)) {
+        addressBalancesForSnapshot[address] = String(balance);
+      }
+
       const snapshot = this.snapshotRepository.create({
         vaultId,
         assetId,
-        addressBalances,
+        addressBalances: addressBalancesForSnapshot,
       });
 
       await this.snapshotRepository.save(snapshot);
@@ -2312,5 +2374,17 @@ export class GovernanceService {
     }
 
     return possible.has(targetInt);
+  }
+
+  /**
+   * Converts a human-readable float amount (as returned by TapTools) to raw on-chain bigint units.
+   * Avoids floating-point drift by parsing the fixed-decimal string representation directly.
+   *
+   * Example: floatToRawBigInt(522963.34, 6) → 522963340000n
+   */
+  private floatToRawBigInt(value: number, decimals: number): bigint {
+    const fixed = value.toFixed(decimals); // e.g. "522963.340000"
+    const [intPart, fracPart = ''] = fixed.split('.');
+    return BigInt(intPart + fracPart.padEnd(decimals, '0').slice(0, decimals));
   }
 }
