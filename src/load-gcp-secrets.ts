@@ -114,7 +114,19 @@ export async function loadSecrets(): Promise<void> {
     });
 
     // Load ALL secrets into process.env (memory)
-    Object.assign(process.env, parsed);
+    // But preserve environment-specific values that are already set (e.g., from docker-compose)
+    const ENV_SPECIFIC_KEYS = ['DB_HOST', 'REDIS_HOST'];
+    const secretsToLoad = { ...parsed };
+
+    ENV_SPECIFIC_KEYS.forEach(key => {
+      if (process.env[key] && parsed[key]) {
+        // eslint-disable-next-line no-console
+        console.log(`⚠️  Keeping existing ${key}=${process.env[key]} (not overwriting with GCP value)`);
+        delete secretsToLoad[key];
+      }
+    });
+
+    Object.assign(process.env, secretsToLoad);
 
     // Debug: verify critical secrets are loaded (without exposing values)
     const criticalKeys = ['DB_HOST', 'DB_USERNAME', 'DB_PASSWORD', 'DB_NAME', 'REDIS_PASSWORD'];
