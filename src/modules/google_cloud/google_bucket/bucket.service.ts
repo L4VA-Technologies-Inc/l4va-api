@@ -50,7 +50,7 @@ export class GoogleCloudStorageService {
     const isDevelopment = nodeEnv === 'dev' || nodeEnv === 'development';
 
     // For development: expect file path in GOOGLE_BUCKET_CREDENTIALS
-    // For production/testnet: expect base64-encoded JSON in GOOGLE_BUCKET_CREDENTIALS_BASE64
+    // For production/testnet: use ADC (Application Default Credentials)
     if (isDevelopment) {
       const credentialsJson = process.env.GOOGLE_BUCKET_CREDENTIALS;
       if (!credentialsJson) {
@@ -72,24 +72,9 @@ export class GoogleCloudStorageService {
       });
       this.logger.log('✅ Initialized Google Cloud Storage from file (dev mode)');
     } else {
-      // Production/Testnet: use base64-encoded credentials (no file on disk)
-      const credentialsBase64 = process.env.GOOGLE_BUCKET_CREDENTIALS_BASE64;
-      if (!credentialsBase64) {
-        throw new Error('GOOGLE_BUCKET_CREDENTIALS_BASE64 environment variable is required for production/testnet');
-      }
-
-      try {
-        const jsonString = Buffer.from(credentialsBase64, 'base64').toString('utf8');
-        const credentials = JSON.parse(jsonString);
-        this.storage = new Storage({
-          credentials: credentials,
-          projectId: credentials.project_id,
-        });
-        this.logger.log('✅ Initialized Google Cloud Storage from base64 env var (no file)');
-      } catch (error) {
-        this.logger.error('Failed to decode GOOGLE_BUCKET_CREDENTIALS_BASE64:', error.message || error);
-        throw new Error('GOOGLE_BUCKET_CREDENTIALS_BASE64 must be valid base64-encoded JSON for production/testnet');
-      }
+      // Production/Testnet: use ADC (VM service account)
+      this.storage = new Storage();
+      this.logger.log('✅ Initialized Google Cloud Storage with ADC (VM service account)');
     }
   }
 

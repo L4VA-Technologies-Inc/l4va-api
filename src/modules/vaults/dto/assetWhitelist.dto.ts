@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose } from 'class-transformer';
-import { IsString, IsNumber, IsOptional, Matches, IsEnum, ValidateIf, Min, Max } from 'class-validator';
+import { IsString, IsNumber, IsOptional, Matches, IsEnum, ValidateIf, Min, Max, IsBoolean } from 'class-validator';
 
 import { AssetValuationMethod } from '@/types/asset.types';
 
@@ -16,6 +16,36 @@ export class AssetWhitelistDto {
   policyId: string;
 
   @ApiProperty({
+    description: 'Asset name hex (used for FT/NFT verification lookup)',
+    required: false,
+    example: 'f6cee18b885e242e91e167e80a38543e58e6c6bd9a9af86e54d8ecef21c78948',
+  })
+  @IsOptional()
+  @IsString()
+  @Expose({ name: 'assetName' })
+  assetName?: string;
+
+  @ApiProperty({
+    description: 'Display name returned by client/app logic',
+    required: false,
+    example: 'BERRY',
+  })
+  @IsOptional()
+  @IsString()
+  @Expose({ name: 'name' })
+  name?: string;
+
+  @ApiProperty({
+    description: 'Amount/weight sent by client for lookup context',
+    required: false,
+    example: 1,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Expose({ name: 'count' })
+  count?: number;
+
+  @ApiProperty({
     description: 'Human-readable collection name (optional)',
     required: false,
     example: 'Relics of Magma - The Vita',
@@ -24,6 +54,16 @@ export class AssetWhitelistDto {
   @IsString()
   @Expose({ name: 'collectionName' })
   collectionName?: string;
+
+  @ApiProperty({
+    description: 'Optional policy name passed from client',
+    required: false,
+    example: 'BERRY',
+  })
+  @IsOptional()
+  @IsString()
+  @Expose({ name: 'policyName' })
+  policyName?: string;
 
   @ApiProperty({
     description: 'Minimum number of assets allowed',
@@ -79,4 +119,13 @@ export class AssetWhitelistDto {
   @Max(1000000, { message: 'Custom price cannot exceed 1,000,000 ADA' })
   @Expose({ name: 'customPriceAda' })
   customPriceAda?: number;
+
+  @ApiProperty({
+    description: 'Client-side verification flag (backend still re-checks independently)',
+    required: false,
+    example: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  isVerified?: boolean;
 }
