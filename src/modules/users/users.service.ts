@@ -9,7 +9,7 @@ import { PriceService } from '../price/price.service';
 
 import { PublicProfileRes } from './dto/public-profile.res';
 import { UpdateProfileDto } from './dto/update-profile.dto';
-import { ImageType as UploadProfileImageType } from './dto/upload-profile-image.dto';
+import { ImageType } from './dto/upload-profile-image.dto';
 
 import { Asset } from '@/database/asset.entity';
 import { FileEntity } from '@/database/file.entity';
@@ -272,11 +272,7 @@ export class UsersService {
     );
   }
 
-  async uploadProfileImage(
-    userId: string,
-    file: Express.Multer.File,
-    imageType: UploadProfileImageType
-  ): Promise<User> {
+  async uploadProfileImage(userId: string, file: Express.Multer.File, imageType: ImageType): Promise<User> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
       relations: ['profile_image', 'banner_image'],
@@ -286,7 +282,7 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
-    const targetField = imageType === UploadProfileImageType.BANNER ? 'banner_image' : 'profile_image';
+    const targetField = imageType === ImageType.BANNER ? 'banner_image' : 'profile_image';
     const previousFile = user[targetField];
 
     const uploadedFile = await this.gcsService.uploadImage(file, { imageType });

@@ -52,7 +52,7 @@ export class VaultFilesCleanupService {
       .leftJoinAndSelect('vault.vault_image', 'vault_image')
       .leftJoinAndSelect('vault.ft_token_img', 'ft_token_img')
       .leftJoinAndSelect('vault.acquirer_whitelist_csv', 'acquirer_whitelist_csv')
-      .leftJoinAndSelect('vault.assets', 'assets')
+      .leftJoinAndSelect('vault.assets', 'assets', "assets.image IS NOT NULL AND assets.image LIKE 'ipfs://%'")
       .getMany();
 
     if (vaults.length === 0) {
@@ -94,10 +94,12 @@ export class VaultFilesCleanupService {
     }
 
     // 2. Clean asset images (only if not used by any active vault)
-    const assetsWithIpfsImage = vault.assets?.filter(a => a.image?.startsWith('ipfs://')) ?? [];
+    // Note: Asset.image uses a transformer that converts ipfs://... to HTTP .../asset-image/{cid} when loaded.
+    // We detect our images by /asset-image/ path, extract cid, and use raw ipfs://{cid} for DB queries.
+    const assetsWithOurImage = vault.assets?.filter(a => a.image?.includes('/asset-image/')) ?? [];
     const processedFileKeys = new Set<string>();
 
-    for (const asset of assetsWithIpfsImage) {
+    for (const asset of assetsWithOurImage) {
       const cid = asset.image!.split('/').pop()?.split('?')[0];
       if (!cid) continue;
 
@@ -107,10 +109,12 @@ export class VaultFilesCleanupService {
       const fileEntity = await this.fileRepository.findOne({ where: { file_key: fileKey } });
       if (!fileEntity) continue; // External URL, not in our bucket
 
+      const ipfsImage = `ipfs://${cid}`; // Raw DB value (transformer converts to HTTP when loading)
+
       const usedByActiveVault = await this.assetRepository
         .createQueryBuilder('a')
         .innerJoin('a.vault', 'v')
-        .where('a.image = :image', { image: asset.image })
+        .where('a.image = :image', { image: ipfsImage })
         .andWhere('v.deleted = :deleted', { deleted: false })
         .andWhere('(v.deactivated_at IS NULL OR v.deactivated_at > :threshold)', { threshold })
         .getCount();
@@ -119,8 +123,8 @@ export class VaultFilesCleanupService {
 
       processedFileKeys.add(fileKey);
 
-      // Clear image for all assets in this vault that reference it
-      await this.assetRepository.update({ vault_id: vault.id, image: asset.image }, { image: null });
+      // Clear image for all assets in this vault that reference it (use raw DB value)
+      await this.assetRepository.update({ vault_id: vault.id, image: ipfsImage }, { image: null });
 
       try {
         await this.gcsService.deleteFile(fileKey);

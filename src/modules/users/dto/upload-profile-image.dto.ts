@@ -1,20 +1,20 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsEnum } from 'class-validator';
+import { IsEnum, IsOptional } from 'class-validator';
 
-export enum ImageType {
-  AVATAR = 'avatar',
-  BANNER = 'banner',
-}
+import { ImageType } from '@/modules/google_cloud/google_bucket/dto/bucket.dto';
+
+export { ImageType };
 
 export class UploadProfileImageDto {
   @ApiProperty({
     example: 'avatar',
     required: false,
     enum: ImageType,
+    description: 'Defaults to avatar if omitted. Use avatar or banner for profile images.',
   })
-  @IsString()
+  @IsOptional()
   @IsEnum(ImageType)
-  imageType: ImageType;
+  imageType?: ImageType;
 
   @ApiProperty({ type: 'string', format: 'binary' })
   image: any;

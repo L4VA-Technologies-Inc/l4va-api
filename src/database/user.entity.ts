@@ -54,13 +54,21 @@ export class User {
   @Expose({ name: 'profileImage' })
   @OneToOne(() => FileEntity)
   @JoinColumn({ name: 'profile_image_id' })
-  @Transform(({ value }) => (value ? transformImageToUrl(value) : null))
+  @Transform(({ value }) => {
+    if (!value) return null;
+    if (typeof value === 'string') return value;
+    return transformImageToUrl(value);
+  })
   profile_image: FileEntity;
 
   @Expose({ name: 'bannerImage' })
   @OneToOne(() => FileEntity)
   @JoinColumn({ name: 'banner_image_id' })
-  @Transform(({ value }) => (value ? transformImageToUrl(value) : null))
+  @Transform(({ value }) => {
+    if (!value) return null;
+    if (typeof value === 'string') return value;
+    return transformImageToUrl(value);
+  })
   banner_image: FileEntity;
 
   @Expose({ name: 'socialLinks' })

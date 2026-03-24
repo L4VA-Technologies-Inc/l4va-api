@@ -29,7 +29,7 @@ import { UploadImageRes } from './dto/upload-image.res';
 import { UsersService } from './users.service';
 
 import { User } from '@/database/user.entity';
-import { UploadProfileImageDto } from '@/modules/users/dto/upload-profile-image.dto';
+import { ImageType, UploadProfileImageDto } from '@/modules/users/dto/upload-profile-image.dto';
 
 @ApiTags('users')
 @Controller('users')
@@ -88,7 +88,7 @@ export class UsersController {
     file: Express.Multer.File
   ): Promise<UploadImageRes> {
     const userId = req.user.sub;
-    const user = await this.usersService.uploadProfileImage(userId, file, body.imageType);
+    const user = await this.usersService.uploadProfileImage(userId, file, body.imageType ?? ImageType.AVATAR);
 
     return { user };
   }
