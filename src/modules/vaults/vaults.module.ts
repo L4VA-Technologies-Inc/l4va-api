@@ -6,6 +6,7 @@ import { GoogleCloudStorageModule } from '../google_cloud/google_bucket/bucket.m
 import { TaptoolsModule } from '../taptools/taptools.module';
 
 import { DraftVaultsService } from './draft-vaults.service';
+import { VaultFilesCleanupService } from './vault-files-cleanup.service';
 import { VaultsController } from './vaults.controller';
 import { VaultsService } from './vaults.service';
 
@@ -55,7 +56,7 @@ import { StatisticsService } from '@/modules/vaults/statistics/statistics.servic
     ]),
     HttpModule,
   ],
-  providers: [VaultsService, DraftVaultsService, StatisticsService],
+  providers: [VaultsService, DraftVaultsService, StatisticsService, VaultFilesCleanupService],
   controllers: [VaultsController],
   exports: [VaultsService, DraftVaultsService],
 })

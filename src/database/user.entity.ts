@@ -10,12 +10,12 @@ import {
   JoinColumn,
 } from 'typeorm';
 
+import { transformImageToUrl } from '../helpers';
+
 import { Claim } from './claim.entity';
 import { FileEntity } from './file.entity';
 import { LinkEntity } from './link.entity';
 import { Vault } from './vault.entity';
-
-import { transformImageToUrl } from '@/helpers';
 
 @Entity('users')
 export class User {

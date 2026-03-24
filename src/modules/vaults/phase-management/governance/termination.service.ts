@@ -906,7 +906,10 @@ export class TerminationService {
       await this.transactionsService.updateTransactionHash(txId, submitResponse.txHash);
 
       // Update vault status to burned
-      await this.vaultRepository.update({ id: vault.id }, { vault_status: VaultStatus.burned });
+      await this.vaultRepository.update(
+        { id: vault.id },
+        { vault_status: VaultStatus.burned, deactivated_at: new Date() }
+      );
 
       await this.updateTerminationStatus(vault.id, TerminationStatus.VAULT_BURNED);
 
@@ -922,7 +925,10 @@ export class TerminationService {
       // Handle case where vault UTXO is not found (already burned)
       if (error.message?.includes('not found') || error.status === 404) {
         this.logger.warn(`Vault UTXO not found for ${vault.asset_vault_name} - may already be burned`);
-        await this.vaultRepository.update({ id: vault.id }, { vault_status: VaultStatus.burned });
+        await this.vaultRepository.update(
+          { id: vault.id },
+          { vault_status: VaultStatus.burned, deactivated_at: new Date() }
+        );
         await this.updateTerminationStatus(vault.id, TerminationStatus.VAULT_BURNED);
         await this.stepCleanupTreasuryWallet(vault);
         return;
