@@ -41,11 +41,10 @@ import { Vote } from '@/database/vote.entity';
 import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
+import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { GetAssetsToListRes } from '@/modules/vaults/phase-management/governance/dto/get-assets-to-list.res';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
-import { VyfiService } from '@/modules/vyfi/vyfi.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
-import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
@@ -129,10 +128,8 @@ export class GovernanceService {
     private readonly dexHunterService: DexHunterService,
     private readonly blockchainService: BlockchainService,
     private readonly systemSettingsService: SystemSettingsService,
-    private readonly vyfiService: VyfiService,
-    private readonly wayUpPricingService: WayUpPricingService
-    private readonly taptoolsService: TaptoolsService
     private readonly wayUpPricingService: WayUpPricingService,
+    private readonly taptoolsService: TaptoolsService,
     private readonly treasuryWalletService: TreasuryWalletService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
