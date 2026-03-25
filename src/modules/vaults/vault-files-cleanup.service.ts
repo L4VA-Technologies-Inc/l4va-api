@@ -41,12 +41,6 @@ export class VaultFilesCleanupService {
           vault.vault_image_id IS NOT NULL
           OR vault.ft_token_img_id IS NOT NULL
           OR vault.acquirer_whitelist_csv_id IS NOT NULL
-          OR EXISTS (
-            SELECT 1 FROM assets
-            WHERE assets.vault_id = vault.id
-            AND assets.image IS NOT NULL
-            AND assets.image LIKE 'ipfs://%'
-          )
         )`
       )
       .leftJoinAndSelect('vault.vault_image', 'vault_image')
@@ -122,9 +116,6 @@ export class VaultFilesCleanupService {
       if (usedByActiveVault > 0) continue; // Image still used by an active vault
 
       processedFileKeys.add(fileKey);
-
-      // Clear image for all assets in this vault that reference it (use raw DB value)
-      await this.assetRepository.update({ vault_id: vault.id, image: ipfsImage }, { image: null });
 
       try {
         await this.gcsService.deleteFile(fileKey);
