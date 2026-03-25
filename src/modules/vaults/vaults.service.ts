@@ -140,7 +140,7 @@ export class VaultsService {
    * @param file_key - GCS file key
    * @returns Array of valid Cardano addresses
    */
-  private async parseCSVFromS3(file_key: string): Promise<string[]> {
+  private async parseCSVFromGCS(file_key: string): Promise<string[]> {
     try {
       const { stream } = await this.gcsService.getCsv(file_key);
 
@@ -421,7 +421,7 @@ export class VaultsService {
       newVault.max_contribute_assets = Number(maxCountOf) || 0;
       await this.vaultsRepository.save(newVault);
       // Handle acquirer whitelist
-      const acquirerFromCsv = acquirerWhitelistFile ? await this.parseCSVFromS3(acquirerWhitelistFile.file_key) : [];
+      const acquirerFromCsv = acquirerWhitelistFile ? await this.parseCSVFromGCS(acquirerWhitelistFile.file_key) : [];
 
       const acquirer = data.acquirerWhitelist ? [...data.acquirerWhitelist.map(item => item.walletAddress)] : [];
 
@@ -438,7 +438,7 @@ export class VaultsService {
 
       // Handle contributors whitelist
       const contributorsFromCsv = contributorWhitelistFile
-        ? await this.parseCSVFromS3(contributorWhitelistFile.file_key)
+        ? await this.parseCSVFromGCS(contributorWhitelistFile.file_key)
         : [];
 
       const contributorList = data.contributorWhitelist
