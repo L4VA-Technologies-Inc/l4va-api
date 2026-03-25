@@ -83,7 +83,6 @@
     "webpack": "^5.105.0",
     "js-yaml": "^4.1.1",
     "lodash": "^4.17.22",
-    "ajv": "^8.18.0",
     "inquirer": "^8.2.7"
   },
   "devDependencies": {
