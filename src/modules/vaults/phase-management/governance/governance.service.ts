@@ -305,8 +305,6 @@ export class GovernanceService {
                 lpHasMore = false;
               } else {
                 for (const holder of lpHolders) {
-                  if (holder.address === this.poolAddress || holder.address === this.adminAddress) continue;
-
                   const holderLpBalance = BigInt(holder.quantity);
 
                   // Skip balances that belong to DEX AMM contracts (not real user positions)
@@ -315,6 +313,9 @@ export class GovernanceService {
                   }
 
                   activeLpSupply += holderLpBalance;
+
+                  if (holder.address === this.poolAddress || holder.address === this.adminAddress) continue;
+
                   realLpHolders.push({ address: holder.address, lpBalance: holderLpBalance });
                 }
                 lpPage++;
