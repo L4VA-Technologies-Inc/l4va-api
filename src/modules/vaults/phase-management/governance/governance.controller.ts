@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { DistributionService } from './distribution.service';
@@ -100,6 +100,17 @@ export class GovernanceController {
     @Req() req: AuthRequest
   ): Promise<GetProposalDetailRes> {
     return this.governanceService.getProposal(proposalId, req.user.sub);
+  }
+
+  @Delete('proposals/:proposalId')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Delete an upcoming governance proposal (owner only)' })
+  @ApiResponse({ status: 200, description: 'Proposal deleted successfully' })
+  async deleteProposal(
+    @Req() req: AuthRequest,
+    @Param('proposalId', ParseUUIDPipe) proposalId: string
+  ): Promise<{ success: boolean; message: string; refundTxHash?: string }> {
+    return this.governanceService.deleteProposal(proposalId, req.user.sub);
   }
 
   @Get('vaults/:vaultId/voting-power')
