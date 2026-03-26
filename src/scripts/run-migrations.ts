@@ -1,9 +1,10 @@
+/* eslint-disable no-console, @typescript-eslint/explicit-function-return-type */
 import { config } from 'dotenv';
 import { DataSource } from 'typeorm';
 
 import { loadSecrets } from '../load-gcp-secrets';
 
-async function runMigrations() {
+async function runMigrations(): Promise<void> {
   try {
     // Load .env first
     config();
