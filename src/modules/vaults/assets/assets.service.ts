@@ -130,7 +130,7 @@ export class AssetsService {
       ])
       .where('asset.vault_id = :vaultId', { vaultId })
       .andWhere('asset.origin_type IN (:...originTypes)', {
-        originTypes: [AssetOriginType.CONTRIBUTED, AssetOriginType.FEE],
+        originTypes: [AssetOriginType.CONTRIBUTED, AssetOriginType.BOUGHT, AssetOriginType.FEE],
       })
       .andWhere('asset.status IN (:...statuses)', {
         statuses: [
