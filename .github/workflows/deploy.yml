@@ -75,6 +75,13 @@ jobs:
           echo "Deploying to port: $NEW_PORT"
 
           docker compose build $NEW_CONTAINER
+
+          echo "Running migrations if needed..."
+          docker compose run --rm $NEW_CONTAINER npm run migration:run || {
+            echo "Migration failed"
+            exit 1
+          }
+
           docker compose up -d $NEW_CONTAINER
 
           echo "Waiting for health..."
@@ -153,6 +160,13 @@ jobs:
           echo "Deploying to port: $NEW_PORT"
 
           docker compose build $NEW_CONTAINER
+
+          echo "Running migrations if needed..."
+          docker compose run --rm $NEW_CONTAINER npm run migration:run || {
+            echo "Migration failed"
+            exit 1
+          }
+
           docker compose up -d $NEW_CONTAINER
 
           echo "Waiting for health..."
