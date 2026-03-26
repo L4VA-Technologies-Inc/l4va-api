@@ -38,7 +38,13 @@ jobs:
       - name: Save logs before deploy
         run: |
           mkdir -p ~/apps/logs/l4va-api
-          docker logs l4va-api > ~/apps/logs/l4va-api/$(date +"%Y%m%d_%H%M%S").log 2>&1 || true
+          ACTIVE_PORT=$(grep -oP 'set \$api_port \K[0-9]+' /etc/nginx/sites-enabled/testnet.l4va.org)
+          if [ "$ACTIVE_PORT" = "3000" ]; then
+            ACTIVE_CONTAINER=l4va-api-blue
+          else
+            ACTIVE_CONTAINER=l4va-api-green
+          fi
+          docker logs $ACTIVE_CONTAINER > ~/apps/logs/l4va-api/$(date +"%Y%m%d_%H%M%S").log 2>&1 || true
           cd ~/apps/logs/l4va-api && ls -t | tail -n +11 | xargs -r rm -f
 
       - name: Copy code to apps/l4va-api
@@ -75,14 +81,20 @@ jobs:
           echo "Deploying to port: $NEW_PORT"
 
           docker compose build $NEW_CONTAINER
+          docker compose up -d $NEW_CONTAINER
 
-          echo "Running migrations if needed..."
-          docker compose run --rm $NEW_CONTAINER npm run migration:run || {
+          echo "Waiting for secrets to load..."
+          until docker logs $NEW_CONTAINER 2>&1 | grep -q "Secrets loaded successfully"; do
+            sleep 2
+          done
+
+          echo "Running migrations..."
+          docker exec $NEW_CONTAINER npm run migration:run:gcp || {
             echo "Migration failed"
+            docker logs $NEW_CONTAINER --tail 100
+            docker stop $NEW_CONTAINER || true
             exit 1
           }
-
-          docker compose up -d $NEW_CONTAINER
 
           echo "Waiting for health..."
           MAX_ATTEMPTS=60
@@ -101,6 +113,7 @@ jobs:
             sleep 2
           done
 
+          sudo nginx -t
           sudo sed -i "s/set \$api_port .*/set \$api_port $NEW_PORT;/" /etc/nginx/sites-enabled/testnet.l4va.org
           sudo nginx -s reload
 
@@ -123,7 +136,13 @@ jobs:
       - name: Save logs before deploy
         run: |
           mkdir -p ~/apps/logs/l4va-api
-          docker logs l4va-api > ~/apps/logs/l4va-api/$(date +"%Y%m%d_%H%M%S").log 2>&1 || true
+          ACTIVE_PORT=$(grep -oP 'set \$api_port \K[0-9]+' /etc/nginx/sites-enabled/app.l4va.org)
+          if [ "$ACTIVE_PORT" = "3000" ]; then
+            ACTIVE_CONTAINER=l4va-api-blue
+          else
+            ACTIVE_CONTAINER=l4va-api-green
+          fi
+          docker logs $ACTIVE_CONTAINER > ~/apps/logs/l4va-api/$(date +"%Y%m%d_%H%M%S").log 2>&1 || true
           cd ~/apps/logs/l4va-api && ls -t | tail -n +11 | xargs -r rm -f
 
       - name: Copy code to apps/l4va-api
@@ -160,14 +179,20 @@ jobs:
           echo "Deploying to port: $NEW_PORT"
 
           docker compose build $NEW_CONTAINER
+          docker compose up -d $NEW_CONTAINER
 
-          echo "Running migrations if needed..."
-          docker compose run --rm $NEW_CONTAINER npm run migration:run || {
+          echo "Waiting for secrets to load..."
+          until docker logs $NEW_CONTAINER 2>&1 | grep -q "Secrets loaded successfully"; do
+            sleep 2
+          done
+
+          echo "Running migrations..."
+          docker exec $NEW_CONTAINER npm run migration:run:gcp || {
             echo "Migration failed"
+            docker logs $NEW_CONTAINER --tail 100
+            docker stop $NEW_CONTAINER || true
             exit 1
           }
-
-          docker compose up -d $NEW_CONTAINER
 
           echo "Waiting for health..."
           MAX_ATTEMPTS=60
@@ -186,6 +211,7 @@ jobs:
             sleep 2
           done
 
+          sudo nginx -t
           sudo sed -i "s/set \$api_port .*/set \$api_port $NEW_PORT;/" /etc/nginx/sites-enabled/app.l4va.org
           sudo nginx -s reload
 
