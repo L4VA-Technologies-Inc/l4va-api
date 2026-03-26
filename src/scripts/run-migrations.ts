@@ -1,7 +1,7 @@
 /* eslint-disable no-console, @typescript-eslint/explicit-function-return-type */
 import { config } from 'dotenv';
+import { DataSource } from 'typeorm';
 
-import dataSource from '../config/typeorm.config';
 import { loadSecrets } from '../load-gcp-secrets';
 
 async function runMigrations(): Promise<void> {
@@ -13,6 +13,21 @@ async function runMigrations(): Promise<void> {
     console.log('Loading secrets from GCP...');
     await loadSecrets();
     console.log('Secrets loaded successfully');
+
+    // Create DataSource AFTER secrets are loaded
+    const dataSource = new DataSource({
+      type: 'postgres',
+      host: process.env.DB_HOST,
+      port: parseInt(process.env.DB_PORT || '5432', 10),
+      username: process.env.DB_USERNAME,
+      password: process.env.DB_PASSWORD,
+      database: process.env.DB_NAME,
+      synchronize: false,
+      entities: ['src/**/*.entity.ts'],
+      migrations: ['src/database/migrations/*.ts'],
+      migrationsRun: false,
+      logging: true,
+    });
 
     console.log('Initializing database connection...');
     await dataSource.initialize();
