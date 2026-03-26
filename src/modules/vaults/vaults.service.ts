@@ -1493,6 +1493,7 @@ export class VaultsService {
       vault.deleted = true;
       vault.liquidation_hash = txHash;
       vault.vault_status = VaultStatus.burned;
+      vault.deactivated_at = new Date();
 
       await this.vaultsRepository.update({ id: vault.id }, { ...vault });
       await this.transactionsService.updateTransactionHash(publishDto.txId, txHash);

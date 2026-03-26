@@ -43,14 +43,22 @@ export class PublicProfileRes {
 
   @ApiProperty({ required: false })
   @DtoRepresent({
-    transform: ({ value }) => (value ? value.url : null),
+    transform: ({ value }) => {
+      if (!value) return null;
+      if (typeof value === 'string') return value;
+      return value.file_url ?? value.url ?? null;
+    },
     expose: { name: 'profileImage' },
   })
   profileImage?: FileEntity;
 
   @ApiProperty({ required: false })
   @DtoRepresent({
-    transform: ({ value }) => (value ? value.url : null),
+    transform: ({ value }) => {
+      if (!value) return null;
+      if (typeof value === 'string') return value;
+      return value.file_url ?? value.url ?? null;
+    },
     expose: true,
   })
   bannerImage?: FileEntity;

@@ -1,4 +1,4 @@
-import { Exclude, Expose } from 'class-transformer';
+import { Exclude, Expose, Transform } from 'class-transformer';
 import {
   Entity,
   PrimaryGeneratedColumn,
@@ -9,6 +9,8 @@ import {
   BeforeUpdate,
   JoinColumn,
 } from 'typeorm';
+
+import { transformImageToUrl } from '../helpers';
 
 import { Claim } from './claim.entity';
 import { FileEntity } from './file.entity';
@@ -52,11 +54,21 @@ export class User {
   @Expose({ name: 'profileImage' })
   @OneToOne(() => FileEntity)
   @JoinColumn({ name: 'profile_image_id' })
+  @Transform(({ value }) => {
+    if (!value) return null;
+    if (typeof value === 'string') return value;
+    return transformImageToUrl(value);
+  })
   profile_image: FileEntity;
 
   @Expose({ name: 'bannerImage' })
   @OneToOne(() => FileEntity)
   @JoinColumn({ name: 'banner_image_id' })
+  @Transform(({ value }) => {
+    if (!value) return null;
+    if (typeof value === 'string') return value;
+    return transformImageToUrl(value);
+  })
   banner_image: FileEntity;
 
   @Expose({ name: 'socialLinks' })

@@ -317,8 +317,7 @@ export class GoogleCloudStorageService {
 
   async uploadImage(file: Express.Multer.File, body?: UploadImageDto): Promise<FileEntity> {
     try {
-      let processedImageBuffer = file.buffer;
-      let mimeType = file.mimetype;
+      let processedImageBuffer: Buffer;
 
       const imageType = body?.imageType;
       const resizeParams = imageType ? ImageResizeMap[imageType] : null;
@@ -335,10 +334,16 @@ export class GoogleCloudStorageService {
             alphaQuality: 80,
           })
           .toBuffer();
-
-        mimeType = 'image/webp';
+      } else {
+        processedImageBuffer = await sharp(file.buffer)
+          .webp({
+            quality: 80,
+            lossless: false,
+            alphaQuality: 80,
+          })
+          .toBuffer();
       }
-
+      const mimeType = 'image/webp';
       const fileKey = `${uuid()}`;
       const uploadResult = await this.uploadFile(processedImageBuffer, fileKey, mimeType);
       const protocol = process.env.NODE_ENV === 'dev' ? 'http://' : 'https://';
@@ -473,5 +478,39 @@ export class GoogleCloudStorageService {
     });
 
     return this.fileRepository.save(newFile);
+  }
+
+  async deleteFile(fileKey: string): Promise<void> {
+    if (!fileKey || typeof fileKey !== 'string') {
+      throw new BadRequestException(`Invalid file key: ${fileKey}`);
+    }
+
+    const trimmedKey = fileKey.trim();
+    if (!trimmedKey) {
+      throw new BadRequestException('Invalid file key: empty');
+    }
+
+    const fileName = this.getFullPath(trimmedKey);
+
+    try {
+      const storage = this.getStorage();
+      if (!storage) {
+        throw new Error('Storage is not initialized');
+      }
+
+      const bucket = storage.bucket(this.bucketName);
+      if (!bucket) {
+        throw new Error('Bucket is not initialized');
+      }
+
+      await bucket.file(fileName).delete({ ignoreNotFound: true });
+
+      await this.fileRepository.delete({ file_key: trimmedKey });
+
+      this.logger.log(`Deleted file ${trimmedKey} (${fileName})`);
+    } catch (error) {
+      this.logger.error(`Failed to delete file ${trimmedKey}: ${error.message}`, error);
+      throw new BadRequestException(`Failed to delete file: ${error.message}`);
+    }
   }
 }
