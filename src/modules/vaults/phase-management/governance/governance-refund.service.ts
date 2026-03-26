@@ -1,7 +1,4 @@
-import { Buffer } from 'node:buffer';
-
-import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { FixedTransaction, PrivateKey, Address } from '@emurgo/cardano-serialization-lib-nodejs';
+import { Blockfrost, Lucid } from '@lucid-evolution/lucid';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -9,8 +6,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
-import { BlockchainService } from '../../processing-tx/onchain/blockchain.service';
-import { getUtxosExtract } from '../../processing-tx/onchain/utils/lib';
 
 import { Proposal } from '@/database/proposal.entity';
 import { Transaction } from '@/database/transaction.entity';
@@ -23,7 +18,6 @@ export class GovernanceRefundService {
   private readonly isMainnet: boolean;
   private readonly adminAddress: string;
   private readonly adminSKey: string;
-  private blockfrost: BlockFrostAPI;
 
   private isRetrying = false;
 
@@ -33,16 +27,11 @@ export class GovernanceRefundService {
     private readonly proposalRepository: Repository<Proposal>,
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
-    private readonly blockchainService: BlockchainService,
     private readonly transactionsService: TransactionsService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
     this.adminSKey = this.configService.get<string>('ADMIN_S_KEY');
-
-    this.blockfrost = new BlockFrostAPI({
-      projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
-    });
   }
 
   async refundProposalCreationFeeIfNeeded(
@@ -147,57 +136,29 @@ export class GovernanceRefundService {
     toAddress: string;
     lovelaceAmount: number;
   }): Promise<string> {
-    const { proposalId, toAddress, lovelaceAmount } = config;
+    const { toAddress, lovelaceAmount } = config;
 
-    // Build an ADA-only refund transaction from the admin wallet.
-    const { utxos, totalAdaCollected } = await getUtxosExtract(
-      Address.from_bech32(this.adminAddress),
-      this.blockfrost,
-      {
-        minAda: 2_000_000,
-        excludeMultiAssets: true,
-        validateUtxos: false,
-        maxUtxos: 200,
-        targetAdaAmount: lovelaceAmount + 2_000_000, // cover tx fees + refund
-      }
+    const network = this.isMainnet ? 'Mainnet' : 'Preprod';
+    const lucid = await Lucid(
+      new Blockfrost(
+        `https://cardano-${network.toLowerCase()}.blockfrost.io/api/v0`,
+        this.configService.get<string>('BLOCKFROST_API_KEY')
+      ),
+      network
     );
 
-    if ((totalAdaCollected ?? 0) < lovelaceAmount + 2_000_000) {
-      throw new Error(
-        `Insufficient ADA in admin wallet for refund. Needed: ${(lovelaceAmount + 2_000_000) / 1_000_000}, available: ${(totalAdaCollected ?? 0) / 1_000_000}`
-      );
-    }
+    // Select admin wallet utxos so Lucid can build a transaction spending from admin.
+    const adminUtxos = await lucid.utxosAt(this.adminAddress);
+    lucid.selectWallet.fromAddress(this.adminAddress, adminUtxos);
 
-    const input = {
-      changeAddress: this.adminAddress,
-      message: `Refund governance fee for proposal ${proposalId}`,
-      utxos,
-      outputs: [
-        {
-          address: toAddress,
-          lovelace: lovelaceAmount,
-        },
-      ],
-      validityInterval: {
-        start: true,
-        end: true,
-      },
-      network: this.isMainnet ? ('mainnet' as const) : ('preprod' as const),
-    };
+    // Refund is ADA-only and the receiver gets exactly `lovelaceAmount`.
+    const tx = await lucid
+      .newTx()
+      .pay.ToAddress(toAddress, { lovelace: BigInt(lovelaceAmount) })
+      .complete({ changeAddress: this.adminAddress });
 
-    const buildResponse = await this.blockchainService.buildTransaction(input);
-    const txToSubmitOnChain = FixedTransaction.from_bytes(Buffer.from(buildResponse.complete, 'hex'));
-    txToSubmitOnChain.sign_and_add_vkey_signature(PrivateKey.from_bech32(this.adminSKey));
-
-    const result = await this.blockchainService.submitTransaction({
-      transaction: txToSubmitOnChain.to_hex(),
-    });
-
-    if (!result.txHash) {
-      throw new Error('No txHash returned from blockchain submission');
-    }
-
-    return result.txHash;
+    const signedTx = await tx.sign.withPrivateKey(this.adminSKey).complete();
+    return await signedTx.submit();
   }
 
   // Retry failed/pending refunds on rejected proposals.
