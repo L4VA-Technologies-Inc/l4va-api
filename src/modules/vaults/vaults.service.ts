@@ -496,12 +496,37 @@ export class VaultsService {
       });
       const policyWhitelist = [...new Set(assetsWhitelistData.map(item => item.policy_id))];
 
-      // Load only wallet_address from contributor_whitelist
+      // Load wallet addresses from both contributor and acquirer whitelists
       const contributorWhitelistData = await this.contributorWhitelistRepository.find({
         where: { vault: { id: newVault.id } },
         select: ['wallet_address'],
       });
-      const contributorWhitelist = [...new Set(contributorWhitelistData.map(item => item.wallet_address))];
+      const acquirerWhitelistData = await this.acquirerWhitelistRepository.find({
+        where: { vault: { id: newVault.id } },
+        select: ['wallet_address'],
+      });
+
+      // Combine both whitelists into a unique array for smart contract
+      const contributorAddresses = contributorWhitelistData.map(item => item.wallet_address);
+      const acquirerAddresses = acquirerWhitelistData.map(item => item.wallet_address);
+      const allowedContributors = [...new Set([...contributorAddresses, ...acquirerAddresses])];
+
+      // Validate combined whitelist size (Cardano transaction size limit)
+      const MAX_COMBINED_WHITELIST_SIZE = 100;
+      if (allowedContributors.length > MAX_COMBINED_WHITELIST_SIZE) {
+        throw new BadRequestException(
+          `Combined whitelist exceeds maximum limit. ` +
+            `You have ${allowedContributors.length} unique addresses ` +
+            `(${contributorAddresses.length} contributors + ${acquirerAddresses.length} acquirers). ` +
+            `Maximum allowed is ${MAX_COMBINED_WHITELIST_SIZE} unique addresses to stay within Cardano transaction size limits.`
+        );
+      }
+
+      this.logger.log(
+        `Vault ${newVault.id}: Combined whitelist - ` +
+          `${contributorAddresses.length} contributors + ${acquirerAddresses.length} acquirers = ` +
+          `${allowedContributors.length} unique addresses`
+      );
 
       const privacy = vault_sc_privacy[finalVault.privacy as VaultPrivacy];
       const valueMethod = valuation_sc_type[finalVault.value_method as ValueMethod];
@@ -569,7 +594,7 @@ export class VaultsService {
           customerAddress: finalVault.owner.address,
           vaultId: finalVault.id,
           allowedPolicies: policyWhitelist,
-          allowedContributors: contributorWhitelist,
+          allowedContributors: allowedContributors,
           contractType: privacy,
           valueMethod: valueMethod,
           assetWindow,

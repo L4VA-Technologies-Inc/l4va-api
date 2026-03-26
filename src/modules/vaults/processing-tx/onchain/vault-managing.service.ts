@@ -24,7 +24,13 @@ import { PublishVaultDto } from '../../dto/publish-vault.dto';
 
 import { BlockchainService } from './blockchain.service';
 import { Datum1 } from './types/type';
-import { generate_tag_from_txhash_index, getAddressFromHash, getUtxosExtract, getVaultUtxo } from './utils/lib';
+import {
+  generate_tag_from_txhash_index,
+  getAddressFromHash,
+  getUtxosExtract,
+  getVaultUtxo,
+  convertAddressesToKeyHashes,
+} from './utils/lib';
 
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
@@ -329,6 +335,16 @@ export class VaultManagingService {
 
     const vaultAddress = getAddressFromHash(scriptHash, this.networkId);
 
+    // Convert contributor wallet addresses to verification key hashes for smart contract
+    const contributorKeyHashes =
+      vaultConfig.allowedContributors && vaultConfig.allowedContributors.length > 0
+        ? convertAddressesToKeyHashes(vaultConfig.allowedContributors)
+        : null;
+
+    if (contributorKeyHashes && contributorKeyHashes.length > 0) {
+      this.logger.log(`Vault creation with contributor whitelist: ${contributorKeyHashes.length} contributors`);
+    }
+
     try {
       const input: VaultCreationInput = {
         changeAddress: vaultConfig.customerAddress,
@@ -373,7 +389,7 @@ export class VaultManagingService {
                 vault_status: SmartContractVaultStatus.OPEN,
                 contract_type: vaultConfig.contractType,
                 asset_whitelist: [...vaultConfig.allowedPolicies, this.VLRM_POLICY_ID],
-                // contributor_whitelist: vaultConfig.allowedContributors, // address list of contributors
+                ...(contributorKeyHashes && { contributor_whitelist: contributorKeyHashes }),
                 asset_window: {
                   // Time allowed to upload NFT
                   lower_bound: {
@@ -566,6 +582,7 @@ export class VaultManagingService {
     acquireMultiplier?: [string, string | null, number][];
     adaPairMultiplier?: number;
     adaDistribution?: [string, string | null, number][];
+    contributorWhitelist?: string[]; // Array of wallet addresses
     asset_window?: {
       start: number;
       end: number;
@@ -587,6 +604,7 @@ export class VaultManagingService {
       acquireMultiplier = [],
       adaPairMultiplier = 0,
       adaDistribution = [],
+      contributorWhitelist = [],
     } = config;
     const transaction = await this.transactionsService.createTransaction({
       vault_id: vault.id,
@@ -611,6 +629,16 @@ export class VaultManagingService {
         ? assetsWhitelist.map(policy => policy.policy_id)
         : [];
     const contract_type = vault.privacy === VaultPrivacy.private ? 0 : vault.privacy === VaultPrivacy.public ? 1 : 2;
+
+    // Convert contributor wallet addresses to verification key hashes for smart contract
+    const contributorKeyHashes =
+      contributorWhitelist && contributorWhitelist.length > 0
+        ? convertAddressesToKeyHashes(contributorWhitelist)
+        : null;
+
+    if (contributorKeyHashes && contributorKeyHashes.length > 0) {
+      this.logger.log(`Vault update with contributor whitelist: ${contributorKeyHashes.length} contributors`);
+    }
 
     this.scAddress = getAddressFromHash(this.scPolicyId, this.networkId);
 
@@ -660,7 +688,7 @@ export class VaultManagingService {
               vault_status: vaultStatus, // Added vault_status field
               contract_type: contract_type,
               asset_whitelist: allowedPolicies,
-              // contributor_whitelist: vaultConfig.allowedContributors || [],
+              ...(contributorKeyHashes && { contributor_whitelist: contributorKeyHashes }),
               asset_window: {
                 lower_bound: {
                   bound_type: asset_window?.start
