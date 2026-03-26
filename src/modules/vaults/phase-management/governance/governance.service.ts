@@ -1689,7 +1689,36 @@ export class GovernanceService {
       throwOnFailure: true,
     });
 
-    await this.proposalRepository.remove(proposal);
+    try {
+      await this.proposalRepository.manager.transaction(async manager => {
+        const proposalToDelete = await manager.findOne(Proposal, {
+          where: { id: proposalId },
+        });
+
+        if (!proposalToDelete) {
+          return;
+        }
+
+        // Re-validate guarded conditions in the same DB transaction before deletion.
+        if (proposalToDelete.creatorId !== userId) {
+          throw new ForbiddenException('Only the proposal creator can delete this proposal');
+        }
+
+        if (proposalToDelete.status !== ProposalStatus.UPCOMING) {
+          throw new BadRequestException(
+            `Proposal can only be deleted while it is UPCOMING. Current status: ${proposalToDelete.status}`
+          );
+        }
+
+        await manager.remove(Proposal, proposalToDelete);
+      });
+    } catch (error: any) {
+      this.logger.error(
+        `Proposal ${proposalId} refund succeeded (tx: ${refundResult.txHash || 'n/a'}), but delete failed: ${error?.message || error}`,
+        error?.stack
+      );
+      throw new InternalServerErrorException('Refund completed, but proposal deletion failed. Please contact support.');
+    }
 
     return {
       success: true,

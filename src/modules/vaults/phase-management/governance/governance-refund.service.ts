@@ -10,7 +10,7 @@ import { TransactionsService } from '../../processing-tx/offchain-tx/transaction
 import { Proposal } from '@/database/proposal.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { ProposalStatus } from '@/types/proposal.types';
-import { TransactionType } from '@/types/transaction.types';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
 @Injectable()
 export class GovernanceRefundService {
@@ -66,6 +66,10 @@ export class GovernanceRefundService {
       .createQueryBuilder('tx')
       .where('tx.type = :type', { type: TransactionType.payment })
       .andWhere('tx.vault_id = :vaultId', { vaultId: proposal.vaultId })
+      .andWhere('tx.status IN (:...statuses)', {
+        statuses: [TransactionStatus.submitted, TransactionStatus.confirmed],
+      })
+      .andWhere('tx.tx_hash IS NOT NULL')
       .andWhere(`tx.metadata->>'kind' = :kind`, { kind: 'governance_creation_fee' })
       .andWhere(`tx.metadata->>'proposalId' = :proposalId`, { proposalId })
       .getOne();
@@ -75,7 +79,9 @@ export class GovernanceRefundService {
       return { refunded: false };
     }
 
-    // Idempotency: don't refund if a refund transaction exists already.
+    const refundedAt = new Date().toISOString();
+
+    // Idempotency: reuse existing refund record when possible.
     const existingRefundTx = await this.transactionRepository
       .createQueryBuilder('tx')
       .where('tx.type = :type', { type: TransactionType.payment })
@@ -85,32 +91,58 @@ export class GovernanceRefundService {
       .getOne();
 
     if (existingRefundTx) {
-      return { refunded: false };
+      if (
+        [TransactionStatus.submitted, TransactionStatus.confirmed].includes(existingRefundTx.status) &&
+        existingRefundTx.tx_hash
+      ) {
+        return { refunded: true, txHash: existingRefundTx.tx_hash };
+      }
     }
 
+    let refundTxId: string | undefined;
+
     try {
-      const refundedAt = new Date().toISOString();
+      if (existingRefundTx) {
+        // Resume/retry using the same DB transaction row to avoid duplicates.
+        refundTxId = existingRefundTx.id;
+        await this.transactionRepository.update(
+          { id: existingRefundTx.id },
+          {
+            status: TransactionStatus.created,
+            metadata: {
+              ...(existingRefundTx.metadata || {}),
+              kind: 'governance_creation_fee_refund',
+              refundOfProposalId: proposalId,
+              refundedAt,
+              paymentTxHash: paymentTx?.tx_hash,
+            } as any,
+          }
+        );
+      } else {
+        const refundTx = await this.transactionsService.createTransaction({
+          vault_id: proposal.vaultId,
+          type: TransactionType.payment,
+          assets: [],
+          amount: feeAmount,
+          userId: proposal.creatorId,
+          metadata: {
+            kind: 'governance_creation_fee_refund',
+            refundOfProposalId: proposalId,
+            refundedAt,
+            paymentTxHash: paymentTx?.tx_hash,
+          },
+        });
+        refundTxId = refundTx.id;
+      }
+
       const refundTxHash = await this.submitAdminRefundTx({
         proposalId,
+        proposalTitle: proposal.title,
         toAddress: creatorAddress,
         lovelaceAmount: feeAmount,
       });
 
-      const refundTx = await this.transactionsService.createTransaction({
-        vault_id: proposal.vaultId,
-        type: TransactionType.payment,
-        assets: [],
-        amount: feeAmount,
-        userId: proposal.creatorId,
-        metadata: {
-          kind: 'governance_creation_fee_refund',
-          refundOfProposalId: proposalId,
-          refundedAt,
-          paymentTxHash: paymentTx?.tx_hash,
-        },
-      });
-
-      await this.transactionsService.updateTransactionHash(refundTx.id, refundTxHash, {
+      await this.transactionsService.updateTransactionHash(refundTxId, refundTxHash, {
         kind: 'governance_creation_fee_refund',
         refundOfProposalId: proposalId,
         refundedAt,
@@ -122,6 +154,24 @@ export class GovernanceRefundService {
     } catch (error: any) {
       const message = error?.message || error?.toString?.() || 'Unknown refund error';
       this.logger.error(`Failed to refund proposal ${proposalId}: ${message}`, error?.stack);
+      if (refundTxId) {
+        await this.transactionRepository.update(
+          { id: refundTxId },
+          {
+            status: TransactionStatus.failed,
+            metadata: {
+              kind: 'governance_creation_fee_refund',
+              refundOfProposalId: proposalId,
+              refundedAt,
+              paymentTxHash: paymentTx?.tx_hash,
+              refundError: {
+                message,
+                timestamp: new Date().toISOString(),
+              },
+            } as any,
+          }
+        );
+      }
 
       if (throwOnFailure) {
         throw new Error(message);
@@ -133,10 +183,11 @@ export class GovernanceRefundService {
 
   private async submitAdminRefundTx(config: {
     proposalId: string;
+    proposalTitle?: string;
     toAddress: string;
     lovelaceAmount: number;
   }): Promise<string> {
-    const { toAddress, lovelaceAmount } = config;
+    const { proposalId, proposalTitle, toAddress, lovelaceAmount } = config;
 
     const network = this.isMainnet ? 'Mainnet' : 'Preprod';
     const lucid = await Lucid(
@@ -152,13 +203,41 @@ export class GovernanceRefundService {
     lucid.selectWallet.fromAddress(this.adminAddress, adminUtxos);
 
     // Refund is ADA-only and the receiver gets exactly `lovelaceAmount`.
+    const metadataMessage = this.formatRefundMetadataMessage(proposalId, proposalTitle);
     const tx = await lucid
       .newTx()
       .pay.ToAddress(toAddress, { lovelace: BigInt(lovelaceAmount) })
+      .attachMetadata(674, metadataMessage)
       .complete({ changeAddress: this.adminAddress });
 
     const signedTx = await tx.sign.withPrivateKey(this.adminSKey).complete();
     return await signedTx.submit();
+  }
+
+  private formatRefundMetadataMessage(proposalId: string, proposalTitle?: string): { msg: string[] } {
+    const proposalLabel = proposalTitle?.trim() || proposalId;
+    const raw = `L4VA: Governance fee refund for proposal ${proposalLabel}`;
+
+    const chunks: string[] = [];
+    let remaining = raw;
+    while (remaining.length > 0) {
+      if (remaining.length <= 64) {
+        chunks.push(remaining);
+        break;
+      }
+
+      let breakPoint = 64;
+      const searchSpace = remaining.slice(0, 65);
+      const lastSpace = searchSpace.lastIndexOf(' ');
+      if (lastSpace > 40) {
+        breakPoint = lastSpace;
+      }
+
+      chunks.push(remaining.slice(0, breakPoint).trimEnd());
+      remaining = remaining.slice(breakPoint).trimStart();
+    }
+
+    return { msg: chunks };
   }
 
   // Retry failed/pending refunds on rejected proposals.
@@ -168,13 +247,33 @@ export class GovernanceRefundService {
     this.isRetrying = true;
 
     try {
-      const rejectedProposals = await this.proposalRepository.find({
-        where: { status: ProposalStatus.REJECTED },
-        select: ['id'],
-      });
+      const batchSize = 100;
+      let page = 0;
+      let hasMore = true;
 
-      for (const proposal of rejectedProposals) {
-        await this.refundProposalCreationFeeIfNeeded(proposal.id, { throwOnFailure: false });
+      while (hasMore) {
+        const rejectedProposals = await this.proposalRepository.find({
+          where: { status: ProposalStatus.REJECTED },
+          select: ['id'],
+          skip: page * batchSize,
+          take: batchSize,
+        });
+
+        if (rejectedProposals.length === 0) {
+          hasMore = false;
+          continue;
+        }
+
+        for (const proposal of rejectedProposals) {
+          await this.refundProposalCreationFeeIfNeeded(proposal.id, { throwOnFailure: false });
+        }
+
+        if (rejectedProposals.length < batchSize) {
+          hasMore = false;
+          continue;
+        }
+
+        page += 1;
       }
     } catch (error: any) {
       this.logger.error(`retryPendingRefunds failed: ${error?.message || error}`, error?.stack);

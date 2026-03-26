@@ -129,19 +129,6 @@ export class Proposal {
       feeAmount: number; // Fee amount in lovelace
     };
 
-    // Persisted governance fee payment tracking (for later refunds)
-    feePayment?: {
-      feeAmount: number; // Fee amount in lovelace
-      paymentTxHash: string;
-      paidAt: string; // ISO date string
-      refundTxHash?: string;
-      refundedAt?: string; // ISO date string
-      refundError?: {
-        message: string;
-        timestamp: string; // ISO date string
-      };
-    };
-
     // Error tracking
     executionError?: {
       message: string;
