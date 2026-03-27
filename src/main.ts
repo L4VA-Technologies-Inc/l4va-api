@@ -20,6 +20,26 @@ async function bootstrap() {
     bodyParser: false, // Disable default body parser so we can configure it manually
   });
 
+  // Configure CORS
+  app.enableCors({
+    origin: [
+      'https://app.l4va.org',
+      'https://admin.l4va.org',
+      'https://testnet.l4va.org',
+      'https://dev-admin.l4va.org',
+      'https://l4va.cryptounity.space',
+      'http://localhost:3000',
+      'http://localhost:5173',
+      'http://localhost:8000',
+      'http://127.0.0.1:3000',
+      'http://127.0.0.1:5173',
+      'http://127.0.0.1:8000',
+    ],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  });
+
   // Configure body parsers with increased limits for webhook endpoint
   // Raw body parser for signature verification on webhook
   app.use('/blockchain/tx-webhook', bodyParser.raw({ type: 'application/json', limit: '50mb' }));

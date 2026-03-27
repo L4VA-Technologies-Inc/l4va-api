@@ -140,7 +140,7 @@ export class VaultsService {
    * @param file_key - GCS file key
    * @returns Array of valid Cardano addresses
    */
-  private async parseCSVFromS3(file_key: string): Promise<string[]> {
+  private async parseCSVFromGCS(file_key: string): Promise<string[]> {
     try {
       const { stream } = await this.gcsService.getCsv(file_key);
 
@@ -421,7 +421,7 @@ export class VaultsService {
       newVault.max_contribute_assets = Number(maxCountOf) || 0;
       await this.vaultsRepository.save(newVault);
       // Handle acquirer whitelist
-      const acquirerFromCsv = acquirerWhitelistFile ? await this.parseCSVFromS3(acquirerWhitelistFile.file_key) : [];
+      const acquirerFromCsv = acquirerWhitelistFile ? await this.parseCSVFromGCS(acquirerWhitelistFile.file_key) : [];
 
       const acquirer = data.acquirerWhitelist ? [...data.acquirerWhitelist.map(item => item.walletAddress)] : [];
 
@@ -438,7 +438,7 @@ export class VaultsService {
 
       // Handle contributors whitelist
       const contributorsFromCsv = contributorWhitelistFile
-        ? await this.parseCSVFromS3(contributorWhitelistFile.file_key)
+        ? await this.parseCSVFromGCS(contributorWhitelistFile.file_key)
         : [];
 
       const contributorList = data.contributorWhitelist
@@ -496,12 +496,37 @@ export class VaultsService {
       });
       const policyWhitelist = [...new Set(assetsWhitelistData.map(item => item.policy_id))];
 
-      // Load only wallet_address from contributor_whitelist
+      // Load wallet addresses from both contributor and acquirer whitelists
       const contributorWhitelistData = await this.contributorWhitelistRepository.find({
         where: { vault: { id: newVault.id } },
         select: ['wallet_address'],
       });
-      const contributorWhitelist = [...new Set(contributorWhitelistData.map(item => item.wallet_address))];
+      const acquirerWhitelistData = await this.acquirerWhitelistRepository.find({
+        where: { vault: { id: newVault.id } },
+        select: ['wallet_address'],
+      });
+
+      // Combine both whitelists into a unique array for smart contract
+      const contributorAddresses = contributorWhitelistData.map(item => item.wallet_address);
+      const acquirerAddresses = acquirerWhitelistData.map(item => item.wallet_address);
+      const allowedContributors = [...new Set([...contributorAddresses, ...acquirerAddresses])];
+
+      // Validate combined whitelist size (Cardano transaction size limit)
+      const MAX_COMBINED_WHITELIST_SIZE = 100;
+      if (allowedContributors.length > MAX_COMBINED_WHITELIST_SIZE) {
+        throw new BadRequestException(
+          `Combined whitelist exceeds maximum limit. ` +
+            `You have ${allowedContributors.length} unique addresses ` +
+            `(${contributorAddresses.length} contributors + ${acquirerAddresses.length} acquirers). ` +
+            `Maximum allowed is ${MAX_COMBINED_WHITELIST_SIZE} unique addresses to stay within Cardano transaction size limits.`
+        );
+      }
+
+      this.logger.log(
+        `Vault ${newVault.id}: Combined whitelist - ` +
+          `${contributorAddresses.length} contributors + ${acquirerAddresses.length} acquirers = ` +
+          `${allowedContributors.length} unique addresses`
+      );
 
       const privacy = vault_sc_privacy[finalVault.privacy as VaultPrivacy];
       const valueMethod = valuation_sc_type[finalVault.value_method as ValueMethod];
@@ -569,7 +594,7 @@ export class VaultsService {
           customerAddress: finalVault.owner.address,
           vaultId: finalVault.id,
           allowedPolicies: policyWhitelist,
-          allowedContributors: contributorWhitelist,
+          allowedContributors: allowedContributors,
           contractType: privacy,
           valueMethod: valueMethod,
           assetWindow,
@@ -1493,6 +1518,7 @@ export class VaultsService {
       vault.deleted = true;
       vault.liquidation_hash = txHash;
       vault.vault_status = VaultStatus.burned;
+      vault.deactivated_at = new Date();
 
       await this.vaultsRepository.update({ id: vault.id }, { ...vault });
       await this.transactionsService.updateTransactionHash(publishDto.txId, txHash);

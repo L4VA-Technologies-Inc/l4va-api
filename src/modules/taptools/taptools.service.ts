@@ -44,6 +44,18 @@ interface AssetPriceResult {
   priceUsd: number;
 }
 
+export interface TapToolsTokenPoolDto {
+  exchange: string;
+  lpTokenUnit: string;
+  onchainID: string;
+  tokenA: string;
+  tokenALocked: number;
+  tokenATicker: string;
+  tokenB: string | null;
+  tokenBLocked: number;
+  tokenBTicker: string;
+}
+
 @Injectable()
 export class TaptoolsService {
   private readonly logger = new Logger(TaptoolsService.name);
@@ -1817,6 +1829,38 @@ export class TaptoolsService {
 
     // 5. Fallback: assume NFT if quantity is 1
     return qty === 1;
+  }
+
+  public async getTokenPools(assetId: string): Promise<TapToolsTokenPoolDto[]> {
+    try {
+      const tapToolsResponse = await this.axiosTapToolsInstance.get<TapToolsTokenPoolDto[]>(
+        `/token/pools?unit=${encodeURIComponent(assetId)}`
+      );
+
+      return tapToolsResponse.data;
+    } catch (error: unknown) {
+      if (axios.isAxiosError(error)) {
+        const status = error.response?.status;
+        const errorData = error.response?.data as any;
+        const upstreamMessage =
+          (typeof errorData === 'string' ? errorData : errorData?.message) ?? error.message ?? 'Unknown error';
+
+        this.logger.error(
+          `Failed to fetch token pools for asset ${assetId} from TapTools (status: ${status ?? 'unknown'}): ${upstreamMessage}`
+        );
+
+        if (status) {
+          throw new HttpException(`TapTools error: ${upstreamMessage}`, status);
+        }
+
+        // No HTTP status available (network error, timeout, etc.)
+        throw new HttpException('Failed to reach TapTools service', 502);
+      }
+
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.logger.error(`Failed to fetch token pools for asset ${assetId}: ${errorMessage}`);
+      throw new HttpException('Failed to fetch token pools from TapTools', 502);
+    }
   }
 
   public invalidateWalletCache(walletAddress: string): void {
