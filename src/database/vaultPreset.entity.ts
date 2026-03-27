@@ -31,6 +31,9 @@ export class VaultPreset {
   @Column({ type: 'jsonb', nullable: true })
   config: Record<string, any>;
 
+  @Column({ name: 'is_active', type: 'boolean', default: true })
+  is_active: boolean;
+
   @Expose({ name: 'created_at' })
   @Column({ name: 'created_at', type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   created_at: Date;
