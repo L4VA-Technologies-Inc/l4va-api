@@ -68,7 +68,7 @@ export class GovernanceExecutionService {
     private readonly expansionService: ExpansionService,
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly treasuryWalletService: TreasuryWalletService,
-    private readonly governanceRefundService: GovernanceRefundService,
+    private readonly governanceRefundService: GovernanceRefundService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
