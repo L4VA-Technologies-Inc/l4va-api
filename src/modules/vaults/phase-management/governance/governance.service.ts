@@ -1685,6 +1685,17 @@ export class GovernanceService {
       );
     }
 
+    // Check if proposal starts in less than 1 hour
+    if (proposal.startDate) {
+      const now = new Date();
+      const timeUntilStart = proposal.startDate.getTime() - now.getTime();
+      const oneHourInMs = 60 * 60 * 1000;
+
+      if (timeUntilStart < oneHourInMs) {
+        throw new BadRequestException('Proposal cannot be deleted within 1 hour of its start time');
+      }
+    }
+
     const refundResult = await this.governanceRefundService.refundProposalCreationFeeIfNeeded(proposalId, {
       throwOnFailure: true,
     });
