@@ -1,6 +1,6 @@
 import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Brackets, Repository } from 'typeorm';
 
 import { CreatePresetReq } from './dto/createPreset.req';
 
@@ -29,13 +29,30 @@ export class PresetsService {
 
     const orderByCase = order.map((type, index) => `WHEN preset.type = '${type}' THEN ${index}`).join(' ');
 
-    return this.presetRepository
+    const hasActiveAdvancedBasePreset = await this.presetRepository.exists({
+      where: {
+        user_id: null,
+        type: VaultPresetType.advanced,
+        is_active: true,
+      },
+    });
+
+    const presetsQuery = this.presetRepository
       .createQueryBuilder('preset')
-      .where('preset.user_id IS NULL')
-      .orWhere('preset.user_id = :userId', { userId })
+      .where(
+        new Brackets(qb => {
+          qb.where('preset.user_id IS NULL').orWhere('preset.user_id = :userId', { userId });
+        })
+      )
+      .andWhere('preset.is_active = true')
       .orderBy(`CASE ${orderByCase} ELSE ${order.length} END`, 'ASC')
-      .addOrderBy('preset.created_at', 'DESC')
-      .getMany();
+      .addOrderBy('preset.created_at', 'DESC');
+
+    if (!hasActiveAdvancedBasePreset) {
+      presetsQuery.andWhere('preset.type != :customType', { customType: VaultPresetType.custom });
+    }
+
+    return presetsQuery.getMany();
   }
 
   async createPreset(userId: string, data: CreatePresetReq): Promise<VaultPreset> {
