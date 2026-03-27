@@ -43,6 +43,9 @@ import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.s
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
+import { GetAssetsToListRes } from '@/modules/vaults/phase-management/governance/dto/get-assets-to-list.res';
+import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
+import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
@@ -79,6 +82,7 @@ import { VoteType } from '@/types/vote.types';
 export class GovernanceService {
   private readonly logger = new Logger(GovernanceService.name);
   private blockfrost: BlockFrostAPI;
+  private readonly isMainnet: boolean;
   private readonly votingPowerCache: NodeCache;
   private readonly proposalCreationCache: NodeCache;
   private readonly poolAddress: string;
@@ -125,8 +129,11 @@ export class GovernanceService {
     private readonly dexHunterService: DexHunterService,
     private readonly blockchainService: BlockchainService,
     private readonly systemSettingsService: SystemSettingsService,
-    private readonly taptoolsService: TaptoolsService
+    private readonly wayUpPricingService: WayUpPricingService,
+    private readonly taptoolsService: TaptoolsService,
+    private readonly treasuryWalletService: TreasuryWalletService
   ) {
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
 
@@ -397,10 +404,10 @@ export class GovernanceService {
     createProposalReq: CreateProposalReq,
     userId: string
   ): Promise<CreateProposalRes> {
-    const vault: Pick<Vault, 'id' | 'vault_status' | 'policy_id' | 'asset_vault_name' | 'name'> =
+    const vault: Pick<Vault, 'id' | 'vault_status' | 'policy_id' | 'asset_vault_name' | 'name' | 'assets_whitelist'> =
       await this.vaultRepository.findOne({
         where: { id: vaultId },
-        select: ['id', 'vault_status', 'policy_id', 'asset_vault_name', 'name'],
+        select: ['id', 'vault_status', 'policy_id', 'asset_vault_name', 'name', 'assets_whitelist'],
       });
 
     if (!vault) {
@@ -473,38 +480,71 @@ export class GovernanceService {
     // Check for only 1 active market action proposal for the same asset at a time
     if (createProposalReq.type === ProposalType.MARKETPLACE_ACTION) {
       const requestedActions = createProposalReq.marketplaceActions || [];
-      const requestedAssetIds = requestedActions.map(action => action.assetId);
 
-      // Find all active/upcoming marketplace action proposals for this vault
-      const activeMarketProposals = await this.proposalRepository.find({
-        where: {
-          vaultId,
-          proposalType: ProposalType.MARKETPLACE_ACTION,
-          status: In([ProposalStatus.ACTIVE, ProposalStatus.UPCOMING]),
-        },
-      });
+      if (requestedActions.length > 0) {
+        const requestedAssetIds = requestedActions
+          .filter(action => action.exec !== ExecType.BUY && action.exec !== ExecType.OFFER)
+          .map(action => action.assetId);
 
-      // Check if any of the requested assets are already in an active proposal
-      for (const existingProposal of activeMarketProposals) {
-        const existingActions = existingProposal.metadata?.marketplaceActions || [];
-        const existingAssetIds = existingActions.map((action: any) => action.assetId);
+        const requestedBuyAssetIds = requestedActions
+          .filter(action => action.exec === ExecType.BUY)
+          .map(action => action.assetId);
 
-        // Check for overlap
-        const overlappingAssets = requestedAssetIds.filter(assetId => existingAssetIds.includes(assetId));
+        const requestedOfferAssetIds = requestedActions
+          .filter(action => action.exec === ExecType.OFFER)
+          .map(action => action.assetId);
 
-        if (overlappingAssets.length > 0) {
-          // Get asset names for better error message
-          const overlappingAssetRecords = await this.assetRepository.find({
-            where: { id: In(overlappingAssets) },
-            select: ['id', 'name'],
-          });
+        const activeMarketProposals = await this.proposalRepository.find({
+          where: {
+            vaultId,
+            proposalType: ProposalType.MARKETPLACE_ACTION,
+            status: In([ProposalStatus.ACTIVE, ProposalStatus.UPCOMING]),
+          },
+        });
 
-          const assetNames = overlappingAssetRecords.map(a => a.name || a.id).join(', ');
+        for (const existingProposal of activeMarketProposals) {
+          const existingActions = existingProposal.metadata?.marketplaceActions || [];
 
-          throw new BadRequestException(
-            `Cannot create market action proposal. The following assets are already in an active proposal "${existingProposal.title}": ${assetNames}. ` +
-              `Please wait for that proposal to complete before creating a new one for these assets.`
-          );
+          // Check DB assets (SELL / UNLIST / UPDATE_LISTING)
+          if (requestedAssetIds.length > 0) {
+            const existingDbAssetIds = existingActions
+              .filter((a: any) => a.exec !== ExecType.BUY)
+              .map((a: any) => a.assetId);
+
+            const overlapping = requestedAssetIds.filter(id => existingDbAssetIds.includes(id));
+
+            if (overlapping.length > 0) {
+              const records = await this.assetRepository.find({
+                where: { id: In(overlapping) },
+                select: ['id', 'name'],
+              });
+              const assetNames = records.map(a => a.name || a.id).join(', ');
+
+              throw new BadRequestException(
+                `Cannot create market action proposal. The following assets are already in an active proposal "${existingProposal.title}": ${assetNames}. ` +
+                  `Please wait for that proposal to complete before creating a new one for these assets.`
+              );
+            }
+          }
+
+          // Check BUY and OFFER assets — they are mutually exclusive for the same NFT
+          // (cannot BUY if an active OFFER exists for it, and vice versa)
+          const allRequestedExternalIds = [...requestedBuyAssetIds, ...requestedOfferAssetIds];
+
+          if (allRequestedExternalIds.length > 0) {
+            const existingExternalIds = existingActions
+              .filter((a: any) => a.exec === ExecType.BUY || a.exec === ExecType.OFFER)
+              .map((a: any) => a.assetId);
+
+            const overlapping = allRequestedExternalIds.filter(id => existingExternalIds.includes(id));
+
+            if (overlapping.length > 0) {
+              throw new BadRequestException(
+                `Cannot create proposal. Some NFTs already have an active buy or offer proposal "${existingProposal.title}". ` +
+                  `Please wait for that proposal to complete before creating a new one for these NFTs.`
+              );
+            }
+          }
         }
       }
     }
@@ -599,6 +639,51 @@ export class GovernanceService {
 
         const market = actions[0]?.market;
 
+        // Pre-check (mainnet only): ensure treasury has enough ADA for WayUp BUY and OFFER operations
+        if (this.isMainnet && market === 'WayUp') {
+          const buyActions = actions.filter(a => a.exec === ExecType.BUY);
+          const offerActions = actions.filter(a => a.exec === ExecType.OFFER);
+
+          const totalBuyAda = buyActions.reduce((sum, a) => {
+            const maxPrice = a.price ? parseFloat(a.price) : 0;
+            return sum + (isNaN(maxPrice) ? 0 : maxPrice);
+          }, 0);
+
+          const totalOfferAda = offerActions.reduce((sum, a) => {
+            const offerPrice = a.price ? parseFloat(a.price) : 0;
+            return sum + (isNaN(offerPrice) ? 0 : offerPrice);
+          }, 0);
+
+          const totalMaxAda = totalBuyAda + totalOfferAda;
+
+          if (totalMaxAda > 0) {
+            try {
+              const balance = await this.treasuryWalletService.getTreasuryWalletBalance(vaultId);
+              const adaBalance = balance.lovelace / 1_000_000;
+
+              if (adaBalance < totalMaxAda) {
+                throw new BadRequestException(
+                  `Treasury wallet has insufficient ADA for this proposal. ` +
+                    `Required up to ${totalMaxAda} ADA for WayUp buys/offers, available: ${adaBalance.toFixed(2)} ADA.`
+                );
+              }
+            } catch (error) {
+              this.logger.error(
+                `Failed to validate treasury balance for vault ${vaultId}: ${error.message}`,
+                error.stack
+              );
+
+              if (error instanceof BadRequestException) {
+                throw error;
+              }
+
+              throw new BadRequestException(
+                'Unable to validate treasury wallet balance for this proposal. Please try again later.'
+              );
+            }
+          }
+        }
+
         // For DexHunter, fetch all assets and aggregate by token to allow multi-asset swaps
         const assetsByToken = new Map<
           string,
@@ -629,6 +714,114 @@ export class GovernanceService {
         // Validate all assets exist and handle market-specific validation
         await Promise.all(
           actions.map(async action => {
+            // BUY actions target external NFTs (not in our DB) — skip DB lookup, validate via WayUp API below
+            if (action.exec === ExecType.BUY) {
+              if (market === 'WayUp') {
+                const policyId = action.assetId.length >= 56 ? action.assetId.slice(0, 56) : action.assetId;
+
+                const isWhitelisted = vault.assets_whitelist?.some(
+                  whitelistItem => whitelistItem.policy_id === policyId
+                );
+
+                if (!isWhitelisted) {
+                  throw new BadRequestException(
+                    `Policy ID ${policyId.substring(0, 6)}...${policyId.substring(policyId.length - 6)} is not whitelisted for this vault.`
+                  );
+                }
+
+                const collectionResponse = await this.wayUpPricingService.getCollectionAssets({
+                  policyId,
+                  saleType: 'listedOnly',
+                  orderBy: 'priceAsc',
+                  term: action.assetName,
+                  limit: 1,
+                });
+
+                const exactAsset = collectionResponse.results?.[0];
+
+                const displayName = exactAsset?.name || action.assetName || action.assetId;
+
+                if (!exactAsset?.listing) {
+                  throw new BadRequestException(
+                    `NFT ${displayName} is not available for purchase — no active listing found on WayUp.`
+                  );
+                }
+
+                const listingPriceAda = exactAsset.listing.price / 1_000_000;
+                const maxPriceAda = action.price ? parseFloat(action.price) : null;
+
+                if (maxPriceAda != null && listingPriceAda > maxPriceAda) {
+                  throw new BadRequestException(
+                    `NFT ${displayName} current listing price is ${listingPriceAda} ADA, ` +
+                      `but proposal max price is ${maxPriceAda} ADA. Update the price or choose a different asset.`
+                  );
+                }
+
+                action.nftSnapshot = {
+                  name: exactAsset.name,
+                  image: exactAsset.image ?? null,
+                  listingPriceAda,
+                  policyId: exactAsset.policyId,
+                  assetName: exactAsset.assetName,
+                  collectionName: exactAsset.collection?.name ?? null,
+                };
+              }
+              return;
+            }
+
+            // OFFER actions target external NFTs — validate policy whitelist and NFT existence via WayUp API
+            if (action.exec === ExecType.OFFER) {
+              if (market === 'WayUp') {
+                const policyId = action.assetId.length >= 56 ? action.assetId.slice(0, 56) : action.assetId;
+
+                const isWhitelisted = vault.assets_whitelist?.some(
+                  whitelistItem => whitelistItem.policy_id === policyId
+                );
+
+                if (!isWhitelisted) {
+                  throw new BadRequestException(
+                    `Policy ID ${policyId.substring(0, 6)}...${policyId.substring(policyId.length - 6)} is not whitelisted for this vault.`
+                  );
+                }
+
+                if (!action.price || isNaN(parseFloat(action.price)) || parseFloat(action.price) <= 0) {
+                  throw new BadRequestException(
+                    `Offer price is required and must be greater than 0 for OFFER action on NFT ${action.assetName || action.assetId}.`
+                  );
+                }
+
+                // Query WayUp to confirm the NFT exists and resolve hex assetName for nftSnapshot
+                // Unlike BUY, the NFT doesn't need to be listed — we can offer on any NFT in the collection
+                const collectionResponse = await this.wayUpPricingService.getCollectionAssets({
+                  policyId,
+                  term: action.assetName,
+                  limit: 1,
+                });
+
+                const exactAsset = collectionResponse.results?.[0];
+                const displayName = exactAsset?.name || action.assetName || action.assetId;
+
+                if (!exactAsset) {
+                  throw new BadRequestException(
+                    `NFT ${displayName} was not found in collection ${policyId.substring(0, 8)}... on WayUp. Cannot place an offer.`
+                  );
+                }
+
+                const offerPriceAda = parseFloat(action.price);
+                const currentListingPriceAda = exactAsset.listing ? exactAsset.listing.price / 1_000_000 : null;
+
+                action.nftSnapshot = {
+                  name: exactAsset.name,
+                  image: exactAsset.image ?? null,
+                  listingPriceAda: currentListingPriceAda ?? offerPriceAda,
+                  policyId: exactAsset.policyId,
+                  assetName: exactAsset.assetName,
+                  collectionName: exactAsset.collection?.name ?? null,
+                };
+              }
+              return;
+            }
+
             const asset: Pick<Asset, 'id' | 'status' | 'type' | 'policy_id' | 'asset_id' | 'quantity' | 'name'> =
               await this.assetRepository.findOne({
                 where: { id: action.assetId },
@@ -1231,7 +1424,10 @@ export class GovernanceService {
     const burnAssetIds = proposal.metadata?.burnAssets || [];
     const fungibleTokenIds = proposal.metadata?.fungibleTokens?.map(ft => ft.id) || [];
     const nonFungibleTokenIds = proposal.metadata?.nonFungibleTokens?.map(nft => nft.id) || [];
-    const marketplaceActionIds = proposal.metadata?.marketplaceActions?.map(ma => ma.assetId) || [];
+    const marketplaceActionIds =
+      proposal.metadata?.marketplaceActions
+        ?.filter(ma => ma.exec !== ExecType.BUY && ma.exec !== ExecType.OFFER)
+        .map(ma => ma.assetId) || [];
 
     [...burnAssetIds, ...fungibleTokenIds, ...nonFungibleTokenIds, ...marketplaceActionIds].forEach(id =>
       allAssetIds.add(id)
@@ -1358,12 +1554,33 @@ export class GovernanceService {
     // Transform marketplace actions with enriched asset data and WayUp URLs
     // For DexHunter swaps, combine quantities by token (policy_id + asset_id)
     const marketplaceActions = (proposal.metadata?.marketplaceActions || []).map(action => {
-      const asset = assetMap.get(action.assetId);
-
-      // Check if this is a DexHunter swap action (has slippage field)
+      const isBuy = action.exec === 'BUY';
+      const isOffer = action.exec === 'OFFER';
       const isSwapAction = action.slippage !== undefined || action.market === 'DexHunter';
 
-      // Generate WayUp URL only for non-swap actions (NFT marketplace actions)
+      if (isBuy || isOffer) {
+        let wayupUrl: string | undefined;
+        if (!isSwapAction && action.nftSnapshot) {
+          wayupUrl = `https://www.wayup.io/collection/${action.nftSnapshot.policyId}/asset/${action.nftSnapshot.assetName}?tab=activity`;
+        }
+
+        const cleanId = action.nftSnapshot?.image?.split('/').pop()?.split('?')[0];
+        const assetImg = cleanId ? `https://ipfs.blockfrost.dev/ipfs/${cleanId}` : undefined;
+
+        return {
+          ...action,
+          assetName: action.nftSnapshot?.name ?? action.assetId,
+          assetImg,
+          assetPrice: action.nftSnapshot?.listingPriceAda ?? 0,
+          listingPrice: null,
+          assetStatus: null,
+          wayupUrl,
+        };
+      }
+
+      // Handling internal assets (those that exist in the database)
+      const asset = assetMap.get(action.assetId);
+
       let wayupUrl: string | undefined;
       if (!isSwapAction && asset?.policy_id && asset?.asset_id) {
         wayupUrl = `https://www.wayup.io/collection/${asset.policy_id}/asset/${asset.asset_id}?tab=activity`;
@@ -2040,7 +2257,7 @@ export class GovernanceService {
     }
   }
 
-  async getAssetsToList(vaultId: string): Promise<AssetBuySellDto[]> {
+  async getAssetsToList(vaultId: string): Promise<GetAssetsToListRes> {
     try {
       // Get all assets in the vault
       const assets: Pick<
@@ -2071,9 +2288,16 @@ export class GovernanceService {
         ],
       });
 
-      return plainToInstance(AssetBuySellDto, assets, {
-        excludeExtraneousValues: true,
-      });
+      const treasuryWalletBalance = this.isMainnet
+        ? await this.treasuryWalletService.getTreasuryWalletBalance(vaultId)
+        : null;
+
+      return {
+        assets: plainToInstance(AssetBuySellDto, assets, {
+          excludeExtraneousValues: true,
+        }),
+        treasuryWalletBalance,
+      };
     } catch (error) {
       this.logger.error(`Error getting assets for buy-sell proposals for vault ${vaultId}: ${error.message}`);
       throw new InternalServerErrorException('Error getting assets for buying/selling');

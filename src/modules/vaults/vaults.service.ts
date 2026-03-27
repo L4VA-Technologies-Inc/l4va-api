@@ -760,7 +760,8 @@ export class VaultsService {
     vault.assets_whitelist = assetsWhitelist;
     vault.acquirer_whitelist = acquirerWhitelist;
 
-    // Get count of contributed assets for this vault (PENDING, LOCKED, EXTRACTED)
+    // Get count of active assets for this vault (PENDING, LOCKED, EXTRACTED, OFFERED)
+    // Includes both contributed and bought assets
     const { lockedNFTCount, lockedFTsCount } = await this.assetsRepository
       .createQueryBuilder('asset')
       .select([
@@ -769,9 +770,11 @@ export class VaultsService {
       ])
       .where('asset.vault_id = :vaultId', { vaultId })
       .andWhere('asset.status IN (:...statuses)', {
-        statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED],
+        statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED, AssetStatus.OFFERED],
       })
-      .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
+      .andWhere('asset.origin_type IN (:...originTypes)', {
+        originTypes: [AssetOriginType.CONTRIBUTED, AssetOriginType.BOUGHT],
+      })
       .setParameters({
         nftType: AssetType.NFT,
         ftType: AssetType.FT,
@@ -790,7 +793,7 @@ export class VaultsService {
       .addSelect(`SUM(CASE WHEN asset.type = :nftType THEN 1 ELSE asset.quantity END)`, 'quantity')
       .where('asset.vault_id = :vaultId', { vaultId })
       .andWhere('asset.status IN (:...statuses)', {
-        statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED],
+        statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED, AssetStatus.OFFERED],
       })
       .andWhere('asset.deleted = false')
       .andWhere(`asset.policy_id != 'lovelace'`)

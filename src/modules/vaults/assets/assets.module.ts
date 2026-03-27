@@ -11,9 +11,13 @@ import { Snapshot } from '@/database/snapshot.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { GoogleCloudStorageModule } from '@/modules/google_cloud/google_bucket/bucket.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Asset, Vault, Transaction, User, Claim, Snapshot, Market])],
+  imports: [
+    TypeOrmModule.forFeature([Asset, Vault, Transaction, User, Claim, Snapshot, Market]),
+    GoogleCloudStorageModule,
+  ],
   controllers: [AssetsController],
   providers: [AssetsService],
   exports: [AssetsService],

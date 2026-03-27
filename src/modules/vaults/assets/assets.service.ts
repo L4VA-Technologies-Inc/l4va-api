@@ -15,6 +15,7 @@ import { Market } from '@/database/market.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { GoogleCloudStorageService } from '@/modules/google_cloud/google_bucket/bucket.service';
 import { PriceService } from '@/modules/price/price.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { VaultStatus } from '@/types/vault.types';
@@ -37,7 +38,8 @@ export class AssetsService {
     @InjectRepository(Market)
     private readonly marketRepository: Repository<Market>,
     private readonly eventEmitter: EventEmitter2,
-    private readonly priceService: PriceService
+    private readonly priceService: PriceService,
+    private readonly gcsService: GoogleCloudStorageService
   ) {}
 
   async addAssetToVault(userId: string, data: CreateAssetDto): Promise<Record<string, unknown>> {
@@ -128,7 +130,7 @@ export class AssetsService {
       ])
       .where('asset.vault_id = :vaultId', { vaultId })
       .andWhere('asset.origin_type IN (:...originTypes)', {
-        originTypes: [AssetOriginType.CONTRIBUTED, AssetOriginType.FEE],
+        originTypes: [AssetOriginType.CONTRIBUTED, AssetOriginType.BOUGHT, AssetOriginType.FEE],
       })
       .andWhere('asset.status IN (:...statuses)', {
         statuses: [
@@ -685,6 +687,50 @@ export class AssetsService {
     } catch (error) {
       throw new Error(`Failed to update asset valuations: ${error.message}`);
     }
+  }
+
+  async recordBoughtAsset(params: {
+    vaultId: string;
+    policyId: string;
+    assetId: string;
+    name: string;
+    image?: string;
+    floorPrice: number;
+    metadata?: any;
+    status?: AssetStatus;
+  }): Promise<Asset> {
+    const vault = await this.vaultsRepository.findOne({ where: { id: params.vaultId } });
+
+    if (!vault) {
+      throw new Error(`Vault ${params.vaultId} not found`);
+    }
+
+    let imageKey: string | null = null;
+    if (params.image) {
+      const fileKey = await this.gcsService.uploadAssetImage(params.image);
+      if (fileKey) {
+        imageKey = fileKey;
+      } else {
+        imageKey = params.image; // fallback to original URL if upload fails
+      }
+    }
+
+    const asset = this.assetsRepository.create({
+      vault,
+      policy_id: params.policyId,
+      asset_id: params.assetId,
+      name: params.name,
+      image: imageKey,
+      type: AssetType.NFT,
+      quantity: 1,
+      floor_price: params.floorPrice,
+      status: params.status ?? AssetStatus.LOCKED,
+      origin_type: AssetOriginType.BOUGHT,
+      added_by: null,
+      metadata: params.metadata ?? null,
+    });
+
+    return this.assetsRepository.save(asset);
   }
 
   async softDeleteAsset(assetId: string, userId: string): Promise<void> {
