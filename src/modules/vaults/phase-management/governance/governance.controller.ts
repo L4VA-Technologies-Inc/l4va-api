@@ -1,12 +1,12 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { DistributionService } from './distribution.service';
 import { CreateProposalReq } from './dto/create-proposal.req';
 import { CreateProposalRes } from './dto/create-proposal.res';
 import { GetDistributionInfoRes } from './dto/distribution.dto';
+import { GetAssetsToListRes } from './dto/get-assets-to-list.res';
 import { GetAssetsToStakeRes } from './dto/get-assets-to-stake.res';
-import { AssetBuySellDto } from './dto/get-assets.dto';
 import { GetProposalDetailRes } from './dto/get-proposal-detail.res';
 import { GetProposalsRes, GetProposalsResItem } from './dto/get-proposal.dto';
 import { GetVotingPowerRes } from './dto/get-voting-power.res';
@@ -23,6 +23,7 @@ import { GovernanceService } from './governance.service';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
 import { OptionalAuthGuard } from '@/modules/auth/optional-auth.guard';
+import { AssetBuySellDto } from '@/modules/vaults/phase-management/governance/dto/get-assets.dto';
 
 @ApiTags('Governance')
 @Controller('governance')
@@ -102,6 +103,17 @@ export class GovernanceController {
     return this.governanceService.getProposal(proposalId, req.user.sub);
   }
 
+  @Delete('proposals/:proposalId')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Delete an upcoming or unpaid governance proposal (owner only)' })
+  @ApiResponse({ status: 200, description: 'Proposal deleted successfully' })
+  async deleteProposal(
+    @Req() req: AuthRequest,
+    @Param('proposalId', ParseUUIDPipe) proposalId: string
+  ): Promise<{ success: boolean; message: string; refundTxHash?: string }> {
+    return this.governanceService.deleteProposal(proposalId, req.user.sub);
+  }
+
   @Get('vaults/:vaultId/voting-power')
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Get user voting power in a vault' })
@@ -121,9 +133,9 @@ export class GovernanceController {
   @ApiResponse({
     status: 200,
     description: 'List of assets available for trading',
-    type: [AssetBuySellDto],
+    type: GetAssetsToListRes,
   })
-  async getAssetsToList(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<AssetBuySellDto[]> {
+  async getAssetsToList(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<GetAssetsToListRes> {
     return await this.governanceService.getAssetsToList(vaultId);
   }
 
