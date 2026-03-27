@@ -104,7 +104,7 @@ export class GovernanceController {
 
   @Delete('proposals/:proposalId')
   @UseGuards(AuthGuard)
-  @ApiOperation({ summary: 'Delete an upcoming governance proposal (owner only)' })
+  @ApiOperation({ summary: 'Delete an upcoming or unpaid governance proposal (owner only)' })
   @ApiResponse({ status: 200, description: 'Proposal deleted successfully' })
   async deleteProposal(
     @Req() req: AuthRequest,

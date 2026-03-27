@@ -81,31 +81,39 @@ export class GovernanceRefundService {
 
     const refundedAt = new Date().toISOString();
 
-    // Idempotency: reuse existing refund record when possible.
-    const existingRefundTx = await this.transactionRepository
-      .createQueryBuilder('tx')
-      .where('tx.type = :type', { type: TransactionType.payment })
-      .andWhere('tx.vault_id = :vaultId', { vaultId: proposal.vaultId })
-      .andWhere(`tx.metadata->>'kind' = :kind`, { kind: 'governance_creation_fee_refund' })
-      .andWhere(`tx.metadata->>'refundOfProposalId' = :proposalId`, { proposalId })
-      .getOne();
-
-    if (existingRefundTx) {
-      if (
-        [TransactionStatus.submitted, TransactionStatus.confirmed].includes(existingRefundTx.status) &&
-        existingRefundTx.tx_hash
-      ) {
-        return { refunded: true, txHash: existingRefundTx.tx_hash };
-      }
-    }
-
-    let refundTxId: string | undefined;
+    // Use database transaction with pessimistic locking to prevent race conditions.
+    const queryRunner = this.transactionRepository.manager.connection.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
     try {
+      // Acquire a pessimistic write lock to ensure only one worker can proceed.
+      const existingRefundTx = await queryRunner.manager
+        .createQueryBuilder(Transaction, 'tx')
+        .setLock('pessimistic_write')
+        .where('tx.type = :type', { type: TransactionType.payment })
+        .andWhere('tx.vault_id = :vaultId', { vaultId: proposal.vaultId })
+        .andWhere(`tx.metadata->>'kind' = :kind`, { kind: 'governance_creation_fee_refund' })
+        .andWhere(`tx.metadata->>'refundOfProposalId' = :proposalId`, { proposalId })
+        .getOne();
+
+      if (existingRefundTx) {
+        if (
+          [TransactionStatus.submitted, TransactionStatus.confirmed].includes(existingRefundTx.status) &&
+          existingRefundTx.tx_hash
+        ) {
+          await queryRunner.commitTransaction();
+          return { refunded: true, txHash: existingRefundTx.tx_hash };
+        }
+      }
+
+      let refundTxId: string | undefined;
+
       if (existingRefundTx) {
         // Resume/retry using the same DB transaction row to avoid duplicates.
         refundTxId = existingRefundTx.id;
-        await this.transactionRepository.update(
+        await queryRunner.manager.update(
+          Transaction,
           { id: existingRefundTx.id },
           {
             status: TransactionStatus.created,
@@ -135,6 +143,9 @@ export class GovernanceRefundService {
         refundTxId = refundTx.id;
       }
 
+      // Commit transaction before submitting to blockchain to ensure DB state is persisted.
+      await queryRunner.commitTransaction();
+
       const refundTxHash = await this.submitAdminRefundTx({
         proposalId,
         proposalTitle: proposal.title,
@@ -152,25 +163,32 @@ export class GovernanceRefundService {
 
       return { refunded: true, txHash: refundTxHash };
     } catch (error: any) {
+      await queryRunner.rollbackTransaction();
       const message = error?.message || error?.toString?.() || 'Unknown refund error';
       this.logger.error(`Failed to refund proposal ${proposalId}: ${message}`, error?.stack);
-      if (refundTxId) {
-        await this.transactionRepository.update(
-          { id: refundTxId },
-          {
-            status: TransactionStatus.failed,
-            metadata: {
-              kind: 'governance_creation_fee_refund',
-              refundOfProposalId: proposalId,
-              refundedAt,
-              paymentTxHash: paymentTx?.tx_hash,
-              refundError: {
-                message,
-                timestamp: new Date().toISOString(),
-              },
-            } as any,
-          }
-        );
+
+      // Update failure state outside of rolled-back transaction.
+      if (error.refundTxId) {
+        try {
+          await this.transactionRepository.update(
+            { id: error.refundTxId },
+            {
+              status: TransactionStatus.failed,
+              metadata: {
+                kind: 'governance_creation_fee_refund',
+                refundOfProposalId: proposalId,
+                refundedAt,
+                paymentTxHash: paymentTx?.tx_hash,
+                refundError: {
+                  message,
+                  timestamp: new Date().toISOString(),
+                },
+              } as any,
+            }
+          );
+        } catch (updateError) {
+          this.logger.error(`Failed to update transaction status: ${updateError}`);
+        }
       }
 
       if (throwOnFailure) {
@@ -178,6 +196,8 @@ export class GovernanceRefundService {
       }
 
       return { refunded: false };
+    } finally {
+      await queryRunner.release();
     }
   }
 
