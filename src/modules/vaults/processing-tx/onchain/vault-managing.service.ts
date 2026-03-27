@@ -335,17 +335,26 @@ export class VaultManagingService {
 
     const vaultAddress = getAddressFromHash(scriptHash, this.networkId);
 
-    // Convert contributor wallet addresses to verification key hashes for smart contract
-    const contributorKeyHashes =
-      vaultConfig.allowedContributors && vaultConfig.allowedContributors.length > 0
-        ? convertAddressesToKeyHashes(vaultConfig.allowedContributors)
-        : null;
-
-    if (contributorKeyHashes && contributorKeyHashes.length > 0) {
-      this.logger.log(`Vault creation with contributor whitelist: ${contributorKeyHashes.length} contributors`);
-    }
-
     try {
+      // Convert contributor wallet addresses to verification key hashes for smart contract
+      let contributorKeyHashes: string[] | null = null;
+      try {
+        contributorKeyHashes =
+          vaultConfig.allowedContributors && vaultConfig.allowedContributors.length > 0
+            ? convertAddressesToKeyHashes(vaultConfig.allowedContributors)
+            : null;
+
+        if (contributorKeyHashes && contributorKeyHashes.length > 0) {
+          this.logger.log(`Vault creation with contributor whitelist: ${contributorKeyHashes.length} contributors`);
+        }
+      } catch (conversionError) {
+        this.logger.error('Failed to convert contributor addresses to key hashes:', conversionError);
+        await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
+        throw new BadRequestException(
+          `Invalid contributor address(es): ${conversionError.message || 'Unable to convert wallet addresses to verification key hashes. Please ensure all addresses are valid Cardano addresses.'}`
+        );
+      }
+
       const input: VaultCreationInput = {
         changeAddress: vaultConfig.customerAddress,
         message: `${vaultConfig.vaultName} Vault Creation`,
@@ -631,13 +640,22 @@ export class VaultManagingService {
     const contract_type = vault.privacy === VaultPrivacy.private ? 0 : vault.privacy === VaultPrivacy.public ? 1 : 2;
 
     // Convert contributor wallet addresses to verification key hashes for smart contract
-    const contributorKeyHashes =
-      contributorWhitelist && contributorWhitelist.length > 0
-        ? convertAddressesToKeyHashes(contributorWhitelist)
-        : null;
+    let contributorKeyHashes: string[] | null = null;
+    try {
+      contributorKeyHashes =
+        contributorWhitelist && contributorWhitelist.length > 0
+          ? convertAddressesToKeyHashes(contributorWhitelist)
+          : null;
 
-    if (contributorKeyHashes && contributorKeyHashes.length > 0) {
-      this.logger.log(`Vault update with contributor whitelist: ${contributorKeyHashes.length} contributors`);
+      if (contributorKeyHashes && contributorKeyHashes.length > 0) {
+        this.logger.log(`Vault update with contributor whitelist: ${contributorKeyHashes.length} contributors`);
+      }
+    } catch (conversionError) {
+      this.logger.error('Failed to convert contributor addresses to key hashes:', conversionError);
+      await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
+      throw new BadRequestException(
+        `Invalid contributor address(es): ${conversionError.message || 'Unable to convert wallet addresses to verification key hashes. Please ensure all addresses are valid Cardano addresses.'}`
+      );
     }
 
     this.scAddress = getAddressFromHash(this.scPolicyId, this.networkId);
