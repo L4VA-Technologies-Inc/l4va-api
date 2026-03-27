@@ -65,25 +65,37 @@ export class VaultFilesCleanupService {
 
   private async cleanupVaultFiles(vault: Vault, threshold: Date): Promise<void> {
     // 1. Clean vault-level files (vault_image, ft_token_img, acquirer_whitelist_csv)
-    const vaultFilesToDelete: FileEntity[] = [
-      vault.vault_image as FileEntity,
-      vault.ft_token_img as FileEntity,
-      vault.acquirer_whitelist_csv as FileEntity,
-    ].filter(Boolean);
+    const vaultFilesToDelete: { file: FileEntity; field: keyof Vault }[] = [];
+
+    if (vault.vault_image) {
+      vaultFilesToDelete.push({ file: vault.vault_image as FileEntity, field: 'vault_image' });
+    }
+    if (vault.ft_token_img) {
+      vaultFilesToDelete.push({ file: vault.ft_token_img as FileEntity, field: 'ft_token_img' });
+    }
+    if (vault.acquirer_whitelist_csv) {
+      vaultFilesToDelete.push({
+        file: vault.acquirer_whitelist_csv as FileEntity,
+        field: 'acquirer_whitelist_csv',
+      });
+    }
 
     if (vaultFilesToDelete.length > 0) {
-      await this.vaultRepository.update(
-        { id: vault.id },
-        { vault_image: null, ft_token_img: null, acquirer_whitelist_csv: null }
-      );
+      const updatePayload: Partial<Vault> = {};
 
-      for (const file of vaultFilesToDelete) {
+      for (const { file, field } of vaultFilesToDelete) {
         try {
           await this.gcsService.deleteFile(file.file_key);
+          await this.fileRepository.delete({ id: file.id });
+          (updatePayload as any)[field] = null;
           this.logger.log(`Deleted vault file ${file.file_key} for vault ${vault.id}`);
         } catch (error) {
           this.logger.warn(`Failed to delete vault file ${file.file_key}: ${error?.message ?? error}`);
         }
+      }
+
+      if (Object.keys(updatePayload).length > 0) {
+        await this.vaultRepository.update({ id: vault.id }, updatePayload);
       }
     }
 
@@ -119,6 +131,7 @@ export class VaultFilesCleanupService {
 
       try {
         await this.gcsService.deleteFile(fileKey);
+        await this.fileRepository.delete({ id: fileEntity.id });
         this.logger.log(`Deleted asset image ${fileKey} for vault ${vault.id}`);
       } catch (error) {
         this.logger.warn(`Failed to delete asset image ${fileKey}: ${error?.message ?? error}`);
