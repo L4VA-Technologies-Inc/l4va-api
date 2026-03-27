@@ -24,14 +24,6 @@ coverage/
 # Docs
 documentation/
 
-# Env / secrets
-.env
-.env.*
-!.env.example
-gcp-*.json
-*.pem
-*.key
-
 # IDE
 .vscode/
 .idea/
