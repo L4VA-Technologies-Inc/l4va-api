@@ -15,6 +15,7 @@ import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { In, IsNull, Not, Repository } from 'typeorm';
 
+import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from '../../processing-tx/onchain/blockchain.service';
 
 import { DistributionService } from './distribution.service';
@@ -26,6 +27,7 @@ import { GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';
 import { VoteRes } from './dto/vote.res';
 import { GovernanceFeeService } from './governance-fee.service';
+import { GovernanceRefundService } from './governance-refund.service';
 import { VoteCountingService } from './vote-counting.service';
 
 import { Asset } from '@/database/asset.entity';
@@ -43,6 +45,7 @@ import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';
 import { VoteType } from '@/types/vote.types';
 
@@ -115,6 +118,8 @@ export class GovernanceService {
     private readonly voteCountingService: VoteCountingService,
     private readonly distributionService: DistributionService,
     private readonly governanceFeeService: GovernanceFeeService,
+    private readonly transactionsService: TransactionsService,
+    private readonly governanceRefundService: GovernanceRefundService,
     private readonly dexHunterPricingService: DexHunterPricingService,
     private readonly dexHunterService: DexHunterService,
     private readonly blockchainService: BlockchainService,
@@ -1579,35 +1584,6 @@ export class GovernanceService {
       throw new BadRequestException(`Proposal is not in UNPAID status. Current status: ${proposal.status}`);
     }
 
-    // Submit transaction to blockchain
-    let txHash: string;
-    try {
-      const result = await this.blockchainService.submitTransaction({
-        transaction: transaction,
-        signatures: signatures || [],
-      });
-
-      if (!result.txHash) {
-        throw new Error('No transaction hash returned from blockchain submission');
-      }
-
-      txHash = result.txHash;
-      this.logger.log(`Submitted governance fee transaction: ${txHash} for proposal ${proposalId}`);
-    } catch (error) {
-      const errorMsg = error?.message || error?.toString() || 'Unknown error';
-      this.logger.error(`Failed to submit governance fee transaction: ${errorMsg}`, error?.stack);
-
-      // Delete the UNPAID proposal if blockchain submission fails
-      try {
-        await this.proposalRepository.remove(proposal);
-        this.logger.warn(`Deleted UNPAID proposal ${proposalId} after failed transaction submission`);
-      } catch (deleteError) {
-        this.logger.error(`Failed to delete UNPAID proposal ${proposalId}: ${deleteError.message}`);
-      }
-
-      throw new BadRequestException(`Failed to submit transaction: ${errorMsg}`);
-    }
-
     // Get pending payment metadata
     const pendingPayment = proposal.metadata?._pendingPayment;
     if (!pendingPayment) {
@@ -1629,6 +1605,67 @@ export class GovernanceService {
     }
     proposal.startDate = startDate;
     proposal.endDate = endDate;
+
+    // Persist the user-paid governance fee transaction in DB
+    // so we can refund it later without relying on proposal.metadata.
+    const feeTx = await this.transactionsService.createTransaction({
+      vault_id: proposal.vault.id,
+      type: TransactionType.payment,
+      assets: [],
+      amount: pendingPayment.feeAmount,
+      userId: proposal.creatorId,
+      metadata: {
+        kind: 'governance_creation_fee',
+        proposalId,
+        paidAt: now.toISOString(),
+        feeAmount: pendingPayment.feeAmount,
+      },
+    });
+
+    // Submit transaction to blockchain
+    let txHash: string;
+    try {
+      const result = await this.blockchainService.submitTransaction({
+        transaction: transaction,
+        signatures: signatures || [],
+      });
+
+      if (!result.txHash) {
+        throw new Error('No transaction hash returned from blockchain submission');
+      }
+
+      txHash = result.txHash;
+
+      await this.transactionsService.updateTransactionHash(feeTx.id, txHash, {
+        kind: 'governance_creation_fee',
+        proposalId,
+        paidAt: now.toISOString(),
+        feeAmount: pendingPayment.feeAmount,
+        paymentTxHash: txHash,
+      });
+
+      this.logger.log(`Submitted governance fee transaction: ${txHash} for proposal ${proposalId}`);
+    } catch (error) {
+      const errorMsg = error?.message || error?.toString() || 'Unknown error';
+      this.logger.error(`Failed to submit governance fee transaction: ${errorMsg}`, error?.stack);
+
+      // Mark DB record as failed (transaction may have been rejected by chain)
+      try {
+        await this.transactionsService.updateTransactionStatusById(feeTx.id, TransactionStatus.failed);
+      } catch (statusError) {
+        this.logger.error(`Failed to mark fee tx DB record as failed: ${statusError.message}`, statusError);
+      }
+
+      // Delete the UNPAID proposal if blockchain submission fails
+      try {
+        await this.proposalRepository.remove(proposal);
+        this.logger.warn(`Deleted UNPAID proposal ${proposalId} after failed transaction submission`);
+      } catch (deleteError) {
+        this.logger.error(`Failed to delete UNPAID proposal ${proposalId}: ${deleteError.message}`);
+      }
+
+      throw new BadRequestException(`Failed to submit transaction: ${errorMsg}`);
+    }
 
     // Clear pending payment metadata
     delete proposal.metadata._pendingPayment;
@@ -1681,6 +1718,86 @@ export class GovernanceService {
       success: true,
       message: 'Payment submitted and proposal activated successfully',
       txHash,
+    };
+  }
+
+  /**
+   * Delete an UPCOMING proposal by its owner.
+   * If the proposal-creation governance fee was paid, refund it back to the creator before deletion.
+   */
+  async deleteProposal(
+    proposalId: string,
+    userId: string
+  ): Promise<{ success: boolean; message: string; refundTxHash?: string }> {
+    const proposal = await this.proposalRepository.findOne({
+      where: { id: proposalId },
+      relations: ['creator'],
+    });
+
+    if (!proposal) {
+      throw new NotFoundException('Proposal not found');
+    }
+
+    if (proposal.creatorId !== userId) {
+      throw new ForbiddenException('Only the proposal creator can delete this proposal');
+    }
+
+    if (proposal.status !== ProposalStatus.UPCOMING) {
+      throw new BadRequestException(
+        `Proposal can only be deleted while it is UPCOMING. Current status: ${proposal.status}`
+      );
+    }
+
+    // Check if proposal starts in less than 1 hour
+    if (proposal.startDate) {
+      const now = new Date();
+      const timeUntilStart = proposal.startDate.getTime() - now.getTime();
+      const oneHourInMs = 60 * 60 * 1000;
+
+      if (timeUntilStart < oneHourInMs) {
+        throw new BadRequestException('Proposal cannot be deleted within 1 hour of its start time');
+      }
+    }
+
+    const refundResult = await this.governanceRefundService.refundProposalCreationFeeIfNeeded(proposalId, {
+      throwOnFailure: true,
+    });
+
+    try {
+      await this.proposalRepository.manager.transaction(async manager => {
+        const proposalToDelete = await manager.findOne(Proposal, {
+          where: { id: proposalId },
+        });
+
+        if (!proposalToDelete) {
+          return;
+        }
+
+        // Re-validate guarded conditions in the same DB transaction before deletion.
+        if (proposalToDelete.creatorId !== userId) {
+          throw new ForbiddenException('Only the proposal creator can delete this proposal');
+        }
+
+        if (proposalToDelete.status !== ProposalStatus.UPCOMING) {
+          throw new BadRequestException(
+            `Proposal can only be deleted while it is UPCOMING. Current status: ${proposalToDelete.status}`
+          );
+        }
+
+        await manager.remove(Proposal, proposalToDelete);
+      });
+    } catch (error: any) {
+      this.logger.error(
+        `Proposal ${proposalId} refund succeeded (tx: ${refundResult.txHash || 'n/a'}), but delete failed: ${error?.message || error}`,
+        error?.stack
+      );
+      throw new InternalServerErrorException('Refund completed, but proposal deletion failed. Please contact support.');
+    }
+
+    return {
+      success: true,
+      message: 'Proposal deleted successfully',
+      refundTxHash: refundResult.txHash,
     };
   }
 

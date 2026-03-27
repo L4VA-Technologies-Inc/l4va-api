@@ -9,6 +9,7 @@ import { In, Repository } from 'typeorm';
 import { DistributionService } from './distribution.service';
 import { ExecType, MarketplaceActionDto } from './dto/create-proposal.req';
 import { ExpansionService } from './expansion.service';
+import { GovernanceRefundService } from './governance-refund.service';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
 import { TerminationService } from './termination.service';
 import { VoteCountingService } from './vote-counting.service';
@@ -62,7 +63,8 @@ export class GovernanceExecutionService {
     private readonly terminationService: TerminationService,
     private readonly distributionService: DistributionService,
     private readonly dexHunterService: DexHunterService,
-    private readonly expansionService: ExpansionService
+    private readonly expansionService: ExpansionService,
+    private readonly governanceRefundService: GovernanceRefundService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
@@ -361,6 +363,11 @@ export class GovernanceExecutionService {
       // If proposal is not successful, move to REJECTED
       if (!isSuccessful) {
         await this.proposalRepository.update({ id: proposalId }, { status: ProposalStatus.REJECTED });
+
+        // Refund governance fee back to proposal owner if it was paid.
+        await this.governanceRefundService.refundProposalCreationFeeIfNeeded(proposalId, {
+          throwOnFailure: false,
+        });
 
         this.eventEmitter.emit('proposal.rejected', {
           address: proposal.vault?.owner?.address || null,
@@ -716,6 +723,11 @@ export class GovernanceExecutionService {
 
           await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
 
+          // Refund governance fee back to proposal owner if it was paid.
+          await this.governanceRefundService.refundProposalCreationFeeIfNeeded(proposal.id, {
+            throwOnFailure: false,
+          });
+
           this.eventEmitter.emit('proposal.rejected', {
             address: proposal.vault?.owner?.address || null,
             vaultId: proposal.vaultId,
@@ -869,6 +881,11 @@ export class GovernanceExecutionService {
         await this.storeExecutionError(proposal, new Error(reason));
 
         await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
+
+        // Refund governance fee back to proposal owner if it was paid.
+        await this.governanceRefundService.refundProposalCreationFeeIfNeeded(proposal.id, {
+          throwOnFailure: false,
+        });
 
         this.eventEmitter.emit('proposal.rejected', {
           address: proposal.vault?.owner?.address || null,
@@ -1043,6 +1060,11 @@ export class GovernanceExecutionService {
         );
 
         await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
+
+        // Refund governance fee back to proposal owner if it was paid.
+        await this.governanceRefundService.refundProposalCreationFeeIfNeeded(proposal.id, {
+          throwOnFailure: false,
+        });
 
         this.eventEmitter.emit('proposal.rejected', {
           address: proposal.vault?.owner?.address || null,
@@ -1476,6 +1498,11 @@ export class GovernanceExecutionService {
 
         await this.proposalRepository.save(proposal);
 
+        // Refund governance fee back to proposal owner if it was paid.
+        await this.governanceRefundService.refundProposalCreationFeeIfNeeded(proposal.id, {
+          throwOnFailure: false,
+        });
+
         this.logger.log(`Proposal ${proposal.id} marked as REJECTED due to insufficient liquidity`);
         return false;
       }
@@ -1694,6 +1721,11 @@ export class GovernanceExecutionService {
 
         // Move proposal to REJECTED status
         await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
+
+        // Refund governance fee back to proposal owner if it was paid.
+        await this.governanceRefundService.refundProposalCreationFeeIfNeeded(proposal.id, {
+          throwOnFailure: false,
+        });
 
         this.eventEmitter.emit('proposal.rejected', {
           address: proposal.vault?.owner?.address || null,

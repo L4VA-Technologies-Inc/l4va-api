@@ -11,6 +11,7 @@ import { DistributionService } from './distribution.service';
 import { ExpansionService } from './expansion.service';
 import { GovernanceExecutionService } from './governance-execution.service';
 import { GovernanceFeeService } from './governance-fee.service';
+import { GovernanceRefundService } from './governance-refund.service';
 import { GovernanceController } from './governance.controller';
 import { GovernanceService } from './governance.service';
 import { ProposalHealthService } from './proposal-health.service';
@@ -69,6 +70,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     GovernanceService,
     GovernanceFeeService,
     GovernanceExecutionService,
+    GovernanceRefundService,
     ProposalSchedulerService,
     ExpansionService,
     VoteCountingService,
