@@ -144,6 +144,21 @@ jobs:
 
           docker stop $OLD_CONTAINER || true
 
+      - name: Cleanup Docker resources
+        run: |
+          DISK_USED=$(df / | awk 'NR==2 {gsub("%","",$5); print $5}')
+          echo "Disk usage: ${DISK_USED}%"
+
+          if [ "$DISK_USED" -ge 70 ]; then
+            echo "Disk usage elevated. Running cleanup..."
+            docker container prune -f || true
+            docker image prune -f || true
+            docker builder prune -f || true
+            echo "Cleanup completed"
+          else
+            echo "Disk usage OK (${DISK_USED}%). Skipping cleanup."
+          fi
+
   deploy-prod:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: build-check
@@ -266,3 +281,18 @@ jobs:
           sudo nginx -s reload
 
           docker stop $OLD_CONTAINER || true
+
+      - name: Cleanup Docker resources
+        run: |
+          DISK_USED=$(df / | awk 'NR==2 {gsub("%","",$5); print $5}')
+          echo "Disk usage: ${DISK_USED}%"
+
+          if [ "$DISK_USED" -ge 70 ]; then
+            echo "Disk usage elevated. Running cleanup..."
+            docker container prune -f || true
+            docker image prune -f || true
+            docker builder prune -f || true
+            echo "Cleanup completed"
+          else
+            echo "Disk usage OK (${DISK_USED}%). Skipping cleanup."
+          fi
