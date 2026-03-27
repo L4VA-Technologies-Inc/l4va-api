@@ -84,9 +84,34 @@ jobs:
           docker compose up -d $NEW_CONTAINER
 
           echo "Waiting for secrets to load..."
-          until docker logs $NEW_CONTAINER 2>&1 | grep -q "Secrets loaded successfully"; do
+          MAX_ATTEMPTS=30
+          ATTEMPT=0
+          SECRETS_LOADED=false
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            LOGS=$(docker logs $NEW_CONTAINER 2>&1)
+            if echo "$LOGS" | grep -q "Secrets loaded successfully"; then
+              SECRETS_LOADED=true
+              echo " Secrets loaded successfully (attempt $ATTEMPT/$MAX_ATTEMPTS)"
+              break
+            fi
+            if echo "$LOGS" | grep -q "Failed to load secrets.*FATAL\|FATAL.*Cannot proceed"; then
+              echo " Secrets loading failed with error:"
+              docker logs $NEW_CONTAINER --tail 50
+              docker stop $NEW_CONTAINER || true
+              exit 1
+            fi
+            echo "Waiting for secrets... (attempt $ATTEMPT/$MAX_ATTEMPTS)"
             sleep 2
           done
+
+          if [ "$SECRETS_LOADED" = false ]; then
+            echo " TIMEOUT: Secrets did not load within $(($MAX_ATTEMPTS * 2)) seconds"
+            echo "Container logs (last 100 lines):"
+            docker logs $NEW_CONTAINER --tail 100
+            docker stop $NEW_CONTAINER || true
+            exit 1
+          fi
 
           echo "Running migrations..."
           docker exec $NEW_CONTAINER npm run migration:run:gcp || {
@@ -182,9 +207,34 @@ jobs:
           docker compose up -d $NEW_CONTAINER
 
           echo "Waiting for secrets to load..."
-          until docker logs $NEW_CONTAINER 2>&1 | grep -q "Secrets loaded successfully"; do
+          MAX_ATTEMPTS=30
+          ATTEMPT=0
+          SECRETS_LOADED=false
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            LOGS=$(docker logs $NEW_CONTAINER 2>&1)
+            if echo "$LOGS" | grep -q "Secrets loaded successfully"; then
+              SECRETS_LOADED=true
+              echo " Secrets loaded successfully (attempt $ATTEMPT/$MAX_ATTEMPTS)"
+              break
+            fi
+            if echo "$LOGS" | grep -q "Failed to load secrets.*FATAL\|FATAL.*Cannot proceed"; then
+              echo " Secrets loading failed with error:"
+              docker logs $NEW_CONTAINER --tail 50
+              docker stop $NEW_CONTAINER || true
+              exit 1
+            fi
+            echo "Waiting for secrets... (attempt $ATTEMPT/$MAX_ATTEMPTS)"
             sleep 2
           done
+
+          if [ "$SECRETS_LOADED" = false ]; then
+            echo " TIMEOUT: Secrets did not load within $(($MAX_ATTEMPTS * 2)) seconds"
+            echo "Container logs (last 100 lines):"
+            docker logs $NEW_CONTAINER --tail 100
+            docker stop $NEW_CONTAINER || true
+            exit 1
+          fi
 
           echo "Running migrations..."
           docker exec $NEW_CONTAINER npm run migration:run:gcp || {
