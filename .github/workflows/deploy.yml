@@ -149,7 +149,7 @@ jobs:
           DISK_USED=$(df / | awk 'NR==2 {gsub("%","",$5); print $5}')
           echo "Disk usage: ${DISK_USED}%"
 
-          if [ "$DISK_USED" -ge 70 ]; then
+          if [ "$DISK_USED" -ge 45 ]; then
             echo "Disk usage elevated. Running cleanup..."
             docker container prune -f || true
             docker image prune -f || true
