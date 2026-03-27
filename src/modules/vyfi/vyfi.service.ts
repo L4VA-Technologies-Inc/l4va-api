@@ -85,7 +85,7 @@ const VYFI_CONSTANTS = {
 @Injectable()
 export class VyfiService {
   private readonly logger = new Logger(VyfiService.name);
-  private readonly vyfiApiUrl = 'https://api.vyfi.io';
+  private readonly vyfiApiUrl = 'https://api-v3.vyfi.io';
   private readonly adminSKey: string;
   private readonly adminAddress: string;
   private readonly adminHash: string;
