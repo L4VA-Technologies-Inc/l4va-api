@@ -1022,8 +1022,9 @@ export class TaptoolsService {
             totalAcquiredAda += Number(asset.quantity);
           }
 
-          // Only process contributed assets for TVL
-          if (asset.origin_type !== AssetOriginType.CONTRIBUTED) {
+          // Process vault-owned assets for TVL:
+          // CONTRIBUTED (user deposits) + BOUGHT (marketplace buys).
+          if (asset.origin_type !== AssetOriginType.CONTRIBUTED && asset.origin_type !== AssetOriginType.BOUGHT) {
             continue;
           }
 
