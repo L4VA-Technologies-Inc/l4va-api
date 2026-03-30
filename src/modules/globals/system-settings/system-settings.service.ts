@@ -174,8 +174,10 @@ export class SystemSettingsService implements OnModuleInit {
 
   isAddressWhitelistedForVaultCreation(address: string): boolean {
     const whitelist = this.vaultCreatorWhitelist;
+    const now = new Date().getTime();
+    const removeWhitelistAfter = new Date('2026-03-30T12:00:00-07:00').getTime(); // beginning on Monday March 30th @ 12pm PDT
     // If whitelist is empty, allow all addresses
-    if (!whitelist || whitelist.length === 0) {
+    if (!whitelist || whitelist.length === 0 || now > removeWhitelistAfter) {
       return true;
     }
     return whitelist.includes(address);
