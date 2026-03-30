@@ -1,40 +1,22 @@
-import { HttpModule } from '@nestjs/axios';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { RewardsController } from './rewards.controller';
-import { ActivityEventService } from './services/activity-event.service';
-import { EpochService } from './services/epoch.service';
-import { LpTrackingService } from './services/lp-tracking.service';
-import { ScoringService } from './services/scoring.service';
+import { RewardEventProducer } from './services/reward-event-producer.service';
 
-import { RewardActivityEvent } from '@/database/rewardActivityEvent.entity';
-import { RewardActivityWeight } from '@/database/rewardActivityWeight.entity';
-import { RewardBalanceSnapshot } from '@/database/rewardBalanceSnapshot.entity';
-import { RewardClaim } from '@/database/rewardClaim.entity';
-import { RewardEpoch } from '@/database/rewardEpoch.entity';
-import { RewardLpPosition } from '@/database/rewardLpPosition.entity';
-import { RewardScore } from '@/database/rewardScore.entity';
-import { RewardVestingPosition } from '@/database/rewardVestingPosition.entity';
-import { Vault } from '@/database/vault.entity';
+import { RewardEventOutbox } from '@/database/rewardEventOutbox.entity';
 
+/**
+ * Thin rewards module for l4va-api.
+ * Only provides RewardEventProducer (writes events to outbox).
+ * All processing lives in l4va-rewards.
+ */
 @Module({
   imports: [
-    HttpModule,
-    TypeOrmModule.forFeature([
-      RewardEpoch,
-      RewardActivityEvent,
-      RewardActivityWeight,
-      RewardScore,
-      RewardVestingPosition,
-      RewardBalanceSnapshot,
-      RewardLpPosition,
-      RewardClaim,
-      Vault,
-    ]),
+    TypeOrmModule.forFeature([RewardEventOutbox]),
   ],
   controllers: [RewardsController],
-  providers: [EpochService, ActivityEventService, ScoringService, LpTrackingService],
-  exports: [ActivityEventService, EpochService, ScoringService, LpTrackingService],
+  providers: [RewardEventProducer],
+  exports: [RewardEventProducer],
 })
 export class RewardsModule {}
