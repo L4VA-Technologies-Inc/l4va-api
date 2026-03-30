@@ -29,6 +29,7 @@ import { UploadImageRes } from './dto/upload-image.res';
 import { UsersService } from './users.service';
 
 import { User } from '@/database/user.entity';
+import { ImageType, UploadProfileImageDto } from '@/modules/users/dto/upload-profile-image.dto';
 
 @ApiTags('users')
 @Controller('users')
@@ -69,55 +70,26 @@ export class UsersController {
     return this.usersService.updateProfile(userId, updateData);
   }
 
-  @ApiDoc({
-    summary: 'Upload profile image',
-    description: "Upload and update user's profile image",
-    status: 200,
-  })
-  @ApiConsumes('multipart/form-data')
   @UseGuards(AuthGuard)
   @Post('profile/image')
-  @UseInterceptors(FileInterceptor('file'))
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FileInterceptor('image'))
   async uploadProfileImage(
     @Request() req: AuthRequest,
+    @Body() body: UploadProfileImageDto,
     @UploadedFile(
       new ParseFilePipe({
         validators: [
-          new MaxFileSizeValidator({ maxSize: 5 * mbMultiplication }), // 5mb
-          new FileTypeValidator({ fileType: 'image/*' }),
+          new MaxFileSizeValidator({ maxSize: 5 * mbMultiplication }),
+          new FileTypeValidator({ fileType: 'image/.*' }),
         ],
       })
     )
     file: Express.Multer.File
   ): Promise<UploadImageRes> {
     const userId = req.user.sub;
-    const user = await this.usersService.uploadProfileImage(userId, file);
-    return { user };
-  }
+    const user = await this.usersService.uploadProfileImage(userId, file, body.imageType ?? ImageType.AVATAR);
 
-  @ApiDoc({
-    summary: 'Upload banner image',
-    description: "Upload and update user's banner image",
-    status: 200,
-  })
-  @ApiConsumes('multipart/form-data')
-  @UseGuards(AuthGuard)
-  @Post('profile/banner')
-  @UseInterceptors(FileInterceptor('file'))
-  async uploadBannerImage(
-    @Request() req: AuthRequest,
-    @UploadedFile(
-      new ParseFilePipe({
-        validators: [
-          new MaxFileSizeValidator({ maxSize: 5 * mbMultiplication }), // 5mb
-          new FileTypeValidator({ fileType: 'image/*' }),
-        ],
-      })
-    )
-    file: Express.Multer.File
-  ): Promise<UploadImageRes> {
-    const userId = req.user.sub;
-    const user = await this.usersService.uploadBannerImage(userId, file);
     return { user };
   }
 }

@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain } from 'class-transformer';
@@ -15,6 +16,9 @@ import { Market } from '@/database/market.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
+import { SystemSettingsService } from '@/modules/globals/system-settings';
+import { GoogleCloudStorageService } from '@/modules/google_cloud/google_bucket/bucket.service';
 import { PriceService } from '@/modules/price/price.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { VaultStatus } from '@/types/vault.types';
@@ -22,6 +26,9 @@ import { VaultStatus } from '@/types/vault.types';
 @Injectable()
 export class AssetsService {
   private readonly logger = new Logger(AssetsService.name);
+  private readonly VLRM_HEX_ASSET_NAME: string;
+  private readonly VLRM_POLICY_ID: string;
+  private readonly isMainnet: boolean;
 
   constructor(
     @InjectRepository(Asset)
@@ -37,8 +44,16 @@ export class AssetsService {
     @InjectRepository(Market)
     private readonly marketRepository: Repository<Market>,
     private readonly eventEmitter: EventEmitter2,
-    private readonly priceService: PriceService
-  ) {}
+    private readonly configService: ConfigService,
+    private readonly priceService: PriceService,
+    private readonly dexHunterPricingService: DexHunterPricingService,
+    private readonly systemSettingsService: SystemSettingsService,
+    private readonly gcsService: GoogleCloudStorageService
+  ) {
+    this.VLRM_HEX_ASSET_NAME = this.configService.get<string>('VLRM_HEX_ASSET_NAME');
+    this.VLRM_POLICY_ID = this.configService.get<string>('VLRM_POLICY_ID');
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+  }
 
   async addAssetToVault(userId: string, data: CreateAssetDto): Promise<Record<string, unknown>> {
     const vault = await this.vaultsRepository.findOne({
@@ -91,6 +106,110 @@ export class AssetsService {
     return instanceToPlain(asset);
   }
 
+  /**
+   * Create and save VLRM fee asset when vault is created
+   * Uses priceService.getAdaPrice() for mainnet, default 5 for testnet
+   */
+  async addVLRMFeeAsset(vault: Vault, ownerId: string, transactionId: string): Promise<void> {
+    // Check if VLRM creation is enabled and fee is greater than 0
+    if (!this.systemSettingsService.vlrmCreatorFeeEnabled || this.systemSettingsService.vlrmCreatorFee <= 0) {
+      this.logger.log(`VLRM creation disabled or fee is 0. Skipping VLRM asset creation for vault ${vault.id}`);
+      return;
+    }
+
+    try {
+      let vlrmDexPrice: number;
+
+      if (this.isMainnet) {
+        // Try to fetch current dex price for VLRM from DexHunter on mainnet
+        try {
+          const vlrmTokenId = `${this.VLRM_POLICY_ID}${this.VLRM_HEX_ASSET_NAME}`;
+          const fetchedPrice = await this.dexHunterPricingService.getTokenPrice(vlrmTokenId);
+          vlrmDexPrice = fetchedPrice || 0;
+        } catch (error) {
+          this.logger.warn(`Failed to fetch VLRM dex price from DexHunter: ${error.message}, using default: 0`);
+          vlrmDexPrice = 0;
+        }
+      } else {
+        // On testnet, use fixed default price of 5
+        vlrmDexPrice = 5;
+      }
+
+      // Create VLRM fee asset
+      const vlrmAsset = this.assetsRepository.create({
+        vault_id: vault.id,
+        policy_id: this.VLRM_POLICY_ID,
+        asset_id: `${this.VLRM_POLICY_ID}${this.VLRM_HEX_ASSET_NAME}`,
+        type: AssetType.FT,
+        dex_price: vlrmDexPrice,
+        quantity: this.systemSettingsService.vlrmCreatorFee,
+        status: AssetStatus.LOCKED,
+        origin_type: AssetOriginType.FEE,
+        decimals: 4, // VLRM has 4 decimal places
+        name: 'VLRM',
+        last_valuation: new Date(),
+        added_by: { id: ownerId } as any,
+        image: 'ipfs://QmdYu513Bu7nfKV5LKP6cmpZ8HHXifQLH6FTTzv3VbbqwP', // VLRM logo
+        metadata: {
+          purpose: 'vault_creation_fee',
+          transaction_id: transactionId,
+        },
+      });
+
+      await this.assetsRepository.save(vlrmAsset);
+
+      this.logger.log(
+        `Created VLRM asset record for vault ${vault.id}: ${this.systemSettingsService.vlrmCreatorFee} tokens (dex_price: ${vlrmDexPrice} ADA)`
+      );
+
+      // Update vault TVL after adding VLRM asset
+      await this.updateVaultTVL(vault.id);
+    } catch (error) {
+      this.logger.error(`Failed to create VLRM asset for vault ${vault.id}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Update vault TVL based on current assets
+   * TVL is calculated as the ratio of vault FDV to total asset value
+   */
+  private async updateVaultTVL(vaultId: string): Promise<void> {
+    try {
+      const vault = await this.vaultsRepository.findOne({
+        where: { id: vaultId },
+      });
+
+      if (!vault) {
+        this.logger.warn(`Vault ${vaultId} not found when updating TVL`);
+        return;
+      }
+
+      // Get all contributed and fee assets for the vault
+      const assets = await this.assetsRepository.find({
+        where: {
+          vault_id: vaultId,
+          deleted: false,
+        },
+      });
+
+      // Calculate total asset value in ADA
+      let totalValueAda = 0;
+      assets.forEach(asset => {
+        const price = asset.floor_price || asset.dex_price || 0;
+        totalValueAda += asset.quantity * price;
+      });
+
+      // Update vault TVL
+      vault.total_assets_cost_ada = totalValueAda;
+      vault.total_assets_cost_usd = totalValueAda * (await this.priceService.getAdaPrice());
+      await this.vaultsRepository.save(vault);
+    } catch (error) {
+      this.logger.error(`Failed to update vault TVL for ${vaultId}:`, error);
+      // Don't throw - TVL update is not critical to asset creation
+    }
+  }
+
   async getVaultAssets(
     vaultId: string,
     page: number = 1,
@@ -128,7 +247,7 @@ export class AssetsService {
       ])
       .where('asset.vault_id = :vaultId', { vaultId })
       .andWhere('asset.origin_type IN (:...originTypes)', {
-        originTypes: [AssetOriginType.CONTRIBUTED, AssetOriginType.FEE],
+        originTypes: [AssetOriginType.CONTRIBUTED, AssetOriginType.BOUGHT, AssetOriginType.FEE],
       })
       .andWhere('asset.status IN (:...statuses)', {
         statuses: [
@@ -685,6 +804,50 @@ export class AssetsService {
     } catch (error) {
       throw new Error(`Failed to update asset valuations: ${error.message}`);
     }
+  }
+
+  async recordBoughtAsset(params: {
+    vaultId: string;
+    policyId: string;
+    assetId: string;
+    name: string;
+    image?: string;
+    floorPrice: number;
+    metadata?: any;
+    status?: AssetStatus;
+  }): Promise<Asset> {
+    const vault = await this.vaultsRepository.findOne({ where: { id: params.vaultId } });
+
+    if (!vault) {
+      throw new Error(`Vault ${params.vaultId} not found`);
+    }
+
+    let imageKey: string | null = null;
+    if (params.image) {
+      const fileKey = await this.gcsService.uploadAssetImage(params.image);
+      if (fileKey) {
+        imageKey = fileKey;
+      } else {
+        imageKey = params.image; // fallback to original URL if upload fails
+      }
+    }
+
+    const asset = this.assetsRepository.create({
+      vault,
+      policy_id: params.policyId,
+      asset_id: params.assetId,
+      name: params.name,
+      image: imageKey,
+      type: AssetType.NFT,
+      quantity: 1,
+      floor_price: params.floorPrice,
+      status: params.status ?? AssetStatus.LOCKED,
+      origin_type: AssetOriginType.BOUGHT,
+      added_by: null,
+      metadata: params.metadata ?? null,
+    });
+
+    return this.assetsRepository.save(asset);
   }
 
   async softDeleteAsset(assetId: string, userId: string): Promise<void> {

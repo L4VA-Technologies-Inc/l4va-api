@@ -56,6 +56,7 @@ export class GoogleKMSService {
 
   /**
    * Lazy initialize KMS client on first use
+   * Uses ADC (Application Default Credentials) on VM, falls back to explicit credentials for local dev
    */
   private ensureKmsClient(): void {
     if (!this.kmsClient) {
@@ -65,31 +66,26 @@ export class GoogleKMSService {
       if (isDevelopment) {
         // Local development: use file-based credentials
         const credentialsPath = this.configService.get('GOOGLE_APPLICATION_CREDENTIALS');
-        this.kmsClient = new KeyManagementServiceClient({
-          keyFilename: credentialsPath,
-        });
-        this.logger.log(
-          `Initialized KMS client from file (dev mode) for ${this.isMainnet ? 'mainnet' : 'testnet'}, project: ${this.projectId}`
-        );
-      } else {
-        // Production/Testnet: use base64-encoded environment variable (no file on disk)
-        const gcpServiceAccountBase64 = this.configService.get('GCP_SERVICE_ACCOUNT_JSON_BASE64');
-
-        if (gcpServiceAccountBase64) {
-          try {
-            const jsonString = Buffer.from(gcpServiceAccountBase64, 'base64').toString('utf8');
-            const credentials = JSON.parse(jsonString);
-            this.kmsClient = new KeyManagementServiceClient({ credentials });
-            this.logger.log(
-              `Initialized KMS client from base64 env var (no file) for ${this.isMainnet ? 'mainnet' : 'testnet'}, project: ${this.projectId}`
-            );
-          } catch (e) {
-            this.logger.error('Failed to decode GCP_SERVICE_ACCOUNT_JSON_BASE64:', e.message || e);
-            throw new Error('GCP_SERVICE_ACCOUNT_JSON_BASE64 is required but invalid');
-          }
+        if (credentialsPath) {
+          this.kmsClient = new KeyManagementServiceClient({
+            keyFilename: credentialsPath,
+          });
+          this.logger.log(
+            `Initialized KMS client from file (dev mode) for ${this.isMainnet ? 'mainnet' : 'testnet'}, project: ${this.projectId}`
+          );
         } else {
-          throw new Error('GCP_SERVICE_ACCOUNT_JSON_BASE64 environment variable is required for production/testnet');
+          // No credentials file, try ADC (for local testing)
+          this.kmsClient = new KeyManagementServiceClient();
+          this.logger.log(
+            `Initialized KMS client with ADC (dev mode) for ${this.isMainnet ? 'mainnet' : 'testnet'}, project: ${this.projectId}`
+          );
         }
+      } else {
+        // Production/Testnet: Use ADC (VM service account)
+        this.kmsClient = new KeyManagementServiceClient();
+        this.logger.log(
+          `Initialized KMS client with ADC for ${this.isMainnet ? 'mainnet' : 'testnet'}, project: ${this.projectId}`
+        );
       }
     }
   }

@@ -274,16 +274,16 @@ export class CreateVaultReq {
   vaultAppreciation: number;
 
   @ApiProperty({
-    description: 'Creation threshold percentage (between 0.00 and 100.00)',
+    description: 'Creation threshold percentage (between 0.50 and 100.00)',
     required: true,
-    minimum: 0,
+    minimum: 0.5,
     maximum: 100,
     type: Number,
   })
   @IsNotEmpty()
   @IsNumber()
   @Type(() => Number)
-  @Min(0)
+  @Min(0.5)
   @Max(100)
   @Expose()
   creationThreshold: number;
@@ -304,16 +304,16 @@ export class CreateVaultReq {
   startThreshold: number = 0;
 
   @ApiProperty({
-    description: 'Cosigning threshold percentage (between 0.00 and 100.00)',
+    description: 'Cosigning threshold percentage (between 33.00 and 100.00)',
     required: true,
-    minimum: 0,
+    minimum: 33,
     maximum: 100,
     type: Number,
   })
   @IsOptional()
   @IsNumber()
   @Type(() => Number)
-  @Min(0)
+  @Min(33)
   @Max(100)
   @Expose()
   @Transform(({ value }) => value ?? 0)
@@ -335,16 +335,16 @@ export class CreateVaultReq {
   voteThreshold: number;
 
   @ApiProperty({
-    description: 'Execution threshold percentage (between 0.00 and 100.00)',
+    description: 'Execution threshold percentage (between 50.10 and 100.00)',
     required: true,
-    minimum: 0,
+    minimum: 50.1,
     maximum: 100,
     type: Number,
   })
   @IsNotEmpty()
   @IsNumber()
   @Type(() => Number)
-  @Min(0)
+  @Min(50.1)
   @Max(100)
   @Expose()
   executionThreshold: number;

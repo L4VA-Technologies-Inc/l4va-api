@@ -18,12 +18,14 @@ export enum AssetStatus {
   LISTED = 'listed',
   SOLD = 'sold',
   BURNED = 'burned',
+  OFFERED = 'offered',
 }
 
 export enum AssetOriginType {
   ACQUIRED = 'acquired',
   CONTRIBUTED = 'contributed',
   FEE = 'fee',
+  BOUGHT = 'bought',
 }
 
 export enum AssetValuationMethod {

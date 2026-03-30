@@ -225,10 +225,6 @@ export class VaultMarketStatsService {
             vaultUpdateData.fdv = mcapData.fdv;
             vaultUpdateData.vt_price = mcapData.price;
             hasMarketData = true;
-
-            this.logger.log(
-              `${vault.name}: Taptools market data - Price: ${mcapData.price} ADA, FDV: ${mcapData.fdv} ADA`
-            );
           }
 
           // Update vault if we got any market data

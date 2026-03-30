@@ -2,6 +2,7 @@ import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import {
   BadRequestException,
   ForbiddenException,
+  HttpException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -15,6 +16,7 @@ import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { In, IsNull, Not, Repository } from 'typeorm';
 
+import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from '../../processing-tx/onchain/blockchain.service';
 
 import { DistributionService } from './distribution.service';
@@ -26,6 +28,7 @@ import { GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';
 import { VoteRes } from './dto/vote.res';
 import { GovernanceFeeService } from './governance-fee.service';
+import { GovernanceRefundService } from './governance-refund.service';
 import { VoteCountingService } from './vote-counting.service';
 
 import { Asset } from '@/database/asset.entity';
@@ -40,11 +43,15 @@ import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.s
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { ActivityEventService } from '@/modules/rewards/services/activity-event.service';
-import { VyfiService } from '@/modules/vyfi/vyfi.service';
+import { TaptoolsService } from '@/modules/taptools/taptools.service';
+import { GetAssetsToListRes } from '@/modules/vaults/phase-management/governance/dto/get-assets-to-list.res';
+import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
+import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { RewardActivityType } from '@/types/rewards.types';
+import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';
 import { VoteType } from '@/types/vote.types';
 
@@ -77,11 +84,14 @@ import { VoteType } from '@/types/vote.types';
 export class GovernanceService {
   private readonly logger = new Logger(GovernanceService.name);
   private blockfrost: BlockFrostAPI;
+  private readonly isMainnet: boolean;
   private readonly votingPowerCache: NodeCache;
   private readonly proposalCreationCache: NodeCache;
   private readonly poolAddress: string;
   private readonly adminAddress: string;
   private readonly MIN_LP_ADA_FOR_MARKET_PRICING = 5000;
+  /** LP tokens held by DEX AMM contracts; balances this large are contract-locked liquidity, not user positions */
+  private readonly LP_CONTRACT_BALANCE_THRESHOLD = BigInt('1000000000000000000');
 
   // private readonly snapshotCache: NodeCache;
 
@@ -115,13 +125,18 @@ export class GovernanceService {
     private readonly voteCountingService: VoteCountingService,
     private readonly distributionService: DistributionService,
     private readonly governanceFeeService: GovernanceFeeService,
+    private readonly transactionsService: TransactionsService,
+    private readonly governanceRefundService: GovernanceRefundService,
     private readonly dexHunterPricingService: DexHunterPricingService,
     private readonly dexHunterService: DexHunterService,
     private readonly blockchainService: BlockchainService,
     private readonly systemSettingsService: SystemSettingsService,
-    private readonly vyfiService: VyfiService,
-    private readonly activityEventService: ActivityEventService
+    private readonly wayUpPricingService: WayUpPricingService,
+    private readonly taptoolsService: TaptoolsService,
+    private readonly treasuryWalletService: TreasuryWalletService,
+    private readonly activityEventService: ActivityEventService,
   ) {
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
 
@@ -224,21 +239,10 @@ export class GovernanceService {
         );
       }
 
-      const lpAddresses: string[] = [];
+      const decimals = vault.ft_token_decimals || 0;
 
-      if (vault.has_active_lp) {
-        // Get vault-specific LP addresses to exclude from voting power
-        const poolInfo = await this.vyfiService.getPoolByTokens(`${vault.policy_id}${vault.asset_vault_name}`);
-        if (poolInfo) {
-          lpAddresses.push(poolInfo.poolAddress);
-          this.logger.log(
-            `Found VyFi pool for vault ${vaultId} with asset ${assetId}. Pool address: ${poolInfo.poolAddress}`
-          );
-        }
-      }
-
-      // Fetch all addresses holding the asset using BlockFrost
-      const addressBalances: Record<string, string> = {}; // For snapshot (excludes LP)
+      // Balances stored as bigint to avoid JS safe-integer precision loss for large on-chain quantities
+      const addressBalances: Record<string, bigint> = {};
       let totalSupplyRaw = BigInt(0); // Total supply INCLUDING LP tokens
       let page = 1;
       let hasMorePages = true;
@@ -259,12 +263,8 @@ export class GovernanceService {
               totalSupplyRaw += BigInt(item.quantity);
 
               // Only add to snapshot if NOT an LP-related address (exclude LP from voting power)
-              if (
-                item.address !== this.poolAddress &&
-                item.address !== this.adminAddress &&
-                !lpAddresses.includes(item.address)
-              ) {
-                addressBalances[item.address] = item.quantity;
+              if (item.address !== this.poolAddress && item.address !== this.adminAddress) {
+                addressBalances[item.address] = BigInt(item.quantity);
               } else {
                 this.logger.log(
                   `Excluded LP address ${item.address} from snapshot (${item.quantity} VT in liquidity pool)`
@@ -294,8 +294,80 @@ export class GovernanceService {
         }
       }
 
-      // Adjust for token decimals (divide by 10^decimals)
-      const decimals = vault.ft_token_decimals || 0;
+      if (vault.has_active_lp) {
+        const pools = await this.taptoolsService.getTokenPools(assetId);
+
+        // Collect locked VT raw amounts per pool to identify DEX pool contract addresses later
+        const lpPoolLockedAmounts = new Set<bigint>();
+
+        for (const pool of pools) {
+          try {
+            const lpAssetId = pool.lpTokenUnit;
+
+            // Convert TapTools float (human-readable) to raw bigint units without floating-point drift
+            const lockedVaultTokensRaw = this.floatToRawBigInt(
+              pool.tokenA === assetId ? pool.tokenALocked : pool.tokenBLocked,
+              decimals
+            );
+            lpPoolLockedAmounts.add(lockedVaultTokensRaw);
+
+            let lpPage = 1;
+            let lpHasMore = true;
+
+            let activeLpSupply = BigInt(0);
+            const realLpHolders: { address: string; lpBalance: bigint }[] = [];
+
+            while (lpHasMore) {
+              const lpHolders = await this.blockfrost.assetsAddresses(lpAssetId, { page: lpPage, order: 'desc' });
+
+              if (lpHolders.length === 0) {
+                lpHasMore = false;
+              } else {
+                for (const holder of lpHolders) {
+                  const holderLpBalance = BigInt(holder.quantity);
+
+                  // Skip balances that belong to DEX AMM contracts (not real user positions)
+                  if (holderLpBalance > this.LP_CONTRACT_BALANCE_THRESHOLD) {
+                    continue;
+                  }
+
+                  activeLpSupply += holderLpBalance;
+
+                  if (holder.address === this.poolAddress || holder.address === this.adminAddress) continue;
+
+                  realLpHolders.push({ address: holder.address, lpBalance: holderLpBalance });
+                }
+                lpPage++;
+              }
+            }
+
+            if (activeLpSupply === BigInt(0)) continue;
+
+            for (const user of realLpHolders) {
+              // Integer division: (userLp * lockedVaultTokens) / totalLpSupply — no float rounding
+              const underlyingTokens = (user.lpBalance * lockedVaultTokensRaw) / activeLpSupply;
+              addressBalances[user.address] = (addressBalances[user.address] ?? BigInt(0)) + underlyingTokens;
+            }
+            this.logger.log(`Processed LP pool ${pool.exchange} successfully.`);
+          } catch (poolError) {
+            this.logger.error(`Failed to process pool ${pool.exchange}: ${poolError.message}`);
+          }
+        }
+
+        // Remove DEX pool contract addresses from the snapshot.
+        // Each pool contract holds VT equal to its lockedVaultTokensRaw — these tokens are
+        // already redistributed proportionally to LP holders above, so keeping the pool
+        // address would double-count that VT in voting power.
+        for (const [address, balance] of Object.entries(addressBalances)) {
+          if (lpPoolLockedAmounts.has(balance)) {
+            this.logger.log(
+              `Excluded DEX pool contract ${address} from snapshot (${balance}n VT redistributed to LP holders)`
+            );
+            delete addressBalances[address];
+          }
+        }
+      }
+
       const divisor = BigInt(10) ** BigInt(decimals);
       const adjustedSupply = Number(totalSupplyRaw / divisor);
 
@@ -309,11 +381,15 @@ export class GovernanceService {
           `Snapshot created for ${Object.keys(addressBalances).length} addresses (LP tokens excluded from voting power)`
       );
 
-      // Create and save the snapshot (addressBalances excludes LP for voting power calculation)
+      const addressBalancesForSnapshot: Record<string, string> = {};
+      for (const [address, balance] of Object.entries(addressBalances)) {
+        addressBalancesForSnapshot[address] = String(balance);
+      }
+
       const snapshot = this.snapshotRepository.create({
         vaultId,
         assetId,
-        addressBalances,
+        addressBalances: addressBalancesForSnapshot,
       });
 
       await this.snapshotRepository.save(snapshot);
@@ -334,10 +410,10 @@ export class GovernanceService {
     createProposalReq: CreateProposalReq,
     userId: string
   ): Promise<CreateProposalRes> {
-    const vault: Pick<Vault, 'id' | 'vault_status' | 'policy_id' | 'asset_vault_name' | 'name'> =
+    const vault: Pick<Vault, 'id' | 'vault_status' | 'policy_id' | 'asset_vault_name' | 'name' | 'assets_whitelist'> =
       await this.vaultRepository.findOne({
         where: { id: vaultId },
-        select: ['id', 'vault_status', 'policy_id', 'asset_vault_name', 'name'],
+        select: ['id', 'vault_status', 'policy_id', 'asset_vault_name', 'name', 'assets_whitelist'],
       });
 
     if (!vault) {
@@ -413,38 +489,71 @@ export class GovernanceService {
     // Check for only 1 active market action proposal for the same asset at a time
     if (createProposalReq.type === ProposalType.MARKETPLACE_ACTION) {
       const requestedActions = createProposalReq.marketplaceActions || [];
-      const requestedAssetIds = requestedActions.map(action => action.assetId);
 
-      // Find all active/upcoming marketplace action proposals for this vault
-      const activeMarketProposals = await this.proposalRepository.find({
-        where: {
-          vaultId,
-          proposalType: ProposalType.MARKETPLACE_ACTION,
-          status: In([ProposalStatus.ACTIVE, ProposalStatus.UPCOMING]),
-        },
-      });
+      if (requestedActions.length > 0) {
+        const requestedAssetIds = requestedActions
+          .filter(action => action.exec !== ExecType.BUY && action.exec !== ExecType.OFFER)
+          .map(action => action.assetId);
 
-      // Check if any of the requested assets are already in an active proposal
-      for (const existingProposal of activeMarketProposals) {
-        const existingActions = existingProposal.metadata?.marketplaceActions || [];
-        const existingAssetIds = existingActions.map((action: any) => action.assetId);
+        const requestedBuyAssetIds = requestedActions
+          .filter(action => action.exec === ExecType.BUY)
+          .map(action => action.assetId);
 
-        // Check for overlap
-        const overlappingAssets = requestedAssetIds.filter(assetId => existingAssetIds.includes(assetId));
+        const requestedOfferAssetIds = requestedActions
+          .filter(action => action.exec === ExecType.OFFER)
+          .map(action => action.assetId);
 
-        if (overlappingAssets.length > 0) {
-          // Get asset names for better error message
-          const overlappingAssetRecords = await this.assetRepository.find({
-            where: { id: In(overlappingAssets) },
-            select: ['id', 'name'],
-          });
+        const activeMarketProposals = await this.proposalRepository.find({
+          where: {
+            vaultId,
+            proposalType: ProposalType.MARKETPLACE_ACTION,
+            status: In([ProposalStatus.ACTIVE, ProposalStatus.UPCOMING]),
+          },
+        });
 
-          const assetNames = overlappingAssetRecords.map(a => a.name || a.id).join(', ');
+        for (const existingProposal of activeMarketProposals) {
+          const existingActions = existingProposal.metadata?.marketplaceActions || [];
 
-          throw new BadRequestException(
-            `Cannot create market action proposal. The following assets are already in an active proposal "${existingProposal.title}": ${assetNames}. ` +
-              `Please wait for that proposal to complete before creating a new one for these assets.`
-          );
+          // Check DB assets (SELL / UNLIST / UPDATE_LISTING)
+          if (requestedAssetIds.length > 0) {
+            const existingDbAssetIds = existingActions
+              .filter((a: any) => a.exec !== ExecType.BUY)
+              .map((a: any) => a.assetId);
+
+            const overlapping = requestedAssetIds.filter(id => existingDbAssetIds.includes(id));
+
+            if (overlapping.length > 0) {
+              const records = await this.assetRepository.find({
+                where: { id: In(overlapping) },
+                select: ['id', 'name'],
+              });
+              const assetNames = records.map(a => a.name || a.id).join(', ');
+
+              throw new BadRequestException(
+                `Cannot create market action proposal. The following assets are already in an active proposal "${existingProposal.title}": ${assetNames}. ` +
+                  `Please wait for that proposal to complete before creating a new one for these assets.`
+              );
+            }
+          }
+
+          // Check BUY and OFFER assets — they are mutually exclusive for the same NFT
+          // (cannot BUY if an active OFFER exists for it, and vice versa)
+          const allRequestedExternalIds = [...requestedBuyAssetIds, ...requestedOfferAssetIds];
+
+          if (allRequestedExternalIds.length > 0) {
+            const existingExternalIds = existingActions
+              .filter((a: any) => a.exec === ExecType.BUY || a.exec === ExecType.OFFER)
+              .map((a: any) => a.assetId);
+
+            const overlapping = allRequestedExternalIds.filter(id => existingExternalIds.includes(id));
+
+            if (overlapping.length > 0) {
+              throw new BadRequestException(
+                `Cannot create proposal. Some NFTs already have an active buy or offer proposal "${existingProposal.title}". ` +
+                  `Please wait for that proposal to complete before creating a new one for these NFTs.`
+              );
+            }
+          }
         }
       }
     }
@@ -539,6 +648,51 @@ export class GovernanceService {
 
         const market = actions[0]?.market;
 
+        // Pre-check (mainnet only): ensure treasury has enough ADA for WayUp BUY and OFFER operations
+        if (this.isMainnet && market === 'WayUp') {
+          const buyActions = actions.filter(a => a.exec === ExecType.BUY);
+          const offerActions = actions.filter(a => a.exec === ExecType.OFFER);
+
+          const totalBuyAda = buyActions.reduce((sum, a) => {
+            const maxPrice = a.price ? parseFloat(a.price) : 0;
+            return sum + (isNaN(maxPrice) ? 0 : maxPrice);
+          }, 0);
+
+          const totalOfferAda = offerActions.reduce((sum, a) => {
+            const offerPrice = a.price ? parseFloat(a.price) : 0;
+            return sum + (isNaN(offerPrice) ? 0 : offerPrice);
+          }, 0);
+
+          const totalMaxAda = totalBuyAda + totalOfferAda;
+
+          if (totalMaxAda > 0) {
+            try {
+              const balance = await this.treasuryWalletService.getTreasuryWalletBalance(vaultId);
+              const adaBalance = balance.lovelace / 1_000_000;
+
+              if (adaBalance < totalMaxAda) {
+                throw new BadRequestException(
+                  `Treasury wallet has insufficient ADA for this proposal. ` +
+                    `Required up to ${totalMaxAda} ADA for WayUp buys/offers, available: ${adaBalance.toFixed(2)} ADA.`
+                );
+              }
+            } catch (error) {
+              this.logger.error(
+                `Failed to validate treasury balance for vault ${vaultId}: ${error.message}`,
+                error.stack
+              );
+
+              if (error instanceof BadRequestException) {
+                throw error;
+              }
+
+              throw new BadRequestException(
+                'Unable to validate treasury wallet balance for this proposal. Please try again later.'
+              );
+            }
+          }
+        }
+
         // For DexHunter, fetch all assets and aggregate by token to allow multi-asset swaps
         const assetsByToken = new Map<
           string,
@@ -569,6 +723,114 @@ export class GovernanceService {
         // Validate all assets exist and handle market-specific validation
         await Promise.all(
           actions.map(async action => {
+            // BUY actions target external NFTs (not in our DB) — skip DB lookup, validate via WayUp API below
+            if (action.exec === ExecType.BUY) {
+              if (market === 'WayUp') {
+                const policyId = action.assetId.length >= 56 ? action.assetId.slice(0, 56) : action.assetId;
+
+                const isWhitelisted = vault.assets_whitelist?.some(
+                  whitelistItem => whitelistItem.policy_id === policyId
+                );
+
+                if (!isWhitelisted) {
+                  throw new BadRequestException(
+                    `Policy ID ${policyId.substring(0, 6)}...${policyId.substring(policyId.length - 6)} is not whitelisted for this vault.`
+                  );
+                }
+
+                const collectionResponse = await this.wayUpPricingService.getCollectionAssets({
+                  policyId,
+                  saleType: 'listedOnly',
+                  orderBy: 'priceAsc',
+                  term: action.assetName,
+                  limit: 1,
+                });
+
+                const exactAsset = collectionResponse.results?.[0];
+
+                const displayName = exactAsset?.name || action.assetName || action.assetId;
+
+                if (!exactAsset?.listing) {
+                  throw new BadRequestException(
+                    `NFT ${displayName} is not available for purchase — no active listing found on WayUp.`
+                  );
+                }
+
+                const listingPriceAda = exactAsset.listing.price / 1_000_000;
+                const maxPriceAda = action.price ? parseFloat(action.price) : null;
+
+                if (maxPriceAda != null && listingPriceAda > maxPriceAda) {
+                  throw new BadRequestException(
+                    `NFT ${displayName} current listing price is ${listingPriceAda} ADA, ` +
+                      `but proposal max price is ${maxPriceAda} ADA. Update the price or choose a different asset.`
+                  );
+                }
+
+                action.nftSnapshot = {
+                  name: exactAsset.name,
+                  image: exactAsset.image ?? null,
+                  listingPriceAda,
+                  policyId: exactAsset.policyId,
+                  assetName: exactAsset.assetName,
+                  collectionName: exactAsset.collection?.name ?? null,
+                };
+              }
+              return;
+            }
+
+            // OFFER actions target external NFTs — validate policy whitelist and NFT existence via WayUp API
+            if (action.exec === ExecType.OFFER) {
+              if (market === 'WayUp') {
+                const policyId = action.assetId.length >= 56 ? action.assetId.slice(0, 56) : action.assetId;
+
+                const isWhitelisted = vault.assets_whitelist?.some(
+                  whitelistItem => whitelistItem.policy_id === policyId
+                );
+
+                if (!isWhitelisted) {
+                  throw new BadRequestException(
+                    `Policy ID ${policyId.substring(0, 6)}...${policyId.substring(policyId.length - 6)} is not whitelisted for this vault.`
+                  );
+                }
+
+                if (!action.price || isNaN(parseFloat(action.price)) || parseFloat(action.price) <= 0) {
+                  throw new BadRequestException(
+                    `Offer price is required and must be greater than 0 for OFFER action on NFT ${action.assetName || action.assetId}.`
+                  );
+                }
+
+                // Query WayUp to confirm the NFT exists and resolve hex assetName for nftSnapshot
+                // Unlike BUY, the NFT doesn't need to be listed — we can offer on any NFT in the collection
+                const collectionResponse = await this.wayUpPricingService.getCollectionAssets({
+                  policyId,
+                  term: action.assetName,
+                  limit: 1,
+                });
+
+                const exactAsset = collectionResponse.results?.[0];
+                const displayName = exactAsset?.name || action.assetName || action.assetId;
+
+                if (!exactAsset) {
+                  throw new BadRequestException(
+                    `NFT ${displayName} was not found in collection ${policyId.substring(0, 8)}... on WayUp. Cannot place an offer.`
+                  );
+                }
+
+                const offerPriceAda = parseFloat(action.price);
+                const currentListingPriceAda = exactAsset.listing ? exactAsset.listing.price / 1_000_000 : null;
+
+                action.nftSnapshot = {
+                  name: exactAsset.name,
+                  image: exactAsset.image ?? null,
+                  listingPriceAda: currentListingPriceAda ?? offerPriceAda,
+                  policyId: exactAsset.policyId,
+                  assetName: exactAsset.assetName,
+                  collectionName: exactAsset.collection?.name ?? null,
+                };
+              }
+              return;
+            }
+
             const asset: Pick<Asset, 'id' | 'status' | 'type' | 'policy_id' | 'asset_id' | 'quantity' | 'name'> =
               await this.assetRepository.findOne({
                 where: { id: action.assetId },
@@ -1183,7 +1445,10 @@ export class GovernanceService {
     const burnAssetIds = proposal.metadata?.burnAssets || [];
     const fungibleTokenIds = proposal.metadata?.fungibleTokens?.map(ft => ft.id) || [];
     const nonFungibleTokenIds = proposal.metadata?.nonFungibleTokens?.map(nft => nft.id) || [];
-    const marketplaceActionIds = proposal.metadata?.marketplaceActions?.map(ma => ma.assetId) || [];
+    const marketplaceActionIds =
+      proposal.metadata?.marketplaceActions
+        ?.filter(ma => ma.exec !== ExecType.BUY && ma.exec !== ExecType.OFFER)
+        .map(ma => ma.assetId) || [];
 
     [...burnAssetIds, ...fungibleTokenIds, ...nonFungibleTokenIds, ...marketplaceActionIds].forEach(id =>
       allAssetIds.add(id)
@@ -1310,12 +1575,33 @@ export class GovernanceService {
     // Transform marketplace actions with enriched asset data and WayUp URLs
     // For DexHunter swaps, combine quantities by token (policy_id + asset_id)
     const marketplaceActions = (proposal.metadata?.marketplaceActions || []).map(action => {
-      const asset = assetMap.get(action.assetId);
-
-      // Check if this is a DexHunter swap action (has slippage field)
+      const isBuy = action.exec === 'BUY';
+      const isOffer = action.exec === 'OFFER';
       const isSwapAction = action.slippage !== undefined || action.market === 'DexHunter';
 
-      // Generate WayUp URL only for non-swap actions (NFT marketplace actions)
+      if (isBuy || isOffer) {
+        let wayupUrl: string | undefined;
+        if (!isSwapAction && action.nftSnapshot) {
+          wayupUrl = `https://www.wayup.io/collection/${action.nftSnapshot.policyId}/asset/${action.nftSnapshot.assetName}?tab=activity`;
+        }
+
+        const cleanId = action.nftSnapshot?.image?.split('/').pop()?.split('?')[0];
+        const assetImg = cleanId ? `https://ipfs.blockfrost.dev/ipfs/${cleanId}` : undefined;
+
+        return {
+          ...action,
+          assetName: action.nftSnapshot?.name ?? action.assetId,
+          assetImg,
+          assetPrice: action.nftSnapshot?.listingPriceAda ?? 0,
+          listingPrice: null,
+          assetStatus: null,
+          wayupUrl,
+        };
+      }
+
+      // Handling internal assets (those that exist in the database)
+      const asset = assetMap.get(action.assetId);
+
       let wayupUrl: string | undefined;
       if (!isSwapAction && asset?.policy_id && asset?.asset_id) {
         wayupUrl = `https://www.wayup.io/collection/${asset.policy_id}/asset/${asset.asset_id}?tab=activity`;
@@ -1546,35 +1832,6 @@ export class GovernanceService {
       throw new BadRequestException(`Proposal is not in UNPAID status. Current status: ${proposal.status}`);
     }
 
-    // Submit transaction to blockchain
-    let txHash: string;
-    try {
-      const result = await this.blockchainService.submitTransaction({
-        transaction: transaction,
-        signatures: signatures || [],
-      });
-
-      if (!result.txHash) {
-        throw new Error('No transaction hash returned from blockchain submission');
-      }
-
-      txHash = result.txHash;
-      this.logger.log(`Submitted governance fee transaction: ${txHash} for proposal ${proposalId}`);
-    } catch (error) {
-      const errorMsg = error?.message || error?.toString() || 'Unknown error';
-      this.logger.error(`Failed to submit governance fee transaction: ${errorMsg}`, error?.stack);
-
-      // Delete the UNPAID proposal if blockchain submission fails
-      try {
-        await this.proposalRepository.remove(proposal);
-        this.logger.warn(`Deleted UNPAID proposal ${proposalId} after failed transaction submission`);
-      } catch (deleteError) {
-        this.logger.error(`Failed to delete UNPAID proposal ${proposalId}: ${deleteError.message}`);
-      }
-
-      throw new BadRequestException(`Failed to submit transaction: ${errorMsg}`);
-    }
-
     // Get pending payment metadata
     const pendingPayment = proposal.metadata?._pendingPayment;
     if (!pendingPayment) {
@@ -1596,6 +1853,75 @@ export class GovernanceService {
     }
     proposal.startDate = startDate;
     proposal.endDate = endDate;
+
+    // Persist the user-paid governance fee transaction in DB
+    // so we can refund it later without relying on proposal.metadata.
+    const feeTx = await this.transactionsService.createTransaction({
+      vault_id: proposal.vault.id,
+      type: TransactionType.payment,
+      assets: [],
+      amount: pendingPayment.feeAmount,
+      userId: proposal.creatorId,
+      metadata: {
+        kind: 'governance_creation_fee',
+        proposalId,
+        paidAt: now.toISOString(),
+        feeAmount: pendingPayment.feeAmount,
+      },
+    });
+
+    // Submit transaction to blockchain
+    let txHash: string;
+    try {
+      const result = await this.blockchainService.submitTransaction({
+        transaction: transaction,
+        signatures: signatures || [],
+      });
+
+      if (!result.txHash) {
+        throw new Error('No transaction hash returned from blockchain submission');
+      }
+
+      txHash = result.txHash;
+      this.logger.log(`Submitted governance fee transaction: ${txHash} for proposal ${proposalId}`);
+    } catch (error) {
+      const errorMsg = error?.message || error?.toString() || 'Unknown error';
+      this.logger.error(`Failed to submit governance fee transaction: ${errorMsg}`, error?.stack);
+
+      // Mark DB record as failed (transaction was rejected by chain)
+      try {
+        await this.transactionsService.updateTransactionStatusById(feeTx.id, TransactionStatus.failed);
+      } catch (statusError) {
+        this.logger.error(`Failed to mark fee tx DB record as failed: ${statusError.message}`, statusError);
+      }
+
+      // Delete the UNPAID proposal if blockchain submission fails
+      try {
+        await this.proposalRepository.remove(proposal);
+        this.logger.warn(`Deleted UNPAID proposal ${proposalId} after failed transaction submission`);
+      } catch (deleteError) {
+        this.logger.error(`Failed to delete UNPAID proposal ${proposalId}: ${deleteError.message}`);
+      }
+
+      throw new BadRequestException(`Failed to submit transaction: ${errorMsg}`);
+    }
+
+    // Update DB record with txHash (separate from submission, since payment has succeeded on-chain)
+    // If this fails, the payment is still valid - we just need to retry the DB update
+    try {
+      await this.transactionsService.updateTransactionHash(feeTx.id, txHash, {
+        kind: 'governance_creation_fee',
+        proposalId,
+        paidAt: now.toISOString(),
+        feeAmount: pendingPayment.feeAmount,
+        paymentTxHash: txHash,
+      });
+    } catch (dbError) {
+      this.logger.error(
+        `Governance fee payment succeeded (txHash: ${txHash}), but DB update failed for proposal ${proposalId}: ${dbError?.message || dbError}`,
+        dbError?.stack
+      );
+    }
 
     // Clear pending payment metadata
     delete proposal.metadata._pendingPayment;
@@ -1661,6 +1987,99 @@ export class GovernanceService {
       success: true,
       message: 'Payment submitted and proposal activated successfully',
       txHash,
+    };
+  }
+
+  /**
+   * Delete an UPCOMING or UNPAID proposal by its owner.
+   * - UNPAID: Proposal created but payment never submitted (no refund needed)
+   * - UPCOMING: Proposal paid and scheduled but not yet active (refund if paid)
+   */
+  async deleteProposal(
+    proposalId: string,
+    userId: string
+  ): Promise<{ success: boolean; message: string; refundTxHash?: string }> {
+    const proposal = await this.proposalRepository.findOne({
+      where: { id: proposalId },
+      relations: ['creator'],
+    });
+
+    if (!proposal) {
+      throw new NotFoundException('Proposal not found');
+    }
+
+    if (proposal.creatorId !== userId) {
+      throw new ForbiddenException('Only the proposal creator can delete this proposal');
+    }
+
+    if (proposal.status !== ProposalStatus.UPCOMING && proposal.status !== ProposalStatus.UNPAID) {
+      throw new BadRequestException(
+        `Proposal can only be deleted while it is UPCOMING or UNPAID. Current status: ${proposal.status}`
+      );
+    }
+
+    // Check if proposal starts in less than 1 hour (only applies to UPCOMING proposals with a start date)
+    if (proposal.status === ProposalStatus.UPCOMING && proposal.startDate) {
+      const now = new Date();
+      const timeUntilStart = proposal.startDate.getTime() - now.getTime();
+      const oneHourInMs = 60 * 60 * 1000;
+
+      if (timeUntilStart < oneHourInMs) {
+        throw new BadRequestException('Proposal cannot be deleted within 1 hour of its start time');
+      }
+    }
+
+    // Only attempt refund for UPCOMING proposals (UNPAID proposals never had payment submitted)
+    let refundTxHash: string | undefined = undefined;
+    if (proposal.status === ProposalStatus.UPCOMING) {
+      const refundResult = await this.governanceRefundService.refundProposalCreationFeeIfNeeded(proposalId, {
+        throwOnFailure: true,
+      });
+      refundTxHash = refundResult.txHash;
+    }
+
+    try {
+      await this.proposalRepository.manager.transaction(async manager => {
+        const proposalToDelete = await manager.findOne(Proposal, {
+          where: { id: proposalId },
+        });
+
+        if (!proposalToDelete) {
+          return;
+        }
+
+        // Re-validate guarded conditions in the same DB transaction before deletion.
+        if (proposalToDelete.creatorId !== userId) {
+          throw new ForbiddenException('Only the proposal creator can delete this proposal');
+        }
+
+        if (proposalToDelete.status !== ProposalStatus.UPCOMING && proposalToDelete.status !== ProposalStatus.UNPAID) {
+          throw new BadRequestException(
+            `Proposal can only be deleted while it is UPCOMING or UNPAID. Current status: ${proposalToDelete.status}`
+          );
+        }
+
+        await manager.remove(Proposal, proposalToDelete);
+      });
+    } catch (error: any) {
+      // If the error is an expected HttpException (e.g., BadRequest, Forbidden),
+      // rethrow it as-is so the client receives the correct status code.
+      if (error instanceof HttpException) {
+        throw error;
+      }
+
+      // For unexpected errors (database failures, etc.), log and wrap in 500 error.
+      this.logger.error(
+        `Proposal ${proposalId} refund succeeded (tx: ${refundTxHash || 'n/a'}), but delete failed due to internal error: ${error?.message || error}`,
+        error?.stack
+      );
+      throw new InternalServerErrorException('Refund completed, but proposal deletion failed. Please contact support.');
+    }
+
+    return {
+      success: true,
+      message: 'Proposal deleted successfully',
+      refundTxHash: refundTxHash,
     };
   }
 
@@ -1881,7 +2300,7 @@ export class GovernanceService {
     }
   }
 
-  async getAssetsToList(vaultId: string): Promise<AssetBuySellDto[]> {
+  async getAssetsToList(vaultId: string): Promise<GetAssetsToListRes> {
     try {
       // Get all assets in the vault
       const assets: Pick<
@@ -1912,9 +2331,16 @@ export class GovernanceService {
         ],
       });
 
-      return plainToInstance(AssetBuySellDto, assets, {
-        excludeExtraneousValues: true,
-      });
+      const treasuryWalletBalance = this.isMainnet
+        ? await this.treasuryWalletService.getTreasuryWalletBalance(vaultId)
+        : null;
+
+      return {
+        assets: plainToInstance(AssetBuySellDto, assets, {
+          excludeExtraneousValues: true,
+        }),
+        treasuryWalletBalance,
+      };
     } catch (error) {
       this.logger.error(`Error getting assets for buy-sell proposals for vault ${vaultId}: ${error.message}`);
       throw new InternalServerErrorException('Error getting assets for buying/selling');
@@ -2367,5 +2793,17 @@ export class GovernanceService {
     }
 
     return possible.has(targetInt);
+  }
+
+  /**
+   * Converts a human-readable float amount (as returned by TapTools) to raw on-chain bigint units.
+   * Avoids floating-point drift by parsing the fixed-decimal string representation directly.
+   *
+   * Example: floatToRawBigInt(522963.34, 6) → 522963340000n
+   */
+  private floatToRawBigInt(value: number, decimals: number): bigint {
+    const fixed = value.toFixed(decimals); // e.g. "522963.340000"
+    const [intPart, fracPart = ''] = fixed.split('.');
+    return BigInt(intPart + fracPart.padEnd(decimals, '0').slice(0, decimals));
   }
 }

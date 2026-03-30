@@ -36,9 +36,9 @@ export class StatisticsService {
    */
   async getVaultStatistics(): Promise<VaultStatisticsResponse> {
     try {
-      // Count active vaults (published, contribution, acquire, locked), excluding hidden vaults on mainnet
+      // Count active vaults (published, contribution, acquire, locked, expansion), excluding hidden vaults on mainnet
       const activeVaultsWhere: any = {
-        vault_status: In([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked]),
+        vault_status: In([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked, VaultStatus.expansion]),
         deleted: false,
       };
       if (this.isMainnet) {
@@ -49,7 +49,13 @@ export class StatisticsService {
       });
 
       const totalVaultsWhere: any = {
-        vault_status: In([VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked]),
+        vault_status: In([
+          VaultStatus.published,
+          VaultStatus.contribution,
+          VaultStatus.acquire,
+          VaultStatus.locked,
+          VaultStatus.expansion,
+        ]),
       };
       if (this.isMainnet) {
         totalVaultsWhere.id = Not(In(this.systemSettingsService.hiddenMainnetVaultIds));
@@ -57,12 +63,12 @@ export class StatisticsService {
       const totalVaultsCount = await this.vaultsRepository.count({
         where: totalVaultsWhere,
       });
-      // Get sum of total assets value for locked vaults only, excluding hidden vaults on mainnet
+      // Get sum of total assets value for locked and expansion vaults only, excluding hidden vaults on mainnet
       const totalValueQuery = this.vaultsRepository
         .createQueryBuilder('vault')
         .select('SUM(vault.total_assets_cost_usd)', 'totalValueUsd')
         .addSelect('SUM(vault.total_assets_cost_ada)', 'totalValueAda')
-        .where('vault.vault_status = :status', { status: VaultStatus.locked })
+        .where('vault.vault_status IN (:...statuses)', { statuses: [VaultStatus.locked, VaultStatus.expansion] })
         .andWhere('vault.deleted = :deleted', { deleted: false });
       if (this.isMainnet) {
         totalValueQuery.andWhere('vault.id NOT IN (:...hiddenIds)', {
@@ -160,7 +166,13 @@ export class StatisticsService {
         .addSelect('COUNT(vault.id)', 'count')
         .where('vault.deleted = :deleted', { deleted: false })
         .andWhere('vault.vault_status IN (:...statuses)', {
-          statuses: ['contribution', 'acquire', 'locked', 'burned'],
+          statuses: [
+            VaultStatus.contribution,
+            VaultStatus.acquire,
+            VaultStatus.locked,
+            VaultStatus.burned,
+            VaultStatus.expansion,
+          ],
         });
       if (this.isMainnet) {
         statusQuery.andWhere('vault.id NOT IN (:...hiddenIds)', {
@@ -177,6 +189,7 @@ export class StatisticsService {
         acquire: { percentage: 0, valueAda: '0', valueUsd: '0' },
         locked: { percentage: 0, valueAda: '0', valueUsd: '0' },
         terminated: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        expansion: { percentage: 0, valueAda: '0', valueUsd: '0' },
       };
 
       const statusMap = {
@@ -184,6 +197,7 @@ export class StatisticsService {
         acquire: 'acquire',
         locked: 'locked',
         burned: 'terminated',
+        expansion: 'expansion',
       };
 
       statusResults.forEach(item => {
@@ -208,6 +222,7 @@ export class StatisticsService {
         acquire: { percentage: 0, valueAda: '0', valueUsd: '0' },
         locked: { percentage: 0, valueAda: '0', valueUsd: '0' },
         terminated: { percentage: 0, valueAda: '0', valueUsd: '0' },
+        expansion: { percentage: 0, valueAda: '0', valueUsd: '0' },
       };
     }
   }

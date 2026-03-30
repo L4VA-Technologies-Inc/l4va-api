@@ -1,21 +1,23 @@
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { PlutusData } from '@emurgo/cardano-serialization-lib-nodejs';
+import { Address, PlutusData } from '@emurgo/cardano-serialization-lib-nodejs';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
-import { getVaultUtxo } from '../vaults/processing-tx/onchain/utils/lib';
+import { BlockchainService } from '../vaults/processing-tx/onchain/blockchain.service';
+import { Datum1 } from '../vaults/processing-tx/onchain/types/type';
+import { getAddressFromHash, getUtxosExtract, getVaultUtxo } from '../vaults/processing-tx/onchain/utils/lib';
 
 import { Asset } from '@/database/asset.entity';
+import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
-import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
 import { AssetOriginType, AssetType } from '@/types/asset.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { SmartContractVaultStatus, VaultStatus } from '@/types/vault.types';
+import { SmartContractVaultStatus, VaultPrivacy, VaultStatus } from '@/types/vault.types';
 
 /**
  * Diagnostic Service
@@ -29,8 +31,12 @@ export class DiagnosticService {
   private readonly GROUPING_THRESHOLD = 1;
   private readonly scPolicyId: string;
   private readonly blockfrost: BlockFrostAPI;
-
+  private readonly adminHash: string;
+  private readonly adminAddress: string;
+  private readonly networkId: number;
   constructor(
+    @InjectRepository(AssetsWhitelistEntity)
+    private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
     @InjectRepository(Asset)
     private readonly assetsRepository: Repository<Asset>,
     @InjectRepository(Transaction)
@@ -38,9 +44,14 @@ export class DiagnosticService {
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     private readonly distributionCalculationService: DistributionCalculationService,
-    private readonly vaultManagingService: VaultManagingService,
+    private readonly blockchainService: BlockchainService,
     private readonly configService: ConfigService
   ) {
+    this.scPolicyId = this.configService.get<string>('SC_POLICY_ID');
+    this.adminHash = this.configService.get<string>('ADMIN_KEY_HASH');
+    this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
+    this.networkId = Number(this.configService.get<string>('NETWORK_ID')) || 0;
+
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
@@ -398,7 +409,7 @@ export class DiagnosticService {
     };
 
     try {
-      const txSizeEstimate = await this.vaultManagingService.estimateUpdateVaultTxSize({
+      const txSizeEstimate = await this.estimateUpdateVaultTxSize({
         vault: {
           id: vault.id,
           asset_vault_name: vault.asset_vault_name,
@@ -1177,6 +1188,191 @@ export class DiagnosticService {
         mixedValuePolicies,
       },
     };
+  }
+
+  /**
+   * TEST METHOD: Estimate the transaction size for an update vault operation
+   * This builds the transaction without creating a transaction record or submitting it
+   * Useful for validating that transactions with large multiplier arrays will fit within Cardano limits
+   */
+  private async estimateUpdateVaultTxSize(config: {
+    vault: Pick<
+      Vault,
+      'id' | 'asset_vault_name' | 'privacy' | 'contribution_phase_start' | 'contribution_duration' | 'value_method'
+    >;
+    vaultStatus: SmartContractVaultStatus;
+    acquireMultiplier?: [string, string | null, number][];
+    adaPairMultiplier?: number;
+    adaDistribution?: [string, string, number][];
+    asset_window?: {
+      start: number;
+      end: number;
+    };
+    acquire_window?: {
+      start: number;
+      end: number;
+    };
+  }): Promise<{
+    txSizeBytes: number;
+    txSizeKB: number;
+    maxSizeBytes: number;
+    percentOfMax: number;
+    withinLimit: boolean;
+    multiplierCount: number;
+    adaDistributionCount: number;
+  }> {
+    const {
+      vault,
+      vaultStatus,
+      asset_window,
+      acquire_window,
+      acquireMultiplier = [],
+      adaPairMultiplier = 0,
+      adaDistribution = [],
+    } = config;
+
+    const assetsWhitelist = await this.assetsWhitelistRepository.find({
+      where: { vault: { id: vault.id } },
+      select: ['policy_id'],
+    });
+
+    const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
+      minAda: 4000000,
+      validateUtxos: false,
+    });
+
+    const requiredInputs: string[] = [];
+
+    const allowedPolicies: string[] =
+      Array.isArray(assetsWhitelist) && assetsWhitelist.length > 0
+        ? assetsWhitelist.map(policy => policy.policy_id)
+        : [];
+    const contract_type = vault.privacy === VaultPrivacy.private ? 0 : vault.privacy === VaultPrivacy.public ? 1 : 2;
+
+    const scAddress = getAddressFromHash(this.scPolicyId, this.networkId);
+
+    const vaultUtxo = await getVaultUtxo(this.scPolicyId, vault.asset_vault_name, this.blockfrost);
+
+    let vaultMessageStatus = '';
+    if (vaultStatus === SmartContractVaultStatus.SUCCESSFUL) {
+      vaultMessageStatus = 'Locked';
+    } else if (vaultStatus === SmartContractVaultStatus.CANCELLED) {
+      vaultMessageStatus = 'Failed';
+    } else if (vaultStatus === SmartContractVaultStatus.OPEN) {
+      vaultMessageStatus = 'Open';
+    } else {
+      vaultMessageStatus = 'Unknown';
+    }
+
+    const input = {
+      changeAddress: this.adminAddress,
+      message: `[TEST] Vault ${vault.id} ${vaultMessageStatus} Update Size Estimation`,
+      utxos: adminUtxos,
+      scriptInteractions: [
+        {
+          purpose: 'spend',
+          outputRef: vaultUtxo,
+          hash: this.scPolicyId,
+          redeemer: {
+            type: 'json',
+            value: {
+              vault_token_index: 0,
+              asset_name: vault.asset_vault_name,
+            },
+          },
+        },
+      ],
+      outputs: [
+        {
+          address: scAddress,
+          assets: [
+            {
+              assetName: vault.asset_vault_name,
+              policyId: this.scPolicyId,
+              quantity: 1,
+            },
+          ],
+          datum: {
+            type: 'inline',
+            value: {
+              vault_status: vaultStatus,
+              contract_type: contract_type,
+              asset_whitelist: allowedPolicies,
+              asset_window: {
+                lower_bound: {
+                  bound_type: new Date(asset_window?.start || vault.contribution_phase_start).getTime(),
+                  is_inclusive: true,
+                },
+                upper_bound: {
+                  bound_type: new Date(
+                    (asset_window?.end ? new Date(asset_window.end) : vault.contribution_phase_start).getTime() +
+                      Number(vault.contribution_duration)
+                  ).getTime(),
+                  is_inclusive: true,
+                },
+              },
+              acquire_window: {
+                lower_bound: {
+                  bound_type: acquire_window?.start ? new Date(acquire_window.start).getTime() : new Date().getTime(),
+                  is_inclusive: true,
+                },
+                upper_bound: {
+                  bound_type: acquire_window?.end ? new Date(acquire_window.end).getTime() : new Date().getTime(),
+                  is_inclusive: true,
+                },
+              },
+              valuation_type: vault.value_method === 'fixed' ? 0 : 1,
+              custom_metadata: [],
+              admin: this.adminHash,
+              minting_key: this.adminHash,
+              acquire_multiplier: acquireMultiplier,
+              ada_distribution: adaDistribution,
+              ada_pair_multipler: adaPairMultiplier,
+            } satisfies Datum1,
+            shape: {
+              validatorHash: this.scPolicyId,
+              purpose: 'spend',
+            },
+          },
+        },
+      ],
+      requiredInputs,
+      requiredSigners: [this.adminHash],
+    };
+
+    try {
+      // Build the transaction to get its size
+      const buildResponse = await this.blockchainService.buildTransaction(input);
+
+      // Calculate transaction size
+      const txBytes = Buffer.from(buildResponse.complete, 'hex');
+      const txSizeBytes = txBytes.length;
+      const txSizeKB = +(txSizeBytes / 1024).toFixed(2);
+
+      // Cardano max transaction size is 16KB (16384 bytes)
+      const maxSizeBytes = 16384;
+      const percentOfMax = +((txSizeBytes / maxSizeBytes) * 100).toFixed(2);
+      const withinLimit = txSizeBytes <= maxSizeBytes;
+
+      this.logger.log(
+        `Transaction size estimation: ${txSizeBytes} bytes (${txSizeKB} KB) = ${percentOfMax}% of max. ` +
+          `Multipliers: ${acquireMultiplier.length}, ADA Distribution: ${adaDistribution.length}, ` +
+          `Within limit: ${withinLimit}`
+      );
+
+      return {
+        txSizeBytes,
+        txSizeKB,
+        maxSizeBytes,
+        percentOfMax,
+        withinLimit,
+        multiplierCount: acquireMultiplier.length,
+        adaDistributionCount: adaDistribution.length,
+      };
+    } catch (error) {
+      this.logger.error('Failed to estimate vault update tx size:', error);
+      throw new Error(`Failed to estimate transaction size: ${error.message}`);
+    }
   }
 
   /**

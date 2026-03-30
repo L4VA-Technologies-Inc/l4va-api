@@ -20,19 +20,24 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
+import { AssetsService } from '../../assets/assets.service';
 import { PublishVaultDto } from '../../dto/publish-vault.dto';
 
 import { BlockchainService } from './blockchain.service';
 import { Datum1 } from './types/type';
-import { generate_tag_from_txhash_index, getAddressFromHash, getUtxosExtract, getVaultUtxo } from './utils/lib';
+import {
+  generate_tag_from_txhash_index,
+  getAddressFromHash,
+  getUtxosExtract,
+  getVaultUtxo,
+  convertAddressesToKeyHashes,
+} from './utils/lib';
 
-import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Vault } from '@/database/vault.entity';
 import { VaultCreationInput } from '@/modules/distribution/distribution.types';
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
-import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { SmartContractVaultStatus, VaultPrivacy } from '@/types/vault.types';
 
@@ -98,15 +103,14 @@ export class VaultManagingService {
   private readonly VLRM_POLICY_ID: string;
 
   constructor(
-    @InjectRepository(Asset)
-    private readonly assetsRepository: Repository<Asset>,
     @InjectRepository(AssetsWhitelistEntity)
     private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
     private readonly configService: ConfigService,
     @Inject(BlockchainService)
     private readonly blockchainService: BlockchainService,
     private readonly transactionsService: TransactionsService,
-    private readonly systemSettingsService: SystemSettingsService
+    private readonly systemSettingsService: SystemSettingsService,
+    private readonly assetsService: AssetsService
   ) {
     this.blueprintTitle = this.configService.get<string>('BLUEPRINT_TITLE');
     this.scPolicyId = this.configService.get<string>('SC_POLICY_ID');
@@ -330,6 +334,25 @@ export class VaultManagingService {
     const vaultAddress = getAddressFromHash(scriptHash, this.networkId);
 
     try {
+      // Convert contributor wallet addresses to verification key hashes for smart contract
+      let contributorKeyHashes: string[] | null = null;
+      try {
+        contributorKeyHashes =
+          vaultConfig.allowedContributors && vaultConfig.allowedContributors.length > 0
+            ? convertAddressesToKeyHashes(vaultConfig.allowedContributors)
+            : null;
+
+        if (contributorKeyHashes && contributorKeyHashes.length > 0) {
+          this.logger.log(`Vault creation with contributor whitelist: ${contributorKeyHashes.length} contributors`);
+        }
+      } catch (conversionError) {
+        this.logger.error('Failed to convert contributor addresses to key hashes:', conversionError);
+        await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
+        throw new BadRequestException(
+          `Invalid contributor address(es): ${conversionError.message || 'Unable to convert wallet addresses to verification key hashes. Please ensure all addresses are valid Cardano addresses.'}`
+        );
+      }
+
       const input: VaultCreationInput = {
         changeAddress: vaultConfig.customerAddress,
         message: `${vaultConfig.vaultName} Vault Creation`,
@@ -373,7 +396,7 @@ export class VaultManagingService {
                 vault_status: SmartContractVaultStatus.OPEN,
                 contract_type: vaultConfig.contractType,
                 asset_whitelist: [...vaultConfig.allowedPolicies, this.VLRM_POLICY_ID],
-                // contributor_whitelist: vaultConfig.allowedContributors, // address list of contributors
+                ...(contributorKeyHashes && { contributor_whitelist: contributorKeyHashes }),
                 asset_window: {
                   // Time allowed to upload NFT
                   lower_bound: {
@@ -566,6 +589,7 @@ export class VaultManagingService {
     acquireMultiplier?: [string, string | null, number][];
     adaPairMultiplier?: number;
     adaDistribution?: [string, string | null, number][];
+    contributorWhitelist?: string[]; // Array of wallet addresses
     asset_window?: {
       start: number;
       end: number;
@@ -587,6 +611,7 @@ export class VaultManagingService {
       acquireMultiplier = [],
       adaPairMultiplier = 0,
       adaDistribution = [],
+      contributorWhitelist = [],
     } = config;
     const transaction = await this.transactionsService.createTransaction({
       vault_id: vault.id,
@@ -611,6 +636,25 @@ export class VaultManagingService {
         ? assetsWhitelist.map(policy => policy.policy_id)
         : [];
     const contract_type = vault.privacy === VaultPrivacy.private ? 0 : vault.privacy === VaultPrivacy.public ? 1 : 2;
+
+    // Convert contributor wallet addresses to verification key hashes for smart contract
+    let contributorKeyHashes: string[] | null = null;
+    try {
+      contributorKeyHashes =
+        contributorWhitelist && contributorWhitelist.length > 0
+          ? convertAddressesToKeyHashes(contributorWhitelist)
+          : null;
+
+      if (contributorKeyHashes && contributorKeyHashes.length > 0) {
+        this.logger.log(`Vault update with contributor whitelist: ${contributorKeyHashes.length} contributors`);
+      }
+    } catch (conversionError) {
+      this.logger.error('Failed to convert contributor addresses to key hashes:', conversionError);
+      await this.transactionsService.updateTransactionStatusById(transaction.id, TransactionStatus.failed);
+      throw new BadRequestException(
+        `Invalid contributor address(es): ${conversionError.message || 'Unable to convert wallet addresses to verification key hashes. Please ensure all addresses are valid Cardano addresses.'}`
+      );
+    }
 
     this.scAddress = getAddressFromHash(this.scPolicyId, this.networkId);
 
@@ -660,7 +704,7 @@ export class VaultManagingService {
               vault_status: vaultStatus, // Added vault_status field
               contract_type: contract_type,
               asset_whitelist: allowedPolicies,
-              // contributor_whitelist: vaultConfig.allowedContributors || [],
+              ...(contributorKeyHashes && { contributor_whitelist: contributorKeyHashes }),
               asset_window: {
                 lower_bound: {
                   bound_type: asset_window?.start
@@ -741,191 +785,6 @@ export class VaultManagingService {
   }
 
   /**
-   * TEST METHOD: Estimate the transaction size for an update vault operation
-   * This builds the transaction without creating a transaction record or submitting it
-   * Useful for validating that transactions with large multiplier arrays will fit within Cardano limits
-   */
-  async estimateUpdateVaultTxSize(config: {
-    vault: Pick<
-      Vault,
-      'id' | 'asset_vault_name' | 'privacy' | 'contribution_phase_start' | 'contribution_duration' | 'value_method'
-    >;
-    vaultStatus: SmartContractVaultStatus;
-    acquireMultiplier?: [string, string | null, number][];
-    adaPairMultiplier?: number;
-    adaDistribution?: [string, string, number][];
-    asset_window?: {
-      start: number;
-      end: number;
-    };
-    acquire_window?: {
-      start: number;
-      end: number;
-    };
-  }): Promise<{
-    txSizeBytes: number;
-    txSizeKB: number;
-    maxSizeBytes: number;
-    percentOfMax: number;
-    withinLimit: boolean;
-    multiplierCount: number;
-    adaDistributionCount: number;
-  }> {
-    const {
-      vault,
-      vaultStatus,
-      asset_window,
-      acquire_window,
-      acquireMultiplier = [],
-      adaPairMultiplier = 0,
-      adaDistribution = [],
-    } = config;
-
-    const assetsWhitelist = await this.assetsWhitelistRepository.find({
-      where: { vault: { id: vault.id } },
-      select: ['policy_id'],
-    });
-
-    const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(this.adminAddress), this.blockfrost, {
-      minAda: 4000000,
-      validateUtxos: false,
-    });
-
-    const requiredInputs: string[] = [];
-
-    const allowedPolicies: string[] =
-      Array.isArray(assetsWhitelist) && assetsWhitelist.length > 0
-        ? assetsWhitelist.map(policy => policy.policy_id)
-        : [];
-    const contract_type = vault.privacy === VaultPrivacy.private ? 0 : vault.privacy === VaultPrivacy.public ? 1 : 2;
-
-    this.scAddress = getAddressFromHash(this.scPolicyId, this.networkId);
-
-    const vaultUtxo = await getVaultUtxo(this.scPolicyId, vault.asset_vault_name, this.blockfrost);
-
-    let vaultMessageStatus = '';
-    if (vaultStatus === SmartContractVaultStatus.SUCCESSFUL) {
-      vaultMessageStatus = 'Locked';
-    } else if (vaultStatus === SmartContractVaultStatus.CANCELLED) {
-      vaultMessageStatus = 'Failed';
-    } else if (vaultStatus === SmartContractVaultStatus.OPEN) {
-      vaultMessageStatus = 'Open';
-    } else {
-      vaultMessageStatus = 'Unknown';
-    }
-
-    const input = {
-      changeAddress: this.adminAddress,
-      message: `[TEST] Vault ${vault.id} ${vaultMessageStatus} Update Size Estimation`,
-      utxos: adminUtxos,
-      scriptInteractions: [
-        {
-          purpose: 'spend',
-          outputRef: vaultUtxo,
-          hash: this.scPolicyId,
-          redeemer: {
-            type: 'json',
-            value: {
-              vault_token_index: 0,
-              asset_name: vault.asset_vault_name,
-            },
-          },
-        },
-      ],
-      outputs: [
-        {
-          address: this.scAddress,
-          assets: [
-            {
-              assetName: vault.asset_vault_name,
-              policyId: this.scPolicyId,
-              quantity: 1,
-            },
-          ],
-          datum: {
-            type: 'inline',
-            value: {
-              vault_status: vaultStatus,
-              contract_type: contract_type,
-              asset_whitelist: allowedPolicies,
-              asset_window: {
-                lower_bound: {
-                  bound_type: new Date(asset_window?.start || vault.contribution_phase_start).getTime(),
-                  is_inclusive: true,
-                },
-                upper_bound: {
-                  bound_type: new Date(
-                    (asset_window?.end ? new Date(asset_window.end) : vault.contribution_phase_start).getTime() +
-                      Number(vault.contribution_duration)
-                  ).getTime(),
-                  is_inclusive: true,
-                },
-              },
-              acquire_window: {
-                lower_bound: {
-                  bound_type: acquire_window?.start ? new Date(acquire_window.start).getTime() : new Date().getTime(),
-                  is_inclusive: true,
-                },
-                upper_bound: {
-                  bound_type: acquire_window?.end ? new Date(acquire_window.end).getTime() : new Date().getTime(),
-                  is_inclusive: true,
-                },
-              },
-              valuation_type: vault.value_method === 'fixed' ? 0 : 1,
-              custom_metadata: [],
-              admin: this.adminHash,
-              minting_key: this.adminHash,
-              acquire_multiplier: acquireMultiplier,
-              ada_distribution: adaDistribution,
-              ada_pair_multipler: adaPairMultiplier,
-            } satisfies Datum1,
-            shape: {
-              validatorHash: this.scPolicyId,
-              purpose: 'spend',
-            },
-          },
-        },
-      ],
-      requiredInputs,
-      requiredSigners: [this.adminHash],
-    };
-
-    try {
-      // Build the transaction to get its size
-      const buildResponse = await this.blockchainService.buildTransaction(input);
-
-      // Calculate transaction size
-      const txBytes = Buffer.from(buildResponse.complete, 'hex');
-      const txSizeBytes = txBytes.length;
-      const txSizeKB = +(txSizeBytes / 1024).toFixed(2);
-
-      // Cardano max transaction size is 16KB (16384 bytes)
-      const maxSizeBytes = 16384;
-      const percentOfMax = +((txSizeBytes / maxSizeBytes) * 100).toFixed(2);
-      const withinLimit = txSizeBytes <= maxSizeBytes;
-
-      this.logger.log(
-        `Transaction size estimation: ${txSizeBytes} bytes (${txSizeKB} KB) = ${percentOfMax}% of max. ` +
-          `Multipliers: ${acquireMultiplier.length}, ADA Distribution: ${adaDistribution.length}, ` +
-          `Within limit: ${withinLimit}`
-      );
-
-      return {
-        txSizeBytes,
-        txSizeKB,
-        maxSizeBytes,
-        percentOfMax,
-        withinLimit,
-        multiplierCount: acquireMultiplier.length,
-        adaDistributionCount: adaDistribution.length,
-      };
-    } catch (error) {
-      this.logger.error('Failed to estimate vault update tx size:', error);
-      throw new Error(`Failed to estimate transaction size: ${error.message}`);
-    }
-  }
-
-  /**
    * Submit a signed vault transaction to the blockchain
    * @param signedTx Object containing the transaction and signatures
    * @returns Transaction hash
@@ -948,30 +807,9 @@ export class VaultManagingService {
 
       await this.transactionsService.updateTransactionHash(signedTx.txId, result.txHash);
 
+      // Create VLRM fee asset if enabled
       if (this.systemSettingsService.vlrmCreatorFeeEnabled && this.systemSettingsService.vlrmCreatorFee > 0) {
-        const vlrmAsset = this.assetsRepository.create({
-          vault: { id: vault.id },
-          policy_id: this.VLRM_POLICY_ID,
-          asset_id: `${this.VLRM_POLICY_ID}${this.VLRM_HEX_ASSET_NAME}`,
-          type: AssetType.FT,
-          quantity: this.systemSettingsService.vlrmCreatorFee,
-          status: AssetStatus.LOCKED,
-          origin_type: AssetOriginType.FEE,
-          decimals: 4, // VLRM has 4 decimal places
-          name: 'VLRM',
-          transaction: { id: signedTx.txId },
-          added_by: { id: ownerId },
-          image: 'ipfs://QmdYu513Bu7nfKV5LKP6cmpZ8HHXifQLH6FTTzv3VbbqwP', // VLRM logo
-          metadata: {
-            purpose: 'vault_creation_fee',
-          },
-        });
-
-        await this.assetsRepository.save(vlrmAsset);
-
-        this.logger.log(
-          `Created VLRM asset record for vault ${vault.id}: ${this.systemSettingsService.vlrmCreatorFee} tokens`
-        );
+        await this.assetsService.addVLRMFeeAsset(vault, ownerId, signedTx.txId);
       }
 
       if (result.txHash) {

@@ -11,6 +11,7 @@ import { DistributionService } from './distribution.service';
 import { ExpansionService } from './expansion.service';
 import { GovernanceExecutionService } from './governance-execution.service';
 import { GovernanceFeeService } from './governance-fee.service';
+import { GovernanceRefundService } from './governance-refund.service';
 import { GovernanceController } from './governance.controller';
 import { GovernanceService } from './governance.service';
 import { ProposalHealthService } from './proposal-health.service';
@@ -34,8 +35,10 @@ import { DexHunterModule } from '@/modules/dexhunter/dexhunter.module';
 import { DistributionCalculationModule } from '@/modules/distribution/distribution-calculation.module';
 import { RedisModule } from '@/modules/redis/redis.module';
 import { RewardsModule } from '@/modules/rewards/rewards.module';
+import { TaptoolsModule } from '@/modules/taptools/taptools.module';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
 import { VyfiModule } from '@/modules/vyfi/vyfi.module';
+import { WayUpPricingModule } from '@/modules/wayup/wayup-pricing.module';
 import { WayUpModule } from '@/modules/wayup/wayup.module';
 
 @Module({
@@ -63,12 +66,15 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     AlertsModule,
     DistributionCalculationModule,
     RewardsModule,
+    WayUpPricingModule,
+    TaptoolsModule,
   ],
   controllers: [GovernanceController, TerminationController],
   providers: [
     GovernanceService,
     GovernanceFeeService,
     GovernanceExecutionService,
+    GovernanceRefundService,
     ProposalSchedulerService,
     ExpansionService,
     VoteCountingService,

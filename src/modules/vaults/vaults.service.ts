@@ -1,16 +1,16 @@
-import { HttpService } from '@nestjs/axios';
 import { BadRequestException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
 import NodeCache from 'node-cache';
-import { firstValueFrom } from 'rxjs';
 import { Brackets, In, Not, Repository } from 'typeorm';
 
+import { DexHunterService } from '../dexhunter/dexhunter.service';
 import { GoogleCloudStorageService } from '../google_cloud/google_bucket/bucket.service';
 import { PriceService } from '../price/price.service';
 import { TaptoolsService } from '../taptools/taptools.service';
+import { WayUpPricingService } from '../wayup/wayup-pricing.service';
 
 import { CreateVaultReq } from './dto/createVault.req';
 import { VaultActivityFilter } from './dto/get-vault-activity.dto';
@@ -48,6 +48,7 @@ import { Vault } from '@/database/vault.entity';
 import { transformToSnakeCase } from '@/helpers';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings';
+import { CollectionItemDto } from '@/modules/vaults/dto/get-collection-names.dto';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -121,7 +122,8 @@ export class VaultsService {
     private readonly configService: ConfigService,
     private readonly systemSettingsService: SystemSettingsService,
     private readonly distributionCalculationService: DistributionCalculationService,
-    private readonly httpService: HttpService
+    private readonly wayUpPricingService: WayUpPricingService,
+    private readonly dexHunterService: DexHunterService
   ) {
     this.scVersion = this.configService.get<string>('SC_VERSION') || '1.0.0'; // Current SC version
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
@@ -138,7 +140,7 @@ export class VaultsService {
    * @param file_key - GCS file key
    * @returns Array of valid Cardano addresses
    */
-  private async parseCSVFromS3(file_key: string): Promise<string[]> {
+  private async parseCSVFromGCS(file_key: string): Promise<string[]> {
     try {
       const { stream } = await this.gcsService.getCsv(file_key);
 
@@ -259,6 +261,28 @@ export class VaultsService {
         });
         if (existingVaultWithTicker) {
           throw new BadRequestException('Ticker is already in use by another active vault');
+        }
+      }
+
+      const uniqueWhitelistItems = Array.from(
+        new Map((data.assetsWhitelist || []).map(item => [`${item.policyId}:${item.assetName || ''}`, item])).values()
+      );
+      if (uniqueWhitelistItems.length > 0) {
+        const whitelistCollections = await this.getCollections(
+          uniqueWhitelistItems.map(item => ({
+            policyId: item.policyId,
+            assetName: item.assetName || '',
+            name: item.name || item.collectionName || item.policyName || '',
+            count: item.count || 1,
+          }))
+        );
+
+        const unverifiedCollections = whitelistCollections.filter(item => !item.isVerified);
+        if (unverifiedCollections.length > 0) {
+          const unverifiedPolicies = unverifiedCollections.map(item => item.policyId);
+          throw new BadRequestException(
+            `All whitelist tokens must be verified. Unverified policy IDs: ${unverifiedPolicies.join(', ')}`
+          );
         }
       }
 
@@ -397,7 +421,7 @@ export class VaultsService {
       newVault.max_contribute_assets = Number(maxCountOf) || 0;
       await this.vaultsRepository.save(newVault);
       // Handle acquirer whitelist
-      const acquirerFromCsv = acquirerWhitelistFile ? await this.parseCSVFromS3(acquirerWhitelistFile.file_key) : [];
+      const acquirerFromCsv = acquirerWhitelistFile ? await this.parseCSVFromGCS(acquirerWhitelistFile.file_key) : [];
 
       const acquirer = data.acquirerWhitelist ? [...data.acquirerWhitelist.map(item => item.walletAddress)] : [];
 
@@ -414,7 +438,7 @@ export class VaultsService {
 
       // Handle contributors whitelist
       const contributorsFromCsv = contributorWhitelistFile
-        ? await this.parseCSVFromS3(contributorWhitelistFile.file_key)
+        ? await this.parseCSVFromGCS(contributorWhitelistFile.file_key)
         : [];
 
       const contributorList = data.contributorWhitelist
@@ -472,12 +496,37 @@ export class VaultsService {
       });
       const policyWhitelist = [...new Set(assetsWhitelistData.map(item => item.policy_id))];
 
-      // Load only wallet_address from contributor_whitelist
+      // Load wallet addresses from both contributor and acquirer whitelists
       const contributorWhitelistData = await this.contributorWhitelistRepository.find({
         where: { vault: { id: newVault.id } },
         select: ['wallet_address'],
       });
-      const contributorWhitelist = [...new Set(contributorWhitelistData.map(item => item.wallet_address))];
+      const acquirerWhitelistData = await this.acquirerWhitelistRepository.find({
+        where: { vault: { id: newVault.id } },
+        select: ['wallet_address'],
+      });
+
+      // Combine both whitelists into a unique array for smart contract
+      const contributorAddresses = contributorWhitelistData.map(item => item.wallet_address);
+      const acquirerAddresses = acquirerWhitelistData.map(item => item.wallet_address);
+      const allowedContributors = [...new Set([...contributorAddresses, ...acquirerAddresses])];
+
+      // Validate combined whitelist size (Cardano transaction size limit)
+      const MAX_COMBINED_WHITELIST_SIZE = 100;
+      if (allowedContributors.length > MAX_COMBINED_WHITELIST_SIZE) {
+        throw new BadRequestException(
+          `Combined whitelist exceeds maximum limit. ` +
+            `You have ${allowedContributors.length} unique addresses ` +
+            `(${contributorAddresses.length} contributors + ${acquirerAddresses.length} acquirers). ` +
+            `Maximum allowed is ${MAX_COMBINED_WHITELIST_SIZE} unique addresses to stay within Cardano transaction size limits.`
+        );
+      }
+
+      this.logger.log(
+        `Vault ${newVault.id}: Combined whitelist - ` +
+          `${contributorAddresses.length} contributors + ${acquirerAddresses.length} acquirers = ` +
+          `${allowedContributors.length} unique addresses`
+      );
 
       const privacy = vault_sc_privacy[finalVault.privacy as VaultPrivacy];
       const valueMethod = valuation_sc_type[finalVault.value_method as ValueMethod];
@@ -545,7 +594,7 @@ export class VaultsService {
           customerAddress: finalVault.owner.address,
           vaultId: finalVault.id,
           allowedPolicies: policyWhitelist,
-          allowedContributors: contributorWhitelist,
+          allowedContributors: allowedContributors,
           contractType: privacy,
           valueMethod: valueMethod,
           assetWindow,
@@ -711,7 +760,8 @@ export class VaultsService {
     vault.assets_whitelist = assetsWhitelist;
     vault.acquirer_whitelist = acquirerWhitelist;
 
-    // Get count of contributed assets for this vault (PENDING, LOCKED, EXTRACTED)
+    // Get count of active assets for this vault (PENDING, LOCKED, EXTRACTED, OFFERED)
+    // Includes both contributed and bought assets
     const { lockedNFTCount, lockedFTsCount } = await this.assetsRepository
       .createQueryBuilder('asset')
       .select([
@@ -720,9 +770,11 @@ export class VaultsService {
       ])
       .where('asset.vault_id = :vaultId', { vaultId })
       .andWhere('asset.status IN (:...statuses)', {
-        statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED],
+        statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED, AssetStatus.OFFERED],
       })
-      .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
+      .andWhere('asset.origin_type IN (:...originTypes)', {
+        originTypes: [AssetOriginType.CONTRIBUTED, AssetOriginType.BOUGHT],
+      })
       .setParameters({
         nftType: AssetType.NFT,
         ftType: AssetType.FT,
@@ -741,7 +793,7 @@ export class VaultsService {
       .addSelect(`SUM(CASE WHEN asset.type = :nftType THEN 1 ELSE asset.quantity END)`, 'quantity')
       .where('asset.vault_id = :vaultId', { vaultId })
       .andWhere('asset.status IN (:...statuses)', {
-        statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED],
+        statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED, AssetStatus.OFFERED],
       })
       .andWhere('asset.deleted = false')
       .andWhere(`asset.policy_id != 'lovelace'`)
@@ -787,10 +839,26 @@ export class VaultsService {
         expansionPriceType = expansionProposal.metadata.expansion.priceType;
         expansionLimitPrice = expansionProposal.metadata.expansion.limitPrice;
         const expansionPolicyIds = expansionProposal.metadata.expansion.policyIds || [];
+        const expansionLabels = expansionProposal.metadata.expansion.labels || [];
 
         // Fetch collection names for expansion policies
         if (expansionPolicyIds.length > 0) {
-          expansionWhitelist = await this.getCollectionNamesByPolicyIds(expansionPolicyIds);
+          if (expansionLabels.length > 0 && expansionLabels.length === expansionPolicyIds.length) {
+            expansionWhitelist = expansionPolicyIds.map((policyId, index) => ({
+              policyId,
+              collectionName: expansionLabels[index],
+              isVerified: true,
+            }));
+          } else {
+            const collectionsToFetch = expansionPolicyIds.map(policyId => ({
+              policyId,
+              assetName: '',
+              name: '',
+              count: 0,
+            }));
+
+            expansionWhitelist = await this.getCollections(collectionsToFetch);
+          }
         }
 
         // Count confirmed expansion contributions
@@ -1453,6 +1521,7 @@ export class VaultsService {
       vault.deleted = true;
       vault.liquidation_hash = txHash;
       vault.vault_status = VaultStatus.burned;
+      vault.deactivated_at = new Date();
 
       await this.vaultsRepository.update({ id: vault.id }, { ...vault });
       await this.transactionsService.updateTransactionHash(publishDto.txId, txHash);
@@ -1724,50 +1793,70 @@ export class VaultsService {
   }
 
   /**
-   * Fetches collection names for given policy IDs from Ada Anvil marketplace API.
-   * For each policy ID, retrieves the collection name or ticker from the first asset.
-   * Uses cache to avoid redundant API calls for the same policy ID.
-   * @param policyIds - Array of policy IDs to look up
-   * @returns Array of { policyId, collectionName } objects
+   * Fetches collection names and verification status for given policies.
+   * Uses cache to avoid redundant API calls.
+   * @param collections - Array of policy objects to look up
+   * @returns Array of objects containing policyId, collectionName, and isVerified status
    */
-  async getCollectionNamesByPolicyIds(
-    policyIds: string[]
-  ): Promise<{ policyId: string; collectionName: string | null }[]> {
-    return await Promise.all(
-      policyIds.map(async policyId => {
-        const cacheKey = `collection_name_${policyId}`;
-        const cached = this.collectionNameCache.get<string | null>(cacheKey);
+  async getCollections(
+    collections: CollectionItemDto[]
+  ): Promise<{ policyId: string; collectionName: string | null; isVerified: boolean }[]> {
+    return await Promise.all(collections.map(collection => this.getCollectionInfoByCollectionItem(collection)));
+  }
 
-        if (cached !== undefined) {
-          return { policyId, collectionName: cached };
-        }
+  private async getCollectionInfoByCollectionItem(
+    collection: CollectionItemDto
+  ): Promise<{ policyId: string; collectionName: string | null; isVerified: boolean }> {
+    const { policyId, assetName } = collection;
 
-        try {
-          const response = await firstValueFrom(
-            this.httpService.get<{
-              count: number;
-              results: Array<{
-                collection: { name: string | null };
-                attributes: Record<string, string> | null;
-              }>;
-            }>(`https://prod.api.ada-anvil.app/marketplace/api/get-collection-assets`, {
-              params: { policyId },
-              timeout: 10000,
-            })
-          );
+    if (!this.isMainnet) {
+      return { policyId, collectionName: null, isVerified: true };
+    }
 
-          const firstAsset = response.data?.results?.[0];
-          const collectionName = firstAsset?.collection?.name || firstAsset?.attributes?.Ticker || null;
+    const tokenId = `${policyId}${assetName}`;
+    const tokenCacheKey = `collection_info_unit_${tokenId}`;
 
-          this.collectionNameCache.set(cacheKey, collectionName);
-
-          return { policyId, collectionName };
-        } catch (error) {
-          this.logger.warn(`Failed to fetch collection name for policyId ${policyId}: ${error.message}`);
-          const collectionName = null;
-          return { policyId, collectionName };
-        }
-      })
+    const cachedToken = this.collectionNameCache.get<{ collectionName: string | null; isVerified: boolean }>(
+      tokenCacheKey
     );
+    if (cachedToken !== undefined) {
+      return { policyId, ...cachedToken };
+    }
+
+    const dexHunterData = await this.dexHunterService.fetchTokenVerification(tokenId);
+    if (dexHunterData !== null) {
+      this.collectionNameCache.set(tokenCacheKey, dexHunterData);
+      return { policyId, ...dexHunterData };
+    }
+
+    const policyCacheKey = `collection_info_${policyId}`;
+    const cachedPolicy = this.collectionNameCache.get<{ collectionName: string | null; isVerified: boolean }>(
+      policyCacheKey
+    );
+    if (cachedPolicy !== undefined) {
+      return { policyId, ...cachedPolicy };
+    }
+
+    try {
+      const adaAnvilData = await this.fetchCollectionInfoFromApi(policyId);
+      this.collectionNameCache.set(policyCacheKey, adaAnvilData);
+      return { policyId, ...adaAnvilData };
+    } catch (error) {
+      this.logger.warn(`Failed to fetch collection info for policyId ${policyId}: ${error.message}`);
+
+      return { policyId, collectionName: null, isVerified: false };
+    }
+  }
+
+  private async fetchCollectionInfoFromApi(
+    policyId: string
+  ): Promise<{ collectionName: string | null; isVerified: boolean }> {
+    const response = await this.wayUpPricingService.getCollectionAssets({ policyId });
+
+    const firstAsset = response.results?.[0];
+    const collectionName = firstAsset?.collection?.name || firstAsset?.attributes?.['Ticker'] || null;
+    const isVerified: boolean = firstAsset?.collection?.verified || false;
+
+    return { collectionName, isVerified };
   }
 }

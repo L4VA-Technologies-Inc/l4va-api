@@ -21,6 +21,7 @@
     "migration:generate": "npm run typeorm migration:generate -- -d src/config/typeorm.config.ts ./src/database/migrations/$npm_config_name",
     "migration:create": "npm run typeorm migration:create -- ./src/database/migrations/$npm_config_name",
     "migration:run": "npm run typeorm migration:run -- -d src/config/typeorm.config.ts",
+    "migration:run:gcp": "ts-node -r tsconfig-paths/register src/scripts/run-migrations.ts",
     "migration:revert": "npm run typeorm migration:revert -- -d src/config/typeorm.config.ts",
     "docs:generate": "npx @compodoc/compodoc -p tsconfig.json -d documentation",
     "docs:serve": "npx @compodoc/compodoc -p tsconfig.json -d documentation -s"
@@ -54,17 +55,15 @@
     "@sentry/node": "^10.22.0",
     "@sentry/profiling-node": "^10.22.0",
     "@types/cbor": "^6.0.4",
-    "aws-sdk": "^2.1692.0",
     "axios": "^1.8.4",
     "bip39": "^3.1.0",
     "bullmq": "^5.56.0",
     "cbor": "^10.0.3",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
-    "crypto": "^1.0.1",
     "csv-parse": "^5.6.0",
     "dotenv": "^17.2.3",
-    "multer": "^1.4.5-lts.1",
+    "multer": "^2.1.1",
     "node-cache": "^5.1.2",
     "pg": "^8.13.1",
     "raw-body": "^3.0.0",
@@ -76,6 +75,16 @@
     "typeorm-naming-strategies": "^4.1.0",
     "unique-username-generator": "^1.4.0",
     "uuid": "^11.1.0"
+  },
+  "overrides": {
+    "minimatch": "^9.0.7",
+    "glob": "^10.4.6",
+    "file-type": "^21.3.2",
+    "tmp": "^0.2.4",
+    "webpack": "^5.105.0",
+    "js-yaml": "^4.1.1",
+    "lodash": "^4.17.22",
+    "inquirer": "^8.2.7"
   },
   "devDependencies": {
     "@eslint/js": "^8.57.0",

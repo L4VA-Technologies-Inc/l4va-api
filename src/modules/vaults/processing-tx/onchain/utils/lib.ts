@@ -474,6 +474,62 @@ export function getTransactionSize(txHex: string): number {
 }
 
 /**
+ * Extracts the payment key hash (verification key hash) from a Cardano address
+ * This is required for the contributor whitelist in smart contracts
+ *
+ * @param addressBech32 - Cardano address in bech32 format (addr1... or addr_test1...)
+ * @returns The payment key hash as a hex string (28 bytes / 56 hex characters)
+ * @throws Error if the address is invalid or doesn't contain a payment key hash
+ *
+ * @example
+ * const keyHash = getPaymentKeyHashFromAddress('addr1qxy...');
+ * // Returns: 'a1b2c3d4e5f6...' (56 hex chars)
+ */
+export function getPaymentKeyHashFromAddress(addressBech32: string): string {
+  try {
+    const address = Address.from_bech32(addressBech32);
+    const paymentCredential = address.payment_cred();
+
+    if (!paymentCredential) {
+      throw new Error('Address does not contain a payment credential');
+    }
+
+    // Get the key hash (verification key hash)
+    const keyHash = paymentCredential.to_keyhash();
+
+    if (!keyHash) {
+      throw new Error('Address payment credential is not a key hash (might be a script hash)');
+    }
+
+    return keyHash.to_hex();
+  } catch (error) {
+    throw new Error(`Invalid Cardano address or cannot extract payment key hash: ${error.message}`);
+  }
+}
+
+/**
+ * Converts an array of Cardano wallet addresses to verification key hashes
+ * for use in contributor whitelist on-chain
+ *
+ * @param addresses - Array of Cardano addresses in bech32 format
+ * @returns Array of hex-encoded verification key hashes
+ * @throws Error if any address is invalid
+ */
+export function convertAddressesToKeyHashes(addresses: string[]): string[] {
+  if (!addresses || addresses.length === 0) {
+    return [];
+  }
+
+  return addresses.map((address, index) => {
+    try {
+      return getPaymentKeyHashFromAddress(address);
+    } catch (error) {
+      throw new Error(`Invalid address at index ${index} (${address}): ${error.message}`);
+    }
+  });
+}
+
+/**
  * Generates random mnemonic for a vault wallet and derives the corresponding Cardano address and private key.
  *
  * Vault 1 → Random Mnemonic A

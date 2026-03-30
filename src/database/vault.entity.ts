@@ -745,6 +745,10 @@ export class Vault {
     this.updated_at = new Date();
   }
 
+  @Expose({ name: 'deactivatedAt' })
+  @Column({ name: 'deactivated_at', type: 'timestamptz', nullable: true })
+  deactivated_at?: Date;
+
   @Expose({ name: 'failureReason' })
   @Column({
     name: 'failure_reason',

@@ -121,6 +121,7 @@ export class LifecycleService {
       if (data.newStatus === VaultStatus.failed) {
         vault.failure_reason = data.failureReason;
         vault.failure_details = data.failureDetails;
+        vault.deactivated_at = new Date();
 
         const pr = await this.tokenRegistryRepository.findOne({
           where: {

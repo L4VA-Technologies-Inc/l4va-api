@@ -27,6 +27,7 @@ export class DexHunterService {
   private readonly logger = new Logger(DexHunterService.name);
   private readonly dexHunterBaseUrl: string;
   private readonly dexHunterApiKey: string;
+  private dexHunterConfigWarningLogged = false;
 
   constructor(
     private readonly configService: ConfigService,
@@ -38,6 +39,50 @@ export class DexHunterService {
   ) {
     this.dexHunterBaseUrl = this.configService.get<string>('DEXHUNTER_BASE_URL');
     this.dexHunterApiKey = this.configService.get<string>('DEXHUNTER_API_KEY');
+  }
+
+  /**
+   * Fetch token verification status and name from DexHunter API.
+   * Returns null when configuration is missing or the token is not found.
+   *
+   * @param tokenId - policyId concatenated with hex-encoded asset name
+   */
+  async fetchTokenVerification(
+    tokenId: string
+  ): Promise<{ isVerified: boolean; collectionName: string | null } | null> {
+    if (!this.dexHunterBaseUrl || !this.dexHunterApiKey) {
+      if (!this.dexHunterConfigWarningLogged) {
+        this.logger.warn(
+          'DexHunter configuration missing (DEXHUNTER_BASE_URL or DEXHUNTER_API_KEY); skipping DexHunter verification and falling back to Ada Anvil.'
+        );
+        this.dexHunterConfigWarningLogged = true;
+      }
+      return null;
+    }
+
+    try {
+      const response = await fetch(`${this.dexHunterBaseUrl}/swap/token/${tokenId}`, {
+        headers: { 'X-Partner-Id': this.dexHunterApiKey },
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (!response.ok) {
+        return null;
+      }
+
+      const data: { is_verified?: boolean; token_ascii?: string } = await response.json();
+
+      if (typeof data?.is_verified === 'boolean') {
+        return {
+          isVerified: data.is_verified,
+          collectionName: data.token_ascii || null,
+        };
+      }
+
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   /**

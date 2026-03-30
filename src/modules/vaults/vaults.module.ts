@@ -2,10 +2,13 @@ import { HttpModule } from '@nestjs/axios';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { DexHunterModule } from '../dexhunter/dexhunter.module';
 import { GoogleCloudStorageModule } from '../google_cloud/google_bucket/bucket.module';
 import { TaptoolsModule } from '../taptools/taptools.module';
+import { WayUpPricingModule } from '../wayup/wayup-pricing.module';
 
 import { DraftVaultsService } from './draft-vaults.service';
+import { VaultFilesCleanupService } from './vault-files-cleanup.service';
 import { VaultsController } from './vaults.controller';
 import { VaultsService } from './vaults.service';
 
@@ -39,6 +42,8 @@ import { StatisticsService } from '@/modules/vaults/statistics/statistics.servic
     DistributionModule,
     MarketStatsModule,
     TaptoolsModule,
+    WayUpPricingModule,
+    DexHunterModule,
     TypeOrmModule.forFeature([
       Vault,
       User,
@@ -55,7 +60,7 @@ import { StatisticsService } from '@/modules/vaults/statistics/statistics.servic
     ]),
     HttpModule,
   ],
-  providers: [VaultsService, DraftVaultsService, StatisticsService],
+  providers: [VaultsService, DraftVaultsService, StatisticsService, VaultFilesCleanupService],
   controllers: [VaultsController],
   exports: [VaultsService, DraftVaultsService],
 })

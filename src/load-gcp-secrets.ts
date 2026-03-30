@@ -5,7 +5,28 @@ import * as dotenv from 'dotenv';
 
 // Define sensitive secrets that this script should avoid adding or updating in .env.
 // Note: If these keys already exist in the .env file, they may still be preserved by merges.
-const SENSITIVE_KEYS = ['ADMIN_S_KEY', 'VAULT_SCRIPT_SKEY'];
+const SENSITIVE_KEYS = [
+  'ADMIN_S_KEY',
+  'VAULT_SCRIPT_SKEY',
+  'TAPTOOLS_API_KEY',
+  'CHARLI3_API_KEY',
+  'GOOGLE_BUCKET_CREDENTIALS',
+  'GCP_KMS_KEY',
+  'GCP_KMS_KEYRING',
+  'SENTRY_DNS_KEY',
+  'SLACK_BOT_TOKEN',
+  'NOVU_API_KEY',
+  'REDIS_PASSWORD',
+  'DB_PASSWORD',
+  'DB_USERNAME',
+  'DB_NAME',
+  'JWT_SECRET',
+  'ANVIL_API_KEY',
+  'GITHUB_TOKEN',
+  'BLOCKFROST_WEBHOOK_AUTH_TOKEN',
+  'BLOCKFROST_API_KEY',
+  'ADMIN_SERVICE_TOKEN',
+];
 
 export async function loadSecrets(): Promise<void> {
   // Step 1: Load .env file first (from git repository)
@@ -22,45 +43,47 @@ export async function loadSecrets(): Promise<void> {
   }
 
   // Support both testnet and mainnet
-  const shouldLoadGcpSecrets = nodeEnv === 'mainnet';
+  const shouldLoadGcpSecrets = nodeEnv === 'mainnet' || nodeEnv === 'testnet';
 
   if (!shouldLoadGcpSecrets) {
-    console.log(`Skipping GCP secrets load because NODE_ENV is "${nodeEnv}" (expected "mainnet")`);
+    // eslint-disable-next-line no-console
+    console.log(`Skipping GCP secrets load because NODE_ENV is "${nodeEnv}" (expected "mainnet" or "testnet")`);
     return;
-  }
-
-  let credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-
-  if (!credentialsPath) {
-    const credentialsFile = 'gcp-service-account.json';
-    credentialsPath = path.join(process.cwd(), credentialsFile);
-  } else {
-    if (!path.isAbsolute(credentialsPath)) {
-      credentialsPath = path.join(process.cwd(), credentialsPath);
-    }
-  }
-
-  if (!fs.existsSync(credentialsPath)) {
-    console.warn('Credentials file not found, skipping secrets load.');
-    return;
-  }
-
-  process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
-
-  if (!process.env.GCP_PROJECT_ID) {
-    try {
-      const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
-      if (credentials.project_id) {
-        process.env.GCP_PROJECT_ID = credentials.project_id;
-      }
-    } catch (e) {
-      console.warn('Failed to read project_id from credentials:', e.message || e);
-    }
   }
 
   if (!process.env.GCP_PROJECT_ID) {
     console.warn('GCP_PROJECT_ID not set, skipping secrets load.');
     return;
+  }
+
+  // GCP_PROJECT_ID is already validated above, now configure authentication
+  const actualEnv = process.env.NODE_ENV;
+  const isDevelopment = actualEnv === 'dev' || actualEnv === 'development';
+
+  if (isDevelopment) {
+    // DEVELOPMENT ONLY: Try to load from local credentials file
+    const credentialsFile = 'gcp-service-account.json';
+    const credentialsPath = path.join(process.cwd(), credentialsFile);
+
+    if (fs.existsSync(credentialsPath)) {
+      try {
+        const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
+        if (credentials.project_id) {
+          process.env.GCP_PROJECT_ID = credentials.project_id;
+          process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
+          // eslint-disable-next-line no-console
+          console.log('✅ Using local credentials file for GCP (development mode)');
+        }
+      } catch (e) {
+        console.warn('Failed to read project_id from credentials:', e.message || e);
+      }
+    } else {
+      console.warn('GCP_PROJECT_ID not set and no credentials file found in development mode');
+    }
+  } else {
+    // PRODUCTION/TESTNET: Using Application Default Credentials (ADC)
+    // eslint-disable-next-line no-console
+    console.log(`✅ Using ADC for GCP authentication (${nodeEnv}), project: ${process.env.GCP_PROJECT_ID}`);
   }
 
   const secretName = nodeEnv === 'mainnet' ? 'mainnet' : 'testnet';
@@ -91,7 +114,26 @@ export async function loadSecrets(): Promise<void> {
     });
 
     // Load ALL secrets into process.env (memory)
-    Object.assign(process.env, parsed);
+    // But preserve environment-specific values that are already set (e.g., from docker-compose)
+    const ENV_SPECIFIC_KEYS = ['DB_HOST', 'REDIS_HOST'];
+    const secretsToLoad = { ...parsed };
+
+    ENV_SPECIFIC_KEYS.forEach(key => {
+      if (process.env[key] && parsed[key]) {
+        // eslint-disable-next-line no-console
+        console.log(`⚠️  Keeping existing ${key}=${process.env[key]} (not overwriting with GCP value)`);
+        delete secretsToLoad[key];
+      }
+    });
+
+    Object.assign(process.env, secretsToLoad);
+
+    // Debug: verify critical secrets are loaded (without exposing values)
+    const criticalKeys = ['DB_HOST', 'DB_USERNAME', 'DB_PASSWORD', 'DB_NAME', 'REDIS_PASSWORD'];
+    const missingKeys = criticalKeys.filter(key => !process.env[key]);
+    if (missingKeys.length > 0) {
+      console.warn(`⚠️  Missing critical secrets in process.env: ${missingKeys.join(', ')}`);
+    }
 
     // Only write non-sensitive secrets to .env file
     const existingEnv = dotenv.parse(envExists ? fs.readFileSync(envFilePath, 'utf8') : '');
@@ -108,11 +150,40 @@ export async function loadSecrets(): Promise<void> {
       .join('\n');
     fs.writeFileSync(envFilePath, envContent, 'utf8');
 
+    // eslint-disable-next-line no-console
     console.log(
       `✅ Loaded ${Object.keys(parsed).length} secrets from GCP (${sensitiveSecretsCount} kept in memory only)`
     );
   } catch (e) {
     console.error('Failed to load GCP secrets:', e.stack || e.message || e);
-    console.warn('Falling back to .env file only');
+
+    // Provide helpful guidance based on the error
+    if (e.message?.includes('NOT_FOUND')) {
+      console.error(`\n🔴 Secret "${secretName}" not found in project ${projectId}`);
+      console.error('To fix this:');
+      console.error(`1. Create the secret: gcloud secrets create ${secretName} --project=${projectId}`);
+      console.error(
+        `2. Add a version: echo -n "KEY=value" | gcloud secrets versions add ${secretName} --data-file=- --project=${projectId}`
+      );
+      console.error(
+        `3. Grant access: gcloud secrets add-iam-policy-binding ${secretName} --member="serviceAccount:YOUR_SA@PROJECT.iam.gserviceaccount.com" --role="roles/secretmanager.secretAccessor" --project=${projectId}`
+      );
+    } else if (e.message?.includes('PERMISSION_DENIED')) {
+      console.error('\n🔴 Permission denied accessing GCP Secret Manager');
+      console.error('To fix this:');
+      console.error('1. Ensure ADC is configured on the VM (it should be automatic for Compute Engine)');
+      console.error('2. Grant the Compute Engine service account the "Secret Manager Secret Accessor" role');
+      console.error(
+        `3. Run: gcloud secrets add-iam-policy-binding ${secretName} --member="serviceAccount:COMPUTE_ENGINE_SA" --role="roles/secretmanager.secretAccessor" --project=${projectId}`
+      );
+    } else if (e.message?.includes('Could not load the default credentials')) {
+      console.error('\n🔴 Application Default Credentials (ADC) not configured');
+      console.error('To fix this on a GCP VM:');
+      console.error('1. Ensure the VM has the correct service account attached');
+      console.error('2. Ensure the service account has "Secret Manager Secret Accessor" role');
+      console.error('3. ADC should work automatically on Compute Engine VMs');
+    }
+
+    console.warn('\n⚠️  Falling back to .env file only\n');
   }
 }

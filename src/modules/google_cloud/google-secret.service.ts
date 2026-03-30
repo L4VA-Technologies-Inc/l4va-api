@@ -22,6 +22,7 @@ export class GoogleSecretService {
 
   /**
    * Lazy initialize Secret Manager client on first use
+   * Uses ADC (Application Default Credentials) on VM, falls back to explicit credentials for local dev
    */
   private ensureSecretClient(): void {
     if (!this.secretClient) {
@@ -29,33 +30,28 @@ export class GoogleSecretService {
       const isDevelopment = nodeEnv === 'dev' || nodeEnv === 'development';
 
       if (isDevelopment) {
-        // Local development: use file-based credentials
+        // Local development: use file-based credentials if available
         const credentialsPath = this.configService.get('GOOGLE_APPLICATION_CREDENTIALS');
-        this.secretClient = new SecretManagerServiceClient({
-          keyFilename: credentialsPath,
-        });
-        this.logger.log(
-          `Initialized Secret Manager client from file (dev mode) for ${this.isMainnet ? 'mainnet' : 'testnet'}, project: ${this.projectId}`
-        );
-      } else {
-        // Production/Testnet: use base64-encoded environment variable (no file on disk)
-        const gcpServiceAccountBase64 = this.configService.get('GCP_SERVICE_ACCOUNT_JSON_BASE64');
-
-        if (gcpServiceAccountBase64) {
-          try {
-            const jsonString = Buffer.from(gcpServiceAccountBase64, 'base64').toString('utf8');
-            const credentials = JSON.parse(jsonString);
-            this.secretClient = new SecretManagerServiceClient({ credentials });
-            this.logger.log(
-              `Initialized Secret Manager client from base64 env var (no file) for ${this.isMainnet ? 'mainnet' : 'testnet'}, project: ${this.projectId}`
-            );
-          } catch (e) {
-            this.logger.error('Failed to decode GCP_SERVICE_ACCOUNT_JSON_BASE64:', e.message || e);
-            throw new Error('GCP_SERVICE_ACCOUNT_JSON_BASE64 is required but invalid');
-          }
+        if (credentialsPath) {
+          this.secretClient = new SecretManagerServiceClient({
+            keyFilename: credentialsPath,
+          });
+          this.logger.log(
+            `Initialized Secret Manager client from file (dev mode) for ${this.isMainnet ? 'mainnet' : 'testnet'}, project: ${this.projectId}`
+          );
         } else {
-          throw new Error('GCP_SERVICE_ACCOUNT_JSON_BASE64 environment variable is required for production/testnet');
+          // No credentials file, try ADC (for local testing)
+          this.secretClient = new SecretManagerServiceClient();
+          this.logger.log(
+            `Initialized Secret Manager client with ADC (dev mode) for ${this.isMainnet ? 'mainnet' : 'testnet'}, project: ${this.projectId}`
+          );
         }
+      } else {
+        // Production/Testnet: Use ADC (VM service account)
+        this.secretClient = new SecretManagerServiceClient();
+        this.logger.log(
+          `Initialized Secret Manager client with ADC for ${this.isMainnet ? 'mainnet' : 'testnet'}, project: ${this.projectId}`
+        );
       }
     }
   }
@@ -118,16 +114,34 @@ export class GoogleSecretService {
   }
 
   /**
-   * Delete a secret from Secret Manager
+   * Mark a secret as unused (kept for manual deletion)
+   * Does not actually delete from Secret Manager to preserve data
    */
-  async deleteSecret(secretId: string): Promise<void> {
-    this.ensureSecretClient();
-
-    const name = `projects/${this.projectId}/secrets/${secretId}`;
-
-    await this.secretClient.deleteSecret({ name });
-    this.logger.log(`Deleted secret: ${secretId}`);
+  async markSecretAsUnused(secretId: string): Promise<void> {
+    this.logger.log(
+      `Marked secret as unused (not deleted): ${secretId}. Manual deletion can be performed later if needed.`
+    );
   }
+
+  /**
+   * Delete a secret from Secret Manager
+   * WARNING: This method is retained for future manual cleanup operations
+   * The service account may not have delete permissions
+   */
+  // async deleteSecret(secretId: string): Promise<void> {
+  //   this.ensureSecretClient();
+
+  //   const name = `projects/${this.projectId}/secrets/${secretId}`;
+
+  //   try {
+  //     await this.secretClient.deleteSecret({ name });
+  //     this.logger.log(`Deleted secret: ${secretId}`);
+  //   } catch (error: any) {
+  //     this.logger.warn(`Failed to delete secret ${secretId} (service account may lack permissions): ${error.message}`);
+  //     // Instead of failing, just mark as unused
+  //     await this.markSecretAsUnused(secretId);
+  //   }
+  // }
 
   /**
    * Store master HD wallet seed

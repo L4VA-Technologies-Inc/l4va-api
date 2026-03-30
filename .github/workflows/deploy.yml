@@ -31,16 +31,20 @@ jobs:
       - name: Create .env for Testnet
         env:
           TESTNET_ENV_VARS: ${{ secrets.TESTNET_ENV_VARS }}
-          GOOGLE_BUCKET: ${{ secrets.GOOGLE_BUCKET }}
         run: |
           echo "$TESTNET_ENV_VARS" > .env
-          echo "GOOGLE_BUCKET_CREDENTIALS_BASE64=$GOOGLE_BUCKET" >> .env
           echo "Created TESTNET .env (GCP Secret Manager disabled, Bucket enabled)"
 
       - name: Save logs before deploy
         run: |
           mkdir -p ~/apps/logs/l4va-api
-          docker logs l4va-api > ~/apps/logs/l4va-api/$(date +"%Y%m%d_%H%M%S").log 2>&1 || true
+          ACTIVE_PORT=$(grep -oP 'set \$api_port \K[0-9]+' /etc/nginx/sites-enabled/testnet.l4va.org)
+          if [ "$ACTIVE_PORT" = "3000" ]; then
+            ACTIVE_CONTAINER=l4va-api-blue
+          else
+            ACTIVE_CONTAINER=l4va-api-green
+          fi
+          docker logs $ACTIVE_CONTAINER > ~/apps/logs/l4va-api/$(date +"%Y%m%d_%H%M%S").log 2>&1 || true
           cd ~/apps/logs/l4va-api && ls -t | tail -n +11 | xargs -r rm -f
 
       - name: Copy code to apps/l4va-api
@@ -59,7 +63,7 @@ jobs:
 
       - name: Zero downtime deploy (blue-green)
         run: |
-          cd ~/apps
+          cd ~/apps/l4va-api
 
           ACTIVE_PORT=$(grep -oP 'set \$api_port \K[0-9]+' /etc/nginx/sites-enabled/testnet.l4va.org)
 
@@ -79,6 +83,44 @@ jobs:
           docker compose build $NEW_CONTAINER
           docker compose up -d $NEW_CONTAINER
 
+          echo "Waiting for secrets to load..."
+          MAX_ATTEMPTS=30
+          ATTEMPT=0
+          SECRETS_LOADED=false
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            LOGS=$(docker logs $NEW_CONTAINER 2>&1)
+            if echo "$LOGS" | grep -q "Secrets loaded successfully"; then
+              SECRETS_LOADED=true
+              echo " Secrets loaded successfully (attempt $ATTEMPT/$MAX_ATTEMPTS)"
+              break
+            fi
+            if echo "$LOGS" | grep -q "Failed to load secrets.*FATAL\|FATAL.*Cannot proceed"; then
+              echo " Secrets loading failed with error:"
+              docker logs $NEW_CONTAINER --tail 50
+              docker stop $NEW_CONTAINER || true
+              exit 1
+            fi
+            echo "Waiting for secrets... (attempt $ATTEMPT/$MAX_ATTEMPTS)"
+            sleep 2
+          done
+
+          if [ "$SECRETS_LOADED" = false ]; then
+            echo " TIMEOUT: Secrets did not load within $(($MAX_ATTEMPTS * 2)) seconds"
+            echo "Container logs (last 100 lines):"
+            docker logs $NEW_CONTAINER --tail 100
+            docker stop $NEW_CONTAINER || true
+            exit 1
+          fi
+
+          echo "Running migrations..."
+          docker exec $NEW_CONTAINER npm run migration:run:gcp || {
+            echo "Migration failed"
+            docker logs $NEW_CONTAINER --tail 100
+            docker stop $NEW_CONTAINER || true
+            exit 1
+          }
+
           echo "Waiting for health..."
           MAX_ATTEMPTS=60
           ATTEMPT=0
@@ -88,16 +130,34 @@ jobs:
               echo "Health check failed after $MAX_ATTEMPTS attempts"
               echo "Container logs:"
               docker logs $NEW_CONTAINER --tail 100
+              echo "Stopping failed container..."
+              docker stop $NEW_CONTAINER || true
               exit 1
             fi
             echo "Attempt $ATTEMPT/$MAX_ATTEMPTS - waiting..."
             sleep 2
           done
 
+          sudo nginx -t
           sudo sed -i "s/set \$api_port .*/set \$api_port $NEW_PORT;/" /etc/nginx/sites-enabled/testnet.l4va.org
           sudo nginx -s reload
 
           docker stop $OLD_CONTAINER || true
+
+      - name: Cleanup Docker resources
+        run: |
+          DISK_USED=$(df / | awk 'NR==2 {gsub("%","",$5); print $5}')
+          echo "Disk usage: ${DISK_USED}%"
+
+          if [ "$DISK_USED" -ge 70 ]; then
+            echo "Disk usage elevated. Running cleanup..."
+            docker container prune -f || true
+            docker image prune -f || true
+            docker builder prune -f || true
+            echo "Cleanup completed"
+          else
+            echo "Disk usage OK (${DISK_USED}%). Skipping cleanup."
+          fi
 
   deploy-prod:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -109,18 +169,20 @@ jobs:
       - name: Create .env for Mainnet
         env:
           MAINNET_ENV_VARS: ${{ secrets.MAINNET_ENV_VARS }}
-          MAINNET_GOOGLE_SECRETS: ${{ secrets.MAINNET_GOOGLE_SECRETS }}
-          GOOGLE_BUCKET: ${{ secrets.GOOGLE_BUCKET }}
         run: |
           echo "$MAINNET_ENV_VARS" > .env
-          echo "GCP_SERVICE_ACCOUNT_JSON_BASE64=$MAINNET_GOOGLE_SECRETS" >> .env
-          echo "GOOGLE_BUCKET_CREDENTIALS_BASE64=$GOOGLE_BUCKET" >> .env
-          echo "Created MAINNET .env with GCP credentials (base64)"
+          echo "Created MAINNET .env"
 
       - name: Save logs before deploy
         run: |
           mkdir -p ~/apps/logs/l4va-api
-          docker logs l4va-api > ~/apps/logs/l4va-api/$(date +"%Y%m%d_%H%M%S").log 2>&1 || true
+          ACTIVE_PORT=$(grep -oP 'set \$api_port \K[0-9]+' /etc/nginx/sites-enabled/app.l4va.org)
+          if [ "$ACTIVE_PORT" = "3000" ]; then
+            ACTIVE_CONTAINER=l4va-api-blue
+          else
+            ACTIVE_CONTAINER=l4va-api-green
+          fi
+          docker logs $ACTIVE_CONTAINER > ~/apps/logs/l4va-api/$(date +"%Y%m%d_%H%M%S").log 2>&1 || true
           cd ~/apps/logs/l4va-api && ls -t | tail -n +11 | xargs -r rm -f
 
       - name: Copy code to apps/l4va-api
@@ -139,7 +201,7 @@ jobs:
 
       - name: Zero downtime deploy (blue-green)
         run: |
-          cd ~/apps
+          cd ~/apps/l4va-api
 
           ACTIVE_PORT=$(grep -oP 'set \$api_port \K[0-9]+' /etc/nginx/sites-enabled/app.l4va.org)
 
@@ -159,6 +221,44 @@ jobs:
           docker compose build $NEW_CONTAINER
           docker compose up -d $NEW_CONTAINER
 
+          echo "Waiting for secrets to load..."
+          MAX_ATTEMPTS=30
+          ATTEMPT=0
+          SECRETS_LOADED=false
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            LOGS=$(docker logs $NEW_CONTAINER 2>&1)
+            if echo "$LOGS" | grep -q "Secrets loaded successfully"; then
+              SECRETS_LOADED=true
+              echo " Secrets loaded successfully (attempt $ATTEMPT/$MAX_ATTEMPTS)"
+              break
+            fi
+            if echo "$LOGS" | grep -q "Failed to load secrets.*FATAL\|FATAL.*Cannot proceed"; then
+              echo " Secrets loading failed with error:"
+              docker logs $NEW_CONTAINER --tail 50
+              docker stop $NEW_CONTAINER || true
+              exit 1
+            fi
+            echo "Waiting for secrets... (attempt $ATTEMPT/$MAX_ATTEMPTS)"
+            sleep 2
+          done
+
+          if [ "$SECRETS_LOADED" = false ]; then
+            echo " TIMEOUT: Secrets did not load within $(($MAX_ATTEMPTS * 2)) seconds"
+            echo "Container logs (last 100 lines):"
+            docker logs $NEW_CONTAINER --tail 100
+            docker stop $NEW_CONTAINER || true
+            exit 1
+          fi
+
+          echo "Running migrations..."
+          docker exec $NEW_CONTAINER npm run migration:run:gcp || {
+            echo "Migration failed"
+            docker logs $NEW_CONTAINER --tail 100
+            docker stop $NEW_CONTAINER || true
+            exit 1
+          }
+
           echo "Waiting for health..."
           MAX_ATTEMPTS=60
           ATTEMPT=0
@@ -168,13 +268,31 @@ jobs:
               echo "Health check failed after $MAX_ATTEMPTS attempts"
               echo "Container logs:"
               docker logs $NEW_CONTAINER --tail 100
+              echo "Stopping failed container..."
+              docker stop $NEW_CONTAINER || true
               exit 1
             fi
             echo "Attempt $ATTEMPT/$MAX_ATTEMPTS - waiting..."
             sleep 2
           done
 
+          sudo nginx -t
           sudo sed -i "s/set \$api_port .*/set \$api_port $NEW_PORT;/" /etc/nginx/sites-enabled/app.l4va.org
           sudo nginx -s reload
 
           docker stop $OLD_CONTAINER || true
+
+      - name: Cleanup Docker resources
+        run: |
+          DISK_USED=$(df / | awk 'NR==2 {gsub("%","",$5); print $5}')
+          echo "Disk usage: ${DISK_USED}%"
+
+          if [ "$DISK_USED" -ge 70 ]; then
+            echo "Disk usage elevated. Running cleanup..."
+            docker container prune -f || true
+            docker image prune -f || true
+            docker builder prune -f || true
+            echo "Cleanup completed"
+          else
+            echo "Disk usage OK (${DISK_USED}%). Skipping cleanup."
+          fi
