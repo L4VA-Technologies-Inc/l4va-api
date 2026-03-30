@@ -108,7 +108,6 @@ export class AssetsService {
 
   /**
    * Create and save VLRM fee asset when vault is created
-   * Uses priceService.getAdaPrice() for mainnet, default 5 for testnet
    */
   async addVLRMFeeAsset(vault: Vault, ownerId: string, transactionId: string): Promise<void> {
     // Check if VLRM creation is enabled and fee is greater than 0
@@ -123,8 +122,9 @@ export class AssetsService {
       if (this.isMainnet) {
         // Try to fetch current dex price for VLRM from DexHunter on mainnet
         try {
-          const vlrmTokenId = `${this.VLRM_POLICY_ID}${this.VLRM_HEX_ASSET_NAME}`;
-          const fetchedPrice = await this.dexHunterPricingService.getTokenPrice(vlrmTokenId);
+          const fetchedPrice = await this.dexHunterPricingService.getTokenPrice(
+            `${this.VLRM_POLICY_ID}${this.VLRM_HEX_ASSET_NAME}`
+          );
           vlrmDexPrice = fetchedPrice || 0;
         } catch (error) {
           this.logger.warn(`Failed to fetch VLRM dex price from DexHunter: ${error.message}, using default: 0`);
@@ -148,11 +148,11 @@ export class AssetsService {
         decimals: 4, // VLRM has 4 decimal places
         name: 'VLRM',
         last_valuation: new Date(),
-        added_by: { id: ownerId } as any,
+        added_by: { id: ownerId },
         image: 'ipfs://QmdYu513Bu7nfKV5LKP6cmpZ8HHXifQLH6FTTzv3VbbqwP', // VLRM logo
+        transaction: { id: transactionId },
         metadata: {
           purpose: 'vault_creation_fee',
-          transaction_id: transactionId,
         },
       });
 
