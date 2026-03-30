@@ -199,7 +199,7 @@ export class DexHunterPricingService {
       }));
 
       this.logger.log(
-        `Token ${tokenId} has liquidity across ${pools.length} DEX(es): ` +
+        `Token ${tokenId.slice(0, 6)}...${tokenId.slice(-6)} has liquidity across ${pools.length} DEX(es): ` +
           `${pools.map(p => `${p.dex} (${p.adaAmount.toFixed(2)} ADA)`).join(', ')}`
       );
 

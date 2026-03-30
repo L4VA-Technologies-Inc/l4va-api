@@ -202,6 +202,7 @@ export class GovernanceFeeService {
       burning: 'Burning',
       marketplace_action: 'Marketplace Action',
       expansion: 'Expansion',
+      buy_sell: 'Marketplace Action',
     };
     return labels[proposalType] || proposalType;
   }

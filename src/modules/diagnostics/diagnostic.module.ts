@@ -8,6 +8,7 @@ import { DiagnosticController } from './diagnostic.controller';
 import { DiagnosticService } from './diagnostic.service';
 
 import { Asset } from '@/database/asset.entity';
+import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
@@ -19,7 +20,11 @@ import { Vault } from '@/database/vault.entity';
  * For admin/recovery use only.
  */
 @Module({
-  imports: [DistributionModule, BlockchainModule, TypeOrmModule.forFeature([Vault, Claim, Transaction, Asset])],
+  imports: [
+    DistributionModule,
+    BlockchainModule,
+    TypeOrmModule.forFeature([Vault, Claim, Transaction, Asset, AssetsWhitelistEntity]),
+  ],
   controllers: [DiagnosticController],
   providers: [DiagnosticService],
   exports: [DiagnosticService],
