@@ -3,6 +3,7 @@ import {
   Body,
   ClassSerializerInterceptor,
   Controller,
+  Delete,
   Get,
   Logger,
   MaxFileSizeValidator,
@@ -57,6 +58,18 @@ export class GoogleCloudStorageController {
       throw new BadRequestException('Only image files are allowed');
     }
     return await this.gcsService.uploadImage(file, body);
+  }
+
+  @ApiDoc({
+    summary: 'Remove image from bucket',
+    description: 'Deletes GCS object and corresponding DB record by file_key',
+    status: 200,
+  })
+  @UseGuards(AuthGuard)
+  @Delete('image/delete/:fileKey')
+  async deleteFileFromBucket(@Param('fileKey', ParseUUIDPipe) fileKey: string): Promise<{ success: boolean }> {
+    await this.gcsService.deleteFile(fileKey);
+    return { success: true };
   }
 
   @ApiDoc({
