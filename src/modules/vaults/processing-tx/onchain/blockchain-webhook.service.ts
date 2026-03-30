@@ -1,4 +1,4 @@
-import { verifyWebhookSignature, SignatureVerificationError } from '@blockfrost/blockfrost-js';
+﻿import { verifyWebhookSignature, SignatureVerificationError } from '@blockfrost/blockfrost-js';
 import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -12,7 +12,7 @@ import { OnchainTransactionStatus } from './types/transaction-status.enum';
 import { Claim } from '@/database/claim.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
-import { ActivityEventService } from '@/modules/rewards/services/activity-event.service';
+import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { AssetType } from '@/types/asset.types';
 import { ClaimStatus } from '@/types/claim.types';
@@ -38,7 +38,7 @@ export class BlockchainWebhookService {
     private readonly transactionsService: TransactionsService,
     private readonly configService: ConfigService,
     private readonly assetsService: AssetsService,
-    private readonly activityEventService: ActivityEventService,
+    private readonly rewardEventProducer: RewardEventProducer,
     @InjectRepository(Claim)
     private readonly claimRepository: Repository<Claim>,
     @InjectRepository(User)
@@ -261,7 +261,7 @@ export class BlockchainWebhookService {
         const assets = transaction.metadata as any[];
         const units = Array.isArray(assets) ? assets.reduce((sum, a) => sum + (Number(a.quantity) || 1), 0) : 1;
 
-        await this.activityEventService.indexEvent({
+        await this.rewardEventProducer.indexEvent({
           walletAddress: user.address,
           vaultId: transaction.vault_id,
           eventType: isExpansion
@@ -275,7 +275,7 @@ export class BlockchainWebhookService {
         // Acquire: use ADA amount as units (in lovelace)
         const units = transaction.amount || 1;
 
-        await this.activityEventService.indexEvent({
+        await this.rewardEventProducer.indexEvent({
           walletAddress: user.address,
           vaultId: transaction.vault_id,
           eventType: RewardActivityType.TOKEN_ACQUIRE,
@@ -288,7 +288,7 @@ export class BlockchainWebhookService {
         });
 
         // Also emit acquire phase purchase bonus
-        await this.activityEventService.indexEvent({
+        await this.rewardEventProducer.indexEvent({
           walletAddress: user.address,
           vaultId: transaction.vault_id,
           eventType: RewardActivityType.ACQUIRE_PHASE_PURCHASE,
