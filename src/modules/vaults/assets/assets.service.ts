@@ -133,7 +133,6 @@ export class AssetsService {
       } else {
         // On testnet, use fixed default price of 5
         vlrmDexPrice = 5;
-        this.logger.log(`Using testnet default VLRM price: ${vlrmDexPrice} ADA`);
       }
 
       // Create VLRM fee asset
@@ -201,14 +200,10 @@ export class AssetsService {
         totalValueAda += asset.quantity * price;
       });
 
-      // Calculate TVL (FDV / total asset value)
-      const newTvl = totalValueAda > 0 ? Number((vault.fdv / totalValueAda).toFixed(6)) : 0;
-
       // Update vault TVL
-      vault.fdv_tvl = newTvl;
+      vault.total_assets_cost_ada = totalValueAda;
+      vault.total_assets_cost_usd = totalValueAda * (await this.priceService.getAdaPrice());
       await this.vaultsRepository.save(vault);
-
-      this.logger.log(`Updated vault ${vaultId} TVL to ${newTvl} (total asset value: ${totalValueAda} ADA)`);
     } catch (error) {
       this.logger.error(`Failed to update vault TVL for ${vaultId}:`, error);
       // Don't throw - TVL update is not critical to asset creation
