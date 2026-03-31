@@ -28,7 +28,7 @@ export class SystemSettingsController {
   })
   getVlrmFeeSettings(): VlrmFeeResponseDto {
     return {
-      vlrm_creator_fee: this.systemSettingsService.vlrmCreatorFee,
+      vlrm_creator_fee: this.systemSettingsService.vlrmCreatorFee / 10000,
       vlrm_creator_fee_enabled: this.systemSettingsService.vlrmCreatorFeeEnabled,
     };
   }
