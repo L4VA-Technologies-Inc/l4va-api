@@ -2,13 +2,13 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
-import { instanceToPlain } from 'class-transformer';
+import { instanceToPlain, plainToInstance } from 'class-transformer';
 import { Repository, In } from 'typeorm';
 
 import { CreateAssetDto } from './dto/create-asset.dto';
 import { GetAcquiredAssetsRes } from './dto/get-acquired-assets.res';
 import { AssetsFilterDto } from './dto/get-contributed-assets.req';
-import { GetContributedAssetsRes } from './dto/get-contributed-assets.res';
+import { AssetItemDto, GetContributedAssetsRes } from './dto/get-contributed-assets.res';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
@@ -275,20 +275,45 @@ export class AssetsService {
       queryBuilder.andWhere('asset.type = :type', { type });
     }
 
+    // Helper function to adjust quantity by decimals
+    const adjustQuantityByDecimals = (quantity: number, decimals: number, isNft: boolean): number => {
+      if (isNft || !decimals || decimals === 0) return quantity;
+      return quantity / Math.pow(10, decimals);
+    };
+
+    // Calculate statistics with decimal adjustment
     const statsQuery = queryBuilder.clone();
     statsQuery
-      .select('SUM(asset.quantity * COALESCE(asset.floor_price, asset.dex_price, 0))', 'totalValue')
+      .select(
+        `SUM(
+          CASE 
+            WHEN asset.type = :ftType THEN 
+              (asset.quantity / POWER(10, COALESCE(asset.decimals, 0))) * COALESCE(asset.dex_price, asset.floor_price, 0)
+            ELSE 
+              asset.quantity * COALESCE(asset.floor_price, asset.dex_price, 0)
+          END
+        )`,
+        'totalValue'
+      )
       .addSelect(`SUM(CASE WHEN asset.type = :nftType THEN asset.quantity ELSE 0 END)`, 'totalNFTAssets')
-      .addSelect(`SUM(CASE WHEN asset.type = :ftType THEN asset.quantity ELSE 0 END)`, 'totalFTAssets')
+      .addSelect(
+        `SUM(
+          CASE 
+            WHEN asset.type = :ftType THEN asset.quantity / POWER(10, COALESCE(asset.decimals, 0))
+            ELSE 0 
+          END
+        )`,
+        'totalFTAssets'
+      )
       .setParameters({
         nftType: AssetType.NFT,
         ftType: AssetType.FT,
       });
 
     const rawStats = await statsQuery.getRawOne();
-    const totalAssetValueAda = parseFloat(rawStats?.totalValue || '0');
+    const adjustedTotalValueAda = parseFloat(rawStats?.totalValue || '0');
     const totalNFTAssets = parseFloat(rawStats?.totalNFTAssets || '0');
-    const totalFTAssets = parseFloat(rawStats?.totalFTAssets || '0');
+    const adjustedTotalFTAssets = parseFloat(rawStats?.totalFTAssets || '0');
 
     const [assets, total] = await queryBuilder
       .skip((page - 1) * limit)
@@ -298,33 +323,53 @@ export class AssetsService {
 
     const adaPrice = await this.priceService.getAdaPrice();
 
-    const totalAssetValueUsd = totalAssetValueAda * adaPrice;
-    const assetsAvgAda = total > 0 ? totalAssetValueAda / total : 0;
+    const totalAssetValueUsd = adjustedTotalValueAda * adaPrice;
+    const assetsAvgAda = total > 0 ? adjustedTotalValueAda / total : 0;
     const assetsAvgUsd = total > 0 ? totalAssetValueUsd / total : 0;
 
-    const assetsWithUsd = assets as Array<Asset & { floorPriceUsd?: number }>;
+    const assetsWithUsd = assets as Array<Asset & { floorPriceUsd?: number; valueAda?: number; valueUsd?: number }>;
 
     assetsWithUsd.forEach(asset => {
-      if (asset.type === AssetType.NFT && asset.floor_price) {
+      const isNft = asset.type === AssetType.NFT;
+      const decimals = asset.decimals || 0;
+
+      // Adjust quantity for FTs with decimals
+      if (!isNft && decimals > 0) {
+        asset.quantity = adjustQuantityByDecimals(asset.quantity, decimals, false);
+      }
+
+      // Get price from DB (dexPrice is already per-token, not per-smallest-unit)
+      const priceAda = isNft
+        ? parseFloat(String(asset.floor_price || asset.dex_price || 0))
+        : parseFloat(String(asset.dex_price || asset.floor_price || 0));
+
+      // Calculate value: adjusted quantity * price per token
+      asset.valueAda = asset.quantity * priceAda;
+      asset.valueUsd = asset.valueAda * adaPrice;
+
+      // FloorPriceUsd is only for NFTs
+      if (isNft && asset.floor_price) {
         asset.floorPriceUsd = asset.floor_price * adaPrice;
-      } else if (asset.type === AssetType.FT && asset.dex_price) {
-        asset.floorPriceUsd = asset.dex_price * adaPrice;
       }
     });
 
+    const items = plainToInstance(AssetItemDto, assetsWithUsd, {
+      excludeExtraneousValues: true,
+    });
+
     return {
-      items: assetsWithUsd.map(asset => instanceToPlain(asset)),
+      items,
       total,
       page,
       limit,
       totalPages: Math.ceil(total / limit),
       statistics: {
-        totalAssetValueAda,
+        totalAssetValueAda: adjustedTotalValueAda,
         totalAssetValueUsd,
         assetsAvgAda,
         assetsAvgUsd,
         totalNFTAssets,
-        totalFTAssets,
+        totalFTAssets: adjustedTotalFTAssets,
       },
     };
   }
