@@ -1,8 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Expose, Type, Transform } from 'class-transformer';
-import { IsArray, IsNotEmpty, IsOptional, ValidateNested } from 'class-validator';
+import { IsArray, IsNotEmpty, IsOptional, ValidateNested, Min, Max, IsNumber } from 'class-validator';
 
 import { AssetType } from '@/types/asset.types';
+
+// Maximum safe quantity to prevent database overflow and JS precision loss
+// Using Number.MAX_SAFE_INTEGER (2^53 - 1) = 9,007,199,254,740,991
+export const MAX_SAFE_QUANTITY = Number.MAX_SAFE_INTEGER;
 
 export class ContributionAsset {
   @ApiProperty({
@@ -30,10 +34,15 @@ export class ContributionAsset {
   assetName: string;
 
   @ApiProperty({
-    description: 'Quantity of assets to contribute',
+    description: 'Quantity of assets to contribute (in smallest units for FTs)',
     example: 1,
+    minimum: 0.01,
+    maximum: 9007199254740991,
   })
   @IsNotEmpty()
+  @IsNumber()
+  @Min(0.01, { message: 'Quantity must be at least 0.01' })
+  @Max(MAX_SAFE_QUANTITY, { message: 'Quantity exceeds maximum safe value (9,007,199,254,740,991)' })
   @Expose()
   quantity: number;
 
