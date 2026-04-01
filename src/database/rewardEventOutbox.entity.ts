@@ -1,6 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, Index } from 'typeorm';
-
-import { RewardActivityType } from '../types/rewards.types';
+import { Entity, Column, Index, PrimaryColumn } from 'typeorm';
 
 export enum OutboxStatus {
   PENDING = 'pending',
@@ -8,52 +6,53 @@ export enum OutboxStatus {
   FAILED = 'failed',
 }
 
-@Entity('reward_event_outbox')
+/**
+ * Domain event outbox table for tracking reward-related events.
+ * Events are published to l4va-rewards service for normalization and processing.
+ */
+@Entity('outbox', { schema: 'events' })
 export class RewardEventOutbox {
-  @PrimaryGeneratedColumn('uuid')
+  @PrimaryColumn('uuid')
   id: string;
 
-  @Column({ name: 'wallet_address' })
+  @Column({ name: 'aggregate_id', type: 'uuid' })
+  aggregate_id: string;
+
+  @Column({ name: 'aggregate_type', type: 'varchar' })
+  aggregate_type: string;
+
+  @Column({ name: 'event_type', type: 'varchar' })
   @Index()
-  wallet_address: string;
+  event_type: string;
 
-  @Column({ name: 'vault_id', nullable: true })
-  vault_id: string;
+  @Column({ name: 'event_data', type: 'jsonb' })
+  event_data: Record<string, any>;
 
-  @Column({
-    name: 'event_type',
-    type: 'enum',
-    enum: RewardActivityType,
-  })
-  @Index()
-  event_type: RewardActivityType;
+  @Column({ name: 'idempotency_key', type: 'varchar', nullable: true, unique: true })
+  idempotency_key: string;
 
-  @Column({ name: 'asset_id', nullable: true })
-  asset_id: string;
-
-  @Column({ name: 'tx_hash', nullable: true })
-  tx_hash: string;
-
-  @Column({ name: 'event_timestamp', type: 'timestamptz' })
-  event_timestamp: Date;
-
-  @Column({ name: 'units', type: 'numeric', precision: 20, scale: 6, default: 1 })
-  units: number;
-
-  @Column({ type: 'jsonb', nullable: true })
-  metadata: Record<string, any>;
-
-  @Column({
-    type: 'enum',
-    enum: OutboxStatus,
-    default: OutboxStatus.PENDING,
-  })
+  @Column({ type: 'enum', enum: OutboxStatus, default: OutboxStatus.PENDING })
   @Index()
   status: OutboxStatus;
 
-  @Column({ name: 'created_at', type: 'timestamptz', default: () => 'now()' })
+  @Column({ name: 'attempt', type: 'integer', default: 0 })
+  attempt: number;
+
+  @Column({ name: 'max_attempts', type: 'integer', default: 5 })
+  max_attempts: number;
+
+  @Column({ name: 'error_message', type: 'text', nullable: true })
+  error_message: string;
+
+  @Column({ name: 'next_retry_at', type: 'timestamptz', nullable: true })
+  next_retry_at: Date;
+
+  @Column({ name: 'created_at', type: 'timestamptz' })
   created_at: Date;
 
   @Column({ name: 'processed_at', type: 'timestamptz', nullable: true })
   processed_at: Date;
+
+  @Column({ name: 'updated_at', type: 'timestamptz', nullable: true })
+  updated_at: Date;
 }
