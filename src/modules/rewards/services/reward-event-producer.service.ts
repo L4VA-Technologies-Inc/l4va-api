@@ -34,15 +34,23 @@ export class RewardEventProducer {
    */
   async indexEvent(input: IndexEventInput): Promise<RewardEventOutbox | null> {
     try {
+      const aggregateId = input.vaultId ?? input.walletAddress;
+      const idempotencyKey = input.txHash ? `${input.eventType}:${input.txHash}` : undefined;
+
       const event = this.outboxRepository.create({
-        wallet_address: input.walletAddress,
-        vault_id: input.vaultId ?? null,
+        aggregate_id: aggregateId,
+        aggregate_type: input.vaultId ? 'vault' : 'wallet',
         event_type: input.eventType,
-        asset_id: input.assetId ?? null,
-        tx_hash: input.txHash ?? null,
-        event_timestamp: new Date(),
-        units: input.units ?? 1,
-        metadata: input.metadata ?? null,
+        event_data: {
+          walletAddress: input.walletAddress,
+          vaultId: input.vaultId ?? null,
+          assetId: input.assetId ?? null,
+          txHash: input.txHash ?? null,
+          units: input.units ?? 1,
+          ...(input.metadata ?? {}),
+        },
+        idempotency_key: idempotencyKey,
+        created_at: new Date(),
       });
 
       const saved = await this.outboxRepository.save(event);
