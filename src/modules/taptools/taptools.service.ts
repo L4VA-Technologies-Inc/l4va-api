@@ -1811,32 +1811,38 @@ export class TaptoolsService {
    * @returns true if NFT, false if FT
    */
   private isNFT(assetDetails: BlockfrostAssetResponseDto): boolean {
-    // 1. Check for decimals first (strongest FT indicator)
-    if (assetDetails.metadata?.decimals !== undefined) {
+    // 1. Check for decimals > 0 (strongest FT indicator)
+    // decimals: 0 is common for NFTs, only decimals > 0 indicates FT
+    if (assetDetails.metadata?.decimals !== undefined && assetDetails.metadata.decimals > 0) {
       return false;
     }
 
-    // 2. Check total quantity (most reliable for NFTs)
-    if (assetDetails.quantity === '1') {
-      return true;
-    }
-
-    // 3. If quantity > 1, it's a fungible token
-    const qty = parseInt(assetDetails.quantity);
-    if (qty > 1) {
-      return false;
-    }
-
-    // 4. Check for NFT-specific metadata (CIP-25)
+    // 2. Check for NFT-specific metadata (CIP-25) - check before quantity
+    // NFTs can have total minted quantity > 1 (limited edition collections)
     const metadata = assetDetails.onchain_metadata;
     if (metadata) {
-      // Check for NFT-specific fields (attributes, mediaType, files)
       if (metadata.attributes || metadata.mediaType || metadata.files) {
         return true;
       }
     }
 
-    // 5. Fallback: assume NFT if quantity is 1
+    // 3. Check CIP-25 standard flag
+    if (assetDetails.onchain_metadata_standard === 'CIP25v1' || assetDetails.onchain_metadata_standard === 'CIP25v2') {
+      return true;
+    }
+
+    // 4. Check total quantity (if 1, likely NFT)
+    if (assetDetails.quantity === '1') {
+      return true;
+    }
+
+    // 5. If quantity > 1 and no NFT metadata, it's a fungible token
+    const qty = parseInt(assetDetails.quantity);
+    if (qty > 1) {
+      return false;
+    }
+
+    // 6. Fallback: assume NFT if quantity is 1
     return qty === 1;
   }
 
