@@ -1817,33 +1817,35 @@ export class TaptoolsService {
       return false;
     }
 
-    // 2. Check for NFT-specific metadata (CIP-25) - check before quantity
-    // NFTs can have total minted quantity > 1 (limited edition collections)
+    const qty = parseInt(assetDetails.quantity);
+
+    // 2. Check CIP-25 standard flag combined with reasonable NFT supply
+    // NFT collections can be limited editions (qty up to ~10,000)
+    // FTs typically have supply in millions+
+    const hasCip25Standard =
+      assetDetails.onchain_metadata_standard === 'CIP25v1' || assetDetails.onchain_metadata_standard === 'CIP25v2';
+
+    // 3. Check for NFT-specific metadata (CIP-25)
     const metadata = assetDetails.onchain_metadata;
-    if (metadata) {
-      if (metadata.attributes || metadata.mediaType || metadata.files) {
-        return true;
-      }
+    const hasNftMetadata = metadata && (metadata.attributes || metadata.mediaType || metadata.files);
+
+    // If CIP-25 standard is explicitly set AND supply is reasonable for NFTs, it's an NFT
+    if (hasCip25Standard && qty <= 100000) {
+      return true;
     }
 
-    // 3. Check CIP-25 standard flag
-    if (assetDetails.onchain_metadata_standard === 'CIP25v1' || assetDetails.onchain_metadata_standard === 'CIP25v2') {
+    // If has NFT metadata AND supply is reasonable, it's an NFT
+    if (hasNftMetadata && qty <= 100000) {
       return true;
     }
 
     // 4. Check total quantity (if 1, likely NFT)
-    if (assetDetails.quantity === '1') {
+    if (qty === 1) {
       return true;
     }
 
-    // 5. If quantity > 1 and no NFT metadata, it's a fungible token
-    const qty = parseInt(assetDetails.quantity);
-    if (qty > 1) {
-      return false;
-    }
-
-    // 6. Fallback: assume NFT if quantity is 1
-    return qty === 1;
+    // 5. If quantity > 1 and no NFT indicators, it's a fungible token
+    return false;
   }
 
   public async getTokenPools(assetId: string): Promise<TapToolsTokenPoolDto[]> {
