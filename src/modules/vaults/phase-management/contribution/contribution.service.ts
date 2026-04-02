@@ -15,6 +15,11 @@ import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionType } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';
 
+// Maximum safe quantity for JavaScript number handling
+// Using Number.MAX_SAFE_INTEGER (2^53 - 1) to prevent precision loss
+const MAX_SAFE_QUANTITY = Number.MAX_SAFE_INTEGER; // 9,007,199,254,740,991
+const LARGE_QUANTITY_WARNING_THRESHOLD = 1000000000; // 1 billion
+
 @Injectable()
 export class ContributionService {
   private readonly logger = new Logger(ContributionService.name);
@@ -171,6 +176,21 @@ export class ContributionService {
           (total, asset) => total + (Number(asset.quantity) || 1),
           0
         );
+
+        // Additional safety check: prevent individual FT quantities from exceeding reasonable limits
+        for (const asset of assetsByPolicy[policyId]) {
+          const qty = Number(asset.quantity) || 0;
+          if (asset.type === 'ft' && qty > MAX_SAFE_QUANTITY) {
+            throw new BadRequestException(`Asset quantity ${qty} exceeds maximum safe value for policy ${policyId}`);
+          }
+
+          // Log warning for very large quantities
+          if (qty > LARGE_QUANTITY_WARNING_THRESHOLD) {
+            this.logger.warn(
+              `Large quantity contribution detected: ${qty} tokens for policy ${policyId} by user ${userId}`
+            );
+          }
+        }
 
         if (
           whitelistedAsset.asset_count_cap_max !== null &&
