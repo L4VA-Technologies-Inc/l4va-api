@@ -223,7 +223,6 @@ export class VaultManagingService {
         Address.from_bech32(vaultConfig.customerAddress),
         this.blockfrost,
         {
-          minAda: 2000000,
           filterByAda: 8000000,
           validateUtxos: false,
           ...(this.systemSettingsService.vlrmCreatorFeeEnabled && {
