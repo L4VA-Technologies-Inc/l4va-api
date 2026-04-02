@@ -1288,17 +1288,8 @@ export class GovernanceService {
       tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
     });
 
-    // Index reward event for proposal creation
-    this.rewardEventProducer.indexEvent({
-      walletAddress: user.address,
-      vaultId: vault.id,
-      eventType: RewardActivityType.GOVERNANCE_PROPOSAL,
-      units: 1,
-      metadata: {
-        proposalId: proposal.id,
-        proposalType: proposal.proposalType,
-      },
-    });
+    // Note: Reward event for governance proposals is emitted in activateProposal()
+    // (only ACTIVE proposals count toward governance participation)
 
     return {
       success: true,
@@ -1784,7 +1775,7 @@ export class GovernanceService {
       vaultId: proposal.vaultId,
       eventType: RewardActivityType.GOVERNANCE_VOTE,
       units: 1,
-      metadata: { proposalId, voteType: voteReq.vote },
+      metadata: { proposal_id: proposalId, vote_type: voteReq.vote },
     });
 
     return {
@@ -1923,8 +1914,9 @@ export class GovernanceService {
       );
     }
 
-    // Clear pending payment metadata
+    // Clear pending payment metadata and store payment txHash for reward tracking
     delete proposal.metadata._pendingPayment;
+    (proposal.metadata as any).paymentTxHash = txHash;
 
     await this.proposalRepository.save(proposal);
 
@@ -1964,19 +1956,6 @@ export class GovernanceService {
       proposalName: proposal.title,
       creatorId: proposal.creatorId,
       tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
-    });
-
-    // Index reward event for proposal creation (paid path)
-    this.rewardEventProducer.indexEvent({
-      walletAddress: proposal.creator.address,
-      vaultId: proposal.vault.id,
-      eventType: RewardActivityType.GOVERNANCE_PROPOSAL,
-      txHash,
-      units: 1,
-      metadata: {
-        proposalId: proposal.id,
-        proposalType: proposal.proposalType,
-      },
     });
 
     this.logger.log(
