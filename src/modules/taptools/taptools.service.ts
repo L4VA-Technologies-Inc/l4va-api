@@ -768,8 +768,12 @@ export class TaptoolsService {
       const key = `${asset.policy_id}_${asset.asset_id}`;
       const existingAsset = assetMap.get(key);
 
+      // For FTs with decimals, convert raw on-chain quantity to human-readable
+      const decimals = asset.type !== AssetType.NFT && asset.decimals ? asset.decimals : 0;
+      const adjustedQuantity = asset.type === AssetType.NFT ? 1 : Number(asset.quantity) / Math.pow(10, decimals);
+
       if (existingAsset) {
-        existingAsset.quantity += asset.type === AssetType.NFT ? 1 : Number(asset.quantity);
+        existingAsset.quantity += adjustedQuantity;
       } else {
         // Check for custom price first, then use cached market price
         let cachedPrice: number | undefined;
@@ -784,7 +788,7 @@ export class TaptoolsService {
         assetMap.set(key, {
           policyId: asset.policy_id,
           assetId: asset.asset_id,
-          quantity: asset.type === AssetType.NFT ? 1 : Number(asset.quantity),
+          quantity: adjustedQuantity,
           isNft: asset.type === AssetType.NFT,
           cachedPrice,
           metadata: asset.metadata || {},
@@ -1031,12 +1035,12 @@ export class TaptoolsService {
           const key = `${asset.policy_id}_${asset.asset_id}`;
           const existingAsset = assetMap.get(key);
 
+          // For FTs with decimals, convert raw on-chain quantity to human-readable
+          const decimals = asset.type !== AssetType.NFT && asset.decimals ? asset.decimals : 0;
+          const adjustedQuantity = asset.type === AssetType.NFT ? 1 : Number(asset.quantity) / Math.pow(10, decimals);
+
           if (existingAsset) {
-            if (asset.type === AssetType.NFT) {
-              existingAsset.quantity += 1;
-            } else {
-              existingAsset.quantity += Number(asset.quantity);
-            }
+            existingAsset.quantity += adjustedQuantity;
           } else {
             // Check for custom price first, then use cached market price
             let cachedPrice: number | undefined;
@@ -1051,7 +1055,7 @@ export class TaptoolsService {
             assetMap.set(key, {
               policyId: asset.policy_id,
               assetId: asset.asset_id,
-              quantity: asset.type === AssetType.NFT ? 1 : Number(asset.quantity),
+              quantity: adjustedQuantity,
               isNft: asset.type === AssetType.NFT,
               cachedPrice,
               name: asset.name,
