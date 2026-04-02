@@ -19,6 +19,7 @@ import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
+import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
@@ -28,6 +29,7 @@ import { WayUpService } from '@/modules/wayup/wayup.service';
 import { AssetStatus } from '@/types/asset.types';
 import { ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
+import { RewardActivityType } from '@/types/rewards.types';
 import { TransactionStatus } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';
 
@@ -68,7 +70,8 @@ export class GovernanceExecutionService {
     private readonly expansionService: ExpansionService,
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly treasuryWalletService: TreasuryWalletService,
-    private readonly governanceRefundService: GovernanceRefundService
+    private readonly governanceRefundService: GovernanceRefundService,
+    private readonly rewardEventProducer: RewardEventProducer
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
@@ -270,7 +273,7 @@ export class GovernanceExecutionService {
     try {
       const proposal = await this.proposalRepository.findOne({
         where: { id: proposalId, status: ProposalStatus.UPCOMING },
-        select: ['id', 'status', 'startDate'],
+        relations: ['vault', 'creator'],
       });
 
       if (!proposal) {
@@ -288,6 +291,21 @@ export class GovernanceExecutionService {
           status: ProposalStatus.ACTIVE,
           previousStatus: ProposalStatus.UPCOMING,
           timestamp: new Date(),
+        });
+
+        // Index reward event for proposal activation
+        // Only ACTIVE proposals count toward governance participation rewards
+        // (UPCOMING proposals can still be deleted, so we don't reward them yet)
+        this.rewardEventProducer.indexEvent({
+          walletAddress: proposal.creator.address,
+          vaultId: proposal.vault.id,
+          eventType: RewardActivityType.GOVERNANCE_PROPOSAL,
+          txHash: (proposal.metadata as any)?.paymentTxHash,
+          units: 1,
+          metadata: {
+            proposal_id: proposal.id,
+            proposal_type: proposal.proposalType,
+          },
         });
 
         this.logger.log(`Proposal ${proposalId} activated successfully`);

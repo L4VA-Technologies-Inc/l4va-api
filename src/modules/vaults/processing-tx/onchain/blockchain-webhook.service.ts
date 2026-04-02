@@ -257,9 +257,8 @@ export class BlockchainWebhookService {
       const isExpansion = vault.vault_status === VaultStatus.expansion;
 
       if (transaction.type === TransactionType.contribute) {
-        // Count contributed assets from transaction metadata
-        const assets = transaction.metadata as any[];
-        const units = Array.isArray(assets) ? assets.reduce((sum, a) => sum + (Number(a.quantity) || 1), 0) : 1;
+        // 1 transaction = 1 contribution event (product decision)
+        const units = 1;
 
         await this.rewardEventProducer.indexEvent({
           walletAddress: user.address,
@@ -269,7 +268,7 @@ export class BlockchainWebhookService {
             : RewardActivityType.ASSET_CONTRIBUTION,
           txHash,
           units,
-          metadata: { transactionId: transaction.id },
+          metadata: { transaction_id: transaction.id },
         });
       } else if (transaction.type === TransactionType.acquire) {
         // Acquire: use ADA amount as units (in lovelace)
@@ -282,7 +281,7 @@ export class BlockchainWebhookService {
           txHash,
           units,
           metadata: {
-            transactionId: transaction.id,
+            transaction_id: transaction.id,
             amount: transaction.amount,
           },
         });
@@ -295,7 +294,7 @@ export class BlockchainWebhookService {
           txHash,
           units,
           metadata: {
-            transactionId: transaction.id,
+            transaction_id: transaction.id,
             amount: transaction.amount,
           },
         });

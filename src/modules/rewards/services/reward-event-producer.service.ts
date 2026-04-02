@@ -9,7 +9,6 @@ interface IndexEventInput {
   walletAddress: string;
   vaultId?: string;
   eventType: RewardActivityType;
-  assetId?: string;
   txHash?: string;
   units?: number;
   metadata?: Record<string, any>;
@@ -44,7 +43,6 @@ export class RewardEventProducer {
         event_data: {
           wallet_address: input.walletAddress,
           vault_id: input.vaultId ?? null,
-          asset_id: input.assetId ?? null,
           tx_hash: input.txHash ?? null,
           units: input.units ?? 1,
           ...(input.metadata ?? {}),
