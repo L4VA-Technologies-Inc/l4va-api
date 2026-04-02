@@ -1811,33 +1811,41 @@ export class TaptoolsService {
    * @returns true if NFT, false if FT
    */
   private isNFT(assetDetails: BlockfrostAssetResponseDto): boolean {
-    // 1. Check for decimals first (strongest FT indicator)
-    if (assetDetails.metadata?.decimals !== undefined) {
+    // 1. Check for decimals > 0 (strongest FT indicator)
+    // decimals: 0 is common for NFTs, only decimals > 0 indicates FT
+    if (assetDetails.metadata?.decimals !== undefined && assetDetails.metadata.decimals > 0) {
       return false;
     }
 
-    // 2. Check total quantity (most reliable for NFTs)
-    if (assetDetails.quantity === '1') {
+    const qty = parseInt(assetDetails.quantity);
+
+    // 2. Check CIP-25 standard flag combined with reasonable NFT supply
+    // NFT collections can be limited editions (qty up to ~10,000)
+    // FTs typically have supply in millions+
+    const hasCip25Standard =
+      assetDetails.onchain_metadata_standard === 'CIP25v1' || assetDetails.onchain_metadata_standard === 'CIP25v2';
+
+    // 3. Check for NFT-specific metadata (CIP-25)
+    const metadata = assetDetails.onchain_metadata;
+    const hasNftMetadata = metadata && (metadata.attributes || metadata.mediaType || metadata.files);
+
+    // If CIP-25 standard is explicitly set AND supply is reasonable for NFTs, it's an NFT
+    if (hasCip25Standard && qty <= 100000) {
       return true;
     }
 
-    // 3. If quantity > 1, it's a fungible token
-    const qty = parseInt(assetDetails.quantity);
-    if (qty > 1) {
-      return false;
+    // If has NFT metadata AND supply is reasonable, it's an NFT
+    if (hasNftMetadata && qty <= 100000) {
+      return true;
     }
 
-    // 4. Check for NFT-specific metadata (CIP-25)
-    const metadata = assetDetails.onchain_metadata;
-    if (metadata) {
-      // Check for NFT-specific fields (attributes, mediaType, files)
-      if (metadata.attributes || metadata.mediaType || metadata.files) {
-        return true;
-      }
+    // 4. Check total quantity (if 1, likely NFT)
+    if (qty === 1) {
+      return true;
     }
 
-    // 5. Fallback: assume NFT if quantity is 1
-    return qty === 1;
+    // 5. If quantity > 1 and no NFT indicators, it's a fungible token
+    return false;
   }
 
   public async getTokenPools(assetId: string): Promise<TapToolsTokenPoolDto[]> {
