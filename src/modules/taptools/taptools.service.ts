@@ -1027,8 +1027,12 @@ export class TaptoolsService {
           }
 
           // Process vault-owned assets for TVL:
-          // CONTRIBUTED (user deposits) + BOUGHT (marketplace buys).
-          if (asset.origin_type !== AssetOriginType.CONTRIBUTED && asset.origin_type !== AssetOriginType.BOUGHT) {
+          // CONTRIBUTED (user deposits) + BOUGHT (marketplace buys) + FEE (protocol fees).
+          if (
+            asset.origin_type !== AssetOriginType.CONTRIBUTED &&
+            asset.origin_type !== AssetOriginType.BOUGHT &&
+            asset.origin_type !== AssetOriginType.FEE
+          ) {
             continue;
           }
 
