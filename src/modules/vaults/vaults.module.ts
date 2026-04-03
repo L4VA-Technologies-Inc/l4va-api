@@ -21,6 +21,7 @@ import { LinkEntity } from '@/database/link.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { TagEntity } from '@/database/tag.entity';
+import { TokenVerification } from '@/database/token-verification.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
@@ -57,6 +58,7 @@ import { StatisticsService } from '@/modules/vaults/statistics/statistics.servic
       Transaction,
       Proposal,
       Snapshot,
+      TokenVerification,
     ]),
     HttpModule,
   ],
