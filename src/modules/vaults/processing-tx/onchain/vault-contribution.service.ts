@@ -423,12 +423,26 @@ export class VaultContributionService {
     maxContributeAssets: number,
     contributingAssetCount: number
   ): Promise<void> {
-    // Count confirmed assets (convert FT raw quantities to decimal using decimals)
-    const confirmedAssets = await this.assetRepository
+    // Count confirmed assets (convert FT raw quantities to decimal using decimals) - done in SQL for performance
+    const confirmedResult = await this.assetRepository
       .createQueryBuilder('asset')
-      .select('asset.quantity', 'rawQuantity')
-      .addSelect('asset.decimals', 'decimals')
-      .addSelect('asset.type', 'assetType')
+      .select(
+        `COALESCE(
+          SUM(
+            CASE 
+              WHEN asset.type = :nftType THEN 1
+              WHEN asset.type = :ftType THEN
+                CASE 
+                  WHEN COALESCE(asset.decimals, 6) > 0 
+                  THEN asset.quantity / POWER(10, COALESCE(asset.decimals, 6))
+                  ELSE asset.quantity
+                END
+              ELSE 1
+            END
+          ), 0
+        )`,
+        'currentAssetCount'
+      )
       .where('asset.vault_id = :vaultId', { vaultId })
       .andWhere('asset.status IN (:...statuses)', {
         statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED],
@@ -436,19 +450,13 @@ export class VaultContributionService {
       .andWhere('asset.origin_type = :originType', {
         originType: AssetOriginType.CONTRIBUTED,
       })
-      .getRawMany();
+      .setParameters({
+        nftType: AssetType.NFT,
+        ftType: AssetType.FT,
+      })
+      .getRawOne();
 
-    const currentAssetCount = confirmedAssets.reduce((sum, asset) => {
-      const rawQuantity = Number(asset.rawQuantity) || 0;
-      if (asset.assetType === AssetType.NFT) {
-        return sum + 1; // NFTs always count as 1
-      }
-      // FTs: convert raw to decimal
-      const parsedDecimals = Number(asset.decimals);
-      const decimals = Number.isNaN(parsedDecimals) ? 6 : parsedDecimals;
-      const decimalQuantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
-      return sum + decimalQuantity;
-    }, 0);
+    const currentAssetCount = Number(confirmedResult?.currentAssetCount || 0);
 
     // Count pending contribution transactions (excluding current transaction)
     // Sum actual quantities from JSON metadata (convert raw to decimal for FTs) - done in SQL for performance
@@ -531,12 +539,26 @@ export class VaultContributionService {
       return;
     }
 
-    // Count confirmed expansion assets (convert raw to decimal for FTs)
-    const expansionAssets = await this.assetRepository
+    // Count confirmed expansion assets (convert raw to decimal for FTs) - done in SQL for performance
+    const confirmedResult = await this.assetRepository
       .createQueryBuilder('asset')
-      .select('asset.type', 'assetType')
-      .addSelect('asset.quantity', 'rawQuantity')
-      .addSelect('asset.decimals', 'decimals')
+      .select(
+        `COALESCE(
+          SUM(
+            CASE 
+              WHEN asset.type = :nftType THEN 1
+              WHEN asset.type = :ftType THEN
+                CASE 
+                  WHEN COALESCE(asset.decimals, 6) > 0 
+                  THEN asset.quantity / POWER(10, COALESCE(asset.decimals, 6))
+                  ELSE asset.quantity
+                END
+              ELSE 1
+            END
+          ), 0
+        )`,
+        'currentAssetCount'
+      )
       .innerJoin('asset.transaction', 'tx')
       .where('asset.vault_id = :vaultId', { vaultId })
       .andWhere('asset.status IN (:...statuses)', {
@@ -544,19 +566,13 @@ export class VaultContributionService {
       })
       .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
       .andWhere('tx.created_at >= (SELECT expansion_phase_start FROM vaults WHERE id = :vaultId)', { vaultId })
-      .getRawMany();
+      .setParameters({
+        nftType: AssetType.NFT,
+        ftType: AssetType.FT,
+      })
+      .getRawOne();
 
-    const currentAssetCount = expansionAssets.reduce((sum, asset) => {
-      const rawQuantity = Number(asset.rawQuantity) || 0;
-      if (asset.assetType === AssetType.NFT) {
-        return sum + 1;
-      }
-      // FTs: convert raw to decimal
-      const parsedDecimals = Number(asset.decimals);
-      const decimals = Number.isNaN(parsedDecimals) ? 6 : parsedDecimals;
-      const decimalQuantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
-      return sum + decimalQuantity;
-    }, 0);
+    const currentAssetCount = Number(confirmedResult?.currentAssetCount || 0);
 
     // Count pending expansion transactions (excluding current transaction)
     // Sum actual quantities from JSON metadata (convert raw to decimal for FTs) - done in SQL for performance
