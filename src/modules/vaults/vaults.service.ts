@@ -755,12 +755,23 @@ export class VaultsService {
 
     // Get count of active assets for this vault (PENDING, LOCKED, EXTRACTED, OFFERED)
     // Includes both contributed and bought assets
-    // For FTs: convert raw quantities to decimal-adjusted quantities
-    const lockedAssets = await this.assetsRepository
+    // For FTs: convert raw quantities to decimal-adjusted quantities in SQL for performance
+    const { lockedNFTCount, lockedFTsCount } = await this.assetsRepository
       .createQueryBuilder('asset')
-      .select('asset.type', 'assetType')
-      .addSelect('asset.quantity', 'rawQuantity')
-      .addSelect('asset.decimals', 'decimals')
+      .select([
+        `SUM(CASE WHEN asset.type = :nftType THEN 1 ELSE 0 END) as "lockedNFTCount"`,
+        `SUM(
+          CASE 
+            WHEN asset.type = :ftType THEN 
+              CASE 
+                WHEN COALESCE(asset.decimals, 6) > 0 
+                THEN asset.quantity / POWER(10, COALESCE(asset.decimals, 6))
+                ELSE asset.quantity
+              END
+            ELSE 0 
+          END
+        ) as "lockedFTsCount"`,
+      ])
       .where('asset.vault_id = :vaultId', { vaultId })
       .andWhere('asset.status IN (:...statuses)', {
         statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED, AssetStatus.OFFERED],
@@ -768,21 +779,15 @@ export class VaultsService {
       .andWhere('asset.origin_type IN (:...originTypes)', {
         originTypes: [AssetOriginType.CONTRIBUTED, AssetOriginType.BOUGHT],
       })
-      .getRawMany();
-
-    let lockedNFTCount = 0;
-    let lockedFTsCount = 0;
-
-    for (const asset of lockedAssets) {
-      if (asset.assetType === AssetType.NFT) {
-        lockedNFTCount += 1;
-      } else if (asset.assetType === AssetType.FT) {
-        const rawQuantity = Number(asset.rawQuantity) || 0;
-        const decimals = Number(asset.decimals) || 6;
-        const decimalQuantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
-        lockedFTsCount += decimalQuantity;
-      }
-    }
+      .setParameters({
+        nftType: AssetType.NFT,
+        ftType: AssetType.FT,
+      })
+      .getRawOne()
+      .then(result => ({
+        lockedNFTCount: Number(result?.lockedNFTCount || 0),
+        lockedFTsCount: Number(result?.lockedFTsCount || 0),
+      }));
 
     const lockedAssetsCount = lockedNFTCount + lockedFTsCount;
 
