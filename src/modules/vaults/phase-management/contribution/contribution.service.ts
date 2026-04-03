@@ -145,10 +145,22 @@ export class ContributionService {
       return this.handleExpansionContribution(vaultId, contributeReq, userId);
     }
 
-    // Normal contribution flow
-    if (currentAssetCount + contributeReq.assets.length > vaultData.max_contribute_assets) {
+    // Calculate decimal-adjusted quantity for new contribution (to match currentAssetCount units)
+    const contributionAssetCount = contributeReq.assets.reduce((total, asset) => {
+      const rawQuantity = Number(asset.quantity) || 1;
+      if (asset.type === AssetType.FT) {
+        const decimals = asset.decimals ?? asset.metadata?.decimals ?? 6;
+        const decimalQuantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
+        return total + decimalQuantity;
+      }
+      // NFTs always count as 1
+      return total + 1;
+    }, 0);
+
+    // Normal contribution flow - compare decimal-adjusted quantities
+    if (currentAssetCount + contributionAssetCount > vaultData.max_contribute_assets) {
       throw new BadRequestException(
-        `Adding ${contributeReq.assets.length} assets would exceed the vault's maximum capacity of ${vaultData.max_contribute_assets}. ` +
+        `Adding ${contributionAssetCount} assets would exceed the vault's maximum capacity of ${vaultData.max_contribute_assets}. ` +
           `The vault currently has ${currentAssetCount} assets.`
       );
     }
