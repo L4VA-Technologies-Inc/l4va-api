@@ -34,6 +34,10 @@ import { VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class VaultContributionService {
+  // Transaction validity duration (how long a built transaction remains valid for signing/submission)
+  // Also used as the stale transaction cutoff for contribution limit checks
+  private readonly TX_VALIDITY_MINUTES = 120; // 2 hours (default Anvil behavior)
+
   private readonly logger = new Logger(VaultContributionService.name);
   private readonly adminAddress: string;
   private readonly adminHash: string;
@@ -431,6 +435,8 @@ export class VaultContributionService {
 
     // Count pending contribution transactions (excluding current transaction)
     // Sum actual quantities from JSON metadata: NFTs = 1, FTs = quantity
+    // Exclude stale "created" transactions older than TX_VALIDITY_MINUTES (matches tx validity interval)
+    const staleCutoff = new Date(Date.now() - this.TX_VALIDITY_MINUTES * 60 * 1000);
     const pendingContributions = await this.transactionRepository
       .createQueryBuilder('t')
       .select(
@@ -447,6 +453,10 @@ export class VaultContributionService {
       .andWhere('t.type = :type', { type: TransactionType.contribute })
       .andWhere('t.status IN (:...statuses)', {
         statuses: [TransactionStatus.created, TransactionStatus.pending],
+      })
+      .andWhere('(t.status != :createdStatus OR t.created_at > :staleCutoff)', {
+        createdStatus: TransactionStatus.created,
+        staleCutoff,
       })
       .getRawOne();
 
@@ -515,6 +525,8 @@ export class VaultContributionService {
 
     // Count pending expansion transactions (excluding current transaction)
     // Sum actual quantities from JSON metadata: NFTs = 1, FTs = quantity
+    // Exclude stale "created" transactions older than TX_VALIDITY_MINUTES (matches tx validity interval)
+    const staleCutoff = new Date(Date.now() - this.TX_VALIDITY_MINUTES * 60 * 1000);
     const pendingExpansionContributions = await this.transactionRepository
       .createQueryBuilder('t')
       .innerJoin('vaults', 'v', 't.vault_id = v.id')
@@ -532,6 +544,10 @@ export class VaultContributionService {
       .andWhere('t.type = :type', { type: TransactionType.contribute })
       .andWhere('t.status IN (:...statuses)', {
         statuses: [TransactionStatus.created, TransactionStatus.pending],
+      })
+      .andWhere('(t.status != :createdStatus OR t.created_at > :staleCutoff)', {
+        createdStatus: TransactionStatus.created,
+        staleCutoff,
       })
       .andWhere('t.created_at >= v.expansion_phase_start')
       .getRawOne();
