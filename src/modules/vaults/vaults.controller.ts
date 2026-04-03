@@ -23,7 +23,11 @@ import { DraftVaultsService } from './draft-vaults.service';
 import { BuildBurnTransactionRes } from './dto/build-burn-transaction.res';
 import { CreateVaultRes } from './dto/create-vault.res';
 import { CreateVaultReq } from './dto/createVault.req';
-import { CollectionNameItem, GetCollectionNamesReq } from './dto/get-collection-names.dto';
+import {
+  CollectionNameItem,
+  GetCollectionNamesReq,
+  tokenVerificationToCollectionNameItem,
+} from './dto/get-collection-names.dto';
 import { GetVaultActivityDto } from './dto/get-vault-activity.dto';
 import { GetVaultParamDto } from './dto/get-vault-param.dto';
 import { GetVaultTransactionsDto } from './dto/get-vault-transactions.dto';
@@ -174,13 +178,14 @@ export class VaultsController {
   @ApiDoc({
     summary: 'Get collection info for whitelist items',
     description:
-      'Resolves collection metadata for provided whitelist items and returns policyId, collectionName, and isVerified.',
+      'Resolves collection metadata for whitelist items. Response: policyId, collectionName, isVerified, optional platform (verification source).',
     status: 200,
   })
   @UseGuards(AuthGuard)
   @Post('collection-names')
   async getCollectionNames(@Body() body: GetCollectionNamesReq): Promise<CollectionNameItem[]> {
-    return this.vaultsService.getCollections(body.collections);
+    const rows = await this.vaultsService.getCollections(body.collections);
+    return rows.map(tokenVerificationToCollectionNameItem);
   }
 
   @ApiDoc({
