@@ -2,6 +2,8 @@ import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { ArrayMaxSize, ArrayNotEmpty, IsArray, IsNumber, IsString, Matches, ValidateNested } from 'class-validator';
 
+import { TokenVerification, VerificationPlatform } from '@/database/token-verification.entity';
+
 export class CollectionItemDto {
   @ApiProperty({
     example: '63efb704b7396890e4d9539d030c0e667739043add65c00f96c586c0',
@@ -58,4 +60,21 @@ export class CollectionNameItem {
     example: true,
   })
   isVerified: boolean;
+
+  @ApiProperty({
+    description: 'Marketplace or source used for verification (null when not from API / not persisted)',
+    enum: VerificationPlatform,
+    nullable: true,
+    required: false,
+  })
+  platform?: VerificationPlatform | null;
+}
+
+export function tokenVerificationToCollectionNameItem(row: TokenVerification): CollectionNameItem {
+  return {
+    policyId: row.policy_id,
+    collectionName: row.collection_name,
+    isVerified: row.is_verified,
+    platform: row.platform ?? null,
+  };
 }

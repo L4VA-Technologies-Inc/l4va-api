@@ -3,13 +3,11 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import * as csv from 'csv-parse';
-import NodeCache from 'node-cache';
 import { Brackets, In, Not, Repository } from 'typeorm';
 
 import { DexHunterService } from '../dexhunter/dexhunter.service';
 import { GoogleCloudStorageService } from '../google_cloud/google_bucket/bucket.service';
 import { PriceService } from '../price/price.service';
-import { TaptoolsService } from '../taptools/taptools.service';
 import { WayUpPricingService } from '../wayup/wayup-pricing.service';
 
 import { CreateVaultReq } from './dto/createVault.req';
@@ -42,6 +40,7 @@ import { LinkEntity } from '@/database/link.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { TagEntity } from '@/database/tag.entity';
+import { TokenVerification, VerificationPlatform } from '@/database/token-verification.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
@@ -85,7 +84,6 @@ export class VaultsService {
    */
   private readonly scVersion: string;
   private readonly isMainnet: boolean;
-  private readonly collectionNameCache: NodeCache;
 
   constructor(
     @InjectRepository(Vault)
@@ -112,12 +110,13 @@ export class VaultsService {
     private readonly proposalRepository: Repository<Proposal>,
     @InjectRepository(Snapshot)
     private readonly snapshotRepository: Repository<Snapshot>,
+    @InjectRepository(TokenVerification)
+    private readonly tokenVerificationRepo: Repository<TokenVerification>,
     private readonly gcsService: GoogleCloudStorageService,
     private readonly vaultContractService: VaultManagingService,
     private readonly blockchainService: BlockchainService,
     private readonly governanceService: GovernanceService,
     private readonly priceService: PriceService,
-    private readonly taptoolsService: TaptoolsService,
     private readonly transactionsService: TransactionsService,
     private readonly configService: ConfigService,
     private readonly systemSettingsService: SystemSettingsService,
@@ -127,12 +126,6 @@ export class VaultsService {
   ) {
     this.scVersion = this.configService.get<string>('SC_VERSION') || '1.0.0'; // Current SC version
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
-    // Cache collection names for 1 hour (3600 seconds)
-    this.collectionNameCache = new NodeCache({
-      stdTTL: 3600,
-      checkperiod: 300,
-      useClones: false,
-    });
   }
 
   /**
@@ -277,9 +270,9 @@ export class VaultsService {
           }))
         );
 
-        const unverifiedCollections = whitelistCollections.filter(item => !item.isVerified);
+        const unverifiedCollections = whitelistCollections.filter(item => !item.is_verified);
         if (unverifiedCollections.length > 0) {
-          const unverifiedPolicies = unverifiedCollections.map(item => item.policyId);
+          const unverifiedPolicies = unverifiedCollections.map(item => item.policy_id);
           throw new BadRequestException(
             `All whitelist tokens must be verified. Unverified policy IDs: ${unverifiedPolicies.join(', ')}`
           );
@@ -817,7 +810,7 @@ export class VaultsService {
     let expansionPriceType: 'limit' | 'market' | undefined;
     let expansionLimitPrice: number | undefined;
     let expansionAssetsByPolicy: Array<{ policyId: string; quantity: number }> = [];
-    let expansionWhitelist: Array<{ policyId: string; collectionName: string | null }> = [];
+    let expansionWhitelist: TokenVerification[] = [];
 
     // Only check vault_status to determine if vault is currently in expansion
     // expansion_phase_start is preserved as a historical timestamp
@@ -844,11 +837,15 @@ export class VaultsService {
         // Fetch collection names for expansion policies
         if (expansionPolicyIds.length > 0) {
           if (expansionLabels.length > 0 && expansionLabels.length === expansionPolicyIds.length) {
-            expansionWhitelist = expansionPolicyIds.map((policyId, index) => ({
-              policyId,
-              collectionName: expansionLabels[index],
-              isVerified: true,
-            }));
+            expansionWhitelist = expansionPolicyIds.map((policyId, index) =>
+              Object.assign(new TokenVerification(), {
+                policy_id: policyId,
+                token_id: null,
+                collection_name: expansionLabels[index],
+                is_verified: true,
+                platform: null,
+              })
+            );
           } else {
             const collectionsToFetch = expansionPolicyIds.map(policyId => ({
               policyId,
@@ -1794,69 +1791,95 @@ export class VaultsService {
 
   /**
    * Fetches collection names and verification status for given policies.
-   * Uses cache to avoid redundant API calls.
+   * One row per policy_id in DB: if a record exists for the policy, it is returned without calling external APIs.
    * @param collections - Array of policy objects to look up
-   * @returns Array of objects containing policyId, collectionName, and isVerified status
+   * @returns Array of TokenVerification records (saved or unsaved) with verification data
    */
-  async getCollections(
-    collections: CollectionItemDto[]
-  ): Promise<{ policyId: string; collectionName: string | null; isVerified: boolean }[]> {
+  async getCollections(collections: CollectionItemDto[]): Promise<TokenVerification[]> {
     return await Promise.all(collections.map(collection => this.getCollectionInfoByCollectionItem(collection)));
   }
 
-  private async getCollectionInfoByCollectionItem(
-    collection: CollectionItemDto
-  ): Promise<{ policyId: string; collectionName: string | null; isVerified: boolean }> {
+  private async getCollectionInfoByCollectionItem(collection: CollectionItemDto): Promise<TokenVerification> {
     const { policyId, assetName } = collection;
 
     if (!this.isMainnet) {
-      return { policyId, collectionName: null, isVerified: true };
+      return Object.assign(new TokenVerification(), {
+        policy_id: policyId,
+        token_id: null,
+        collection_name: null,
+        is_verified: true,
+        platform: VerificationPlatform.MANUAL,
+      });
+    }
+
+    const existing = await this.tokenVerificationRepo.findOne({
+      where: { policy_id: policyId },
+      order: { updated_at: 'DESC' },
+    });
+    if (existing) {
+      return existing;
     }
 
     const tokenId = `${policyId}${assetName}`;
-    const tokenCacheKey = `collection_info_unit_${tokenId}`;
-
-    const cachedToken = this.collectionNameCache.get<{ collectionName: string | null; isVerified: boolean }>(
-      tokenCacheKey
-    );
-    if (cachedToken !== undefined) {
-      return { policyId, ...cachedToken };
-    }
 
     const dexHunterData = await this.dexHunterService.fetchTokenVerification(tokenId);
     if (dexHunterData !== null) {
-      this.collectionNameCache.set(tokenCacheKey, dexHunterData);
-      return { policyId, ...dexHunterData };
-    }
-
-    const policyCacheKey = `collection_info_${policyId}`;
-    const cachedPolicy = this.collectionNameCache.get<{ collectionName: string | null; isVerified: boolean }>(
-      policyCacheKey
-    );
-    if (cachedPolicy !== undefined) {
-      return { policyId, ...cachedPolicy };
+      return await this.tokenVerificationRepo.save(
+        Object.assign(new TokenVerification(), {
+          policy_id: policyId,
+          token_id: tokenId,
+          collection_name: dexHunterData.collectionName,
+          is_verified: dexHunterData.isVerified,
+          platform: VerificationPlatform.DEXHUNTER,
+        })
+      );
     }
 
     try {
       const adaAnvilData = await this.fetchCollectionInfoFromApi(policyId);
-      this.collectionNameCache.set(policyCacheKey, adaAnvilData);
-      return { policyId, ...adaAnvilData };
+      if (!adaAnvilData.hasResults) {
+        return await this.tokenVerificationRepo.save(
+          Object.assign(new TokenVerification(), {
+            policy_id: policyId,
+            token_id: null,
+            collection_name: null,
+            is_verified: false,
+            platform: null,
+          })
+        );
+      }
+      return await this.tokenVerificationRepo.save(
+        Object.assign(new TokenVerification(), {
+          policy_id: policyId,
+          token_id: null,
+          collection_name: adaAnvilData.collectionName,
+          is_verified: adaAnvilData.isVerified,
+          platform: VerificationPlatform.WAYUP,
+        })
+      );
     } catch (error) {
       this.logger.warn(`Failed to fetch collection info for policyId ${policyId}: ${error.message}`);
 
-      return { policyId, collectionName: null, isVerified: false };
+      return Object.assign(new TokenVerification(), {
+        policy_id: policyId,
+        token_id: null,
+        collection_name: null,
+        is_verified: false,
+        platform: null,
+      });
     }
   }
 
   private async fetchCollectionInfoFromApi(
     policyId: string
-  ): Promise<{ collectionName: string | null; isVerified: boolean }> {
+  ): Promise<{ collectionName: string | null; isVerified: boolean; hasResults: boolean }> {
     const response = await this.wayUpPricingService.getCollectionAssets({ policyId });
 
     const firstAsset = response.results?.[0];
+    const hasResults = Array.isArray(response.results) && response.results.length > 0;
     const collectionName = firstAsset?.collection?.name || firstAsset?.attributes?.['Ticker'] || null;
     const isVerified: boolean = firstAsset?.collection?.verified || false;
 
-    return { collectionName, isVerified };
+    return { collectionName, isVerified, hasResults };
   }
 }
