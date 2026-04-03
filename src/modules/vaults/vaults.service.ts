@@ -790,7 +790,10 @@ export class VaultsService {
     const rawAssetsByPolicy = await this.assetsRepository
       .createQueryBuilder('asset')
       .select('asset.policy_id', 'policyId')
-      .addSelect(`SUM(CASE WHEN asset.type = :nftType THEN 1 ELSE asset.quantity END)`, 'quantity')
+      .addSelect('asset.type', 'assetType')
+      .addSelect(`COUNT(DISTINCT CASE WHEN asset.type = :nftType THEN asset.id END)`, 'nftCount')
+      .addSelect(`SUM(CASE WHEN asset.type != :nftType THEN asset.quantity ELSE 0 END)`, 'ftQuantityRaw')
+      .addSelect(`MAX(CASE WHEN asset.type != :nftType THEN COALESCE(asset.decimals, 0) ELSE 0 END)`, 'decimals')
       .where('asset.vault_id = :vaultId', { vaultId })
       .andWhere('asset.status IN (:...statuses)', {
         statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED, AssetStatus.OFFERED],
@@ -801,13 +804,34 @@ export class VaultsService {
       .setParameters({
         nftType: AssetType.NFT,
       })
-      .groupBy('asset.policy_id')
+      .groupBy('asset.policy_id, asset.type')
       .getRawMany();
 
-    const assetsByPolicy: Array<{ policyId: string; quantity: number }> = rawAssetsByPolicy.map(row => ({
-      policyId: row.policyId,
-      quantity: Number(row.quantity || 0),
-    }));
+    // Convert raw FT quantities to decimal-adjusted quantities
+    const policyQuantityMap = new Map<string, number>();
+    for (const row of rawAssetsByPolicy) {
+      const policyId = row.policyId;
+      const nftCount = Number(row.nftCount || 0);
+      const ftQuantityRaw = Number(row.ftQuantityRaw || 0);
+      const decimals = Number(row.decimals || 0);
+
+      // Convert FT raw quantity to decimal-adjusted
+      const ftQuantityAdjusted = decimals > 0 ? ftQuantityRaw / Math.pow(10, decimals) : ftQuantityRaw;
+      const totalQuantity = nftCount + ftQuantityAdjusted;
+
+      if (policyQuantityMap.has(policyId)) {
+        policyQuantityMap.set(policyId, policyQuantityMap.get(policyId)! + totalQuantity);
+      } else {
+        policyQuantityMap.set(policyId, totalQuantity);
+      }
+    }
+
+    const assetsByPolicy: Array<{ policyId: string; quantity: number }> = Array.from(policyQuantityMap.entries()).map(
+      ([policyId, quantity]) => ({
+        policyId,
+        quantity,
+      })
+    );
 
     // Calculate expansion asset data if vault is in expansion or has had expansion
     let expansionAssetsCount = 0;
@@ -867,7 +891,8 @@ export class VaultsService {
           .select('asset.policy_id', 'policyId')
           .addSelect('asset.type', 'assetType')
           .addSelect('COUNT(DISTINCT asset.id)', 'nftCount')
-          .addSelect('COALESCE(SUM(asset.quantity), 0)', 'ftQuantity')
+          .addSelect('COALESCE(SUM(asset.quantity), 0)', 'ftQuantityRaw')
+          .addSelect('MAX(COALESCE(asset.decimals, 0))', 'decimals')
           .innerJoin('asset.transaction', 'tx')
           .where('asset.vault_id = :vaultId', { vaultId })
           .andWhere('asset.status IN (:...statuses)', {
@@ -880,12 +905,22 @@ export class VaultsService {
           .groupBy('asset.policy_id, asset.type')
           .getRawMany();
 
-        // Group by policy and sum quantities
+        // Group by policy and sum quantities (with decimal adjustment for FTs)
         const policyMap = new Map<string, number>();
 
         for (const row of expansionAssetData) {
           const policyId = row.policyId;
-          const quantity = row.assetType === AssetType.NFT ? Number(row.nftCount) : Number(row.ftQuantity);
+          const nftCount = Number(row.nftCount || 0);
+          const ftQuantityRaw = Number(row.ftQuantityRaw || 0);
+          const decimals = Number(row.decimals || 0);
+
+          // Convert FT raw quantity to decimal-adjusted
+          const quantity =
+            row.assetType === AssetType.NFT
+              ? nftCount
+              : decimals > 0
+                ? ftQuantityRaw / Math.pow(10, decimals)
+                : ftQuantityRaw;
 
           if (policyMap.has(policyId)) {
             policyMap.set(policyId, policyMap.get(policyId)! + quantity);
