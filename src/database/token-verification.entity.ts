@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, BeforeInsert, BeforeUpdate } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
 
 export enum VerificationPlatform {
   DEXHUNTER = 'dexhunter',
@@ -13,7 +13,7 @@ export class TokenVerification {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'policy_id' })
+  @Column({ name: 'policy_id', unique: true })
   policy_id: string;
 
   @Column({ name: 'token_id', nullable: true, type: 'text' })
@@ -28,21 +28,9 @@ export class TokenVerification {
   @Column({ type: 'enum', enum: VerificationPlatform, nullable: true })
   platform: VerificationPlatform | null;
 
-  @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   created_at: Date;
 
-  @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
+  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updated_at: Date;
-
-  @BeforeInsert()
-  setDates(): void {
-    const now = new Date();
-    this.created_at = now;
-    this.updated_at = now;
-  }
-
-  @BeforeUpdate()
-  updateDate(): void {
-    this.updated_at = new Date();
-  }
 }
