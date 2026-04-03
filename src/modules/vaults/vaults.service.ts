@@ -778,7 +778,8 @@ export class VaultsService {
         lockedNFTCount += 1;
       } else if (asset.assetType === AssetType.FT) {
         const rawQuantity = Number(asset.rawQuantity) || 0;
-        const decimals = Number(asset.decimals) || 6;
+        const parsedDecimals = Number(asset.decimals);
+        const decimals = Number.isNaN(parsedDecimals) ? 6 : parsedDecimals;
         const decimalQuantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
         lockedFTsCount += decimalQuantity;
       }
