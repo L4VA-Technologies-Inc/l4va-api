@@ -451,12 +451,31 @@ export class VaultContributionService {
     }, 0);
 
     // Count pending contribution transactions (excluding current transaction)
-    // Sum actual quantities from JSON metadata (convert raw to decimal for FTs)
+    // Sum actual quantities from JSON metadata (convert raw to decimal for FTs) - done in SQL for performance
     // Exclude stale "created" transactions older than TX_VALIDITY_MINUTES (matches tx validity interval)
     const staleCutoff = new Date(Date.now() - this.TX_VALIDITY_MINUTES * 60 * 1000);
-    const pendingTransactions = await this.transactionRepository
+    const pendingResult = await this.transactionRepository
       .createQueryBuilder('t')
-      .select('t.metadata', 'metadata')
+      .select(
+        `COALESCE(
+          SUM(
+            (SELECT SUM(
+              CASE 
+                WHEN (elem->>'type') = 'nft' THEN 1
+                WHEN (elem->>'type') = 'ft' THEN
+                  CASE 
+                    WHEN COALESCE((elem->>'decimals')::int, 6) > 0 
+                    THEN (elem->>'quantity')::numeric / POWER(10, COALESCE((elem->>'decimals')::int, 6))
+                    ELSE (elem->>'quantity')::numeric
+                  END
+                ELSE 1
+              END
+            )
+            FROM jsonb_array_elements(t.metadata) AS elem)
+          ), 0
+        )`,
+        'pendingAssetCount'
+      )
       .where('t.vault_id = :vaultId', { vaultId })
       .andWhere('t.id != :currentTxId', { currentTxId })
       .andWhere('t.type = :type', { type: TransactionType.contribute })
@@ -467,24 +486,9 @@ export class VaultContributionService {
         createdStatus: TransactionStatus.created,
         staleCutoff,
       })
-      .getRawMany();
+      .getRawOne();
 
-    const pendingAssetCount = pendingTransactions.reduce((sum, tx) => {
-      const assets = (tx.metadata as any[]) || [];
-      return (
-        sum +
-        assets.reduce((assetSum, asset) => {
-          const rawQuantity = Number(asset?.quantity) || 1;
-          if (asset.type === AssetType.NFT) {
-            return assetSum + 1;
-          }
-          // FTs: convert raw to decimal
-          const decimals = asset.decimals ?? asset.metadata?.decimals ?? 6;
-          const decimalQuantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
-          return assetSum + decimalQuantity;
-        }, 0)
-      );
-    }, 0);
+    const pendingAssetCount = Number(pendingResult?.pendingAssetCount || 0);
 
     const totalAssetCount = currentAssetCount + pendingAssetCount;
     const projectedCount = totalAssetCount + contributingAssetCount;
@@ -554,13 +558,31 @@ export class VaultContributionService {
     }, 0);
 
     // Count pending expansion transactions (excluding current transaction)
-    // Sum actual quantities from JSON metadata (convert raw to decimal for FTs)
+    // Sum actual quantities from JSON metadata (convert raw to decimal for FTs) - done in SQL for performance
     // Exclude stale "created" transactions older than TX_VALIDITY_MINUTES (matches tx validity interval)
     const staleCutoff = new Date(Date.now() - this.TX_VALIDITY_MINUTES * 60 * 1000);
-    const pendingTransactions = await this.transactionRepository
+    const pendingResult = await this.transactionRepository
       .createQueryBuilder('t')
-      .innerJoin('vaults', 'v', 't.vault_id = v.id')
-      .select('t.metadata', 'metadata')
+      .select(
+        `COALESCE(
+          SUM(
+            (SELECT SUM(
+              CASE 
+                WHEN (elem->>'type') = 'nft' THEN 1
+                WHEN (elem->>'type') = 'ft' THEN
+                  CASE 
+                    WHEN COALESCE((elem->>'decimals')::int, 6) > 0 
+                    THEN (elem->>'quantity')::numeric / POWER(10, COALESCE((elem->>'decimals')::int, 6))
+                    ELSE (elem->>'quantity')::numeric
+                  END
+                ELSE 1
+              END
+            )
+            FROM jsonb_array_elements(t.metadata) AS elem)
+          ), 0
+        )`,
+        'pendingAssetCount'
+      )
       .where('t.vault_id = :vaultId', { vaultId })
       .andWhere('t.id != :currentTxId', { currentTxId })
       .andWhere('t.type = :type', { type: TransactionType.contribute })
@@ -571,24 +593,9 @@ export class VaultContributionService {
         createdStatus: TransactionStatus.created,
         staleCutoff,
       })
-      .getRawMany();
+      .getRawOne();
 
-    const pendingAssetCount = pendingTransactions.reduce((sum, tx) => {
-      const assets = (tx.metadata as any[]) || [];
-      return (
-        sum +
-        assets.reduce((assetSum, asset) => {
-          const rawQuantity = Number(asset?.quantity) || 1;
-          if (asset.type === AssetType.NFT) {
-            return assetSum + 1;
-          }
-          // FTs: convert raw to decimal
-          const decimals = asset.decimals ?? asset.metadata?.decimals ?? 6;
-          const decimalQuantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
-          return assetSum + decimalQuantity;
-        }, 0)
-      );
-    }, 0);
+    const pendingAssetCount = Number(pendingResult?.pendingAssetCount || 0);
 
     const totalAssetCount = currentAssetCount + pendingAssetCount;
     const projectedCount = totalAssetCount + contributingAssetCount;
