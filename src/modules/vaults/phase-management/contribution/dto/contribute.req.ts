@@ -34,14 +34,15 @@ export class ContributionAsset {
   assetName: string;
 
   @ApiProperty({
-    description: 'Quantity of assets to contribute (in smallest units for FTs)',
-    example: 1,
-    minimum: 0.01,
+    description:
+      'Quantity of assets to contribute in raw blockchain units (e.g., 3500000 for 3.5 tokens with 6 decimals). For NFTs, this is always 1.',
+    example: 3500000,
+    minimum: 1,
     maximum: 9007199254740991,
   })
   @IsNotEmpty()
   @IsNumber()
-  @Min(0.01, { message: 'Quantity must be at least 0.01' })
+  @Min(1, { message: 'Quantity must be at least 1 (raw units)' })
   @Max(MAX_SAFE_QUANTITY, { message: 'Quantity exceeds maximum safe value (9,007,199,254,740,991)' })
   @Expose()
   quantity: number;

@@ -8,6 +8,7 @@ import { TaptoolsModule } from '../taptools/taptools.module';
 import { WayUpPricingModule } from '../wayup/wayup-pricing.module';
 
 import { DraftVaultsService } from './draft-vaults.service';
+import { TokenVerificationRefreshService } from './token-verification-refresh.service';
 import { VaultFilesCleanupService } from './vault-files-cleanup.service';
 import { VaultsController } from './vaults.controller';
 import { VaultsService } from './vaults.service';
@@ -21,6 +22,7 @@ import { LinkEntity } from '@/database/link.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { TagEntity } from '@/database/tag.entity';
+import { TokenVerification } from '@/database/token-verification.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
@@ -57,10 +59,17 @@ import { StatisticsService } from '@/modules/vaults/statistics/statistics.servic
       Transaction,
       Proposal,
       Snapshot,
+      TokenVerification,
     ]),
     HttpModule,
   ],
-  providers: [VaultsService, DraftVaultsService, StatisticsService, VaultFilesCleanupService],
+  providers: [
+    VaultsService,
+    DraftVaultsService,
+    StatisticsService,
+    VaultFilesCleanupService,
+    TokenVerificationRefreshService,
+  ],
   controllers: [VaultsController],
   exports: [VaultsService, DraftVaultsService],
 })

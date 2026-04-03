@@ -1776,18 +1776,25 @@ export class TaptoolsService {
 
     return prepared.map(({ asset, details, metadata, assetName, isNFT }, idx) => {
       const { priceAda, priceUsd } = prices[idx];
+
+      // Get decimals for proper value calculation
+      // For FTs with decimals > 0, prices are per decimal-adjusted unit
+      // For NFTs, decimals are always 0
+      const decimals = details.metadata?.decimals || 0;
+      const decimalAdjustedQuantity = decimals > 0 ? asset.quantity / Math.pow(10, decimals) : asset.quantity;
+
       const assetData: AssetValueDto = {
         tokenId: asset.unit,
         name: assetName,
         displayName: String((metadata as Record<string, unknown>)?.name || assetName),
         ticker: String(details.metadata?.ticker || ''),
-        quantity: asset.quantity,
+        quantity: asset.quantity, // Keep raw quantity for frontend
         isNft: isNFT,
         isFungibleToken: !isNFT,
         priceAda,
         priceUsd,
-        valueAda: priceAda * asset.quantity,
-        valueUsd: priceUsd * asset.quantity,
+        valueAda: priceAda * decimalAdjustedQuantity, // Calculate value with decimal-adjusted quantity
+        valueUsd: priceUsd * decimalAdjustedQuantity,
         metadata: {
           image: String((metadata as Record<string, unknown>)?.image || '').replace(
             /^ipfs:\/\/(?:ipfs\/)*/i,

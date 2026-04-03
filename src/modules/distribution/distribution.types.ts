@@ -83,8 +83,8 @@ export interface ContributionInput {
   requiredInputs?: string[];
   referenceInputs: { txHash: string; index: number }[];
   validityInterval: {
-    start: boolean;
-    end: boolean;
+    start: boolean | number; // <posix_timestamp_or_slot_number>
+    end: boolean | number; // <posix_timestamp_or_slot_number>
   };
   network: string;
 }

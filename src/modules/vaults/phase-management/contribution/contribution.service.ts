@@ -85,11 +85,13 @@ export class ContributionService {
     let policyCountMap = new Map<string, number>();
 
     if (requestedPolicyIds.length > 0) {
-      const assetCountResults = await this.assetRepository
+      // Fetch individual assets to properly convert raw quantities to decimal for FTs
+      const existingAssets = await this.assetRepository
         .createQueryBuilder('asset')
-        .select('COUNT(DISTINCT asset.id)', 'totalCount')
-        .addSelect('asset.policy_id', 'policyId')
-        .addSelect('COALESCE(SUM(asset.quantity), 0)', 'totalQuantity')
+        .select('asset.policy_id', 'policyId')
+        .addSelect('asset.type', 'assetType')
+        .addSelect('asset.quantity', 'rawQuantity')
+        .addSelect('asset.decimals', 'decimals')
         .where('asset.vault_id = :vaultId', { vaultId })
         .andWhere('asset.status IN (:...statuses)', {
           statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED],
@@ -97,16 +99,31 @@ export class ContributionService {
         .andWhere('asset.origin_type = :originType', {
           originType: AssetOriginType.CONTRIBUTED,
         })
-        .groupBy('asset.policy_id')
         .getRawMany();
 
-      currentAssetCount = assetCountResults.reduce((total, row) => {
-        return total + Number(row.totalQuantity || 0);
-      }, 0);
+      // Calculate decimal-adjusted counts per policy
+      const policyCountsMap = new Map<string, number>();
+      existingAssets.forEach(asset => {
+        const rawQuantity = Number(asset.rawQuantity) || 0;
+        let decimalQuantity: number;
 
-      const filteredPolicyResults = assetCountResults.filter(row => requestedPolicyIds.includes(row.policyId));
+        if (asset.assetType === AssetType.NFT) {
+          decimalQuantity = 1;
+        } else {
+          // FT: convert raw to decimal
+          const decimals = Number(asset.decimals) || 6;
+          decimalQuantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
+        }
 
-      policyCountMap = new Map(filteredPolicyResults.map(row => [row.policyId, Number(row.totalQuantity || 0)]));
+        const currentCount = policyCountsMap.get(asset.policyId) || 0;
+        policyCountsMap.set(asset.policyId, currentCount + decimalQuantity);
+      });
+
+      // Calculate total asset count across all policies
+      currentAssetCount = Array.from(policyCountsMap.values()).reduce((sum, count) => sum + count, 0);
+
+      // Filter to only requested policies
+      policyCountMap = new Map(requestedPolicyIds.map(policyId => [policyId, policyCountsMap.get(policyId) || 0]));
     }
 
     const user = await this.usersRepository.findOne({
@@ -128,10 +145,22 @@ export class ContributionService {
       return this.handleExpansionContribution(vaultId, contributeReq, userId);
     }
 
-    // Normal contribution flow
-    if (currentAssetCount + contributeReq.assets.length > vaultData.max_contribute_assets) {
+    // Calculate decimal-adjusted quantity for new contribution (to match currentAssetCount units)
+    const contributionAssetCount = contributeReq.assets.reduce((total, asset) => {
+      const rawQuantity = Number(asset.quantity) || 1;
+      if (asset.type === AssetType.FT) {
+        const decimals = asset.decimals ?? asset.metadata?.decimals ?? 6;
+        const decimalQuantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
+        return total + decimalQuantity;
+      }
+      // NFTs always count as 1
+      return total + 1;
+    }, 0);
+
+    // Normal contribution flow - compare decimal-adjusted quantities
+    if (currentAssetCount + contributionAssetCount > vaultData.max_contribute_assets) {
       throw new BadRequestException(
-        `Adding ${contributeReq.assets.length} assets would exceed the vault's maximum capacity of ${vaultData.max_contribute_assets}. ` +
+        `Adding ${contributionAssetCount} assets would exceed the vault's maximum capacity of ${vaultData.max_contribute_assets}. ` +
           `The vault currently has ${currentAssetCount} assets.`
       );
     }
@@ -172,10 +201,17 @@ export class ContributionService {
         }
 
         const existingPolicyCount = policyCountMap.get(policyId) || 0;
-        const policyAssetsQuantity = assetsByPolicy[policyId].reduce(
-          (total, asset) => total + (Number(asset.quantity) || 1),
-          0
-        );
+        // Calculate decimal-adjusted quantity for this contribution
+        const policyAssetsQuantity = assetsByPolicy[policyId].reduce((total, asset) => {
+          const rawQuantity = Number(asset.quantity) || 1;
+          if (asset.type === AssetType.NFT) {
+            return total + 1;
+          }
+          // FT: convert raw to decimal
+          const decimals = asset.decimals ?? asset.metadata?.decimals ?? 6;
+          const decimalQuantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
+          return total + decimalQuantity;
+        }, 0);
 
         // Additional safety check: prevent individual FT quantities from exceeding reasonable limits
         for (const asset of assetsByPolicy[policyId]) {
@@ -281,19 +317,30 @@ export class ContributionService {
       );
     }
 
-    // Calculate total asset count for this contribution (NFTs = 1 each, FTs = quantity)
+    // Calculate total asset count for this contribution
+    // FTs: convert raw quantity to decimal (e.g., 3,500,000 with 6 decimals = 3.5 tokens)
+    // NFTs: always count as 1
     const contributionAssetCount = contributeReq.assets.reduce((total, asset) => {
-      return total + (Number(asset.quantity) || 1);
+      const rawQuantity = Number(asset.quantity) || 1;
+      if (asset.type === AssetType.FT) {
+        const decimals = asset.decimals ?? asset.metadata?.decimals ?? 6;
+        const decimalQuantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
+        return total + decimalQuantity;
+      }
+      // NFTs always count as 1
+      return total + 1;
     }, 0);
 
     // Check asset max if configured - count already CONFIRMED contributions
     if (!expansionConfig.noMax && expansionConfig.assetMax) {
-      // Count currently locked expansion assets (sum quantities for FTs, count for NFTs)
-      const expansionAssetData = await this.assetRepository
+      // Count currently locked expansion assets
+      // For NFTs: count each as 1
+      // For FTs: sum decimal-adjusted quantities (raw quantity / 10^decimals)
+      const expansionAssets = await this.assetRepository
         .createQueryBuilder('asset')
         .select('asset.type', 'assetType')
-        .addSelect('COUNT(DISTINCT asset.id)', 'nftCount')
-        .addSelect('COALESCE(SUM(asset.quantity), 0)', 'ftQuantity')
+        .addSelect('asset.quantity', 'rawQuantity')
+        .addSelect('asset.decimals', 'decimals')
         .innerJoin('asset.transaction', 'tx')
         .where('asset.vault_id = :vaultId', { vaultId })
         .andWhere('asset.status IN (:...statuses)', {
@@ -301,12 +348,17 @@ export class ContributionService {
         })
         .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
         .andWhere('tx.created_at >= (SELECT expansion_phase_start FROM vaults WHERE id = :vaultId)', { vaultId })
-        .groupBy('asset.type')
         .getRawMany();
 
-      const currentAssetCount = expansionAssetData.reduce((total, row) => {
-        const quantity = row.assetType === AssetType.NFT ? Number(row.nftCount) : Number(row.ftQuantity);
-        return total + quantity;
+      const currentAssetCount = expansionAssets.reduce((total, asset) => {
+        if (asset.assetType === AssetType.NFT) {
+          return total + 1;
+        }
+        // FT: convert raw to decimal
+        const rawQuantity = Number(asset.rawQuantity) || 0;
+        const decimals = Number(asset.decimals) || 6;
+        const decimalQuantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
+        return total + decimalQuantity;
       }, 0);
 
       const projectedCount = currentAssetCount + contributionAssetCount;

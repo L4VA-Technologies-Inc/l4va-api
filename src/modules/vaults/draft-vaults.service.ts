@@ -97,6 +97,7 @@ export class DraftVaultsService {
         'vault_image',
         'ft_token_img',
         'acquirer_whitelist_csv',
+        'tags',
       ],
     });
 
@@ -112,8 +113,11 @@ export class DraftVaultsService {
     delete vault.acquire_phase_start;
     delete vault.locked_at;
 
+    const plain = classToPlain(vault) as Record<string, unknown>;
+    plain.tags = vault.tags?.map(t => t.name) ?? [];
+
     // todo need to create additional model for remove owner, and transform image to link
-    return classToPlain(vault);
+    return plain;
   }
 
   async saveDraftVault(userId: string, data: SaveDraftReq): Promise<any> {

@@ -20,7 +20,8 @@ export class NftAsset {
   readonly assetName: string;
 
   @ApiProperty({
-    description: 'Quantity of the asset',
+    description:
+      'Quantity of the asset (decimal-adjusted for FTs, always 1 for NFTs). For FTs: 3.5 means 3.5 tokens. Backend will convert to raw blockchain quantity using decimals.',
     example: 1,
   })
   @IsNumber()

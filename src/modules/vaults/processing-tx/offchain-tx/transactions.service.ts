@@ -173,22 +173,29 @@ export class TransactionsService {
         const floorPrice = assetItem.type === AssetType.NFT ? assetItem.priceAda : null;
         const dexPrice = assetItem.type === AssetType.FT ? assetItem.priceAda : null;
 
+        // Get decimals for FT metadata storage
+        const decimals =
+          assetItem.decimals ??
+          assetItem.metadata?.decimals ??
+          (blockfrostMetadata?.metadata as any)?.decimals ??
+          (assetItem.type === AssetType.FT ? 6 : 0); // Default FTs to 6 decimals, NFTs to 0
+
+        // Frontend already sends raw blockchain quantities (e.g., 3500000 for 3.5 tokens with 6 decimals)
+        // No conversion needed - store as-is with decimals metadata for later display
+        const rawQuantity = assetItem.quantity;
+
         assetsToCreate.push({
           transaction,
           vault: { id: transaction.vault_id } as Vault,
           type: assetItem.type,
           policy_id: assetItem.policyId || '',
           asset_id: assetItem.assetName,
-          quantity: assetItem.quantity,
+          quantity: rawQuantity, // Store raw blockchain quantity
           status: AssetStatus.PENDING,
           origin_type: AssetOriginType.CONTRIBUTED,
           added_by: user,
           image: cleanImage,
-          decimals:
-            assetItem.decimals ??
-            assetItem.metadata?.decimals ??
-            (blockfrostMetadata?.metadata as any)?.decimals ??
-            null,
+          decimals,
           name: finalName,
           description: finalDescription,
           floor_price: floorPrice,
