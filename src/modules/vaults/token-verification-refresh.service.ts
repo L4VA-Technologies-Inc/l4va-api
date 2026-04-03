@@ -1,6 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -26,7 +25,7 @@ export class TokenVerificationRefreshService {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
   }
 
-  @Cron(process.env.TOKEN_VERIFICATION_REFRESH_CRON ?? CronExpression.EVERY_HOUR)
+  // @Cron(process.env.TOKEN_VERIFICATION_REFRESH_CRON ?? CronExpression.EVERY_HOUR)
   async refreshUnverifiedTokens(): Promise<void> {
     if (!this.isMainnet) {
       return;
