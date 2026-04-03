@@ -552,7 +552,8 @@ export class VaultContributionService {
         return sum + 1;
       }
       // FTs: convert raw to decimal
-      const decimals = Number(asset.decimals) || 6;
+      const parsedDecimals = Number(asset.decimals);
+      const decimals = Number.isNaN(parsedDecimals) ? 6 : parsedDecimals;
       const decimalQuantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
       return sum + decimalQuantity;
     }, 0);
