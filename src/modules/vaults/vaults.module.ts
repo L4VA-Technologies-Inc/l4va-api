@@ -8,6 +8,7 @@ import { TaptoolsModule } from '../taptools/taptools.module';
 import { WayUpPricingModule } from '../wayup/wayup-pricing.module';
 
 import { DraftVaultsService } from './draft-vaults.service';
+import { TokenVerificationRefreshService } from './token-verification-refresh.service';
 import { VaultFilesCleanupService } from './vault-files-cleanup.service';
 import { VaultsController } from './vaults.controller';
 import { VaultsService } from './vaults.service';
@@ -62,7 +63,13 @@ import { StatisticsService } from '@/modules/vaults/statistics/statistics.servic
     ]),
     HttpModule,
   ],
-  providers: [VaultsService, DraftVaultsService, StatisticsService, VaultFilesCleanupService],
+  providers: [
+    VaultsService,
+    DraftVaultsService,
+    StatisticsService,
+    VaultFilesCleanupService,
+    TokenVerificationRefreshService,
+  ],
   controllers: [VaultsController],
   exports: [VaultsService, DraftVaultsService],
 })
