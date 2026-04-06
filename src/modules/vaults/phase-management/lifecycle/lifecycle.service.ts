@@ -833,17 +833,22 @@ export class LifecycleService {
             const isNFT = asset.type === AssetType.NFT;
             const quantity = asset.quantity || 1;
             const priceAda = isNFT ? asset.floor_price : asset.dex_price;
-            transactionValueAda += priceAda * quantity;
+            // Normalize quantity using decimals (prices are per normalized token)
+            // ADA is stored in ADA units (not lovelace), so skip normalization
+            const decimals = asset.decimals || 0;
+            const isAda = asset.type === AssetType.ADA;
+            const normalizedQuantity = !isAda && decimals > 0 ? quantity / Math.pow(10, decimals) : quantity;
+            transactionValueAda += priceAda * normalizedQuantity;
 
             if (uniqueAssets.has(assetKey)) {
               const existing = uniqueAssets.get(assetKey)!;
-              existing.totalValueAda += priceAda * quantity;
+              existing.totalValueAda += priceAda * normalizedQuantity;
               existing.totalQuantity += quantity;
             } else {
               uniqueAssets.set(assetKey, {
                 policyId: asset.policy_id,
                 assetName: asset.asset_id,
-                totalValueAda: priceAda * quantity,
+                totalValueAda: priceAda * normalizedQuantity,
                 totalQuantity: quantity,
                 userId: tx.user.id,
                 txId: tx.id,

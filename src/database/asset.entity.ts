@@ -77,6 +77,10 @@ export class Asset {
   })
   type: AssetType;
 
+  /**
+   * Raw quantity of the asset as stored in the database, not adjusted for decimals. For fungible tokens, this represents the total quantity.
+   * For NFTs, this is typically 1. The actual value in human-readable form should be calculated using the 'decimals' field when applicable.
+   */
   @Column({
     type: 'decimal',
     precision: 20,

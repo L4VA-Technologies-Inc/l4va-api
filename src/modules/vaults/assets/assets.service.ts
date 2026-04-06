@@ -197,7 +197,12 @@ export class AssetsService {
       let totalValueAda = 0;
       assets.forEach(asset => {
         const price = asset.floor_price || asset.dex_price || 0;
-        totalValueAda += asset.quantity * price;
+        // Normalize quantity using decimals (prices are per normalized token)
+        // ADA is stored in ADA units (not lovelace), so skip normalization
+        const decimals = asset.decimals || 0;
+        const isAda = asset.type === AssetType.ADA;
+        const normalizedQuantity = !isAda && decimals > 0 ? asset.quantity / Math.pow(10, decimals) : asset.quantity;
+        totalValueAda += normalizedQuantity * price;
       });
 
       // Update vault TVL

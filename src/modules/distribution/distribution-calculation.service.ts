@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
+import { AssetType } from '@/types/asset.types';
 
 /**
  * Input item for the policy grouping helper
@@ -325,7 +326,12 @@ export class DistributionCalculationService {
       const totalTxValue = assets.reduce((sum, asset) => {
         const qty = Number(asset.quantity) || 1;
         const price = asset.floor_price ?? 0;
-        return sum + qty * price;
+        // Normalize quantity using decimals (prices are per normalized token)
+        // ADA is stored in ADA units (not lovelace), so skip normalization
+        const decimals = asset.decimals || 0;
+        const isAda = asset.type === AssetType.ADA;
+        const normalizedQty = !isAda && decimals > 0 ? qty / Math.pow(10, decimals) : qty;
+        return sum + normalizedQty * price;
       }, 0);
 
       // Track recalculated amounts for this claim
@@ -335,7 +341,12 @@ export class DistributionCalculationService {
       assets.forEach(asset => {
         const assetQuantity = Number(asset.quantity) || 1;
         const floorPrice = asset.floor_price ?? 0;
-        const assetValue = assetQuantity * floorPrice;
+        // Normalize quantity using decimals (prices are per normalized token)
+        // ADA is stored in ADA units (not lovelace), so skip normalization
+        const decimals = asset.decimals || 0;
+        const isAda = asset.type === AssetType.ADA;
+        const normalizedQuantity = !isAda && decimals > 0 ? assetQuantity / Math.pow(10, decimals) : assetQuantity;
+        const assetValue = normalizedQuantity * floorPrice;
 
         // Distribute VT PROPORTIONALLY to floor_price
         // Each asset gets: (assetValue / totalTxValue) * claim.amount
@@ -491,7 +502,12 @@ export class DistributionCalculationService {
       const totalTxValue = assets.reduce((sum, asset) => {
         const qty = Number(asset.quantity) || 1;
         const price = asset.floor_price ?? 0;
-        return sum + qty * price;
+        // Normalize quantity using decimals (prices are per normalized token)
+        // ADA is stored in ADA units (not lovelace), so skip normalization
+        const decimals = asset.decimals || 0;
+        const isAda = asset.type === AssetType.ADA;
+        const normalizedQty = !isAda && decimals > 0 ? qty / Math.pow(10, decimals) : qty;
+        return sum + normalizedQty * price;
       }, 0);
 
       // Track recalculated amounts for this claim
@@ -501,7 +517,12 @@ export class DistributionCalculationService {
       assets.forEach(asset => {
         const assetQuantity = Number(asset.quantity) || 1;
         const floorPrice = asset.floor_price ?? 0;
-        const assetValue = assetQuantity * floorPrice;
+        // Normalize quantity using decimals (prices are per normalized token)
+        // ADA is stored in ADA units (not lovelace), so skip normalization
+        const decimals = asset.decimals || 0;
+        const isAda = asset.type === AssetType.ADA;
+        const normalizedQuantity = !isAda && decimals > 0 ? assetQuantity / Math.pow(10, decimals) : assetQuantity;
+        const assetValue = normalizedQuantity * floorPrice;
 
         // Distribute VT PROPORTIONALLY to floor_price
         const proportion = totalTxValue > 0 ? assetValue / totalTxValue : 1 / assets.length;
@@ -670,8 +691,15 @@ export class DistributionCalculationService {
       const effectivePrice = getEffectivePrice(asset);
       const quantity = asset.quantity || 1;
 
+      // Normalize quantity using decimals (prices are per normalized token)
+      // ADA is stored in ADA units (not lovelace), so skip normalization
+      // FTs are stored in raw units, so normalize by decimals
+      const decimals = asset.decimals || 0;
+      const isAda = asset.type === AssetType.ADA;
+      const normalizedQuantity = !isAda && decimals > 0 ? quantity / Math.pow(10, decimals) : quantity;
+
       // Calculate VT for this asset: (assetValue / totalContributedValueAda) * vtSupply
-      const assetValue = effectivePrice * quantity;
+      const assetValue = effectivePrice * normalizedQuantity;
       const proportion = totalContributedValueAda > 0 ? assetValue / totalContributedValueAda : 0;
       const totalVt = Math.floor(proportion * vtSupply);
       const vtPerUnit = Math.floor(totalVt / quantity);

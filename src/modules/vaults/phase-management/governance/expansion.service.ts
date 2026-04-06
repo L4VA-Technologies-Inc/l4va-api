@@ -11,6 +11,7 @@ import { Vault } from '@/database/vault.entity';
 import { AlertsService } from '@/modules/alerts/alerts.service';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
+import { AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -430,7 +431,12 @@ export class ExpansionService {
 
       // Use DEX price if available (for FTs)
       if (asset.dex_price && asset.dex_price > 0) {
-        totalValueAda += asset.dex_price * asset.quantity; // Multiply by quantity for FTs
+        // Normalize quantity using decimals (prices are per normalized token)
+        // ADA is stored in ADA units (not lovelace), so skip normalization
+        const decimals = asset.decimals || 0;
+        const isAda = asset.type === AssetType.ADA;
+        const normalizedQuantity = !isAda && decimals > 0 ? asset.quantity / Math.pow(10, decimals) : asset.quantity;
+        totalValueAda += asset.dex_price * normalizedQuantity; // Multiply by normalized quantity for FTs
         continue;
       }
     }
