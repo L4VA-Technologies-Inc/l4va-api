@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as process from 'process';
@@ -369,41 +370,78 @@ export class GoogleCloudStorageService {
     }
   }
 
+  /** Decodes `data:*;base64,...` payload into a buffer. */
+  private bufferFromDataUrl(dataUrl: string): Buffer | null {
+    const comma = dataUrl.indexOf(',');
+    if (comma === -1) {
+      return null;
+    }
+    const metadata = dataUrl.slice(0, comma);
+    if (!/;base64$/i.test(metadata)) {
+      return null;
+    }
+    const b64 = dataUrl.slice(comma + 1).replace(/\s/g, '');
+    try {
+      return Buffer.from(b64, 'base64');
+    } catch {
+      return null;
+    }
+  }
+
   /**
-   * Downloads an asset image from an IPFS URI, converts it to WebP
-   * (animated WebP for GIFs) and stores it under the dedicated
-   * `asset-images/` folder in GCS.
+   * Downloads/decodes an asset image, converts it to WebP
+   * (animated WebP for GIFs/WebPs), and stores it under `asset-images/` in GCS.
    *
-   * @param imageUrl - Source IPFS image URL (`ipfs://…`).
-   * @returns The full serving URL (e.g. `https://{APP_HOST}/api/v1/asset-image/{uuid}`),
-   *          or `null` when the download / conversion fails (original URL kept as fallback).
+   * Supports `ipfs://...`, `http(s)://...`, and `data:image/...;base64,...` sources.
+   *
+   * @param imageUrl - Source image URL or data URL.
+   * @returns `ipfs://{id}` handle used by the app (mapped to `asset-images/{id}` in GCS),
+   *          or `null` when decoding/downloading/conversion/upload fails.
    */
   async uploadAssetImage(imageUrl: string): Promise<string | null> {
     try {
       if (!imageUrl) return null;
 
-      const cid = imageUrl.split('/').pop()?.split('?')[0];
-      if (!cid) return null;
+      let imageBuffer: Buffer;
+      let objectId: string;
+      let contentType = '';
 
-      const bucketKey = `${this.ASSET_IMAGES_FOLDER}/${cid}`;
+      if (imageUrl.startsWith('data:')) {
+        const decoded = this.bufferFromDataUrl(imageUrl);
+        if (!decoded?.length) {
+          return null;
+        }
+        imageBuffer = decoded;
+        objectId = crypto.createHash('sha256').update(imageBuffer).digest('hex');
+        const mimeMatch = imageUrl.match(/^data:([^;,]+)/i);
+        contentType = mimeMatch?.[1]?.toLowerCase() ?? '';
+      } else {
+        const cid = imageUrl.split('/').pop()?.split('?')[0];
+        if (!cid) return null;
+
+        objectId = cid;
+
+        const fetchUrl = imageUrl.startsWith('ipfs://') ? `https://ipfs.blockfrost.dev/ipfs/${cid}` : imageUrl;
+
+        const response = await this.httpService.axiosRef.get<ArrayBuffer>(fetchUrl, {
+          responseType: 'arraybuffer',
+          timeout: 30_000,
+        });
+
+        imageBuffer = Buffer.from(response.data);
+        contentType = String(response.headers['content-type'] ?? '').toLowerCase();
+      }
+
+      const bucketKey = `${this.ASSET_IMAGES_FOLDER}/${objectId}`;
 
       const existingFile = await this.fileRepository.findOne({
         where: { file_key: bucketKey },
       });
 
       if (existingFile) {
-        return `ipfs://${cid}`;
+        return `ipfs://${objectId}`;
       }
 
-      const fetchUrl = imageUrl.startsWith('ipfs://') ? `https://ipfs.blockfrost.dev/ipfs/${cid}` : imageUrl;
-
-      const response = await this.httpService.axiosRef.get<ArrayBuffer>(fetchUrl, {
-        responseType: 'arraybuffer',
-        timeout: 30_000,
-      });
-
-      const imageBuffer = Buffer.from(response.data);
-      const contentType: string = response.headers['content-type'] ?? '';
       const isAnimated = contentType.includes('gif') || contentType.includes('webp');
 
       const webpBuffer = await sharp(imageBuffer, { animated: isAnimated })
@@ -417,17 +455,17 @@ export class GoogleCloudStorageService {
         return null;
       }
 
-      const fileUrl = `ipfs://${cid}`;
+      const fileUrl = `ipfs://${objectId}`;
 
       const newFile = this.fileRepository.create({
         file_key: bucketKey,
         file_url: fileUrl,
-        file_name: `${cid}.webp`,
+        file_name: `${objectId}.webp`,
         file_type: 'image/webp',
       });
       await this.fileRepository.save(newFile);
 
-      return `ipfs://${cid}`;
+      return `ipfs://${objectId}`;
     } catch (error) {
       return null;
     }
