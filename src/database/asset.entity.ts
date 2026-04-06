@@ -258,10 +258,16 @@ export class Asset {
   /**
    * Get the effective price for this asset
    * Prioritizes floor_price for NFTs, dex_price for FTs
+   * ADA always has a price of 1 (1 ADA = 1 ADA)
    *
    * @returns Price in ADA per normalized token
    */
   get effectivePrice(): number {
+    // ADA is always priced at 1 (1 ADA = 1 ADA)
+    if (this.type === AssetType.ADA) {
+      return 1;
+    }
+
     if (this.type === AssetType.NFT) {
       return this.floor_price || this.dex_price || 0;
     }
