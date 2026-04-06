@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
-import { AssetType } from '@/types/asset.types';
+import { AssetOriginType, AssetType } from '@/types/asset.types';
 
 /**
  * Input item for the policy grouping helper
@@ -322,8 +322,11 @@ export class DistributionCalculationService {
       const contributorLovelaceAmount = claim?.lovelace_amount || 0;
       const assets = claim.transaction.assets;
 
-      // Calculate total transaction value from floor prices
-      const totalTxValue = assets.reduce((sum, asset) => {
+      // Filter out FEE assets - they shouldn't affect multiplier calculations
+      const contributedAssets = assets.filter(asset => asset.origin_type !== AssetOriginType.FEE);
+
+      // Calculate total transaction value from floor prices (excluding FEE assets)
+      const totalTxValue = contributedAssets.reduce((sum, asset) => {
         const qty = Number(asset.quantity) || 1;
         const price = asset.floor_price ?? 0;
         // Normalize quantity using decimals (prices are per normalized token)
@@ -338,7 +341,7 @@ export class DistributionCalculationService {
       let recalculatedVtAmount = 0;
       let recalculatedLovelace = 0;
 
-      assets.forEach(asset => {
+      contributedAssets.forEach(asset => {
         const assetQuantity = Number(asset.quantity) || 1;
         const floorPrice = asset.floor_price ?? 0;
         // Normalize quantity using decimals (prices are per normalized token)
@@ -350,7 +353,7 @@ export class DistributionCalculationService {
 
         // Distribute VT PROPORTIONALLY to floor_price
         // Each asset gets: (assetValue / totalTxValue) * claim.amount
-        const proportion = totalTxValue > 0 ? assetValue / totalTxValue : 1 / assets.length;
+        const proportion = totalTxValue > 0 ? assetValue / totalTxValue : 1 / contributedAssets.length;
         const vtShare = Math.floor(proportion * claim.amount);
         const vtSharePerUnit = Math.floor(vtShare / assetQuantity);
 
@@ -498,8 +501,11 @@ export class DistributionCalculationService {
       const contributorLovelaceAmount = claim?.lovelace_amount || 0;
       const assets = claim.transaction.assets;
 
-      // Calculate total transaction value from floor prices
-      const totalTxValue = assets.reduce((sum, asset) => {
+      // Filter out FEE assets - they shouldn't affect multiplier calculations
+      const contributedAssets = assets.filter(asset => asset.origin_type !== AssetOriginType.FEE);
+
+      // Calculate total transaction value from floor prices (excluding FEE assets)
+      const totalTxValue = contributedAssets.reduce((sum, asset) => {
         const qty = Number(asset.quantity) || 1;
         const price = asset.floor_price ?? 0;
         // Normalize quantity using decimals (prices are per normalized token)
@@ -514,7 +520,7 @@ export class DistributionCalculationService {
       let recalculatedVtAmount = 0;
       let recalculatedLovelace = 0;
 
-      assets.forEach(asset => {
+      contributedAssets.forEach(asset => {
         const assetQuantity = Number(asset.quantity) || 1;
         const floorPrice = asset.floor_price ?? 0;
         // Normalize quantity using decimals (prices are per normalized token)
@@ -525,7 +531,7 @@ export class DistributionCalculationService {
         const assetValue = normalizedQuantity * floorPrice;
 
         // Distribute VT PROPORTIONALLY to floor_price
-        const proportion = totalTxValue > 0 ? assetValue / totalTxValue : 1 / assets.length;
+        const proportion = totalTxValue > 0 ? assetValue / totalTxValue : 1 / contributedAssets.length;
         const vtShare = Math.floor(proportion * claim.amount);
         const vtSharePerUnit = Math.floor(vtShare / assetQuantity);
 
