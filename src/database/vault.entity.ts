@@ -528,7 +528,6 @@ export class Vault {
     name: 'acquire_multiplier',
     type: 'jsonb',
     nullable: true,
-    default: () => 'null',
   })
   acquire_multiplier?: Array<[string, string | null, number]>; // [policyId, assetName?, multiplier]
 
@@ -537,7 +536,6 @@ export class Vault {
     name: 'ada_distribution',
     type: 'jsonb',
     nullable: true,
-    default: () => 'null',
   })
   ada_distribution?: Array<[string, string, number]>; // [policyId, assetName, ada]
 
@@ -609,7 +607,6 @@ export class Vault {
     name: 'apply_params_result',
     type: 'jsonb',
     nullable: true,
-    default: () => 'null',
   })
   apply_params_result?: ApplyParamsResult;
 
@@ -643,7 +640,6 @@ export class Vault {
     name: 'dispatch_preloaded_script',
     type: 'jsonb',
     nullable: true,
-    default: () => 'null',
   })
   dispatch_preloaded_script?: ApplyParamsResult;
 
