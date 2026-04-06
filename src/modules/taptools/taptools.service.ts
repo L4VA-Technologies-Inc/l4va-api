@@ -1346,7 +1346,7 @@ export class TaptoolsService {
                 status: In([AssetStatus.LOCKED, AssetStatus.DISTRIBUTED, AssetStatus.EXTRACTED]),
                 origin_type: AssetOriginType.CONTRIBUTED,
               },
-              select: ['vault', 'added_by', 'quantity', 'dex_price', 'floor_price', 'type'],
+              select: ['vault', 'added_by', 'quantity', 'dex_price', 'floor_price', 'type', 'decimals'],
               relations: ['vault', 'added_by'],
             })
           : [];
@@ -1421,14 +1421,7 @@ export class TaptoolsService {
             const userVaultAssets = assetsByUserAndVault.get(userId)?.get(vault.id);
             if (userVaultAssets) {
               for (const asset of userVaultAssets) {
-                const price = asset.type === AssetType.NFT ? asset.floor_price || 0 : asset.dex_price || 0;
-                // Normalize quantity using decimals (prices are per normalized token)
-                // ADA is stored in ADA units (not lovelace), so skip normalization
-                const decimals = asset.decimals || 0;
-                const isAda = asset.type === AssetType.ADA;
-                const normalizedQuantity =
-                  !isAda && decimals > 0 ? Number(asset.quantity) / Math.pow(10, decimals) : Number(asset.quantity);
-                userTvl.tvl += normalizedQuantity * price;
+                userTvl.tvl += asset.valueAda;
               }
             }
           }
