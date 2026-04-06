@@ -13,7 +13,6 @@ import { Claim } from '@/database/claim.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
-import { AssetType } from '@/types/asset.types';
 import { ClaimStatus } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { ContributionWindowType, VaultStatus } from '@/types/vault.types';

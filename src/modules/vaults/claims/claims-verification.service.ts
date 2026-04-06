@@ -14,7 +14,6 @@ import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
-import { AssetType } from '@/types/asset.types';
 import { ClaimType } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
