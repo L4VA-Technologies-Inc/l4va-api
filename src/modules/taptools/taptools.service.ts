@@ -768,12 +768,8 @@ export class TaptoolsService {
       const key = `${asset.policy_id}_${asset.asset_id}`;
       const existingAsset = assetMap.get(key);
 
-      // For FTs with decimals, convert raw on-chain quantity to human-readable
-      const decimals = asset.type !== AssetType.NFT && asset.decimals ? asset.decimals : 0;
-      const adjustedQuantity = asset.type === AssetType.NFT ? 1 : Number(asset.quantity) / Math.pow(10, decimals);
-
       if (existingAsset) {
-        existingAsset.quantity += adjustedQuantity;
+        existingAsset.quantity += asset.normalizedQuantity;
       } else {
         // Check for custom price first, then use cached market price
         let cachedPrice: number | undefined;
@@ -788,7 +784,7 @@ export class TaptoolsService {
         assetMap.set(key, {
           policyId: asset.policy_id,
           assetId: asset.asset_id,
-          quantity: adjustedQuantity,
+          quantity: asset.normalizedQuantity,
           isNft: asset.type === AssetType.NFT,
           cachedPrice,
           metadata: asset.metadata || {},
@@ -1039,12 +1035,8 @@ export class TaptoolsService {
           const key = `${asset.policy_id}_${asset.asset_id}`;
           const existingAsset = assetMap.get(key);
 
-          // For FTs with decimals, convert raw on-chain quantity to human-readable
-          const decimals = asset.type !== AssetType.NFT && asset.decimals ? asset.decimals : 0;
-          const adjustedQuantity = asset.type === AssetType.NFT ? 1 : Number(asset.quantity) / Math.pow(10, decimals);
-
           if (existingAsset) {
-            existingAsset.quantity += adjustedQuantity;
+            existingAsset.quantity += asset.normalizedQuantity;
           } else {
             // Check for custom price first, then use cached market price
             let cachedPrice: number | undefined;
@@ -1059,7 +1051,7 @@ export class TaptoolsService {
             assetMap.set(key, {
               policyId: asset.policy_id,
               assetId: asset.asset_id,
-              quantity: adjustedQuantity,
+              quantity: asset.normalizedQuantity,
               isNft: asset.type === AssetType.NFT,
               cachedPrice,
               name: asset.name,

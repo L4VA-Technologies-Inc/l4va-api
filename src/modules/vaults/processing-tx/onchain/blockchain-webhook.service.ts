@@ -279,14 +279,7 @@ export class BlockchainWebhookService {
       // Handle contribution returns (assets)
       if (claim.transaction?.assets && claim.transaction.assets.length > 0) {
         for (const asset of claim.transaction.assets) {
-          const price = asset.type === AssetType.NFT ? asset.floor_price || 0 : asset.dex_price || 0;
-          // Normalize quantity using decimals (prices are per normalized token)
-          // ADA is stored in ADA units (not lovelace), so skip normalization
-          const decimals = asset.decimals || 0;
-          const isAda = asset.type === AssetType.ADA;
-          const normalizedQuantity = !isAda && decimals > 0 ? Number(asset.quantity) / Math.pow(10, decimals) : Number(asset.quantity);
-          const value = normalizedQuantity * price;
-          deductionAda += value;
+          deductionAda += asset.valueAda;
         }
       }
 

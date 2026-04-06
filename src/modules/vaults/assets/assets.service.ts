@@ -280,12 +280,6 @@ export class AssetsService {
       queryBuilder.andWhere('asset.type = :type', { type });
     }
 
-    // Helper function to adjust quantity by decimals
-    const adjustQuantityByDecimals = (quantity: number, decimals: number, isNft: boolean): number => {
-      if (isNft || !decimals || decimals === 0) return quantity;
-      return quantity / Math.pow(10, decimals);
-    };
-
     // Calculate statistics with decimal adjustment
     const statsQuery = queryBuilder.clone();
     statsQuery
@@ -332,24 +326,13 @@ export class AssetsService {
     const assetsAvgAda = total > 0 ? adjustedTotalValueAda / total : 0;
     const assetsAvgUsd = total > 0 ? totalAssetValueUsd / total : 0;
 
-    const assetsWithUsd = assets as Array<Asset & { floorPriceUsd?: number; valueAda?: number; valueUsd?: number }>;
+    const assetsWithUsd = assets as Array<Asset & { floorPriceUsd?: number; valueUsd?: number }>;
 
     assetsWithUsd.forEach(asset => {
       const isNft = asset.type === AssetType.NFT;
-      const decimals = asset.decimals || 0;
 
-      // Adjust quantity for FTs with decimals
-      if (!isNft && decimals > 0) {
-        asset.quantity = adjustQuantityByDecimals(asset.quantity, decimals, false);
-      }
-
-      // Get price from DB (dexPrice is already per-token, not per-smallest-unit)
-      const priceAda = isNft
-        ? parseFloat(String(asset.floor_price || asset.dex_price || 0))
-        : parseFloat(String(asset.dex_price || asset.floor_price || 0));
-
-      // Calculate value: adjusted quantity * price per token
-      asset.valueAda = asset.quantity * priceAda;
+      // Use the Asset entity getters for computed values
+      // Note: normalizedQuantity and valueAda are now automatic via getters
       asset.valueUsd = asset.valueAda * adaPrice;
 
       // FloorPriceUsd is only for NFTs

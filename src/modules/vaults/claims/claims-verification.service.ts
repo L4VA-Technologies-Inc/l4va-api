@@ -96,17 +96,7 @@ export class ClaimsVerificationService {
       let txTotalValue = 0;
 
       for (const asset of assets) {
-        // Normalize quantity using decimals (prices are per normalized token)
-        // ADA is stored in ADA units (not lovelace), so skip normalization
-        const decimals = asset.decimals || 0;
-        const isAda = asset.type === AssetType.ADA;
-        const normalizedQuantity = !isAda && decimals > 0 ? asset.quantity / Math.pow(10, decimals) : asset.quantity;
-        const assetValueAda = asset.dex_price
-          ? asset.dex_price * normalizedQuantity
-          : asset.floor_price
-            ? asset.floor_price * normalizedQuantity
-            : 0;
-        txTotalValue += assetValueAda;
+        txTotalValue += asset.valueAda;
       }
 
       contributionValueByTransaction[tx.id] = txTotalValue;
