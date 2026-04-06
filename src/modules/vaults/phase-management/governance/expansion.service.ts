@@ -11,7 +11,6 @@ import { Vault } from '@/database/vault.entity';
 import { AlertsService } from '@/modules/alerts/alerts.service';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
-import { AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -420,42 +419,15 @@ export class ExpansionService {
    * Calculate the ADA value of contributed assets
    */
   private async calculateTotalAssetsValue(assets: Asset[]): Promise<number> {
-    let totalValueAda = 0;
-
-    for (const asset of assets) {
-      // Use floor price if available (for NFTs)
-      if (asset.floor_price && asset.floor_price > 0) {
-        totalValueAda += asset.floor_price;
-        continue;
-      }
-
-      // Use DEX price if available (for FTs)
-      if (asset.dex_price && asset.dex_price > 0) {
-        // Normalize quantity using decimals (prices are per normalized token)
-        // ADA is stored in ADA units (not lovelace), so skip normalization
-        const decimals = asset.decimals || 0;
-        const isAda = asset.type === AssetType.ADA;
-        const normalizedQuantity = !isAda && decimals > 0 ? asset.quantity / Math.pow(10, decimals) : asset.quantity;
-        totalValueAda += asset.dex_price * normalizedQuantity; // Multiply by normalized quantity for FTs
-        continue;
-      }
-    }
-
-    return totalValueAda;
+    // Use the new Asset getter methods for clean, centralized logic
+    return assets.reduce((sum, asset) => sum + asset.valueAda, 0);
   }
 
   /**
    * Calculate the total quantity of contributed assets
-   * NFTs count as 1 each, FTs use their quantity field
+   * NFTs count as 1 each, FTs use their normalized quantity
    */
   private calculateTotalQuantity(assets: Asset[]): number {
-    let totalQuantity = 0;
-
-    for (const asset of assets) {
-      const quantity = asset.quantity || 1;
-      totalQuantity += quantity;
-    }
-
-    return totalQuantity;
+    return assets.reduce((sum, asset) => sum + asset.normalizedQuantity, 0);
   }
 }
