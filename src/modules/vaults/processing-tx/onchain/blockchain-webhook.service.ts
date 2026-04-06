@@ -260,6 +260,7 @@ export class BlockchainWebhookService {
             dex_price: true,
             floor_price: true,
             type: true,
+            decimals: true,
             added_by: true,
           },
         },
