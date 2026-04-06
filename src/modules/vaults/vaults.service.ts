@@ -1711,6 +1711,16 @@ export class VaultsService {
           .andWhere('t.status = :status', { status: TransactionStatus.confirmed })
           .getMany();
 
+        // Normalize asset quantities for display (convert raw units to human-readable)
+        transactions.forEach(tx => {
+          if (tx.assets) {
+            tx.assets.forEach(asset => {
+              // Replace raw quantity with normalized quantity for display
+              (asset as Asset).quantity = asset.normalizedQuantity;
+            });
+          }
+        });
+
         const transactionEvents: TransactionActivityEvent[] = transactions.map(tx => ({
           ...tx,
           activityType: ActivityType.TRANSACTION,
