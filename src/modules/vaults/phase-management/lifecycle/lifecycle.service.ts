@@ -459,12 +459,8 @@ export class LifecycleService {
           if (!counts[asset.policy_id]) {
             counts[asset.policy_id] = 0;
           }
-          // Ensure numeric addition by converting quantity to number
-          // For FTs with decimals, convert raw on-chain quantity to human-readable units
-          const rawQuantity = Number(asset.quantity) || 1;
-          const decimals = asset.decimals ?? 0;
-          const quantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
-          counts[asset.policy_id] += quantity;
+          // Use centralized normalization logic from Asset entity
+          counts[asset.policy_id] += asset.normalizedQuantity;
           return counts;
         },
         {} as Record<string, number>

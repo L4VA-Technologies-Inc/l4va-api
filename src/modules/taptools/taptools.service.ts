@@ -761,8 +761,9 @@ export class TaptoolsService {
         continue;
       }
 
-      if (asset.origin_type === AssetOriginType.ACQUIRED && asset.policy_id === 'lovelace') {
-        totalAcquiredAda += Number(asset.quantity);
+      // Track acquired ADA (already stored in ADA units, not lovelace)
+      if (asset.origin_type === AssetOriginType.ACQUIRED && asset.type === AssetType.ADA) {
+        totalAcquiredAda += asset.normalizedQuantity;
       }
 
       const key = `${asset.policy_id}_${asset.asset_id}`;
