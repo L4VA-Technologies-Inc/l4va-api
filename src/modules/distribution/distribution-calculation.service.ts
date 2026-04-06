@@ -640,34 +640,20 @@ export class DistributionCalculationService {
    * @param assets - All contributed assets
    * @param totalContributedValueAda - Total value of all contributed assets (FDV)
    * @param vtSupply - Total vault token supply (with decimals applied)
-   * @param customPriceMap - Optional map of policy_id -> custom price (overrides floor_price)
    */
-  calculateMultipliersFromAssets(params: {
-    assets: Asset[];
-    totalContributedValueAda: number;
-    vtSupply: number;
-    customPriceMap?: Map<string, number>;
-  }): {
+  calculateMultipliersFromAssets(params: { assets: Asset[]; totalContributedValueAda: number; vtSupply: number }): {
     acquireMultiplier: [string, string | null, number][];
     adaDistribution: [string, string | null, number][];
     multipliersByAssetId: Map<string, { vtPerUnit: number; policyId: string; assetName: string | null }>;
   } {
-    const { assets, totalContributedValueAda, vtSupply, customPriceMap } = params;
-
-    // Helper to get effective price (custom > floor_price > dex_price)
-    const getEffectivePrice = (asset: Asset): number => {
-      if (customPriceMap?.has(asset.policy_id)) {
-        return customPriceMap.get(asset.policy_id)!;
-      }
-      return asset.floor_price || asset.dex_price || 0;
-    };
+    const { assets, totalContributedValueAda, vtSupply } = params;
 
     // Build items for policy grouping
     const groupingItems: PolicyGroupingItem[] = [];
 
     for (const asset of assets) {
-      const effectivePrice = getEffectivePrice(asset);
       const quantity = asset.quantity || 1;
+      const price = asset.floor_price || asset.dex_price || 0;
 
       // Calculate VT for this asset: (assetValue / totalContributedValueAda) * vtSupply
       const assetValue = asset.valueAda;
@@ -679,7 +665,7 @@ export class DistributionCalculationService {
         policyId: asset.policy_id,
         assetName: asset.asset_id || null,
         assetDbId: asset.id, // Track by database ID
-        price: effectivePrice,
+        price,
         quantity,
         vtMultiplier: vtPerUnit,
         adaMultiplier: 0, // No ADA distribution for 0% acquirers
