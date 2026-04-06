@@ -460,7 +460,10 @@ export class LifecycleService {
             counts[asset.policy_id] = 0;
           }
           // Ensure numeric addition by converting quantity to number
-          const quantity = Number(asset.quantity) || 1;
+          // For FTs with decimals, convert raw on-chain quantity to human-readable units
+          const rawQuantity = Number(asset.quantity) || 1;
+          const decimals = asset.decimals ?? 0;
+          const quantity = decimals > 0 ? rawQuantity / Math.pow(10, decimals) : rawQuantity;
           counts[asset.policy_id] += quantity;
           return counts;
         },
