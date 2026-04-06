@@ -161,57 +161,31 @@ export class AssetsService {
       this.logger.log(
         `Created VLRM asset record for vault ${vault.id}: ${this.systemSettingsService.vlrmCreatorFee} tokens (dex_price: ${vlrmDexPrice} ADA)`
       );
+      try {
+        // Get all contributed and fee assets for the vault
+        const assets = await this.assetsRepository.find({
+          where: {
+            vault_id: vault.id,
+            deleted: false,
+          },
+        });
 
-      // Update vault TVL after adding VLRM asset
-      await this.updateVaultTVL(vault.id);
+        const totalValueAda = assets.reduce((sum, asset) => sum + asset.valueAda, 0);
+
+        // Update vault TVL
+        vault.total_assets_cost_ada = totalValueAda;
+        vault.total_assets_cost_usd = totalValueAda * (await this.priceService.getAdaPrice());
+
+        await this.vaultsRepository.update(vault.id, {
+          total_assets_cost_ada: vault.total_assets_cost_ada,
+          total_assets_cost_usd: vault.total_assets_cost_usd,
+        });
+      } catch (error) {
+        this.logger.error(`Failed to update vault totals after VLRM asset creation for vault ${vault.id}:`, error);
+      }
     } catch (error) {
       this.logger.error(`Failed to create VLRM asset for vault ${vault.id}:`, error);
       throw error;
-    }
-  }
-
-  /**
-   * Update vault TVL based on current assets
-   * TVL is calculated as the ratio of vault FDV to total asset value
-   */
-  private async updateVaultTVL(vaultId: string): Promise<void> {
-    try {
-      const vault = await this.vaultsRepository.findOne({
-        where: { id: vaultId },
-      });
-
-      if (!vault) {
-        this.logger.warn(`Vault ${vaultId} not found when updating TVL`);
-        return;
-      }
-
-      // Get all contributed and fee assets for the vault
-      const assets = await this.assetsRepository.find({
-        where: {
-          vault_id: vaultId,
-          deleted: false,
-        },
-      });
-
-      // Calculate total asset value in ADA
-      let totalValueAda = 0;
-      assets.forEach(asset => {
-        const price = asset.floor_price || asset.dex_price || 0;
-        // Normalize quantity using decimals (prices are per normalized token)
-        // ADA is stored in ADA units (not lovelace), so skip normalization
-        const decimals = asset.decimals || 0;
-        const isAda = asset.type === AssetType.ADA;
-        const normalizedQuantity = !isAda && decimals > 0 ? asset.quantity / Math.pow(10, decimals) : asset.quantity;
-        totalValueAda += normalizedQuantity * price;
-      });
-
-      // Update vault TVL
-      vault.total_assets_cost_ada = totalValueAda;
-      vault.total_assets_cost_usd = totalValueAda * (await this.priceService.getAdaPrice());
-      await this.vaultsRepository.save(vault);
-    } catch (error) {
-      this.logger.error(`Failed to update vault TVL for ${vaultId}:`, error);
-      // Don't throw - TVL update is not critical to asset creation
     }
   }
 

@@ -317,7 +317,7 @@ export class DistributionCalculationService {
     // Build items for policy grouping
     const groupingItems: PolicyGroupingItem[] = [];
 
-    // First pass: collect all assets, distribute VT PROPORTIONALLY to floor_price
+    // First pass: collect all assets, distribute VT PROPORTIONALLY to asset value
     for (const claim of contributorsClaims) {
       const contributorLovelaceAmount = claim?.lovelace_amount || 0;
       const assets = claim.transaction.assets;
@@ -325,7 +325,7 @@ export class DistributionCalculationService {
       // Filter out FEE assets - they shouldn't affect multiplier calculations
       const contributedAssets = assets.filter(asset => asset.origin_type !== AssetOriginType.FEE);
 
-      // Calculate total transaction value from floor prices (excluding FEE assets)
+      // Calculate total transaction value from asset values (excluding FEE assets)
       const totalTxValue = contributedAssets.reduce((sum, asset) => sum + asset.valueAda, 0);
 
       // Track recalculated amounts for this claim
@@ -334,10 +334,10 @@ export class DistributionCalculationService {
 
       contributedAssets.forEach(asset => {
         const assetQuantity = Number(asset.quantity) || 1;
-        const floorPrice = asset.floor_price ?? 0;
+        const effectivePrice = asset.effectivePrice;
         const assetValue = asset.valueAda;
 
-        // Distribute VT PROPORTIONALLY to floor_price
+        // Distribute VT PROPORTIONALLY to asset value
         // Each asset gets: (assetValue / totalTxValue) * claim.amount
         const proportion = totalTxValue > 0 ? assetValue / totalTxValue : 1 / contributedAssets.length;
         const vtShare = Math.floor(proportion * claim.amount);
@@ -351,7 +351,7 @@ export class DistributionCalculationService {
         groupingItems.push({
           policyId: asset.policy_id,
           assetName: asset.asset_id,
-          price: floorPrice,
+          price: effectivePrice,
           quantity: assetQuantity,
           vtMultiplier: vtSharePerUnit,
           adaMultiplier: adaSharePerUnit,
@@ -482,7 +482,7 @@ export class DistributionCalculationService {
     // Build items for policy grouping
     const groupingItems: PolicyGroupingItem[] = [];
 
-    // First pass: collect all assets, distribute VT PROPORTIONALLY to floor_price
+    // First pass: collect all assets, distribute VT PROPORTIONALLY to asset value
     for (const claim of contributorsClaims) {
       const contributorLovelaceAmount = claim?.lovelace_amount || 0;
       const assets = claim.transaction.assets;
@@ -490,7 +490,7 @@ export class DistributionCalculationService {
       // Filter out FEE assets - they shouldn't affect multiplier calculations
       const contributedAssets = assets.filter(asset => asset.origin_type !== AssetOriginType.FEE);
 
-      // Calculate total transaction value from floor prices (excluding FEE assets)
+      // Calculate total transaction value from asset values (excluding FEE assets)
       const totalTxValue = contributedAssets.reduce((sum, asset) => sum + asset.valueAda, 0);
 
       // Track recalculated amounts for this claim
@@ -499,10 +499,10 @@ export class DistributionCalculationService {
 
       contributedAssets.forEach(asset => {
         const assetQuantity = Number(asset.quantity) || 1;
-        const floorPrice = asset.floor_price ?? 0;
+        const effectivePrice = asset.effectivePrice;
         const assetValue = asset.valueAda;
 
-        // Distribute VT PROPORTIONALLY to floor_price
+        // Distribute VT PROPORTIONALLY to asset value
         const proportion = totalTxValue > 0 ? assetValue / totalTxValue : 1 / contributedAssets.length;
         const vtShare = Math.floor(proportion * claim.amount);
         const vtSharePerUnit = Math.floor(vtShare / assetQuantity);
@@ -515,7 +515,7 @@ export class DistributionCalculationService {
         groupingItems.push({
           policyId: asset.policy_id,
           assetName: asset.asset_id,
-          price: floorPrice,
+          price: effectivePrice,
           quantity: assetQuantity,
           vtMultiplier: vtSharePerUnit,
           adaMultiplier: adaSharePerUnit,
@@ -570,7 +570,7 @@ export class DistributionCalculationService {
     const groupingItems: PolicyGroupingItem[] = [];
 
     for (const asset of assets) {
-      const price = asset.floor_price || asset.dex_price || 0;
+      const price = asset.effectivePrice;
       if (price === 0) continue;
 
       // Calculate VT amount based on pricing type
@@ -653,7 +653,7 @@ export class DistributionCalculationService {
 
     for (const asset of assets) {
       const quantity = asset.quantity || 1;
-      const price = asset.floor_price || asset.dex_price || 0;
+      const price = asset.effectivePrice;
 
       // Calculate VT for this asset: (assetValue / totalContributedValueAda) * vtSupply
       const assetValue = asset.valueAda;
