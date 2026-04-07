@@ -22,6 +22,7 @@ import {
 } from '@/modules/vaults/processing-tx/offchain-tx/dto/get-transactions.dto';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { VaultStatus } from '@/types/vault.types';
+import { normalizeAssetImageSource } from '@/utils/asset-image-source.util';
 
 @Injectable()
 export class TransactionsService {
@@ -151,16 +152,16 @@ export class TransactionsService {
           decodedName ||
           null;
 
-        let cleanImage =
+        const rawImage =
           assetItem.image ||
           assetItem.metadata?.image ||
           assetItem.metadata?.files?.[0]?.src ||
           (blockfrostMetadata?.onchain_metadata as any)?.image ||
+          assetItem.metadata?.logo ||
+          (blockfrostMetadata?.metadata as any)?.logo ||
           null;
 
-        if (typeof cleanImage === 'string') {
-          cleanImage = cleanImage.replace(/^ipfs:\/\/(ipfs\/)+/, 'ipfs://');
-        }
+        const cleanImage = typeof rawImage === 'string' ? normalizeAssetImageSource(rawImage) : null;
 
         const finalDescription =
           assetItem.description ||
