@@ -22,6 +22,7 @@ import {
 } from '@/modules/vaults/processing-tx/offchain-tx/dto/get-transactions.dto';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { VaultStatus } from '@/types/vault.types';
+import { normalizeAssetImageSource } from '@/utils/asset-image-source.util';
 
 @Injectable()
 export class TransactionsService {
@@ -151,16 +152,16 @@ export class TransactionsService {
           decodedName ||
           null;
 
-        let cleanImage =
+        const rawImage =
           assetItem.image ||
           assetItem.metadata?.image ||
           assetItem.metadata?.files?.[0]?.src ||
           (blockfrostMetadata?.onchain_metadata as any)?.image ||
+          assetItem.metadata?.logo ||
+          (blockfrostMetadata?.metadata as any)?.logo ||
           null;
 
-        if (typeof cleanImage === 'string') {
-          cleanImage = cleanImage.replace(/^ipfs:\/\/(ipfs\/)+/, 'ipfs://');
-        }
+        const cleanImage = typeof rawImage === 'string' ? normalizeAssetImageSource(rawImage) : null;
 
         const finalDescription =
           assetItem.description ||
@@ -855,12 +856,23 @@ export class TransactionsService {
       }
 
       // Count locked expansion assets (contributed during expansion)
-      // NFTs counted by record count, FTs counted by quantity sum
+      // NFTs counted by record count, FTs use normalized quantity (adjusted for decimals)
       const expansionAssetData = await this.assetRepository
         .createQueryBuilder('asset')
         .select('asset.type', 'assetType')
         .addSelect('COUNT(DISTINCT asset.id)', 'nftCount')
-        .addSelect('COALESCE(SUM(asset.quantity), 0)', 'ftQuantity')
+        .addSelect(
+          `COALESCE(
+            SUM(
+              CASE 
+                WHEN COALESCE(asset.decimals, 6) > 0 
+                THEN asset.quantity / POWER(10, COALESCE(asset.decimals, 6))
+                ELSE asset.quantity
+              END
+            ), 0
+          )`,
+          'ftQuantity'
+        )
         .where('asset.vault_id = :vaultId', { vaultId })
         .andWhere('asset.status = :status', { status: AssetStatus.LOCKED })
         .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })

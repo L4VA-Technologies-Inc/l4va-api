@@ -852,7 +852,7 @@ export class VaultsService {
     let expansionPriceType: 'limit' | 'market' | undefined;
     let expansionLimitPrice: number | undefined;
     let expansionAssetsByPolicy: Array<{ policyId: string; quantity: number }> = [];
-    let expansionWhitelist: TokenVerification[] = [];
+    let expansionWhitelist: Array<{ policyId: string; collectionName: string | null }> = [];
 
     // Only check vault_status to determine if vault is currently in expansion
     // expansion_phase_start is preserved as a historical timestamp
@@ -879,15 +879,10 @@ export class VaultsService {
         // Fetch collection names for expansion policies
         if (expansionPolicyIds.length > 0) {
           if (expansionLabels.length > 0 && expansionLabels.length === expansionPolicyIds.length) {
-            expansionWhitelist = expansionPolicyIds.map((policyId, index) =>
-              Object.assign(new TokenVerification(), {
-                policy_id: policyId,
-                token_id: null,
-                collection_name: expansionLabels[index],
-                is_verified: true,
-                platform: null,
-              })
-            );
+            expansionWhitelist = expansionPolicyIds.map((policyId, index) => ({
+              policyId,
+              collectionName: expansionLabels[index],
+            }));
           } else {
             const collectionsToFetch = expansionPolicyIds.map(policyId => ({
               policyId,
@@ -896,7 +891,12 @@ export class VaultsService {
               count: 0,
             }));
 
-            expansionWhitelist = await this.getCollections(collectionsToFetch);
+            const tokenVerifications = await this.getCollections(collectionsToFetch);
+            // Transform TokenVerification entities to DTO format
+            expansionWhitelist = tokenVerifications.map(tv => ({
+              policyId: tv.policy_id,
+              collectionName: tv.collection_name,
+            }));
           }
         }
 

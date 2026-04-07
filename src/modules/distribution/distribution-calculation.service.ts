@@ -575,12 +575,39 @@ export class DistributionCalculationService {
 
       // Calculate VT amount based on pricing type
       let vtPerAsset: number;
+
+      // Get asset decimals for FT normalization (used by both pricing types)
+      const assetDecimals = asset.decimals || 0;
+      const assetDecimalMultiplier = assetDecimals > 0 ? Math.pow(10, assetDecimals) : 1;
+
       if (priceType === 'limit') {
-        // For limit pricing: vtPrice IS the VT amount per asset (not a divisor!)
-        vtPerAsset = vtPrice * decimalMultiplier;
+        // For limit pricing: vtPrice is "VT (decimal-adjusted) per normalized asset"
+        // Multiplier needs to be "VT base units per RAW asset unit"
+        //
+        // For NFTs (no decimals):
+        //   - 1 NFT → limitPrice * VT_decimals base units
+        // For FTs with decimals:
+        //   - 1 normalized FT → limitPrice * VT_decimals base units
+        //   - 1 raw FT unit → (limitPrice * VT_decimals) / FT_decimals base units
+        //
+        // Example: 1 FT with 6 decimals, limitPrice=1 VT, VT decimals=6
+        //   - Raw quantity: 1,000,000 units
+        //   - Multiplier calculation: (1 * 1,000,000) / 1,000,000 = 1
+        //   - Result: Multiplier = 1 (means: 1 VT base unit per 1 raw FT unit)
+        //   - On-chain: 1,000,000 raw units × 1 multiplier = 1,000,000 VT base units = 1 VT ✓
+        vtPerAsset = (vtPrice * decimalMultiplier) / assetDecimalMultiplier;
       } else {
-        // For market pricing: Calculate VT from asset price / VT market price
-        vtPerAsset = (price / vtPrice) * decimalMultiplier;
+        // For market pricing: Calculate VT from asset floor/dex price divided by VT market price
+        // asset.effectivePrice is per NORMALIZED asset, so we need to adjust for raw units
+        //
+        // Example: 1 FT with 6 decimals, floor_price=5 ADA, VT price=10 ADA, VT decimals=6
+        //   - Raw quantity: 1,000,000 units
+        //   - Price is for 1 normalized FT (1,000,000 raw units) = 5 ADA
+        //   - VT per normalized FT: (5 / 10) * 1,000,000 = 500,000 VT base units
+        //   - VT per raw unit: 500,000 / 1,000,000 = 0.5 (floors to 0)
+        //   - Multiplier calculation: (5 / 10) * 1,000,000 / 1,000,000 = 0
+        //   - On-chain: 1,000,000 raw units × 0 multiplier = 0 VT base units
+        vtPerAsset = ((price / vtPrice) * decimalMultiplier) / assetDecimalMultiplier;
       }
       const vtMultiplier = Math.floor(vtPerAsset);
 
