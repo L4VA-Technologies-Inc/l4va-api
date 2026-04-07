@@ -855,12 +855,23 @@ export class TransactionsService {
       }
 
       // Count locked expansion assets (contributed during expansion)
-      // NFTs counted by record count, FTs counted by quantity sum
+      // NFTs counted by record count, FTs use normalized quantity (adjusted for decimals)
       const expansionAssetData = await this.assetRepository
         .createQueryBuilder('asset')
         .select('asset.type', 'assetType')
         .addSelect('COUNT(DISTINCT asset.id)', 'nftCount')
-        .addSelect('COALESCE(SUM(asset.quantity), 0)', 'ftQuantity')
+        .addSelect(
+          `COALESCE(
+            SUM(
+              CASE 
+                WHEN COALESCE(asset.decimals, 6) > 0 
+                THEN asset.quantity / POWER(10, COALESCE(asset.decimals, 6))
+                ELSE asset.quantity
+              END
+            ), 0
+          )`,
+          'ftQuantity'
+        )
         .where('asset.vault_id = :vaultId', { vaultId })
         .andWhere('asset.status = :status', { status: AssetStatus.LOCKED })
         .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.CONTRIBUTED })
