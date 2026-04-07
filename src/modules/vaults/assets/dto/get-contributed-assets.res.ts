@@ -18,7 +18,8 @@ export class AssetItemDto {
   @ApiProperty({ description: 'Asset type', enum: ['nft', 'ft'], example: 'nft' })
   type: string;
 
-  @Expose()
+  // Map from Asset entity's normalizedQuantity getter (auto-adjusts for decimals)
+  @Expose({ name: 'normalizedQuantity' })
   @ApiProperty({ description: 'Quantity (adjusted for decimals in FTs)', example: 1 })
   quantity: number;
 

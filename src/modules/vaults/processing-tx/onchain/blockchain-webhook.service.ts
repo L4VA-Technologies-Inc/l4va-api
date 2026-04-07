@@ -13,7 +13,6 @@ import { Claim } from '@/database/claim.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
-import { AssetType } from '@/types/asset.types';
 import { ClaimStatus } from '@/types/claim.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { ContributionWindowType, VaultStatus } from '@/types/vault.types';
@@ -261,6 +260,7 @@ export class BlockchainWebhookService {
             dex_price: true,
             floor_price: true,
             type: true,
+            decimals: true,
             added_by: true,
           },
         },
@@ -279,9 +279,7 @@ export class BlockchainWebhookService {
       // Handle contribution returns (assets)
       if (claim.transaction?.assets && claim.transaction.assets.length > 0) {
         for (const asset of claim.transaction.assets) {
-          const price = asset.type === AssetType.NFT ? asset.floor_price || 0 : asset.dex_price || 0;
-          const value = Number(asset.quantity) * price;
-          deductionAda += value;
+          deductionAda += asset.valueAda;
         }
       }
 

@@ -21,7 +21,7 @@ import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { MetadataRegistryApiService } from '@/modules/vaults/processing-tx/onchain/metadata-register.service';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
-import { AssetOriginType, AssetType } from '@/types/asset.types';
+import { AssetOriginType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TokenRegistryStatus } from '@/types/tokenRegistry.types';
@@ -459,9 +459,8 @@ export class LifecycleService {
           if (!counts[asset.policy_id]) {
             counts[asset.policy_id] = 0;
           }
-          // Ensure numeric addition by converting quantity to number
-          const quantity = Number(asset.quantity) || 1;
-          counts[asset.policy_id] += quantity;
+          // Use centralized normalization logic from Asset entity
+          counts[asset.policy_id] += asset.normalizedQuantity;
           return counts;
         },
         {} as Record<string, number>
@@ -827,20 +826,19 @@ export class LifecycleService {
           const assetKey = `${asset.policy_id}:${asset.asset_id}`;
 
           try {
-            const isNFT = asset.type === AssetType.NFT;
             const quantity = asset.quantity || 1;
-            const priceAda = isNFT ? asset.floor_price : asset.dex_price;
-            transactionValueAda += priceAda * quantity;
+            const assetValueAda = asset.valueAda;
+            transactionValueAda += assetValueAda;
 
             if (uniqueAssets.has(assetKey)) {
               const existing = uniqueAssets.get(assetKey)!;
-              existing.totalValueAda += priceAda * quantity;
+              existing.totalValueAda += assetValueAda;
               existing.totalQuantity += quantity;
             } else {
               uniqueAssets.set(assetKey, {
                 policyId: asset.policy_id,
                 assetName: asset.asset_id,
-                totalValueAda: priceAda * quantity,
+                totalValueAda: assetValueAda,
                 totalQuantity: quantity,
                 userId: tx.user.id,
                 txId: tx.id,
@@ -1350,27 +1348,34 @@ export class LifecycleService {
         this.logger.error(`Failed to update asset prices for vault ${vault.id}:`, error);
       }
 
-      // Step 3: Recalculate and persist vault TVL with updated market prices
+      // Step 3: Recalculate and persist vault TVL with updated market prices (includes all asset types for display)
       await this.taptoolsService.updateMultipleVaultTotals([vault.id]);
 
-      // Reload vault to get fresh TVL values
-      const updatedVault = await this.vaultRepository.findOne({
-        where: { id: vault.id },
-        select: ['id', 'total_assets_cost_ada', 'total_assets_cost_usd', 'ft_token_supply', 'ft_token_decimals'],
+      // Load all contributed assets (excluding FEE assets)
+      const allContributedAssets = await this.assetsRepository.find({
+        where: {
+          vault: { id: vault.id },
+          origin_type: AssetOriginType.CONTRIBUTED,
+          deleted: false,
+        },
+        relations: ['transaction'],
       });
 
-      // Calculate total value of contributed assets (this becomes the FDV)
-      const totalContributedValueAda = updatedVault.total_assets_cost_ada;
+      // Calculate total contributed value manually (excluding FEE assets for accurate FDV/distribution)
+      let totalContributedValueAda = 0;
+      for (const asset of allContributedAssets) {
+        totalContributedValueAda += asset.valueAda;
+      }
 
       // Use raw units for claim calculations (on-chain minting needs decimal-adjusted amounts)
       const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
 
       // Calculate FDV and VT price directly (no LP in 0% acquirer scenario)
-      const fdv = totalContributedValueAda; // FDV = TVL when no acquirers
+      const fdv = totalContributedValueAda; // FDV = TVL when no acquirers (excluding FEE assets)
       const vtPrice = fdv > 0 ? fdv / vtSupply : 0;
 
       this.logger.log(
-        `Vault ${vault.id} (0% acquirers): FDV = ${fdv} ADA (from TVL), ` +
+        `Vault ${vault.id} (0% acquirers): FDV = ${fdv} ADA (from contributed assets, excluding fees), ` +
           `VT Price = ${vtPrice} ADA, No LP created (no incoming ADA)`
       );
 
@@ -1383,16 +1388,6 @@ export class LifecycleService {
         },
         relations: ['user', 'assets'],
         order: { created_at: 'ASC' },
-      });
-
-      // Load all contributed assets
-      const allContributedAssets = await this.assetsRepository.find({
-        where: {
-          vault: { id: vault.id },
-          origin_type: AssetOriginType.CONTRIBUTED,
-          deleted: false,
-        },
-        relations: ['transaction'],
       });
 
       // STEP 1: Calculate multipliers using centralized distribution-calculation service

@@ -95,12 +95,7 @@ export class ClaimsVerificationService {
       let txTotalValue = 0;
 
       for (const asset of assets) {
-        const assetValueAda = asset.dex_price
-          ? asset.dex_price * asset.quantity
-          : asset.floor_price
-            ? asset.floor_price * asset.quantity
-            : 0;
-        txTotalValue += assetValueAda;
+        txTotalValue += asset.valueAda;
       }
 
       contributionValueByTransaction[tx.id] = txTotalValue;

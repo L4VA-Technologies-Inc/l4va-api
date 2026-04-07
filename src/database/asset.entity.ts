@@ -77,6 +77,10 @@ export class Asset {
   })
   type: AssetType;
 
+  /**
+   * Raw quantity of the asset as stored in the database, not adjusted for decimals. For fungible tokens, this represents the total quantity.
+   * For NFTs, this is typically 1. The actual value in human-readable form should be calculated using the 'decimals' field when applicable.
+   */
   @Column({
     type: 'decimal',
     precision: 20,
@@ -223,5 +227,60 @@ export class Asset {
   @BeforeUpdate()
   updateTimestamp(): void {
     this.updated_at = new Date();
+  }
+
+  /**
+   * Get normalized (human-readable) quantity
+   *
+   * Storage formats:
+   * - FT tokens: Stored in raw units (e.g., 3,000,000 base units) → normalize by decimals
+   * - ADA: Stored in ADA units (e.g., 5250.00 ADA) → already normalized
+   * - NFTs: Always 1 → no normalization needed
+   *
+   * @returns Normalized quantity (e.g., 3.0 tokens instead of 3,000,000 raw units)
+   */
+  get normalizedQuantity(): number {
+    // ADA is already stored in ADA units (not lovelace)
+    if (this.type === AssetType.ADA) {
+      return this.quantity;
+    }
+
+    // NFTs are always quantity 1
+    if (this.type === AssetType.NFT) {
+      return 1;
+    }
+
+    // FTs need decimal normalization
+    const decimals = this.decimals || 0;
+    return decimals > 0 ? this.quantity / Math.pow(10, decimals) : this.quantity;
+  }
+
+  /**
+   * Get the effective price for this asset
+   * Prioritizes floor_price for NFTs, dex_price for FTs
+   * ADA always has a price of 1 (1 ADA = 1 ADA)
+   *
+   * @returns Price in ADA per normalized token
+   */
+  get effectivePrice(): number {
+    // ADA is always priced at 1 (1 ADA = 1 ADA)
+    if (this.type === AssetType.ADA) {
+      return 1;
+    }
+
+    if (this.type === AssetType.NFT) {
+      return this.floor_price || this.dex_price || 0;
+    }
+    return this.dex_price || this.floor_price || 0;
+  }
+
+  /**
+   * Get the total value of this asset in ADA
+   * Uses normalized quantity and effective price
+   *
+   * @returns Total value in ADA
+   */
+  get valueAda(): number {
+    return this.normalizedQuantity * this.effectivePrice;
   }
 }

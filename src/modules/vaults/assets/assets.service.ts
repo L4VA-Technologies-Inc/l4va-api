@@ -161,52 +161,31 @@ export class AssetsService {
       this.logger.log(
         `Created VLRM asset record for vault ${vault.id}: ${this.systemSettingsService.vlrmCreatorFee} tokens (dex_price: ${vlrmDexPrice} ADA)`
       );
+      try {
+        // Get all contributed and fee assets for the vault
+        const assets = await this.assetsRepository.find({
+          where: {
+            vault_id: vault.id,
+            deleted: false,
+          },
+        });
 
-      // Update vault TVL after adding VLRM asset
-      await this.updateVaultTVL(vault.id);
+        const totalValueAda = assets.reduce((sum, asset) => sum + asset.valueAda, 0);
+
+        // Update vault TVL
+        vault.total_assets_cost_ada = totalValueAda;
+        vault.total_assets_cost_usd = totalValueAda * (await this.priceService.getAdaPrice());
+
+        await this.vaultsRepository.update(vault.id, {
+          total_assets_cost_ada: vault.total_assets_cost_ada,
+          total_assets_cost_usd: vault.total_assets_cost_usd,
+        });
+      } catch (error) {
+        this.logger.error(`Failed to update vault totals after VLRM asset creation for vault ${vault.id}:`, error);
+      }
     } catch (error) {
       this.logger.error(`Failed to create VLRM asset for vault ${vault.id}:`, error);
       throw error;
-    }
-  }
-
-  /**
-   * Update vault TVL based on current assets
-   * TVL is calculated as the ratio of vault FDV to total asset value
-   */
-  private async updateVaultTVL(vaultId: string): Promise<void> {
-    try {
-      const vault = await this.vaultsRepository.findOne({
-        where: { id: vaultId },
-      });
-
-      if (!vault) {
-        this.logger.warn(`Vault ${vaultId} not found when updating TVL`);
-        return;
-      }
-
-      // Get all contributed and fee assets for the vault
-      const assets = await this.assetsRepository.find({
-        where: {
-          vault_id: vaultId,
-          deleted: false,
-        },
-      });
-
-      // Calculate total asset value in ADA
-      let totalValueAda = 0;
-      assets.forEach(asset => {
-        const price = asset.floor_price || asset.dex_price || 0;
-        totalValueAda += asset.quantity * price;
-      });
-
-      // Update vault TVL
-      vault.total_assets_cost_ada = totalValueAda;
-      vault.total_assets_cost_usd = totalValueAda * (await this.priceService.getAdaPrice());
-      await this.vaultsRepository.save(vault);
-    } catch (error) {
-      this.logger.error(`Failed to update vault TVL for ${vaultId}:`, error);
-      // Don't throw - TVL update is not critical to asset creation
     }
   }
 
@@ -275,12 +254,6 @@ export class AssetsService {
       queryBuilder.andWhere('asset.type = :type', { type });
     }
 
-    // Helper function to adjust quantity by decimals
-    const adjustQuantityByDecimals = (quantity: number, decimals: number, isNft: boolean): number => {
-      if (isNft || !decimals || decimals === 0) return quantity;
-      return quantity / Math.pow(10, decimals);
-    };
-
     // Calculate statistics with decimal adjustment
     const statsQuery = queryBuilder.clone();
     statsQuery
@@ -327,24 +300,13 @@ export class AssetsService {
     const assetsAvgAda = total > 0 ? adjustedTotalValueAda / total : 0;
     const assetsAvgUsd = total > 0 ? totalAssetValueUsd / total : 0;
 
-    const assetsWithUsd = assets as Array<Asset & { floorPriceUsd?: number; valueAda?: number; valueUsd?: number }>;
+    const assetsWithUsd = assets as Array<Asset & { floorPriceUsd?: number; valueUsd?: number }>;
 
     assetsWithUsd.forEach(asset => {
       const isNft = asset.type === AssetType.NFT;
-      const decimals = asset.decimals || 0;
 
-      // Adjust quantity for FTs with decimals
-      if (!isNft && decimals > 0) {
-        asset.quantity = adjustQuantityByDecimals(asset.quantity, decimals, false);
-      }
-
-      // Get price from DB (dexPrice is already per-token, not per-smallest-unit)
-      const priceAda = isNft
-        ? parseFloat(String(asset.floor_price || asset.dex_price || 0))
-        : parseFloat(String(asset.dex_price || asset.floor_price || 0));
-
-      // Calculate value: adjusted quantity * price per token
-      asset.valueAda = asset.quantity * priceAda;
+      // Use the Asset entity getters for computed values
+      // Note: normalizedQuantity and valueAda are now automatic via getters
       asset.valueUsd = asset.valueAda * adaPrice;
 
       // FloorPriceUsd is only for NFTs

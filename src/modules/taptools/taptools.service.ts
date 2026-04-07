@@ -761,19 +761,16 @@ export class TaptoolsService {
         continue;
       }
 
-      if (asset.origin_type === AssetOriginType.ACQUIRED && asset.policy_id === 'lovelace') {
-        totalAcquiredAda += Number(asset.quantity);
+      // Track acquired ADA (already stored in ADA units, not lovelace)
+      if (asset.origin_type === AssetOriginType.ACQUIRED && asset.type === AssetType.ADA) {
+        totalAcquiredAda += asset.normalizedQuantity;
       }
 
       const key = `${asset.policy_id}_${asset.asset_id}`;
       const existingAsset = assetMap.get(key);
 
-      // For FTs with decimals, convert raw on-chain quantity to human-readable
-      const decimals = asset.type !== AssetType.NFT && asset.decimals ? asset.decimals : 0;
-      const adjustedQuantity = asset.type === AssetType.NFT ? 1 : Number(asset.quantity) / Math.pow(10, decimals);
-
       if (existingAsset) {
-        existingAsset.quantity += adjustedQuantity;
+        existingAsset.quantity += asset.normalizedQuantity;
       } else {
         // Check for custom price first, then use cached market price
         let cachedPrice: number | undefined;
@@ -788,7 +785,7 @@ export class TaptoolsService {
         assetMap.set(key, {
           policyId: asset.policy_id,
           assetId: asset.asset_id,
-          quantity: adjustedQuantity,
+          quantity: asset.normalizedQuantity,
           isNft: asset.type === AssetType.NFT,
           cachedPrice,
           metadata: asset.metadata || {},
@@ -1039,12 +1036,8 @@ export class TaptoolsService {
           const key = `${asset.policy_id}_${asset.asset_id}`;
           const existingAsset = assetMap.get(key);
 
-          // For FTs with decimals, convert raw on-chain quantity to human-readable
-          const decimals = asset.type !== AssetType.NFT && asset.decimals ? asset.decimals : 0;
-          const adjustedQuantity = asset.type === AssetType.NFT ? 1 : Number(asset.quantity) / Math.pow(10, decimals);
-
           if (existingAsset) {
-            existingAsset.quantity += adjustedQuantity;
+            existingAsset.quantity += asset.normalizedQuantity;
           } else {
             // Check for custom price first, then use cached market price
             let cachedPrice: number | undefined;
@@ -1059,7 +1052,7 @@ export class TaptoolsService {
             assetMap.set(key, {
               policyId: asset.policy_id,
               assetId: asset.asset_id,
-              quantity: adjustedQuantity,
+              quantity: asset.normalizedQuantity,
               isNft: asset.type === AssetType.NFT,
               cachedPrice,
               name: asset.name,
@@ -1354,7 +1347,7 @@ export class TaptoolsService {
                 status: In([AssetStatus.LOCKED, AssetStatus.DISTRIBUTED, AssetStatus.EXTRACTED]),
                 origin_type: AssetOriginType.CONTRIBUTED,
               },
-              select: ['vault', 'added_by', 'quantity', 'dex_price', 'floor_price', 'type'],
+              select: ['vault', 'added_by', 'quantity', 'dex_price', 'floor_price', 'type', 'decimals'],
               relations: ['vault', 'added_by'],
             })
           : [];
@@ -1429,8 +1422,7 @@ export class TaptoolsService {
             const userVaultAssets = assetsByUserAndVault.get(userId)?.get(vault.id);
             if (userVaultAssets) {
               for (const asset of userVaultAssets) {
-                const price = asset.type === AssetType.NFT ? asset.floor_price || 0 : asset.dex_price || 0;
-                userTvl.tvl += Number(asset.quantity) * price;
+                userTvl.tvl += asset.valueAda;
               }
             }
           }
