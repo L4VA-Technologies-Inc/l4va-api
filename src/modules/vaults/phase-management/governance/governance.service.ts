@@ -1920,6 +1920,19 @@ export class GovernanceService {
 
     await this.proposalRepository.save(proposal);
 
+    // Index reward event for proposal creation ONLY if proposal is ACTIVE
+    // UPCOMING proposals will be rewarded later in activateProposal (can still be deleted)
+    if (proposal.status === ProposalStatus.ACTIVE) {
+      this.rewardEventProducer.indexEvent({
+        walletAddress: proposal.creator.address,
+        vaultId: proposal.vault.id,
+        eventType: RewardActivityType.GOVERNANCE_PROPOSAL,
+        txHash,
+        units: 1,
+        metadata: { proposal_id: proposalId, proposal_type: proposal.proposalType },
+      });
+    }
+
     // Fetch contributor claims for notifications
     const finalContributorClaims = await this.claimRepository.find({
       where: {
