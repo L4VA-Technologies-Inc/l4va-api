@@ -469,7 +469,9 @@ export class LifecycleService {
         processingIds:
           this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'], // Dummy UUID to avoid empty array
       })
-      .andWhere('(vault.manual_distribution IS NULL OR vault.manual_distribution = :manualDist)', { manualDist: false })
+      .andWhere('(vault.manual_distribution_mode IS NULL OR vault.manual_distribution_mode = :manualDist)', {
+        manualDist: false,
+      })
       .leftJoinAndSelect('vault.owner', 'owner')
       .leftJoinAndSelect('vault.assets_whitelist', 'assets_whitelist')
       .leftJoinAndSelect('vault.assets', 'assets', 'assets.deleted = :deleted', { deleted: false })
@@ -750,7 +752,9 @@ export class LifecycleService {
         processingIds:
           this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'], // Dummy UUID to avoid empty array
       })
-      .andWhere('(vault.manual_distribution IS NULL OR vault.manual_distribution = :manualDist)', { manualDist: false })
+      .andWhere('(vault.manual_distribution_mode IS NULL OR vault.manual_distribution_mode = :manualDist)', {
+        manualDist: false,
+      })
       .leftJoinAndSelect('vault.owner', 'owner')
       .leftJoinAndSelect('vault.assets', 'assets')
       .getMany();
