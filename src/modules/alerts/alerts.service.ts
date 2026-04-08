@@ -12,6 +12,7 @@ export type SlackAlertType =
   | 'general_error'
   | 'admin_utxos_exhausted'
   | 'expansion_invalid_vtprice'
+  | 'multiplier_underflow_detected'
   | string;
 
 @Injectable()
@@ -333,6 +334,93 @@ export class AlertsService {
                 {
                   type: 'mrkdwn',
                   text: `*Close Reason:* ${data.closeReason} | *Timestamp:* ${timestamp}`,
+                },
+              ],
+            },
+          ],
+        };
+
+      case 'multiplier_underflow_detected':
+        return {
+          text: `🚨 Multiplier Underflow Detected - Manual Review Required`,
+          blocks: [
+            {
+              type: 'header',
+              text: {
+                type: 'plain_text',
+                text: '🚨 Multiplier Underflow Detected',
+                emoji: true,
+              },
+            },
+            {
+              type: 'section',
+              fields: [
+                {
+                  type: 'mrkdwn',
+                  text: `*Vault ID:*\n\`${data.vaultId}\``,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Vault Name:*\n${data.vaultName}`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Total Claim Amount:*\n${data.totalClaimAmount.toLocaleString()} base units`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Expected Supply:*\n${data.totalSupplyWithDecimals.toLocaleString()} base units`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Claim Percentage:*\n${data.claimPercentage}%`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*VT Decimals:*\n${data.decimals}`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Contributors:*\n${data.contributorCount}`,
+                },
+              ],
+            },
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text:
+                  `*⚠️ Critical: Multiplier Underflow Detected*\n` +
+                  `Vault claim amounts are less than 10% of total supply, indicating integer multiplier underflow.\n\n` +
+                  `*Root Cause:*\n` +
+                  `Price variance between contributed assets caused multipliers < 1.0 to floor to 0, ` +
+                  `wiping out most token allocations.\n\n` +
+                  `*Automatic Actions Taken:*\n` +
+                  `• Distribution halted\n` +
+                  `• Vault set to \`manual_distribution_mode = true\`\n` +
+                  `• Claims saved but distribution will NOT proceed automatically\n\n` +
+                  `*Required Manual Actions:*\n` +
+                  `1. Review acquire_multiplier array (see details below)\n` +
+                  `2. Determine if decimals need upgrading (6 → 7 or 8)\n` +
+                  `3. Recalculate multipliers with higher decimals if needed\n` +
+                  `4. Update vault metadata on-chain with corrected multipliers\n` +
+                  `5. Recalculate and update claim amounts\n` +
+                  `6. Set \`manual_distribution_mode = false\` to resume distribution`,
+              },
+            },
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: `*Multiplier Array:*\n\`\`\`${data.acquireMultiplier}\`\`\``,
+              },
+            },
+            {
+              type: 'context',
+              elements: [
+                {
+                  type: 'mrkdwn',
+                  text: `*Action:* ${data.action} | *Timestamp:* ${timestamp}`,
                 },
               ],
             },
