@@ -15,6 +15,7 @@ import { Proposal } from '@/database/proposal.entity';
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { AlertsService } from '@/modules/alerts/alerts.service';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
@@ -65,7 +66,8 @@ export class LifecycleService {
     private readonly transactionsService: TransactionsService,
     private readonly eventEmitter: EventEmitter2,
     private readonly systemSettingsService: SystemSettingsService,
-    private readonly expansionService: ExpansionService
+    private readonly expansionService: ExpansionService,
+    private readonly alertsService: AlertsService
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -291,6 +293,73 @@ export class LifecycleService {
   }
 
   /**
+   * Validate total claim amounts against vault supply to detect multiplier underflow.
+   * Sets vault to manual distribution mode if claim amounts are suspiciously low (<10% of supply).
+   *
+   * This prevents automatic distribution when integer multiplier truncation causes massive token loss.
+   * Should be called after claims are created but BEFORE on-chain metadata update.
+   *
+   * @param vault - The vault being validated
+   * @param claims - Array of contributor claims (acquirer claims not counted toward supply)
+   * @param acquireMultiplier - The calculated multiplier array for Slack alert
+   * @returns true if validation passed, false if vault was set to manual mode
+   */
+  private async validateClaimsBeforeDistribution(
+    vault: Vault,
+    claims: Partial<Claim>[],
+    acquireMultiplier: [string, string | null, number][]
+  ): Promise<boolean> {
+    const totalClaimAmount = claims.reduce((sum, claim) => sum + (claim.amount || 0), 0);
+    const totalSupplyWithDecimals = vault.ft_token_supply * Math.pow(10, vault.ft_token_decimals);
+    const minExpectedAmount = totalSupplyWithDecimals * 0.1; // 10% threshold
+    const claimPercentage = totalSupplyWithDecimals > 0 ? (totalClaimAmount / totalSupplyWithDecimals) * 100 : 0;
+
+    if (totalClaimAmount < minExpectedAmount) {
+      this.logger.error(
+        `🚨 CRITICAL: Vault ${vault.id} claim amounts are suspiciously low! ` +
+          `Total claims: ${totalClaimAmount} (${claimPercentage.toFixed(2)}%), ` +
+          `Expected: ${totalSupplyWithDecimals} (100%). ` +
+          `This indicates multiplier underflow. Setting manual_distribution_mode = true.`
+      );
+
+      // Set manual distribution mode to prevent automatic processing
+      await this.vaultRepository.update(
+        { id: vault.id },
+        {
+          manual_distribution_mode: true,
+          distribution_in_progress: false,
+        }
+      );
+
+      // Send Slack alert
+      await this.alertsService.sendAlert('multiplier_underflow_detected', {
+        vaultId: vault.id,
+        vaultName: vault.name || vault.asset_vault_name,
+        totalClaimAmount,
+        totalSupplyWithDecimals,
+        claimPercentage: claimPercentage.toFixed(2),
+        decimals: vault.ft_token_decimals,
+        contributorCount: claims.length,
+        acquireMultiplier: JSON.stringify(acquireMultiplier),
+        action: 'Vault set to manual_distribution_mode for admin review',
+      });
+
+      this.logger.log(
+        `Vault ${vault.id} distribution halted. Administrator must manually review multipliers and distribution.`
+      );
+
+      return false; // Validation failed
+    }
+
+    this.logger.log(
+      `Vault ${vault.id} claim validation passed: ${totalClaimAmount} base units ` +
+        `(${claimPercentage.toFixed(2)}% of supply). Proceeding with distribution.`
+    );
+
+    return true; // Validation passed
+  }
+
+  /**
    * Switch all custom price entries in asset whitelist to market pricing
    * Called when Contribution phase ends to ensure market-based valuations going forward
    *
@@ -386,6 +455,8 @@ export class LifecycleService {
   private async handleContributionToAcquire(): Promise<void> {
     const now = new Date();
 
+    // Skip vaults with manual_distribution = true from automatic phase transitions
+    // Manual distribution vaults require admin intervention and should not auto-transition
     const contributionVaults = await this.vaultRepository
       .createQueryBuilder('vault')
       .where('vault.vault_status = :status', { status: VaultStatus.contribution })
@@ -397,6 +468,9 @@ export class LifecycleService {
       .andWhere('vault.id NOT IN (:...processingIds)', {
         processingIds:
           this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'], // Dummy UUID to avoid empty array
+      })
+      .andWhere('(vault.manual_distribution_mode IS NULL OR vault.manual_distribution_mode = :manualDist)', {
+        manualDist: false,
       })
       .leftJoinAndSelect('vault.owner', 'owner')
       .leftJoinAndSelect('vault.assets_whitelist', 'assets_whitelist')
@@ -664,6 +738,8 @@ export class LifecycleService {
   private async handleAcquireToGovernance(): Promise<void> {
     const now = new Date();
 
+    // Skip vaults with manual_distribution = true from automatic phase transitions
+    // Manual distribution vaults require admin intervention and should not auto-transition
     const acquireVaults = await this.vaultRepository
       .createQueryBuilder('vault')
       .where('vault.vault_status = :status', { status: VaultStatus.acquire })
@@ -675,6 +751,9 @@ export class LifecycleService {
       .andWhere('vault.id NOT IN (:...processingIds)', {
         processingIds:
           this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'], // Dummy UUID to avoid empty array
+      })
+      .andWhere('(vault.manual_distribution_mode IS NULL OR vault.manual_distribution_mode = :manualDist)', {
+        manualDist: false,
       })
       .leftJoinAndSelect('vault.owner', 'owner')
       .leftJoinAndSelect('vault.assets', 'assets')
@@ -1192,6 +1271,17 @@ export class LifecycleService {
           acquirerClaims: finalAcquirerClaims,
         });
 
+        // Validate claim amounts to detect multiplier underflow
+        const validationPassed = await this.validateClaimsBeforeDistribution(
+          vault,
+          finalContributorClaims,
+          acquireMultiplier
+        );
+
+        if (!validationPassed) {
+          return; // Vault set to manual mode, exit early
+        }
+
         // Submit single update transaction with all multipliers
         const response = await this.vaultManagingService.updateVaultMetadataTx({
           vault,
@@ -1552,6 +1642,13 @@ export class LifecycleService {
           `No contributor claims created for vault ${vault.id}. ` +
             `This may indicate an issue with contribution value calculations.`
         );
+      }
+
+      // STEP 2.5: Validate claim amounts to detect multiplier underflow
+      const validationPassed = await this.validateClaimsBeforeDistribution(vault, contributorClaims, acquireMultiplier);
+
+      if (!validationPassed) {
+        return; // Vault set to manual mode, exit early
       }
 
       // STEP 3: Submit single update transaction with all multipliers
