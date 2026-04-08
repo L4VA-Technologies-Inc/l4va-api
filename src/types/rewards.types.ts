@@ -9,12 +9,6 @@ export enum RewardActivityType {
   GOVERNANCE_VOTE = 'governance_vote',
 }
 
-// Activities that trigger vesting (50/50 split)
-export const VESTING_ACTIVITIES: ReadonlySet<RewardActivityType> = new Set([
-  RewardActivityType.TOKEN_ACQUIRE,
-  RewardActivityType.EXPANSION_TOKEN_PURCHASE,
-]);
-
 export enum EpochStatus {
   ACTIVE = 'active',
   PROCESSING = 'processing',
