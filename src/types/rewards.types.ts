@@ -1,7 +1,6 @@
 export enum RewardActivityType {
   ASSET_CONTRIBUTION = 'asset_contribution',
   TOKEN_ACQUIRE = 'token_acquire',
-  ACQUIRE_PHASE_PURCHASE = 'acquire_phase_purchase',
   EXPANSION_ASSET_CONTRIBUTION = 'expansion_asset_contribution',
   EXPANSION_TOKEN_PURCHASE = 'expansion_token_purchase',
   LP_POSITION_UPDATE = 'lp_position_update',
@@ -13,7 +12,6 @@ export enum RewardActivityType {
 // Activities that trigger vesting (50/50 split)
 export const VESTING_ACTIVITIES: ReadonlySet<RewardActivityType> = new Set([
   RewardActivityType.TOKEN_ACQUIRE,
-  RewardActivityType.ACQUIRE_PHASE_PURCHASE,
   RewardActivityType.EXPANSION_TOKEN_PURCHASE,
 ]);
 
@@ -89,7 +87,6 @@ export const REWARDS_CONSTANTS = {
 export const DEFAULT_ACTIVITY_WEIGHTS: Record<RewardActivityType, number> = {
   [RewardActivityType.ASSET_CONTRIBUTION]: 10,
   [RewardActivityType.TOKEN_ACQUIRE]: 5,
-  [RewardActivityType.ACQUIRE_PHASE_PURCHASE]: 5,
   [RewardActivityType.EXPANSION_ASSET_CONTRIBUTION]: 10,
   [RewardActivityType.EXPANSION_TOKEN_PURCHASE]: 5,
   [RewardActivityType.LP_POSITION_UPDATE]: 15,
@@ -101,7 +98,6 @@ export const DEFAULT_ACTIVITY_WEIGHTS: Record<RewardActivityType, number> = {
 export interface ScoreBreakdown {
   asset_contribution?: number;
   token_acquire?: number;
-  acquire_phase_purchase?: number;
   expansion_asset_contribution?: number;
   expansion_token_purchase?: number;
   lp_position_update?: number;

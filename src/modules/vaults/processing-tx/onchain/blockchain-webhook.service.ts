@@ -284,19 +284,6 @@ export class BlockchainWebhookService {
             amount: transaction.amount,
           },
         });
-
-        // Also emit acquire phase purchase bonus
-        await this.rewardEventProducer.indexEvent({
-          walletAddress: user.address,
-          vaultId: transaction.vault_id,
-          eventType: RewardActivityType.ACQUIRE_PHASE_PURCHASE,
-          txHash,
-          units,
-          metadata: {
-            transaction_id: transaction.id,
-            amount: transaction.amount,
-          },
-        });
       }
     } catch (error) {
       // Non-blocking: reward indexing failure should not break webhook processing
