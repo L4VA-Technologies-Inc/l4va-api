@@ -9,6 +9,7 @@ import { TransactionsService } from '../offchain-tx/transactions.service';
 import { BlockchainWebhookDto, BlockfrostTransaction, BlockfrostTransactionEvent } from './dto/webhook.dto';
 import { OnchainTransactionStatus } from './types/transaction-status.enum';
 
+import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
@@ -38,6 +39,8 @@ export class BlockchainWebhookService {
     private readonly configService: ConfigService,
     private readonly assetsService: AssetsService,
     private readonly rewardEventProducer: RewardEventProducer,
+    @InjectRepository(Asset)
+    private readonly assetRepository: Repository<Asset>,
     @InjectRepository(Claim)
     private readonly claimRepository: Repository<Claim>,
     @InjectRepository(User)
@@ -256,8 +259,18 @@ export class BlockchainWebhookService {
       const isExpansion = vault.vault_status === VaultStatus.expansion;
 
       if (transaction.type === TransactionType.contribute) {
-        // 1 transaction = 1 contribution event (product decision)
-        const units = 1;
+        // Fetch assets for this transaction to count them
+        const assets = await this.assetRepository.find({
+          where: { transaction: { id: transaction.id } },
+          select: ['id', 'type'],
+        });
+
+        // Count by asset: each NFT = 1, each FT = 1
+        const units = assets.length;
+
+        // Store asset breakdown for debugging
+        const nftCount = assets.filter(a => a.type === 'nft').length;
+        const ftCount = assets.filter(a => a.type === 'ft').length;
 
         await this.rewardEventProducer.indexEvent({
           walletAddress: user.address,
@@ -267,7 +280,11 @@ export class BlockchainWebhookService {
             : RewardActivityType.ASSET_CONTRIBUTION,
           txHash,
           units,
-          metadata: { transaction_id: transaction.id },
+          metadata: {
+            transaction_id: transaction.id,
+            nft_count: nftCount,
+            ft_count: ftCount,
+          },
         });
       } else if (transaction.type === TransactionType.acquire) {
         // Acquire: use ADA amount as units (in lovelace)
