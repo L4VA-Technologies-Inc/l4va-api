@@ -6,18 +6,21 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { RewardsController } from './rewards.controller';
 import { RewardClaimProxy } from './services/reward-claim-proxy.service';
 import { RewardEventProducer } from './services/reward-event-producer.service';
+import { RewardsTransformerService } from './services/rewards-transformer.service';
 
 import { RewardEventOutbox } from '@/database/rewardEventOutbox.entity';
 
 /**
- * Thin rewards module for l4va-api.
- * Provides RewardEventProducer (writes events to outbox) and
- * RewardClaimProxy (proxies claim operations to l4va-rewards).
+ * Rewards module for l4va-api (BFF layer).
+ * Provides:
+ * - RewardEventProducer: writes events to outbox
+ * - RewardClaimProxy: proxies operations to l4va-rewards
+ * - RewardsTransformerService: transforms raw data into UI-ready DTOs
  */
 @Module({
   imports: [HttpModule, ConfigModule, TypeOrmModule.forFeature([RewardEventOutbox])],
   controllers: [RewardsController],
-  providers: [RewardEventProducer, RewardClaimProxy],
+  providers: [RewardEventProducer, RewardClaimProxy, RewardsTransformerService],
   exports: [RewardEventProducer],
 })
 export class RewardsModule {}
