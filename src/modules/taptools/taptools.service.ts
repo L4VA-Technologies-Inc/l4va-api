@@ -1790,8 +1790,8 @@ export class TaptoolsService {
       // Normalize image source (handles base64, IPFS, HTTP, etc.)
       let normalizedImage = normalizeAssetImageSource(rawImage) || '';
 
-      if (normalizedImage.startsWith('ipfs://')) {
-        normalizedImage = normalizedImage.replace(/^ipfs:\/\//, 'https://ipfs.blockfrost.dev/ipfs/');
+      if (/^ipfs:\/\//i.test(normalizedImage)) {
+        normalizedImage = normalizedImage.replace(/^ipfs:\/\//i, 'https://ipfs.blockfrost.dev/ipfs/');
       }
 
       const assetData: AssetValueDto = {
