@@ -289,39 +289,6 @@ export class AssetsService {
     const totalNFTAssets = parseFloat(rawStats?.totalNFTAssets || '0');
     const adjustedTotalFTAssets = parseFloat(rawStats?.totalFTAssets || '0');
 
-    // Calculate statistics excluding fee assets for accurate averages
-    const statsQueryExcludingFees = queryBuilder.clone();
-    statsQueryExcludingFees
-      .select(
-        `SUM(
-          CASE 
-            WHEN asset.type = :ftType THEN 
-              (asset.quantity / POWER(10, COALESCE(asset.decimals, 0))) * COALESCE(asset.dex_price, asset.floor_price, 0)
-            ELSE 
-              asset.quantity * COALESCE(asset.floor_price, asset.dex_price, 0)
-          END
-        )`,
-        'totalValueExcludingFees'
-      )
-      .addSelect(
-        `SUM(
-          CASE 
-            WHEN asset.type = :ftType THEN asset.quantity / POWER(10, COALESCE(asset.decimals, 0))
-            ELSE asset.quantity
-          END
-        )`,
-        'totalTokensExcludingFees'
-      )
-      .andWhere('asset.origin_type != :feeType', { feeType: AssetOriginType.FEE })
-      .setParameters({
-        nftType: AssetType.NFT,
-        ftType: AssetType.FT,
-      });
-
-    const rawStatsExcludingFees = await statsQueryExcludingFees.getRawOne();
-    const totalValueExcludingFees = parseFloat(rawStatsExcludingFees?.totalValueExcludingFees || '0');
-    const totalTokensExcludingFees = parseFloat(rawStatsExcludingFees?.totalTokensExcludingFees || '0');
-
     const [assets, total] = await queryBuilder
       .skip((page - 1) * limit)
       .take(limit)
@@ -331,8 +298,9 @@ export class AssetsService {
     const adaPrice = await this.priceService.getAdaPrice();
 
     const totalAssetValueUsd = adjustedTotalValueAda * adaPrice;
-    // Calculate average per token (excluding fee assets like VLRM)
-    const assetsAvgAda = totalTokensExcludingFees > 0 ? totalValueExcludingFees / totalTokensExcludingFees : 0;
+    // Calculate average per token (including all assets)
+    const totalTokens = adjustedTotalFTAssets + totalNFTAssets;
+    const assetsAvgAda = totalTokens > 0 ? adjustedTotalValueAda / totalTokens : 0;
     const assetsAvgUsd = assetsAvgAda * adaPrice;
 
     const assetsWithUsd = assets as Array<Asset & { floorPriceUsd?: number; valueUsd?: number }>;
