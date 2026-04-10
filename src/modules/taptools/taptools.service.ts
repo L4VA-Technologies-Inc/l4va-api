@@ -25,6 +25,7 @@ import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { VaultStatus } from '@/types/vault.types';
+import { normalizeAssetImageSource } from '@/utils/asset-image-source.util';
 
 /** Map of policyId -> custom price in ADA for vault-specific asset valuations */
 export type CustomPriceMap = Map<string, number>;
@@ -1775,6 +1776,20 @@ export class TaptoolsService {
       const decimals = details.metadata?.decimals || 0;
       const decimalAdjustedQuantity = decimals > 0 ? asset.quantity / Math.pow(10, decimals) : asset.quantity;
 
+      // Extract raw image from metadata (check both 'image' and 'logo' fields)
+      const rawImage =
+        (metadata as Record<string, unknown>)?.image ||
+        (details.metadata as any)?.logo ||
+        (details.onchain_metadata as Record<string, unknown>)?.image ||
+        '';
+
+      // Normalize image source (handles base64, IPFS, HTTP, etc.)
+      let normalizedImage = normalizeAssetImageSource(rawImage as string) || '';
+
+      if (normalizedImage.startsWith('ipfs://')) {
+        normalizedImage = normalizedImage.replace(/^ipfs:\/\//, 'https://ipfs.blockfrost.dev/ipfs/');
+      }
+
       const assetData: AssetValueDto = {
         tokenId: asset.unit,
         name: assetName,
@@ -1788,10 +1803,7 @@ export class TaptoolsService {
         valueAda: priceAda * decimalAdjustedQuantity, // Calculate value with decimal-adjusted quantity
         valueUsd: priceUsd * decimalAdjustedQuantity,
         metadata: {
-          image: String((metadata as Record<string, unknown>)?.image || '').replace(
-            /^ipfs:\/\/(?:ipfs\/)*/i,
-            'https://ipfs.blockfrost.dev/ipfs/'
-          ),
+          image: normalizedImage,
           policyId: details.policy_id,
           decimals: details.metadata?.decimals || 0,
           description: String((metadata as Record<string, unknown>)?.description || ''),
