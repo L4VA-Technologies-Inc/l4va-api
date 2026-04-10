@@ -1777,14 +1777,18 @@ export class TaptoolsService {
       const decimalAdjustedQuantity = decimals > 0 ? asset.quantity / Math.pow(10, decimals) : asset.quantity;
 
       // Extract raw image from metadata (check both 'image' and 'logo' fields)
-      const rawImage =
-        (metadata as Record<string, unknown>)?.image ||
-        (details.metadata as any)?.logo ||
-        (details.onchain_metadata as Record<string, unknown>)?.image ||
-        '';
+      const rawImageCandidates = [
+        (metadata as Record<string, unknown>)?.image,
+        (metadata as Record<string, unknown>)?.logo,
+        (details.metadata as any)?.image,
+        (details.metadata as any)?.logo,
+        (details.onchain_metadata as Record<string, unknown>)?.image,
+        (details.onchain_metadata as Record<string, unknown>)?.logo,
+      ];
+      const rawImage = rawImageCandidates.find((candidate): candidate is string => typeof candidate === 'string') || '';
 
       // Normalize image source (handles base64, IPFS, HTTP, etc.)
-      let normalizedImage = normalizeAssetImageSource(rawImage as string) || '';
+      let normalizedImage = normalizeAssetImageSource(rawImage) || '';
 
       if (normalizedImage.startsWith('ipfs://')) {
         normalizedImage = normalizedImage.replace(/^ipfs:\/\//, 'https://ipfs.blockfrost.dev/ipfs/');
