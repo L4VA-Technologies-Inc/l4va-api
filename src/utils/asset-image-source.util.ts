@@ -26,7 +26,7 @@ export function normalizeAssetImageSource(raw: string | null | undefined): strin
     }
     try {
       const decoded = Buffer.from(s, 'hex').toString('utf8');
-      const urlMatch = decoded.match(/(ipfs:\/\/\S+|https?:\/\/\S+)/);
+      const urlMatch = decoded.match(/(ipfs:\/\/\S+|https?:\/\/\S+)/i);
       if (urlMatch) {
         return normalizeAssetImageSource(urlMatch[1].trim());
       }
