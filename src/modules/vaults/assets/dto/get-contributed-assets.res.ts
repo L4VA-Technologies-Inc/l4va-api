@@ -99,32 +99,44 @@ export class AssetItemDto {
 
 export class AssetsStatisticsDto {
   @Expose()
-  @ApiProperty({ description: 'Total asset value in ADA', example: 1000.5 })
+  @ApiProperty({
+    description: 'Total combined value of all assets in ADA (includes contributed, bought, and fee assets)',
+    example: 1000.5,
+  })
   totalAssetValueAda: number;
 
   @Expose()
-  @ApiProperty({ description: 'Total asset value in USD', example: 500.25 })
+  @ApiProperty({
+    description: 'Total combined value of all assets in USD (includes contributed, bought, and fee assets)',
+    example: 500.25,
+  })
   totalAssetValueUsd: number;
 
   @Expose()
-  @ApiProperty({ description: 'Average asset value in ADA', example: 100.05 })
+  @ApiProperty({
+    description: 'Average value per token in ADA (total value ÷ total tokens, includes all assets)',
+    example: 3.98,
+  })
   assetsAvgAda: number;
 
   @Expose()
-  @ApiProperty({ description: 'Average asset value in USD', example: 50.025 })
+  @ApiProperty({
+    description: 'Average value per token in USD (total value ÷ total tokens, includes all assets)',
+    example: 1.0,
+  })
   assetsAvgUsd: number;
 
   @Expose()
   @ApiProperty({
-    description: 'Total quantity of all contributed NFT assets (count of NFTs)',
+    description: 'Total quantity of NFT assets (count of individual NFTs)',
     example: 50,
   })
   totalNFTAssets: number;
 
   @Expose()
   @ApiProperty({
-    description: 'Total quantity of all contributed FT assets (adjusted for decimals)',
-    example: 100.5,
+    description: 'Total quantity of FT assets (adjusted for decimals to show actual token count)',
+    example: 424.5,
   })
   totalFTAssets: number;
 }
