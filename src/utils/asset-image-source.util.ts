@@ -1,5 +1,7 @@
 /** Normalizes Cardano asset image/logo field into URL or data URL usable by image pipeline. */
 export function normalizeAssetImageSource(raw: string | null | undefined): string | null {
+  const MAX_HEX_METADATA_CHARS = 64 * 1024; // 64KB hex text (~32KB decoded bytes)
+
   if (raw == null || typeof raw !== 'string') {
     return null;
   }
@@ -12,6 +14,26 @@ export function normalizeAssetImageSource(raw: string | null | undefined): strin
   s = s.replace(/^ipfs:\/\/(ipfs\/)+/, 'ipfs://');
   if (s.startsWith('http://') || s.startsWith('https://') || s.startsWith('ipfs://') || s.startsWith('data:')) {
     return s;
+  }
+
+  // Hex-encoded values: Blockfrost sometimes returns on-chain metadata fields as CBOR byte strings
+  // in hex form (e.g., "5835697066733a2f2f..." → CBOR prefix 58 35 + "ipfs://...").
+  // Hex chars (0-9, a-f) are a strict subset of base64 chars, so we must detect this BEFORE
+  // the base64 path to avoid wrapping a valid IPFS URL as a fake data:image/png.
+  if (s.length % 2 === 0 && /^[0-9a-fA-F]+$/.test(s)) {
+    if (s.length > MAX_HEX_METADATA_CHARS) {
+      return null;
+    }
+    try {
+      const decoded = Buffer.from(s, 'hex').toString('utf8');
+      const urlMatch = decoded.match(/(ipfs:\/\/\S+|https?:\/\/\S+)/);
+      if (urlMatch) {
+        return normalizeAssetImageSource(urlMatch[1].trim());
+      }
+    } catch {
+      // Treat undecodable hex-like payloads as invalid image source.
+    }
+    return null;
   }
 
   const b64 = s.replace(/\s/g, '');
