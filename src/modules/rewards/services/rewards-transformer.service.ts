@@ -178,9 +178,10 @@ export class RewardsTransformerService {
   transformVestingPosition(position: any) {
     if (!position) return null;
 
-    const startDate = new Date(position.start_date || position.startDate);
-    const endDate = new Date(position.end_date || position.endDate);
-    const unlockDate = position.unlock_date || position.unlockDate ? new Date(position.unlock_date || position.unlockDate) : null;
+    const startDate = new Date(position.vesting_start || position.start_date || position.startDate);
+    const endDate = new Date(position.vesting_end || position.end_date || position.endDate);
+    const unlockDate =
+      position.unlock_date || position.unlockDate ? new Date(position.unlock_date || position.unlockDate) : null;
     const now = new Date();
 
     const totalDuration = endDate.getTime() - startDate.getTime();
@@ -196,6 +197,9 @@ export class RewardsTransformerService {
       epochId: position.epoch_id || position.epochId,
       epochNumber: position.epoch_number || position.epochNumber,
       totalAmount: position.total_amount || position.totalAmount,
+      vestedAmount: position.vested_amount || position.vestedAmount,
+      unlockedAmount: position.unlocked_amount || position.unlockedAmount,
+      claimedAmount: position.claimed_amount || position.claimedAmount,
       releasedAmount: position.released_amount || position.releasedAmount,
       remainingAmount: position.remaining_amount || position.remainingAmount,
       startDate: startDate.toISOString(),
@@ -213,10 +217,12 @@ export class RewardsTransformerService {
       daysUntilUnlock: unlockDate
         ? Math.max(0, Math.ceil((unlockDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)))
         : null,
-      nextRelease: position.next_release ? {
-        amount: position.next_release.amount,
-        date: position.next_release.date,
-      } : undefined,
+      nextRelease: position.next_release
+        ? {
+            amount: position.next_release.amount,
+            date: position.next_release.date,
+          }
+        : undefined,
     };
   }
 
@@ -230,7 +236,9 @@ export class RewardsTransformerService {
     if (!data) return null;
 
     const activePositions = this.transformVestingPositions(data.activePositions || data.active_positions || []);
-    const completedPositions = this.transformVestingPositions(data.completedPositions || data.completed_positions || []);
+    const completedPositions = this.transformVestingPositions(
+      data.completedPositions || data.completed_positions || []
+    );
 
     const totalVested = data.totalVested || data.total_vested || 0;
     const totalReleased = data.totalReleased || data.total_released || 0;
@@ -253,14 +261,19 @@ export class RewardsTransformerService {
       hasUnlockedRewards: totalUnlocked > 0,
       lockedPercentage: totalVested > 0 ? (totalLocked / totalVested) * 100 : 0,
       unlockedPercentage: totalVested > 0 ? (totalUnlocked / totalVested) * 100 : 0,
-      nextUnlock: data.nextUnlock || data.next_unlock ? {
-        amount: (data.nextUnlock || data.next_unlock).amount,
-        date: (data.nextUnlock || data.next_unlock).date,
-        daysUntil: Math.max(
-          0,
-          Math.ceil((new Date((data.nextUnlock || data.next_unlock).date).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
-        ),
-      } : null,
+      nextUnlock:
+        data.nextUnlock || data.next_unlock
+          ? {
+              amount: (data.nextUnlock || data.next_unlock).amount,
+              date: (data.nextUnlock || data.next_unlock).date,
+              daysUntil: Math.max(
+                0,
+                Math.ceil(
+                  (new Date((data.nextUnlock || data.next_unlock).date).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
+                )
+              ),
+            }
+          : null,
     };
   }
 
@@ -294,7 +307,7 @@ export class RewardsTransformerService {
       epochId: data.epochId || data.epoch_id,
       epochNumber: data.epochNumber || data.epoch_number,
       totalReward: data.totalReward || data.total_reward,
-      vaults: Array.isArray(data.vaults) 
+      vaults: Array.isArray(data.vaults)
         ? data.vaults.map((vault: any) => ({
             ...vault,
             vaultId: vault.vault_id || vault.vaultId,
@@ -344,12 +357,14 @@ export class RewardsTransformerService {
       currentEpochId: data.currentEpochId || data.current_epoch_id || data.epochId,
       currentEpochNumber: data.currentEpochNumber || data.current_epoch_number || data.epoch_number,
       estimatedReward: data.estimatedReward || data.estimated_reward,
-      breakdown: data.breakdown ? {
-        creatorScore: data.breakdown.creator_score || data.breakdown.creatorScore || 0,
-        participantScore: data.breakdown.participant_score || data.breakdown.participantScore || 0,
-        lpScore: data.breakdown.lp_score || data.breakdown.lpScore || 0,
-        governanceScore: data.breakdown.governance_score || data.breakdown.governanceScore || 0,
-      } : undefined,
+      breakdown: data.breakdown
+        ? {
+            creatorScore: data.breakdown.creator_score || data.breakdown.creatorScore || 0,
+            participantScore: data.breakdown.participant_score || data.breakdown.participantScore || 0,
+            lpScore: data.breakdown.lp_score || data.breakdown.lpScore || 0,
+            governanceScore: data.breakdown.governance_score || data.breakdown.governanceScore || 0,
+          }
+        : undefined,
     };
   }
 }
