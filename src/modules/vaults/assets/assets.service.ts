@@ -127,7 +127,8 @@ export class AssetsService {
           );
           vlrmDexPrice = fetchedPrice || 0;
         } catch (error) {
-          this.logger.warn(`Failed to fetch VLRM dex price from DexHunter: ${error.message}, using default: 0`);
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+          this.logger.warn(`Failed to fetch VLRM dex price from DexHunter: ${errorMessage}, using default: 0`);
           vlrmDexPrice = 0;
         }
       } else {
@@ -288,6 +289,39 @@ export class AssetsService {
     const totalNFTAssets = parseFloat(rawStats?.totalNFTAssets || '0');
     const adjustedTotalFTAssets = parseFloat(rawStats?.totalFTAssets || '0');
 
+    // Calculate statistics excluding fee assets for accurate averages
+    const statsQueryExcludingFees = queryBuilder.clone();
+    statsQueryExcludingFees
+      .select(
+        `SUM(
+          CASE 
+            WHEN asset.type = :ftType THEN 
+              (asset.quantity / POWER(10, COALESCE(asset.decimals, 0))) * COALESCE(asset.dex_price, asset.floor_price, 0)
+            ELSE 
+              asset.quantity * COALESCE(asset.floor_price, asset.dex_price, 0)
+          END
+        )`,
+        'totalValueExcludingFees'
+      )
+      .addSelect(
+        `SUM(
+          CASE 
+            WHEN asset.type = :ftType THEN asset.quantity / POWER(10, COALESCE(asset.decimals, 0))
+            ELSE asset.quantity
+          END
+        )`,
+        'totalTokensExcludingFees'
+      )
+      .andWhere('asset.origin_type != :feeType', { feeType: AssetOriginType.FEE })
+      .setParameters({
+        nftType: AssetType.NFT,
+        ftType: AssetType.FT,
+      });
+
+    const rawStatsExcludingFees = await statsQueryExcludingFees.getRawOne();
+    const totalValueExcludingFees = parseFloat(rawStatsExcludingFees?.totalValueExcludingFees || '0');
+    const totalTokensExcludingFees = parseFloat(rawStatsExcludingFees?.totalTokensExcludingFees || '0');
+
     const [assets, total] = await queryBuilder
       .skip((page - 1) * limit)
       .take(limit)
@@ -297,8 +331,9 @@ export class AssetsService {
     const adaPrice = await this.priceService.getAdaPrice();
 
     const totalAssetValueUsd = adjustedTotalValueAda * adaPrice;
-    const assetsAvgAda = total > 0 ? adjustedTotalValueAda / total : 0;
-    const assetsAvgUsd = total > 0 ? totalAssetValueUsd / total : 0;
+    // Calculate average per token (excluding fee assets like VLRM)
+    const assetsAvgAda = totalTokensExcludingFees > 0 ? totalValueExcludingFees / totalTokensExcludingFees : 0;
+    const assetsAvgUsd = assetsAvgAda * adaPrice;
 
     const assetsWithUsd = assets as Array<Asset & { floorPriceUsd?: number; valueUsd?: number }>;
 
@@ -809,7 +844,8 @@ export class AssetsService {
       // Note: Vault totals update will be triggered by scheduled job or manually
       // We don't await it here to avoid blocking the price update process
     } catch (error) {
-      throw new Error(`Failed to update asset valuations: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      throw new Error(`Failed to update asset valuations: ${errorMessage}`);
     }
   }
 
