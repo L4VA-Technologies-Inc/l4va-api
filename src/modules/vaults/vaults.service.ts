@@ -1294,7 +1294,7 @@ export class VaultsService {
       switch (filter) {
         case VaultFilter.open:
           queryBuilder.andWhere('vault.vault_status IN (:...statuses)', {
-            statuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire],
+            statuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire, VaultStatus.expansion],
           });
           break;
         case VaultFilter.contribution:
