@@ -300,20 +300,44 @@ export class RewardsTransformerService {
   }
 
   transformWalletVaults(data: any) {
-    if (!data || !data.vaults) return { walletAddress: '', vaults: [], epochId: '', epochNumber: 0, totalReward: '0' };
+    // Handle empty/null data
+    if (!data) {
+      return {
+        walletAddress: '',
+        vaults: [],
+        epochId: '',
+        epochNumber: 0,
+        totalRewardBeforeCap: 0,
+        totalFinalReward: 0,
+        wasCapped: false,
+        capDifference: 0,
+      };
+    }
+
+    const totalRewardBeforeCap = data.total_reward_before_cap || data.totalRewardBeforeCap || 0;
+    const totalFinalReward = data.total_final_reward || data.totalFinalReward || 0;
+    const wasCapped = data.was_capped || data.wasCapped || false;
+    const capDifference = data.cap_difference || data.capDifference || 0;
 
     return {
-      walletAddress: data.walletAddress || data.wallet_address,
-      epochId: data.epochId || data.epoch_id,
-      epochNumber: data.epochNumber || data.epoch_number,
-      totalReward: data.totalReward || data.total_reward,
+      walletAddress: data.wallet_address || data.walletAddress || '',
+      epochId: data.epoch_id || data.epochId || '',
+      epochNumber: data.epoch_number || data.epochNumber || 0,
+      // Vault rewards (uncapped)
+      totalRewardBeforeCap,
+      // Final rewards (after 5% cap applied)
+      totalFinalReward,
+      wasCapped,
+      capDifference,
+      // Backwards compatibility
+      totalReward: totalFinalReward || totalRewardBeforeCap,
       vaults: Array.isArray(data.vaults)
         ? data.vaults.map((vault: any) => ({
             ...vault,
             vaultId: vault.vault_id || vault.vaultId,
             vaultName: vault.vault_name || vault.vaultName,
-            totalReward: vault.total_reward || vault.totalReward,
-            epochCount: vault.epoch_count || vault.epochCount,
+            totalReward: vault.total_reward || vault.totalReward || 0,
+            epochCount: vault.epoch_count || vault.epochCount || 0,
             // Computed properties
             isCreator: vault.role === 'creator' || vault.role === 'both',
             isParticipant: vault.role === 'participant' || vault.role === 'both',
