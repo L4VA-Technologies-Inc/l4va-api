@@ -185,6 +185,46 @@ export class RewardsController {
     return this.rewardClaimProxy.executeClaim(walletAddress, body);
   }
 
+  /**
+   * POST /rewards/claims/:walletAddress/build
+   * Build and submit a claim transaction with on-chain L4VA payment.
+   * Returns 200 with transaction hash on success.
+   * Returns 400 BadRequest on failure (claims are automatically rolled back).
+   */
+  @UseGuards(AuthGuard)
+  @Post('claims/:walletAddress/build')
+  async buildClaimTransaction(
+    @Param('walletAddress') walletAddress: string,
+    @Body() body: { epochIds?: string[]; claimImmediate?: boolean; claimVested?: boolean }
+  ): Promise<{
+    success: boolean;
+    txHash: string;
+    claimedAmount: number;
+    claimedImmediateAmount: number;
+    claimedVestedAmount: number;
+  }> {
+    // Let BadRequestException propagate - NestJS will handle as HTTP 400
+    return this.rewardClaimProxy.buildAndExecuteClaim(walletAddress, body);
+  }
+
+  /**
+   * POST /rewards/claims/submit
+   * Submit a signed claim transaction to the blockchain.
+   * Note: The transaction is already signed by the treasury in the build step.
+   */
+  @UseGuards(AuthGuard)
+  @Post('claims/submit')
+  async submitClaimTransaction(@Body() body: { txCbor: string }): Promise<{
+    success: boolean;
+    txHash?: string;
+    error?: string;
+  }> {
+    if (!body.txCbor) {
+      return { success: false, error: 'txCbor is required' };
+    }
+    return this.rewardClaimProxy.submitClaimTransaction(body.txCbor);
+  }
+
   // ============================================================================
   // Vesting Endpoints (proxied to l4va-rewards)
   // ============================================================================

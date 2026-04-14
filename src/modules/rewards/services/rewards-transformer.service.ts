@@ -357,14 +357,10 @@ export class RewardsTransformerService {
       currentEpochId: data.currentEpochId || data.current_epoch_id || data.epochId,
       currentEpochNumber: data.currentEpochNumber || data.current_epoch_number || data.epoch_number,
       estimatedReward: data.estimatedReward || data.estimated_reward,
-      breakdown: data.breakdown
-        ? {
-            creatorScore: data.breakdown.creator_score || data.breakdown.creatorScore || 0,
-            participantScore: data.breakdown.participant_score || data.breakdown.participantScore || 0,
-            lpScore: data.breakdown.lp_score || data.breakdown.lpScore || 0,
-            governanceScore: data.breakdown.governance_score || data.breakdown.governanceScore || 0,
-          }
-        : undefined,
+      estimatedScore: data.estimatedScore || data.estimated_score,
+      eventCount: data.eventCount || data.event_count,
+      // Pass through activity breakdown (keyed by activity type)
+      breakdown: data.breakdown || undefined,
     };
   }
 }

@@ -219,7 +219,7 @@ export class BlockchainService {
    * @param signedTx Signed transaction data
    * @returns Transaction hash
    */
-  async submitTransaction(signedTx: {
+  async   submitTransaction(signedTx: {
     transaction: string;
     signatures?: string[];
   }): Promise<TransactionSubmitResponse> {
