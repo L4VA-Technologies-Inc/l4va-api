@@ -235,7 +235,7 @@ export class RewardClaimProxy {
   // ============================================================================
 
   async getVestingPositions(walletAddress: string): Promise<any> {
-    const url = `${this.rewardsBaseUrl}/api/v1/rewards/vesting/${walletAddress}`;
+    const url = `${this.rewardsBaseUrl}/api/v1/rewards/vesting/${walletAddress}/summary`;
     const { data } = await firstValueFrom(this.httpService.get(url));
     return data;
   }
