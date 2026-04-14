@@ -2,7 +2,6 @@ import { Body, Controller, Get, Param, Post, Query, Request, UseGuards } from '@
 
 import { RewardClaimProxy } from './services/reward-claim-proxy.service';
 import { RewardEventProducer } from './services/reward-event-producer.service';
-import { RewardsTransformerService } from './services/rewards-transformer.service';
 
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
@@ -13,7 +12,7 @@ import { RewardActivityType, WidgetSwapEventData, WidgetSwapItemData } from '@/t
  * Acts as a BFF (Backend For Frontend) layer:
  * - Handles widget-swap event ingestion
  * - Proxies all read/write operations to internal l4va-rewards service
- * - Transforms raw data into UI-ready responses with computed properties
+ * - l4va-rewards returns clean, typed DTOs (no transformation needed)
  *
  * l4va-rewards remains an internal/private service.
  */
@@ -22,7 +21,6 @@ export class RewardsController {
   constructor(
     private readonly rewardEventProducer: RewardEventProducer,
     private readonly rewardClaimProxy: RewardClaimProxy,
-    private readonly transformer: RewardsTransformerService
   ) {}
 
   /**
@@ -73,20 +71,17 @@ export class RewardsController {
 
   @Get('epochs')
   async getEpochs(@Query('limit') limit = '20', @Query('offset') offset = '0'): Promise<any> {
-    const data = await this.rewardClaimProxy.getEpochs(parseInt(limit, 10), parseInt(offset, 10));
-    return this.transformer.transformEpochs(data);
+    return this.rewardClaimProxy.getEpochs(parseInt(limit, 10), parseInt(offset, 10));
   }
 
   @Get('epochs/current')
   async getCurrentEpoch(): Promise<any> {
-    const data = await this.rewardClaimProxy.getCurrentEpoch();
-    return this.transformer.transformCurrentEpoch(data);
+    return this.rewardClaimProxy.getCurrentEpoch();
   }
 
   @Get('epochs/:id')
   async getEpochDetails(@Param('id') id: string): Promise<any> {
-    const data = await this.rewardClaimProxy.getEpochById(id);
-    return this.transformer.transformEpoch(data);
+    return this.rewardClaimProxy.getEpochById(id);
   }
 
   // ============================================================================
@@ -96,15 +91,13 @@ export class RewardsController {
   @UseGuards(AuthGuard)
   @Get('score/:walletAddress')
   async getWalletScore(@Param('walletAddress') walletAddress: string): Promise<any> {
-    const data = await this.rewardClaimProxy.getWalletScore(walletAddress);
-    return this.transformer.transformWalletScore(data);
+    return this.rewardClaimProxy.getWalletScore(walletAddress);
   }
 
   @UseGuards(AuthGuard)
   @Get('history/:walletAddress')
   async getWalletHistory(@Param('walletAddress') walletAddress: string, @Query('limit') limit = '20'): Promise<any> {
-    const data = await this.rewardClaimProxy.getWalletHistory(walletAddress, parseInt(limit, 10));
-    return this.transformer.transformWalletHistory(data);
+    return this.rewardClaimProxy.getWalletHistory(walletAddress, parseInt(limit, 10));
   }
 
   // ============================================================================
@@ -113,8 +106,7 @@ export class RewardsController {
 
   @Get('vault/:vaultId/scores')
   async getVaultScores(@Param('vaultId') vaultId: string, @Query('epochId') epochId?: string): Promise<any> {
-    const data = await this.rewardClaimProxy.getVaultScores(vaultId, epochId);
-    return this.transformer.transformVaultScores(data);
+    return this.rewardClaimProxy.getVaultScores(vaultId, epochId);
   }
 
   @UseGuards(AuthGuard)
@@ -124,8 +116,7 @@ export class RewardsController {
     @Param('vaultId') vaultId: string,
     @Query('epochId') epochId?: string
   ): Promise<any> {
-    const data = await this.rewardClaimProxy.getWalletVaultReward(walletAddress, vaultId, epochId);
-    return this.transformer.transformWalletVaultReward(data);
+    return this.rewardClaimProxy.getWalletVaultReward(walletAddress, vaultId, epochId);
   }
 
   @UseGuards(AuthGuard)
@@ -134,8 +125,7 @@ export class RewardsController {
     @Param('walletAddress') walletAddress: string,
     @Query('epochId') epochId?: string
   ): Promise<any> {
-    const data = await this.rewardClaimProxy.getWalletVaults(walletAddress, epochId);
-    return this.transformer.transformWalletVaults(data);
+    return this.rewardClaimProxy.getWalletVaults(walletAddress, epochId);
   }
 
   // ============================================================================
@@ -145,22 +135,19 @@ export class RewardsController {
   @UseGuards(AuthGuard)
   @Get('claims/:walletAddress')
   async getClaimsSummary(@Param('walletAddress') walletAddress: string): Promise<any> {
-    const data = await this.rewardClaimProxy.getAvailableClaims(walletAddress);
-    return this.transformer.transformClaimsSummary(data);
+    return this.rewardClaimProxy.getAvailableClaims(walletAddress);
   }
 
   @UseGuards(AuthGuard)
   @Get('claims/:walletAddress/claimable')
   async getClaimableAmount(@Param('walletAddress') walletAddress: string): Promise<any> {
-    const data = await this.rewardClaimProxy.getClaimableSummary(walletAddress);
-    return this.transformer.transformClaimsSummary(data);
+    return this.rewardClaimProxy.getClaimableSummary(walletAddress);
   }
 
   @UseGuards(AuthGuard)
   @Get('claims/:walletAddress/history')
   async getClaimHistory(@Param('walletAddress') walletAddress: string, @Query('limit') limit = '50'): Promise<any> {
-    const data = await this.rewardClaimProxy.getClaimHistory(walletAddress, parseInt(limit, 10));
-    return this.transformer.transformClaimHistory(data);
+    return this.rewardClaimProxy.getClaimHistory(walletAddress, parseInt(limit, 10));
   }
 
   @UseGuards(AuthGuard)
@@ -169,8 +156,7 @@ export class RewardsController {
     @Param('walletAddress') walletAddress: string,
     @Query('limit') limit = '50'
   ): Promise<any> {
-    const data = await this.rewardClaimProxy.getClaimTransactions(walletAddress, parseInt(limit, 10));
-    return this.transformer.transformClaimTransactions(data);
+    return this.rewardClaimProxy.getClaimTransactions(walletAddress, parseInt(limit, 10));
   }
 
   @UseGuards(AuthGuard)
@@ -232,15 +218,13 @@ export class RewardsController {
   @UseGuards(AuthGuard)
   @Get('vesting/:walletAddress')
   async getVestingSummary(@Param('walletAddress') walletAddress: string): Promise<any> {
-    const data = await this.rewardClaimProxy.getVestingPositions(walletAddress);
-    return this.transformer.transformVestingSummary(data);
+    return this.rewardClaimProxy.getVestingPositions(walletAddress);
   }
 
   @UseGuards(AuthGuard)
   @Get('vesting/:walletAddress/active')
   async getActiveVesting(@Param('walletAddress') walletAddress: string): Promise<any> {
-    const data = await this.rewardClaimProxy.getActiveVesting(walletAddress);
-    return this.transformer.transformVestingPositions(data);
+    return this.rewardClaimProxy.getActiveVesting(walletAddress);
   }
 
   // ============================================================================
@@ -262,8 +246,7 @@ export class RewardsController {
   @UseGuards(AuthGuard)
   @Get('claims')
   async getAvailableClaims(@Request() req: AuthRequest): Promise<any> {
-    const data = await this.rewardClaimProxy.getAvailableClaims(req.user.address);
-    return this.transformer.transformClaimsSummary(data);
+    return this.rewardClaimProxy.getAvailableClaims(req.user.address);
   }
 
   /**
@@ -272,8 +255,7 @@ export class RewardsController {
   @UseGuards(AuthGuard)
   @Get('claims/history')
   async getClaimHistoryLegacy(@Request() req: AuthRequest, @Query('limit') limit = '50'): Promise<any> {
-    const data = await this.rewardClaimProxy.getClaimHistory(req.user.address, parseInt(limit, 10));
-    return this.transformer.transformClaimHistory(data);
+    return this.rewardClaimProxy.getClaimHistory(req.user.address, parseInt(limit, 10));
   }
 
   /**
@@ -297,7 +279,6 @@ export class RewardsController {
   @UseGuards(AuthGuard)
   @Get('vesting')
   async getVestingPositions(@Request() req: AuthRequest): Promise<any> {
-    const data = await this.rewardClaimProxy.getVestingPositions(req.user.address);
-    return this.transformer.transformVestingSummary(data);
+    return this.rewardClaimProxy.getVestingPositions(req.user.address);
   }
 }
