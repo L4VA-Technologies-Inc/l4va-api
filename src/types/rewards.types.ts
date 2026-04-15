@@ -17,7 +17,9 @@ export enum EpochStatus {
 
 export enum VestingPositionStatus {
   ACTIVE = 'active',
-  FULLY_UNLOCKED = 'fully_unlocked',
+  /** Vesting period ended and finalized. unlocked_amount may be < vested_amount due to hold_factor. */
+  FINALIZED = 'fully_unlocked',
+  /** Cancelled due to low hold_factor at maturity. Already unlocked amount remains claimable. */
   CANCELLED = 'cancelled',
 }
 
