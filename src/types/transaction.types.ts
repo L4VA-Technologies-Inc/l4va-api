@@ -23,6 +23,8 @@ export enum TransactionType {
   swap = 'swap',
   stake = 'stake',
   unstake = 'unstake',
+  harvest = 'harvest',
+  compound = 'compound',
   extractLp = 'extract-lp',
   distributeLp = 'distribute-lp',
   /** ADA distribution from treasury to VT holders */

@@ -23,6 +23,25 @@ import { Transaction } from '@/database/transaction.entity';
 import { UtxoRefDto } from '@/modules/stake/dto/unstake-tokens.dto';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
+/** Transaction types that "renew" a box — their staked_at must also be trusted. */
+const STAKE_LIKE_TYPES = [TransactionType.stake, TransactionType.harvest, TransactionType.compound];
+
+/** Transaction types built from the admin wallet and requiring admin co-sign on submit. */
+const ADMIN_SIGNED_TYPES = [TransactionType.unstake, TransactionType.harvest, TransactionType.compound];
+
+type ProcessedBox = { utxo: UTxO; unit: string; deposit: bigint; reward: bigint; payout: bigint };
+
+type AdminTxData = {
+  ok: true;
+  lucid: LucidEvolution;
+  ownerHash: string;
+  referenceUtxo: UTxO;
+  eligibleBoxes: UTxO[];
+  processedBoxes: ProcessedBox[];
+  totalDepositAll: bigint;
+  totalRewardAll: bigint;
+};
+
 @Injectable()
 export class StakeService {
   private readonly logger = new Logger(StakeService.name);
@@ -35,9 +54,8 @@ export class StakeService {
   private readonly referenceScriptIndex: number;
   private readonly adminAddress: string;
   private readonly adminSKey: string;
-  private readonly APY = 0.12; // 12% p.a.
+  private readonly APY = 0.12;
   private readonly TOKEN_DECIMALS = 4;
-  private readonly unstakeCooldownMs: number;
 
   constructor(
     private readonly configService: ConfigService,
@@ -52,11 +70,6 @@ export class StakeService {
     this.referenceScriptIndex = parseInt(this.configService.get<string>('REFERENCE_SCRIPT_INDEX') ?? '0', 10);
     this.adminAddress = this.configService.getOrThrow<string>('ADMIN_ADDRESS');
     this.adminSKey = this.configService.getOrThrow<string>('ADMIN_S_KEY');
-
-    const cooldownDaysRaw = this.configService.get<string>('UNSTAKE_COOLDOWN_DAYS') ?? '30';
-    const cooldownDays = Number.parseInt(cooldownDaysRaw, 10);
-    const safeCooldownDays = Number.isFinite(cooldownDays) && cooldownDays > 0 ? cooldownDays : 30;
-    this.unstakeCooldownMs = safeCooldownDays * 24 * 60 * 60 * 1000;
   }
 
   private async createLucid(): Promise<LucidEvolution> {
@@ -110,12 +123,8 @@ export class StakeService {
   }
 
   /**
-   * Filters candidate UTxOs down to only those that pass both security checks:
-   * 1. trusted staked_at — datum matches a confirmed stake record in the DB
-   * 2. cooldown — enough time has passed since staking
-   *
-   * `unit` is intentionally absent: we load all confirmed stake records for the
-   * user so the same check works for single- or multi-asset unstake requests.
+   * Filters candidate UTxOs down to only those that pass the security check:
+   * 1. trusted staked_at — datum matches a confirmed stake/harvest/compound record in the DB
    */
   private async getUnstakeEligibleBoxes(
     userId: string,
@@ -125,18 +134,15 @@ export class StakeService {
     const stakeRecords = await this.transactionRepository.find({
       where: {
         user_id: userId,
-        type: TransactionType.stake,
-        status: In([TransactionStatus.confirmed, TransactionStatus.submitted]),
+        type: In(STAKE_LIKE_TYPES),
+        status: TransactionStatus.confirmed,
       },
       select: ['metadata'],
     });
 
-    // Build a set of all trusted staked_at timestamps across all assets for this user.
     const trustedStakedAt = new Set(
       stakeRecords.map(r => Number(r.metadata?.staked_at)).filter(v => Number.isFinite(v) && v > 0)
     );
-
-    const now = Date.now();
 
     const verifiedBoxes = candidateBoxes.filter(utxo => {
       const decoded = tryDecodeStakeDatum(utxo.datum!);
@@ -146,15 +152,6 @@ export class StakeService {
         this.logger.warn(
           `getUnstakeEligibleBoxes: rejecting UTxO ${utxo.txHash}#${utxo.outputIndex} ` +
             `with unverified staked_at=${stakedAt} for user ${userId} — no matching DB stake record`
-        );
-        return false;
-      }
-
-      const elapsed = now - stakedAt;
-      if (elapsed < this.unstakeCooldownMs) {
-        this.logger.log(
-          `getUnstakeEligibleBoxes: cooldown not met for UTxO ${utxo.txHash}#${utxo.outputIndex} ` +
-            `(elapsed=${elapsed}ms, required=${this.unstakeCooldownMs}ms)`
         );
         return false;
       }
@@ -170,10 +167,9 @@ export class StakeService {
     }
 
     if (verifiedBoxes.length === 0) {
-      const days = Math.ceil(this.unstakeCooldownMs / (24 * 60 * 60 * 1000));
       return {
         ok: false,
-        message: `No eligible UTxOs found. All positions were either unverified or still within the ${days}-day cooldown.`,
+        message: `No eligible UTxOs found. All positions were unverified.`,
       } as const;
     }
 
@@ -181,9 +177,93 @@ export class StakeService {
   }
 
   /**
+   * Resolves requested UTxO refs on-chain, verifies ownership, and returns
+   * only those that actually exist and belong to this user.
+   */
+  private async resolveRequestedBoxes(
+    lucid: LucidEvolution,
+    userAddress: string,
+    ownerHash: string,
+    utxoRefs: UtxoRefDto[]
+  ): Promise<{ ok: true; boxes: UTxO[] } | { ok: false; message: string }> {
+    const scriptUtxos = await lucid.utxosAt(this.contractAddress);
+
+    const refKey = (txHash: string, outputIndex: number): string => `${txHash}#${outputIndex}`;
+    const requestedKeys = new Set(utxoRefs.map(r => refKey(r.txHash, r.outputIndex)));
+
+    const requestedBoxes = scriptUtxos.filter(utxo => {
+      if (!requestedKeys.has(refKey(utxo.txHash, utxo.outputIndex))) return false;
+      if (!utxo.datum) return false;
+      const decoded = tryDecodeStakeDatum(utxo.datum);
+      return decoded !== null && decoded.owner === ownerHash;
+    });
+
+    if (requestedBoxes.length === 0) {
+      return { ok: false, message: 'None of the requested UTxOs were found at the contract for your address.' };
+    }
+
+    if (requestedBoxes.length < utxoRefs.length) {
+      this.logger.warn(
+        `resolveRequestedBoxes: ${utxoRefs.length - requestedBoxes.length} requested UTxO(s) not found on-chain for ${userAddress}`
+      );
+    }
+
+    return { ok: true, boxes: requestedBoxes };
+  }
+
+  /**
+   * Shared setup for all admin-wallet operations (unstake, harvest, compound).
+   * Initialises Lucid, verifies ownership, filters eligible boxes,
+   * loads the reference script, and pre-computes per-box reward data.
+   */
+  private async prepareAdminTxData(
+    userId: string,
+    userAddress: string,
+    utxoRefs: UtxoRefDto[]
+  ): Promise<AdminTxData | { ok: false; message: string }> {
+    const lucid = await this.getLucidForAdmin();
+
+    const { paymentCredential } = getAddressDetails(userAddress);
+    if (!paymentCredential?.hash) throw new Error('Invalid user address.');
+    const ownerHash = paymentCredential.hash;
+
+    const resolved = await this.resolveRequestedBoxes(lucid, userAddress, ownerHash, utxoRefs);
+    if (resolved.ok === false) return { ok: false, message: resolved.message } as const;
+
+    const eligible = await this.getUnstakeEligibleBoxes(userId, userAddress, resolved.boxes);
+    if (eligible.ok === false) return { ok: false, message: eligible.message } as const;
+
+    const [referenceUtxo] = await lucid.utxosByOutRef([
+      { txHash: this.referenceScriptTxHash, outputIndex: this.referenceScriptIndex },
+    ]);
+    if (!referenceUtxo) throw new Error('Reference script not found.');
+
+    let totalDepositAll = 0n;
+    let totalRewardAll = 0n;
+
+    const processedBoxes: ProcessedBox[] = eligible.boxes.map(utxo => {
+      const unit = Object.keys(utxo.assets).find(k => k !== 'lovelace') ?? '';
+      const { deposit, reward, payout } = this.calculateRewardForUtxo(unit, utxo);
+      totalDepositAll += deposit;
+      totalRewardAll += reward;
+      return { utxo, unit, deposit, reward, payout };
+    });
+
+    return {
+      ok: true,
+      lucid,
+      ownerHash,
+      referenceUtxo,
+      eligibleBoxes: eligible.boxes,
+      processedBoxes,
+      totalDepositAll,
+      totalRewardAll,
+    } as const;
+  }
+
+  /**
    * Returns all individual staked UTxO boxes belonging to this user, with
-   * per-box reward estimates and eligibility status. The frontend uses this
-   * to let the user pick which boxes to unstake.
+   * per-box reward estimates and eligibility status.
    */
   async getOnChainStakedBalance(userId: string, userAddress: string): Promise<StakedBalanceRes> {
     const { paymentCredential } = getAddressDetails(userAddress);
@@ -206,13 +286,10 @@ export class StakeService {
     const eligible = await this.getUnstakeEligibleBoxes(userId, userAddress, myUtxos);
     const eligibleSet = new Set(eligible.ok ? eligible.boxes.map(u => `${u.txHash}#${u.outputIndex}`) : []);
 
-    const now = Date.now();
     const boxes: StakedBoxItem[] = myUtxos.map(utxo => {
       const decoded = tryDecodeStakeDatum(utxo.datum!)!;
       const stakedAt = Number(decoded.staked_at);
-      const cooldownEndsAt = stakedAt + this.unstakeCooldownMs;
 
-      // Derive unit from the non-lovelace asset in this UTxO.
       const unit = Object.keys(utxo.assets).find(k => k !== 'lovelace') ?? '';
       const { deposit, reward, payout } = this.calculateRewardForUtxo(unit, utxo);
 
@@ -226,7 +303,6 @@ export class StakeService {
         estimatedReward: StakeService.toHumanAmount(reward, this.TOKEN_DECIMALS),
         estimatedPayout: StakeService.toHumanAmount(payout, this.TOKEN_DECIMALS),
         eligible: eligibleSet.has(`${utxo.txHash}#${utxo.outputIndex}`),
-        cooldownEndsAt: Math.max(cooldownEndsAt, now),
       };
     });
 
@@ -249,13 +325,8 @@ export class StakeService {
       const unit = assetId.trim().toLowerCase();
       const policyId = unit.slice(0, 56);
       const assetNameHex = unit.slice(56);
-      const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-      const ONE_YEAR_MS = 365 * ONE_DAY_MS;
+      const currentTimeMs = Date.now();
 
-      const currentTimeMs = Date.now() - ONE_YEAR_MS;
-
-      // Convert human-readable amount to raw on-chain integer.
-      // E.g. amount=100.56 → 1_005_600n  (TOKEN_DECIMALS=4)
       const rawAmount = StakeService.toRawAmount(amount, this.TOKEN_DECIMALS);
       if (rawAmount <= 0n) throw new Error('Computed raw amount must be greater than 0.');
 
@@ -281,8 +352,6 @@ export class StakeService {
           humanAmount: amount,
           decimals: this.TOKEN_DECIMALS,
           rawAmount: Number(rawAmount),
-          // Persisted so buildUnstakeTx can verify the datum's staked_at against
-          // a real API-originated stake record, blocking fake/inflated datums.
           staked_at: currentTimeMs,
           contractAddress: this.contractAddress,
           referenceScript: {
@@ -301,59 +370,18 @@ export class StakeService {
   }
 
   /**
-   * 1. Resolves requested UTxO refs on-chain and verifies ownership.
-   * 2. Runs eligibility check (trusted staked_at + cooldown).
-   * 3. Builds the transaction from the admin wallet for only the selected boxes.
-   * 4. Supports boxes with different token units in a single transaction.
-   * 5. Creates an `unstake` ledger row and returns `txCbor` + `transactionId`.
+   * Unstake: collect selected boxes, send full payout (deposit + reward) to user.
    */
   async buildUnstakeTx(userId: string, userAddress: string, utxoRefs: UtxoRefDto[]): Promise<BuildTxRes> {
     try {
-      const lucid = await this.getLucidForAdmin();
+      const prep = await this.prepareAdminTxData(userId, userAddress, utxoRefs);
+      if (prep.ok === false) return { success: false, message: prep.message };
 
-      const { paymentCredential } = getAddressDetails(userAddress);
-      if (!paymentCredential?.hash) throw new Error('Invalid user address.');
-      const ownerHash = paymentCredential.hash;
+      const { lucid, ownerHash, referenceUtxo, eligibleBoxes, processedBoxes, totalDepositAll, totalRewardAll } = prep;
 
-      const scriptUtxos = await lucid.utxosAt(this.contractAddress);
-
-      // Build a lookup map for fast resolution of requested refs.
-      const refKey = (txHash: string, outputIndex: number): string => `${txHash}#${outputIndex}`;
-      const requestedKeys = new Set(utxoRefs.map(r => refKey(r.txHash, r.outputIndex)));
-
-      // Find the on-chain UTxOs matching the requested refs that also belong to this user.
-      const requestedBoxes = scriptUtxos.filter(utxo => {
-        if (!requestedKeys.has(refKey(utxo.txHash, utxo.outputIndex))) return false;
-        if (!utxo.datum) return false;
-        const decoded = tryDecodeStakeDatum(utxo.datum);
-        return decoded !== null && decoded.owner === ownerHash;
-      });
-
-      if (requestedBoxes.length === 0) {
-        return { success: false, message: 'None of the requested UTxOs were found at the contract for your address.' };
-      }
-
-      if (requestedBoxes.length < utxoRefs.length) {
-        this.logger.warn(
-          `buildUnstakeTx: ${utxoRefs.length - requestedBoxes.length} requested UTxO(s) not found on-chain for ${userAddress}`
-        );
-      }
-
-      const eligible = await this.getUnstakeEligibleBoxes(userId, userAddress, requestedBoxes);
-      if (eligible.ok === false) return { success: false, message: eligible.message };
-      const eligibleBoxes = eligible.boxes;
-
-      // Aggregate payout per unit — supports unstaking different tokens in one tx.
       const payoutByUnit = new Map<string, bigint>();
-      let totalDepositAll = 0n;
-      let totalRewardAll = 0n;
-
-      for (const utxo of eligibleBoxes) {
-        const unit = Object.keys(utxo.assets).find(k => k !== 'lovelace') ?? '';
-        const { deposit, reward, payout } = this.calculateRewardForUtxo(unit, utxo);
-        payoutByUnit.set(unit, (payoutByUnit.get(unit) ?? 0n) + payout);
-        totalDepositAll += deposit;
-        totalRewardAll += reward;
+      for (const box of processedBoxes) {
+        payoutByUnit.set(box.unit, (payoutByUnit.get(box.unit) ?? 0n) + box.payout);
       }
 
       this.logger.log(
@@ -362,21 +390,11 @@ export class StakeService {
       );
 
       const redeemer = Data.to(new Constr(0, []));
-
-      const [referenceUtxo] = await lucid.utxosByOutRef([
-        { txHash: this.referenceScriptTxHash, outputIndex: this.referenceScriptIndex },
-      ]);
-
-      if (!referenceUtxo) throw new Error('Reference script not found.');
-
-      // Build the payout assets object (may contain multiple units).
-      const payoutAssets = Object.fromEntries(payoutByUnit.entries());
-
       const tx = await lucid
         .newTx()
         .readFrom([referenceUtxo])
         .collectFrom(eligibleBoxes, redeemer)
-        .pay.ToAddress(userAddress, payoutAssets)
+        .pay.ToAddress(userAddress, Object.fromEntries(payoutByUnit.entries()))
         .addSignerKey(ownerHash)
         .complete();
 
@@ -414,40 +432,184 @@ export class StakeService {
   }
 
   /**
+   * Harvest: collect selected boxes, send rewards to user, re-lock deposits in
+   * a new box with staked_at = now (resetting the reward timer).
+   */
+  async buildHarvestTx(userId: string, userAddress: string, utxoRefs: UtxoRefDto[]): Promise<BuildTxRes> {
+    try {
+      const prep = await this.prepareAdminTxData(userId, userAddress, utxoRefs);
+      if (prep.ok === false) return { success: false, message: prep.message };
+
+      const { lucid, ownerHash, referenceUtxo, eligibleBoxes, processedBoxes, totalDepositAll, totalRewardAll } = prep;
+
+      const depositByUnit = new Map<string, bigint>();
+      const rewardByUnit = new Map<string, bigint>();
+      for (const box of processedBoxes) {
+        depositByUnit.set(box.unit, (depositByUnit.get(box.unit) ?? 0n) + box.deposit);
+        rewardByUnit.set(box.unit, (rewardByUnit.get(box.unit) ?? 0n) + box.reward);
+      }
+
+      this.logger.log(
+        `buildHarvestTx: ${eligibleBoxes.length} eligible UTxO(s) for ${userAddress} — ` +
+          `deposit=${totalDepositAll}, reward=${totalRewardAll}`
+      );
+
+      const now = Date.now();
+      const redeemer = Data.to(new Constr(0, []));
+      let txBuilder = lucid.newTx().readFrom([referenceUtxo]).collectFrom(eligibleBoxes, redeemer);
+
+      for (const [unit, deposit] of depositByUnit.entries()) {
+        const datum = encodeStakeDatum({ owner: ownerHash, staked_at: BigInt(now) });
+        txBuilder = txBuilder.pay.ToContract(
+          this.contractAddress,
+          { kind: 'inline', value: datum },
+          { [unit]: deposit }
+        );
+      }
+
+      txBuilder = txBuilder.pay.ToAddress(userAddress, Object.fromEntries(rewardByUnit.entries()));
+      const tx = await txBuilder.addSignerKey(ownerHash).complete();
+
+      const saved = await this.transactionRepository.save({
+        type: TransactionType.harvest,
+        status: TransactionStatus.created,
+        user_id: userId,
+        utxo_input: this.contractAddress,
+        utxo_output: userAddress,
+        amount: Number(totalRewardAll),
+        metadata: {
+          utxos: eligibleBoxes.map(u => ({ txHash: u.txHash, outputIndex: u.outputIndex })),
+          decimals: this.TOKEN_DECIMALS,
+          rawDepositAmount: Number(totalDepositAll),
+          rawRewardAmount: Number(totalRewardAll),
+          depositAmount: StakeService.toHumanAmount(totalDepositAll, this.TOKEN_DECIMALS),
+          rewardAmount: StakeService.toHumanAmount(totalRewardAll, this.TOKEN_DECIMALS),
+          staked_at: now,
+          utxoCount: eligibleBoxes.length,
+          contractAddress: this.contractAddress,
+          referenceScript: {
+            txHash: this.referenceScriptTxHash,
+            outputIndex: this.referenceScriptIndex,
+          },
+          cardanoNetwork: this.isMainnet ? 'mainnet' : 'preprod',
+        },
+      });
+
+      return { success: true, txCbor: tx.toCBOR(), transactionId: saved.id };
+    } catch (error: unknown) {
+      this.logger.error('buildHarvestTx failed', error instanceof Error ? error.stack : String(error));
+      return { success: false, message: StakeService.formatErrorMessage(error, 'buildHarvestTx failed') };
+    }
+  }
+
+  /**
+   * Compound: collect selected boxes, re-lock deposit + reward in a new box
+   * with staked_at = now. Nothing is sent to the user — rewards are compounded.
+   */
+  async buildCompoundTx(userId: string, userAddress: string, utxoRefs: UtxoRefDto[]): Promise<BuildTxRes> {
+    try {
+      const prep = await this.prepareAdminTxData(userId, userAddress, utxoRefs);
+      if (prep.ok === false) return { success: false, message: prep.message };
+
+      const { lucid, ownerHash, referenceUtxo, eligibleBoxes, processedBoxes, totalDepositAll, totalRewardAll } = prep;
+
+      const newAmountByUnit = new Map<string, bigint>();
+      for (const box of processedBoxes) {
+        newAmountByUnit.set(box.unit, (newAmountByUnit.get(box.unit) ?? 0n) + box.payout);
+      }
+
+      this.logger.log(
+        `buildCompoundTx: ${eligibleBoxes.length} eligible UTxO(s) for ${userAddress} — ` +
+          `deposit=${totalDepositAll}, reward=${totalRewardAll}, newDeposit=${totalDepositAll + totalRewardAll}`
+      );
+
+      const now = Date.now();
+      const redeemer = Data.to(new Constr(0, []));
+      let txBuilder = lucid.newTx().readFrom([referenceUtxo]).collectFrom(eligibleBoxes, redeemer);
+
+      for (const [unit, newAmount] of newAmountByUnit.entries()) {
+        const datum = encodeStakeDatum({ owner: ownerHash, staked_at: BigInt(now) });
+        txBuilder = txBuilder.pay.ToContract(
+          this.contractAddress,
+          { kind: 'inline', value: datum },
+          { [unit]: newAmount }
+        );
+      }
+
+      const tx = await txBuilder.addSignerKey(ownerHash).complete();
+
+      const saved = await this.transactionRepository.save({
+        type: TransactionType.compound,
+        status: TransactionStatus.created,
+        user_id: userId,
+        utxo_input: this.contractAddress,
+        utxo_output: this.contractAddress,
+        amount: Number(totalDepositAll + totalRewardAll),
+        metadata: {
+          utxos: eligibleBoxes.map(u => ({ txHash: u.txHash, outputIndex: u.outputIndex })),
+          decimals: this.TOKEN_DECIMALS,
+          rawDepositAmount: Number(totalDepositAll),
+          rawRewardAmount: Number(totalRewardAll),
+          rawNewDepositAmount: Number(totalDepositAll + totalRewardAll),
+          depositAmount: StakeService.toHumanAmount(totalDepositAll, this.TOKEN_DECIMALS),
+          rewardAmount: StakeService.toHumanAmount(totalRewardAll, this.TOKEN_DECIMALS),
+          newDepositAmount: StakeService.toHumanAmount(totalDepositAll + totalRewardAll, this.TOKEN_DECIMALS),
+          staked_at: now,
+          utxoCount: eligibleBoxes.length,
+          contractAddress: this.contractAddress,
+          referenceScript: {
+            txHash: this.referenceScriptTxHash,
+            outputIndex: this.referenceScriptIndex,
+          },
+          cardanoNetwork: this.isMainnet ? 'mainnet' : 'preprod',
+        },
+      });
+
+      return { success: true, txCbor: tx.toCBOR(), transactionId: saved.id };
+    } catch (error: unknown) {
+      this.logger.error('buildCompoundTx failed', error instanceof Error ? error.stack : String(error));
+      return { success: false, message: StakeService.formatErrorMessage(error, 'buildCompoundTx failed') };
+    }
+  }
+
+  /**
    * Finds the existing `created` transaction, submits the signed CBOR and updates
    * the record with `tx_hash` + status `submitted`.
-   * Only `txCbor`, `signature` and `transactionId` are required — no extra metadata.
    */
   async submitTransaction(userId: string, dto: SubmitStakeTxDto): Promise<SubmitTxRes> {
     const { txCbor, signature, transactionId } = dto;
 
-    const transaction = await this.transactionRepository.findOne({
-      where: { id: transactionId, user_id: userId },
-    });
+    const updateResult = await this.transactionRepository.update(
+      { id: transactionId, user_id: userId, status: TransactionStatus.created },
+      { status: TransactionStatus.pending }
+    );
 
-    if (!transaction) {
-      return { success: false, message: 'Transaction not found or does not belong to this user.' };
+    if (!updateResult.affected) {
+      return {
+        success: false,
+        message: 'Transaction not found, already processing, or already submitted.',
+      };
     }
 
+    const transaction = await this.transactionRepository.findOne({ where: { id: transactionId, user_id: userId } });
+    if (!transaction) return { success: false, message: 'Transaction not found.' };
+
     try {
+      const isAdminSigned = ADMIN_SIGNED_TYPES.includes(transaction.type as TransactionType);
       const userAddress = transaction.utxo_input;
-      const lucid =
-        transaction.type === TransactionType.unstake
-          ? await this.getLucidForAdmin()
-          : await this.getLucidForUser(userAddress);
+      const lucid = isAdminSigned ? await this.getLucidForAdmin() : await this.getLucidForUser(userAddress);
 
       const signBuilder = lucid.fromTx(txCbor).assemble([signature]);
 
-      const signedTx =
-        transaction.type === TransactionType.unstake
-          ? await signBuilder.sign.withPrivateKey(this.adminSKey).complete()
-          : await signBuilder.complete();
+      const signedTx = isAdminSigned
+        ? await signBuilder.sign.withPrivateKey(this.adminSKey).complete()
+        : await signBuilder.complete();
 
       const txHash = await signedTx.submit();
 
       await this.transactionRepository.update(
         { id: transactionId },
-        { tx_hash: txHash, status: TransactionStatus.submitted }
+        { tx_hash: txHash, status: TransactionStatus.confirmed }
       );
 
       this.logger.log(`${transaction.type} transaction submitted! Hash: ${txHash}, dbId: ${transactionId}`);

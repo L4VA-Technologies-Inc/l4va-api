@@ -1,7 +1,7 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddUnstakeTypeForTransactions1775739422178 implements MigrationInterface {
-  name = 'AddUnstakeTypeForTransactions1775739422178';
+export class AddTransactionTypesForStaking1776327983967 implements MigrationInterface {
+  name = 'AddTransactionTypesForStaking1776327983967';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`ALTER TABLE "vault_tags" DROP CONSTRAINT "FK_2b3fd4667b2be7a2d7a329083cc"`);
@@ -12,7 +12,7 @@ export class AddUnstakeTypeForTransactions1775739422178 implements MigrationInte
     await queryRunner.query(`ALTER TABLE "vaults" ALTER COLUMN "dispatch_preloaded_script" SET DEFAULT null`);
     await queryRunner.query(`ALTER TYPE "public"."transactions_type_enum" RENAME TO "transactions_type_enum_old"`);
     await queryRunner.query(
-      `CREATE TYPE "public"."transactions_type_enum" AS ENUM('create-vault', 'mint', 'payment', 'contribute', 'claim', 'extract', 'extract-dispatch', 'cancel', 'acquire', 'investment', 'burn', 'swap', 'stake', 'unstake', 'extract-lp', 'distribute-lp', 'distribution', 'update-vault', 'wayup', 'all')`
+      `CREATE TYPE "public"."transactions_type_enum" AS ENUM('create-vault', 'mint', 'payment', 'contribute', 'claim', 'extract', 'extract-dispatch', 'cancel', 'acquire', 'investment', 'burn', 'swap', 'stake', 'unstake', 'harvest', 'compound', 'extract-lp', 'distribute-lp', 'distribution', 'update-vault', 'wayup', 'all')`
     );
     await queryRunner.query(
       `ALTER TABLE "transactions" ALTER COLUMN "type" TYPE "public"."transactions_type_enum" USING "type"::"text"::"public"."transactions_type_enum"`

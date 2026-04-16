@@ -28,11 +28,8 @@ export class StakedBoxItem {
   })
   estimatedPayout: number;
 
-  @ApiProperty({ description: 'Whether this box has passed verification and cooldown — can be unstaked' })
+  @ApiProperty({ description: 'Whether this box has passed verification — can be unstaked' })
   eligible: boolean;
-
-  @ApiProperty({ description: 'Timestamp (ms) when the cooldown period ends' })
-  cooldownEndsAt: number;
 }
 
 export class StakedBalanceRes {

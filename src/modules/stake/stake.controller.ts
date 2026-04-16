@@ -2,6 +2,8 @@ import { Body, Controller, ForbiddenException, Get, Post, Req, UseGuards } from 
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { BuildTxRes } from './dto/build-tx.res';
+import { CompoundTokensDto } from './dto/compound-tokens.dto';
+import { HarvestTokensDto } from './dto/harvest-tokens.dto';
 import { StakeTokensDto } from './dto/stake-tokens.dto';
 import { StakedBalanceRes } from './dto/staked-balance.res';
 import { SubmitStakeTxDto } from './dto/submit-stake-tx.dto';
@@ -31,8 +33,8 @@ export class StakeController {
     summary: 'Live staked boxes from the smart contract (Blockfrost)',
     description:
       'Returns individual UTxO boxes locked at the staking contract for the current user. ' +
-      'Each box includes the staked amount, estimated reward/payout, eligibility status, and cooldown end time. ' +
-      'Use this to display per-box info and let the user select which boxes to unstake.',
+      'Each box includes the staked amount, estimated reward/payout, and eligibility status. ' +
+      'Use this to display per-box info and let the user select which boxes to unstake/harvest/compound.',
   })
   @ApiResponse({ status: 200, type: StakedBalanceRes })
   async getMyStakedBalance(@Req() req: AuthRequest): Promise<StakedBalanceRes> {
@@ -52,7 +54,8 @@ export class StakeController {
     summary: 'Build unsigned unstake transaction (CBOR)',
     description:
       'Pass the list of UTxO refs (txHash + outputIndex) the user selected. ' +
-      'Only eligible boxes (verified + cooldown passed) will be included in the transaction.',
+      'Only eligible boxes (verified) will be included. ' +
+      'Full payout (deposit + reward) is sent to the user.',
   })
   @ApiResponse({ status: 201, description: 'Unsigned transaction or error', type: BuildTxRes })
   async buildUnstake(@Req() req: AuthRequest, @Body() body: UnstakeTokensDto): Promise<BuildTxRes> {
@@ -60,8 +63,42 @@ export class StakeController {
     return this.stakeService.buildUnstakeTx(req.user.sub, body.userAddress, body.utxos);
   }
 
+  @Post('build-harvest')
+  @ApiOperation({
+    summary: 'Build unsigned harvest transaction (CBOR)',
+    description:
+      'Collect accrued rewards from selected boxes and send them to the user wallet. ' +
+      'The original deposit stays locked in the contract with a fresh staked_at timer. ' +
+      'Requires the boxes to pass the eligibility check (trusted staked_at). ' +
+      'Rewards are sent to the user wallet.',
+  })
+  @ApiResponse({ status: 201, description: 'Unsigned transaction or error', type: BuildTxRes })
+  async buildHarvest(@Req() req: AuthRequest, @Body() body: HarvestTokensDto): Promise<BuildTxRes> {
+    this.ensureWalletMatchesUser(req, body.userAddress);
+    return this.stakeService.buildHarvestTx(req.user.sub, body.userAddress, body.utxos);
+  }
+
+  @Post('build-compound')
+  @ApiOperation({
+    summary: 'Build unsigned compound (restake) transaction (CBOR)',
+    description:
+      'Reinvest accrued rewards into the staking contract — deposit + reward are locked as one new box ' +
+      'with a fresh staked_at timer. Nothing is sent to the user wallet. ' +
+      'Requires the boxes to pass the eligibility check (trusted staked_at).',
+  })
+  @ApiResponse({ status: 201, description: 'Unsigned transaction or error', type: BuildTxRes })
+  async buildCompound(@Req() req: AuthRequest, @Body() body: CompoundTokensDto): Promise<BuildTxRes> {
+    this.ensureWalletMatchesUser(req, body.userAddress);
+    return this.stakeService.buildCompoundTx(req.user.sub, body.userAddress, body.utxos);
+  }
+
   @Post('submit')
-  @ApiOperation({ summary: 'Assemble witnesses and submit signed transaction' })
+  @ApiOperation({
+    summary: 'Assemble witnesses and submit signed transaction',
+    description:
+      'Works for stake, unstake, harvest and compound transaction types. ' +
+      'Admin co-signs unstake/harvest/compound automatically.',
+  })
   @ApiResponse({ status: 201, description: 'Submission result', type: SubmitTxRes })
   async submit(@Req() req: AuthRequest, @Body() body: SubmitStakeTxDto): Promise<SubmitTxRes> {
     return this.stakeService.submitTransaction(req.user.sub, body);
