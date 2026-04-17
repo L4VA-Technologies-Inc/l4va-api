@@ -20,7 +20,7 @@ import { RewardActivityType, WidgetSwapEventData, WidgetSwapItemData } from '@/t
 export class RewardsController {
   constructor(
     private readonly rewardEventProducer: RewardEventProducer,
-    private readonly rewardClaimProxy: RewardClaimProxy,
+    private readonly rewardClaimProxy: RewardClaimProxy
   ) {}
 
   /**
@@ -126,6 +126,18 @@ export class RewardsController {
     @Query('epochId') epochId?: string
   ): Promise<any> {
     return this.rewardClaimProxy.getWalletVaults(walletAddress, epochId);
+  }
+
+  @UseGuards(AuthGuard)
+  @Get('wallet/:walletAddress/timeline/vaults')
+  async getWalletVaultTimeline(@Param('walletAddress') walletAddress: string): Promise<any> {
+    return this.rewardClaimProxy.getWalletVaultTimeline(walletAddress);
+  }
+
+  @UseGuards(AuthGuard)
+  @Get('wallet/:walletAddress/timeline/activities')
+  async getWalletActivityTimeline(@Param('walletAddress') walletAddress: string): Promise<any> {
+    return this.rewardClaimProxy.getWalletActivityTimeline(walletAddress);
   }
 
   // ============================================================================

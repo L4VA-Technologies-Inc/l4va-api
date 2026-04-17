@@ -84,6 +84,18 @@ export class RewardClaimProxy {
     return data;
   }
 
+  async getWalletVaultTimeline(walletAddress: string): Promise<any> {
+    const url = `${this.rewardsBaseUrl}/api/v1/rewards/wallet/${walletAddress}/timeline/vaults`;
+    const { data } = await firstValueFrom(this.httpService.get(url));
+    return data;
+  }
+
+  async getWalletActivityTimeline(walletAddress: string): Promise<any> {
+    const url = `${this.rewardsBaseUrl}/api/v1/rewards/wallet/${walletAddress}/timeline/activities`;
+    const { data } = await firstValueFrom(this.httpService.get(url));
+    return data;
+  }
+
   // ============================================================================
   // Claims Methods
   // ============================================================================
