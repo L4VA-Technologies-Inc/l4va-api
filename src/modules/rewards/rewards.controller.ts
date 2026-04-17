@@ -140,6 +140,12 @@ export class RewardsController {
     return this.rewardClaimProxy.getWalletActivityTimeline(walletAddress);
   }
 
+  @UseGuards(AuthGuard)
+  @Get('wallet/:walletAddress/current-estimate')
+  async getCurrentEpochEstimate(@Param('walletAddress') walletAddress: string): Promise<any> {
+    return this.rewardClaimProxy.getCurrentEpochEstimate(walletAddress);
+  }
+
   // ============================================================================
   // Claims Endpoints (proxied to l4va-rewards)
   // ============================================================================

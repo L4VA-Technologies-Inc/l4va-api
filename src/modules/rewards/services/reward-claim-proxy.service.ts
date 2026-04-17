@@ -96,6 +96,12 @@ export class RewardClaimProxy {
     return data;
   }
 
+  async getCurrentEpochEstimate(walletAddress: string): Promise<any> {
+    const url = `${this.rewardsBaseUrl}/api/v1/rewards/wallet/${walletAddress}/current-estimate`;
+    const { data } = await firstValueFrom(this.httpService.get(url));
+    return data;
+  }
+
   // ============================================================================
   // Claims Methods
   // ============================================================================
