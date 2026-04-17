@@ -1,3 +1,5 @@
+import { createHash } from 'crypto';
+
 import {
   Constr,
   Data,
@@ -19,6 +21,7 @@ import { SubmitTxRes } from './dto/submit-tx.res';
 import { encodeStakeDatum, tryDecodeStakeDatum } from './stake-datum';
 
 import { createLucidBlockfrostProvider, lucidNetworkFromCardanoEnv } from '@/common/cardano/blockfrost-lucid';
+import { normalizeLucidCardanoError } from '@/common/cardano/lucid-error-normalizer';
 import { Transaction } from '@/database/transaction.entity';
 import { UtxoRefDto } from '@/modules/stake/dto/unstake-tokens.dto';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -54,7 +57,7 @@ export class StakeService {
   private readonly referenceScriptIndex: number;
   private readonly adminAddress: string;
   private readonly adminSKey: string;
-  private readonly APY = 0.12;
+  private readonly APY: number;
   private readonly TOKEN_DECIMALS = 4;
 
   constructor(
@@ -70,6 +73,13 @@ export class StakeService {
     this.referenceScriptIndex = parseInt(this.configService.get<string>('REFERENCE_SCRIPT_INDEX') ?? '0', 10);
     this.adminAddress = this.configService.getOrThrow<string>('ADMIN_ADDRESS');
     this.adminSKey = this.configService.getOrThrow<string>('ADMIN_S_KEY');
+
+    const apyPercentRaw = this.configService.get<string>('STAKING_APY') ?? '8';
+    const apyPercent = Number.parseFloat(apyPercentRaw);
+    if (!Number.isFinite(apyPercent) || apyPercent < 0 || apyPercent > 100) {
+      throw new Error(`Invalid STAKING_APY: expected a number between 0 and 100 (percent), got "${apyPercentRaw}"`);
+    }
+    this.APY = apyPercent / 100;
   }
 
   private async createLucid(): Promise<LucidEvolution> {
@@ -91,9 +101,19 @@ export class StakeService {
   }
 
   private static formatErrorMessage(error: unknown, fallback: string): string {
-    if (error instanceof Error && error.message) return error.message;
-    if (typeof error === 'string') return error;
-    return fallback;
+    return normalizeLucidCardanoError(error, fallback);
+  }
+
+  private static sha256Hex(input: string): string {
+    return createHash('sha256').update(input).digest('hex');
+  }
+
+  private static bigintToSafeNumber(value: bigint, label: string): number {
+    const max = BigInt(Number.MAX_SAFE_INTEGER);
+    if (value > max || value < -max) {
+      throw new Error(`${label} exceeds JS safe integer range`);
+    }
+    return Number(value);
   }
 
   /**
@@ -241,13 +261,24 @@ export class StakeService {
     let totalDepositAll = 0n;
     let totalRewardAll = 0n;
 
-    const processedBoxes: ProcessedBox[] = eligible.boxes.map(utxo => {
-      const unit = Object.keys(utxo.assets).find(k => k !== 'lovelace') ?? '';
+    const processedBoxes: ProcessedBox[] = [];
+    for (const utxo of eligible.boxes) {
+      const nonLovelaceUnits = Object.keys(utxo.assets).filter(k => k !== 'lovelace');
+      if (nonLovelaceUnits.length !== 1) {
+        return {
+          ok: false,
+          message:
+            `Invalid stake box asset shape for ${utxo.txHash}#${utxo.outputIndex}: ` +
+            `expected exactly one non-lovelace asset, found ${nonLovelaceUnits.length}.`,
+        } as const;
+      }
+
+      const [unit] = nonLovelaceUnits;
       const { deposit, reward, payout } = this.calculateRewardForUtxo(unit, utxo);
       totalDepositAll += deposit;
       totalRewardAll += reward;
-      return { utxo, unit, deposit, reward, payout };
-    });
+      processedBoxes.push({ utxo, unit, deposit, reward, payout });
+    }
 
     return {
       ok: true,
@@ -338,21 +369,23 @@ export class StakeService {
         .addSignerKey(ownerHash)
         .complete();
 
+      const unsignedTxCbor = tx.toCBOR();
       const saved = await this.transactionRepository.save({
         type: TransactionType.stake,
         status: TransactionStatus.created,
         user_id: userId,
         utxo_input: userAddress,
         utxo_output: this.contractAddress,
-        amount: Number(rawAmount),
+        amount: StakeService.bigintToSafeNumber(rawAmount, 'stake rawAmount'),
         metadata: {
           assetId: unit,
           policyId,
           assetName: assetNameHex,
           humanAmount: amount,
           decimals: this.TOKEN_DECIMALS,
-          rawAmount: Number(rawAmount),
+          rawAmount: rawAmount.toString(),
           staked_at: currentTimeMs,
+          unsignedTxCborHash: StakeService.sha256Hex(unsignedTxCbor),
           contractAddress: this.contractAddress,
           referenceScript: {
             txHash: this.referenceScriptTxHash,
@@ -362,7 +395,7 @@ export class StakeService {
         },
       });
 
-      return { success: true, txCbor: tx.toCBOR(), transactionId: saved.id };
+      return { success: true, txCbor: unsignedTxCbor, transactionId: saved.id };
     } catch (error: unknown) {
       this.logger.error('buildStakeTx failed', error instanceof Error ? error.stack : String(error));
       return { success: false, message: StakeService.formatErrorMessage(error, 'buildStakeTx failed') };
@@ -398,23 +431,25 @@ export class StakeService {
         .addSignerKey(ownerHash)
         .complete();
 
+      const unsignedTxCbor = tx.toCBOR();
       const saved = await this.transactionRepository.save({
         type: TransactionType.unstake,
         status: TransactionStatus.created,
         user_id: userId,
         utxo_input: this.contractAddress,
         utxo_output: userAddress,
-        amount: Number(totalDepositAll + totalRewardAll),
+        amount: StakeService.bigintToSafeNumber(totalDepositAll + totalRewardAll, 'unstake rawPayoutAmount'),
         metadata: {
           utxos: eligibleBoxes.map(u => ({ txHash: u.txHash, outputIndex: u.outputIndex })),
           decimals: this.TOKEN_DECIMALS,
-          rawDepositAmount: Number(totalDepositAll),
-          rawRewardAmount: Number(totalRewardAll),
-          rawPayoutAmount: Number(totalDepositAll + totalRewardAll),
+          rawDepositAmount: totalDepositAll.toString(),
+          rawRewardAmount: totalRewardAll.toString(),
+          rawPayoutAmount: (totalDepositAll + totalRewardAll).toString(),
           depositAmount: StakeService.toHumanAmount(totalDepositAll, this.TOKEN_DECIMALS),
           rewardAmount: StakeService.toHumanAmount(totalRewardAll, this.TOKEN_DECIMALS),
           payoutAmount: StakeService.toHumanAmount(totalDepositAll + totalRewardAll, this.TOKEN_DECIMALS),
           utxoCount: eligibleBoxes.length,
+          unsignedTxCborHash: StakeService.sha256Hex(unsignedTxCbor),
           contractAddress: this.contractAddress,
           referenceScript: {
             txHash: this.referenceScriptTxHash,
@@ -424,7 +459,7 @@ export class StakeService {
         },
       });
 
-      return { success: true, txCbor: tx.toCBOR(), transactionId: saved.id };
+      return { success: true, txCbor: unsignedTxCbor, transactionId: saved.id };
     } catch (error: unknown) {
       this.logger.error('buildUnstakeTx failed', error instanceof Error ? error.stack : String(error));
       return { success: false, message: StakeService.formatErrorMessage(error, 'buildUnstakeTx failed') };
@@ -470,22 +505,24 @@ export class StakeService {
       txBuilder = txBuilder.pay.ToAddress(userAddress, Object.fromEntries(rewardByUnit.entries()));
       const tx = await txBuilder.addSignerKey(ownerHash).complete();
 
+      const unsignedTxCbor = tx.toCBOR();
       const saved = await this.transactionRepository.save({
         type: TransactionType.harvest,
         status: TransactionStatus.created,
         user_id: userId,
         utxo_input: this.contractAddress,
         utxo_output: userAddress,
-        amount: Number(totalRewardAll),
+        amount: StakeService.bigintToSafeNumber(totalRewardAll, 'harvest rawRewardAmount'),
         metadata: {
           utxos: eligibleBoxes.map(u => ({ txHash: u.txHash, outputIndex: u.outputIndex })),
           decimals: this.TOKEN_DECIMALS,
-          rawDepositAmount: Number(totalDepositAll),
-          rawRewardAmount: Number(totalRewardAll),
+          rawDepositAmount: totalDepositAll.toString(),
+          rawRewardAmount: totalRewardAll.toString(),
           depositAmount: StakeService.toHumanAmount(totalDepositAll, this.TOKEN_DECIMALS),
           rewardAmount: StakeService.toHumanAmount(totalRewardAll, this.TOKEN_DECIMALS),
           staked_at: now,
           utxoCount: eligibleBoxes.length,
+          unsignedTxCborHash: StakeService.sha256Hex(unsignedTxCbor),
           contractAddress: this.contractAddress,
           referenceScript: {
             txHash: this.referenceScriptTxHash,
@@ -495,7 +532,7 @@ export class StakeService {
         },
       });
 
-      return { success: true, txCbor: tx.toCBOR(), transactionId: saved.id };
+      return { success: true, txCbor: unsignedTxCbor, transactionId: saved.id };
     } catch (error: unknown) {
       this.logger.error('buildHarvestTx failed', error instanceof Error ? error.stack : String(error));
       return { success: false, message: StakeService.formatErrorMessage(error, 'buildHarvestTx failed') };
@@ -538,24 +575,26 @@ export class StakeService {
 
       const tx = await txBuilder.addSignerKey(ownerHash).complete();
 
+      const unsignedTxCbor = tx.toCBOR();
       const saved = await this.transactionRepository.save({
         type: TransactionType.compound,
         status: TransactionStatus.created,
         user_id: userId,
         utxo_input: this.contractAddress,
         utxo_output: this.contractAddress,
-        amount: Number(totalDepositAll + totalRewardAll),
+        amount: StakeService.bigintToSafeNumber(totalDepositAll + totalRewardAll, 'compound rawNewDepositAmount'),
         metadata: {
           utxos: eligibleBoxes.map(u => ({ txHash: u.txHash, outputIndex: u.outputIndex })),
           decimals: this.TOKEN_DECIMALS,
-          rawDepositAmount: Number(totalDepositAll),
-          rawRewardAmount: Number(totalRewardAll),
-          rawNewDepositAmount: Number(totalDepositAll + totalRewardAll),
+          rawDepositAmount: totalDepositAll.toString(),
+          rawRewardAmount: totalRewardAll.toString(),
+          rawNewDepositAmount: (totalDepositAll + totalRewardAll).toString(),
           depositAmount: StakeService.toHumanAmount(totalDepositAll, this.TOKEN_DECIMALS),
           rewardAmount: StakeService.toHumanAmount(totalRewardAll, this.TOKEN_DECIMALS),
           newDepositAmount: StakeService.toHumanAmount(totalDepositAll + totalRewardAll, this.TOKEN_DECIMALS),
           staked_at: now,
           utxoCount: eligibleBoxes.length,
+          unsignedTxCborHash: StakeService.sha256Hex(unsignedTxCbor),
           contractAddress: this.contractAddress,
           referenceScript: {
             txHash: this.referenceScriptTxHash,
@@ -565,7 +604,7 @@ export class StakeService {
         },
       });
 
-      return { success: true, txCbor: tx.toCBOR(), transactionId: saved.id };
+      return { success: true, txCbor: unsignedTxCbor, transactionId: saved.id };
     } catch (error: unknown) {
       this.logger.error('buildCompoundTx failed', error instanceof Error ? error.stack : String(error));
       return { success: false, message: StakeService.formatErrorMessage(error, 'buildCompoundTx failed') };
@@ -579,23 +618,42 @@ export class StakeService {
   async submitTransaction(userId: string, dto: SubmitStakeTxDto): Promise<SubmitTxRes> {
     const { txCbor, signature, transactionId } = dto;
 
-    const updateResult = await this.transactionRepository.update(
-      { id: transactionId, user_id: userId, status: TransactionStatus.created },
-      { status: TransactionStatus.pending }
-    );
-
-    if (!updateResult.affected) {
-      return {
-        success: false,
-        message: 'Transaction not found, already processing, or already submitted.',
-      };
-    }
-
     const transaction = await this.transactionRepository.findOne({ where: { id: transactionId, user_id: userId } });
     if (!transaction) return { success: false, message: 'Transaction not found.' };
 
     try {
       const isAdminSigned = ADMIN_SIGNED_TYPES.includes(transaction.type as TransactionType);
+
+      // Prevent malicious txCbor substitution: require that submitted CBOR matches
+      // what the backend originally built for this transactionId.
+      const expectedHash = transaction.metadata?.unsignedTxCborHash;
+      if (typeof expectedHash === 'string' && expectedHash.length > 0) {
+        const gotHash = StakeService.sha256Hex(txCbor);
+        if (gotHash !== expectedHash) {
+          return {
+            success: false,
+            message: 'Unsigned transaction mismatch. Please rebuild and try again.',
+          };
+        }
+      } else if (isAdminSigned) {
+        return {
+          success: false,
+          message: 'Server cannot verify unsigned transaction. Please rebuild and try again.',
+        };
+      }
+
+      const updateResult = await this.transactionRepository.update(
+        { id: transactionId, user_id: userId, status: TransactionStatus.created },
+        { status: TransactionStatus.pending }
+      );
+
+      if (!updateResult.affected) {
+        return {
+          success: false,
+          message: 'Transaction not found, already processing, or already submitted.',
+        };
+      }
+
       const userAddress = transaction.utxo_input;
       const lucid = isAdminSigned ? await this.getLucidForAdmin() : await this.getLucidForUser(userAddress);
 
@@ -607,6 +665,7 @@ export class StakeService {
 
       const txHash = await signedTx.submit();
 
+      // mark transaction as confirmed, not necessary to mark it as submitted
       await this.transactionRepository.update(
         { id: transactionId },
         { tx_hash: txHash, status: TransactionStatus.confirmed }

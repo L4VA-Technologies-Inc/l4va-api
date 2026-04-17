@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsNumber, IsString, Matches, Min } from 'class-validator';
+import { IsNotEmpty, IsNumber, IsString, IsPositive, Matches } from 'class-validator';
 
 export class StakeTokensDto {
   @ApiProperty({ example: 'addr1...', description: 'Address of the user staking tokens' })
@@ -24,7 +24,7 @@ export class StakeTokensDto {
     description:
       'Human-readable token amount (e.g. 100.56 VLRM). Backend converts to raw on-chain integer using 4 decimals.',
   })
-  @IsNumber()
-  @Min(0, { message: 'amount must be greater than 0' })
+  @IsNumber({ maxDecimalPlaces: 4 }, { message: 'amount must be a number with up to 4 decimal places' })
+  @IsPositive({ message: 'amount must be greater than 0' })
   amount: number;
 }
