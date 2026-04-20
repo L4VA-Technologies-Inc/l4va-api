@@ -142,15 +142,31 @@ export class TransactionsService {
           decodedName = assetItem.assetName || null;
         }
 
-        // Priority: frontend displayName > frontend metadata > blockfrost metadata > decoded hex
-        const finalName =
-          assetItem.displayName ||
-          assetItem.metadata?.onchainMetadata?.name ||
-          assetItem.metadata?.name ||
-          (blockfrostMetadata?.onchain_metadata as any)?.name ||
-          (blockfrostMetadata as any)?.asset_name ||
-          decodedName ||
-          null;
+        // For FTs, prefer ticker over name. For NFTs, prefer name.
+        let finalName: string | null = null;
+        if (assetItem.type === AssetType.FT) {
+          // FT Priority: ticker > displayName > name > decoded hex
+          finalName =
+            assetItem.metadata?.ticker ||
+            (blockfrostMetadata?.metadata as any)?.ticker ||
+            assetItem.displayName ||
+            assetItem.metadata?.onchainMetadata?.name ||
+            assetItem.metadata?.name ||
+            (blockfrostMetadata?.onchain_metadata as any)?.name ||
+            (blockfrostMetadata as any)?.asset_name ||
+            decodedName ||
+            null;
+        } else {
+          // NFT Priority: displayName > name > decoded hex
+          finalName =
+            assetItem.displayName ||
+            assetItem.metadata?.onchainMetadata?.name ||
+            assetItem.metadata?.name ||
+            (blockfrostMetadata?.onchain_metadata as any)?.name ||
+            (blockfrostMetadata as any)?.asset_name ||
+            decodedName ||
+            null;
+        }
 
         const rawImage =
           assetItem.image ||

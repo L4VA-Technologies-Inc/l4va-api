@@ -93,113 +93,6 @@ export class DiagnosticController {
   // }
 
   /**
-   * STEP 3: Prepare vault update for specific claims
-   *
-   * This analyzes which multipliers are needed for the selected claims
-   * and returns the data you need to submit a vault update.
-   */
-  // @Post('vault/:vaultId/prepare-update-for-claims')
-  // @HttpCode(HttpStatus.OK)
-  // @ApiOperation({
-  //   summary: 'Prepare vault update for specific claims',
-  //   description: 'Analyze which multipliers are needed for selected claims and prepare vault update transaction data',
-  // })
-  // async prepareVaultUpdateForClaims(
-  //   @Param('vaultId') vaultId: string,
-  //   @Body() body: { claimIds: string[] }
-  // ): Promise<any> {
-  //   this.logger.log(`Preparing vault update for vault ${vaultId}, claims: ${body.claimIds.join(', ')}`);
-
-  //   const analysis = await this.multiBatchService.getRequiredMultipliersForClaims(vaultId, body.claimIds);
-
-  //   // Check if any multipliers are missing
-  //   const allReady = analysis.claims.every(c => c.canProcess);
-
-  //   if (allReady) {
-  //     return {
-  //       success: true,
-  //       ready: true,
-  //       message: '✅ All selected claims can be processed immediately. No vault update needed.',
-  //       vaultId,
-  //       claimIds: body.claimIds,
-  //       analysis,
-  //     };
-  //   }
-
-  //   return {
-  //     success: true,
-  //     ready: false,
-  //     message: `⚠️ Vault update required. ${analysis.requiredMultipliers.length} multiplier(s) need to be added.`,
-  //     vaultId,
-  //     claimIds: body.claimIds,
-  //     multipliersToAdd: analysis.requiredMultipliers,
-  //     adaDistributionToAdd: [], // Can be calculated if needed
-  //     analysis,
-  //     nextStep: 'Call POST /vault/:vaultId/submit-update-for-claims with the multipliers',
-  //   };
-  // }
-
-  /**
-   * STEP 4: Submit vault update with multipliers for specific claims
-   *
-   * This actually submits the on-chain transaction to update the vault.
-   */
-  // @Post('vault/:vaultId/submit-update-for-claims')
-  // @HttpCode(HttpStatus.OK)
-  // @ApiOperation({
-  //   summary: 'Submit vault update for specific claims',
-  //   description: 'Submit on-chain transaction to add multipliers for selected claims',
-  // })
-  // async submitVaultUpdateForClaims(
-  //   @Param('vaultId') vaultId: string,
-  //   @Body()
-  //   body: {
-  //     claimIds: string[];
-  //     multipliers?: Array<[string, string | null, number]>;
-  //     adaDistribution?: Array<[string, string, number]>;
-  //   }
-  // ): Promise<any> {
-  //   this.logger.log(`Submitting vault update for vault ${vaultId}, claims: ${body.claimIds.join(', ')}`);
-
-  //   // If multipliers not provided, calculate them from claims
-  //   let multipliers = body.multipliers;
-  //   const adaDistribution = body.adaDistribution || [];
-
-  //   if (!multipliers || multipliers.length === 0) {
-  //     const analysis = await this.multiBatchService.getRequiredMultipliersForClaims(vaultId, body.claimIds);
-  //     multipliers = analysis.requiredMultipliers;
-  //     this.logger.log(`Auto-calculated ${multipliers.length} multipliers from claims`);
-  //   }
-
-  //   if (multipliers.length === 0) {
-  //     return {
-  //       success: false,
-  //       message: 'No multipliers to add. Claims might already be ready for processing.',
-  //       vaultId,
-  //     };
-  //   }
-
-  //   // Submit the vault update
-  //   const result = await this.multiBatchService.manuallyUpdateVaultMultipliers(
-  //     vaultId,
-  //     multipliers,
-  //     adaDistribution,
-  //     `Manual update for claims: ${body.claimIds.join(', ')}`
-  //   );
-
-  //   return {
-  //     success: true,
-  //     message: result.message,
-  //     txHash: result.txHash,
-  //     vaultId,
-  //     claimIds: body.claimIds,
-  //     multipliersAdded: multipliers.length,
-  //     totalOnChainMultipliers: result.newMultiplierCount,
-  //     nextStep: 'Wait for transaction to confirm, then call POST /vault/:vaultId/process-claims',
-  //   };
-  // }
-
-  /**
    * STEP 5: Process specific contribution claims using buildPaymentInput
    *
    * This builds and submits a claim payment transaction for specific contributor claims.
@@ -402,6 +295,48 @@ export class DiagnosticController {
   // ========================================
   // VAULT RECOVERY ENDPOINTS (SILENT MODE)
   // ========================================
+
+  /**
+   * Manually update vault multipliers
+   *
+   * Use this to manually add multipliers to a vault on-chain.
+   * WARNING: Only use this when manual_distribution_mode is enabled!
+   *
+   * Set replaceExisting=true to use ONLY the passed multipliers (not append to existing).
+   */
+  // @Post('vault/manual-update-multipliers')
+  // @HttpCode(HttpStatus.OK)
+  // @ApiOperation({
+  //   summary: 'Manually update vault multipliers on-chain',
+  //   description: 'Manually add multipliers to vault. Use replaceExisting=true to use ONLY the passed multipliers.',
+  // })
+  // async manuallyUpdateVaultMultipliers(
+  //   @Body()
+  //   body: {
+  //     vaultId: string;
+  //     multipliers: Array<[string, string | null, number]>;
+  //     adaDistribution: Array<[string, string, number]>;
+  //     reason: string;
+  //     replaceExisting?: boolean;
+  //   }
+  // ): Promise<any> {
+  //   this.logger.log(
+  //     `Manual vault update for ${body.vaultId}: ${body.reason} (replaceExisting=${body.replaceExisting ?? false})`
+  //   );
+
+  //   const result = await this.multiBatchService.manuallyUpdateVaultMultipliers(
+  //     body.vaultId,
+  //     body.multipliers,
+  //     body.adaDistribution,
+  //     body.reason,
+  //     body.replaceExisting ?? false
+  //   );
+
+  //   return {
+  //     success: true,
+  //     data: result,
+  //   };
+  // }
 
   /**
    * RECOVERY STEP 1: Reopen vault contribution window ON-CHAIN only

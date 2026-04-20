@@ -260,6 +260,7 @@ export class VaultsService {
       const uniqueWhitelistItems = Array.from(
         new Map((data.assetsWhitelist || []).map(item => [`${item.policyId}:${item.assetName || ''}`, item])).values()
       );
+      const collectionNameByPolicyId = new Map<string, string>();
       if (uniqueWhitelistItems.length > 0) {
         const whitelistCollections = await this.getCollections(
           uniqueWhitelistItems.map(item => ({
@@ -276,6 +277,14 @@ export class VaultsService {
           throw new BadRequestException(
             `All whitelist tokens must be verified. Unverified policy IDs: ${unverifiedPolicies.join(', ')}`
           );
+        }
+
+        // Build a fallback map for collection names. This prevents saving null collection_name
+        // when the client doesn't send collectionName but verification lookup knows it.
+        for (const c of whitelistCollections) {
+          if (c?.policy_id && c.collection_name) {
+            collectionNameByPolicyId.set(c.policy_id, c.collection_name);
+          }
         }
       }
 
@@ -390,13 +399,22 @@ export class VaultsService {
         uniquePolicyIds.map(async assetItem => {
           if (!assetItem.policyId) return;
 
+          const rawFallbackCollectionName =
+            assetItem.collectionName ||
+            collectionNameByPolicyId.get(assetItem.policyId) ||
+            assetItem.name ||
+            assetItem.policyName ||
+            null;
+
+          const fallbackCollectionName = rawFallbackCollectionName ? rawFallbackCollectionName.slice(0, 255) : null;
+
           const result = await this.assetsWhitelistRepository
             .createQueryBuilder()
             .insert()
             .values({
               vault: newVault,
               policy_id: assetItem.policyId,
-              collection_name: assetItem.collectionName,
+              collection_name: fallbackCollectionName,
               asset_count_cap_min: assetItem.countCapMin,
               asset_count_cap_max: assetItem.countCapMax,
               valuation_method: assetItem.valuationMethod || 'market',
@@ -1294,7 +1312,7 @@ export class VaultsService {
       switch (filter) {
         case VaultFilter.open:
           queryBuilder.andWhere('vault.vault_status IN (:...statuses)', {
-            statuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire],
+            statuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire, VaultStatus.expansion],
           });
           break;
         case VaultFilter.contribution:

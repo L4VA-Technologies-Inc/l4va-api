@@ -127,7 +127,8 @@ export class AssetsService {
           );
           vlrmDexPrice = fetchedPrice || 0;
         } catch (error) {
-          this.logger.warn(`Failed to fetch VLRM dex price from DexHunter: ${error.message}, using default: 0`);
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+          this.logger.warn(`Failed to fetch VLRM dex price from DexHunter: ${errorMessage}, using default: 0`);
           vlrmDexPrice = 0;
         }
       } else {
@@ -297,8 +298,10 @@ export class AssetsService {
     const adaPrice = await this.priceService.getAdaPrice();
 
     const totalAssetValueUsd = adjustedTotalValueAda * adaPrice;
-    const assetsAvgAda = total > 0 ? adjustedTotalValueAda / total : 0;
-    const assetsAvgUsd = total > 0 ? totalAssetValueUsd / total : 0;
+    // Calculate average per token (including all assets)
+    const totalTokens = adjustedTotalFTAssets + totalNFTAssets;
+    const assetsAvgAda = totalTokens > 0 ? adjustedTotalValueAda / totalTokens : 0;
+    const assetsAvgUsd = assetsAvgAda * adaPrice;
 
     const assetsWithUsd = assets as Array<Asset & { floorPriceUsd?: number; valueUsd?: number }>;
 
@@ -809,7 +812,8 @@ export class AssetsService {
       // Note: Vault totals update will be triggered by scheduled job or manually
       // We don't await it here to avoid blocking the price update process
     } catch (error) {
-      throw new Error(`Failed to update asset valuations: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      throw new Error(`Failed to update asset valuations: ${errorMessage}`);
     }
   }
 

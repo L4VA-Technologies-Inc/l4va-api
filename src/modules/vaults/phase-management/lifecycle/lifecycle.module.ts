@@ -11,6 +11,7 @@ import { Proposal } from '@/database/proposal.entity';
 import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
+import { AlertsModule } from '@/modules/alerts/alerts.module';
 import { DistributionModule } from '@/modules/distribution/distribution.module';
 import { MarketModule } from '@/modules/market/market.module';
 import { TaptoolsModule } from '@/modules/taptools/taptools.module';
@@ -30,6 +31,7 @@ import { VyfiModule } from '@/modules/vyfi/vyfi.module';
     TreasureWalletModule,
     ClaimsModule,
     TaptoolsModule,
+    AlertsModule,
     MarketModule,
     VyfiModule,
     GovernanceModule,
