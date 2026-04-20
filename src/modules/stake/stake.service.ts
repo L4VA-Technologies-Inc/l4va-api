@@ -58,7 +58,10 @@ export class StakeService {
   private readonly adminAddress: string;
   private readonly adminSKey: string;
   private readonly APY: number;
+  /** Fallback decimals for unknown tokens */
   private readonly TOKEN_DECIMALS = 4;
+  /** unit (policyId + assetName hex, lowercase) → decimal precision */
+  private readonly knownTokens: Map<string, number>;
 
   constructor(
     private readonly configService: ConfigService,
@@ -80,6 +83,32 @@ export class StakeService {
       throw new Error(`Invalid STAKING_APY: expected a number between 0 and 100 (percent), got "${apyPercentRaw}"`);
     }
     this.APY = apyPercent / 100;
+
+    this.knownTokens = this.buildKnownTokensMap();
+  }
+
+  private buildKnownTokensMap(): Map<string, number> {
+    const map = new Map<string, number>();
+
+    const vlrmPolicy = this.configService.get<string>('VLRM_POLICY_ID')?.toLowerCase();
+    const vlrmName = this.configService.get<string>('VLRM_HEX_ASSET_NAME')?.toLowerCase() ?? '';
+    const vlrmDecimals = parseInt(this.configService.get<string>('VLRM_DECIMALS') ?? '4', 10);
+    if (vlrmPolicy) {
+      map.set(`${vlrmPolicy}${vlrmName}`, Number.isFinite(vlrmDecimals) ? vlrmDecimals : 4);
+    }
+
+    const l4vaPolicy = this.configService.get<string>('L4VA_POLICY_ID')?.toLowerCase();
+    const l4vaName = this.configService.get<string>('L4VA_ASSET_NAME')?.toLowerCase() ?? '';
+    const l4vaDecimals = parseInt(this.configService.get<string>('L4VA_DECIMALS') ?? '3', 10);
+    if (l4vaPolicy) {
+      map.set(`${l4vaPolicy}${l4vaName}`, Number.isFinite(l4vaDecimals) ? l4vaDecimals : 3);
+    }
+
+    return map;
+  }
+
+  private getDecimalsForUnit(unit: string): number {
+    return this.knownTokens.get(unit.toLowerCase()) ?? this.TOKEN_DECIMALS;
   }
 
   private async createLucid(): Promise<LucidEvolution> {
@@ -323,16 +352,17 @@ export class StakeService {
 
       const unit = Object.keys(utxo.assets).find(k => k !== 'lovelace') ?? '';
       const { deposit, reward, payout } = this.calculateRewardForUtxo(unit, utxo);
+      const decimals = this.getDecimalsForUnit(unit);
 
       return {
         txHash: utxo.txHash,
         outputIndex: utxo.outputIndex,
         unit,
         policyId: unit.slice(0, 56),
-        stakedAmount: StakeService.toHumanAmount(deposit, this.TOKEN_DECIMALS),
+        stakedAmount: StakeService.toHumanAmount(deposit, decimals),
         stakedAt,
-        estimatedReward: StakeService.toHumanAmount(reward, this.TOKEN_DECIMALS),
-        estimatedPayout: StakeService.toHumanAmount(payout, this.TOKEN_DECIMALS),
+        estimatedReward: StakeService.toHumanAmount(reward, decimals),
+        estimatedPayout: StakeService.toHumanAmount(payout, decimals),
         eligible: eligibleSet.has(`${utxo.txHash}#${utxo.outputIndex}`),
       };
     });
@@ -341,49 +371,85 @@ export class StakeService {
   }
 
   /**
-   * 1. Creates a `created` ledger row.
-   * 2. Builds the unsigned transaction via Lucid.
-   * 3. Returns `txCbor` + `transactionId` — both are passed to `submitTransaction`.
+   * 1. Validates all tokens (no duplicates, each has a positive computable raw amount).
+   * 2. Builds one unsigned transaction with a separate `.pay.ToContract()` output per token,
+   *    all sharing the same `staked_at` datum so eligibility checks remain consistent.
+   * 3. Saves a single `created` DB record with `metadata.tokens` array.
+   * 4. Returns `txCbor` + `transactionId`.
    */
-  async buildStakeTx(userId: string, userAddress: string, assetId: string, amount: number): Promise<BuildTxRes> {
+  async buildStakeTx(
+    userId: string,
+    userAddress: string,
+    tokens: { assetId: string; amount: number }[]
+  ): Promise<BuildTxRes> {
     try {
-      const lucid = await this.getLucidForUser(userAddress);
-
       const { paymentCredential } = getAddressDetails(userAddress);
       if (!paymentCredential?.hash) throw new Error('Invalid user address.');
-
       const ownerHash = paymentCredential.hash;
-      const unit = assetId.trim().toLowerCase();
-      const policyId = unit.slice(0, 56);
-      const assetNameHex = unit.slice(56);
+
+      // Deduplicate
+      const units = tokens.map(t => t.assetId.trim().toLowerCase());
+      if (new Set(units).size !== units.length) {
+        return { success: false, message: 'Duplicate assetId values are not allowed.' };
+      }
+
       const currentTimeMs = Date.now();
-
-      const rawAmount = StakeService.toRawAmount(amount, this.TOKEN_DECIMALS);
-      if (rawAmount <= 0n) throw new Error('Computed raw amount must be greater than 0.');
-
       const datum = encodeStakeDatum({ owner: ownerHash, staked_at: BigInt(currentTimeMs) });
 
-      const tx = await lucid
-        .newTx()
-        .pay.ToContract(this.contractAddress, { kind: 'inline', value: datum }, { [unit]: rawAmount })
-        .addSignerKey(ownerHash)
-        .complete();
+      // Resolve raw amounts with per-token decimals
+      type TokenEntry = {
+        unit: string;
+        policyId: string;
+        assetName: string;
+        humanAmount: number;
+        decimals: number;
+        rawAmount: bigint;
+      };
+      const entries: TokenEntry[] = tokens.map(({ assetId, amount }) => {
+        const unit = assetId.trim().toLowerCase();
+        const decimals = this.getDecimalsForUnit(unit);
+        const rawAmount = StakeService.toRawAmount(amount, decimals);
+        if (rawAmount <= 0n) throw new Error(`Computed raw amount for ${unit} must be greater than 0.`);
+        return {
+          unit,
+          policyId: unit.slice(0, 56),
+          assetName: unit.slice(56),
+          humanAmount: amount,
+          decimals,
+          rawAmount,
+        };
+      });
 
+      const lucid = await this.getLucidForUser(userAddress);
+      let txBuilder = lucid.newTx();
+
+      for (const entry of entries) {
+        txBuilder = txBuilder.pay.ToContract(
+          this.contractAddress,
+          { kind: 'inline', value: datum },
+          { [entry.unit]: entry.rawAmount }
+        );
+      }
+
+      const tx = await txBuilder.addSignerKey(ownerHash).complete();
       const unsignedTxCbor = tx.toCBOR();
+
       const saved = await this.transactionRepository.save({
         type: TransactionType.stake,
         status: TransactionStatus.created,
         user_id: userId,
         utxo_input: userAddress,
         utxo_output: this.contractAddress,
-        amount: StakeService.bigintToSafeNumber(rawAmount, 'stake rawAmount'),
+        amount: 0,
         metadata: {
-          assetId: unit,
-          policyId,
-          assetName: assetNameHex,
-          humanAmount: amount,
-          decimals: this.TOKEN_DECIMALS,
-          rawAmount: rawAmount.toString(),
+          tokens: entries.map(e => ({
+            assetId: e.unit,
+            policyId: e.policyId,
+            assetName: e.assetName,
+            humanAmount: e.humanAmount,
+            decimals: e.decimals,
+            rawAmount: e.rawAmount.toString(),
+          })),
           staked_at: currentTimeMs,
           unsignedTxCborHash: StakeService.sha256Hex(unsignedTxCbor),
           contractAddress: this.contractAddress,
@@ -394,6 +460,11 @@ export class StakeService {
           cardanoNetwork: this.isMainnet ? 'mainnet' : 'preprod',
         },
       });
+
+      this.logger.log(
+        `buildStakeTx: ${entries.length} token(s) staked for ${userAddress} — ` +
+          entries.map(e => `${e.unit.slice(0, 10)}…=${e.rawAmount}`).join(', ')
+      );
 
       return { success: true, txCbor: unsignedTxCbor, transactionId: saved.id };
     } catch (error: unknown) {

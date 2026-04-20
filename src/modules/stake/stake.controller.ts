@@ -46,7 +46,7 @@ export class StakeController {
   @ApiResponse({ status: 201, description: 'txCbor + transactionId on success', type: BuildTxRes })
   async buildStake(@Req() req: AuthRequest, @Body() body: StakeTokensDto): Promise<BuildTxRes> {
     this.ensureWalletMatchesUser(req, body.userAddress);
-    return this.stakeService.buildStakeTx(req.user.sub, body.userAddress, body.assetId, body.amount);
+    return this.stakeService.buildStakeTx(req.user.sub, body.userAddress, body.tokens);
   }
 
   @Post('build-unstake')
