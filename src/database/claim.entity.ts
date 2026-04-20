@@ -17,7 +17,7 @@ import { Proposal } from './proposal.entity';
 import { Transaction } from './transaction.entity';
 import { User } from './user.entity';
 import { Vault } from './vault.entity';
-
+// =)
 @Entity('claims')
 export class Claim {
   @Expose({ name: 'id' })
