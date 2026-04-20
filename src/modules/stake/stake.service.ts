@@ -432,10 +432,7 @@ export class StakeService {
         return { success: false, message: 'Duplicate assetId values are not allowed.' };
       }
 
-      const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-      const ONE_YEAR_MS = 365 * ONE_DAY_MS;
-
-      const currentTimeMs = Date.now() - ONE_YEAR_MS;
+      const currentTimeMs = Date.now();
       const datum = encodeStakeDatum({ owner: ownerHash, staked_at: BigInt(currentTimeMs) });
 
       // Resolve raw amounts with per-token decimals
@@ -529,10 +526,16 @@ export class StakeService {
       for (const box of processedBoxes) {
         payoutByUnit.set(box.unit, (payoutByUnit.get(box.unit) ?? 0n) + box.payout);
       }
+      // Return all lovelace locked in the consumed UTxOs back to the user.
+      // Without this the ADA would flow to the admin change address instead.
+      const lovelaceFromBoxes = eligibleBoxes.reduce((sum, u) => sum + (u.assets['lovelace'] ?? 0n), 0n);
+      if (lovelaceFromBoxes > 0n) {
+        payoutByUnit.set('lovelace', lovelaceFromBoxes);
+      }
 
       this.logger.log(
         `buildUnstakeTx: ${eligibleBoxes.length} eligible UTxO(s) for ${userAddress} — ` +
-          `deposit=${totalDepositAll}, reward=${totalRewardAll}, payout=${totalDepositAll + totalRewardAll}`
+          `deposit=${totalDepositAll}, reward=${totalRewardAll}, payout=${totalDepositAll + totalRewardAll}, lovelace=${lovelaceFromBoxes}`
       );
 
       const redeemer = Data.to(new Constr(0, []));
@@ -587,9 +590,12 @@ export class StakeService {
 
       const depositByUnit = new Map<string, bigint>();
       const rewardByUnit = new Map<string, bigint>();
+      // Track lovelace per unit so old-box ADA re-enters the new boxes, not admin change.
+      const lovelaceByUnit = new Map<string, bigint>();
       for (const box of processedBoxes) {
         depositByUnit.set(box.unit, (depositByUnit.get(box.unit) ?? 0n) + box.deposit);
         rewardByUnit.set(box.unit, (rewardByUnit.get(box.unit) ?? 0n) + box.reward);
+        lovelaceByUnit.set(box.unit, (lovelaceByUnit.get(box.unit) ?? 0n) + (box.utxo.assets['lovelace'] ?? 0n));
       }
 
       this.logger.log(
@@ -603,13 +609,16 @@ export class StakeService {
 
       for (const [unit, deposit] of depositByUnit.entries()) {
         const datum = encodeStakeDatum({ owner: ownerHash, staked_at: BigInt(now) });
+        const lovelace = lovelaceByUnit.get(unit) ?? 0n;
         txBuilder = txBuilder.pay.ToContract(
           this.contractAddress,
           { kind: 'inline', value: datum },
-          { [unit]: deposit }
+          lovelace > 0n ? { lovelace, [unit]: deposit } : { [unit]: deposit }
         );
       }
 
+      // Reward tokens are sent to the user. Cardano requires a min-ADA alongside any
+      // token output; Lucid calculates this automatically — admin wallet covers it.
       txBuilder = txBuilder.pay.ToAddress(userAddress, Object.fromEntries(rewardByUnit.entries()));
       const tx = await txBuilder.addSignerKey(ownerHash).complete();
 
@@ -656,8 +665,11 @@ export class StakeService {
       const { lucid, ownerHash, referenceUtxo, eligibleBoxes, processedBoxes, totalDepositAll, totalRewardAll } = prep;
 
       const newAmountByUnit = new Map<string, bigint>();
+      // Track lovelace per unit so old-box ADA re-enters the new boxes, not admin change.
+      const lovelaceByUnit = new Map<string, bigint>();
       for (const box of processedBoxes) {
         newAmountByUnit.set(box.unit, (newAmountByUnit.get(box.unit) ?? 0n) + box.payout);
+        lovelaceByUnit.set(box.unit, (lovelaceByUnit.get(box.unit) ?? 0n) + (box.utxo.assets['lovelace'] ?? 0n));
       }
 
       this.logger.log(
@@ -671,10 +683,11 @@ export class StakeService {
 
       for (const [unit, newAmount] of newAmountByUnit.entries()) {
         const datum = encodeStakeDatum({ owner: ownerHash, staked_at: BigInt(now) });
+        const lovelace = lovelaceByUnit.get(unit) ?? 0n;
         txBuilder = txBuilder.pay.ToContract(
           this.contractAddress,
           { kind: 'inline', value: datum },
-          { [unit]: newAmount }
+          lovelace > 0n ? { lovelace, [unit]: newAmount } : { [unit]: newAmount }
         );
       }
 
