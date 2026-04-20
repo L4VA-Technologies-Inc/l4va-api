@@ -111,6 +111,45 @@ export class StakeService {
     return this.knownTokens.get(unit.toLowerCase()) ?? this.TOKEN_DECIMALS;
   }
 
+  /**
+   * Groups processed boxes by token unit and builds a per-token summary with
+   * human-readable amounts (correct decimals per token).
+   */
+  private buildTokensSummary(processedBoxes: ProcessedBox[]): Array<{
+    unit: string;
+    policyId: string;
+    decimals: number;
+    rawDeposit: string;
+    rawReward: string;
+    rawPayout: string;
+    depositAmount: number;
+    rewardAmount: number;
+    payoutAmount: number;
+  }> {
+    const byUnit = new Map<string, { deposit: bigint; reward: bigint; payout: bigint }>();
+    for (const box of processedBoxes) {
+      const acc = byUnit.get(box.unit) ?? { deposit: 0n, reward: 0n, payout: 0n };
+      acc.deposit += box.deposit;
+      acc.reward += box.reward;
+      acc.payout += box.payout;
+      byUnit.set(box.unit, acc);
+    }
+    return Array.from(byUnit.entries()).map(([unit, amounts]) => {
+      const decimals = this.getDecimalsForUnit(unit);
+      return {
+        unit,
+        policyId: unit.slice(0, 56),
+        decimals,
+        rawDeposit: amounts.deposit.toString(),
+        rawReward: amounts.reward.toString(),
+        rawPayout: amounts.payout.toString(),
+        depositAmount: StakeService.toHumanAmount(amounts.deposit, decimals),
+        rewardAmount: StakeService.toHumanAmount(amounts.reward, decimals),
+        payoutAmount: StakeService.toHumanAmount(amounts.payout, decimals),
+      };
+    });
+  }
+
   private async createLucid(): Promise<LucidEvolution> {
     return Lucid(createLucidBlockfrostProvider(this.blockfrostProjectId, this.network), this.network);
   }
@@ -393,7 +432,10 @@ export class StakeService {
         return { success: false, message: 'Duplicate assetId values are not allowed.' };
       }
 
-      const currentTimeMs = Date.now();
+      const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+      const ONE_YEAR_MS = 365 * ONE_DAY_MS;
+
+      const currentTimeMs = Date.now() - ONE_YEAR_MS;
       const datum = encodeStakeDatum({ owner: ownerHash, staked_at: BigInt(currentTimeMs) });
 
       // Resolve raw amounts with per-token decimals
@@ -503,22 +545,17 @@ export class StakeService {
         .complete();
 
       const unsignedTxCbor = tx.toCBOR();
+      const tokensSummary = this.buildTokensSummary(processedBoxes);
       const saved = await this.transactionRepository.save({
         type: TransactionType.unstake,
         status: TransactionStatus.created,
         user_id: userId,
         utxo_input: this.contractAddress,
         utxo_output: userAddress,
-        amount: StakeService.bigintToSafeNumber(totalDepositAll + totalRewardAll, 'unstake rawPayoutAmount'),
+        amount: 0,
         metadata: {
           utxos: eligibleBoxes.map(u => ({ txHash: u.txHash, outputIndex: u.outputIndex })),
-          decimals: this.TOKEN_DECIMALS,
-          rawDepositAmount: totalDepositAll.toString(),
-          rawRewardAmount: totalRewardAll.toString(),
-          rawPayoutAmount: (totalDepositAll + totalRewardAll).toString(),
-          depositAmount: StakeService.toHumanAmount(totalDepositAll, this.TOKEN_DECIMALS),
-          rewardAmount: StakeService.toHumanAmount(totalRewardAll, this.TOKEN_DECIMALS),
-          payoutAmount: StakeService.toHumanAmount(totalDepositAll + totalRewardAll, this.TOKEN_DECIMALS),
+          tokens: tokensSummary,
           utxoCount: eligibleBoxes.length,
           unsignedTxCborHash: StakeService.sha256Hex(unsignedTxCbor),
           contractAddress: this.contractAddress,
@@ -577,20 +614,17 @@ export class StakeService {
       const tx = await txBuilder.addSignerKey(ownerHash).complete();
 
       const unsignedTxCbor = tx.toCBOR();
+      const tokensSummary = this.buildTokensSummary(processedBoxes);
       const saved = await this.transactionRepository.save({
         type: TransactionType.harvest,
         status: TransactionStatus.created,
         user_id: userId,
         utxo_input: this.contractAddress,
         utxo_output: userAddress,
-        amount: StakeService.bigintToSafeNumber(totalRewardAll, 'harvest rawRewardAmount'),
+        amount: 0,
         metadata: {
           utxos: eligibleBoxes.map(u => ({ txHash: u.txHash, outputIndex: u.outputIndex })),
-          decimals: this.TOKEN_DECIMALS,
-          rawDepositAmount: totalDepositAll.toString(),
-          rawRewardAmount: totalRewardAll.toString(),
-          depositAmount: StakeService.toHumanAmount(totalDepositAll, this.TOKEN_DECIMALS),
-          rewardAmount: StakeService.toHumanAmount(totalRewardAll, this.TOKEN_DECIMALS),
+          tokens: tokensSummary,
           staked_at: now,
           utxoCount: eligibleBoxes.length,
           unsignedTxCborHash: StakeService.sha256Hex(unsignedTxCbor),
@@ -647,22 +681,17 @@ export class StakeService {
       const tx = await txBuilder.addSignerKey(ownerHash).complete();
 
       const unsignedTxCbor = tx.toCBOR();
+      const tokensSummary = this.buildTokensSummary(processedBoxes);
       const saved = await this.transactionRepository.save({
         type: TransactionType.compound,
         status: TransactionStatus.created,
         user_id: userId,
         utxo_input: this.contractAddress,
         utxo_output: this.contractAddress,
-        amount: StakeService.bigintToSafeNumber(totalDepositAll + totalRewardAll, 'compound rawNewDepositAmount'),
+        amount: 0,
         metadata: {
           utxos: eligibleBoxes.map(u => ({ txHash: u.txHash, outputIndex: u.outputIndex })),
-          decimals: this.TOKEN_DECIMALS,
-          rawDepositAmount: totalDepositAll.toString(),
-          rawRewardAmount: totalRewardAll.toString(),
-          rawNewDepositAmount: (totalDepositAll + totalRewardAll).toString(),
-          depositAmount: StakeService.toHumanAmount(totalDepositAll, this.TOKEN_DECIMALS),
-          rewardAmount: StakeService.toHumanAmount(totalRewardAll, this.TOKEN_DECIMALS),
-          newDepositAmount: StakeService.toHumanAmount(totalDepositAll + totalRewardAll, this.TOKEN_DECIMALS),
+          tokens: tokensSummary,
           staked_at: now,
           utxoCount: eligibleBoxes.length,
           unsignedTxCborHash: StakeService.sha256Hex(unsignedTxCbor),
