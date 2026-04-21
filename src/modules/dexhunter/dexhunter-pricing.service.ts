@@ -15,11 +15,15 @@ export class DexHunterPricingService {
   private readonly logger = new Logger(DexHunterPricingService.name);
   private readonly dexHunterBaseUrl: string;
   private readonly dexHunterApiKey: string;
+  private readonly tapToolsApiKey: string;
+  private readonly tapToolsApiUrl: string;
   private readonly isMainnet: boolean;
 
   constructor(private readonly configService: ConfigService) {
     this.dexHunterBaseUrl = this.configService.get<string>('DEXHUNTER_BASE_URL');
     this.dexHunterApiKey = this.configService.get<string>('DEXHUNTER_API_KEY');
+    this.tapToolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
+    this.tapToolsApiUrl = this.configService.get<string>('TAPTOOLS_API_URL');
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
   }
 
@@ -51,8 +55,62 @@ export class DexHunterPricingService {
   }
 
   /**
-   * Get current token price in ADA using DexHunter API
-   * Uses the average price endpoint to get the current market price
+  /**
+   * Fetch token prices from TapTools API in batch
+   * @param tokenIds - Array of token identifiers
+   * @returns Map of tokenId to price in ADA
+   */
+  private async fetchTokenPricesFromTapTools(tokenIds: string[]): Promise<Map<string, number | null>> {
+    const priceMap = new Map<string, number | null>();
+
+    // TapTools supports max 100 tokens per batch
+    const batchSize = 100;
+    for (let i = 0; i < tokenIds.length; i += batchSize) {
+      const batch = tokenIds.slice(i, i + batchSize);
+
+      try {
+        const response = await fetch(`${this.tapToolsApiUrl}/token/prices`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': this.tapToolsApiKey,
+          },
+          body: JSON.stringify(batch),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          this.logger.warn(`TapTools batch API failed: ${response.status} - ${errorText}`);
+          // Set all tokens in batch to null
+          batch.forEach(tokenId => priceMap.set(tokenId, null));
+          continue;
+        }
+
+        const data = await response.json();
+
+        // Map response to price map
+        batch.forEach(tokenId => {
+          const price = data[tokenId];
+          priceMap.set(tokenId, price !== undefined && price !== null ? price : null);
+        });
+      } catch (error) {
+        this.logger.warn(`TapTools batch request failed for batch ${i / batchSize + 1}`, error);
+        // Set all tokens in batch to null
+        batch.forEach(tokenId => priceMap.set(tokenId, null));
+      }
+    }
+
+    return priceMap;
+  }
+
+  /**
+   * Get current token price in ADA with TapTools fallback
+   * Uses DexHunter API first, falls back to TapTools if DexHunter fails or returns null
+   *
+   * Fallback strategy:
+   * 1. Try DexHunter API first
+   * 2. If DexHunter fails (404, 500, 401, etc.) or returns null - try TapTools API
+   * 3. Return null only if both APIs fail or have no data
    *
    * @param tokenId - The token identifier (policyId + assetName in hex)
    * @returns Token price in ADA, or null if token not found/no liquidity
@@ -64,6 +122,9 @@ export class DexHunterPricingService {
       return null;
     }
 
+    let dexHunterResult: number | null = null;
+
+    // Try DexHunter API first
     try {
       const response = await fetch(`${this.dexHunterBaseUrl}/swap/averagePrice/ADA/${tokenId}`, {
         method: 'GET',
@@ -75,27 +136,51 @@ export class DexHunterPricingService {
 
       if (!response.ok) {
         if (response.status === 404) {
-          this.logger.debug(`Token ${tokenId} not found or has no liquidity`);
-          return null;
+          this.logger.debug(`DexHunter: Token ${tokenId} not found or has no liquidity, trying TapTools fallback`);
+        } else {
+          const errorText = await response.text();
+          const sanitizedError = this.sanitizeErrorText(errorText, response.status);
+          this.logger.warn(`DexHunter API error (${response.status}): ${sanitizedError}, trying TapTools fallback`);
         }
-        const errorText = await response.text();
-        const sanitizedError = this.sanitizeErrorText(errorText, response.status);
-        throw new Error(`DexHunter API error: ${response.status} - ${sanitizedError}`);
+      } else {
+        const data = await response.json();
+        const priceAda = data.price_ba;
+
+        if (priceAda && priceAda > 0) {
+          dexHunterResult = priceAda;
+        } else {
+          this.logger.debug(`DexHunter returned zero/null price for token ${tokenId}, trying TapTools fallback`);
+        }
       }
-
-      const data = await response.json();
-
-      const priceAda = data.price_ba;
-      return priceAda;
     } catch (error) {
-      this.logger.error(`Failed to fetch token price for ${tokenId}`, error);
-      return null;
+      this.logger.warn(`DexHunter API failed for token ${tokenId}, trying TapTools fallback`, error);
     }
+
+    // If DexHunter succeeded with valid data, return it
+    if (dexHunterResult) {
+      return dexHunterResult;
+    }
+
+    // Fallback to TapTools API
+    const tapToolsResult = await this.fetchTokenPricesFromTapTools([tokenId]).then(map => map.get(tokenId) || null);
+
+    if (tapToolsResult !== null && tapToolsResult > 0) {
+      this.logger.log(`Successfully fetched token price from TapTools for ${tokenId}: ${tapToolsResult} ADA`);
+      return tapToolsResult;
+    }
+
+    // Both APIs failed or returned no data
+    this.logger.debug(`No price data available from DexHunter or TapTools for token ${tokenId}`);
+    return null;
   }
 
   /**
-   * Get prices for multiple tokens in ADA
+   * Get prices for multiple tokens in ADA with TapTools fallback
    * Batch fetches prices for efficiency
+   *
+   * Fallback strategy:
+   * 1. Try fetching all prices from DexHunter first (in parallel batches)
+   * 2. For any tokens that returned null, try TapTools as fallback (in single batch)
    *
    * @param tokenIds - Array of token identifiers (policyId + assetName in hex)
    * @returns Map of tokenId to price in ADA (null if not found)
@@ -113,6 +198,24 @@ export class DexHunterPricingService {
 
       batch.forEach((tokenId, index) => {
         priceMap.set(tokenId, prices[index]);
+      });
+    }
+
+    // Find tokens that still have null prices and try TapTools fallback
+    const tokensNeedingFallback = tokenIds.filter(tokenId => priceMap.get(tokenId) === null);
+
+    if (tokensNeedingFallback.length > 0) {
+      this.logger.log(
+        `${tokensNeedingFallback.length} tokens had no price from DexHunter, trying TapTools fallback in batch`
+      );
+      const tapToolsPrices = await this.fetchTokenPricesFromTapTools(tokensNeedingFallback);
+
+      // Update price map with TapTools results
+      tapToolsPrices.forEach((price, tokenId) => {
+        if (price !== null && price > 0) {
+          priceMap.set(tokenId, price);
+          this.logger.debug(`TapTools provided fallback price for token ${tokenId}: ${price} ADA`);
+        }
       });
     }
 

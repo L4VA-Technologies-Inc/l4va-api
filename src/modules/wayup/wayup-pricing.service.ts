@@ -19,6 +19,9 @@ export class WayUpPricingService {
   private readonly logger = new Logger(WayUpPricingService.name);
   private readonly baseUrl = 'https://prod.api.ada-anvil.app/marketplace/api/get-collection-assets';
   private readonly isMainnet: boolean;
+  private readonly tapToolsApiKey: string;
+  private readonly tapToolsApiUrl: string;
+
   private isTrackingInProgress = false;
 
   constructor(
@@ -28,6 +31,8 @@ export class WayUpPricingService {
     private readonly assetsService: AssetsService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+    this.tapToolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
+    this.tapToolsApiUrl = this.configService.get<string>('TAPTOOLS_API_URL');
   }
 
   /**
@@ -71,13 +76,67 @@ export class WayUpPricingService {
       return data;
     } catch (error) {
       this.logger.error(`Failed to fetch collection assets for policy ${query.policyId}`, error);
-      throw new Error(`Failed to fetch collection assets: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to fetch collection assets: ${errorMessage}`);
     }
   }
 
   /**
-   * Get the floor price for an NFT collection from WayUp Marketplace
+   * Fetch floor price from TapTools API as fallback
+   * @param policyId - The policy ID of the NFT collection
+   * @returns Floor price result or null if no data available
+   */
+  private async fetchFloorPriceFromTapTools(policyId: string): Promise<{
+    floorPrice: number | null;
+    floorPriceAda: number | null;
+    hasListings: boolean;
+  } | null> {
+    try {
+      const tapToolsResponse = await fetch(`${this.tapToolsApiUrl}/nft/collection/stats?policy=${policyId}`, {
+        headers: {
+          'x-api-key': this.tapToolsApiKey,
+        },
+      });
+
+      if (!tapToolsResponse.ok) {
+        const errorText = await tapToolsResponse.text();
+        throw new Error(`TapTools API error: ${tapToolsResponse.status} ${tapToolsResponse.statusText} - ${errorText}`);
+      }
+
+      const tapToolsData = await tapToolsResponse.json();
+
+      // TapTools returns price in ADA
+      if (!tapToolsData.price || tapToolsData.price === 0) {
+        this.logger.debug(`TapTools returned no floor price for collection ${policyId}`);
+        return null;
+      }
+
+      const floorPriceAda = tapToolsData.price;
+      const floorPriceLovelace = Math.round(floorPriceAda * 1_000_000);
+
+      this.logger.log(
+        `Successfully fetched floor price from TapTools for collection ${policyId}: ${floorPriceAda} ADA`
+      );
+
+      return {
+        floorPrice: floorPriceLovelace,
+        floorPriceAda,
+        hasListings: tapToolsData.listings > 0,
+      };
+    } catch (error) {
+      this.logger.warn(`TapTools API failed for collection ${policyId}`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Get the floor price for an NFT collection from WayUp Marketplace with TapTools fallback
    * Floor price is the lowest currently listed price in the collection
+   *
+   * Fallback strategy:
+   * 1. Try WayUp API first
+   * 2. If WayUp returns empty results, zero price, or fails - try TapTools API
+   * 3. Return null only if both APIs fail or have no data
    *
    * @param policyId - The policy ID of the NFT collection
    * @returns Floor price in lovelace and ADA, or null if no listings exist
@@ -97,8 +156,10 @@ export class WayUpPricingService {
       };
     }
 
+    let wayUpResult: { floorPrice: number | null; floorPriceAda: number | null; hasListings: boolean } | null = null;
+
+    // Try WayUp API first
     try {
-      // Query the collection for the cheapest listing
       const response = await this.getCollectionAssets({
         policyId,
         saleType: 'listedOnly',
@@ -106,27 +167,47 @@ export class WayUpPricingService {
         limit: 1,
       });
 
-      if (response.results.length === 0 || !response.results[0].listing) {
-        return {
-          floorPrice: null,
-          floorPriceAda: null,
-          hasListings: false,
-        };
+      if (response.results.length > 0 && response.results[0].listing) {
+        const floorAsset = response.results[0];
+        const floorPriceLovelace = floorAsset.listing.price;
+        const floorPriceAda = floorPriceLovelace / 1_000_000;
+
+        // Only use WayUp result if price is valid (non-zero)
+        if (floorPriceLovelace > 0) {
+          wayUpResult = {
+            floorPrice: floorPriceLovelace,
+            floorPriceAda,
+            hasListings: true,
+          };
+        } else {
+          this.logger.warn(`WayUp returned zero price for collection ${policyId}, trying TapTools fallback`);
+        }
+      } else {
+        this.logger.debug(`WayUp returned no listings for collection ${policyId}, trying TapTools fallback`);
       }
-
-      const floorAsset = response.results[0];
-      const floorPriceLovelace = floorAsset.listing.price;
-      const floorPriceAda = floorPriceLovelace / 1_000_000;
-
-      return {
-        floorPrice: floorPriceLovelace,
-        floorPriceAda,
-        hasListings: true,
-      };
     } catch (error) {
-      this.logger.error(`Failed to fetch floor price for collection ${policyId}`, error);
-      throw new Error(`Failed to fetch floor price: ${error.message}`);
+      this.logger.warn(`WayUp API failed for collection ${policyId}, trying TapTools fallback`, error);
     }
+
+    // If WayUp succeeded with valid data, return it
+    if (wayUpResult) {
+      return wayUpResult;
+    }
+
+    // Fallback to TapTools API
+    const tapToolsResult = await this.fetchFloorPriceFromTapTools(policyId);
+
+    if (tapToolsResult) {
+      return tapToolsResult;
+    }
+
+    // Both APIs failed or returned no data
+    this.logger.warn(`No floor price data available from WayUp or TapTools for collection ${policyId}`);
+    return {
+      floorPrice: null,
+      floorPriceAda: null,
+      hasListings: false,
+    };
   }
 
   /**
@@ -185,9 +266,8 @@ export class WayUpPricingService {
             this.logger.log(`Asset ${asset.name} (${asset.asset_id}) from policy ${asset.policy_id} has been sold`);
           }
         } catch (error) {
-          this.logger.error(
-            `Failed to check sale status for asset ${asset.name} (${asset.asset_id}): ${error.message}`
-          );
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          this.logger.error(`Failed to check sale status for asset ${asset.name} (${asset.asset_id}): ${errorMessage}`);
           // Continue with next asset
         }
       }
@@ -202,7 +282,9 @@ export class WayUpPricingService {
 
       this.logger.log('NFT sale tracking cron job completed successfully');
     } catch (error) {
-      this.logger.error(`NFT sale tracking cron job failed: ${error.message}`, error.stack);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      this.logger.error(`NFT sale tracking cron job failed: ${errorMessage}`, errorStack);
     } finally {
       // Release lock
       this.isTrackingInProgress = false;
