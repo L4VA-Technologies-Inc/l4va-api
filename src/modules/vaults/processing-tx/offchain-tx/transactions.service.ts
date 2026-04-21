@@ -177,7 +177,8 @@ export class TransactionsService {
           (blockfrostMetadata?.metadata as any)?.logo ||
           null;
 
-        const cleanImage = typeof rawImage === 'string' ? normalizeAssetImageSource(rawImage) : null;
+        const cleanImage =
+          typeof rawImage === 'string' || Array.isArray(rawImage) ? normalizeAssetImageSource(rawImage) : null;
 
         const finalDescription =
           assetItem.description ||
