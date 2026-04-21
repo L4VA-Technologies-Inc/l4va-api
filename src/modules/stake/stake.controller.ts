@@ -30,15 +30,15 @@ export class StakeController {
 
   @Get('balance')
   @ApiOperation({
-    summary: 'Live staked boxes from the smart contract (Blockfrost)',
+    summary: 'Active staking positions (from database)',
     description:
-      'Returns individual UTxO boxes locked at the staking contract for the current user. ' +
-      'Each box includes the staked amount, estimated reward/payout, and eligibility status. ' +
-      'Use this to display per-box info and let the user select which boxes to unstake/harvest/compound.',
+      'Returns individual staking positions tracked in the database for the current user. ' +
+      'Each entry corresponds to one on-chain box and includes the staked amount, ' +
+      'estimated reward/payout, and the UTxO ref needed to unstake/harvest/compound.',
   })
   @ApiResponse({ status: 200, type: StakedBalanceRes })
   async getMyStakedBalance(@Req() req: AuthRequest): Promise<StakedBalanceRes> {
-    return this.stakeService.getOnChainStakedBalance(req.user.sub, req.user.address);
+    return this.stakeService.getStakedBalanceFromDb(req.user.sub);
   }
 
   @Post('build-stake')

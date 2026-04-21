@@ -3,9 +3,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 
 import { createLucidBlockfrostProvider, lucidNetworkFromCardanoEnv } from '@/common/cardano/blockfrost-lucid';
+import { StakingStatus, TokenStakingPosition } from '@/database/tokenStakingPosition.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { tryDecodeStakeDatum } from '@/modules/stake/stake-datum';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
@@ -13,12 +14,16 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 type StakeKey = `${string}:${number}`;
 type StakeTxHashKey = `tx:${string}`;
 
+/** All transaction types that create a new stake box — their output UTxO can be directly unstaked. */
+const STAKE_LIKE_TYPES = [TransactionType.stake, TransactionType.harvest, TransactionType.compound];
+
 /**
- * Detects direct (off-platform) stake exits by reconciling DB stake records
+ * Detects direct (off-platform) stake exits by reconciling DB stake/harvest/compound records
  * with actual UTxOs currently present at the staking contract address.
  *
- * If a DB-confirmed stake no longer exists on-chain, we treat it as an "unstake confirmed"
- * performed outside the backend (no admin-funded reward).
+ * If a DB-confirmed stake-like tx no longer has its output UTxO on-chain, and that UTxO was
+ * not legitimately consumed by a subsequent platform harvest/compound, we treat it as an
+ * "unstake confirmed" performed outside the backend (no admin-funded reward).
  */
 @Injectable()
 export class StakeReconciliationService {
@@ -32,7 +37,9 @@ export class StakeReconciliationService {
   constructor(
     private readonly configService: ConfigService,
     @InjectRepository(Transaction)
-    private readonly transactionRepository: Repository<Transaction>
+    private readonly transactionRepository: Repository<Transaction>,
+    @InjectRepository(TokenStakingPosition)
+    private readonly tokenStakingPositionRepository: Repository<TokenStakingPosition>
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.network = lucidNetworkFromCardanoEnv(this.isMainnet);
@@ -52,24 +59,62 @@ export class StakeReconciliationService {
     return `tx:${txHash}`;
   }
 
+  /**
+   * Closes all ACTIVE positions that were created by the given stake-like transaction.
+   * Called when we detect that the transaction's output boxes are no longer on-chain
+   * (direct off-platform unstake).
+   */
+  private async closePositionsForTransaction(stakeTx: Transaction): Promise<void> {
+    try {
+      const positions = await this.tokenStakingPositionRepository.find({
+        where: { stake_tx_id: stakeTx.id, status: StakingStatus.ACTIVE },
+      });
+
+      if (positions.length === 0) return;
+
+      for (const position of positions) {
+        await this.tokenStakingPositionRepository.save({
+          ...position,
+          status: StakingStatus.CLOSED,
+        });
+      }
+
+      this.logger.log(
+        `closePositionsForTransaction: closed ${positions.length} position(s) for tx=${stakeTx.id} user=${stakeTx.user_id}`
+      );
+    } catch (err) {
+      this.logger.error(`closePositionsForTransaction: failed for tx=${stakeTx.id} user=${stakeTx.user_id}`, err);
+    }
+  }
+
   @Cron(CronExpression.EVERY_DAY_AT_2AM)
   async reconcileStakes(): Promise<void> {
     const startedAt = Date.now();
 
-    const stakes = await this.transactionRepository.find({
-      where: { type: TransactionType.stake, status: TransactionStatus.confirmed },
+    const allStakeLike = await this.transactionRepository.find({
+      where: { type: In(STAKE_LIKE_TYPES), status: TransactionStatus.confirmed },
       select: ['id', 'user_id', 'utxo_input', 'utxo_output', 'tx_hash', 'metadata', 'created_at'],
     });
 
-    const openStakes = stakes.filter(tx => {
+    const openStakes = allStakeLike.filter(tx => {
       const stakedAt = Number(tx.metadata?.staked_at);
       const alreadyClosed = Boolean(tx.metadata?.direct_unstake_detected_at || tx.metadata?.closed_at);
       return Number.isFinite(stakedAt) && stakedAt > 0 && !alreadyClosed;
     });
 
     if (openStakes.length === 0) {
-      this.logger.log(`reconcileStakes: no open confirmed stakes to reconcile`);
+      this.logger.log(`reconcileStakes: no open confirmed stake-like txs to reconcile`);
       return;
+    }
+
+    // Build a set of UTxO txHashes legitimately consumed by platform harvest/compound.
+    const knownConsumedTxHashes = new Set<string>();
+    for (const tx of allStakeLike) {
+      if (tx.type !== TransactionType.harvest && tx.type !== TransactionType.compound) continue;
+      const utxos: Array<{ txHash?: string }> = Array.isArray(tx.metadata?.utxos) ? tx.metadata.utxos : [];
+      for (const u of utxos) {
+        if (u.txHash) knownConsumedTxHashes.add(u.txHash);
+      }
     }
 
     const lucid = await this.createLucid();
@@ -104,44 +149,36 @@ export class StakeReconciliationService {
         continue;
       }
 
-      // Primary correlation is by the tx hash that created the stake UTxO.
-      // This avoids collisions when multiple stakes share the same staked_at millisecond.
+      // Primary check: by the on-chain tx hash that created this stake box.
       if (stakeTx.tx_hash) {
         const txKey = StakeReconciliationService.stakeTxHashKey(stakeTx.tx_hash);
-        if (onChainByTxHash.has(txKey)) continue;
+        if (onChainByTxHash.has(txKey)) continue; // still on-chain
+        if (knownConsumedTxHashes.has(stakeTx.tx_hash)) continue; // consumed by platform harvest/compound
       } else {
-        // Fallback correlation for legacy rows without tx_hash.
+        // Fallback for legacy rows without tx_hash.
         const key = StakeReconciliationService.stakeKey(ownerHash, stakedAt);
         if (onChainByOwnerAndTime.has(key)) continue;
       }
 
-      // Mark the stake as closed off-platform.
+      // Mark the stake tx as direct-unstaked (idempotent guard).
       const directUnstakeMetadata = {
         ...(stakeTx.metadata ?? {}),
         direct_unstake_detected_at: nowIso,
         direct_unstake_reason: 'utxo_missing_at_contract',
       };
 
-      // Idempotency across concurrent workers: only the first worker that flips this flag proceeds.
       const updateResult = await this.transactionRepository
         .createQueryBuilder()
         .update(Transaction)
-        .set({
-          // TypeORM typings for JSONB updates are awkward; use a JSONB cast expression.
-          metadata: () => ':directUnstakeMetadata::jsonb',
-        })
+        .set({ metadata: () => ':directUnstakeMetadata::jsonb' })
         .where('id = :id', { id: stakeTx.id })
         .andWhere("(metadata IS NULL OR metadata->>'direct_unstake_detected_at' IS NULL)")
         .setParameter('directUnstakeMetadata', JSON.stringify(directUnstakeMetadata))
         .execute();
 
-      if (!updateResult.affected) {
-        // Another worker already reconciled this stake.
-        continue;
-      }
+      if (!updateResult.affected) continue; // another worker already reconciled this
 
-      // Insert a synthetic "unstake confirmed" record for accounting/history.
-      // Amount is set to 0 because we don't know the actual payout (and no admin reward applies).
+      // Insert a synthetic unstake record for history/audit.
       const existingSynthetic = await this.transactionRepository
         .createQueryBuilder('tx')
         .where('tx.type = :type', { type: TransactionType.unstake })
@@ -167,6 +204,8 @@ export class StakeReconciliationService {
           },
         });
       }
+
+      await this.closePositionsForTransaction(stakeTx);
 
       closedCount++;
     }

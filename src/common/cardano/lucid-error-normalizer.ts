@@ -47,6 +47,11 @@ export function normalizeLucidCardanoError(error: unknown, fallback: string): st
     return 'Transaction failed script validation. Please double-check selected UTxOs and try again.';
   }
 
+  // WASM internal panic — usually caused by zero-amount token outputs or invalid value encoding.
+  if (/RuntimeError\s*:?\s*unreachable/i.test(text)) {
+    return 'Transaction could not be built. This can happen when accumulated rewards are too small to include in an output. Please wait longer before harvesting, or use Compound to reinvest rewards.';
+  }
+
   // Fallback: try to extract first string inside `"error":[ "..."]` if present.
   const errorArrayFirst = text.match(/"error"\s*:\s*\[\s*"([^"]+)"/);
   if (errorArrayFirst?.[1]) {
