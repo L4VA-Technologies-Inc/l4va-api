@@ -1785,9 +1785,12 @@ export class TaptoolsService {
         (details.onchain_metadata as Record<string, unknown>)?.image,
         (details.onchain_metadata as Record<string, unknown>)?.logo,
       ];
-      const rawImage = rawImageCandidates.find((candidate): candidate is string => typeof candidate === 'string') || '';
+      const rawImage =
+        rawImageCandidates.find(
+          (candidate): candidate is string | string[] => typeof candidate === 'string' || Array.isArray(candidate)
+        ) || '';
 
-      // Normalize image source (handles base64, IPFS, HTTP, etc.)
+      // Normalize image source (handles base64, IPFS, HTTP, chunked array, etc.)
       let normalizedImage = normalizeAssetImageSource(rawImage) || '';
 
       if (/^ipfs:\/\//i.test(normalizedImage)) {
