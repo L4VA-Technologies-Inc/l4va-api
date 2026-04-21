@@ -302,7 +302,10 @@ export class DraftVaultsService {
             return this.assetsWhitelistRepository.save({
               vault: vault,
               policy_id: whitelistItem.policyId,
-              collection_name: whitelistItem.collectionName,
+              collection_name:
+                typeof whitelistItem.collectionName === 'string'
+                  ? whitelistItem.collectionName.slice(0, 255)
+                  : whitelistItem.collectionName,
               asset_count_cap_min: whitelistItem?.countCapMin,
               asset_count_cap_max: whitelistItem?.countCapMax,
               valuation_method: whitelistItem?.valuationMethod || 'market',
