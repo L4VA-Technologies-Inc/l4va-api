@@ -148,6 +148,7 @@ export class AssetsService {
         origin_type: AssetOriginType.FEE,
         decimals: 4, // VLRM has 4 decimal places
         name: 'VLRM',
+        description: 'The governance and utility token of the Relics of Magma.',
         last_valuation: new Date(),
         added_by: { id: ownerId },
         image: 'ipfs://QmdYu513Bu7nfKV5LKP6cmpZ8HHXifQLH6FTTzv3VbbqwP', // VLRM logo
