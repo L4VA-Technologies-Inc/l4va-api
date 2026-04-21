@@ -176,11 +176,7 @@ export class VaultMarketStatsService {
           // This data is essential and stored in market.totalAdaLiquidity
           const liquidityCheck = await this.dexHunterPricingService.checkTokenLiquidity(unit);
 
-          if (liquidityCheck?.hasLiquidity) {
-            this.logger.log(
-              `${vault.name}: DexHunter detected liquidity (${liquidityCheck.totalAdaLiquidity.toFixed(2)} ADA across ${liquidityCheck.pools.length} pool(s))`
-            );
-          } else {
+          if (!liquidityCheck?.hasLiquidity) {
             this.logger.debug(`${vault.name}: No liquidity detected by DexHunter, skipping Taptools API`);
 
             // Update LP status to false and record check time
