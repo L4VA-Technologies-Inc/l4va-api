@@ -140,7 +140,7 @@ export class AssetsService {
       const vlrmAsset = this.assetsRepository.create({
         vault_id: vault.id,
         policy_id: this.VLRM_POLICY_ID,
-        asset_id: `${this.VLRM_POLICY_ID}${this.VLRM_HEX_ASSET_NAME}`,
+        asset_id: this.VLRM_HEX_ASSET_NAME,
         type: AssetType.FT,
         dex_price: vlrmDexPrice,
         quantity: this.systemSettingsService.vlrmCreatorFee,
