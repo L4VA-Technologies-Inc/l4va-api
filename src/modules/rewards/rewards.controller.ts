@@ -211,24 +211,6 @@ export class RewardsController {
     return this.rewardClaimProxy.buildAndExecuteClaim(walletAddress, body);
   }
 
-  /**
-   * POST /rewards/claims/submit
-   * Submit a signed claim transaction to the blockchain.
-   * Note: The transaction is already signed by the treasury in the build step.
-   */
-  @UseGuards(AuthGuard)
-  @Post('claims/submit')
-  async submitClaimTransaction(@Body() body: { txCbor: string }): Promise<{
-    success: boolean;
-    txHash?: string;
-    error?: string;
-  }> {
-    if (!body.txCbor) {
-      return { success: false, error: 'txCbor is required' };
-    }
-    return this.rewardClaimProxy.submitClaimTransaction(body.txCbor);
-  }
-
   // ============================================================================
   // Vesting Endpoints (proxied to l4va-rewards)
   // ============================================================================
@@ -252,51 +234,5 @@ export class RewardsController {
   @Get('weights')
   async getWeights(): Promise<any> {
     return this.rewardClaimProxy.getWeights();
-  }
-
-  // ============================================================================
-  // Legacy Endpoints (deprecated, kept for backward compatibility)
-  // ============================================================================
-
-  /**
-   * @deprecated Use GET /claims/:walletAddress instead
-   */
-  @UseGuards(AuthGuard)
-  @Get('claims')
-  async getAvailableClaims(@Request() req: AuthRequest): Promise<any> {
-    return this.rewardClaimProxy.getAvailableClaims(req.user.address);
-  }
-
-  /**
-   * @deprecated Use GET /claims/:walletAddress/history instead
-   */
-  @UseGuards(AuthGuard)
-  @Get('claims/history')
-  async getClaimHistoryLegacy(@Request() req: AuthRequest, @Query('limit') limit = '50'): Promise<any> {
-    return this.rewardClaimProxy.getClaimHistory(req.user.address, parseInt(limit, 10));
-  }
-
-  /**
-   * @deprecated Use POST /claims/:walletAddress/claim instead
-   */
-  @UseGuards(AuthGuard)
-  @Post('claim')
-  async claimRewards(
-    @Request() req: AuthRequest,
-    @Body() body: { claimIds?: string[]; transactionId: string }
-  ): Promise<any> {
-    if (!body.transactionId) {
-      return { success: false, error: 'transactionId is required' };
-    }
-    return this.rewardClaimProxy.markClaimed(req.user.address, body.claimIds ?? [], body.transactionId);
-  }
-
-  /**
-   * @deprecated Use GET /vesting/:walletAddress instead
-   */
-  @UseGuards(AuthGuard)
-  @Get('vesting')
-  async getVestingPositions(@Request() req: AuthRequest): Promise<any> {
-    return this.rewardClaimProxy.getVestingPositions(req.user.address);
   }
 }

@@ -227,27 +227,6 @@ export class RewardClaimProxy {
     }
   }
 
-  /**
-   * @deprecated Submit is now handled automatically in buildAndExecuteClaim
-   * Submit a signed claim transaction to the blockchain.
-   */
-  async submitClaimTransaction(_signedTxCbor: string): Promise<{
-    success: boolean;
-    txHash?: string;
-    error?: string;
-  }> {
-    return {
-      success: false,
-      error: 'This endpoint is deprecated. Transactions are now submitted automatically when built.',
-    };
-  }
-
-  async markClaimed(walletAddress: string, claimIds: string[], transactionId: string): Promise<any> {
-    const url = `${this.rewardsBaseUrl}/api/v1/rewards/claims/${walletAddress}/mark-claimed`;
-    const { data } = await firstValueFrom(this.httpService.post(url, { claimIds, transactionId }));
-    return data;
-  }
-
   // ============================================================================
   // Vesting Methods
   // ============================================================================
