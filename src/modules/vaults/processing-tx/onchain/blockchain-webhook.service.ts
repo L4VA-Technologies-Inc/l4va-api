@@ -293,7 +293,7 @@ export class BlockchainWebhookService {
         await this.rewardEventProducer.indexEvent({
           walletAddress: user.address,
           vaultId: transaction.vault_id,
-          eventType: RewardActivityType.TOKEN_ACQUIRE,
+          eventType: isExpansion ? RewardActivityType.EXPANSION_TOKEN_PURCHASE : RewardActivityType.TOKEN_ACQUIRE,
           txHash,
           units,
           metadata: {

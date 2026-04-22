@@ -296,17 +296,28 @@ export class GovernanceExecutionService {
         // Index reward event for proposal activation
         // Only ACTIVE proposals count toward governance participation rewards
         // (UPCOMING proposals can still be deleted, so we don't reward them yet)
-        this.rewardEventProducer.indexEvent({
-          walletAddress: proposal.creator.address,
-          vaultId: proposal.vault.id,
-          eventType: RewardActivityType.GOVERNANCE_PROPOSAL,
-          txHash: (proposal.metadata as any)?.paymentTxHash,
-          units: 1,
-          metadata: {
-            proposal_id: proposal.id,
-            proposal_type: proposal.proposalType,
-          },
-        });
+        // Await for durability, but don't fail the main operation
+        try {
+          await this.rewardEventProducer.indexEvent({
+            walletAddress: proposal.creator.address,
+            vaultId: proposal.vault.id,
+            eventType: RewardActivityType.GOVERNANCE_PROPOSAL,
+            txHash: (proposal.metadata as any)?.paymentTxHash,
+            units: 1,
+            metadata: {
+              proposal_id: proposal.id,
+              proposal_type: proposal.proposalType,
+            },
+          });
+        } catch (rewardEventError) {
+          // Log but don't throw - main operation already succeeded
+          const errorMsg = rewardEventError instanceof Error ? rewardEventError.message : String(rewardEventError);
+          const errorStack = rewardEventError instanceof Error ? rewardEventError.stack : undefined;
+          this.logger.error(
+            `Proposal ${proposalId} activated successfully, but reward event indexing failed: ${errorMsg}`,
+            errorStack
+          );
+        }
 
         this.logger.log(`Proposal ${proposalId} activated successfully`);
       }

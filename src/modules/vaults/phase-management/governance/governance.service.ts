@@ -1770,13 +1770,24 @@ export class GovernanceService {
     await this.voteRepository.save(vote);
 
     // Index reward event for governance vote
-    this.rewardEventProducer.indexEvent({
-      walletAddress: voteReq.voterAddress,
-      vaultId: proposal.vaultId,
-      eventType: RewardActivityType.GOVERNANCE_VOTE,
-      units: 1,
-      metadata: { proposal_id: proposalId, vote_type: voteReq.vote },
-    });
+    // Await for durability, but don't fail the main operation
+    try {
+      await this.rewardEventProducer.indexEvent({
+        walletAddress: voteReq.voterAddress,
+        vaultId: proposal.vaultId,
+        eventType: RewardActivityType.GOVERNANCE_VOTE,
+        units: 1,
+        metadata: { proposal_id: proposalId, vote_type: voteReq.vote },
+      });
+    } catch (rewardEventError) {
+      // Log but don't throw - main operation already succeeded
+      const errorMsg = rewardEventError instanceof Error ? rewardEventError.message : String(rewardEventError);
+      const errorStack = rewardEventError instanceof Error ? rewardEventError.stack : undefined;
+      this.logger.error(
+        `Vote ${vote.id} recorded successfully, but reward event indexing failed: ${errorMsg}`,
+        errorStack
+      );
+    }
 
     return {
       success: true,
@@ -1923,14 +1934,25 @@ export class GovernanceService {
     // Index reward event for proposal creation ONLY if proposal is ACTIVE
     // UPCOMING proposals will be rewarded later in activateProposal (can still be deleted)
     if (proposal.status === ProposalStatus.ACTIVE) {
-      this.rewardEventProducer.indexEvent({
-        walletAddress: proposal.creator.address,
-        vaultId: proposal.vault.id,
-        eventType: RewardActivityType.GOVERNANCE_PROPOSAL,
-        txHash,
-        units: 1,
-        metadata: { proposal_id: proposalId, proposal_type: proposal.proposalType },
-      });
+      // Await for durability, but don't fail the main operation
+      try {
+        await this.rewardEventProducer.indexEvent({
+          walletAddress: proposal.creator.address,
+          vaultId: proposal.vault.id,
+          eventType: RewardActivityType.GOVERNANCE_PROPOSAL,
+          txHash,
+          units: 1,
+          metadata: { proposal_id: proposalId, proposal_type: proposal.proposalType },
+        });
+      } catch (rewardEventError) {
+        // Log but don't throw - main operation already succeeded
+        const errorMsg = rewardEventError instanceof Error ? rewardEventError.message : String(rewardEventError);
+        const errorStack = rewardEventError instanceof Error ? rewardEventError.stack : undefined;
+        this.logger.error(
+          `Proposal ${proposalId} activated successfully, but reward event indexing failed: ${errorMsg}`,
+          errorStack
+        );
+      }
     }
 
     // Fetch contributor claims for notifications
