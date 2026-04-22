@@ -1,4 +1,4 @@
-import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
+﻿import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import {
   BadRequestException,
   ForbiddenException,
@@ -42,6 +42,7 @@ import { Vote } from '@/database/vote.entity';
 import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
+import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { GetAssetsToListRes } from '@/modules/vaults/phase-management/governance/dto/get-assets-to-list.res';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
@@ -49,6 +50,7 @@ import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
+import { RewardActivityType } from '@/types/rewards.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';
 import { VoteType } from '@/types/vote.types';
@@ -131,7 +133,8 @@ export class GovernanceService {
     private readonly systemSettingsService: SystemSettingsService,
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly taptoolsService: TaptoolsService,
-    private readonly treasuryWalletService: TreasuryWalletService
+    private readonly treasuryWalletService: TreasuryWalletService,
+    private readonly rewardEventProducer: RewardEventProducer
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
@@ -246,7 +249,10 @@ export class GovernanceService {
 
       while (hasMorePages) {
         try {
-          const response = await this.blockfrost.assetsAddresses(assetId, { page, order: 'desc' });
+          const response = await this.blockfrost.assetsAddresses(assetId, {
+            page,
+            order: 'desc',
+          });
 
           if (response.length === 0) {
             hasMorePages = false;
@@ -431,7 +437,10 @@ export class GovernanceService {
       }
     }
 
-    const latestSnapshot = await this.snapshotRepository.findOne({ where: { vaultId }, order: { createdAt: 'DESC' } });
+    const latestSnapshot = await this.snapshotRepository.findOne({
+      where: { vaultId },
+      order: { createdAt: 'DESC' },
+    });
 
     // Get user early as we'll need their address for potential fee transaction
     const user = await this.userRepository.findOneBy({ id: userId });
@@ -1279,6 +1288,9 @@ export class GovernanceService {
       tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
     });
 
+    // Note: Reward event for governance proposals is emitted in activateProposal()
+    // (only ACTIVE proposals count toward governance participation)
+
     return {
       success: true,
       message: 'Proposal created successfully',
@@ -1757,6 +1769,26 @@ export class GovernanceService {
 
     await this.voteRepository.save(vote);
 
+    // Index reward event for governance vote
+    // Await for durability, but don't fail the main operation
+    try {
+      await this.rewardEventProducer.indexEvent({
+        walletAddress: voteReq.voterAddress,
+        vaultId: proposal.vaultId,
+        eventType: RewardActivityType.GOVERNANCE_VOTE,
+        units: 1,
+        metadata: { proposal_id: proposalId, vote_type: voteReq.vote },
+      });
+    } catch (rewardEventError) {
+      // Log but don't throw - main operation already succeeded
+      const errorMsg = rewardEventError instanceof Error ? rewardEventError.message : String(rewardEventError);
+      const errorStack = rewardEventError instanceof Error ? rewardEventError.stack : undefined;
+      this.logger.error(
+        `Vote ${vote.id} recorded successfully, but reward event indexing failed: ${errorMsg}`,
+        errorStack
+      );
+    }
+
     return {
       success: true,
       message: 'Vote recorded successfully',
@@ -1893,10 +1925,35 @@ export class GovernanceService {
       );
     }
 
-    // Clear pending payment metadata
+    // Clear pending payment metadata and store payment txHash for reward tracking
     delete proposal.metadata._pendingPayment;
+    (proposal.metadata as any).paymentTxHash = txHash;
 
     await this.proposalRepository.save(proposal);
+
+    // Index reward event for proposal creation ONLY if proposal is ACTIVE
+    // UPCOMING proposals will be rewarded later in activateProposal (can still be deleted)
+    if (proposal.status === ProposalStatus.ACTIVE) {
+      // Await for durability, but don't fail the main operation
+      try {
+        await this.rewardEventProducer.indexEvent({
+          walletAddress: proposal.creator.address,
+          vaultId: proposal.vault.id,
+          eventType: RewardActivityType.GOVERNANCE_PROPOSAL,
+          txHash,
+          units: 1,
+          metadata: { proposal_id: proposalId, proposal_type: proposal.proposalType },
+        });
+      } catch (rewardEventError) {
+        // Log but don't throw - main operation already succeeded
+        const errorMsg = rewardEventError instanceof Error ? rewardEventError.message : String(rewardEventError);
+        const errorStack = rewardEventError instanceof Error ? rewardEventError.stack : undefined;
+        this.logger.error(
+          `Proposal ${proposalId} activated successfully, but reward event indexing failed: ${errorMsg}`,
+          errorStack
+        );
+      }
+    }
 
     // Fetch contributor claims for notifications
     const finalContributorClaims = await this.claimRepository.find({
@@ -2308,7 +2365,13 @@ export class GovernanceService {
     try {
       // Get all listed assets in the vault
       const assets = await this.assetRepository.find({
-        where: [{ vault: { id: vaultId }, type: In([AssetType.NFT, AssetType.FT]), status: AssetStatus.LISTED }],
+        where: [
+          {
+            vault: { id: vaultId },
+            type: In([AssetType.NFT, AssetType.FT]),
+            status: AssetStatus.LISTED,
+          },
+        ],
         select: [
           'id',
           'name',
@@ -2339,7 +2402,13 @@ export class GovernanceService {
     try {
       // Get all listed assets in the vault that can have their listing updated
       const assets = await this.assetRepository.find({
-        where: [{ vault: { id: vaultId }, type: In([AssetType.NFT, AssetType.FT]), status: AssetStatus.LISTED }],
+        where: [
+          {
+            vault: { id: vaultId },
+            type: In([AssetType.NFT, AssetType.FT]),
+            status: AssetStatus.LISTED,
+          },
+        ],
         select: [
           'id',
           'name',
@@ -2744,7 +2813,7 @@ export class GovernanceService {
    * Converts a human-readable float amount (as returned by TapTools) to raw on-chain bigint units.
    * Avoids floating-point drift by parsing the fixed-decimal string representation directly.
    *
-   * Example: floatToRawBigInt(522963.34, 6) → 522963340000n
+   * Example: floatToRawBigInt(522963.34, 6) в†’ 522963340000n
    */
   private floatToRawBigInt(value: number, decimals: number): bigint {
     const fixed = value.toFixed(decimals); // e.g. "522963.340000"
