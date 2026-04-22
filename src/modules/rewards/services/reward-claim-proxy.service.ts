@@ -21,7 +21,9 @@ export class RewardClaimProxy {
     private readonly configService: ConfigService,
     private readonly txBuilder: RewardsClaimTxBuilderService
   ) {
-    this.rewardsBaseUrl = this.configService.get<string>('REWARDS_SERVICE_URL', 'http://localhost:3001');
+    // Default to local dev setup (localhost:4000)
+    // Testnet/Mainnet MUST set REWARDS_SERVICE_URL explicitly (e.g., http://l4va-rewards:3001 for Docker)
+    this.rewardsBaseUrl = this.configService.get<string>('REWARDS_SERVICE_URL', 'http://localhost:4000');
   }
 
   // ============================================================================
