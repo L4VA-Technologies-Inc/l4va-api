@@ -1,4 +1,4 @@
-import { Entity, Column, Index, PrimaryColumn } from 'typeorm';
+import { Entity, Column, Index, PrimaryGeneratedColumn } from 'typeorm';
 
 export enum OutboxStatus {
   PENDING = 'pending',
@@ -12,7 +12,7 @@ export enum OutboxStatus {
  */
 @Entity('outbox', { schema: 'events' })
 export class RewardEventOutbox {
-  @PrimaryColumn('uuid')
+  @PrimaryGeneratedColumn('uuid')
   id: string;
 
   @Column({ name: 'aggregate_id', type: 'uuid' })
