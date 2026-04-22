@@ -1,6 +1,12 @@
 /** Normalizes Cardano asset image/logo field into URL or data URL usable by image pipeline. */
-export function normalizeAssetImageSource(raw: string | null | undefined): string | null {
+export function normalizeAssetImageSource(raw: string | string[] | null | undefined): string | null {
   const MAX_HEX_METADATA_CHARS = 64 * 1024; // 64KB hex text (~32KB decoded bytes)
+
+  // Cardano on-chain metadata often splits long strings into arrays of ≤64-char chunks.
+  if (Array.isArray(raw)) {
+    const joined = raw.map(chunk => (typeof chunk === 'string' ? chunk : '')).join('');
+    return normalizeAssetImageSource(joined);
+  }
 
   if (raw == null || typeof raw !== 'string') {
     return null;
