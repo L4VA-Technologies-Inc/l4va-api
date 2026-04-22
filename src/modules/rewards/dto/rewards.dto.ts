@@ -1,3 +1,5 @@
+import { EpochStatus } from '../../../types/rewards.types';
+
 /**
  * Data Transfer Objects for Rewards API (l4va-api)
  * These DTOs represent UI-ready responses for the frontend.
@@ -32,7 +34,7 @@ export interface EpochDto {
   epochNumber: number;
   startDate: string;
   endDate: string;
-  status: 'active' | 'processing' | 'finalized';
+  status: EpochStatus;
   totalEmission?: string;
   userReward?: {
     total: string;

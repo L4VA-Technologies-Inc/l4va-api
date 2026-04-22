@@ -344,7 +344,7 @@ export class GovernanceService {
             if (activeLpSupply === BigInt(0)) continue;
 
             for (const user of realLpHolders) {
-              // Integer division: (userLp * lockedVaultTokens) / totalLpSupply вЂ” no float rounding
+              // Integer division: (userLp * lockedVaultTokens) / totalLpSupply — no float rounding
               const underlyingTokens = (user.lpBalance * lockedVaultTokensRaw) / activeLpSupply;
               addressBalances[user.address] = (addressBalances[user.address] ?? BigInt(0)) + underlyingTokens;
             }
@@ -355,7 +355,7 @@ export class GovernanceService {
         }
 
         // Remove DEX pool contract addresses from the snapshot.
-        // Each pool contract holds VT equal to its lockedVaultTokensRaw вЂ” these tokens are
+        // Each pool contract holds VT equal to its lockedVaultTokensRaw — these tokens are
         // already redistributed proportionally to LP holders above, so keeping the pool
         // address would double-count that VT in voting power.
         for (const [address, balance] of Object.entries(addressBalances)) {
@@ -536,7 +536,7 @@ export class GovernanceService {
             }
           }
 
-          // Check BUY and OFFER assets вЂ” they are mutually exclusive for the same NFT
+          // Check BUY and OFFER assets — they are mutually exclusive for the same NFT
           // (cannot BUY if an active OFFER exists for it, and vice versa)
           const allRequestedExternalIds = [...requestedBuyAssetIds, ...requestedOfferAssetIds];
 
@@ -723,7 +723,7 @@ export class GovernanceService {
         // Validate all assets exist and handle market-specific validation
         await Promise.all(
           actions.map(async action => {
-            // BUY actions target external NFTs (not in our DB) вЂ” skip DB lookup, validate via WayUp API below
+            // BUY actions target external NFTs (not in our DB) — skip DB lookup, validate via WayUp API below
             if (action.exec === ExecType.BUY) {
               if (market === 'WayUp') {
                 const policyId = action.assetId.length >= 56 ? action.assetId.slice(0, 56) : action.assetId;
@@ -752,7 +752,7 @@ export class GovernanceService {
 
                 if (!exactAsset?.listing) {
                   throw new BadRequestException(
-                    `NFT ${displayName} is not available for purchase вЂ” no active listing found on WayUp.`
+                    `NFT ${displayName} is not available for purchase — no active listing found on WayUp.`
                   );
                 }
 
@@ -778,7 +778,7 @@ export class GovernanceService {
               return;
             }
 
-            // OFFER actions target external NFTs вЂ” validate policy whitelist and NFT existence via WayUp API
+            // OFFER actions target external NFTs — validate policy whitelist and NFT existence via WayUp API
             if (action.exec === ExecType.OFFER) {
               if (market === 'WayUp') {
                 const policyId = action.assetId.length >= 56 ? action.assetId.slice(0, 56) : action.assetId;
@@ -800,7 +800,7 @@ export class GovernanceService {
                 }
 
                 // Query WayUp to confirm the NFT exists and resolve hex assetName for nftSnapshot
-                // Unlike BUY, the NFT doesn't need to be listed вЂ” we can offer on any NFT in the collection
+                // Unlike BUY, the NFT doesn't need to be listed — we can offer on any NFT in the collection
                 const collectionResponse = await this.wayUpPricingService.getCollectionAssets({
                   policyId,
                   term: action.assetName,
