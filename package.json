@@ -23,6 +23,7 @@
     "migration:run": "npm run typeorm migration:run -- -d src/config/typeorm.config.ts",
     "migration:run:gcp": "ts-node -r tsconfig-paths/register src/scripts/run-migrations.ts",
     "migration:revert": "npm run typeorm migration:revert -- -d src/config/typeorm.config.ts",
+    "migration:show": "npm run typeorm migration:show -- -d src/config/typeorm.config.ts",
     "docs:generate": "npx @compodoc/compodoc -p tsconfig.json -d documentation",
     "docs:serve": "npx @compodoc/compodoc -p tsconfig.json -d documentation -s"
   },
