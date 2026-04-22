@@ -179,24 +179,8 @@ export class VaultMarketStatsService {
           if (!liquidityCheck?.hasLiquidity) {
             this.logger.debug(`${vault.name}: No liquidity detected by DexHunter, skipping Taptools API`);
 
-            // Update LP status to false and record check time
+            // Update LP status to false and record check time, but do NOT upsert market data
             await this.vaultRepository.update({ id: vault.id }, { has_active_lp: false, lp_last_checked: new Date() });
-
-            // Update market stats with no market data (but still record the check)
-            await this.upsertMarketData({
-              vault_id: vault.id,
-              circSupply: 0,
-              mcap: 0,
-              totalSupply: 0,
-              price_change_1h: 0,
-              price_change_24h: 0,
-              price_change_7d: 0,
-              price_change_30d: 0,
-              tvl: vault.total_assets_cost_ada || 0,
-              has_market_data: false,
-              totalAdaLiquidity: null,
-              fdv_per_asset: null,
-            });
 
             return null; // Skip Taptools since no LP exists
           }

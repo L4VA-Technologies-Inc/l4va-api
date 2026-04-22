@@ -120,6 +120,8 @@ export class MarketService implements OnModuleInit {
   }
 
   private applyVisibilityFilters(queryBuilder: SelectQueryBuilder<Market>): void {
+    queryBuilder.andWhere('vault.has_active_lp = true');
+
     if (this.isMainnet) {
       const hiddenIds = this.systemSettingsService.hiddenMainnetVaultIds;
       if (hiddenIds.length > 0) {
@@ -218,6 +220,7 @@ export class MarketService implements OnModuleInit {
       .createQueryBuilder('market')
       .leftJoinAndSelect('market.vault', 'vault')
       .where('market.vault_id = :vaultId', { vaultId })
+      .andWhere('vault.has_active_lp = true')
       .getOne();
 
     if (!item) {
@@ -229,7 +232,10 @@ export class MarketService implements OnModuleInit {
 
   /** Full load: vault + social_links, vault_image, ft_token_img, tags. Use for getMarketById. */
   private async getRawMarketByVaultIdWithRelations(vaultId: string): Promise<Market> {
-    const item = await this.createBaseQuery().where('market.vault_id = :vaultId', { vaultId }).getOne();
+    const item = await this.createBaseQuery()
+      .where('market.vault_id = :vaultId', { vaultId })
+      .andWhere('vault.has_active_lp = true')
+      .getOne();
 
     if (!item) {
       throw new NotFoundException(`Market not found for vault ${vaultId}`);
