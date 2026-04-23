@@ -61,6 +61,16 @@ export enum VaultStatus {
   expansion = 'expansion',
 }
 
+export const VAULT_SEARCH_STATUSES: VaultStatus[] = [
+  VaultStatus.published,
+  VaultStatus.expansion,
+  VaultStatus.contribution,
+  VaultStatus.acquire,
+  VaultStatus.locked,
+  VaultStatus.terminating,
+  VaultStatus.burned,
+];
+
 // Mapping for smart contract vault status
 export enum SmartContractVaultStatus {
   PENDING = 0,
