@@ -58,6 +58,12 @@ export class RewardClaimProxy {
     return data;
   }
 
+  async getAlignmentDetails(walletAddress: string): Promise<any> {
+    const url = `${this.rewardsBaseUrl}/api/v1/rewards/alignment/${walletAddress}`;
+    const { data } = await firstValueFrom(this.httpService.get(url));
+    return data;
+  }
+
   async getWalletHistory(walletAddress: string, limit = 20): Promise<any> {
     const url = `${this.rewardsBaseUrl}/api/v1/rewards/history/${walletAddress}?limit=${limit}`;
     const { data } = await firstValueFrom(this.httpService.get(url));

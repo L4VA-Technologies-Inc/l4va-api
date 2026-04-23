@@ -96,6 +96,12 @@ export class RewardsController {
   }
 
   @UseGuards(AuthGuard, WalletOwnershipGuard)
+  @Get('alignment/:walletAddress')
+  async getAlignmentDetails(@Param('walletAddress') walletAddress: string): Promise<any> {
+    return this.rewardClaimProxy.getAlignmentDetails(walletAddress);
+  }
+
+  @UseGuards(AuthGuard, WalletOwnershipGuard)
   @Get('history/:walletAddress')
   async getWalletHistory(@Param('walletAddress') walletAddress: string, @Query('limit') limit = '20'): Promise<any> {
     return this.rewardClaimProxy.getWalletHistory(walletAddress, parseInt(limit, 10));
