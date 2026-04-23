@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Transform, Type } from 'class-transformer';
-import { IsBoolean, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsArray, IsBoolean, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
 
 import { PaginationDto } from './pagination.dto';
 
@@ -209,16 +209,35 @@ export class GetVaultsDto extends PaginationDto {
   @Type(() => Number)
   maxInitialVaultOffered?: number;
 
-  @IsString()
+  @IsArray()
+  @IsString({ each: true })
   @IsOptional()
   @ApiProperty({
-    type: String,
+    type: [String],
     required: false,
-    description: 'Filter by asset whitelist (exact match)',
+    description: 'Filter by asset whitelist policy IDs',
   })
   @Expose()
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
-  assetWhitelist?: string;
+  @Transform(({ value }) => {
+    if (typeof value === 'string') {
+      const trimmedValue = value.trim();
+      return trimmedValue ? [trimmedValue] : [];
+    }
+
+    if (Array.isArray(value)) {
+      return Array.from(
+        new Set(
+          value
+            .filter(item => typeof item === 'string')
+            .map(item => item.trim())
+            .filter(item => item.length > 0)
+        )
+      );
+    }
+
+    return value;
+  })
+  assetWhitelist?: string[];
 
   // TVL Range
   @IsNumber()
