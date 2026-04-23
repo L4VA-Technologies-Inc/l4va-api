@@ -11,6 +11,7 @@ import { PriceService } from '../price/price.service';
 import { WayUpPricingService } from '../wayup/wayup-pricing.service';
 
 import { CreateVaultReq } from './dto/createVault.req';
+import { GetAssetsWhitelistDto } from './dto/get-assets-whitelist.dto';
 import { VaultActivityFilter } from './dto/get-vault-activity.dto';
 import { GetVaultsDto, SortOrder, TVLCurrency, VaultFilter } from './dto/get-vaults.dto';
 import { IncrementViewCountRes } from './dto/increment-view-count.res';
@@ -54,6 +55,7 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import {
   ContributionWindowType,
   InvestmentWindowType,
+  VAULT_SEARCH_STATUSES,
   ValueMethod,
   VaultPrivacy,
   VaultStatus,
@@ -1356,15 +1358,7 @@ export class VaultsService {
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.published });
           break;
         case VaultFilter.all: {
-          const statuses = [
-            VaultStatus.published,
-            VaultStatus.expansion,
-            VaultStatus.contribution,
-            VaultStatus.acquire,
-            VaultStatus.locked,
-            VaultStatus.terminating,
-            VaultStatus.burned,
-          ];
+          const statuses = [...VAULT_SEARCH_STATUSES];
 
           if (myVaults) {
             statuses.push(VaultStatus.draft);
@@ -1429,13 +1423,13 @@ export class VaultsService {
       queryBuilder.andWhere('(100 - vault.acquire_reserve) >= :minInitialVaultOffered', { minInitialVaultOffered });
     }
 
-    if (assetWhitelist) {
+    if (assetWhitelist?.length) {
       queryBuilder.andWhere(
         `EXISTS (
           SELECT 1 
           FROM assets_whitelist aw 
           WHERE aw.vault_id = vault.id 
-          AND aw.policy_id = :assetWhitelist
+          AND aw.policy_id IN (:...assetWhitelist)
         )`,
         { assetWhitelist }
       );
@@ -1611,6 +1605,71 @@ export class VaultsService {
     }
 
     return { success: true };
+  }
+
+  async getAssetsWhitelist(
+    query: GetAssetsWhitelistDto & { userId?: string }
+  ): Promise<PaginatedResponseDto<{ name: string; policyId: string }>> {
+    const { myVaults = false, userId, page = 1, limit = 10, search } = query;
+    const statuses = [...VAULT_SEARCH_STATUSES];
+    const includeDrafts = Boolean(myVaults && userId);
+    const safePage = page > 0 ? page : 1;
+    const safeLimit = limit > 0 ? limit : 10;
+    const offset = (safePage - 1) * safeLimit;
+
+    if (includeDrafts) {
+      statuses.push(VaultStatus.draft);
+    }
+
+    const baseQuery = this.assetsWhitelistRepository
+      .createQueryBuilder('assets_whitelist')
+      .innerJoin('assets_whitelist.vault', 'vault')
+      .select('assets_whitelist.policy_id', 'policyId')
+      .addSelect("MIN(NULLIF(assets_whitelist.collection_name, ''))", 'name')
+      .where('vault.vault_status IN (:...statuses)', { statuses })
+      .andWhere('vault.deleted != :deleted', { deleted: true });
+
+    if (includeDrafts) {
+      baseQuery.andWhere('vault.owner_id = :userId', { userId });
+    } else {
+      baseQuery.andWhere('vault.privacy = :publicPrivacy', { publicPrivacy: VaultPrivacy.public });
+    }
+
+    if (search?.trim()) {
+      baseQuery.andWhere(
+        new Brackets(qb => {
+          qb.where('assets_whitelist.policy_id ILIKE :search', { search: `%${search.trim()}%` }).orWhere(
+            'assets_whitelist.collection_name ILIKE :search',
+            { search: `%${search.trim()}%` }
+          );
+        })
+      );
+    }
+
+    const totalRaw = await baseQuery
+      .clone()
+      .select('COUNT(DISTINCT assets_whitelist.policy_id)', 'total')
+      .getRawOne<{ total: string }>();
+
+    const total = Number(totalRaw?.total || 0);
+
+    const rows = await baseQuery
+      .groupBy('assets_whitelist.policy_id')
+      .orderBy("MIN(NULLIF(assets_whitelist.collection_name, ''))", 'ASC')
+      .offset(offset)
+      .limit(safeLimit)
+      .getRawMany<{ policyId: string; name: string | null }>();
+
+    return {
+      items: rows.map(item => ({
+        name: item.name || item.policyId,
+        policyId: item.policyId,
+      })),
+      total,
+      page: safePage,
+      limit: safeLimit,
+      totalPages: Math.ceil(total / safeLimit),
+    };
   }
 
   /**

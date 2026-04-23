@@ -23,6 +23,7 @@ import { DraftVaultsService } from './draft-vaults.service';
 import { BuildBurnTransactionRes } from './dto/build-burn-transaction.res';
 import { CreateVaultRes } from './dto/create-vault.res';
 import { CreateVaultReq } from './dto/createVault.req';
+import { GetAssetsWhitelistDto } from './dto/get-assets-whitelist.dto';
 import {
   CollectionNameItem,
   GetCollectionNamesReq,
@@ -148,6 +149,21 @@ export class VaultsController {
   @Get('acquire/top')
   async getTopPublicAcquireVaults(): Promise<VaultAcquireResponse[]> {
     return this.vaultsService.getTopPublicAcquireVaults();
+  }
+
+  @ApiDoc({
+    summary: 'Get unique assets whitelist',
+    description:
+      'Returns paginated unique assets from assets whitelist as collection name and policy ID. Supports myVaults, page, limit and search query params.',
+    status: 200,
+  })
+  @UseGuards(OptionalAuthGuard)
+  @Get('assets-whitelist')
+  async getAssetsWhitelist(
+    @Query() query: GetAssetsWhitelistDto,
+    @Request() req?: AuthRequest
+  ): Promise<PaginatedResponseDto<{ name: string; policyId: string }>> {
+    return this.vaultsService.getAssetsWhitelist({ ...query, userId: req?.user?.sub });
   }
 
   @ApiDoc({
