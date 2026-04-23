@@ -2,11 +2,11 @@ name: Deploy API
 
 on:
   pull_request:
-    branches: [main, dev]
-    types: [opened, synchronize, reopened]
+    branches: [ main, dev ]
+    types: [ opened, synchronize, reopened ]
 
   push:
-    branches: [main, dev]
+    branches: [ main, dev ]
 
 jobs:
   build-check:
@@ -24,7 +24,7 @@ jobs:
   deploy-dev:
     if: github.ref == 'refs/heads/dev' && github.event_name == 'push'
     needs: build-check
-    runs-on: [self-hosted, dev]
+    runs-on: [ self-hosted, dev ]
     steps:
       - uses: actions/checkout@v3
 
@@ -162,7 +162,7 @@ jobs:
   deploy-prod:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: build-check
-    runs-on: [self-hosted, prod]
+    runs-on: [ self-hosted, prod ]
     steps:
       - uses: actions/checkout@v3
 

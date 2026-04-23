@@ -15,7 +15,9 @@ export class RewardEpochConfigProxy {
     private readonly httpService: HttpService,
     private readonly configService: ConfigService
   ) {
-    this.rewardsBaseUrl = this.configService.get<string>('REWARDS_SERVICE_URL', 'http://localhost:3001');
+    // Default to local dev setup (localhost:4000 is the host-mapped port)
+    // Testnet/Mainnet MUST set REWARDS_SERVICE_URL=http://l4va-rewards:3001 for Docker inter-container communication
+    this.rewardsBaseUrl = this.configService.get<string>('REWARDS_SERVICE_URL', 'http://localhost:4000');
   }
 
   async getActiveConfig(): Promise<any> {

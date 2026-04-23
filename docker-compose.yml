@@ -11,7 +11,6 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@host.docker.internal:5432/${POSTGRES_DB}
       DB_HOST: host.docker.internal
       DB_PORT: 5432
       REDIS_HOST: l4va-redis
@@ -21,7 +20,7 @@ services:
       - l4va-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:3000/api/v1/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -36,7 +35,6 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@host.docker.internal:5432/${POSTGRES_DB}
       DB_HOST: host.docker.internal
       DB_PORT: 5432
       REDIS_HOST: l4va-redis
@@ -46,7 +44,7 @@ services:
       - l4va-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:3000/api/v1/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
