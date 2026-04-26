@@ -184,23 +184,11 @@ export class RewardsController {
     return this.rewardClaimProxy.getClaimTransactions(walletAddress, parseInt(limit, 10));
   }
 
-  @UseGuards(AuthGuard, WalletOwnershipGuard)
-  @Post('claims/:walletAddress/claim')
-  async submitClaim(
-    @Param('walletAddress') walletAddress: string,
-    @Body() body: { epochIds?: string[]; claimImmediate?: boolean; claimVested?: boolean; transactionId: string }
-  ): Promise<any> {
-    if (!body.transactionId) {
-      return { success: false, error: 'transactionId is required' };
-    }
-    return this.rewardClaimProxy.executeClaim(walletAddress, body);
-  }
-
   /**
    * POST /rewards/claims/:walletAddress/build
    * Build and submit a claim transaction with on-chain L4VA payment.
    * Returns 200 with transaction hash on success.
-   * Returns 400 BadRequest on failure (claims are automatically rolled back).
+   * Returns 400 BadRequest on failure (no database changes on failure).
    */
   @UseGuards(AuthGuard, WalletOwnershipGuard)
   @Post('claims/:walletAddress/build')

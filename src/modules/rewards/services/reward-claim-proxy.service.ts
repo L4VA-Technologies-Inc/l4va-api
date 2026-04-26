@@ -2,7 +2,6 @@ import { HttpService } from '@nestjs/axios';
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
-import { v4 as uuidv4 } from 'uuid';
 
 import { RewardsClaimTxBuilderService } from './rewards-claim-tx-builder.service';
 
@@ -140,7 +139,15 @@ export class RewardClaimProxy {
 
   async executeClaim(
     walletAddress: string,
-    payload: { epochIds?: string[]; claimImmediate?: boolean; claimVested?: boolean; transactionId: string }
+    payload: {
+      epochIds?: string[];
+      claimImmediate?: boolean;
+      claimVested?: boolean;
+      txHash: string;
+      claimedImmediateAmount: number;
+      claimedVestedAmount: number;
+      totalClaimedAmount: number;
+    }
   ): Promise<any> {
     const url = `${this.rewardsBaseUrl}/api/v1/rewards/claims/${walletAddress}/claim`;
     const { data } = await firstValueFrom(this.httpService.post(url, payload));
@@ -148,24 +155,14 @@ export class RewardClaimProxy {
   }
 
   /**
-   * Mark claim transactions as failed and rollback claimed amounts.
-   * This should be called if the on-chain transaction fails.
-   */
-  async failClaimTransaction(transactionId: string): Promise<void> {
-    const url = `${this.rewardsBaseUrl}/api/v1/rewards/claims/fail`;
-    await firstValueFrom(this.httpService.post(url, { claimTransactionIds: [transactionId] }));
-    this.logger.log(`Rolled back claim transaction ${transactionId}`);
-  }
-
-  /**
    * Build and execute a claim transaction with on-chain payment.
    * This method:
-   * 1. Calls l4va-rewards to update DB state
+   * 1. Gets claimable amounts (read-only)
    * 2. Builds the Cardano transaction using Lucid
    * 3. Signs and submits the transaction to blockchain
-   * 4. Returns the transaction hash
+   * 4. ONLY IF SUCCESSFUL with tx_hash, updates the database
    *
-   * Throws BadRequestException on failure with automatic rollback.
+   * Throws BadRequestException on failure WITHOUT any database changes.
    */
   async buildAndExecuteClaim(
     walletAddress: string,
@@ -177,61 +174,52 @@ export class RewardClaimProxy {
     claimedImmediateAmount: number;
     claimedVestedAmount: number;
   }> {
-    // Generate a proper UUID for this claim transaction
-    const transactionId = uuidv4();
-
     try {
-      // Step 1: Call l4va-rewards to update DB state
-      this.logger.log(`Executing claim for wallet ${walletAddress.slice(0, 20)}...`);
-      const claimResult = await this.executeClaim(walletAddress, {
-        ...payload,
-        transactionId,
-      });
+      // Step 1: Get claimable amounts (read-only, no DB changes)
+      this.logger.log(`Getting claimable amounts for wallet ${walletAddress.slice(0, 20)}...`);
+      const claimableSummary = await this.getClaimableSummary(walletAddress);
 
-      if (!claimResult.success) {
-        throw new BadRequestException(claimResult.error || 'Claim execution failed');
-      }
+      const totalClaimableNow = claimableSummary.totalClaimable || 0;
 
-      const totalClaimedAmount = claimResult.totalClaimedAmount || 0;
-
-      if (totalClaimedAmount <= 0) {
+      if (totalClaimableNow <= 0) {
         throw new BadRequestException('No claimable amount available');
       }
 
       // Step 2: Build, sign, and submit the Cardano transaction
-      this.logger.log(`Building and submitting transaction for ${totalClaimedAmount} L4VA tokens...`);
-      const txResult = await this.txBuilder.buildClaimTransaction(walletAddress, totalClaimedAmount);
+      this.logger.log(`Building and submitting transaction for ${totalClaimableNow} L4VA tokens...`);
+      const txResult = await this.txBuilder.buildClaimTransaction(walletAddress, totalClaimableNow);
 
-      if (!txResult.success) {
-        // Rollback claim state if transaction building/submission fails
-        this.logger.error(`Transaction failed, rolling back claim for tx: ${transactionId}`);
-        await this.failClaimTransaction(transactionId);
+      if (!txResult.success || !txResult.txHash) {
         throw new BadRequestException(txResult.error || 'Transaction building/submission failed');
       }
 
+      // Step 3: ONLY NOW update the database with successful transaction
+      this.logger.log(`Transaction successful with hash ${txResult.txHash}, updating database...`);
+      await this.executeClaim(walletAddress, {
+        ...payload,
+        txHash: txResult.txHash,
+        claimedImmediateAmount: claimableSummary.immediateClaimable || 0,
+        claimedVestedAmount: claimableSummary.vestedClaimable || 0,
+        totalClaimedAmount: totalClaimableNow,
+      });
+
       this.logger.log(
-        `✅ Successfully submitted claim transaction ${txResult.txHash} for ${totalClaimedAmount} L4VA to ${walletAddress.slice(0, 20)}...`
+        `✅ Successfully claimed ${totalClaimableNow} L4VA with tx ${txResult.txHash} for ${walletAddress.slice(0, 20)}...`
       );
 
       return {
         success: true,
-        txHash: txResult.txHash!,
-        claimedAmount: totalClaimedAmount,
-        claimedImmediateAmount: claimResult.claimedImmediateAmount || 0,
-        claimedVestedAmount: claimResult.claimedVestedAmount || 0,
+        txHash: txResult.txHash,
+        claimedAmount: totalClaimableNow,
+        claimedImmediateAmount: claimableSummary.immediateClaimable || 0,
+        claimedVestedAmount: claimableSummary.vestedClaimable || 0,
       };
     } catch (error: any) {
-      // If we haven't thrown a BadRequestException yet, rollback and throw
-      if (error.name !== 'BadRequestException') {
-        this.logger.error(`Failed to build and execute claim: ${error?.message || error}`, error?.stack);
-        try {
-          await this.failClaimTransaction(transactionId);
-        } catch (rollbackError: any) {
-          this.logger.error(`Failed to rollback transaction ${transactionId}: ${rollbackError?.message}`);
-        }
-        throw new BadRequestException(error?.message || 'Unknown error occurred');
+      if (error.name === 'BadRequestException') {
+        throw error;
       }
-      throw error;
+      this.logger.error(`Failed to build and execute claim: ${error?.message || error}`, error?.stack);
+      throw new BadRequestException(error?.message || 'Unknown error occurred');
     }
   }
 
