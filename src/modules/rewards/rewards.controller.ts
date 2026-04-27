@@ -5,7 +5,6 @@ import { RewardEventProducer } from './services/reward-event-producer.service';
 
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
-import { WalletOwnershipGuard } from '@/modules/auth/wallet-ownership.guard';
 import { RewardActivityType, WidgetSwapEventData, WidgetSwapItemData } from '@/types/rewards.types';
 
 /**
@@ -89,21 +88,24 @@ export class RewardsController {
   // Score & History Endpoints (proxied to l4va-rewards)
   // ============================================================================
 
-  @UseGuards(AuthGuard, WalletOwnershipGuard)
-  @Get('score/:walletAddress')
-  async getWalletScore(@Param('walletAddress') walletAddress: string): Promise<any> {
+  @UseGuards(AuthGuard)
+  @Get('me/score')
+  async getWalletScore(@Request() req: AuthRequest): Promise<any> {
+    const walletAddress = req.user.address;
     return this.rewardClaimProxy.getWalletScore(walletAddress);
   }
 
-  @UseGuards(AuthGuard, WalletOwnershipGuard)
-  @Get('alignment/:walletAddress')
-  async getAlignmentDetails(@Param('walletAddress') walletAddress: string): Promise<any> {
+  @UseGuards(AuthGuard)
+  @Get('me/alignment')
+  async getAlignmentDetails(@Request() req: AuthRequest): Promise<any> {
+    const walletAddress = req.user.address;
     return this.rewardClaimProxy.getAlignmentDetails(walletAddress);
   }
 
-  @UseGuards(AuthGuard, WalletOwnershipGuard)
-  @Get('history/:walletAddress')
-  async getWalletHistory(@Param('walletAddress') walletAddress: string, @Query('limit') limit = '20'): Promise<any> {
+  @UseGuards(AuthGuard)
+  @Get('me/history')
+  async getWalletHistory(@Request() req: AuthRequest, @Query('limit') limit = '20'): Promise<any> {
+    const walletAddress = req.user.address;
     return this.rewardClaimProxy.getWalletHistory(walletAddress, parseInt(limit, 10));
   }
 
@@ -116,40 +118,42 @@ export class RewardsController {
     return this.rewardClaimProxy.getVaultScores(vaultId, epochId);
   }
 
-  @UseGuards(AuthGuard, WalletOwnershipGuard)
-  @Get('wallet/:walletAddress/vault/:vaultId')
+  @UseGuards(AuthGuard)
+  @Get('me/vault/:vaultId')
   async getWalletVaultReward(
-    @Param('walletAddress') walletAddress: string,
+    @Request() req: AuthRequest,
     @Param('vaultId') vaultId: string,
     @Query('epochId') epochId?: string
   ): Promise<any> {
+    const walletAddress = req.user.address;
     return this.rewardClaimProxy.getWalletVaultReward(walletAddress, vaultId, epochId);
   }
 
-  @UseGuards(AuthGuard, WalletOwnershipGuard)
-  @Get('wallet/:walletAddress/vaults')
-  async getWalletVaults(
-    @Param('walletAddress') walletAddress: string,
-    @Query('epochId') epochId?: string
-  ): Promise<any> {
+  @UseGuards(AuthGuard)
+  @Get('me/vaults')
+  async getWalletVaults(@Request() req: AuthRequest, @Query('epochId') epochId?: string): Promise<any> {
+    const walletAddress = req.user.address;
     return this.rewardClaimProxy.getWalletVaults(walletAddress, epochId);
   }
 
-  @UseGuards(AuthGuard, WalletOwnershipGuard)
-  @Get('wallet/:walletAddress/timeline/vaults')
-  async getWalletVaultTimeline(@Param('walletAddress') walletAddress: string): Promise<any> {
+  @UseGuards(AuthGuard)
+  @Get('me/timeline/vaults')
+  async getWalletVaultTimeline(@Request() req: AuthRequest): Promise<any> {
+    const walletAddress = req.user.address;
     return this.rewardClaimProxy.getWalletVaultTimeline(walletAddress);
   }
 
-  @UseGuards(AuthGuard, WalletOwnershipGuard)
-  @Get('wallet/:walletAddress/timeline/activities')
-  async getWalletActivityTimeline(@Param('walletAddress') walletAddress: string): Promise<any> {
+  @UseGuards(AuthGuard)
+  @Get('me/timeline/activities')
+  async getWalletActivityTimeline(@Request() req: AuthRequest): Promise<any> {
+    const walletAddress = req.user.address;
     return this.rewardClaimProxy.getWalletActivityTimeline(walletAddress);
   }
 
-  @UseGuards(AuthGuard, WalletOwnershipGuard)
-  @Get('wallet/:walletAddress/current-estimate')
-  async getCurrentEpochEstimate(@Param('walletAddress') walletAddress: string): Promise<any> {
+  @UseGuards(AuthGuard)
+  @Get('me/current-estimate')
+  async getCurrentEpochEstimate(@Request() req: AuthRequest): Promise<any> {
+    const walletAddress = req.user.address;
     return this.rewardClaimProxy.getCurrentEpochEstimate(walletAddress);
   }
 
@@ -157,43 +161,44 @@ export class RewardsController {
   // Claims Endpoints (proxied to l4va-rewards)
   // ============================================================================
 
-  @UseGuards(AuthGuard, WalletOwnershipGuard)
-  @Get('claims/:walletAddress')
-  async getClaimsSummary(@Param('walletAddress') walletAddress: string): Promise<any> {
+  @UseGuards(AuthGuard)
+  @Get('me/claims')
+  async getClaimsSummary(@Request() req: AuthRequest): Promise<any> {
+    const walletAddress = req.user.address;
     return this.rewardClaimProxy.getAvailableClaims(walletAddress);
   }
 
-  @UseGuards(AuthGuard, WalletOwnershipGuard)
-  @Get('claims/:walletAddress/claimable')
-  async getClaimableAmount(@Param('walletAddress') walletAddress: string): Promise<any> {
+  @UseGuards(AuthGuard)
+  @Get('me/claims/claimable')
+  async getClaimableAmount(@Request() req: AuthRequest): Promise<any> {
+    const walletAddress = req.user.address;
     return this.rewardClaimProxy.getClaimableSummary(walletAddress);
   }
 
-  @UseGuards(AuthGuard, WalletOwnershipGuard)
-  @Get('claims/:walletAddress/history')
-  async getClaimHistory(@Param('walletAddress') walletAddress: string, @Query('limit') limit = '50'): Promise<any> {
+  @UseGuards(AuthGuard)
+  @Get('me/claims/history')
+  async getClaimHistory(@Request() req: AuthRequest, @Query('limit') limit = '50'): Promise<any> {
+    const walletAddress = req.user.address;
     return this.rewardClaimProxy.getClaimHistory(walletAddress, parseInt(limit, 10));
   }
 
-  @UseGuards(AuthGuard, WalletOwnershipGuard)
-  @Get('claims/:walletAddress/transactions')
-  async getClaimTransactions(
-    @Param('walletAddress') walletAddress: string,
-    @Query('limit') limit = '50'
-  ): Promise<any> {
+  @UseGuards(AuthGuard)
+  @Get('me/claims/transactions')
+  async getClaimTransactions(@Request() req: AuthRequest, @Query('limit') limit = '50'): Promise<any> {
+    const walletAddress = req.user.address;
     return this.rewardClaimProxy.getClaimTransactions(walletAddress, parseInt(limit, 10));
   }
 
   /**
-   * POST /rewards/claims/:walletAddress/build
+   * POST /rewards/me/claims/build
    * Build and submit a claim transaction with on-chain L4VA payment.
    * Returns 200 with transaction hash on success.
    * Returns 400 BadRequest on failure (no database changes on failure).
    */
-  @UseGuards(AuthGuard, WalletOwnershipGuard)
-  @Post('claims/:walletAddress/build')
+  @UseGuards(AuthGuard)
+  @Post('me/claims/build')
   async buildClaimTransaction(
-    @Param('walletAddress') walletAddress: string,
+    @Request() req: AuthRequest,
     @Body() body: { epochIds?: string[]; claimImmediate?: boolean; claimVested?: boolean }
   ): Promise<{
     success: boolean;
@@ -202,6 +207,7 @@ export class RewardsController {
     claimedImmediateAmount: number;
     claimedVestedAmount: number;
   }> {
+    const walletAddress = req.user.address;
     // Let BadRequestException propagate - NestJS will handle as HTTP 400
     return this.rewardClaimProxy.buildAndExecuteClaim(walletAddress, body);
   }
@@ -210,15 +216,17 @@ export class RewardsController {
   // Vesting Endpoints (proxied to l4va-rewards)
   // ============================================================================
 
-  @UseGuards(AuthGuard, WalletOwnershipGuard)
-  @Get('vesting/:walletAddress')
-  async getVestingSummary(@Param('walletAddress') walletAddress: string): Promise<any> {
+  @UseGuards(AuthGuard)
+  @Get('me/vesting')
+  async getVestingSummary(@Request() req: AuthRequest): Promise<any> {
+    const walletAddress = req.user.address;
     return this.rewardClaimProxy.getVestingPositions(walletAddress);
   }
 
-  @UseGuards(AuthGuard, WalletOwnershipGuard)
-  @Get('vesting/:walletAddress/active')
-  async getActiveVesting(@Param('walletAddress') walletAddress: string): Promise<any> {
+  @UseGuards(AuthGuard)
+  @Get('me/vesting/active')
+  async getActiveVesting(@Request() req: AuthRequest): Promise<any> {
+    const walletAddress = req.user.address;
     return this.rewardClaimProxy.getActiveVesting(walletAddress);
   }
 

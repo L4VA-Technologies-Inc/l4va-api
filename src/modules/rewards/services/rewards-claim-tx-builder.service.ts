@@ -21,7 +21,6 @@ export class RewardsClaimTxBuilderService {
   private readonly l4vaDecimals: number;
   private readonly treasuryKey: string;
   private readonly treasuryAddress: string;
-  private readonly isMainnet: boolean;
   private readonly networkId: number;
 
   constructor(private readonly configService: ConfigService) {
@@ -30,7 +29,6 @@ export class RewardsClaimTxBuilderService {
     this.l4vaDecimals = this.configService.get<number>('L4VA_DECIMALS') || 1;
     this.treasuryKey = this.configService.get<string>('L4VA_TREASURY_KEY');
     this.treasuryAddress = this.configService.get<string>('L4VA_TREASURY_ADDRESS');
-    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.networkId = Number(this.configService.get<string>('NETWORK_ID')) || 0;
 
     // Validate configuration
@@ -61,8 +59,10 @@ export class RewardsClaimTxBuilderService {
         throw new BadRequestException('Invalid wallet address or claim amount');
       }
 
+      // claimAmount is already in base units
+      const humanReadable = claimAmount / 10 ** this.l4vaDecimals;
       this.logger.log(
-        `Building claim transaction: ${claimAmount / 10 ** this.l4vaDecimals} L4VA to ${walletAddress.slice(0, 20)}...`
+        `Building claim transaction: ${humanReadable.toFixed(this.l4vaDecimals)} L4VA to ${walletAddress.slice(0, 20)}...`
       );
 
       // Initialize Lucid
@@ -94,11 +94,14 @@ export class RewardsClaimTxBuilderService {
         return sum + Number(l4vaAmount);
       }, 0);
 
-      this.logger.debug(`Total L4VA in treasury: ${totalL4vaInTreasury / 10 ** this.l4vaDecimals}`);
+      const treasuryHumanReadable = totalL4vaInTreasury / 10 ** this.l4vaDecimals;
+      this.logger.debug(`Total L4VA in treasury: ${treasuryHumanReadable.toFixed(this.l4vaDecimals)} L4VA`);
 
       if (totalL4vaInTreasury < claimAmount) {
+        const requiredHuman = (claimAmount / 10 ** this.l4vaDecimals).toFixed(this.l4vaDecimals);
+        const availableHuman = (totalL4vaInTreasury / 10 ** this.l4vaDecimals).toFixed(this.l4vaDecimals);
         throw new BadRequestException(
-          `Insufficient L4VA in treasury. Required: ${claimAmount / 10 ** this.l4vaDecimals}, Available: ${totalL4vaInTreasury / 10 ** this.l4vaDecimals}`
+          `Insufficient L4VA in treasury. Required: ${requiredHuman} L4VA, Available: ${availableHuman} L4VA`
         );
       }
 
@@ -116,8 +119,9 @@ export class RewardsClaimTxBuilderService {
       // Submit to blockchain
       const txHash = await signedTx.submit();
 
+      const claimedHuman = (claimAmount / 10 ** this.l4vaDecimals).toFixed(this.l4vaDecimals);
       this.logger.log(
-        `✅ Claim transaction submitted: ${txHash} - ${claimAmount / 10 ** this.l4vaDecimals} L4VA to ${walletAddress.slice(0, 20)}...`
+        `✅ Claim transaction submitted: ${txHash} - ${claimedHuman} L4VA to ${walletAddress.slice(0, 20)}...`
       );
 
       return {

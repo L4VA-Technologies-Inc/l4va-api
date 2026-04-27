@@ -14,6 +14,7 @@ import { RewardsClaimTxBuilderService } from './rewards-claim-tx-builder.service
 export class RewardClaimProxy {
   private readonly logger = new Logger(RewardClaimProxy.name);
   private readonly rewardsBaseUrl: string;
+  private readonly l4vaDecimals: number;
 
   constructor(
     private readonly httpService: HttpService,
@@ -23,6 +24,7 @@ export class RewardClaimProxy {
     // Default to local dev setup (localhost:4000)
     // Testnet/Mainnet MUST set REWARDS_SERVICE_URL explicitly (e.g., http://l4va-rewards:3001 for Docker)
     this.rewardsBaseUrl = this.configService.get<string>('REWARDS_SERVICE_URL', 'http://localhost:4000');
+    this.l4vaDecimals = this.configService.get<number>('L4VA_DECIMALS') || 3;
   }
 
   // ============================================================================
@@ -179,38 +181,50 @@ export class RewardClaimProxy {
       this.logger.log(`Getting claimable amounts for wallet ${walletAddress.slice(0, 20)}...`);
       const claimableSummary = await this.getClaimableSummary(walletAddress);
 
-      const totalClaimableNow = claimableSummary.totalClaimable || 0;
+      // Rewards service returns human-readable amounts (with decimals applied)
+      const totalClaimableHumanReadable = claimableSummary.totalClaimable || 0;
 
-      if (totalClaimableNow <= 0) {
+      if (totalClaimableHumanReadable <= 0) {
         throw new BadRequestException('No claimable amount available');
       }
 
-      // Step 2: Build, sign, and submit the Cardano transaction
-      this.logger.log(`Building and submitting transaction for ${totalClaimableNow} L4VA tokens...`);
-      const txResult = await this.txBuilder.buildClaimTransaction(walletAddress, totalClaimableNow);
+      // Step 2: Convert to base units for blockchain transaction
+      // Rewards API returns: 26785.714 L4VA
+      // We need base units: 26785714000 (if decimals=6) or 26785714 (if decimals=3)
+      const totalClaimableBaseUnits = Math.floor(totalClaimableHumanReadable * 10 ** this.l4vaDecimals);
+      this.logger.log(
+        `Building and submitting transaction for ${totalClaimableHumanReadable} L4VA (${totalClaimableBaseUnits} base units)...`
+      );
+
+      // Step 3: Build, sign, and submit the Cardano transaction
+      const txResult = await this.txBuilder.buildClaimTransaction(walletAddress, totalClaimableBaseUnits);
 
       if (!txResult.success || !txResult.txHash) {
         throw new BadRequestException(txResult.error || 'Transaction building/submission failed');
       }
 
-      // Step 3: ONLY NOW update the database with successful transaction
+      // Step 4: ONLY NOW update the database with successful transaction
+      // Note: Database stores base units, so we pass the base units values
+      const immediateBaseUnits = Math.floor((claimableSummary.immediateClaimable || 0) * 10 ** this.l4vaDecimals);
+      const vestedBaseUnits = Math.floor((claimableSummary.vestedClaimable || 0) * 10 ** this.l4vaDecimals);
+
       this.logger.log(`Transaction successful with hash ${txResult.txHash}, updating database...`);
       await this.executeClaim(walletAddress, {
         ...payload,
         txHash: txResult.txHash,
-        claimedImmediateAmount: claimableSummary.immediateClaimable || 0,
-        claimedVestedAmount: claimableSummary.vestedClaimable || 0,
-        totalClaimedAmount: totalClaimableNow,
+        claimedImmediateAmount: immediateBaseUnits,
+        claimedVestedAmount: vestedBaseUnits,
+        totalClaimedAmount: totalClaimableBaseUnits,
       });
 
       this.logger.log(
-        `✅ Successfully claimed ${totalClaimableNow} L4VA with tx ${txResult.txHash} for ${walletAddress.slice(0, 20)}...`
+        `✅ Successfully claimed ${totalClaimableHumanReadable} L4VA with tx ${txResult.txHash} for ${walletAddress.slice(0, 20)}...`
       );
 
       return {
         success: true,
         txHash: txResult.txHash,
-        claimedAmount: totalClaimableNow,
+        claimedAmount: totalClaimableHumanReadable,
         claimedImmediateAmount: claimableSummary.immediateClaimable || 0,
         claimedVestedAmount: claimableSummary.vestedClaimable || 0,
       };
