@@ -29,6 +29,7 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
 /** Transaction types built from the admin wallet and requiring admin co-sign on submit. */
 const ADMIN_SIGNED_TYPES = [TransactionType.unstake, TransactionType.harvest, TransactionType.compound];
+const TX_VALIDITY_WINDOW_MS = 30 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Module-level pure helpers
@@ -715,7 +716,10 @@ export class StakeService {
         );
       }
 
-      const tx = await txBuilder.addSignerKey(ownerHash).complete();
+      const tx = await txBuilder
+        .validTo(currentTimeMs + TX_VALIDITY_WINDOW_MS)
+        .addSignerKey(ownerHash)
+        .complete();
       const unsignedTxCbor = tx.toCBOR();
 
       const saved = await this.transactionRepository.save({
@@ -775,11 +779,13 @@ export class StakeService {
       );
 
       const redeemer = Data.to(new Constr(0, []));
+      const validTo = Date.now() + TX_VALIDITY_WINDOW_MS;
       const tx = await lucid
         .newTx()
         .readFrom([referenceUtxo])
         .collectFrom(eligibleBoxes, redeemer)
         .pay.ToAddress(userAddress, Object.fromEntries(payoutByUnit.entries()))
+        .validTo(validTo)
         .addSignerKey(ownerHash)
         .complete();
 
@@ -825,6 +831,7 @@ export class StakeService {
       );
 
       const now = Date.now();
+      const validTo = now + TX_VALIDITY_WINDOW_MS;
       const redeemer = Data.to(new Constr(0, []));
       let txBuilder = lucid.newTx().readFrom([referenceUtxo]).collectFrom(eligibleBoxes, redeemer);
 
@@ -841,7 +848,7 @@ export class StakeService {
 
       txBuilder = txBuilder.pay.ToAddress(userAddress, Object.fromEntries(rewardByUnit.entries()));
 
-      const tx = await txBuilder.addSignerKey(ownerHash).complete();
+      const tx = await txBuilder.validTo(validTo).addSignerKey(ownerHash).complete();
       const unsignedTxCbor = tx.toCBOR();
 
       const saved = await this.transactionRepository.save({
@@ -885,6 +892,7 @@ export class StakeService {
       );
 
       const now = Date.now();
+      const validTo = now + TX_VALIDITY_WINDOW_MS;
       const redeemer = Data.to(new Constr(0, []));
       let txBuilder = lucid.newTx().readFrom([referenceUtxo]).collectFrom(eligibleBoxes, redeemer);
 
@@ -897,7 +905,7 @@ export class StakeService {
         );
       }
 
-      const tx = await txBuilder.addSignerKey(ownerHash).complete();
+      const tx = await txBuilder.validTo(validTo).addSignerKey(ownerHash).complete();
       const unsignedTxCbor = tx.toCBOR();
 
       const saved = await this.transactionRepository.save({
