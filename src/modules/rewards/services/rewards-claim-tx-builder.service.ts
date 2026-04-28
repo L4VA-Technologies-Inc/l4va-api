@@ -83,8 +83,6 @@ export class RewardsClaimTxBuilderService {
         throw new InternalServerErrorException('No UTXOs available in treasury wallet');
       }
 
-      this.logger.debug(`Found ${treasuryUtxos.length} UTXOs in treasury`);
-
       // Build the L4VA asset unit
       const l4vaUnit = this.l4vaPolicyId + this.l4vaAssetName;
 
@@ -121,7 +119,7 @@ export class RewardsClaimTxBuilderService {
 
       const claimedHuman = (claimAmount / 10 ** this.l4vaDecimals).toFixed(this.l4vaDecimals);
       this.logger.log(
-        `✅ Claim transaction submitted: ${txHash} - ${claimedHuman} L4VA to ${walletAddress.slice(0, 20)}...`
+        `Claim transaction submitted: ${txHash} - ${claimedHuman} L4VA to ${walletAddress.slice(0, 20)}...`
       );
 
       return {

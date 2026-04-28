@@ -193,14 +193,14 @@ export class RewardClaimProxy {
   }
 
   /**
-   * Build and execute a claim transaction with on-chain payment.
-   * This method:
-   * 1. Gets claimable amounts (read-only)
-   * 2. Builds the Cardano transaction using Lucid
-   * 3. Signs and submits the transaction to blockchain
-   * 4. ONLY IF SUCCESSFUL with tx_hash, updates the database
+   * Build and execute a claim transaction with on-chain payment using atomic reservation.
+   * Flow:
+   * 1. Reserve claim atomically (prevents race condition)
+   * 2. Build and submit blockchain transaction
+   * 3. ONLY IF SUCCESSFUL with txHash → Confirm reservation
+   * 4. On ANY error → Rollback reservation
    *
-   * Throws BadRequestException on failure WITHOUT any database changes.
+   * Throws BadRequestException on failure WITHOUT persisting any claim changes.
    */
   async buildAndExecuteClaim(
     walletAddress: string,
@@ -212,64 +212,101 @@ export class RewardClaimProxy {
     claimedImmediateAmount: number;
     claimedVestedAmount: number;
   }> {
+    let reservation: { claimTransactionId: string; reservationId: string; totalClaimableAmount: number } | null = null;
+
     try {
-      // Step 1: Get claimable amounts (read-only, no DB changes)
-      this.logger.log(`Getting claimable amounts for wallet ${walletAddress.slice(0, 20)}...`);
-      const claimableSummary = await this.getClaimableSummary(walletAddress);
+      // ============================================================
+      // STEP 1: ATOMIC RESERVATION (prevents race condition)
+      // ============================================================
+      this.logger.log(`Reserving claim for wallet ${walletAddress.slice(0, 20)}...`);
 
-      // Rewards service returns human-readable amounts (with decimals applied)
-      const totalClaimableHumanReadable = claimableSummary.totalClaimable || 0;
-
-      if (totalClaimableHumanReadable <= 0) {
-        throw new BadRequestException('No claimable amount available');
-      }
-
-      // Step 2: Convert to base units for blockchain transaction
-      // Rewards API returns: 26785.714 L4VA
-      // We need base units: 26785714000 (if decimals=6) or 26785714 (if decimals=3)
-      const totalClaimableBaseUnits = Math.floor(totalClaimableHumanReadable * 10 ** this.l4vaDecimals);
-      this.logger.log(
-        `Building and submitting transaction for ${totalClaimableHumanReadable} L4VA (${totalClaimableBaseUnits} base units)...`
+      const reserveUrl = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/${walletAddress}/reserve`;
+      const { data } = await firstValueFrom(
+        this.httpService.post(reserveUrl, payload, {
+          headers: { 'X-Internal-Service-Token': this.internalToken },
+        })
       );
 
-      // Step 3: Build, sign, and submit the Cardano transaction
-      const txResult = await this.txBuilder.buildClaimTransaction(walletAddress, totalClaimableBaseUnits);
+      reservation = {
+        claimTransactionId: data.claimTransactionId,
+        reservationId: data.reservationId,
+        totalClaimableAmount: data.totalClaimableAmount,
+      };
+
+      this.logger.log(
+        `Claim reserved: ${reservation.reservationId} - ${(reservation.totalClaimableAmount / 10 ** this.l4vaDecimals).toFixed(this.l4vaDecimals)} L4VA`
+      );
+
+      // ============================================================
+      // STEP 2: BUILD, SIGN & SUBMIT BLOCKCHAIN TRANSACTION
+      // ============================================================
+      const txResult = await this.txBuilder.buildClaimTransaction(walletAddress, reservation.totalClaimableAmount);
 
       if (!txResult.success || !txResult.txHash) {
-        throw new BadRequestException(txResult.error || 'Transaction building/submission failed');
+        throw new BadRequestException(txResult.error || 'Blockchain transaction failed');
       }
 
-      // Step 4: ONLY NOW update the database with successful transaction
-      // Note: Database stores base units, so we pass the base units values
-      const immediateBaseUnits = Math.floor((claimableSummary.immediateClaimable || 0) * 10 ** this.l4vaDecimals);
-      const vestedBaseUnits = Math.floor((claimableSummary.vestedClaimable || 0) * 10 ** this.l4vaDecimals);
+      const txHash = txResult.txHash;
+      this.logger.log(`Blockchain tx submitted: ${txHash}`);
 
-      this.logger.log(`Transaction successful with hash ${txResult.txHash}, updating database...`);
-      await this.executeClaim(walletAddress, {
-        ...payload,
-        txHash: txResult.txHash,
-        claimedImmediateAmount: immediateBaseUnits,
-        claimedVestedAmount: vestedBaseUnits,
-        totalClaimedAmount: totalClaimableBaseUnits,
-      });
-
-      this.logger.log(
-        `✅ Successfully claimed ${totalClaimableHumanReadable} L4VA with tx ${txResult.txHash} for ${walletAddress.slice(0, 20)}...`
+      // ============================================================
+      // STEP 3: CONFIRM RESERVATION (only after successful tx submission)
+      // ============================================================
+      const confirmUrl = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/${walletAddress}/confirm`;
+      const { data: confirmed } = await firstValueFrom(
+        this.httpService.post(
+          confirmUrl,
+          {
+            reservationId: reservation.reservationId,
+            txHash,
+          },
+          { headers: { 'X-Internal-Service-Token': this.internalToken } }
+        )
       );
 
+      this.logger.log(
+        `Claim confirmed: ${reservation.reservationId} - tx: ${txHash} - ` +
+          `${(confirmed.totalClaimedAmount / 10 ** this.l4vaDecimals).toFixed(this.l4vaDecimals)} L4VA`
+      );
+
+      // Return human-readable amounts
       return {
         success: true,
-        txHash: txResult.txHash,
-        claimedAmount: totalClaimableHumanReadable,
-        claimedImmediateAmount: claimableSummary.immediateClaimable || 0,
-        claimedVestedAmount: claimableSummary.vestedClaimable || 0,
+        txHash,
+        claimedAmount: confirmed.totalClaimedAmount / 10 ** this.l4vaDecimals,
+        claimedImmediateAmount: confirmed.claimedImmediateAmount / 10 ** this.l4vaDecimals,
+        claimedVestedAmount: confirmed.claimedVestedAmount / 10 ** this.l4vaDecimals,
       };
     } catch (error: any) {
-      if (error.name === 'BadRequestException') {
+      // ============================================================
+      // STEP 4: ROLLBACK ON ANY ERROR AFTER RESERVATION
+      // ============================================================
+      if (reservation?.claimTransactionId) {
+        try {
+          this.logger.error(`Claim failed, rolling back reservation ${reservation.reservationId}...`);
+          const rollbackUrl = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/${walletAddress}/rollback`;
+          await firstValueFrom(
+            this.httpService.post(
+              rollbackUrl,
+              {
+                reservationId: reservation.reservationId,
+                errorReason: error?.message || 'Unknown error',
+              },
+              { headers: { 'X-Internal-Service-Token': this.internalToken } }
+            )
+          );
+          this.logger.log(`Reservation ${reservation.reservationId} rolled back successfully`);
+        } catch (rollbackError: any) {
+          this.logger.error(`CRITICAL: Failed to rollback reservation: ${rollbackError?.message || rollbackError}`);
+        }
+      }
+
+      // Re-throw original error
+      if (error.name === 'BadRequestException' || error.name === 'ConflictException') {
         throw error;
       }
       this.logger.error(`Failed to build and execute claim: ${error?.message || error}`, error?.stack);
-      throw new BadRequestException(error?.message || 'Unknown error occurred');
+      throw new BadRequestException(error?.message || 'Claim transaction failed');
     }
   }
 
