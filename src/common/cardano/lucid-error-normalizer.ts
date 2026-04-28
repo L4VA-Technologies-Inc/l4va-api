@@ -52,6 +52,18 @@ export function normalizeLucidCardanoError(error: unknown, fallback: string): st
     return 'Transaction could not be built. This can happen when accumulated rewards are too small to include in an output. Please wait longer before harvesting, or use Compound to reinvest rewards.';
   }
 
+  // Coin selection failed on the selected wallet UTxOs.
+  if (
+    /Your wallet does not have enough funds to cover the required assets/i.test(text) ||
+    /excluded from coin selection/i.test(text) ||
+    /contains UTxOs with reference scripts/i.test(text)
+  ) {
+    return (
+      'Insufficient spendable wallet balance to complete this transaction. ' +
+      'Please make sure your wallet has enough ADA/tokens for fees and that not all funds are locked in reference-script UTxOs, then try again.'
+    );
+  }
+
   // Fallback: try to extract first string inside `"error":[ "..."]` if present.
   const errorArrayFirst = text.match(/"error"\s*:\s*\[\s*"([^"]+)"/);
   if (errorArrayFirst?.[1]) {
