@@ -686,10 +686,16 @@ export class TaptoolsService {
       );
 
       // Fetch trait-based prices for Relics Vita assets (needs per-asset character lookup)
+      // Use concurrency control to avoid performance regression with many Vita assets
       const relicsVitaPriceMap = new Map<string, number | null>();
-      for (const asset of relicsVitaAssets) {
-        const cacheKey = `${asset.policy_id}_${asset.name}`;
-        if (!relicsVitaPriceMap.has(cacheKey)) {
+      const uniqueVitaAssets = Array.from(
+        new Map(relicsVitaAssets.map(a => [`${a.policy_id}_${a.name}`, a])).values()
+      );
+
+      await this.processWithConcurrency(
+        uniqueVitaAssets,
+        async asset => {
+          const cacheKey = `${asset.policy_id}_${asset.name}`;
           try {
             const relicsPrice = await this.getRelicsOfMagmaPrice(asset.policy_id, asset.name);
             relicsVitaPriceMap.set(cacheKey, relicsPrice);
@@ -697,12 +703,27 @@ export class TaptoolsService {
             this.logger.debug(`Failed to get Relics Vita price for ${asset.name}: ${error.message}`);
             relicsVitaPriceMap.set(cacheKey, null);
           }
-        }
-      }
+        },
+        3, // Max 3 concurrent lookups (Vita pricing involves WayUp + TapTools)
+        100 // 100ms delay between batches
+      );
+
+      // Prepare Porta fallback price (70 ADA) for when WayUp has no listings
+      const portaFloorPrice = nftFloorPriceMap.get(this.RELICS_OF_MAGMA_PORTA_POLICY);
+      const portaPriceWithFallback = portaFloorPrice || this.RELICS_PORTA_PRICE_FALLBACK;
 
       let updatedCount = 0;
 
-      // Now apply prices to all assets using batch-fetched data
+      // Collect all updates to batch them
+      interface PriceUpdate {
+        policy_id: string;
+        asset_id: string;
+        priceAda: number;
+        isNFT: boolean;
+      }
+      const priceUpdates: PriceUpdate[] = [];
+
+      // Build update list from batch-fetched data
       for (const asset of uniqueAssets) {
         try {
           // Skip lovelace
@@ -728,8 +749,11 @@ export class TaptoolsService {
             if (asset.policy_id === this.RELICS_OF_MAGMA_VITA_POLICY) {
               const cacheKey = `${asset.policy_id}_${asset.name}`;
               priceAda = relicsVitaPriceMap.get(cacheKey) || null;
+            } else if (asset.policy_id === this.RELICS_OF_MAGMA_PORTA_POLICY) {
+              // Preserve Porta-specific fallback behavior when WayUp has no listings or fails
+              priceAda = portaPriceWithFallback;
             } else {
-              // Use batch-fetched floor price (includes Porta and all other NFT collections)
+              // Use batch-fetched floor price for all other NFT collections
               priceAda = nftFloorPriceMap.get(asset.policy_id) || null;
             }
           } else {
@@ -739,24 +763,45 @@ export class TaptoolsService {
           }
 
           if (priceAda !== null) {
-            // Update all assets with this policy_id and asset_id
+            priceUpdates.push({
+              policy_id: asset.policy_id,
+              asset_id: asset.asset_id,
+              priceAda,
+              isNFT,
+            });
+          }
+        } catch (error) {
+          this.logger.error(`Error preparing price update for asset ${asset.policy_id}.${asset.asset_id}:`, error.message);
+        }
+      }
+
+      // Apply database updates with controlled concurrency
+      await this.processWithConcurrency(
+        priceUpdates,
+        async update => {
+          try {
             await this.assetRepository.update(
               {
-                policy_id: asset.policy_id,
-                asset_id: asset.asset_id,
+                policy_id: update.policy_id,
+                asset_id: update.asset_id,
                 deleted: false,
               },
               {
-                [isNFT ? 'floor_price' : 'dex_price']: priceAda,
+                [update.isNFT ? 'floor_price' : 'dex_price']: update.priceAda,
                 last_valuation: new Date(),
               }
             );
             updatedCount++;
+          } catch (error) {
+            this.logger.error(
+              `Failed to update price for ${update.policy_id}.${update.asset_id}:`,
+              error.message
+            );
           }
-        } catch (error) {
-          this.logger.error(`Error updating price for asset ${asset.policy_id}.${asset.asset_id}:`, error.message);
-        }
-      }
+        },
+        10, // Max 10 concurrent DB updates
+        0 // No delay needed for DB updates
+      );
 
       this.logger.log(`Successfully updated prices for ${updatedCount} assets using batch fetching`);
 
