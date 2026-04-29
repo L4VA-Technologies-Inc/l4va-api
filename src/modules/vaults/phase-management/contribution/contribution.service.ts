@@ -47,6 +47,13 @@ export class ContributionService {
     vaultId: string;
     txId: string;
   }> {
+    // Check contribution kill switch
+    if (!this.systemSettingsService.contributionEnabled) {
+      throw new BadRequestException(
+        'Contributions are temporarily unavailable. Please try again later or contact support if this persists.'
+      );
+    }
+
     const assetsByPolicy = contributeReq.assets.reduce(
       (acc, asset) => {
         if (!acc[asset.policyId]) {

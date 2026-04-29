@@ -195,6 +195,13 @@ export class VaultsService {
     txId: string;
   }> {
     try {
+      // Check vault creation kill switch
+      if (!this.systemSettingsService.vaultCreationEnabled) {
+        throw new BadRequestException(
+          'Vault creation is temporarily unavailable. Please try again later or contact support if this persists.'
+        );
+      }
+
       if (this.isMainnet) {
         // Check if user exists and get their wallet address
         const user = await this.usersRepository.findOne({

@@ -410,6 +410,13 @@ export class GovernanceService {
     createProposalReq: CreateProposalReq,
     userId: string
   ): Promise<CreateProposalRes> {
+    // Check governance kill switch
+    if (!this.systemSettingsService.governanceEnabled) {
+      throw new BadRequestException(
+        'Governance proposals are temporarily unavailable. Please try again later or contact support if this persists.'
+      );
+    }
+
     const vault: Pick<Vault, 'id' | 'vault_status' | 'policy_id' | 'asset_vault_name' | 'name' | 'assets_whitelist'> =
       await this.vaultRepository.findOne({
         where: { id: vaultId },
