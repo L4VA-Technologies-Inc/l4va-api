@@ -1,8 +1,10 @@
 import { ApiProperty } from '@nestjs/swagger';
 
+import { TokenType } from '@/database/tokenStakingPosition.entity';
+
 export class StakeTokenAnalyticsRes {
-  @ApiProperty({ description: 'Token type', example: 'L4VA' })
-  tokenType: string;
+  @ApiProperty({ description: 'Token type', enum: TokenType, example: TokenType.L4VA })
+  tokenType: TokenType;
 
   @ApiProperty({ description: 'Number of active staking positions for this token' })
   activePositionsCount: number;
@@ -16,8 +18,8 @@ export class StakeTokenAnalyticsRes {
   })
   totalDepositedRaw: string;
 
-  @ApiProperty({ description: 'Total deposited amount in human-readable units', example: 100.0 })
-  totalDepositedHuman: number;
+  @ApiProperty({ description: 'Total deposited amount in human-readable units', example: '100' })
+  totalDepositedHuman: string;
 
   @ApiProperty({
     description: 'Total estimated pending rewards in raw on-chain units (what admin owes)',
@@ -25,14 +27,14 @@ export class StakeTokenAnalyticsRes {
   })
   totalEstimatedRewardRaw: string;
 
-  @ApiProperty({ description: 'Total estimated pending rewards in human-readable units', example: 0.8 })
-  totalEstimatedRewardHuman: number;
+  @ApiProperty({ description: 'Total estimated pending rewards in human-readable units', example: '0.8' })
+  totalEstimatedRewardHuman: string;
 
   @ApiProperty({ description: 'Total estimated payout (deposit + reward) in raw on-chain units', example: '1008000' })
   totalEstimatedPayoutRaw: string;
 
-  @ApiProperty({ description: 'Total estimated payout (deposit + reward) in human-readable units', example: 100.8 })
-  totalEstimatedPayoutHuman: number;
+  @ApiProperty({ description: 'Total estimated payout (deposit + reward) in human-readable units', example: '100.8' })
+  totalEstimatedPayoutHuman: string;
 
   @ApiProperty({ description: 'Average staking duration in milliseconds across all active positions' })
   averageStakingDurationMs: number;
@@ -48,39 +50,39 @@ export class StakeTokenAnalyticsRes {
 }
 
 export class PendingRewardRes {
-  @ApiProperty({ description: 'Token type', example: 'L4VA' })
-  tokenType: string;
+  @ApiProperty({ description: 'Token type', enum: TokenType, example: TokenType.L4VA })
+  tokenType: TokenType;
 
   @ApiProperty({ description: 'Total pending reward in raw on-chain units', example: '8000' })
   amountRaw: string;
 
-  @ApiProperty({ description: 'Total pending reward in human-readable units', example: 0.8 })
-  amountHuman: number;
+  @ApiProperty({ description: 'Total pending reward in human-readable units', example: '0.8' })
+  amountHuman: string;
 }
 
 export class DistributedRewardRes {
-  @ApiProperty({ description: 'Token type', example: 'L4VA' })
-  tokenType: string;
+  @ApiProperty({ description: 'Token type', enum: TokenType, example: TokenType.L4VA })
+  tokenType: TokenType;
 
   @ApiProperty({ description: 'Total distributed reward all-time in raw on-chain units', example: '128000' })
   amountRaw: string;
 
-  @ApiProperty({ description: 'Total distributed reward all-time in human-readable units', example: 12.8 })
-  amountHuman: number;
+  @ApiProperty({ description: 'Total distributed reward all-time in human-readable units', example: '12.8' })
+  amountHuman: string;
 }
 
 export class DistributedRewardTimelinePointRes {
   @ApiProperty({ description: 'UTC date (YYYY-MM-DD) when rewards were distributed', example: '2026-04-28' })
   date: string;
 
-  @ApiProperty({ description: 'Token type', example: 'L4VA' })
-  tokenType: string;
+  @ApiProperty({ description: 'Token type', enum: TokenType, example: TokenType.L4VA })
+  tokenType: TokenType;
 
   @ApiProperty({ description: 'Distributed reward for this date/token in raw on-chain units', example: '12000' })
   amountRaw: string;
 
-  @ApiProperty({ description: 'Distributed reward for this date/token in human-readable units', example: 12.0 })
-  amountHuman: number;
+  @ApiProperty({ description: 'Distributed reward for this date/token in human-readable units', example: '12' })
+  amountHuman: string;
 }
 
 export class TopStakerRes {
@@ -90,14 +92,14 @@ export class TopStakerRes {
   @ApiProperty({ description: 'Wallet address (Cardano Bech32)' })
   walletAddress: string;
 
-  @ApiProperty({ description: 'Token type', example: 'L4VA' })
-  tokenType: string;
+  @ApiProperty({ description: 'Token type', enum: TokenType, example: TokenType.L4VA })
+  tokenType: TokenType;
 
   @ApiProperty({ description: 'Total amount deposited in raw on-chain units', example: '500000' })
   totalDepositedRaw: string;
 
-  @ApiProperty({ description: 'Total amount deposited in human-readable units', example: 50.0 })
-  totalDepositedHuman: number;
+  @ApiProperty({ description: 'Total amount deposited in human-readable units', example: '50' })
+  totalDepositedHuman: string;
 
   @ApiProperty({ description: 'Number of individual staking positions held' })
   positionCount: number;
@@ -121,17 +123,29 @@ export class StakeTransactionStatsRes {
 }
 
 export class AdminWalletBalancesRes {
+  @ApiProperty({
+    description: 'Whether L4VA token unit is configured in environment (policy + asset name)',
+    example: true,
+  })
+  l4vaConfigured: boolean;
+
   @ApiProperty({ description: 'L4VA balance on admin wallet in raw on-chain units', example: '1500000' })
   l4vaRaw: string;
 
-  @ApiProperty({ description: 'L4VA balance on admin wallet in human-readable units', example: 1500.0 })
-  l4vaHuman: number;
+  @ApiProperty({ description: 'L4VA balance on admin wallet in human-readable units', example: '1500' })
+  l4vaHuman: string;
+
+  @ApiProperty({
+    description: 'Whether VLRM token unit is configured in environment (policy + asset name)',
+    example: true,
+  })
+  vlrmConfigured: boolean;
 
   @ApiProperty({ description: 'VLRM balance on admin wallet in raw on-chain units', example: '250000' })
   vlrmRaw: string;
 
-  @ApiProperty({ description: 'VLRM balance on admin wallet in human-readable units', example: 25.0 })
-  vlrmHuman: number;
+  @ApiProperty({ description: 'VLRM balance on admin wallet in human-readable units', example: '25' })
+  vlrmHuman: string;
 }
 
 export class StakeAnalyticsRes {
@@ -181,7 +195,8 @@ export class StakeAnalyticsRes {
   transactions: StakeTransactionStatsRes;
 
   @ApiProperty({
-    description: 'Top 20 stakers ranked by total deposited amount (across all tokens)',
+    description:
+      'Top 20 staker entries ranked by deposited amount for each user/token pair (not aggregated across tokens)',
     type: [TopStakerRes],
   })
   topStakers: TopStakerRes[];
