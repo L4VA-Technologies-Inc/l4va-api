@@ -621,10 +621,9 @@ export class TaptoolsService {
       }
 
       // Separate assets into categories for batch processing
-      const ftTokenIds: string[] = [];
+      const ftTokenIds = new Set<string>(); // Use Set to ensure unique token IDs
       const nftPolicyIds = new Set<string>();
-      const relicsPolicyIds = new Set<string>();
-      const assetsNeedingExternalPricing: Array<(typeof assets)[0]> = [];
+      const relicsVitaAssets: Array<(typeof assets)[0]> = []; // Track Vita assets for trait-based pricing
 
       for (const asset of uniqueAssets) {
         // Skip lovelace
@@ -643,49 +642,60 @@ export class TaptoolsService {
           continue; // Will use testnet prices later
         }
 
-        // Check if this is a Relics of Magma collection (needs special handling)
-        if (
-          asset.policy_id === this.RELICS_OF_MAGMA_VITA_POLICY ||
-          asset.policy_id === this.RELICS_OF_MAGMA_PORTA_POLICY
-        ) {
-          relicsPolicyIds.add(asset.policy_id);
-        } else if (isNFT) {
+        // Categorize assets for batch fetching
+        if (asset.policy_id === this.RELICS_OF_MAGMA_VITA_POLICY) {
+          // Vita needs trait-based pricing - track assets for individual processing
+          relicsVitaAssets.push(asset);
+        } else if (asset.policy_id === this.RELICS_OF_MAGMA_PORTA_POLICY || isNFT) {
+          // Porta and other NFTs use collection floor price
           nftPolicyIds.add(asset.policy_id);
         } else {
-          ftTokenIds.push(`${asset.policy_id}${asset.asset_id}`);
+          // FT tokens
+          ftTokenIds.add(`${asset.policy_id}${asset.asset_id}`);
         }
-
-        assetsNeedingExternalPricing.push(asset);
       }
 
       // Batch fetch all FT prices at once
-      this.logger.log(`Fetching prices for ${ftTokenIds.length} FTs and ${nftPolicyIds.size} NFT collections`);
+      const ftTokenIdsArray = Array.from(ftTokenIds);
+      this.logger.log(
+        `Fetching prices for ${ftTokenIdsArray.length} unique FTs and ${nftPolicyIds.size} NFT collections`
+      );
       const ftPriceMap =
-        ftTokenIds.length > 0
-          ? await this.dexHunterPricingService.getTokenPrices(ftTokenIds)
+        ftTokenIdsArray.length > 0
+          ? await this.dexHunterPricingService.getTokenPrices(ftTokenIdsArray)
           : new Map<string, number | null>();
 
-      // Batch fetch all NFT floor prices at once
+      // Batch fetch all NFT floor prices with controlled concurrency
       const nftFloorPriceMap = new Map<string, number | null>();
-      for (const policyId of nftPolicyIds) {
-        try {
-          const { floorPriceAda } = await this.wayUpPricingService.getCollectionFloorPrice(policyId);
-          nftFloorPriceMap.set(policyId, floorPriceAda && floorPriceAda > 0 ? floorPriceAda : null);
-        } catch (error) {
-          this.logger.debug(`Failed to get floor price for NFT ${policyId}: ${error.message}`);
-          nftFloorPriceMap.set(policyId, null);
-        }
-      }
+      const nftPolicyIdsArray = Array.from(nftPolicyIds);
 
-      // Fetch Relics floor prices (they use WayUp floor price directly)
-      for (const policyId of relicsPolicyIds) {
-        if (!nftFloorPriceMap.has(policyId)) {
+      // Fetch NFT floor prices in parallel batches of 5 to avoid overwhelming the API
+      await this.processWithConcurrency(
+        nftPolicyIdsArray,
+        async policyId => {
           try {
             const { floorPriceAda } = await this.wayUpPricingService.getCollectionFloorPrice(policyId);
             nftFloorPriceMap.set(policyId, floorPriceAda && floorPriceAda > 0 ? floorPriceAda : null);
           } catch (error) {
-            this.logger.debug(`Failed to get floor price for Relics ${policyId}: ${error.message}`);
+            this.logger.debug(`Failed to get floor price for NFT ${policyId}: ${error.message}`);
             nftFloorPriceMap.set(policyId, null);
+          }
+        },
+        5, // Max 5 concurrent API calls
+        100 // 100ms delay between batches
+      );
+
+      // Fetch trait-based prices for Relics Vita assets (needs per-asset character lookup)
+      const relicsVitaPriceMap = new Map<string, number | null>();
+      for (const asset of relicsVitaAssets) {
+        const cacheKey = `${asset.policy_id}_${asset.name}`;
+        if (!relicsVitaPriceMap.has(cacheKey)) {
+          try {
+            const relicsPrice = await this.getRelicsOfMagmaPrice(asset.policy_id, asset.name);
+            relicsVitaPriceMap.set(cacheKey, relicsPrice);
+          } catch (error) {
+            this.logger.debug(`Failed to get Relics Vita price for ${asset.name}: ${error.message}`);
+            relicsVitaPriceMap.set(cacheKey, null);
           }
         }
       }
@@ -714,15 +724,12 @@ export class TaptoolsService {
           }
           // Priority 3: Use batch-fetched prices
           else if (isNFT) {
-            // Check for Relics of Magma trait-based pricing first
-            if (
-              asset.policy_id === this.RELICS_OF_MAGMA_VITA_POLICY ||
-              asset.policy_id === this.RELICS_OF_MAGMA_PORTA_POLICY
-            ) {
-              const relicsPrice = await this.getRelicsOfMagmaPrice(asset.policy_id, asset.name);
-              priceAda = relicsPrice;
+            // Check for Relics of Magma Vita trait-based pricing
+            if (asset.policy_id === this.RELICS_OF_MAGMA_VITA_POLICY) {
+              const cacheKey = `${asset.policy_id}_${asset.name}`;
+              priceAda = relicsVitaPriceMap.get(cacheKey) || null;
             } else {
-              // Use batch-fetched floor price
+              // Use batch-fetched floor price (includes Porta and all other NFT collections)
               priceAda = nftFloorPriceMap.get(asset.policy_id) || null;
             }
           } else {
