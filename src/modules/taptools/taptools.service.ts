@@ -575,7 +575,7 @@ export class TaptoolsService {
    * Update asset prices in database from custom vault prices and external APIs (DexHunter/WayUp)
    * Updates dex_price for FTs and floor_price for NFTs
    * Includes assets with PENDING, LOCKED, and EXTRACTED (in treasury wallet) status
-   * Uses batch fetching to minimize duplicate API calls - each unique token/collection is fetched once
+   * Uses controlled concurrency to avoid overwhelming external APIs
    * After updating prices, calculates and returns TVL for affected vaults
    *
    * Price priority:
@@ -620,138 +620,82 @@ export class TaptoolsService {
         }
       }
 
-      // Separate assets into categories for batch processing
-      const ftTokenIds: string[] = [];
-      const nftPolicyIds = new Set<string>();
-      const relicsPolicyIds = new Set<string>();
-      const assetsNeedingExternalPricing: Array<(typeof assets)[0]> = [];
-
-      for (const asset of uniqueAssets) {
-        // Skip lovelace
-        if (asset.type === AssetType.ADA) {
-          continue;
-        }
-
-        const isNFT = asset.type === AssetType.NFT;
-        const vaultCustomPrices = customPricesByVault.get(asset.vault_id);
-
-        // Skip if asset has custom price or testnet price
-        if (vaultCustomPrices?.has(asset.policy_id)) {
-          continue;
-        }
-        if (!this.isMainnet) {
-          continue; // Will use testnet prices later
-        }
-
-        // Check if this is a Relics of Magma collection (needs special handling)
-        if (
-          asset.policy_id === this.RELICS_OF_MAGMA_VITA_POLICY ||
-          asset.policy_id === this.RELICS_OF_MAGMA_PORTA_POLICY
-        ) {
-          relicsPolicyIds.add(asset.policy_id);
-        } else if (isNFT) {
-          nftPolicyIds.add(asset.policy_id);
-        } else {
-          ftTokenIds.push(`${asset.policy_id}${asset.asset_id}`);
-        }
-
-        assetsNeedingExternalPricing.push(asset);
-      }
-
-      // Batch fetch all FT prices at once
-      this.logger.log(`Fetching prices for ${ftTokenIds.length} FTs and ${nftPolicyIds.size} NFT collections`);
-      const ftPriceMap =
-        ftTokenIds.length > 0
-          ? await this.dexHunterPricingService.getTokenPrices(ftTokenIds)
-          : new Map<string, number | null>();
-
-      // Batch fetch all NFT floor prices at once
-      const nftFloorPriceMap = new Map<string, number | null>();
-      for (const policyId of nftPolicyIds) {
-        try {
-          const { floorPriceAda } = await this.wayUpPricingService.getCollectionFloorPrice(policyId);
-          nftFloorPriceMap.set(policyId, floorPriceAda && floorPriceAda > 0 ? floorPriceAda : null);
-        } catch (error) {
-          this.logger.debug(`Failed to get floor price for NFT ${policyId}: ${error.message}`);
-          nftFloorPriceMap.set(policyId, null);
-        }
-      }
-
-      // Fetch Relics floor prices (they use WayUp floor price directly)
-      for (const policyId of relicsPolicyIds) {
-        if (!nftFloorPriceMap.has(policyId)) {
-          try {
-            const { floorPriceAda } = await this.wayUpPricingService.getCollectionFloorPrice(policyId);
-            nftFloorPriceMap.set(policyId, floorPriceAda && floorPriceAda > 0 ? floorPriceAda : null);
-          } catch (error) {
-            this.logger.debug(`Failed to get floor price for Relics ${policyId}: ${error.message}`);
-            nftFloorPriceMap.set(policyId, null);
-          }
-        }
-      }
-
       let updatedCount = 0;
 
-      // Now apply prices to all assets using batch-fetched data
-      for (const asset of uniqueAssets) {
-        try {
-          // Skip lovelace
-          if (asset.type === AssetType.ADA) {
-            continue;
-          }
-
-          const isNFT = asset.type === AssetType.NFT;
-          let priceAda: number | null = null;
-
-          // Priority 1: Check for custom price from vault whitelist
-          const vaultCustomPrices = customPricesByVault.get(asset.vault_id);
-          if (vaultCustomPrices && vaultCustomPrices.has(asset.policy_id)) {
-            priceAda = vaultCustomPrices.get(asset.policy_id)!;
-          }
-          // Priority 2: Use hardcoded testnet prices if available
-          else if (!this.isMainnet) {
-            priceAda = this.testnetPrices[asset.policy_id] || 5.0;
-          }
-          // Priority 3: Use batch-fetched prices
-          else if (isNFT) {
-            // Check for Relics of Magma trait-based pricing first
-            if (
-              asset.policy_id === this.RELICS_OF_MAGMA_VITA_POLICY ||
-              asset.policy_id === this.RELICS_OF_MAGMA_PORTA_POLICY
-            ) {
-              const relicsPrice = await this.getRelicsOfMagmaPrice(asset.policy_id, asset.name);
-              priceAda = relicsPrice;
-            } else {
-              // Use batch-fetched floor price
-              priceAda = nftFloorPriceMap.get(asset.policy_id) || null;
+      // Process with controlled concurrency: 5 concurrent API calls, 100ms delay between batches
+      await this.processWithConcurrency(
+        uniqueAssets,
+        async asset => {
+          try {
+            // Skip lovelace
+            if (asset.type === AssetType.ADA) {
+              return;
             }
-          } else {
-            // Use batch-fetched FT price
-            const tokenId = `${asset.policy_id}${asset.asset_id}`;
-            priceAda = ftPriceMap.get(tokenId) || null;
-          }
 
-          if (priceAda !== null) {
-            // Update all assets with this policy_id and asset_id
-            await this.assetRepository.update(
-              {
-                policy_id: asset.policy_id,
-                asset_id: asset.asset_id,
-                deleted: false,
-              },
-              {
-                [isNFT ? 'floor_price' : 'dex_price']: priceAda,
-                last_valuation: new Date(),
+            const isNFT = asset.type === AssetType.NFT;
+
+            let priceAda: number | null = null;
+
+            // Priority 1: Check for custom price from vault whitelist
+            const vaultCustomPrices = customPricesByVault.get(asset.vault_id);
+            if (vaultCustomPrices && vaultCustomPrices.has(asset.policy_id)) {
+              priceAda = vaultCustomPrices.get(asset.policy_id)!;
+            }
+            // Priority 2: Use hardcoded testnet prices if available
+            else if (!this.isMainnet) {
+              priceAda = this.testnetPrices[asset.policy_id] || 5.0;
+            }
+            // Priority 3: Fetch from external APIs
+            else if (isNFT) {
+              // Check for Relics of Magma trait-based pricing first
+              const relicsPrice = await this.getRelicsOfMagmaPrice(asset.policy_id, asset.name);
+              if (relicsPrice !== null) {
+                priceAda = relicsPrice;
+              } else {
+                // Fall back to WayUp collection floor price for other NFTs
+                try {
+                  const { floorPriceAda } = await this.wayUpPricingService.getCollectionFloorPrice(asset.policy_id);
+                  priceAda = floorPriceAda > 0 ? floorPriceAda : null;
+                } catch (error) {
+                  this.logger.debug(`Failed to get floor price for NFT ${asset.policy_id}: ${error.message}`);
+                }
               }
-            );
-            updatedCount++;
-          }
-        } catch (error) {
-          this.logger.error(`Error updating price for asset ${asset.policy_id}.${asset.asset_id}:`, error.message);
-        }
-      }
+            } else {
+              // Get DEX price from DexHunter for FTs
+              try {
+                const tokenPriceAda = await this.dexHunterPricingService.getTokenPrice(
+                  `${asset.policy_id}${asset.asset_id}`
+                );
+                priceAda = tokenPriceAda !== null && tokenPriceAda > 0 ? tokenPriceAda : null;
+              } catch (error) {
+                this.logger.debug(`Failed to get DEX price for FT ${asset.policy_id}: ${error.message}`);
+              }
+            }
 
-      this.logger.log(`Successfully updated prices for ${updatedCount} assets using batch fetching`);
+            if (priceAda !== null) {
+              // Update all assets with this policy_id and asset_id
+              await this.assetRepository.update(
+                {
+                  policy_id: asset.policy_id,
+                  asset_id: asset.asset_id,
+                  deleted: false,
+                },
+                {
+                  [isNFT ? 'floor_price' : 'dex_price']: priceAda,
+                  last_valuation: new Date(),
+                }
+              );
+              updatedCount++;
+            }
+          } catch (error) {
+            this.logger.error(`Error updating price for asset ${asset.policy_id}.${asset.asset_id}:`, error.message);
+          }
+        },
+        5, // Max 5 concurrent API calls
+        100 // 100ms delay between batches
+      );
+
+      this.logger.log(`Successfully updated prices for ${updatedCount} assets`);
 
       // Calculate and return TVL for all affected vaults
       return await this.calculateVaultsTvl(vaultIds);
