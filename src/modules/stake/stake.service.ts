@@ -22,6 +22,7 @@ import { encodeStakeDatum, tryDecodeStakeDatum } from './stake-datum';
 
 import { createLucidBlockfrostProvider, lucidNetworkFromCardanoEnv } from '@/common/cardano/blockfrost-lucid';
 import { normalizeLucidCardanoError } from '@/common/cardano/lucid-error-normalizer';
+import { buildStakeTokenRegistry, type TokenMeta } from '@/common/cardano/token-registry';
 import { StakingStatus, TokenStakingPosition, TokenType } from '@/database/tokenStakingPosition.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { UtxoRefDto } from '@/modules/stake/dto/unstake-tokens.dto';
@@ -61,7 +62,6 @@ function formatError(error: unknown, fallback: string): string {
 // Types
 // ---------------------------------------------------------------------------
 
-type TokenMeta = { decimals: number; type: TokenType | null };
 /** Processed stake box: on-chain UTxO + token unit + reward data + datum staked_at. */
 type ProcessedBox = { utxo: UTxO; unit: string; deposit: bigint; reward: bigint; payout: bigint; staked_at: bigint };
 type UnitAggregation = { deposit: bigint; reward: bigint; payout: bigint; lovelace: bigint };
@@ -123,38 +123,12 @@ export class StakeService {
     this.APY = apyPercent / 100;
     this.APY_SCALED = BigInt(Math.round(this.APY * 1e12));
 
-    this.tokenRegistry = this.buildTokenRegistry();
+    this.tokenRegistry = buildStakeTokenRegistry(this.configService);
   }
 
   // ---------------------------------------------------------------------------
   // Token registry
   // ---------------------------------------------------------------------------
-
-  private buildTokenRegistry(): Map<string, TokenMeta> {
-    const map = new Map<string, TokenMeta>();
-
-    const vlrmPolicy = this.configService.get<string>('VLRM_POLICY_ID')?.toLowerCase();
-    const vlrmName = this.configService.get<string>('VLRM_HEX_ASSET_NAME')?.toLowerCase() ?? '';
-    const vlrmDecimals = parseInt(this.configService.get<string>('VLRM_DECIMALS') ?? '4', 10);
-    if (vlrmPolicy) {
-      map.set(`${vlrmPolicy}${vlrmName}`, {
-        decimals: Number.isFinite(vlrmDecimals) ? vlrmDecimals : 4,
-        type: TokenType.VLRM,
-      });
-    }
-
-    const l4vaPolicy = this.configService.get<string>('L4VA_POLICY_ID')?.toLowerCase();
-    const l4vaName = this.configService.get<string>('L4VA_ASSET_NAME')?.toLowerCase() ?? '';
-    const l4vaDecimals = parseInt(this.configService.get<string>('L4VA_DECIMALS') ?? '3', 10);
-    if (l4vaPolicy) {
-      map.set(`${l4vaPolicy}${l4vaName}`, {
-        decimals: Number.isFinite(l4vaDecimals) ? l4vaDecimals : 3,
-        type: TokenType.L4VA,
-      });
-    }
-
-    return map;
-  }
 
   private getDecimalsForUnit(unit: string): number {
     return this.tokenRegistry.get(unit.toLowerCase())?.decimals ?? this.TOKEN_DECIMALS;

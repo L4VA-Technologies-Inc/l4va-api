@@ -2,7 +2,7 @@ import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 
 import {
   DistributedRewardRes,
@@ -14,14 +14,29 @@ import {
   TopStakerRes,
 } from './dto/stake-analytics.res';
 
+import { buildStakeTokenRegistry, type TokenMeta } from '@/common/cardano/token-registry';
 import { StakingStatus, TokenStakingPosition, TokenType } from '@/database/tokenStakingPosition.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
-type TokenMeta = { decimals: number; type: TokenType | null };
+function toHumanAmount(raw: bigint, decimals: number): string {
+  const negative = raw < 0n;
+  const absoluteRaw = negative ? -raw : raw;
 
-function toHumanAmount(raw: bigint, decimals: number): number {
-  return Number(raw) / Math.pow(10, decimals);
+  if (decimals === 0) {
+    return `${negative ? '-' : ''}${absoluteRaw.toString()}`;
+  }
+
+  const scale = 10n ** BigInt(decimals);
+  const whole = absoluteRaw / scale;
+  const fraction = absoluteRaw % scale;
+  const fractionString = fraction.toString().padStart(decimals, '0').replace(/0+$/, '');
+
+  if (fractionString.length === 0) {
+    return `${negative ? '-' : ''}${whole.toString()}`;
+  }
+
+  return `${negative ? '-' : ''}${whole.toString()}.${fractionString}`;
 }
 
 @Injectable()
@@ -47,37 +62,11 @@ export class StakeAdminService {
     }
     this.APY = apyPercent / 100;
     this.APY_SCALED = BigInt(Math.round(this.APY * 1e12));
-    this.tokenRegistry = this.buildTokenRegistry();
+    this.tokenRegistry = buildStakeTokenRegistry(this.configService);
     this.adminAddress = this.configService.getOrThrow<string>('ADMIN_ADDRESS');
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.getOrThrow<string>('BLOCKFROST_API_KEY'),
     });
-  }
-
-  private buildTokenRegistry(): Map<string, TokenMeta> {
-    const map = new Map<string, TokenMeta>();
-
-    const vlrmPolicy = this.configService.get<string>('VLRM_POLICY_ID')?.toLowerCase();
-    const vlrmName = this.configService.get<string>('VLRM_HEX_ASSET_NAME')?.toLowerCase() ?? '';
-    const vlrmDecimals = parseInt(this.configService.get<string>('VLRM_DECIMALS') ?? '4', 10);
-    if (vlrmPolicy) {
-      map.set(`${vlrmPolicy}${vlrmName}`, {
-        decimals: Number.isFinite(vlrmDecimals) ? vlrmDecimals : 4,
-        type: TokenType.VLRM,
-      });
-    }
-
-    const l4vaPolicy = this.configService.get<string>('L4VA_POLICY_ID')?.toLowerCase();
-    const l4vaName = this.configService.get<string>('L4VA_ASSET_NAME')?.toLowerCase() ?? '';
-    const l4vaDecimals = parseInt(this.configService.get<string>('L4VA_DECIMALS') ?? '3', 10);
-    if (l4vaPolicy) {
-      map.set(`${l4vaPolicy}${l4vaName}`, {
-        decimals: Number.isFinite(l4vaDecimals) ? l4vaDecimals : 3,
-        type: TokenType.L4VA,
-      });
-    }
-
-    return map;
   }
 
   private getDecimalsForUnit(unit: string): number {
@@ -92,15 +81,19 @@ export class StakeAdminService {
   }
 
   private async getAdminTokenBalances(): Promise<{
+    l4vaConfigured: boolean;
     l4vaRaw: string;
-    l4vaHuman: number;
+    l4vaHuman: string;
+    vlrmConfigured: boolean;
     vlrmRaw: string;
-    vlrmHuman: number;
+    vlrmHuman: string;
   }> {
     const l4vaUnit = this.getUnitForTokenType(TokenType.L4VA);
     const vlrmUnit = this.getUnitForTokenType(TokenType.VLRM);
-    const l4vaDecimals = this.getDecimalsForUnit(l4vaUnit);
-    const vlrmDecimals = this.getDecimalsForUnit(vlrmUnit);
+    const l4vaConfigured = l4vaUnit.length > 0;
+    const vlrmConfigured = vlrmUnit.length > 0;
+    const l4vaDecimals = l4vaConfigured ? this.getDecimalsForUnit(l4vaUnit) : this.TOKEN_DECIMALS;
+    const vlrmDecimals = vlrmConfigured ? this.getDecimalsForUnit(vlrmUnit) : this.TOKEN_DECIMALS;
 
     const addressInfo = await this.blockfrost.addresses(this.adminAddress);
     const amountByUnit = new Map<string, bigint>(
@@ -111,8 +104,10 @@ export class StakeAdminService {
     const vlrmRaw = vlrmUnit ? (amountByUnit.get(vlrmUnit.toLowerCase()) ?? 0n) : 0n;
 
     return {
+      l4vaConfigured,
       l4vaRaw: l4vaRaw.toString(),
       l4vaHuman: toHumanAmount(l4vaRaw, l4vaDecimals),
+      vlrmConfigured,
       vlrmRaw: vlrmRaw.toString(),
       vlrmHuman: toHumanAmount(vlrmRaw, vlrmDecimals),
     };
@@ -130,16 +125,45 @@ export class StakeAdminService {
       TransactionType.compound,
     ];
 
+    type ActivePositionRow = {
+      userId: string;
+      tokenType: TokenType;
+      amount: string;
+      walletAddress: string | null;
+      stakeMetadata: { staked_at?: number } | null;
+    };
+    type ClosedPositionRow = {
+      tokenType: TokenType;
+      amount: string;
+      stakeMetadata: { staked_at?: number } | null;
+      unstakeCreatedAt: Date | string | null;
+      unstakeUpdatedAt: Date | string | null;
+    };
+
     const [activePositions, closedPositions, allTimeStakersResult, adminWalletBalances] = await Promise.all([
-      this.tokenStakingPositionRepository.find({
-        where: { status: StakingStatus.ACTIVE },
-        relations: ['stake_transaction', 'user'],
-        order: { created_at: 'ASC' },
-      }),
-      this.tokenStakingPositionRepository.find({
-        where: { status: StakingStatus.CLOSED },
-        relations: ['stake_transaction', 'unstake_transaction'],
-      }),
+      this.tokenStakingPositionRepository
+        .createQueryBuilder('p')
+        .leftJoin('p.stake_transaction', 'stakeTx')
+        .leftJoin('p.user', 'u')
+        .select('p.user_id', 'userId')
+        .addSelect('p.token_type', 'tokenType')
+        .addSelect('p.amount', 'amount')
+        .addSelect('u.address', 'walletAddress')
+        .addSelect('stakeTx.metadata', 'stakeMetadata')
+        .where('p.status = :status', { status: StakingStatus.ACTIVE })
+        .orderBy('p.created_at', 'ASC')
+        .getRawMany<ActivePositionRow>(),
+      this.tokenStakingPositionRepository
+        .createQueryBuilder('p')
+        .leftJoin('p.stake_transaction', 'stakeTx')
+        .leftJoin('p.unstake_transaction', 'unstakeTx')
+        .select('p.token_type', 'tokenType')
+        .addSelect('p.amount', 'amount')
+        .addSelect('stakeTx.metadata', 'stakeMetadata')
+        .addSelect('unstakeTx.created_at', 'unstakeCreatedAt')
+        .addSelect('unstakeTx.updated_at', 'unstakeUpdatedAt')
+        .where('p.status = :status', { status: StakingStatus.CLOSED })
+        .getRawMany<ClosedPositionRow>(),
       this.tokenStakingPositionRepository
         .createQueryBuilder('p')
         .select('COUNT(DISTINCT p.user_id)', 'count')
@@ -148,7 +172,7 @@ export class StakeAdminService {
     ]);
 
     const uniqueAllTimeStakers = parseInt(allTimeStakersResult?.count ?? '0', 10);
-    const activeStakerIds = new Set(activePositions.map(p => p.user_id));
+    const activeStakerIds = new Set(activePositions.map(p => p.userId));
 
     type TokenAgg = {
       activePositions: number;
@@ -173,10 +197,11 @@ export class StakeAdminService {
     const userTokenMap = new Map<UserTokenKey, UserTokenAgg>();
 
     for (const pos of activePositions) {
-      const { token_type: tokenType, user_id } = pos;
-      const txMeta = pos.stake_transaction?.metadata ?? {};
-      const stakedAt = Number(txMeta.staked_at ?? 0);
-      const amount = BigInt(pos.amount);
+      const tokenType = pos.tokenType;
+      const userId = pos.userId;
+      const txMeta = pos.stakeMetadata ?? {};
+      const stakedAt = Number(txMeta?.staked_at ?? 0);
+      const amount = BigInt(pos.amount ?? '0');
 
       let reward = 0n;
       if (stakedAt > 0) {
@@ -198,7 +223,7 @@ export class StakeAdminService {
 
       const agg = tokenAggMap.get(tokenType)!;
       agg.activePositions += 1;
-      agg.stakerIds.add(user_id);
+      agg.stakerIds.add(userId);
       agg.totalDepositRaw += amount;
       agg.totalRewardRaw += reward;
       agg.totalPayoutRaw += amount + reward;
@@ -207,11 +232,11 @@ export class StakeAdminService {
         agg.stakedAtTimestamps.push(stakedAt);
       }
 
-      const userTokenKey: UserTokenKey = `${user_id}:${tokenType}`;
+      const userTokenKey: UserTokenKey = `${userId}:${tokenType}`;
       if (!userTokenMap.has(userTokenKey)) {
         userTokenMap.set(userTokenKey, {
-          userId: user_id,
-          walletAddress: pos.user?.address ?? '',
+          userId,
+          walletAddress: pos.walletAddress ?? '',
           tokenType,
           totalDepositRaw: 0n,
           positionCount: 0,
@@ -253,15 +278,18 @@ export class StakeAdminService {
     const distributedRewardByToken = new Map<TokenType, bigint>();
     const distributedRewardByDateAndToken = new Map<string, bigint>();
     for (const pos of closedPositions) {
-      const tokenType = pos.token_type;
-      const txMeta = pos.stake_transaction?.metadata ?? {};
-      const stakedAt = Number(txMeta.staked_at ?? 0);
+      const tokenType = pos.tokenType;
+      const txMeta = pos.stakeMetadata ?? {};
+      const stakedAt = Number(txMeta?.staked_at ?? 0);
       if (stakedAt <= 0) continue;
 
-      const closedAt =
-        pos.unstake_transaction?.created_at?.getTime() ?? pos.unstake_transaction?.updated_at?.getTime() ?? now;
+      const closedAt = pos.unstakeCreatedAt
+        ? new Date(pos.unstakeCreatedAt).getTime()
+        : pos.unstakeUpdatedAt
+          ? new Date(pos.unstakeUpdatedAt).getTime()
+          : now;
       const elapsed = BigInt(Math.max(0, closedAt - stakedAt));
-      const amount = BigInt(pos.amount);
+      const amount = BigInt(pos.amount ?? '0');
       const reward = (amount * this.APY_SCALED * elapsed) / (MS_IN_YEAR * APY_SCALE);
       distributedRewardByToken.set(tokenType, (distributedRewardByToken.get(tokenType) ?? 0n) + reward);
 
@@ -329,21 +357,35 @@ export class StakeAdminService {
         };
       });
 
-    const txCountsByType = await Promise.all(
-      stakeTypes.map(t => this.transactionRepository.count({ where: { type: t } }))
+    const txCountsByType = await this.transactionRepository
+      .createQueryBuilder('tx')
+      .select('tx.type', 'type')
+      .addSelect('COUNT(*)', 'count')
+      .where('tx.type IN (:...stakeTypes)', { stakeTypes })
+      .groupBy('tx.type')
+      .getRawMany<{ type: TransactionType; count: string }>();
+    const txCountByTypeMap = new Map(txCountsByType.map(row => [row.type, Number(row.count)]));
+    const byType: Record<string, number> = Object.fromEntries(
+      stakeTypes.map(type => [type, txCountByTypeMap.get(type) ?? 0])
     );
-    const byType: Record<string, number> = Object.fromEntries(stakeTypes.map((t, i) => [t, txCountsByType[i]]));
 
     const allStatuses = Object.values(TransactionStatus);
-    const txCountsByStatus = await Promise.all(
-      allStatuses.map(s => this.transactionRepository.count({ where: { type: In(stakeTypes), status: s } }))
+    const txCountsByStatus = await this.transactionRepository
+      .createQueryBuilder('tx')
+      .select('tx.status', 'status')
+      .addSelect('COUNT(*)', 'count')
+      .where('tx.type IN (:...stakeTypes)', { stakeTypes })
+      .groupBy('tx.status')
+      .getRawMany<{ status: TransactionStatus; count: string }>();
+    const txCountByStatusMap = new Map(txCountsByStatus.map(row => [row.status, Number(row.count)]));
+    const byStatus: Record<string, number> = Object.fromEntries(
+      allStatuses.map(status => [status, txCountByStatusMap.get(status) ?? 0])
     );
-    const byStatus: Record<string, number> = Object.fromEntries(allStatuses.map((s, i) => [s, txCountsByStatus[i]]));
 
     const transactions: StakeTransactionStatsRes = {
       byType,
       byStatus,
-      total: txCountsByType.reduce((a, b) => a + b, 0),
+      total: Object.values(byType).reduce((a, b) => a + b, 0),
     };
 
     return {
