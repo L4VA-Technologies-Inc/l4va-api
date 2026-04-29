@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import {
   Constr,
   Data,
@@ -18,6 +19,8 @@ import { BuildTxRes } from './dto/build-tx.res';
 import { StakedBalanceRes, StakedBoxItem } from './dto/staked-balance.res';
 import { SubmitStakeTxDto } from './dto/submit-stake-tx.dto';
 import { SubmitTxRes } from './dto/submit-tx.res';
+import { getStakeAdminWalletBalances } from './stake-admin-wallet-balances';
+import { toHumanAmountNumber } from './stake-amounts';
 import { encodeStakeDatum, tryDecodeStakeDatum } from './stake-datum';
 
 import { createLucidBlockfrostProvider, lucidNetworkFromCardanoEnv } from '@/common/cardano/blockfrost-lucid';
@@ -25,12 +28,15 @@ import { normalizeLucidCardanoError } from '@/common/cardano/lucid-error-normali
 import { buildStakeTokenRegistry, type TokenMeta } from '@/common/cardano/token-registry';
 import { StakingStatus, TokenStakingPosition, TokenType } from '@/database/tokenStakingPosition.entity';
 import { Transaction } from '@/database/transaction.entity';
+import { AlertsService } from '@/modules/alerts/alerts.service';
 import { UtxoRefDto } from '@/modules/stake/dto/unstake-tokens.dto';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 
 /** Transaction types built from the admin wallet and requiring admin co-sign on submit. */
 const ADMIN_SIGNED_TYPES = [TransactionType.unstake, TransactionType.harvest, TransactionType.compound];
 const TX_VALIDITY_WINDOW_MS = 30 * 60 * 1000;
+const MIN_STAKE_AMOUNT = 100;
+const MAX_UNSTAKE_BOXES = 25;
 
 // ---------------------------------------------------------------------------
 // Module-level pure helpers
@@ -42,10 +48,6 @@ function sha256Hex(input: string): string {
 
 function toRawAmount(amount: number, decimals: number): bigint {
   return BigInt(Math.round(amount * Math.pow(10, decimals)));
-}
-
-function toHumanAmount(raw: bigint, decimals: number): number {
-  return Number(raw) / Math.pow(10, decimals);
 }
 
 function bigintToSafeNumber(value: bigint, label: string): number {
@@ -87,6 +89,7 @@ export class StakeService {
   private readonly network: Network;
   private readonly blockfrostProjectId: string;
   private readonly contractAddress: string;
+  private readonly blockfrost: BlockFrostAPI;
   private readonly referenceScriptTxHash: string;
   private readonly referenceScriptIndex: number;
   private readonly adminAddress: string;
@@ -101,6 +104,7 @@ export class StakeService {
 
   constructor(
     private readonly configService: ConfigService,
+    private readonly alertsService: AlertsService,
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(TokenStakingPosition)
@@ -110,6 +114,7 @@ export class StakeService {
     this.network = lucidNetworkFromCardanoEnv(this.isMainnet);
     this.blockfrostProjectId = this.configService.getOrThrow<string>('BLOCKFROST_API_KEY');
     this.contractAddress = this.configService.getOrThrow<string>('CONTRACT_ADDRESS');
+    this.blockfrost = new BlockFrostAPI({ projectId: this.blockfrostProjectId });
     this.referenceScriptTxHash = this.configService.getOrThrow<string>('REFERENCE_SCRIPT_TX_HASH');
     this.referenceScriptIndex = parseInt(this.configService.get<string>('REFERENCE_SCRIPT_INDEX') ?? '0', 10);
     this.adminAddress = this.configService.getOrThrow<string>('ADMIN_ADDRESS');
@@ -136,6 +141,54 @@ export class StakeService {
 
   private getTokenTypeForUnit(unit: string): TokenType | null {
     return this.tokenRegistry.get(unit.toLowerCase())?.type ?? null;
+  }
+
+  private isInsufficientFundsError(error: unknown): boolean {
+    const message = formatError(error, '').toLowerCase();
+    return (
+      message.includes('insufficient') ||
+      message.includes('not enough') ||
+      message.includes('value not conserved') ||
+      message.includes('utxo balance insufficient')
+    );
+  }
+
+  private async getAdminBalancesSnapshot(): Promise<{ ada: string; vlrm: string; l4va: string }> {
+    const balances = await getStakeAdminWalletBalances({
+      blockfrost: this.blockfrost,
+      adminAddress: this.adminAddress,
+      tokenDecimalsFallback: this.TOKEN_DECIMALS,
+      getUnitForTokenType: this.getUnitForTokenType.bind(this),
+      getDecimalsForUnit: this.getDecimalsForUnit.bind(this),
+    });
+
+    return {
+      ada: balances.adaHuman,
+      vlrm: balances.vlrmHuman,
+      l4va: balances.l4vaHuman,
+    };
+  }
+
+  private async alertInsufficientRewardFunds(
+    action: 'unstake' | 'harvest' | 'compound',
+    userAddress: string,
+    error: unknown
+  ): Promise<void> {
+    try {
+      const balances = await this.getAdminBalancesSnapshot();
+      await this.alertsService.sendAlert('stake_reward_insufficient_funds', {
+        action,
+        userAddress,
+        adminAddress: this.adminAddress,
+        error: formatError(error, `${action} failed`),
+        balances,
+      });
+    } catch (alertError: unknown) {
+      this.logger.error(
+        `[${action}] failed to send insufficient-funds alert`,
+        alertError instanceof Error ? alertError.stack : String(alertError)
+      );
+    }
   }
 
   /** Reverse lookup: TokenType → canonical unit string. */
@@ -235,9 +288,9 @@ export class StakeService {
         rawDeposit: amounts.deposit.toString(),
         rawReward: amounts.reward.toString(),
         rawPayout: amounts.payout.toString(),
-        depositAmount: toHumanAmount(amounts.deposit, decimals),
-        rewardAmount: toHumanAmount(amounts.reward, decimals),
-        payoutAmount: toHumanAmount(amounts.payout, decimals),
+        depositAmount: toHumanAmountNumber(amounts.deposit, decimals),
+        rewardAmount: toHumanAmountNumber(amounts.reward, decimals),
+        payoutAmount: toHumanAmountNumber(amounts.payout, decimals),
       };
     });
   }
@@ -518,6 +571,14 @@ export class StakeService {
     userAddress: string,
     utxoRefs: UtxoRefDto[]
   ): Promise<AdminTxData | { ok: false; message: string }> {
+    const uniqueRefsCount = new Set(utxoRefs.map(ref => `${ref.txHash}#${ref.outputIndex}`)).size;
+    if (uniqueRefsCount > MAX_UNSTAKE_BOXES) {
+      return {
+        ok: false,
+        message: `At most ${MAX_UNSTAKE_BOXES} UTxO boxes can be processed in one transaction.`,
+      };
+    }
+
     const lucid = await this.getLucidFor(this.adminAddress);
     const ownerHash = this.extractOwnerHash(userAddress);
 
@@ -616,10 +677,10 @@ export class StakeService {
           outputIndex: outputIndex >= 0 ? outputIndex : 0,
           unit,
           policyId: unit.slice(0, 56),
-          stakedAmount: toHumanAmount(amount, decimals),
+          stakedAmount: toHumanAmountNumber(amount, decimals),
           stakedAt,
-          estimatedReward: toHumanAmount(reward, decimals),
-          estimatedPayout: toHumanAmount(payout, decimals),
+          estimatedReward: toHumanAmountNumber(reward, decimals),
+          estimatedPayout: toHumanAmountNumber(payout, decimals),
           eligible: true,
         } satisfies StakedBoxItem;
       })
@@ -649,6 +710,13 @@ export class StakeService {
         return {
           success: false,
           message: `Unsupported staking token(s). Only VLRM and L4VA can be staked.`,
+        };
+      }
+      const belowMinimum = tokens.filter(token => token.amount < MIN_STAKE_AMOUNT);
+      if (belowMinimum.length > 0) {
+        return {
+          success: false,
+          message: `Minimum stake amount is ${MIN_STAKE_AMOUNT} tokens for VLRM and L4VA.`,
         };
       }
 
@@ -781,6 +849,9 @@ export class StakeService {
 
       return { success: true, txCbor: unsignedTxCbor, transactionId: saved.id };
     } catch (error: unknown) {
+      if (this.isInsufficientFundsError(error)) {
+        await this.alertInsufficientRewardFunds('unstake', userAddress, error);
+      }
       this.logger.error('buildUnstakeTx failed', error instanceof Error ? error.stack : String(error));
       return { success: false, message: formatError(error, 'buildUnstakeTx failed') };
     }
@@ -843,6 +914,9 @@ export class StakeService {
 
       return { success: true, txCbor: unsignedTxCbor, transactionId: saved.id };
     } catch (error: unknown) {
+      if (this.isInsufficientFundsError(error)) {
+        await this.alertInsufficientRewardFunds('harvest', userAddress, error);
+      }
       this.logger.error('buildHarvestTx failed', error instanceof Error ? error.stack : String(error));
       return { success: false, message: formatError(error, 'buildHarvestTx failed') };
     }
@@ -900,6 +974,9 @@ export class StakeService {
 
       return { success: true, txCbor: unsignedTxCbor, transactionId: saved.id };
     } catch (error: unknown) {
+      if (this.isInsufficientFundsError(error)) {
+        await this.alertInsufficientRewardFunds('compound', userAddress, error);
+      }
       this.logger.error('buildCompoundTx failed', error instanceof Error ? error.stack : String(error));
       return { success: false, message: formatError(error, 'buildCompoundTx failed') };
     }

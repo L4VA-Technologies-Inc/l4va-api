@@ -1,3 +1,4 @@
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { getAddressDetails, Lucid, type LucidEvolution, type Network } from '@lucid-evolution/lucid';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -28,6 +29,7 @@ const STAKE_LIKE_TYPES = [TransactionType.stake, TransactionType.harvest, Transa
 @Injectable()
 export class StakeReconciliationService {
   private readonly logger = new Logger(StakeReconciliationService.name);
+  private readonly blockfrost: BlockFrostAPI;
 
   private readonly isMainnet: boolean;
   private readonly network: Network;
@@ -45,6 +47,9 @@ export class StakeReconciliationService {
     this.network = lucidNetworkFromCardanoEnv(this.isMainnet);
     this.blockfrostProjectId = this.configService.getOrThrow<string>('BLOCKFROST_API_KEY');
     this.contractAddress = this.configService.getOrThrow<string>('CONTRACT_ADDRESS');
+    this.blockfrost = new BlockFrostAPI({
+      projectId: this.blockfrostProjectId,
+    });
   }
 
   private async createLucid(): Promise<LucidEvolution> {
@@ -85,6 +90,94 @@ export class StakeReconciliationService {
     } catch (err) {
       this.logger.error(`closePositionsForTransaction: failed for tx=${stakeTx.id} user=${stakeTx.user_id}`, err);
     }
+  }
+
+  /**
+   * Detects unstake transactions that were marked as confirmed in DB but are absent on-chain
+   * (dropped/orphaned from mempool), then re-opens previously closed staking positions.
+   */
+  @Cron(CronExpression.EVERY_6_HOURS)
+  async reconcileDroppedUnstakes(): Promise<void> {
+    const startedAt = Date.now();
+    const threshold = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const nowIso = new Date().toISOString();
+
+    const recentConfirmedUnstakes = await this.transactionRepository
+      .createQueryBuilder('tx')
+      .where('tx.type = :type', { type: TransactionType.unstake })
+      .andWhere('tx.status = :status', { status: TransactionStatus.confirmed })
+      .andWhere('tx.tx_hash IS NOT NULL')
+      .andWhere('tx.created_at >= :threshold', { threshold })
+      .andWhere("(tx.metadata IS NULL OR tx.metadata->>'orphaned_detected_at' IS NULL)")
+      .getMany();
+
+    if (recentConfirmedUnstakes.length === 0) {
+      this.logger.log('reconcileDroppedUnstakes: no recent confirmed unstake txs to check');
+      return;
+    }
+
+    let orphanedCount = 0;
+    let reopenedPositions = 0;
+    let skippedCount = 0;
+
+    for (const unstakeTx of recentConfirmedUnstakes) {
+      try {
+        await this.blockfrost.txs(unstakeTx.tx_hash);
+        continue;
+      } catch (error: any) {
+        if (error?.status_code !== 404) {
+          skippedCount++;
+          this.logger.warn(
+            `reconcileDroppedUnstakes: failed to verify tx=${unstakeTx.id} hash=${unstakeTx.tx_hash}: ${error?.message ?? 'unknown error'}`
+          );
+          continue;
+        }
+      }
+
+      const reopened = await this.transactionRepository.manager.transaction(async manager => {
+        const reopenedInTransaction = await manager
+          .getRepository(TokenStakingPosition)
+          .update(
+            { unstake_tx_id: unstakeTx.id, status: StakingStatus.CLOSED },
+            { status: StakingStatus.ACTIVE, unstake_tx_id: null }
+          );
+
+        const reopenedCount = reopenedInTransaction.affected ?? 0;
+        const orphanedMetadata = {
+          ...(unstakeTx.metadata ?? {}),
+          orphaned_detected_at: nowIso,
+          orphaned_reason: 'tx_not_found_on_chain',
+          positions_reopened: reopenedCount,
+        };
+
+        const updateResult = await manager
+          .createQueryBuilder()
+          .update(Transaction)
+          .set({
+            status: TransactionStatus.failed,
+            metadata: () => ':orphanedMetadata::jsonb',
+          })
+          .where('id = :id', { id: unstakeTx.id })
+          .andWhere('status = :status', { status: TransactionStatus.confirmed })
+          .setParameter('orphanedMetadata', JSON.stringify(orphanedMetadata))
+          .execute();
+
+        if (!updateResult.affected) {
+          throw new Error(`Failed to mark tx ${unstakeTx.id} as failed during orphaned reconciliation`);
+        }
+
+        return reopenedCount;
+      });
+
+      reopenedPositions += reopened;
+      orphanedCount++;
+    }
+
+    const elapsedMs = Date.now() - startedAt;
+    this.logger.log(
+      `reconcileDroppedUnstakes: scanned=${recentConfirmedUnstakes.length}, orphaned=${orphanedCount}, ` +
+        `reopenedPositions=${reopenedPositions}, skipped=${skippedCount}, elapsedMs=${elapsedMs}`
+    );
   }
 
   @Cron(CronExpression.EVERY_DAY_AT_2AM)

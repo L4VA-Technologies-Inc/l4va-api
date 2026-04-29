@@ -4,6 +4,9 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
+import { getStakeAdminWalletBalances } from '../stake-admin-wallet-balances';
+import { toHumanAmountString } from '../stake-amounts';
+
 import {
   DistributedRewardRes,
   DistributedRewardTimelinePointRes,
@@ -18,26 +21,6 @@ import { buildStakeTokenRegistry, type TokenMeta } from '@/common/cardano/token-
 import { StakingStatus, TokenStakingPosition, TokenType } from '@/database/tokenStakingPosition.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
-
-function toHumanAmount(raw: bigint, decimals: number): string {
-  const negative = raw < 0n;
-  const absoluteRaw = negative ? -raw : raw;
-
-  if (decimals === 0) {
-    return `${negative ? '-' : ''}${absoluteRaw.toString()}`;
-  }
-
-  const scale = 10n ** BigInt(decimals);
-  const whole = absoluteRaw / scale;
-  const fraction = absoluteRaw % scale;
-  const fractionString = fraction.toString().padStart(decimals, '0').replace(/0+$/, '');
-
-  if (fractionString.length === 0) {
-    return `${negative ? '-' : ''}${whole.toString()}`;
-  }
-
-  return `${negative ? '-' : ''}${whole.toString()}.${fractionString}`;
-}
 
 @Injectable()
 export class StakeAdminService {
@@ -88,28 +71,21 @@ export class StakeAdminService {
     vlrmRaw: string;
     vlrmHuman: string;
   }> {
-    const l4vaUnit = this.getUnitForTokenType(TokenType.L4VA);
-    const vlrmUnit = this.getUnitForTokenType(TokenType.VLRM);
-    const l4vaConfigured = l4vaUnit.length > 0;
-    const vlrmConfigured = vlrmUnit.length > 0;
-    const l4vaDecimals = l4vaConfigured ? this.getDecimalsForUnit(l4vaUnit) : this.TOKEN_DECIMALS;
-    const vlrmDecimals = vlrmConfigured ? this.getDecimalsForUnit(vlrmUnit) : this.TOKEN_DECIMALS;
-
-    const addressInfo = await this.blockfrost.addresses(this.adminAddress);
-    const amountByUnit = new Map<string, bigint>(
-      (addressInfo.amount ?? []).map(entry => [entry.unit.toLowerCase(), BigInt(entry.quantity)])
-    );
-
-    const l4vaRaw = l4vaUnit ? (amountByUnit.get(l4vaUnit.toLowerCase()) ?? 0n) : 0n;
-    const vlrmRaw = vlrmUnit ? (amountByUnit.get(vlrmUnit.toLowerCase()) ?? 0n) : 0n;
+    const balances = await getStakeAdminWalletBalances({
+      blockfrost: this.blockfrost,
+      adminAddress: this.adminAddress,
+      tokenDecimalsFallback: this.TOKEN_DECIMALS,
+      getUnitForTokenType: this.getUnitForTokenType.bind(this),
+      getDecimalsForUnit: this.getDecimalsForUnit.bind(this),
+    });
 
     return {
-      l4vaConfigured,
-      l4vaRaw: l4vaRaw.toString(),
-      l4vaHuman: toHumanAmount(l4vaRaw, l4vaDecimals),
-      vlrmConfigured,
-      vlrmRaw: vlrmRaw.toString(),
-      vlrmHuman: toHumanAmount(vlrmRaw, vlrmDecimals),
+      l4vaConfigured: balances.l4vaConfigured,
+      l4vaRaw: balances.l4vaRaw,
+      l4vaHuman: balances.l4vaHuman,
+      vlrmConfigured: balances.vlrmConfigured,
+      vlrmRaw: balances.vlrmRaw,
+      vlrmHuman: balances.vlrmHuman,
     };
   }
 
@@ -258,11 +234,11 @@ export class StakeAdminService {
         activePositionsCount: agg.activePositions,
         uniqueStakers: agg.stakerIds.size,
         totalDepositedRaw: agg.totalDepositRaw.toString(),
-        totalDepositedHuman: toHumanAmount(agg.totalDepositRaw, decimals),
+        totalDepositedHuman: toHumanAmountString(agg.totalDepositRaw, decimals),
         totalEstimatedRewardRaw: agg.totalRewardRaw.toString(),
-        totalEstimatedRewardHuman: toHumanAmount(agg.totalRewardRaw, decimals),
+        totalEstimatedRewardHuman: toHumanAmountString(agg.totalRewardRaw, decimals),
         totalEstimatedPayoutRaw: agg.totalPayoutRaw.toString(),
-        totalEstimatedPayoutHuman: toHumanAmount(agg.totalPayoutRaw, decimals),
+        totalEstimatedPayoutHuman: toHumanAmountString(agg.totalPayoutRaw, decimals),
         averageStakingDurationMs: avgDuration,
         oldestPositionStakedAt: agg.stakedAtTimestamps.length > 0 ? Math.min(...agg.stakedAtTimestamps) : null,
         newestPositionStakedAt: agg.stakedAtTimestamps.length > 0 ? Math.max(...agg.stakedAtTimestamps) : null,
@@ -317,7 +293,7 @@ export class StakeAdminService {
       return {
         tokenType,
         amountRaw: amountRaw.toString(),
-        amountHuman: toHumanAmount(amountRaw, decimals),
+        amountHuman: toHumanAmountString(amountRaw, decimals),
       };
     });
 
@@ -333,7 +309,7 @@ export class StakeAdminService {
           date,
           tokenType,
           amountRaw: amountRaw.toString(),
-          amountHuman: toHumanAmount(amountRaw, decimals),
+          amountHuman: toHumanAmountString(amountRaw, decimals),
         };
       })
       .sort((a, b) => {
@@ -352,7 +328,7 @@ export class StakeAdminService {
           walletAddress: entry.walletAddress,
           tokenType: entry.tokenType,
           totalDepositedRaw: entry.totalDepositRaw.toString(),
-          totalDepositedHuman: toHumanAmount(entry.totalDepositRaw, decimals),
+          totalDepositedHuman: toHumanAmountString(entry.totalDepositRaw, decimals),
           positionCount: entry.positionCount,
         };
       });
