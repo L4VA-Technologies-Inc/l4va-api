@@ -213,6 +213,7 @@ export class RewardClaimProxy {
     claimedVestedAmount: number;
   }> {
     let reservation: { claimTransactionId: string; reservationId: string; totalClaimableAmount: number } | null = null;
+    let txHash: string | null = null;
 
     try {
       // ============================================================
@@ -246,45 +247,64 @@ export class RewardClaimProxy {
         throw new BadRequestException(txResult.error || 'Blockchain transaction failed');
       }
 
-      const txHash = txResult.txHash;
+      txHash = txResult.txHash;
       this.logger.log(`Blockchain tx submitted: ${txHash}`);
 
       // ============================================================
       // STEP 3: CONFIRM RESERVATION (only after successful tx submission)
       // ============================================================
-      const confirmUrl = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/${walletAddress}/confirm`;
-      const { data: confirmed } = await firstValueFrom(
-        this.httpService.post(
-          confirmUrl,
-          {
-            reservationId: reservation.reservationId,
-            txHash,
-          },
-          { headers: { 'X-Internal-Service-Token': this.internalToken } }
-        )
-      );
+      try {
+        const confirmUrl = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/confirm`;
+        const { data: confirmed } = await firstValueFrom(
+          this.httpService.post(
+            confirmUrl,
+            {
+              reservationId: reservation.reservationId,
+              txHash,
+            },
+            { headers: { 'X-Internal-Service-Token': this.internalToken } }
+          )
+        );
 
-      this.logger.log(
-        `Claim confirmed: ${reservation.reservationId} - tx: ${txHash} - ` +
-          `${(confirmed.totalClaimedAmount / 10 ** this.l4vaDecimals).toFixed(this.l4vaDecimals)} L4VA`
-      );
+        this.logger.log(
+          `Claim confirmed: ${reservation.reservationId} - tx: ${txHash} - ` +
+            `${(confirmed.totalClaimedAmount / 10 ** this.l4vaDecimals).toFixed(this.l4vaDecimals)} L4VA`
+        );
 
-      // Return human-readable amounts
-      return {
-        success: true,
-        txHash,
-        claimedAmount: confirmed.totalClaimedAmount / 10 ** this.l4vaDecimals,
-        claimedImmediateAmount: confirmed.claimedImmediateAmount / 10 ** this.l4vaDecimals,
-        claimedVestedAmount: confirmed.claimedVestedAmount / 10 ** this.l4vaDecimals,
-      };
+        // Return human-readable amounts
+        return {
+          success: true,
+          txHash,
+          claimedAmount: confirmed.totalClaimedAmount / 10 ** this.l4vaDecimals,
+          claimedImmediateAmount: confirmed.claimedImmediateAmount / 10 ** this.l4vaDecimals,
+          claimedVestedAmount: confirmed.claimedVestedAmount / 10 ** this.l4vaDecimals,
+        };
+      } catch (confirmError: any) {
+        // ============================================================
+        // CRITICAL: TX SUBMITTED BUT CONFIRMATION FAILED
+        // DO NOT ROLLBACK - log as pending and throw retryable error
+        // ============================================================
+        this.logger.error(
+          `CRITICAL: Blockchain tx ${txHash} submitted successfully but confirmation failed: ${confirmError?.message || confirmError}. ` +
+            `Reservation ${reservation.reservationId} is marked PENDING. Manual intervention or retry may be needed.`,
+          confirmError?.stack
+        );
+
+        throw new BadRequestException(
+          `Claim transaction submitted on-chain (tx: ${txHash}) but confirmation failed. ` +
+            `The transaction may still complete. Please check transaction status before retrying.`
+        );
+      }
     } catch (error: any) {
       // ============================================================
-      // STEP 4: ROLLBACK ON ANY ERROR AFTER RESERVATION
+      // STEP 4: ROLLBACK ONLY IF RESERVATION EXISTS AND NO TXHASH
       // ============================================================
-      if (reservation?.claimTransactionId) {
+      if (reservation?.claimTransactionId && !txHash) {
         try {
-          this.logger.error(`Claim failed, rolling back reservation ${reservation.reservationId}...`);
-          const rollbackUrl = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/${walletAddress}/rollback`;
+          this.logger.error(
+            `Claim failed before blockchain submission, rolling back reservation ${reservation.reservationId}...`
+          );
+          const rollbackUrl = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/rollback`;
           await firstValueFrom(
             this.httpService.post(
               rollbackUrl,
@@ -299,6 +319,11 @@ export class RewardClaimProxy {
         } catch (rollbackError: any) {
           this.logger.error(`CRITICAL: Failed to rollback reservation: ${rollbackError?.message || rollbackError}`);
         }
+      } else if (txHash) {
+        // Transaction was submitted on-chain - DO NOT rollback
+        this.logger.error(
+          `Claim processing failed but blockchain tx ${txHash} already submitted. NOT rolling back reservation.`
+        );
       }
 
       // Re-throw original error
