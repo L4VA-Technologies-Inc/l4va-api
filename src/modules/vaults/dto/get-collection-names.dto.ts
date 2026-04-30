@@ -68,6 +68,12 @@ export class CollectionNameItem {
     required: false,
   })
   platform?: VerificationPlatform | null;
+
+  @ApiProperty({
+    description: 'Whether this is an LP (Liquidity Provider) token that requires dynamic pricing',
+    example: false,
+  })
+  isLpToken: boolean;
 }
 
 export function tokenVerificationToCollectionNameItem(row: TokenVerification): CollectionNameItem {
@@ -76,5 +82,6 @@ export function tokenVerificationToCollectionNameItem(row: TokenVerification): C
     collectionName: row.collection_name,
     isVerified: row.is_verified,
     platform: row.platform ?? null,
+    isLpToken: row.is_lp_token ?? false,
   };
 }

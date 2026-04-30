@@ -48,7 +48,7 @@ import { transformToSnakeCase } from '@/helpers';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { CollectionItemDto } from '@/modules/vaults/dto/get-collection-names.dto';
-import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
+import { AssetValuationMethod, AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import {
@@ -395,6 +395,47 @@ export class VaultsService {
       // Then process them
       const uniquePolicyIds = Array.from(new Map(data.assetsWhitelist.map(obj => [obj.policyId, obj])).values());
 
+      // Fetch LP token metadata AND verify valuation methods
+      const policyIds = uniquePolicyIds.map(item => item.policyId).filter(Boolean);
+      const lpTokensData = await this.tokenVerificationRepo.find({
+        where: { policy_id: In(policyIds) },
+        select: ['policy_id', 'lp_pool_onchain_id', 'is_lp_token'],
+      });
+      const lpTokenMap = new Map(
+        lpTokensData.map(lp => [lp.policy_id, { onchainId: lp.lp_pool_onchain_id, isLp: lp.is_lp_token }])
+      );
+
+      // Validate LP token pricing configuration
+      for (const assetItem of uniquePolicyIds) {
+        const lpData = lpTokenMap.get(assetItem.policyId);
+
+        if (lpData?.isLp) {
+          // LP token detected - enforce lp_token_dynamic pricing
+          // Validate that LP token has an on-chain pool ID
+          if (!lpData.onchainId) {
+            throw new BadRequestException(
+              `Policy ${assetItem.policyId} is an LP token but missing lp_pool_onchain_id in token_verifications. ` +
+                `Please ensure the LP token has a valid pool ID before adding it to the vault.`
+            );
+          }
+          if (assetItem.valuationMethod && assetItem.valuationMethod !== AssetValuationMethod.LP_TOKEN_DYNAMIC) {
+            throw new BadRequestException(
+              `Policy ${assetItem.policyId} is an LP token and must use "lp_token_dynamic" valuation method.`
+            );
+          }
+          // Auto-set if not provided
+          if (!assetItem.valuationMethod) {
+            assetItem.valuationMethod = AssetValuationMethod.LP_TOKEN_DYNAMIC;
+          }
+        } else if (assetItem.valuationMethod === AssetValuationMethod.LP_TOKEN_DYNAMIC) {
+          // Non-LP token attempting to use lp_token_dynamic
+          throw new BadRequestException(
+            `Policy ${assetItem.policyId} is not an LP token and cannot use "lp_token_dynamic" valuation method. ` +
+              `Please mark it as an LP token in token_verifications or use a different valuation method.`
+          );
+        }
+      }
+
       await Promise.all(
         uniquePolicyIds.map(async assetItem => {
           if (!assetItem.policyId) return;
@@ -407,6 +448,7 @@ export class VaultsService {
             null;
 
           const fallbackCollectionName = rawFallbackCollectionName ? rawFallbackCollectionName.slice(0, 255) : null;
+          const lpData = lpTokenMap.get(assetItem.policyId);
 
           const result = await this.assetsWhitelistRepository
             .createQueryBuilder()
@@ -419,6 +461,7 @@ export class VaultsService {
               asset_count_cap_max: assetItem.countCapMax,
               valuation_method: assetItem.valuationMethod || 'market',
               custom_price_ada: assetItem.customPriceAda || null,
+              lp_pool_onchain_id: lpData?.onchainId || null,
             })
             .orIgnore()
             .execute();
@@ -1877,6 +1920,16 @@ export class VaultsService {
   private async getCollectionInfoByCollectionItem(collection: CollectionItemDto): Promise<TokenVerification> {
     const { policyId, assetName } = collection;
 
+    // Always check database first for manually registered tokens (including LP tokens)
+    const existing = await this.tokenVerificationRepo.findOne({
+      where: { policy_id: policyId },
+      order: { updated_at: 'DESC' },
+    });
+    if (existing) {
+      return existing;
+    }
+
+    // For testnet, return default verification if not found in DB
     if (!this.isMainnet) {
       return Object.assign(new TokenVerification(), {
         policy_id: policyId,
@@ -1884,15 +1937,9 @@ export class VaultsService {
         collection_name: null,
         is_verified: true,
         platform: VerificationPlatform.MANUAL,
+        is_lp_token: false,
+        lp_pool_onchain_id: null,
       });
-    }
-
-    const existing = await this.tokenVerificationRepo.findOne({
-      where: { policy_id: policyId },
-      order: { updated_at: 'DESC' },
-    });
-    if (existing) {
-      return existing;
     }
 
     const tokenId = `${policyId}${assetName}`;

@@ -22,6 +22,12 @@ export class TokenVerification {
   @Column({ name: 'collection_name', nullable: true, type: 'text' }) //using as Collection name for nft and Ticker for FT
   collection_name: string | null;
 
+  @Column({ name: 'is_lp_token', type: 'boolean', default: false })
+  is_lp_token: boolean;
+
+  @Column({ name: 'lp_pool_onchain_id', nullable: true, type: 'text' })
+  lp_pool_onchain_id: string | null;
+
   @Column({ name: 'is_verified', type: 'boolean' })
   is_verified: boolean;
 

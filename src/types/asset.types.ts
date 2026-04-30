@@ -31,4 +31,5 @@ export enum AssetOriginType {
 export enum AssetValuationMethod {
   MARKET = 'market',
   CUSTOM = 'custom',
+  LP_TOKEN_DYNAMIC = 'lp_token_dynamic', // Calculate from pool TVL
 }
