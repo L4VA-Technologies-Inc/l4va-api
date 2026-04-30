@@ -1906,6 +1906,16 @@ export class VaultsService {
   private async getCollectionInfoByCollectionItem(collection: CollectionItemDto): Promise<TokenVerification> {
     const { policyId, assetName } = collection;
 
+    // Always check database first for manually registered tokens (including LP tokens)
+    const existing = await this.tokenVerificationRepo.findOne({
+      where: { policy_id: policyId },
+      order: { updated_at: 'DESC' },
+    });
+    if (existing) {
+      return existing;
+    }
+
+    // For testnet, return default verification if not found in DB
     if (!this.isMainnet) {
       return Object.assign(new TokenVerification(), {
         policy_id: policyId,
@@ -1913,15 +1923,9 @@ export class VaultsService {
         collection_name: null,
         is_verified: true,
         platform: VerificationPlatform.MANUAL,
+        is_lp_token: false,
+        lp_pool_onchain_id: null,
       });
-    }
-
-    const existing = await this.tokenVerificationRepo.findOne({
-      where: { policy_id: policyId },
-      order: { updated_at: 'DESC' },
-    });
-    if (existing) {
-      return existing;
     }
 
     const tokenId = `${policyId}${assetName}`;
