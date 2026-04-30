@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
+import NodeCache from 'node-cache';
 import { Repository } from 'typeorm';
 
 import { GetCollectionAssetsQuery, GetCollectionAssetsResponse } from './wayup.types';
@@ -21,6 +22,7 @@ export class WayUpPricingService {
   private readonly isMainnet: boolean;
   private readonly tapToolsApiKey: string;
   private readonly tapToolsApiUrl: string;
+  private floorPriceCache = new NodeCache({ stdTTL: 300 }); // 5 minute cache for floor prices
 
   private isTrackingInProgress = false;
 
@@ -132,6 +134,7 @@ export class WayUpPricingService {
   /**
    * Get the floor price for an NFT collection from WayUp Marketplace with TapTools fallback
    * Floor price is the lowest currently listed price in the collection
+   * Results are cached for 5 minutes to reduce API calls
    *
    * Fallback strategy:
    * 1. Try WayUp API first
@@ -146,6 +149,18 @@ export class WayUpPricingService {
     floorPriceAda: number | null; // ADA
     hasListings: boolean;
   }> {
+    // Check cache first
+    const cacheKey = `floor_price_${policyId}`;
+    const cached = this.floorPriceCache.get<{
+      floorPrice: number | null;
+      floorPriceAda: number | null;
+      hasListings: boolean;
+    }>(cacheKey);
+    if (cached !== undefined) {
+      this.logger.debug(`Using cached floor price for collection ${policyId}: ${cached.floorPriceAda} ADA`);
+      return cached;
+    }
+
     // Skip API calls for testnet - WayUp doesn't support preprod
     if (!this.isMainnet) {
       this.logger.debug(`Skipping WayUp API call for testnet collection ${policyId}`);
@@ -189,8 +204,9 @@ export class WayUpPricingService {
       this.logger.warn(`WayUp API failed for collection ${policyId}, trying TapTools fallback`, error);
     }
 
-    // If WayUp succeeded with valid data, return it
+    // If WayUp succeeded with valid data, cache and return it
     if (wayUpResult) {
+      this.floorPriceCache.set(cacheKey, wayUpResult);
       return wayUpResult;
     }
 
@@ -198,16 +214,19 @@ export class WayUpPricingService {
     const tapToolsResult = await this.fetchFloorPriceFromTapTools(policyId);
 
     if (tapToolsResult) {
+      this.floorPriceCache.set(cacheKey, tapToolsResult);
       return tapToolsResult;
     }
 
-    // Both APIs failed or returned no data
+    // Both APIs failed or returned no data - cache the result to avoid repeated failed lookups
     this.logger.warn(`No floor price data available from WayUp or TapTools for collection ${policyId}`);
-    return {
+    const noDataResult = {
       floorPrice: null,
       floorPriceAda: null,
       hasListings: false,
     };
+    this.floorPriceCache.set(cacheKey, noDataResult);
+    return noDataResult;
   }
 
   /**

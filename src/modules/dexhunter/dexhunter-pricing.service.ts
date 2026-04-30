@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import NodeCache from 'node-cache';
 
 /**
  * Build Swap Flow
@@ -18,6 +19,7 @@ export class DexHunterPricingService {
   private readonly tapToolsApiKey: string;
   private readonly tapToolsApiUrl: string;
   private readonly isMainnet: boolean;
+  private priceCache = new NodeCache({ stdTTL: 300 }); // 5 minute cache for token prices
 
   constructor(private readonly configService: ConfigService) {
     this.dexHunterBaseUrl = this.configService.get<string>('DEXHUNTER_BASE_URL');
@@ -106,6 +108,7 @@ export class DexHunterPricingService {
   /**
    * Get current token price in ADA with TapTools fallback
    * Uses DexHunter API first, falls back to TapTools if DexHunter fails or returns null
+   * Results are cached for 5 minutes to reduce API calls
    *
    * Fallback strategy:
    * 1. Try DexHunter API first
@@ -116,6 +119,14 @@ export class DexHunterPricingService {
    * @returns Token price in ADA, or null if token not found/no liquidity
    */
   async getTokenPrice(tokenId: string): Promise<number | null> {
+    // Check cache first
+    const cacheKey = `token_price_${tokenId}`;
+    const cached = this.priceCache.get<number | null>(cacheKey);
+    if (cached !== undefined) {
+      this.logger.debug(`Using cached price for token ${tokenId}: ${cached} ADA`);
+      return cached;
+    }
+
     // Skip API calls for testnet - DexHunter doesn't support preprod
     if (!this.isMainnet) {
       this.logger.debug(`Skipping DexHunter API call for testnet token ${tokenId}`);
@@ -156,8 +167,9 @@ export class DexHunterPricingService {
       this.logger.warn(`DexHunter API failed for token ${tokenId}, trying TapTools fallback`, error);
     }
 
-    // If DexHunter succeeded with valid data, return it
+    // If DexHunter succeeded with valid data, cache and return it
     if (dexHunterResult) {
+      this.priceCache.set(cacheKey, dexHunterResult);
       return dexHunterResult;
     }
 
@@ -166,11 +178,13 @@ export class DexHunterPricingService {
 
     if (tapToolsResult !== null && tapToolsResult > 0) {
       this.logger.log(`Successfully fetched token price from TapTools for ${tokenId}: ${tapToolsResult} ADA`);
+      this.priceCache.set(cacheKey, tapToolsResult);
       return tapToolsResult;
     }
 
-    // Both APIs failed or returned no data
+    // Both APIs failed or returned no data - cache null to avoid repeated failed lookups
     this.logger.debug(`No price data available from DexHunter or TapTools for token ${tokenId}`);
+    this.priceCache.set(cacheKey, null);
     return null;
   }
 
