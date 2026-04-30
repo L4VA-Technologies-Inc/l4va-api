@@ -23,7 +23,7 @@ import { Vault } from '@/database/vault.entity';
 import { PriceService } from '@/modules/price/price.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
-import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
+import { AssetOriginType, AssetStatus, AssetType, AssetValuationMethod } from '@/types/asset.types';
 import { VaultStatus } from '@/types/vault.types';
 import { normalizeAssetImageSource } from '@/utils/asset-image-source.util';
 
@@ -52,7 +52,8 @@ export interface TapToolsTokenPoolDto {
   tokenA: string;
   tokenALocked: number;
   tokenATicker: string;
-  tokenB: string | null;
+  /** empty for ADA */
+  tokenB: string | null; // empty for ADA
   tokenBLocked: number;
   tokenBTicker: string;
 }
@@ -1490,9 +1491,118 @@ export class TaptoolsService {
   }
 
   /**
+   * Fetch pool data from TapTools using onchain pool ID
+   * @param onchainID - Pool onchain ID
+   * @returns Pool data with token reserves
+   */
+  private async fetchLpPoolData(onchainID: string): Promise<TapToolsTokenPoolDto | null> {
+    if (!this.isMainnet) {
+      this.logger.debug('Skipping TapTools LP pool fetch for testnet');
+      return null;
+    }
+
+    try {
+      const response = await this.axiosTapToolsInstance.get('/token/pools', {
+        params: { onchainID },
+        timeout: 10000,
+        headers: {
+          Accept: 'application/json',
+        },
+      });
+
+      if (response.data && Array.isArray(response.data) && response.data.length > 0) {
+        return response.data[0];
+      }
+
+      return null;
+    } catch (error) {
+      this.logger.warn(`Failed to fetch LP pool data from TapTools: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Fetch LP token total supply from TapTools
+   * @param lpTokenUnit - Full LP token unit (policyId + assetName)
+   * @returns Total supply or null
+   */
+  private async fetchLpTokenTotalSupply(lpTokenUnit: string): Promise<number | null> {
+    if (!this.isMainnet) {
+      this.logger.debug('Skipping TapTools LP metadata fetch for testnet');
+      return null;
+    }
+
+    try {
+      const response = await this.axiosTapToolsInstance.get('/token/metadata', {
+        params: { unit: lpTokenUnit },
+        timeout: 10000,
+        headers: {
+          Accept: 'application/json',
+        },
+      });
+
+      if (response.data && response.data.totalSupply) {
+        return response.data.totalSupply;
+      }
+
+      return null;
+    } catch (error) {
+      this.logger.warn(`Failed to fetch LP token metadata from TapTools: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Calculate LP token price dynamically from pool TVL
+   * Formula: LP Token Price = TVL / Total LP Token Supply
+   * TVL = (tokenALocked * tokenAPrice) + (tokenBLocked * tokenBPrice)
+   *
+   * @param onchainID - Pool onchain ID
+   * @returns LP token price in ADA per normalized unit
+   */
+  private async calculateLpTokenPrice(onchainID: string): Promise<number | null> {
+    try {
+      const poolData = await this.fetchLpPoolData(onchainID);
+      if (!poolData || !poolData.lpTokenUnit) {
+        this.logger.warn(`No pool data found for onchain ID ${onchainID}`);
+        return null;
+      }
+
+      const totalSupply = await this.fetchLpTokenTotalSupply(poolData.lpTokenUnit);
+      if (!totalSupply) {
+        this.logger.warn(`No total supply found for LP token ${poolData.lpTokenUnit}`);
+        return null;
+      }
+
+      let tokenAPrice = 0;
+      let tokenBPrice = 0;
+
+      if (poolData.tokenATicker === 'ADA' || !poolData.tokenA || poolData.tokenA === '') {
+        tokenAPrice = 1;
+      } else {
+        tokenAPrice = (await this.dexHunterPricingService.getTokenPrice(poolData.tokenA)) || 0;
+      }
+
+      if (poolData.tokenBTicker === 'ADA' || !poolData.tokenB || poolData.tokenB === '') {
+        tokenBPrice = 1;
+      } else {
+        tokenBPrice = (await this.dexHunterPricingService.getTokenPrice(poolData.tokenB)) || 0;
+      }
+
+      const tvl = poolData.tokenALocked * tokenAPrice + poolData.tokenBLocked * tokenBPrice;
+      const lpTokenPrice = tvl / totalSupply;
+
+      return lpTokenPrice;
+    } catch (error) {
+      this.logger.error(`Failed to calculate LP token price for ${onchainID}`, error);
+      return null;
+    }
+  }
+
+  /**
    * Get custom prices from vault asset whitelist
    * Returns a Map of policyId -> customPriceAda
-   * Only includes assets with valuation_method = 'custom'
+   * Includes assets with valuation_method = 'custom' and 'lp_token_dynamic'
    * @param vaultId The ID of the vault
    * @returns Map of policy IDs to custom prices in ADA
    */
@@ -1510,8 +1620,20 @@ export class TaptoolsService {
       }
 
       for (const whitelistItem of vault.assets_whitelist) {
-        if (whitelistItem.valuation_method === 'custom' && whitelistItem.custom_price_ada) {
+        // Handle static custom pricing
+        if (whitelistItem.valuation_method === AssetValuationMethod.CUSTOM && whitelistItem.custom_price_ada) {
           customPriceMap.set(whitelistItem.policy_id, Number(whitelistItem.custom_price_ada));
+        }
+
+        // Handle dynamic LP token pricing
+        if (
+          whitelistItem.valuation_method === AssetValuationMethod.LP_TOKEN_DYNAMIC &&
+          whitelistItem.lp_pool_onchain_id
+        ) {
+          const lpPrice = await this.calculateLpTokenPrice(whitelistItem.lp_pool_onchain_id);
+          if (lpPrice !== null && lpPrice !== undefined && Number.isFinite(lpPrice)) {
+            customPriceMap.set(whitelistItem.policy_id, lpPrice);
+          }
         }
       }
 

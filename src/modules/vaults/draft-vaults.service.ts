@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { classToPlain, plainToInstance } from 'class-transformer';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 
 import { transformImageToUrl } from '../../helpers';
 import { VaultStatus } from '../../types/vault.types';
@@ -17,8 +17,10 @@ import { ContributorWhitelistEntity } from '@/database/contributorWhitelist.enti
 import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
 import { TagEntity } from '@/database/tag.entity';
+import { TokenVerification } from '@/database/token-verification.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { AssetValuationMethod } from '@/types/asset.types';
 
 @Injectable()
 export class DraftVaultsService {
@@ -38,7 +40,9 @@ export class DraftVaultsService {
     @InjectRepository(ContributorWhitelistEntity)
     private readonly contributorWhitelistRepository: Repository<ContributorWhitelistEntity>,
     @InjectRepository(TagEntity)
-    private readonly tagsRepository: Repository<TagEntity>
+    private readonly tagsRepository: Repository<TagEntity>,
+    @InjectRepository(TokenVerification)
+    private readonly tokenVerificationRepo: Repository<TokenVerification>
   ) {}
 
   async getMyDraftVaults(
@@ -297,8 +301,53 @@ export class DraftVaultsService {
 
       // Handle assets whitelist only if provided
       if (data.assetsWhitelist !== undefined && data.assetsWhitelist.length > 0) {
+        // Fetch LP token metadata AND verify valuation methods
+        const policyIds = data.assetsWhitelist.map(item => item.policyId).filter(Boolean);
+        const lpTokensData = await this.tokenVerificationRepo.find({
+          where: { policy_id: In(policyIds) },
+          select: ['policy_id', 'lp_pool_onchain_id', 'is_lp_token'],
+        });
+        const lpTokenMap = new Map(
+          lpTokensData.map(lp => [lp.policy_id, { onchainId: lp.lp_pool_onchain_id, isLp: lp.is_lp_token }])
+        );
+
+        // Validate LP token pricing configuration
+        for (const whitelistItem of data.assetsWhitelist) {
+          const lpData = lpTokenMap.get(whitelistItem.policyId);
+
+          if (lpData?.isLp) {
+            // LP token detected - enforce lp_token_dynamic pricing
+            // Validate that LP token has an on-chain pool ID
+            if (!lpData.onchainId) {
+              throw new BadRequestException(
+                `Policy ${whitelistItem.policyId} is an LP token but missing lp_pool_onchain_id in token_verifications. ` +
+                  `Please ensure the LP token has a valid pool ID before adding it to the vault.`
+              );
+            }
+            if (
+              whitelistItem.valuationMethod &&
+              whitelistItem.valuationMethod !== AssetValuationMethod.LP_TOKEN_DYNAMIC
+            ) {
+              throw new BadRequestException(
+                `Policy ${whitelistItem.policyId} is an LP token and must use "lp_token_dynamic" valuation method.`
+              );
+            }
+            // Auto-set if not provided
+            if (!whitelistItem.valuationMethod) {
+              whitelistItem.valuationMethod = AssetValuationMethod.LP_TOKEN_DYNAMIC;
+            }
+          } else if (whitelistItem.valuationMethod === AssetValuationMethod.LP_TOKEN_DYNAMIC) {
+            // Non-LP token attempting to use lp_token_dynamic
+            throw new BadRequestException(
+              `Policy ${whitelistItem.policyId} is not an LP token and cannot use "lp_token_dynamic" valuation method. ` +
+                `Please mark it as an LP token in token_verifications or use a different valuation method.`
+            );
+          }
+        }
+
         await Promise.all(
           data.assetsWhitelist.map(whitelistItem => {
+            const lpData = lpTokenMap.get(whitelistItem.policyId);
             return this.assetsWhitelistRepository.save({
               vault: vault,
               policy_id: whitelistItem.policyId,
@@ -310,6 +359,7 @@ export class DraftVaultsService {
               asset_count_cap_max: whitelistItem?.countCapMax,
               valuation_method: whitelistItem?.valuationMethod || 'market',
               custom_price_ada: whitelistItem?.customPriceAda || null,
+              lp_pool_onchain_id: lpData?.onchainId || null,
             });
           })
         );
