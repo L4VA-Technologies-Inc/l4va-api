@@ -49,7 +49,7 @@ import { transformToSnakeCase } from '@/helpers';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { CollectionItemDto } from '@/modules/vaults/dto/get-collection-names.dto';
-import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
+import { AssetValuationMethod, AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import {
@@ -404,6 +404,33 @@ export class VaultsService {
       // Then process them
       const uniquePolicyIds = Array.from(new Map(data.assetsWhitelist.map(obj => [obj.policyId, obj])).values());
 
+      // Fetch LP token metadata AND verify valuation methods
+      const policyIds = uniquePolicyIds.map(item => item.policyId).filter(Boolean);
+      const lpTokensData = await this.tokenVerificationRepo.find({
+        where: { policy_id: In(policyIds) },
+        select: ['policy_id', 'lp_pool_onchain_id', 'is_lp_token'],
+      });
+      const lpTokenMap = new Map(
+        lpTokensData.map(lp => [lp.policy_id, { onchainId: lp.lp_pool_onchain_id, isLp: lp.is_lp_token }])
+      );
+
+      // Validate that LP tokens only use lp_token_dynamic pricing
+      for (const assetItem of uniquePolicyIds) {
+        const lpData = lpTokenMap.get(assetItem.policyId);
+        if (lpData?.isLp) {
+          // LP token detected - enforce lp_token_dynamic pricing
+          if (assetItem.valuationMethod && assetItem.valuationMethod !== AssetValuationMethod.LP_TOKEN_DYNAMIC) {
+            throw new BadRequestException(
+              `Policy ${assetItem.policyId} is an LP token and must use "lp_token_dynamic" valuation method.`
+            );
+          }
+          // Auto-set if not provided
+          if (!assetItem.valuationMethod) {
+            assetItem.valuationMethod = AssetValuationMethod.LP_TOKEN_DYNAMIC;
+          }
+        }
+      }
+
       await Promise.all(
         uniquePolicyIds.map(async assetItem => {
           if (!assetItem.policyId) return;
@@ -416,6 +443,7 @@ export class VaultsService {
             null;
 
           const fallbackCollectionName = rawFallbackCollectionName ? rawFallbackCollectionName.slice(0, 255) : null;
+          const lpData = lpTokenMap.get(assetItem.policyId);
 
           const result = await this.assetsWhitelistRepository
             .createQueryBuilder()
@@ -428,6 +456,7 @@ export class VaultsService {
               asset_count_cap_max: assetItem.countCapMax,
               valuation_method: assetItem.valuationMethod || 'market',
               custom_price_ada: assetItem.customPriceAda || null,
+              lp_pool_onchain_id: lpData?.onchainId || null,
             })
             .orIgnore()
             .execute();
