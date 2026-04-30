@@ -10,9 +10,10 @@ import { StakeService } from './stake.service';
 
 import { TokenStakingPosition } from '@/database/tokenStakingPosition.entity';
 import { Transaction } from '@/database/transaction.entity';
+import { AlertsModule } from '@/modules/alerts/alerts.module';
 
 @Module({
-  imports: [ConfigModule, TypeOrmModule.forFeature([Transaction, TokenStakingPosition])],
+  imports: [ConfigModule, AlertsModule, TypeOrmModule.forFeature([Transaction, TokenStakingPosition])],
   controllers: [StakeController, StakeAdminController],
   providers: [StakeService, StakeReconciliationService, StakeAdminService],
 })
