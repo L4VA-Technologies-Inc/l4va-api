@@ -66,6 +66,15 @@ export class AssetsWhitelistEntity {
   })
   custom_price_ada?: number;
 
+  @Expose({ name: 'lpPoolOnchainId' })
+  @Column({
+    name: 'lp_pool_onchain_id',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
+  lp_pool_onchain_id?: string;
+
   @ManyToOne(() => Vault, (vault: Vault) => vault.assets_whitelist, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'vault_id' })
   public vault: Vault;
