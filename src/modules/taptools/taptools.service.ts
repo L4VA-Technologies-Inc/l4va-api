@@ -1631,7 +1631,7 @@ export class TaptoolsService {
           whitelistItem.lp_pool_onchain_id
         ) {
           const lpPrice = await this.calculateLpTokenPrice(whitelistItem.lp_pool_onchain_id);
-          if (lpPrice) {
+          if (lpPrice !== null && lpPrice !== undefined && Number.isFinite(lpPrice)) {
             customPriceMap.set(whitelistItem.policy_id, lpPrice);
           }
         }
