@@ -411,6 +411,13 @@ export class VaultsService {
 
         if (lpData?.isLp) {
           // LP token detected - enforce lp_token_dynamic pricing
+          // Validate that LP token has an on-chain pool ID
+          if (!lpData.onchainId) {
+            throw new BadRequestException(
+              `Policy ${assetItem.policyId} is an LP token but missing lp_pool_onchain_id in token_verifications. ` +
+                `Please ensure the LP token has a valid pool ID before adding it to the vault.`
+            );
+          }
           if (assetItem.valuationMethod && assetItem.valuationMethod !== AssetValuationMethod.LP_TOKEN_DYNAMIC) {
             throw new BadRequestException(
               `Policy ${assetItem.policyId} is an LP token and must use "lp_token_dynamic" valuation method.`
