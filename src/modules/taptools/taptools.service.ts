@@ -1502,7 +1502,8 @@ export class TaptoolsService {
     }
 
     try {
-      const response = await this.axiosTapToolsInstance.get(`/token/pools?onchainID=${onchainID}`, {
+      const response = await this.axiosTapToolsInstance.get('/token/pools', {
+        params: { onchainID },
         timeout: 10000,
         headers: {
           Accept: 'application/json',
@@ -1532,7 +1533,8 @@ export class TaptoolsService {
     }
 
     try {
-      const response = await this.axiosTapToolsInstance.get(`/token/metadata?unit=${lpTokenUnit}`, {
+      const response = await this.axiosTapToolsInstance.get('/token/metadata', {
+        params: { unit: lpTokenUnit },
         timeout: 10000,
         headers: {
           Accept: 'application/json',

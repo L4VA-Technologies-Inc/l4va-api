@@ -414,9 +414,10 @@ export class VaultsService {
         lpTokensData.map(lp => [lp.policy_id, { onchainId: lp.lp_pool_onchain_id, isLp: lp.is_lp_token }])
       );
 
-      // Validate that LP tokens only use lp_token_dynamic pricing
+      // Validate LP token pricing configuration
       for (const assetItem of uniquePolicyIds) {
         const lpData = lpTokenMap.get(assetItem.policyId);
+
         if (lpData?.isLp) {
           // LP token detected - enforce lp_token_dynamic pricing
           if (assetItem.valuationMethod && assetItem.valuationMethod !== AssetValuationMethod.LP_TOKEN_DYNAMIC) {
@@ -428,6 +429,12 @@ export class VaultsService {
           if (!assetItem.valuationMethod) {
             assetItem.valuationMethod = AssetValuationMethod.LP_TOKEN_DYNAMIC;
           }
+        } else if (assetItem.valuationMethod === AssetValuationMethod.LP_TOKEN_DYNAMIC) {
+          // Non-LP token attempting to use lp_token_dynamic
+          throw new BadRequestException(
+            `Policy ${assetItem.policyId} is not an LP token and cannot use "lp_token_dynamic" valuation method. ` +
+              `Please mark it as an LP token in token_verifications or use a different valuation method.`
+          );
         }
       }
 
