@@ -317,6 +317,13 @@ export class DraftVaultsService {
 
           if (lpData?.isLp) {
             // LP token detected - enforce lp_token_dynamic pricing
+            // Validate that LP token has an on-chain pool ID
+            if (!lpData.onchainId) {
+              throw new BadRequestException(
+                `Policy ${whitelistItem.policyId} is an LP token but missing lp_pool_onchain_id in token_verifications. ` +
+                  `Please ensure the LP token has a valid pool ID before adding it to the vault.`
+              );
+            }
             if (
               whitelistItem.valuationMethod &&
               whitelistItem.valuationMethod !== AssetValuationMethod.LP_TOKEN_DYNAMIC
