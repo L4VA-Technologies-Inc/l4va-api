@@ -311,9 +311,10 @@ export class DraftVaultsService {
           lpTokensData.map(lp => [lp.policy_id, { onchainId: lp.lp_pool_onchain_id, isLp: lp.is_lp_token }])
         );
 
-        // Validate that LP tokens only use lp_token_dynamic pricing
+        // Validate LP token pricing configuration
         for (const whitelistItem of data.assetsWhitelist) {
           const lpData = lpTokenMap.get(whitelistItem.policyId);
+
           if (lpData?.isLp) {
             // LP token detected - enforce lp_token_dynamic pricing
             if (
@@ -328,6 +329,12 @@ export class DraftVaultsService {
             if (!whitelistItem.valuationMethod) {
               whitelistItem.valuationMethod = AssetValuationMethod.LP_TOKEN_DYNAMIC;
             }
+          } else if (whitelistItem.valuationMethod === AssetValuationMethod.LP_TOKEN_DYNAMIC) {
+            // Non-LP token attempting to use lp_token_dynamic
+            throw new BadRequestException(
+              `Policy ${whitelistItem.policyId} is not an LP token and cannot use "lp_token_dynamic" valuation method. ` +
+                `Please mark it as an LP token in token_verifications or use a different valuation method.`
+            );
           }
         }
 
