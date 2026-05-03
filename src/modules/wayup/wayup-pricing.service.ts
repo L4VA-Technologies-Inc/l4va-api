@@ -157,7 +157,6 @@ export class WayUpPricingService {
       hasListings: boolean;
     }>(cacheKey);
     if (cached !== undefined) {
-      this.logger.debug(`Using cached floor price for collection ${policyId}: ${cached.floorPriceAda} ADA`);
       return cached;
     }
 

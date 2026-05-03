@@ -123,7 +123,6 @@ export class DexHunterPricingService {
     const cacheKey = `token_price_${tokenId}`;
     const cached = this.priceCache.get<number | null>(cacheKey);
     if (cached !== undefined) {
-      this.logger.debug(`Using cached price for token ${tokenId}: ${cached} ADA`);
       return cached;
     }
 
