@@ -31,7 +31,7 @@ export class AssetsWhitelistEntity {
   collection_name?: string;
 
   @Expose({ name: 'countCapMin' })
-  @Transform(({ value }) => (value ? Number(value) : null))
+  @Transform(({ value }) => (value !== null && value !== undefined ? Number(value) : null))
   @Column({
     name: 'asset_count_cap_min',
     type: 'bigint',
@@ -40,7 +40,7 @@ export class AssetsWhitelistEntity {
   asset_count_cap_min?: number;
 
   @Expose({ name: 'countCapMax' })
-  @Transform(({ value }) => (value ? Number(value) : null))
+  @Transform(({ value }) => (value !== null && value !== undefined ? Number(value) : null))
   @Column({
     name: 'asset_count_cap_max',
     type: 'bigint',
