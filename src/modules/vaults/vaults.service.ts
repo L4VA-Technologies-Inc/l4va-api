@@ -921,7 +921,7 @@ export class VaultsService {
     let expansionNoLimit: boolean | undefined;
     let expansionPriceType: 'limit' | 'market' | undefined;
     let expansionLimitPrice: number | undefined;
-    let expansionAssetsByPolicy: Array<{ policyId: string; quantity: number }> = [];
+    let expansionAssetsByPolicy: Array<{ policyId: string; quantity: number; collectionName: string | null }> = [];
     let expansionWhitelist: Array<{ policyId: string; collectionName: string | null }> = [];
 
     // Only check vault_status to determine if vault is currently in expansion
@@ -991,7 +991,8 @@ export class VaultsService {
           .getRawMany();
 
         // Group by policy and sum quantities (with decimal adjustment for FTs)
-        const policyMap = new Map<string, number>();
+        // Pre-fill expansion policies with 0 so frontend can show them even before first contribution.
+        const policyMap = new Map<string, number>(expansionWhitelist.map(item => [item.policyId, 0] as const));
 
         for (const row of expansionAssetData) {
           const policyId = row.policyId;
@@ -1007,16 +1008,15 @@ export class VaultsService {
                 ? ftQuantityRaw / Math.pow(10, decimals)
                 : ftQuantityRaw;
 
-          if (policyMap.has(policyId)) {
-            policyMap.set(policyId, policyMap.get(policyId)! + quantity);
-          } else {
-            policyMap.set(policyId, quantity);
-          }
+          policyMap.set(policyId, (policyMap.get(policyId) ?? 0) + quantity);
         }
+
+        const expansionNameByPolicy = new Map(expansionWhitelist.map(w => [w.policyId, w.collectionName] as const));
 
         expansionAssetsByPolicy = Array.from(policyMap.entries()).map(([policyId, quantity]) => ({
           policyId,
           quantity,
+          collectionName: expansionNameByPolicy.get(policyId) ?? null,
         }));
 
         expansionAssetsCount = Array.from(policyMap.values()).reduce((sum, qty) => sum + qty, 0);
