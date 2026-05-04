@@ -717,12 +717,24 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   expansionNoLimit?: boolean;
 
-  @ApiProperty({ description: 'Expansion assets grouped by policy', required: false })
+  @ApiProperty({
+    description: 'Expansion assets grouped by policy',
+    required: false,
+    type: 'array',
+    items: {
+      type: 'object',
+      properties: {
+        policyId: { type: 'string' },
+        quantity: { type: 'number' },
+        collectionName: { type: 'string', nullable: true },
+      },
+    },
+  })
   @DtoRepresent({
     transform: false,
     expose: { name: 'expansionAssetsByPolicy' },
   })
-  expansionAssetsByPolicy?: Array<{ policyId: string; quantity: number }>;
+  expansionAssetsByPolicy?: Array<{ policyId: string; quantity: number; collectionName: string | null }>;
 
   @ApiProperty({
     description: 'Expansion whitelisted collections with names',
