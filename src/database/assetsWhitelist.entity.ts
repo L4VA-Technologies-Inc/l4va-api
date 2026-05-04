@@ -1,4 +1,4 @@
-import { Expose } from 'class-transformer';
+import { Expose, Transform } from 'class-transformer';
 import { Matches } from 'class-validator';
 import {
   BeforeInsert,
@@ -31,17 +31,19 @@ export class AssetsWhitelistEntity {
   collection_name?: string;
 
   @Expose({ name: 'countCapMin' })
+  @Transform(({ value }) => (value !== null && value !== undefined ? Number(value) : null))
   @Column({
     name: 'asset_count_cap_min',
-    type: 'integer',
+    type: 'bigint',
     nullable: true,
   })
   asset_count_cap_min?: number;
 
   @Expose({ name: 'countCapMax' })
+  @Transform(({ value }) => (value !== null && value !== undefined ? Number(value) : null))
   @Column({
     name: 'asset_count_cap_max',
-    type: 'integer',
+    type: 'bigint',
     nullable: true,
   })
   asset_count_cap_max?: number;
