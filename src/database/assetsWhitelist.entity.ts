@@ -33,7 +33,7 @@ export class AssetsWhitelistEntity {
   @Expose({ name: 'countCapMin' })
   @Column({
     name: 'asset_count_cap_min',
-    type: 'integer',
+    type: 'bigint',
     nullable: true,
   })
   asset_count_cap_min?: number;
@@ -41,7 +41,7 @@ export class AssetsWhitelistEntity {
   @Expose({ name: 'countCapMax' })
   @Column({
     name: 'asset_count_cap_max',
-    type: 'integer',
+    type: 'bigint',
     nullable: true,
   })
   asset_count_cap_max?: number;

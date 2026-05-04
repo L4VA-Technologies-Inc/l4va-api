@@ -69,9 +69,13 @@ export class AssetWhitelistDto {
     description: 'Minimum number of assets allowed',
     required: false,
     example: 1,
+    minimum: 0,
+    maximum: 1000000000000,
   })
   @IsOptional()
   @IsNumber()
+  @Min(0)
+  @Max(1000000000000, { message: 'Count cap minimum cannot exceed 1 trillion' })
   @Expose({ name: 'countCapMin' })
   countCapMin?: number;
 
@@ -79,9 +83,13 @@ export class AssetWhitelistDto {
     description: 'Maximum number of assets allowed',
     required: false,
     example: 10,
+    minimum: 0,
+    maximum: 1000000000000,
   })
   @IsOptional()
   @IsNumber()
+  @Min(0)
+  @Max(1000000000000, { message: 'Count cap maximum cannot exceed 1 trillion' })
   @Expose({ name: 'countCapMax' })
   countCapMax?: number;
 
