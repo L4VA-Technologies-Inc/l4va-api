@@ -193,6 +193,198 @@ export class RewardClaimProxy {
   }
 
   /**
+   * Phase 1 of the witness flow.
+   * Atomically reserves the claim in l4va-rewards, then builds an unsigned
+   * Cardano transaction that requires the user's wallet to co-sign (requiredSigners).
+   *
+   * Returns { reservationId, txCbor, totalClaimableAmount } to the client.
+   * The client must sign txCbor via CIP-30 signTx() and call submitClaim().
+   */
+  async prepareClaim(
+    walletAddress: string,
+    payload: { epochIds?: string[]; claimImmediate?: boolean; claimVested?: boolean }
+  ): Promise<{
+    reservationId: string;
+    txCbor: string;
+    claimableImmediateAmount: number;
+    claimableVestedAmount: number;
+    totalClaimableAmount: number;
+  }> {
+    let reservation: { reservationId: string; totalClaimableAmount: number } | null = null;
+
+    try {
+      // ─── Step 1: Atomic reservation ───────────────────────────────────────
+      const reserveUrl = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/${walletAddress}/reserve`;
+      const { data } = await firstValueFrom(
+        this.httpService.post(reserveUrl, payload, {
+          headers: { 'X-Internal-Service-Token': this.internalToken },
+        })
+      );
+
+      reservation = {
+        reservationId: data.reservationId,
+        totalClaimableAmount: data.totalClaimableAmount,
+      };
+
+      this.logger.log(
+        `Claim reserved for prepare: ${reservation.reservationId} - ` +
+          `${(reservation.totalClaimableAmount / 10 ** this.l4vaDecimals).toFixed(this.l4vaDecimals)} L4VA`
+      );
+
+      // ─── Step 2: Build unsigned tx (no submit yet) ────────────────────────
+      const txResult = await this.txBuilder.prepareClaimTx(walletAddress, reservation.totalClaimableAmount);
+
+      if (!txResult.success || !txResult.txCbor) {
+        throw new BadRequestException(txResult.error || 'Failed to build claim transaction');
+      }
+
+      return {
+        reservationId: reservation.reservationId,
+        txCbor: txResult.txCbor,
+        claimableImmediateAmount: data.claimableImmediateAmount / 10 ** this.l4vaDecimals,
+        claimableVestedAmount: data.claimableVestedAmount / 10 ** this.l4vaDecimals,
+        totalClaimableAmount: data.totalClaimableAmount / 10 ** this.l4vaDecimals,
+      };
+    } catch (error: any) {
+      // Roll back if reservation succeeded but tx build failed
+      if (reservation?.reservationId) {
+        try {
+          const rollbackUrl = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/rollback`;
+          await firstValueFrom(
+            this.httpService.post(
+              rollbackUrl,
+              { reservationId: reservation.reservationId, errorReason: error?.message || 'Tx build failed' },
+              { headers: { 'X-Internal-Service-Token': this.internalToken } }
+            )
+          );
+          this.logger.log(`Reservation ${reservation.reservationId} rolled back after prepare failure`);
+        } catch (rollbackError: any) {
+          this.logger.error(`CRITICAL: Failed to rollback reservation: ${rollbackError?.message || rollbackError}`);
+        }
+      }
+
+      if (error.name === 'BadRequestException' || error.name === 'ConflictException') {
+        throw error;
+      }
+      throw new BadRequestException(error?.message || 'Claim prepare failed');
+    }
+  }
+
+  /**
+   * Phase 2 of the witness flow.
+   * Receives the user's CIP-30 witness, assembles + submits the transaction,
+   * then confirms the reservation in l4va-rewards.
+   *
+   * @param reservationId - ID returned by prepareClaim
+   * @param txCbor        - Unsigned tx CBOR (same one returned by prepareClaim)
+   * @param userWitness   - Hex witness set from CIP-30 signTx()
+   */
+  async submitClaim(
+    walletAddress: string,
+    reservationId: string,
+    txCbor: string,
+    userWitness: string
+  ): Promise<{
+    success: boolean;
+    txHash: string;
+    claimedAmount: number;
+    claimedImmediateAmount: number;
+    claimedVestedAmount: number;
+  }> {
+    let txHash: string | null = null;
+
+    try {
+      // ─── Step 1: Submit assembled tx to blockchain ────────────────────────
+      const txResult = await this.txBuilder.submitClaimTx(txCbor, userWitness);
+
+      if (!txResult.success || !txResult.txHash) {
+        // No txHash → safe to rollback
+        const rollbackUrl = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/rollback`;
+        await firstValueFrom(
+          this.httpService.post(
+            rollbackUrl,
+            { reservationId, errorReason: txResult.error || 'Blockchain submission failed' },
+            { headers: { 'X-Internal-Service-Token': this.internalToken } }
+          )
+        ).catch(err => this.logger.error(`Failed to rollback after submit failure: ${err?.message}`));
+
+        throw new BadRequestException(txResult.error || 'Blockchain transaction failed');
+      }
+
+      txHash = txResult.txHash;
+      this.logger.log(`Claim blockchain tx submitted: ${txHash}`);
+
+      // ─── Step 2: Confirm reservation ──────────────────────────────────────
+      try {
+        const confirmUrl = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/confirm`;
+        const { data: confirmed } = await firstValueFrom(
+          this.httpService.post(
+            confirmUrl,
+            { reservationId, txHash },
+            { headers: { 'X-Internal-Service-Token': this.internalToken } }
+          )
+        );
+
+        this.logger.log(
+          `Claim confirmed: ${reservationId} - tx: ${txHash} - ` +
+            `${(confirmed.totalClaimedAmount / 10 ** this.l4vaDecimals).toFixed(this.l4vaDecimals)} L4VA`
+        );
+
+        return {
+          success: true,
+          txHash,
+          claimedAmount: confirmed.totalClaimedAmount / 10 ** this.l4vaDecimals,
+          claimedImmediateAmount: confirmed.claimedImmediateAmount / 10 ** this.l4vaDecimals,
+          claimedVestedAmount: confirmed.claimedVestedAmount / 10 ** this.l4vaDecimals,
+        };
+      } catch (confirmError: any) {
+        // Tx is on-chain — do NOT rollback
+        this.logger.error(
+          `CRITICAL: Blockchain tx ${txHash} submitted but confirmation failed: ${confirmError?.message}. ` +
+            `Reservation ${reservationId} is PENDING. Manual intervention may be needed.`,
+          confirmError?.stack
+        );
+        throw new BadRequestException(
+          `Claim submitted on-chain (tx: ${txHash}) but confirmation failed. ` +
+            `Check transaction status before retrying.`
+        );
+      }
+    } catch (error: any) {
+      // If tx was already submitted, never rollback
+      if (txHash) {
+        this.logger.error(`Claim processing failed but blockchain tx ${txHash} already submitted. NOT rolling back.`);
+      }
+
+      if (error.name === 'BadRequestException' || error.name === 'ConflictException') {
+        throw error;
+      }
+      throw new BadRequestException(error?.message || 'Claim submit failed');
+    }
+  }
+
+  /**
+   * Cancel a pending reservation — called when the user declines signing in their wallet.
+   * Safe to call at any time; a missing or already-processed reservation is a no-op.
+   */
+  async cancelClaim(reservationId: string): Promise<void> {
+    try {
+      const rollbackUrl = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/rollback`;
+      await firstValueFrom(
+        this.httpService.post(
+          rollbackUrl,
+          { reservationId, errorReason: 'Cancelled by user' },
+          { headers: { 'X-Internal-Service-Token': this.internalToken } }
+        )
+      );
+      this.logger.log(`Reservation ${reservationId} cancelled by user`);
+    } catch (error: any) {
+      // Non-fatal — reservation will be cleaned up by the cron if this fails
+      this.logger.warn(`Failed to cancel reservation ${reservationId}: ${error?.message}`);
+    }
+  }
+
+  /**
+   * @deprecated Use prepareClaim + submitClaim instead.
    * Build and execute a claim transaction with on-chain payment using atomic reservation.
    * Flow:
    * 1. Reserve claim atomically (prevents race condition)
