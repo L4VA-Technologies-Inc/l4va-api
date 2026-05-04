@@ -1,6 +1,17 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose } from 'class-transformer';
-import { IsString, IsNumber, IsOptional, Matches, IsEnum, ValidateIf, Min, Max, IsBoolean } from 'class-validator';
+import {
+  IsString,
+  IsNumber,
+  IsInt,
+  IsOptional,
+  Matches,
+  IsEnum,
+  ValidateIf,
+  Min,
+  Max,
+  IsBoolean,
+} from 'class-validator';
 
 import { AssetValuationMethod } from '@/types/asset.types';
 
@@ -73,7 +84,7 @@ export class AssetWhitelistDto {
     maximum: 1000000000000,
   })
   @IsOptional()
-  @IsNumber()
+  @IsInt()
   @Min(0)
   @Max(1000000000000, { message: 'Count cap minimum cannot exceed 1 trillion' })
   @Expose({ name: 'countCapMin' })
@@ -87,7 +98,7 @@ export class AssetWhitelistDto {
     maximum: 1000000000000,
   })
   @IsOptional()
-  @IsNumber()
+  @IsInt()
   @Min(0)
   @Max(1000000000000, { message: 'Count cap maximum cannot exceed 1 trillion' })
   @Expose({ name: 'countCapMax' })
