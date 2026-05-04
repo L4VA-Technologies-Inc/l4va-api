@@ -39,6 +39,13 @@ export class RewardsClaimTxBuilderService implements OnModuleInit {
   /** Singleton Lucid instance — initialized once on module startup. */
   private lucid: LucidEvolution | null = null;
 
+  /**
+   * Serializes concurrent tx builds because selectWallet.fromAddress() mutates
+   * the shared Lucid instance. Ensures one request completes selectWallet→complete
+   * before the next begins.
+   */
+  private buildLock: Promise<void> = Promise.resolve();
+
   /** Cached treasury UTxOs with timestamp for TTL-based invalidation. */
   private utxoCache: { utxos: Awaited<ReturnType<LucidEvolution['utxosAt']>>; fetchedAt: number } | null = null;
   private readonly UTXO_CACHE_TTL_MS = 20_000; // 20 seconds
@@ -92,6 +99,10 @@ export class RewardsClaimTxBuilderService implements OnModuleInit {
    * Returns cached treasury UTxOs, refreshing from Blockfrost only when the cache is stale.
    * Pass force=true after submitting a transaction to immediately invalidate.
    */
+  /**
+   * Returns cached treasury UTxOs, refreshing from Blockfrost only when the cache is stale.
+   * Pass force=true after submitting a transaction to immediately invalidate.
+   */
   private async getTreasuryUtxos(force = false): Promise<Awaited<ReturnType<LucidEvolution['utxosAt']>>> {
     const now = Date.now();
     if (!force && this.utxoCache && now - this.utxoCache.fetchedAt < this.UTXO_CACHE_TTL_MS) {
@@ -102,6 +113,25 @@ export class RewardsClaimTxBuilderService implements OnModuleInit {
     this.utxoCache = { utxos, fetchedAt: Date.now() };
     this.logger.log(`Treasury UTxOs refreshed from Blockfrost (${utxos.length} UTxOs)`);
     return utxos;
+  }
+
+  /**
+   * Acquires a simple promise-based lock so that the selectWallet.fromAddress +
+   * tx.complete() sequence cannot be interleaved by concurrent requests.
+   */
+  private async withBuildLock<T>(fn: () => Promise<T>): Promise<T> {
+    let release!: () => void;
+    const nextLock = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const acquired = this.buildLock;
+    this.buildLock = acquired.then(() => nextLock);
+    await acquired;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
   }
 
   /**
@@ -138,8 +168,6 @@ export class RewardsClaimTxBuilderService implements OnModuleInit {
         throw new InternalServerErrorException('No UTXOs available in treasury wallet');
       }
 
-      lucid.selectWallet.fromAddress(this.treasuryAddress, treasuryUtxos);
-
       const l4vaUnit = this.l4vaPolicyId + this.l4vaAssetName;
 
       const totalL4vaInTreasury = treasuryUtxos.reduce((sum, utxo) => {
@@ -164,15 +192,17 @@ export class RewardsClaimTxBuilderService implements OnModuleInit {
 
       const TX_VALIDITY_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
 
-      // Build unsigned tx with requiredSigners — forces the user's wallet to co-sign
-      const tx = await lucid
-        .newTx()
-        .pay.ToAddress(walletAddress, { [l4vaUnit]: BigInt(claimAmount) })
-        .addSignerKey(userKeyHash)
-        .validTo(Date.now() + TX_VALIDITY_WINDOW_MS)
-        .complete({ changeAddress: this.treasuryAddress });
-
-      const txCbor = tx.toCBOR();
+      // Build unsigned tx — serialized via buildLock since selectWallet mutates the Lucid instance
+      const txCbor = await this.withBuildLock(async () => {
+        lucid.selectWallet.fromAddress(this.treasuryAddress, treasuryUtxos);
+        const tx = await lucid
+          .newTx()
+          .pay.ToAddress(walletAddress, { [l4vaUnit]: BigInt(claimAmount) })
+          .addSignerKey(userKeyHash)
+          .validTo(Date.now() + TX_VALIDITY_WINDOW_MS)
+          .complete({ changeAddress: this.treasuryAddress });
+        return tx.toCBOR();
+      });
 
       this.logger.log(`Unsigned claim tx built for ${walletAddress.slice(0, 20)}...`);
 
@@ -245,9 +275,8 @@ export class RewardsClaimTxBuilderService implements OnModuleInit {
 
       const lucid = await this.getLucid();
 
-      // Get treasury UTXOs and select wallet
+      // Get treasury UTXOs
       const treasuryUtxos = await this.getTreasuryUtxos();
-      lucid.selectWallet.fromAddress(this.treasuryAddress, treasuryUtxos);
 
       if (!treasuryUtxos || treasuryUtxos.length === 0) {
         throw new InternalServerErrorException('No UTXOs available in treasury wallet');
@@ -273,19 +302,20 @@ export class RewardsClaimTxBuilderService implements OnModuleInit {
         );
       }
 
-      // Build transaction
-      const tx = await lucid
-        .newTx()
-        .pay.ToAddress(walletAddress, {
-          [l4vaUnit]: BigInt(claimAmount),
-        })
-        .complete({ changeAddress: this.treasuryAddress });
-
-      // Sign with treasury private key
-      const signedTx = await tx.sign.withPrivateKey(this.treasuryKey).complete();
-
-      // Submit to blockchain
-      const txHash = await signedTx.submit();
+      // Build and sign tx — serialized via buildLock since selectWallet mutates the Lucid instance
+      const { tx, txHash } = await this.withBuildLock(async () => {
+        lucid.selectWallet.fromAddress(this.treasuryAddress, treasuryUtxos);
+        const builtTx = await lucid
+          .newTx()
+          .pay.ToAddress(walletAddress, {
+            [l4vaUnit]: BigInt(claimAmount),
+          })
+          .complete({ changeAddress: this.treasuryAddress });
+        const signedTx = await builtTx.sign.withPrivateKey(this.treasuryKey).complete();
+        const hash = await signedTx.submit();
+        return { tx: builtTx, txHash: hash };
+      });
+      void tx; // suppress unused warning
 
       // Invalidate UTxO cache — the treasury UTxO set just changed on-chain
       this.utxoCache = null;

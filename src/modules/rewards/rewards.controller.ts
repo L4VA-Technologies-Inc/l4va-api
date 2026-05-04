@@ -250,8 +250,11 @@ export class RewardsController {
    */
   @UseGuards(AuthGuard)
   @Post('me/claims/cancel')
-  async cancelClaimTransaction(@Body() body: { reservationId: string }): Promise<{ cancelled: boolean }> {
-    await this.rewardClaimProxy.cancelClaim(body.reservationId);
+  async cancelClaimTransaction(
+    @Request() req: AuthRequest,
+    @Body() body: { reservationId: string }
+  ): Promise<{ cancelled: boolean }> {
+    await this.rewardClaimProxy.cancelClaim(req.user.address, body.reservationId);
     return { cancelled: true };
   }
 

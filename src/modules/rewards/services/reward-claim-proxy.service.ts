@@ -366,13 +366,13 @@ export class RewardClaimProxy {
    * Cancel a pending reservation — called when the user declines signing in their wallet.
    * Safe to call at any time; a missing or already-processed reservation is a no-op.
    */
-  async cancelClaim(reservationId: string): Promise<void> {
+  async cancelClaim(walletAddress: string, reservationId: string): Promise<void> {
     try {
       const rollbackUrl = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/rollback`;
       await firstValueFrom(
         this.httpService.post(
           rollbackUrl,
-          { reservationId, errorReason: 'Cancelled by user' },
+          { reservationId, errorReason: 'Cancelled by user', walletAddress },
           { headers: { 'X-Internal-Service-Token': this.internalToken } }
         )
       );
