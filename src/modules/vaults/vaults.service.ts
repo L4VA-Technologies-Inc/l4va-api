@@ -476,7 +476,7 @@ export class VaultsService {
             .execute();
 
           if (result.identifiers.length > 0 && assetItem.countCapMax) {
-            maxCountOf += assetItem.countCapMax;
+            maxCountOf += Number(assetItem.countCapMax);
           }
         })
       );

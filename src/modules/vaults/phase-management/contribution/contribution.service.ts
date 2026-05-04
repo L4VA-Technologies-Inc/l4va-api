@@ -18,7 +18,7 @@ import { VaultStatus } from '@/types/vault.types';
 // Maximum safe quantity for JavaScript number handling
 // Using Number.MAX_SAFE_INTEGER (2^53 - 1) to prevent precision loss
 const MAX_SAFE_QUANTITY = Number.MAX_SAFE_INTEGER; // 9,007,199,254,740,991
-const LARGE_QUANTITY_WARNING_THRESHOLD = 1000000000; // 1 billion
+const LARGE_QUANTITY_WARNING_THRESHOLD = 1000000000000; // 1 trillion
 
 @Injectable()
 export class ContributionService {
@@ -237,14 +237,14 @@ export class ContributionService {
 
         if (
           whitelistedAsset.asset_count_cap_max !== null &&
-          whitelistedAsset.asset_count_cap_max > 0 &&
-          existingPolicyCount + policyAssetsQuantity > whitelistedAsset.asset_count_cap_max
+          Number(whitelistedAsset.asset_count_cap_max) > 0 &&
+          existingPolicyCount + policyAssetsQuantity > Number(whitelistedAsset.asset_count_cap_max)
         ) {
           policyExceedsLimit.push({
             policyId,
             existing: existingPolicyCount,
             adding: policyAssetsQuantity,
-            max: whitelistedAsset.asset_count_cap_max,
+            max: Number(whitelistedAsset.asset_count_cap_max),
           });
         }
       }
