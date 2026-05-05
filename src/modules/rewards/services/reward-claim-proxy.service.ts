@@ -243,15 +243,33 @@ export class RewardClaimProxy {
       // Store txCbor hash in reservation metadata for later validation (prevents signing oracle)
       const txCborHash = createHash('sha256').update(txResult.txCbor).digest('hex');
       const updateUrl = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/store-txcbor`;
-      await firstValueFrom(
-        this.httpService.post(
-          updateUrl,
-          { reservationId: reservation.reservationId, txCborHash },
-          { headers: { 'X-Internal-Service-Token': this.internalToken } }
-        )
-      ).catch(err => {
-        this.logger.warn(`Failed to store txCbor hash for ${reservation.reservationId}: ${err.message}`);
-      });
+      try {
+        await firstValueFrom(
+          this.httpService.post(
+            updateUrl,
+            { reservationId: reservation.reservationId, txCborHash },
+            { headers: { 'X-Internal-Service-Token': this.internalToken } }
+          )
+        );
+      } catch (hashStoreError: any) {
+        this.logger.error(
+          `CRITICAL: Failed to store txCbor hash for ${reservation.reservationId}: ${hashStoreError.message}`
+        );
+        // Rollback the reservation since we can't validate the tx later
+        const rollbackUrl = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/rollback`;
+        await firstValueFrom(
+          this.httpService.post(
+            rollbackUrl,
+            {
+              reservationId: reservation.reservationId,
+              errorReason: 'Failed to store transaction hash',
+              walletAddress,
+            },
+            { headers: { 'X-Internal-Service-Token': this.internalToken } }
+          )
+        ).catch(() => {});
+        throw new BadRequestException('Failed to prepare claim transaction. Please try again.');
+      }
 
       return {
         reservationId: reservation.reservationId,
@@ -286,9 +304,9 @@ export class RewardClaimProxy {
         throw new NotFoundException(error.response?.data?.message || 'Resource not found');
       }
       if (
-        error.name === 'BadRequestException' ||
-        error.name === 'ConflictException' ||
-        error.name === 'NotFoundException'
+        error instanceof BadRequestException ||
+        error instanceof ConflictException ||
+        error instanceof NotFoundException
       ) {
         throw error;
       }
@@ -340,18 +358,30 @@ export class RewardClaimProxy {
       // ─── Step 1: Submit assembled tx to blockchain ────────────────────────
       const txResult = await this.txBuilder.submitClaimTx(txCbor, userWitness);
 
-      if (!txResult.success || !txResult.txHash) {
-        // No txHash → safe to rollback
-        const rollbackUrl = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/rollback`;
-        await firstValueFrom(
-          this.httpService.post(
-            rollbackUrl,
-            { reservationId, errorReason: txResult.error || 'Blockchain submission failed' },
-            { headers: { 'X-Internal-Service-Token': this.internalToken } }
-          )
-        ).catch(err => this.logger.error(`Failed to rollback after submit failure: ${err?.message}`));
+      if (!txResult.success) {
+        const submitError = txResult.error || 'Blockchain submission failed';
 
-        throw new BadRequestException(txResult.error || 'Blockchain transaction failed');
+        // If we have no txHash, the submission state is indeterminate:
+        // the tx may have been broadcast but timed out, or it may have failed pre-broadcast.
+        // We cannot safely rollback because the tx might already be on-chain.
+        if (!txResult.txHash) {
+          this.logger.error(
+            `Claim submission indeterminate for reservation ${reservationId}: ${submitError}. ` +
+              `No txHash returned. Reservation will remain PENDING until manual resolution or TTL cleanup.`
+          );
+          throw new BadRequestException(
+            'Transaction submission state is unknown. The transaction may already be on-chain. ' +
+              'Check transaction status before retrying.'
+          );
+        }
+
+        // We have a txHash but submission reported failure - this shouldn't normally happen
+        this.logger.error(`Claim submission failed with txHash ${txResult.txHash}: ${submitError}`);
+        throw new BadRequestException(submitError);
+      }
+
+      if (!txResult.txHash) {
+        throw new BadRequestException('Transaction submitted but no hash returned');
       }
 
       txHash = txResult.txHash;
@@ -398,7 +428,7 @@ export class RewardClaimProxy {
         this.logger.error(`Claim processing failed but blockchain tx ${txHash} already submitted. NOT rolling back.`);
       }
 
-      if (error.name === 'BadRequestException' || error.name === 'ConflictException') {
+      if (error instanceof BadRequestException || error instanceof ConflictException) {
         throw error;
       }
       throw new BadRequestException(error?.message || 'Claim submit failed');
@@ -534,37 +564,30 @@ export class RewardClaimProxy {
       }
     } catch (error: any) {
       // ============================================================
-      // STEP 4: ROLLBACK ONLY IF RESERVATION EXISTS AND NO TXHASH
+      // STEP 4: ERROR HANDLING - NEVER ROLLBACK WITHOUT CERTAINTY
       // ============================================================
-      if (reservation?.claimTransactionId && !txHash) {
-        try {
-          this.logger.error(
-            `Claim failed before blockchain submission, rolling back reservation ${reservation.reservationId}...`
-          );
-          const rollbackUrl = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/rollback`;
-          await firstValueFrom(
-            this.httpService.post(
-              rollbackUrl,
-              {
-                reservationId: reservation.reservationId,
-                errorReason: error?.message || 'Unknown error',
-              },
-              { headers: { 'X-Internal-Service-Token': this.internalToken } }
-            )
-          );
-          this.logger.log(`Reservation ${reservation.reservationId} rolled back successfully`);
-        } catch (rollbackError: any) {
-          this.logger.error(`CRITICAL: Failed to rollback reservation: ${rollbackError?.message || rollbackError}`);
-        }
-      } else if (txHash) {
-        // Transaction was submitted on-chain - DO NOT rollback
+      // NOTE: We cannot safely rollback based on !txHash because:
+      // - buildClaimTransaction() could have broadcast the tx but timed out returning the hash
+      // - In that case, rolling back would allow double-claiming while funds are being transferred
+      // - If txHash is missing, treat as indeterminate state and let TTL cleanup handle it
+
+      if (txHash) {
+        // Transaction definitely reached the chain - DO NOT rollback
         this.logger.error(
-          `Claim processing failed but blockchain tx ${txHash} already submitted. NOT rolling back reservation.`
+          `Claim processing failed but blockchain tx ${txHash} was submitted. ` +
+            `NOT rolling back reservation ${reservation?.reservationId}. Manual intervention may be needed.`
+        );
+      } else if (reservation?.claimTransactionId) {
+        // No txHash but we had a reservation - state is indeterminate
+        // The tx may or may not have been broadcast; we cannot safely rollback
+        this.logger.error(
+          `Claim failed with no txHash for reservation ${reservation.reservationId}. ` +
+            `Submission state is indeterminate. Reservation will remain PENDING until TTL cleanup.`
         );
       }
 
       // Re-throw original error
-      if (error.name === 'BadRequestException' || error.name === 'ConflictException') {
+      if (error instanceof BadRequestException || error instanceof ConflictException) {
         throw error;
       }
       this.logger.error(`Failed to build and execute claim: ${error?.message || error}`, error?.stack);

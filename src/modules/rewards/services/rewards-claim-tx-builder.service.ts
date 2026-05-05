@@ -1,5 +1,5 @@
 import { Blockfrost, getAddressDetails, Lucid, type LucidEvolution } from '@lucid-evolution/lucid';
-import { Injectable, Logger, BadRequestException, InternalServerErrorException, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 export interface ClaimTxResult {
@@ -25,9 +25,12 @@ export interface SubmitClaimTxResult {
 /**
  * Service to build Cardano transactions for L4VA rewards claims using Lucid.
  * Sends L4VA tokens from the treasury wallet to claiming users.
+ *
+ * Creates a fresh Lucid instance per operation to avoid concurrency issues
+ * with shared state (follows codebase pattern from stake.service.ts).
  */
 @Injectable()
-export class RewardsClaimTxBuilderService implements OnModuleInit {
+export class RewardsClaimTxBuilderService {
   private readonly logger = new Logger(RewardsClaimTxBuilderService.name);
   private readonly l4vaPolicyId: string;
   private readonly l4vaAssetName: string;
@@ -35,16 +38,7 @@ export class RewardsClaimTxBuilderService implements OnModuleInit {
   private readonly treasuryKey: string;
   private readonly treasuryAddress: string;
   private readonly networkId: number;
-
-  /** Singleton Lucid instance — initialized once on module startup. */
-  private lucid: LucidEvolution | null = null;
-
-  /**
-   * Serializes concurrent tx builds because selectWallet.fromAddress() mutates
-   * the shared Lucid instance. Ensures one request completes selectWallet→complete
-   * before the next begins.
-   */
-  private buildLock: Promise<void> = Promise.resolve();
+  private readonly blockfrostApiKey: string;
 
   constructor(private readonly configService: ConfigService) {
     this.l4vaPolicyId = this.configService.get<string>('L4VA_POLICY_ID');
@@ -53,6 +47,7 @@ export class RewardsClaimTxBuilderService implements OnModuleInit {
     this.treasuryKey = this.configService.get<string>('L4VA_TREASURY_KEY');
     this.treasuryAddress = this.configService.get<string>('L4VA_TREASURY_ADDRESS');
     this.networkId = Number(this.configService.get<string>('NETWORK_ID')) || 0;
+    this.blockfrostApiKey = this.configService.get<string>('BLOCKFROST_API_KEY');
 
     // Validate configuration
     if (!this.l4vaPolicyId || !this.l4vaAssetName) {
@@ -64,61 +59,16 @@ export class RewardsClaimTxBuilderService implements OnModuleInit {
     }
   }
 
-  async onModuleInit(): Promise<void> {
-    try {
-      this.lucid = await this.createLucidInstance();
-      this.logger.log('Lucid instance initialized');
-    } catch (error: any) {
-      this.logger.error(`Failed to initialize Lucid on startup: ${error?.message}`, error?.stack);
-    }
-  }
-
-  private async createLucidInstance(): Promise<LucidEvolution> {
+  /**
+   * Create a fresh Lucid instance for each operation.
+   * Follows codebase pattern from stake.service.ts to avoid shared state issues.
+   */
+  private async createLucid(): Promise<LucidEvolution> {
     const network = this.networkId === 1 ? 'Mainnet' : 'Preprod';
     return Lucid(
-      new Blockfrost(
-        `https://cardano-${network.toLowerCase()}.blockfrost.io/api/v0`,
-        this.configService.get<string>('BLOCKFROST_API_KEY')
-      ),
+      new Blockfrost(`https://cardano-${network.toLowerCase()}.blockfrost.io/api/v0`, this.blockfrostApiKey),
       network
     );
-  }
-
-  private async getLucid(): Promise<LucidEvolution> {
-    if (!this.lucid) {
-      this.lucid = await this.createLucidInstance();
-    }
-    return this.lucid;
-  }
-
-  /**
-   * Fetch fresh treasury UTxOs from Blockfrost.
-   * No caching to avoid stale UTxO issues with concurrent claims.
-   */
-  private async getTreasuryUtxos(): Promise<Awaited<ReturnType<LucidEvolution['utxosAt']>>> {
-    const lucid = await this.getLucid();
-    const utxos = await lucid.utxosAt(this.treasuryAddress);
-    this.logger.log(`Treasury UTxOs fetched from Blockfrost (${utxos.length} UTxOs)`);
-    return utxos;
-  }
-
-  /**
-   * Acquires a simple promise-based lock so that the selectWallet.fromAddress +
-   * tx.complete() sequence cannot be interleaved by concurrent requests.
-   */
-  private async withBuildLock<T>(fn: () => Promise<T>): Promise<T> {
-    let release!: () => void;
-    const nextLock = new Promise<void>(resolve => {
-      release = resolve;
-    });
-    const acquired = this.buildLock;
-    this.buildLock = acquired.then(() => nextLock);
-    await acquired;
-    try {
-      return await fn();
-    } finally {
-      release();
-    }
   }
 
   /**
@@ -148,8 +98,12 @@ export class RewardsClaimTxBuilderService implements OnModuleInit {
         `Preparing unsigned claim tx: ${humanReadable.toFixed(this.l4vaDecimals)} L4VA to ${walletAddress.slice(0, 20)}...`
       );
 
-      const lucid = await this.getLucid();
-      const treasuryUtxos = await this.getTreasuryUtxos();
+      // Create fresh Lucid instance for this operation
+      const lucid = await this.createLucid();
+
+      // Fetch fresh treasury UTxOs
+      const treasuryUtxos = await lucid.utxosAt(this.treasuryAddress);
+      this.logger.log(`Treasury UTxOs fetched: ${treasuryUtxos.length} UTxOs`);
 
       if (!treasuryUtxos || treasuryUtxos.length === 0) {
         throw new InternalServerErrorException('No UTXOs available in treasury wallet');
@@ -179,17 +133,16 @@ export class RewardsClaimTxBuilderService implements OnModuleInit {
 
       const TX_VALIDITY_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
 
-      // Build unsigned tx — serialized via buildLock since selectWallet mutates the Lucid instance
-      const txCbor = await this.withBuildLock(async () => {
-        lucid.selectWallet.fromAddress(this.treasuryAddress, treasuryUtxos);
-        const tx = await lucid
-          .newTx()
-          .pay.ToAddress(walletAddress, { [l4vaUnit]: BigInt(claimAmount) })
-          .addSignerKey(userKeyHash)
-          .validTo(Date.now() + TX_VALIDITY_WINDOW_MS)
-          .complete({ changeAddress: this.treasuryAddress });
-        return tx.toCBOR();
-      });
+      // Build unsigned tx — no locking needed since each operation has its own Lucid instance
+      lucid.selectWallet.fromAddress(this.treasuryAddress, treasuryUtxos);
+      const tx = await lucid
+        .newTx()
+        .pay.ToAddress(walletAddress, { [l4vaUnit]: BigInt(claimAmount) })
+        .addSignerKey(userKeyHash)
+        .validTo(Date.now() + TX_VALIDITY_WINDOW_MS)
+        .complete({ changeAddress: this.treasuryAddress });
+
+      const txCbor = tx.toCBOR();
 
       this.logger.log(`Unsigned claim tx built for ${walletAddress.slice(0, 20)}...`);
 
@@ -217,7 +170,8 @@ export class RewardsClaimTxBuilderService implements OnModuleInit {
         throw new BadRequestException('txCbor and userWitness are required');
       }
 
-      const lucid = await this.getLucid();
+      // Create fresh Lucid instance for this operation
+      const lucid = await this.createLucid();
 
       // Assemble: treasury key sign + user witness
       const signedTx = await lucid
@@ -257,10 +211,12 @@ export class RewardsClaimTxBuilderService implements OnModuleInit {
         `Building claim transaction: ${humanReadable.toFixed(this.l4vaDecimals)} L4VA to ${walletAddress.slice(0, 20)}...`
       );
 
-      const lucid = await this.getLucid();
+      // Create fresh Lucid instance for this operation
+      const lucid = await this.createLucid();
 
       // Get treasury UTXOs
-      const treasuryUtxos = await this.getTreasuryUtxos();
+      const treasuryUtxos = await lucid.utxosAt(this.treasuryAddress);
+      this.logger.log(`Treasury UTxOs fetched: ${treasuryUtxos.length} UTxOs`);
 
       if (!treasuryUtxos || treasuryUtxos.length === 0) {
         throw new InternalServerErrorException('No UTXOs available in treasury wallet');
@@ -286,20 +242,17 @@ export class RewardsClaimTxBuilderService implements OnModuleInit {
         );
       }
 
-      // Build and sign tx — serialized via buildLock since selectWallet mutates the Lucid instance
-      const { tx, txHash } = await this.withBuildLock(async () => {
-        lucid.selectWallet.fromAddress(this.treasuryAddress, treasuryUtxos);
-        const builtTx = await lucid
-          .newTx()
-          .pay.ToAddress(walletAddress, {
-            [l4vaUnit]: BigInt(claimAmount),
-          })
-          .complete({ changeAddress: this.treasuryAddress });
-        const signedTx = await builtTx.sign.withPrivateKey(this.treasuryKey).complete();
-        const hash = await signedTx.submit();
-        return { tx: builtTx, txHash: hash };
-      });
-      void tx; // suppress unused warning
+      // Build and sign tx — no locking needed since each operation has its own Lucid instance
+      lucid.selectWallet.fromAddress(this.treasuryAddress, treasuryUtxos);
+      const builtTx = await lucid
+        .newTx()
+        .pay.ToAddress(walletAddress, {
+          [l4vaUnit]: BigInt(claimAmount),
+        })
+        .complete({ changeAddress: this.treasuryAddress });
+
+      const signedTx = await builtTx.sign.withPrivateKey(this.treasuryKey).complete();
+      const txHash = await signedTx.submit();
 
       const claimedHuman = (claimAmount / 10 ** this.l4vaDecimals).toFixed(this.l4vaDecimals);
       this.logger.log(
@@ -330,14 +283,8 @@ export class RewardsClaimTxBuilderService implements OnModuleInit {
     utxoCount: number;
   }> {
     try {
-      const network = this.networkId === 1 ? 'Mainnet' : 'Preprod';
-      const lucid = await Lucid(
-        new Blockfrost(
-          `https://cardano-${network.toLowerCase()}.blockfrost.io/api/v0`,
-          this.configService.get<string>('BLOCKFROST_API_KEY')
-        ),
-        network
-      );
+      // Create fresh Lucid instance for this operation
+      const lucid = await this.createLucid();
 
       const utxos = await lucid.utxosAt(this.treasuryAddress);
       const l4vaUnit = this.l4vaPolicyId + this.l4vaAssetName;
