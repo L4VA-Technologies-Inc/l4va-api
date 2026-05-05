@@ -27,6 +27,7 @@ import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { DistributionModule } from '@/modules/distribution/distribution.module';
+import { ClaimsModule } from '@/modules/vaults/claims/claims.module';
 import { MarketStatsModule } from '@/modules/vaults/market-stats/market-stats.module';
 import { GovernanceModule } from '@/modules/vaults/phase-management/governance/governance.module';
 import { LifecycleModule } from '@/modules/vaults/phase-management/lifecycle/lifecycle.module';
@@ -46,6 +47,7 @@ import { StatisticsService } from '@/modules/vaults/statistics/statistics.servic
     TaptoolsModule,
     WayUpPricingModule,
     DexHunterModule,
+    ClaimsModule,
     TypeOrmModule.forFeature([
       Vault,
       User,

@@ -278,6 +278,20 @@ export class VaultsController {
   }
 
   @ApiDoc({
+    summary: 'Cancel vault (owner)',
+    description: 'Allowed only for the owner and only within 24 hours of vault creation.',
+    status: 200,
+  })
+  @UseGuards(AuthGuard)
+  @Delete(':id/cancel')
+  async cancelVaultByOwner(
+    @Param('id', new ParseUUIDPipe()) vaultId: string,
+    @Request() req: AuthRequest
+  ): Promise<{ success: boolean }> {
+    return this.vaultsService.cancelVaultByOwner(vaultId, req.user.sub);
+  }
+
+  @ApiDoc({
     summary: 'Delete drafted vault',
     description: 'Deletes a drafted vault owned by the authenticated user',
     status: 204,

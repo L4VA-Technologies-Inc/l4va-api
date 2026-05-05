@@ -48,6 +48,7 @@ import { Vault } from '@/database/vault.entity';
 import { transformToSnakeCase } from '@/helpers';
 import { DistributionCalculationService } from '@/modules/distribution/distribution-calculation.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings';
+import { ClaimsService } from '@/modules/vaults/claims/claims.service';
 import { CollectionItemDto } from '@/modules/vaults/dto/get-collection-names.dto';
 import { AssetValuationMethod, AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
@@ -59,6 +60,8 @@ import {
   ValueMethod,
   VaultPrivacy,
   VaultStatus,
+  VaultFailureReason,
+  SmartContractVaultStatus,
 } from '@/types/vault.types';
 
 /**
@@ -124,7 +127,8 @@ export class VaultsService {
     private readonly systemSettingsService: SystemSettingsService,
     private readonly distributionCalculationService: DistributionCalculationService,
     private readonly wayUpPricingService: WayUpPricingService,
-    private readonly dexHunterService: DexHunterService
+    private readonly dexHunterService: DexHunterService,
+    private readonly claimsService: ClaimsService
   ) {
     this.scVersion = this.configService.get<string>('SC_VERSION') || '1.0.0'; // Current SC version
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
@@ -1146,6 +1150,10 @@ export class VaultsService {
     if (userId !== undefined && userId !== null) {
       canCreateProposal = await this.governanceService.canUserCreateProposal(vaultId, userId);
     }
+    let canCancelVault = false;
+    if (userId !== undefined && userId !== null) {
+      canCancelVault = await this.canCancelVaultByOwner(vaultId, userId);
+    }
     const isChatVisible = await this.verifyChatAccess(userId, vaultId);
 
     let isWhitelistedContributor = vault.privacy === VaultPrivacy.public || vault.owner.id === userId;
@@ -1171,6 +1179,7 @@ export class VaultsService {
     additionalData['isWhitelistedContributor'] = isWhitelistedContributor;
     additionalData['isWhitelistedAcquirer'] = isWhitelistedAcquirer;
     additionalData['canCreateProposal'] = canCreateProposal;
+    additionalData['canCancelVault'] = canCancelVault;
     additionalData['isChatVisible'] = isChatVisible;
     additionalData['valuationAmount'] =
       assetsPrices.totalAcquiredAda && vault.tokens_for_acquires
@@ -2069,5 +2078,109 @@ export class VaultsService {
     const isVerified: boolean = firstAsset?.collection?.verified || false;
 
     return { collectionName, isVerified, hasResults };
+  }
+
+  /**
+   * Cancels a vault owned by the user, only within 24 hours of DB creation.
+   * Marks pending create-vault transactions as failed and soft-deletes the vault record.
+   */
+  async cancelVaultByOwner(vaultId: string, ownerId: string): Promise<{ success: boolean }> {
+    const vault = await this.checkVaultToCancel(vaultId, ownerId);
+
+    const [contribCount, acquireCount] = await Promise.all([
+      this.transactionRepository.count({
+        where: { vault_id: vault.id, type: TransactionType.contribute, status: TransactionStatus.confirmed },
+      }),
+      this.transactionRepository.count({
+        where: { vault_id: vault.id, type: TransactionType.acquire, status: TransactionStatus.confirmed },
+      }),
+    ]);
+
+    const hasRefundableFlows = contribCount > 0 || acquireCount > 0;
+
+    if (hasRefundableFlows) {
+      const response = await this.vaultContractService.updateVaultMetadataTx({
+        vault,
+        vaultStatus: SmartContractVaultStatus.CANCELLED,
+      });
+
+      await this.claimsService.createCancellationClaims(vault, 'manual_owner_cancel');
+
+      vault.vault_status = VaultStatus.failed;
+      vault.vault_sc_status = SmartContractVaultStatus.CANCELLED;
+      vault.last_update_tx_hash = response.txHash;
+      vault.failure_reason = VaultFailureReason.MANUAL_CANCELLATION;
+      vault.failure_details = { message: 'Cancelled by owner' };
+      vault.deactivated_at = new Date();
+      await this.vaultsRepository.save(vault);
+
+      return { success: true };
+    }
+
+    await this.transactionRepository
+      .createQueryBuilder()
+      .update(Transaction)
+      .set({ status: TransactionStatus.failed })
+      .where('vault_id = :vaultId', { vaultId: vault.id })
+      .andWhere('type = :type', { type: TransactionType.createVault })
+      .andWhere('status IN (:...statuses)', { statuses: [TransactionStatus.created, TransactionStatus.pending] })
+      .execute();
+
+    vault.deleted = true;
+    vault.deactivated_at = new Date();
+    await this.vaultsRepository.save(vault);
+
+    return { success: true };
+  }
+
+  private async checkVaultToCancel(vaultId: string, ownerId: string): Promise<Vault> {
+    const vault = await this.vaultsRepository.findOne({
+      where: { id: vaultId },
+      relations: ['owner'],
+    });
+
+    if (!vault || vault.deleted) {
+      throw new NotFoundException('Vault not found');
+    }
+
+    if (vault.owner.id !== ownerId) {
+      throw new UnauthorizedException('You must be an owner of vault!');
+    }
+
+    const cancellableStatuses: VaultStatus[] = [VaultStatus.contribution, VaultStatus.acquire];
+    if (!cancellableStatuses.includes(vault.vault_status)) {
+      throw new BadRequestException('Vault cannot be cancelled in its current status');
+    }
+
+    const oneDayMs = 86_400_000;
+    const phaseStart = vault.acquire_phase_start ?? vault.contribution_phase_start;
+    if (!phaseStart) {
+      throw new BadRequestException('Vault phase start is not defined');
+    }
+    const ageMs = Date.now() - new Date(phaseStart).getTime();
+    if (ageMs > oneDayMs) {
+      throw new BadRequestException('Vault can only be cancelled within 24 hours of creation');
+    }
+
+    const hasForeignAssets = await this.assetsRepository
+      .createQueryBuilder('asset')
+      .where('asset.vault_id = :vaultId', { vaultId })
+      .andWhere('asset.deleted = false')
+      .andWhere('(asset.added_by IS NULL OR asset.added_by != :ownerId)', { ownerId })
+      .getExists();
+    if (hasForeignAssets) {
+      throw new BadRequestException('Vault cannot be cancelled because it already contains assets from other users');
+    }
+
+    return vault;
+  }
+
+  private async canCancelVaultByOwner(vaultId: string, ownerId: string): Promise<boolean> {
+    try {
+      await this.checkVaultToCancel(vaultId, ownerId);
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
