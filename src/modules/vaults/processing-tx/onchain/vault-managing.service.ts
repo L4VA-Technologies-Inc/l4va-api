@@ -456,6 +456,8 @@ export class VaultManagingService {
         ],
         requiredInputs: REQUIRED_INPUTS,
       };
+
+      this.logger.log(JSON.stringify(input));
       // Build the transaction using BlockchainService
       const buildResponse = await this.blockchainService.buildTransaction(input);
 
