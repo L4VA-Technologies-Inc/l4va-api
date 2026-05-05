@@ -10,8 +10,8 @@ import { VaultsAdminService } from '@/modules/vaults/vaults-admin/vaults-admin.s
 @Controller('vaults-admin')
 @UseGuards(AdminGuard)
 @ApiSecurity('Admin-Token')
-export class VaultsAdminControllerController {
-  private readonly logger = new Logger(VaultsAdminControllerController.name);
+export class VaultsAdminController {
+  private readonly logger = new Logger(VaultsAdminController.name);
   constructor(private readonly vaultsAdminService: VaultsAdminService) {}
 
   @ApiOperation({ summary: 'Get vaults available for admin cancellation' })

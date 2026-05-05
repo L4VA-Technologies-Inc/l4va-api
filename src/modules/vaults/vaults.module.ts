@@ -34,7 +34,7 @@ import { LifecycleModule } from '@/modules/vaults/phase-management/lifecycle/lif
 import { TransactionsModule } from '@/modules/vaults/processing-tx/offchain-tx/transactions.module';
 import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockchain.module';
 import { StatisticsService } from '@/modules/vaults/statistics/statistics.service';
-import { VaultsAdminControllerController } from '@/modules/vaults/vaults-admin/vaults-admin.controller';
+import { VaultsAdminController } from '@/modules/vaults/vaults-admin/vaults-admin.controller';
 import { VaultsAdminService } from '@/modules/vaults/vaults-admin/vaults-admin.service';
 
 @Module({
@@ -75,7 +75,7 @@ import { VaultsAdminService } from '@/modules/vaults/vaults-admin/vaults-admin.s
     TokenVerificationRefreshService,
     VaultsAdminService,
   ],
-  controllers: [VaultsController, VaultsAdminControllerController],
+  controllers: [VaultsController, VaultsAdminController],
   exports: [VaultsService, DraftVaultsService],
 })
 export class VaultsModule {}

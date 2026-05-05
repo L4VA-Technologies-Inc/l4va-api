@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Brackets, Repository } from 'typeorm';
 
 import { Asset } from '@/database/asset.entity';
 import { Transaction } from '@/database/transaction.entity';
@@ -33,11 +33,40 @@ export class VaultsAdminService {
   ): Promise<PaginatedResponseDto<Vault>> {
     const safePage = page > 0 ? page : 1;
     const safeLimit = limit > 0 ? limit : 10;
+    const offset = (safePage - 1) * safeLimit;
+    const now = Date.now();
+    const oneDayAgo = new Date(now - 86_400_000);
 
     const queryBuilder = this.vaultsRepository
       .createQueryBuilder('vault')
       .leftJoinAndSelect('vault.owner', 'owner')
-      .where('vault.deleted = false');
+      .where('vault.deleted = false')
+      .andWhere(
+        new Brackets(qb => {
+          qb.where(
+            'vault.vault_status = :contributionStatus AND vault.contribution_phase_start IS NOT NULL AND vault.contribution_phase_start >= :oneDayAgo',
+            {
+              contributionStatus: VaultStatus.contribution,
+              oneDayAgo,
+            }
+          ).orWhere(
+            'vault.vault_status = :acquireStatus AND vault.acquire_phase_start IS NOT NULL AND vault.acquire_phase_start >= :oneDayAgo',
+            {
+              acquireStatus: VaultStatus.acquire,
+              oneDayAgo,
+            }
+          );
+        })
+      )
+      .andWhere(
+        `NOT EXISTS (
+          SELECT 1
+          FROM assets asset
+          WHERE asset.vault_id = vault.id
+            AND asset.deleted = false
+            AND (asset.added_by IS NULL OR asset.added_by != owner.id)
+        )`
+      );
 
     if (search?.trim()) {
       queryBuilder.andWhere('(vault.id::text ILIKE :search OR vault.name ILIKE :search)', {
@@ -45,13 +74,12 @@ export class VaultsAdminService {
       });
     }
 
-    const candidates = await queryBuilder.getMany();
-
-    const checks = await Promise.all(candidates.map(vault => this.canCancelVaultByAdmin(vault)));
-    const filtered = candidates.filter((_, idx) => checks[idx]);
-    const total = filtered.length;
-    const offset = (safePage - 1) * safeLimit;
-    const items = filtered.slice(offset, offset + safeLimit);
+    const [items, total] = await queryBuilder
+      .orderBy('vault.created_at', 'DESC')
+      .addOrderBy('vault.id', 'DESC')
+      .skip(offset)
+      .take(safeLimit)
+      .getManyAndCount();
 
     return {
       items,
@@ -95,15 +123,6 @@ export class VaultsAdminService {
       return { success: true };
     }
 
-    await this.transactionRepository
-      .createQueryBuilder()
-      .update(Transaction)
-      .set({ status: TransactionStatus.failed })
-      .where('vault_id = :vaultId', { vaultId: vault.id })
-      .andWhere('type = :type', { type: TransactionType.createVault })
-      .andWhere('status IN (:...statuses)', { statuses: [TransactionStatus.created, TransactionStatus.pending] })
-      .execute();
-
     vault.deleted = true;
     vault.deactivated_at = new Date();
     await this.vaultsRepository.save(vault);
@@ -112,14 +131,14 @@ export class VaultsAdminService {
   }
 
   private async canCancelVaultByAdmin(vault: Vault): Promise<boolean> {
-    const cancellableStatuses: VaultStatus[] = [VaultStatus.contribution, VaultStatus.acquire];
+    const cancellableStatuses: VaultStatus[] = [VaultStatus.contribution];
     if (!cancellableStatuses.includes(vault.vault_status)) {
       return false;
     }
 
     const oneDayMs = 86_400_000;
-    const phaseStart =
-      vault.vault_status === VaultStatus.acquire ? vault.acquire_phase_start : vault.contribution_phase_start;
+    const phaseStart = vault.contribution_phase_start;
+
     if (!phaseStart) {
       return false;
     }

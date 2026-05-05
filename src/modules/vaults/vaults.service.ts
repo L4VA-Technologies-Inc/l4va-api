@@ -11,6 +11,7 @@ import { PriceService } from '../price/price.service';
 import { WayUpPricingService } from '../wayup/wayup-pricing.service';
 
 import { CreateVaultReq } from './dto/createVault.req';
+import { EditUpcomingVaultDto } from './dto/edit-upcoming-vault.dto';
 import { GetAssetsWhitelistDto } from './dto/get-assets-whitelist.dto';
 import { VaultActivityFilter } from './dto/get-vault-activity.dto';
 import { GetVaultsDto, SortOrder, TVLCurrency, VaultFilter } from './dto/get-vaults.dto';
@@ -707,7 +708,6 @@ export class VaultsService {
         );
       }
 
-      // throw new BadRequestException('Failed to create vault. Please check your input and try again.');
       throw error;
     }
   }
@@ -2081,8 +2081,10 @@ export class VaultsService {
   }
 
   /**
-   * Cancels a vault owned by the user, only within 24 hours of DB creation.
-   * Marks pending create-vault transactions as failed and soft-deletes the vault record.
+   * Cancels a vault owned by the user after eligibility checks in `checkVaultToCancel`.
+   * If confirmed contribution/acquisition flows exist, marks vault as failed/canceled,
+   * updates on-chain metadata, and creates cancellation claims.
+   * Otherwise, marks pending create-vault transactions as failed and soft-deletes the vault.
    */
   async cancelVaultByOwner(vaultId: string, ownerId: string): Promise<{ success: boolean }> {
     const vault = await this.checkVaultToCancel(vaultId, ownerId);
@@ -2117,15 +2119,6 @@ export class VaultsService {
       return { success: true };
     }
 
-    await this.transactionRepository
-      .createQueryBuilder()
-      .update(Transaction)
-      .set({ status: TransactionStatus.failed })
-      .where('vault_id = :vaultId', { vaultId: vault.id })
-      .andWhere('type = :type', { type: TransactionType.createVault })
-      .andWhere('status IN (:...statuses)', { statuses: [TransactionStatus.created, TransactionStatus.pending] })
-      .execute();
-
     vault.deleted = true;
     vault.deactivated_at = new Date();
     await this.vaultsRepository.save(vault);
@@ -2147,13 +2140,13 @@ export class VaultsService {
       throw new UnauthorizedException('You must be an owner of vault!');
     }
 
-    const cancellableStatuses: VaultStatus[] = [VaultStatus.contribution, VaultStatus.acquire];
+    const cancellableStatuses: VaultStatus[] = [VaultStatus.contribution];
     if (!cancellableStatuses.includes(vault.vault_status)) {
       throw new BadRequestException('Vault cannot be cancelled in its current status');
     }
 
     const oneDayMs = 86_400_000;
-    const phaseStart = vault.acquire_phase_start ?? vault.contribution_phase_start;
+    const phaseStart = vault.contribution_phase_start;
     if (!phaseStart) {
       throw new BadRequestException('Vault phase start is not defined');
     }
@@ -2182,5 +2175,97 @@ export class VaultsService {
     } catch {
       return false;
     }
+  }
+
+  async editUpcomingVaultSettings(userId: string, vaultId: string, data: EditUpcomingVaultDto): Promise<boolean> {
+    const vault = await this.vaultsRepository.findOne({
+      where: { id: vaultId },
+      relations: ['owner', 'tags', 'vault_image', 'ft_token_img'],
+    });
+
+    if (!vault || vault.deleted) {
+      throw new NotFoundException('Vault not found');
+    }
+
+    if (vault.owner.id !== userId) {
+      throw new UnauthorizedException('You must be an owner of vault!');
+    }
+
+    if (vault.vault_status !== VaultStatus.published) {
+      throw new BadRequestException('Only upcoming vaults can be edited');
+    }
+
+    const existingVaultWithTicker = await this.vaultsRepository.exists({
+      where: {
+        id: Not(vaultId),
+        vault_token_ticker: data.vaultTokenTicker,
+        vault_status: In([VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked]),
+      },
+    });
+
+    if (existingVaultWithTicker) {
+      throw new BadRequestException('Ticker is already in use by another active vault');
+    }
+
+    const fieldMapping: Partial<Record<keyof Vault, any>> = {
+      description: data.description,
+      tokens_for_acquires: data.tokensForAcquires,
+      acquire_reserve: data.acquireReserve,
+      liquidity_pool_contribution: data.liquidityPoolContribution,
+      creation_threshold: data.creationThreshold,
+      cosigning_threshold: data.cosigningThreshold,
+      execution_threshold: data.executionThreshold,
+      vault_token_ticker: data.vaultTokenTicker,
+    };
+
+    Object.entries(fieldMapping).forEach(([key, value]) => {
+      (vault as any)[key] = value;
+    });
+
+    await this.linksRepository.delete({ vault: { id: vault.id } });
+
+    if (data.socialLinks.length) {
+      const newLinks = data.socialLinks.map(linkItem =>
+        this.linksRepository.create({
+          name: linkItem.name,
+          url: linkItem.url,
+          vault: { id: vault.id },
+        })
+      );
+
+      await this.linksRepository.save(newLinks);
+    }
+
+    if (data.tags.length) {
+      vault.tags = await Promise.all(
+        data.tags.map(async tagName => {
+          let tag = await this.tagsRepository.findOne({
+            where: { name: tagName },
+          });
+          if (!tag) {
+            tag = await this.tagsRepository.save({ name: tagName });
+          }
+          return tag;
+        })
+      );
+    } else {
+      vault.tags = [];
+    }
+
+    const imgKey = data.vaultImage.split('image/')[1];
+    if (!imgKey) {
+      throw new BadRequestException('Invalid vault image key');
+    }
+    vault.vault_image = await this.gcsService.createFileRecordForVault(imgKey);
+
+    const ftTokenImgKey = data.ftTokenImg.split('image/')[1];
+    if (!ftTokenImgKey) {
+      throw new BadRequestException('Invalid FT token image key');
+    }
+    vault.ft_token_img = await this.gcsService.createFileRecordForVault(ftTokenImgKey);
+
+    await this.vaultsRepository.save(vault);
+
+    return true;
   }
 }
