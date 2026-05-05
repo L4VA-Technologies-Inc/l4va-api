@@ -1,5 +1,7 @@
+import { createHash } from 'crypto';
+
 import { HttpService } from '@nestjs/axios';
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, ConflictException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 
@@ -238,6 +240,19 @@ export class RewardClaimProxy {
         throw new BadRequestException(txResult.error || 'Failed to build claim transaction');
       }
 
+      // Store txCbor hash in reservation metadata for later validation (prevents signing oracle)
+      const txCborHash = createHash('sha256').update(txResult.txCbor).digest('hex');
+      const updateUrl = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/store-txcbor`;
+      await firstValueFrom(
+        this.httpService.post(
+          updateUrl,
+          { reservationId: reservation.reservationId, txCborHash },
+          { headers: { 'X-Internal-Service-Token': this.internalToken } }
+        )
+      ).catch(err => {
+        this.logger.warn(`Failed to store txCbor hash for ${reservation.reservationId}: ${err.message}`);
+      });
+
       return {
         reservationId: reservation.reservationId,
         txCbor: txResult.txCbor,
@@ -263,7 +278,18 @@ export class RewardClaimProxy {
         }
       }
 
-      if (error.name === 'BadRequestException' || error.name === 'ConflictException') {
+      // Preserve HTTP status codes from l4va-rewards service
+      if (error.response?.status === 409) {
+        throw new ConflictException(error.response?.data?.message || 'Claim already in progress');
+      }
+      if (error.response?.status === 404) {
+        throw new NotFoundException(error.response?.data?.message || 'Resource not found');
+      }
+      if (
+        error.name === 'BadRequestException' ||
+        error.name === 'ConflictException' ||
+        error.name === 'NotFoundException'
+      ) {
         throw error;
       }
       throw new BadRequestException(error?.message || 'Claim prepare failed');
@@ -294,6 +320,23 @@ export class RewardClaimProxy {
     let txHash: string | null = null;
 
     try {
+      // ─── Step 0: Verify txCbor matches reservation (prevents signing oracle) ──
+      const txCborHash = createHash('sha256').update(txCbor).digest('hex');
+      const verifyUrl = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/verify-txcbor`;
+
+      try {
+        await firstValueFrom(
+          this.httpService.post(
+            verifyUrl,
+            { reservationId, txCborHash, walletAddress },
+            { headers: { 'X-Internal-Service-Token': this.internalToken } }
+          )
+        );
+      } catch (verifyError: any) {
+        // txCbor mismatch or reservation not found
+        throw new BadRequestException(verifyError.response?.data?.message || 'Transaction verification failed');
+      }
+
       // ─── Step 1: Submit assembled tx to blockchain ────────────────────────
       const txResult = await this.txBuilder.submitClaimTx(txCbor, userWitness);
 
@@ -366,10 +409,10 @@ export class RewardClaimProxy {
    * Cancel a pending reservation — called when the user declines signing in their wallet.
    * Safe to call at any time; a missing or already-processed reservation is a no-op.
    */
-  async cancelClaim(walletAddress: string, reservationId: string): Promise<void> {
+  async cancelClaim(walletAddress: string, reservationId: string): Promise<{ success: boolean; message: string }> {
     try {
       const rollbackUrl = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/rollback`;
-      await firstValueFrom(
+      const { data } = await firstValueFrom(
         this.httpService.post(
           rollbackUrl,
           { reservationId, errorReason: 'Cancelled by user', walletAddress },
@@ -377,9 +420,11 @@ export class RewardClaimProxy {
         )
       );
       this.logger.log(`Reservation ${reservationId} cancelled by user`);
+      return { success: data.success, message: data.message };
     } catch (error: any) {
       // Non-fatal — reservation will be cleaned up by the cron if this fails
       this.logger.warn(`Failed to cancel reservation ${reservationId}: ${error?.message}`);
+      return { success: false, message: error?.message || 'Rollback failed' };
     }
   }
 

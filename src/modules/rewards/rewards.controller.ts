@@ -253,9 +253,9 @@ export class RewardsController {
   async cancelClaimTransaction(
     @Request() req: AuthRequest,
     @Body() body: { reservationId: string }
-  ): Promise<{ cancelled: boolean }> {
-    await this.rewardClaimProxy.cancelClaim(req.user.address, body.reservationId);
-    return { cancelled: true };
+  ): Promise<{ cancelled: boolean; message?: string }> {
+    const result = await this.rewardClaimProxy.cancelClaim(req.user.address, body.reservationId);
+    return { cancelled: result.success, message: result.message };
   }
 
   /**

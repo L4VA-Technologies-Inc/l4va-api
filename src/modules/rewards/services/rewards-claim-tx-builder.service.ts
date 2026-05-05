@@ -46,10 +46,6 @@ export class RewardsClaimTxBuilderService implements OnModuleInit {
    */
   private buildLock: Promise<void> = Promise.resolve();
 
-  /** Cached treasury UTxOs with timestamp for TTL-based invalidation. */
-  private utxoCache: { utxos: Awaited<ReturnType<LucidEvolution['utxosAt']>>; fetchedAt: number } | null = null;
-  private readonly UTXO_CACHE_TTL_MS = 20_000; // 20 seconds
-
   constructor(private readonly configService: ConfigService) {
     this.l4vaPolicyId = this.configService.get<string>('L4VA_POLICY_ID');
     this.l4vaAssetName = this.configService.get<string>('L4VA_ASSET_NAME');
@@ -96,22 +92,13 @@ export class RewardsClaimTxBuilderService implements OnModuleInit {
   }
 
   /**
-   * Returns cached treasury UTxOs, refreshing from Blockfrost only when the cache is stale.
-   * Pass force=true after submitting a transaction to immediately invalidate.
+   * Fetch fresh treasury UTxOs from Blockfrost.
+   * No caching to avoid stale UTxO issues with concurrent claims.
    */
-  /**
-   * Returns cached treasury UTxOs, refreshing from Blockfrost only when the cache is stale.
-   * Pass force=true after submitting a transaction to immediately invalidate.
-   */
-  private async getTreasuryUtxos(force = false): Promise<Awaited<ReturnType<LucidEvolution['utxosAt']>>> {
-    const now = Date.now();
-    if (!force && this.utxoCache && now - this.utxoCache.fetchedAt < this.UTXO_CACHE_TTL_MS) {
-      return this.utxoCache.utxos;
-    }
+  private async getTreasuryUtxos(): Promise<Awaited<ReturnType<LucidEvolution['utxosAt']>>> {
     const lucid = await this.getLucid();
     const utxos = await lucid.utxosAt(this.treasuryAddress);
-    this.utxoCache = { utxos, fetchedAt: Date.now() };
-    this.logger.log(`Treasury UTxOs refreshed from Blockfrost (${utxos.length} UTxOs)`);
+    this.logger.log(`Treasury UTxOs fetched from Blockfrost (${utxos.length} UTxOs)`);
     return utxos;
   }
 
@@ -241,9 +228,6 @@ export class RewardsClaimTxBuilderService implements OnModuleInit {
 
       const txHash = await signedTx.submit();
 
-      // Invalidate UTxO cache — the treasury UTxO set just changed on-chain
-      this.utxoCache = null;
-
       this.logger.log(`Claim transaction submitted: ${txHash}`);
 
       return { success: true, txHash };
@@ -316,9 +300,6 @@ export class RewardsClaimTxBuilderService implements OnModuleInit {
         return { tx: builtTx, txHash: hash };
       });
       void tx; // suppress unused warning
-
-      // Invalidate UTxO cache — the treasury UTxO set just changed on-chain
-      this.utxoCache = null;
 
       const claimedHuman = (claimAmount / 10 ** this.l4vaDecimals).toFixed(this.l4vaDecimals);
       this.logger.log(
