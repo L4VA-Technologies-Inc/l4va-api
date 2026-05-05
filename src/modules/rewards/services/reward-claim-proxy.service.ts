@@ -290,15 +290,18 @@ export class RewardClaimProxy {
         claimedVestedAmount: data.claimedVestedAmount / 10 ** this.l4vaDecimals,
       };
     } catch (error: any) {
+      if (error.response?.status === 409) {
+        throw new ConflictException(error.response?.data?.message || 'Claim already in progress');
+      }
+      if (error.response?.status === 404) {
+        throw new NotFoundException(error.response?.data?.message || 'Reservation not found');
+      }
       if (
         error instanceof BadRequestException ||
         error instanceof ConflictException ||
         error instanceof NotFoundException
       ) {
         throw error;
-      }
-      if (error.response?.data?.message) {
-        throw new BadRequestException(error.response.data.message);
       }
       throw new BadRequestException(error?.message || 'Claim submit failed');
     }
