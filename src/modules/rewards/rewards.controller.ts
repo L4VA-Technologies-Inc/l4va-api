@@ -190,16 +190,47 @@ export class RewardsController {
   }
 
   /**
-   * POST /rewards/me/claims/build
-   * Build and submit a claim transaction with on-chain L4VA payment.
-   * Returns 200 with transaction hash on success.
-   * Returns 400 BadRequest on failure (no database changes on failure).
+   * POST /rewards/me/claims/prepare
+   * Phase 1 of the witness claim flow.
+   * Atomically reserves claims and returns an unsigned tx CBOR that the user
+   * must sign via CIP-30 signTx() before calling /me/claims/submit.
+   *
+   * Returns 409 if a claim is already in progress for this wallet.
    */
   @UseGuards(AuthGuard)
-  @Post('me/claims/build')
-  async buildClaimTransaction(
+  @Post('me/claims/prepare')
+  async prepareClaimTransaction(
     @Request() req: AuthRequest,
-    @Body() body: { epochIds?: string[]; claimImmediate?: boolean; claimVested?: boolean }
+    @Body()
+    body: {
+      epochIds?: string[];
+      claimImmediate?: boolean;
+      claimVested?: boolean;
+    }
+  ): Promise<{
+    reservationId: string;
+    txCbor: string;
+    claimableImmediateAmount: number;
+    claimableVestedAmount: number;
+    totalClaimableAmount: number;
+  }> {
+    const walletAddress = req.user.address;
+    return this.rewardClaimProxy.prepareClaim(walletAddress, body);
+  }
+
+  /**
+   * POST /rewards/me/claims/submit
+   * Phase 2 of the witness claim flow.
+   * Receives the user's CIP-30 witness, assembles the transaction with the
+   * treasury key, submits to the blockchain, and confirms the reservation.
+   *
+   * Call this only after signing txCbor from /me/claims/prepare.
+   */
+  @UseGuards(AuthGuard)
+  @Post('me/claims/submit')
+  async submitClaimTransaction(
+    @Request() req: AuthRequest,
+    @Body() body: { reservationId: string; txCbor: string; userWitness: string }
   ): Promise<{
     success: boolean;
     txHash: string;
@@ -208,8 +239,23 @@ export class RewardsController {
     claimedVestedAmount: number;
   }> {
     const walletAddress = req.user.address;
-    // Let BadRequestException propagate - NestJS will handle as HTTP 400
-    return this.rewardClaimProxy.buildAndExecuteClaim(walletAddress, body);
+    return this.rewardClaimProxy.submitClaim(walletAddress, body.reservationId, body.txCbor, body.userWitness);
+  }
+
+  /**
+   * POST /rewards/me/claims/cancel
+   * Explicitly releases a PROCESSING reservation when the user declines signing.
+   * This is a best-effort call — the reservation will also be cleaned up by the
+   * cron job after its TTL expires, but calling this immediately unblocks the user.
+   */
+  @UseGuards(AuthGuard)
+  @Post('me/claims/cancel')
+  async cancelClaimTransaction(
+    @Request() req: AuthRequest,
+    @Body() body: { reservationId: string }
+  ): Promise<{ cancelled: boolean; message?: string }> {
+    const result = await this.rewardClaimProxy.cancelClaim(req.user.address, body.reservationId);
+    return { cancelled: result.success, message: result.message };
   }
 
   // ============================================================================

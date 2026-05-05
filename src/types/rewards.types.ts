@@ -30,6 +30,9 @@ export enum LpPoolType {
 
 export enum RewardClaimStatus {
   AVAILABLE = 'available',
+  PROCESSING = 'processing',
+  PARTIALLY_CLAIMED = 'partially_claimed',
+  PENDING = 'pending',
   CLAIMED = 'claimed',
 }
 

@@ -148,7 +148,7 @@ export interface ClaimableRewardDto {
   immediateAmount: string;
   vestedAmount: string;
   totalAmount: string;
-  status: 'available' | 'pending' | 'claimed';
+  status: 'available' | 'pending' | 'processing' | 'partially_claimed' | 'claimed';
 }
 
 export interface ClaimsSummaryDto {

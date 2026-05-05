@@ -1,9 +1,7 @@
 import { HttpService } from '@nestjs/axios';
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, ConflictException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
-
-import { RewardsClaimTxBuilderService } from './rewards-claim-tx-builder.service';
 
 /**
  * Internal proxy client for l4va-rewards service.
@@ -19,8 +17,7 @@ export class RewardClaimProxy {
 
   constructor(
     private readonly httpService: HttpService,
-    private readonly configService: ConfigService,
-    private readonly txBuilder: RewardsClaimTxBuilderService
+    private readonly configService: ConfigService
   ) {
     // Default to local dev setup (localhost:4000)
     // Testnet/Mainnet MUST set REWARDS_SERVICE_URL explicitly (e.g., http://l4va-rewards:3001 for Docker)
@@ -193,18 +190,76 @@ export class RewardClaimProxy {
   }
 
   /**
-   * Build and execute a claim transaction with on-chain payment.
-   * This method:
-   * 1. Gets claimable amounts (read-only)
-   * 2. Builds the Cardano transaction using Lucid
-   * 3. Signs and submits the transaction to blockchain
-   * 4. ONLY IF SUCCESSFUL with tx_hash, updates the database
+   * Phase 1 of the witness flow.
+   * Calls l4va-rewards to atomically reserve the claim and build an unsigned
+   * Cardano transaction in a single operation. The txCbor is stored server-side
+   * in the reservation, eliminating the need for a separate store-hash call.
    *
-   * Throws BadRequestException on failure WITHOUT any database changes.
+   * Returns { reservationId, txCbor, amounts } to the client.
+   * The client signs txCbor via CIP-30 signTx() and calls submitClaim().
    */
-  async buildAndExecuteClaim(
+  async prepareClaim(
     walletAddress: string,
     payload: { epochIds?: string[]; claimImmediate?: boolean; claimVested?: boolean }
+  ): Promise<{
+    reservationId: string;
+    txCbor: string;
+    claimableImmediateAmount: number;
+    claimableVestedAmount: number;
+    totalClaimableAmount: number;
+  }> {
+    try {
+      const url = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/${walletAddress}/prepare`;
+      const { data } = await firstValueFrom(
+        this.httpService.post(url, payload, {
+          headers: { 'X-Internal-Service-Token': this.internalToken },
+        })
+      );
+
+      this.logger.log(
+        `Claim prepared for ${walletAddress.slice(0, 12)}...: reservation ${data.reservationId} ` +
+          `${(data.totalClaimableAmount / 10 ** this.l4vaDecimals).toFixed(this.l4vaDecimals)} L4VA`
+      );
+
+      return {
+        reservationId: data.reservationId,
+        txCbor: data.txCbor,
+        claimableImmediateAmount: data.claimableImmediateAmount / 10 ** this.l4vaDecimals,
+        claimableVestedAmount: data.claimableVestedAmount / 10 ** this.l4vaDecimals,
+        totalClaimableAmount: data.totalClaimableAmount / 10 ** this.l4vaDecimals,
+      };
+    } catch (error: any) {
+      if (error.response?.status === 409) {
+        throw new ConflictException(error.response?.data?.message || 'Claim already in progress');
+      }
+      if (error.response?.status === 404) {
+        throw new NotFoundException(error.response?.data?.message || 'No claimable rewards found');
+      }
+      if (
+        error instanceof BadRequestException ||
+        error instanceof ConflictException ||
+        error instanceof NotFoundException
+      ) {
+        throw error;
+      }
+      throw new BadRequestException(error?.message || 'Claim prepare failed');
+    }
+  }
+
+  /**
+   * Phase 2 of the witness flow.
+   * Sends the user's CIP-30 witness to l4va-rewards, which assembles the stored
+   * txCbor with the treasury key + user witness, submits to the blockchain,
+   * and confirms the reservation — all in a single call.
+   *
+   * @param reservationId - ID returned by prepareClaim
+   * @param userWitness   - Hex witness set from CIP-30 signTx()
+   */
+  async submitClaim(
+    walletAddress: string,
+    reservationId: string,
+    _txCbor: string, // kept for API compatibility; txCbor is now stored server-side
+    userWitness: string
   ): Promise<{
     success: boolean;
     txHash: string;
@@ -213,63 +268,65 @@ export class RewardClaimProxy {
     claimedVestedAmount: number;
   }> {
     try {
-      // Step 1: Get claimable amounts (read-only, no DB changes)
-      this.logger.log(`Getting claimable amounts for wallet ${walletAddress.slice(0, 20)}...`);
-      const claimableSummary = await this.getClaimableSummary(walletAddress);
-
-      // Rewards service returns human-readable amounts (with decimals applied)
-      const totalClaimableHumanReadable = claimableSummary.totalClaimable || 0;
-
-      if (totalClaimableHumanReadable <= 0) {
-        throw new BadRequestException('No claimable amount available');
-      }
-
-      // Step 2: Convert to base units for blockchain transaction
-      // Rewards API returns: 26785.714 L4VA
-      // We need base units: 26785714000 (if decimals=6) or 26785714 (if decimals=3)
-      const totalClaimableBaseUnits = Math.floor(totalClaimableHumanReadable * 10 ** this.l4vaDecimals);
-      this.logger.log(
-        `Building and submitting transaction for ${totalClaimableHumanReadable} L4VA (${totalClaimableBaseUnits} base units)...`
+      const url = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/submit`;
+      const { data } = await firstValueFrom(
+        this.httpService.post(
+          url,
+          { reservationId, walletAddress, userWitness },
+          { headers: { 'X-Internal-Service-Token': this.internalToken } }
+        )
       );
 
-      // Step 3: Build, sign, and submit the Cardano transaction
-      const txResult = await this.txBuilder.buildClaimTransaction(walletAddress, totalClaimableBaseUnits);
-
-      if (!txResult.success || !txResult.txHash) {
-        throw new BadRequestException(txResult.error || 'Transaction building/submission failed');
-      }
-
-      // Step 4: ONLY NOW update the database with successful transaction
-      // Note: Database stores base units, so we pass the base units values
-      const immediateBaseUnits = Math.floor((claimableSummary.immediateClaimable || 0) * 10 ** this.l4vaDecimals);
-      const vestedBaseUnits = Math.floor((claimableSummary.vestedClaimable || 0) * 10 ** this.l4vaDecimals);
-
-      this.logger.log(`Transaction successful with hash ${txResult.txHash}, updating database...`);
-      await this.executeClaim(walletAddress, {
-        ...payload,
-        txHash: txResult.txHash,
-        claimedImmediateAmount: immediateBaseUnits,
-        claimedVestedAmount: vestedBaseUnits,
-        totalClaimedAmount: totalClaimableBaseUnits,
-      });
-
       this.logger.log(
-        `✅ Successfully claimed ${totalClaimableHumanReadable} L4VA with tx ${txResult.txHash} for ${walletAddress.slice(0, 20)}...`
+        `Claim submitted: reservation ${reservationId} - tx: ${data.txHash} - ` +
+          `${(data.totalClaimedAmount / 10 ** this.l4vaDecimals).toFixed(this.l4vaDecimals)} L4VA`
       );
 
       return {
         success: true,
-        txHash: txResult.txHash,
-        claimedAmount: totalClaimableHumanReadable,
-        claimedImmediateAmount: claimableSummary.immediateClaimable || 0,
-        claimedVestedAmount: claimableSummary.vestedClaimable || 0,
+        txHash: data.txHash,
+        claimedAmount: data.totalClaimedAmount / 10 ** this.l4vaDecimals,
+        claimedImmediateAmount: data.claimedImmediateAmount / 10 ** this.l4vaDecimals,
+        claimedVestedAmount: data.claimedVestedAmount / 10 ** this.l4vaDecimals,
       };
     } catch (error: any) {
-      if (error.name === 'BadRequestException') {
+      if (error.response?.status === 409) {
+        throw new ConflictException(error.response?.data?.message || 'Claim already in progress');
+      }
+      if (error.response?.status === 404) {
+        throw new NotFoundException(error.response?.data?.message || 'Reservation not found');
+      }
+      if (
+        error instanceof BadRequestException ||
+        error instanceof ConflictException ||
+        error instanceof NotFoundException
+      ) {
         throw error;
       }
-      this.logger.error(`Failed to build and execute claim: ${error?.message || error}`, error?.stack);
-      throw new BadRequestException(error?.message || 'Unknown error occurred');
+      throw new BadRequestException(error?.message || 'Claim submit failed');
+    }
+  }
+
+  /**
+   * Cancel a pending reservation — called when the user declines signing in their wallet.
+   * Safe to call at any time; a missing or already-processed reservation is a no-op.
+   */
+  async cancelClaim(walletAddress: string, reservationId: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const url = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/cancel`;
+      const { data } = await firstValueFrom(
+        this.httpService.post(
+          url,
+          { reservationId, walletAddress, errorReason: 'Cancelled by user' },
+          { headers: { 'X-Internal-Service-Token': this.internalToken } }
+        )
+      );
+      this.logger.log(`Reservation ${reservationId} cancelled by user`);
+      return { success: data.success, message: data.message };
+    } catch (error: any) {
+      // Non-fatal — reservation will be cleaned up by the cron if this fails
+      this.logger.warn(`Failed to cancel reservation ${reservationId}: ${error?.message}`);
+      return { success: false, message: error?.message || 'Cancel failed' };
     }
   }
 
