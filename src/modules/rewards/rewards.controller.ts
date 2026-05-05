@@ -258,30 +258,6 @@ export class RewardsController {
     return { cancelled: result.success, message: result.message };
   }
 
-  /**
-   * @deprecated Use POST /rewards/me/claims/prepare + /me/claims/submit instead.
-   * POST /rewards/me/claims/build
-   * Build and submit a claim transaction with on-chain L4VA payment.
-   * Returns 200 with transaction hash on success.
-   * Returns 400 BadRequest on failure (no database changes on failure).
-   */
-  @UseGuards(AuthGuard)
-  @Post('me/claims/build')
-  async buildClaimTransaction(
-    @Request() req: AuthRequest,
-    @Body() body: { epochIds?: string[]; claimImmediate?: boolean; claimVested?: boolean }
-  ): Promise<{
-    success: boolean;
-    txHash: string;
-    claimedAmount: number;
-    claimedImmediateAmount: number;
-    claimedVestedAmount: number;
-  }> {
-    const walletAddress = req.user.address;
-    // Let BadRequestException propagate - NestJS will handle as HTTP 400
-    return this.rewardClaimProxy.buildAndExecuteClaim(walletAddress, body);
-  }
-
   // ============================================================================
   // Vesting Endpoints (proxied to l4va-rewards)
   // ============================================================================
