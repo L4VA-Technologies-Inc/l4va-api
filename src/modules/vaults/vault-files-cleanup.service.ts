@@ -64,6 +64,8 @@ export class VaultFilesCleanupService {
   }
 
   private async cleanupVaultFiles(vault: Vault, threshold: Date): Promise<void> {
+    this.logger.log(`Processing vault ${vault.id} for file cleanup`);
+
     // 1. Clean vault-level files (vault_image, ft_token_img, acquirer_whitelist_csv)
     const vaultFilesToDelete: { file: FileEntity; field: keyof Vault }[] = [];
 
@@ -81,21 +83,21 @@ export class VaultFilesCleanupService {
     }
 
     if (vaultFilesToDelete.length > 0) {
+      // First, update vault to clear foreign key references
       const updatePayload: Partial<Vault> = {};
+      for (const { field } of vaultFilesToDelete) {
+        (updatePayload as any)[field] = null;
+      }
+      await this.vaultRepository.update({ id: vault.id }, updatePayload);
 
-      for (const { file, field } of vaultFilesToDelete) {
+      // Then delete files from GCS and database (deleteFile handles both)
+      for (const { file } of vaultFilesToDelete) {
         try {
           await this.gcsService.deleteFile(file.file_key);
-          await this.fileRepository.delete({ id: file.id });
-          (updatePayload as any)[field] = null;
           this.logger.log(`Deleted vault file ${file.file_key} for vault ${vault.id}`);
         } catch (error) {
           this.logger.warn(`Failed to delete vault file ${file.file_key}: ${error?.message ?? error}`);
         }
-      }
-
-      if (Object.keys(updatePayload).length > 0) {
-        await this.vaultRepository.update({ id: vault.id }, updatePayload);
       }
     }
 
@@ -131,7 +133,6 @@ export class VaultFilesCleanupService {
 
       try {
         await this.gcsService.deleteFile(fileKey);
-        await this.fileRepository.delete({ id: fileEntity.id });
         this.logger.log(`Deleted asset image ${fileKey} for vault ${vault.id}`);
       } catch (error) {
         this.logger.warn(`Failed to delete asset image ${fileKey}: ${error?.message ?? error}`);
