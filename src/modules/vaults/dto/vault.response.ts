@@ -312,6 +312,17 @@ export class VaultFullResponse extends VaultShortResponse {
   canCreateProposal: boolean;
 
   @ApiProperty({
+    description: 'Indicates whether the user can cancel this vault',
+    type: Boolean,
+    default: false,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  canCancelVault: boolean;
+
+  @ApiProperty({
     description: 'Indicates whether the user can acquire from this vault',
     type: Boolean,
     default: true,

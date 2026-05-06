@@ -371,7 +371,7 @@ export class Vault {
     type: 'numeric',
     nullable: true,
   })
-  cosigning_threshold?: number; // Not used for now
+  cosigning_threshold?: number;
 
   @Expose({ name: 'totalAssetsCostUsd' })
   @Transform(({ value }) => (value ? Number(value) : null))
