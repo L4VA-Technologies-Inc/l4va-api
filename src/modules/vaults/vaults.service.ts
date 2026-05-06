@@ -199,6 +199,7 @@ export class VaultsService {
     presignedTx: string;
     txId: string;
   }> {
+    let newVault: Vault | null = null;
     try {
       // Check vault creation kill switch
       if (!this.systemSettingsService.vaultCreationEnabled) {
@@ -358,7 +359,6 @@ export class VaultsService {
       delete vaultData.contributor_whitelist;
       delete vaultData.tags;
 
-      let newVault: Vault;
       try {
         newVault = await this.vaultsRepository.save(vaultData as Vault);
         // Always reload the entity to ensure it's managed and has all relations
@@ -685,6 +685,18 @@ export class VaultsService {
       };
     } catch (error) {
       this.logger.error('Error creating vault:', error);
+
+      // Revert the partially-created vault to draft so the user can retry from their drafts.
+      // Deletion would require cascading through vault_tags, transactions, and other FK-constrained
+      // tables — reverting to draft is simpler and keeps all related data intact.
+      if (newVault?.id) {
+        try {
+          await this.vaultsRepository.update({ id: newVault.id }, { vault_status: VaultStatus.draft });
+          this.logger.log(`Reverted vault ${newVault.id} to draft status after creation failure`);
+        } catch (cleanupError) {
+          this.logger.error(`Failed to revert vault ${newVault.id} to draft:`, cleanupError);
+        }
+      }
 
       // Handle database constraint violations as fallback
       if (error.code === '23505') {
