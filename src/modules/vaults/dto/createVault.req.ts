@@ -112,8 +112,18 @@ export class CreateVaultReq {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   @Expose()
   description: string;
+
+  @ApiProperty({
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  @Expose()
+  tokenDescription?: string;
 
   @ApiProperty({ required: true })
   @IsNotEmpty()
