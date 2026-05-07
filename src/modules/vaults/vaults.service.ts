@@ -2228,6 +2228,7 @@ export class VaultsService {
       cosigning_threshold: data.cosigningThreshold,
       execution_threshold: data.executionThreshold,
       vault_token_ticker: data.vaultTokenTicker,
+      token_description: data.tokenDescription,
     };
 
     Object.entries(fieldMapping).forEach(([key, value]) => {

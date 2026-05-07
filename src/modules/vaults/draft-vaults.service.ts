@@ -118,6 +118,8 @@ export class DraftVaultsService {
     delete vault.locked_at;
 
     const plain = classToPlain(vault) as Record<string, unknown>;
+    plain.tokenDescription = plain.token_description;
+    delete plain.token_description;
     plain.tags = vault.tags?.map(t => t.name) ?? [];
 
     // todo need to create additional model for remove owner, and transform image to link
@@ -211,6 +213,7 @@ export class DraftVaultsService {
       if (data.valuationCurrency !== undefined) vaultData.valuation_currency = data.valuationCurrency;
       if (data.valuationAmount !== undefined) vaultData.valuation_amount = data.valuationAmount;
       if (data.description !== undefined) vaultData.description = data.description;
+      if (data.tokenDescription !== undefined) vaultData.token_description = data.tokenDescription;
       if (data.ftTokenDecimals) vaultData.ft_token_decimals = data.ftTokenDecimals;
       if (data.ftTokenSupply) vaultData.ft_token_supply = data.ftTokenSupply;
       if (data.terminationType) vaultData.termination_type = data.terminationType;

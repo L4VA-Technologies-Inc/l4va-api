@@ -12,6 +12,7 @@ import {
   ArrayMaxSize,
   IsObject,
   IsUUID,
+  MaxLength,
 } from 'class-validator';
 
 import {
@@ -117,7 +118,16 @@ export class SaveDraftReq {
   @ValidateIf((o, v) => v !== null)
   @IsString()
   @Expose()
+  @MaxLength(500)
   description?: string | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @ValidateIf((o, v) => v !== null)
+  @IsString()
+  @Expose()
+  @MaxLength(300)
+  tokenDescription?: string | null;
 
   @ApiProperty({ required: false, nullable: true })
   @IsOptional()

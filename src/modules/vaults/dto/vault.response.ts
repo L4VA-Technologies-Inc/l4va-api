@@ -42,6 +42,13 @@ export class VaultShortResponse {
   })
   description?: string;
 
+  @ApiProperty({ description: 'Description of the vault token', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'token_description' },
+  })
+  tokenDescription?: string;
+
   @ApiProperty({
     description: 'Total value of locked vaults in USD',
     example: 1250000,

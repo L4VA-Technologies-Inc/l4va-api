@@ -77,6 +77,9 @@ export class Vault {
   @Column({ nullable: true })
   description?: string;
 
+  @Column({ name: 'token_description', nullable: true })
+  token_description?: string;
+
   @Expose({ name: 'valueMethod' })
   @Column({
     type: 'enum',

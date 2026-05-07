@@ -4,6 +4,7 @@ import {
   IsArray,
   IsNotEmpty,
   IsNumber,
+  IsOptional,
   IsString,
   Max,
   MaxLength,
@@ -18,7 +19,14 @@ export class EditUpcomingVaultDto {
   @ApiProperty()
   @IsNotEmpty()
   @IsString()
+  @MaxLength(500)
   description: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  tokenDescription?: string;
 
   @ApiProperty({ minimum: 0, maximum: 100, type: Number })
   @IsNumber()
