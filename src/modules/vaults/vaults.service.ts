@@ -418,15 +418,8 @@ export class VaultsService {
                 `Please ensure the LP token has a valid pool ID before adding it to the vault.`
             );
           }
-          if (assetItem.valuationMethod && assetItem.valuationMethod !== AssetValuationMethod.LP_TOKEN_DYNAMIC) {
-            throw new BadRequestException(
-              `Policy ${assetItem.policyId} is an LP token and must use "lp_token_dynamic" valuation method.`
-            );
-          }
-          // Auto-set if not provided
-          if (!assetItem.valuationMethod) {
-            assetItem.valuationMethod = AssetValuationMethod.LP_TOKEN_DYNAMIC;
-          }
+          // Auto-set to LP_TOKEN_DYNAMIC for LP tokens
+          assetItem.valuationMethod = AssetValuationMethod.LP_TOKEN_DYNAMIC;
         } else if (assetItem.valuationMethod === AssetValuationMethod.LP_TOKEN_DYNAMIC) {
           // Non-LP token attempting to use lp_token_dynamic
           throw new BadRequestException(
