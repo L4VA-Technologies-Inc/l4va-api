@@ -12,6 +12,7 @@ interface IndexEventInput {
   txHash?: string;
   units?: number;
   metadata?: Record<string, any>;
+  idempotencyKey?: string;
 }
 
 /**
@@ -33,8 +34,8 @@ export class RewardEventProducer {
    */
   async indexEvent(input: IndexEventInput): Promise<RewardEventOutbox | null> {
     try {
-      const aggregateId = input.vaultId ?? input.walletAddress;
-      const idempotencyKey = input.txHash ? `${input.eventType}:${input.txHash}` : undefined;
+      const aggregateId = input.vaultId;
+      const idempotencyKey = input.idempotencyKey ?? (input.txHash ? `${input.eventType}:${input.txHash}` : undefined);
 
       const event = this.outboxRepository.create({
         aggregate_id: aggregateId,

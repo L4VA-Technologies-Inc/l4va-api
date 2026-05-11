@@ -308,6 +308,7 @@ export class GovernanceExecutionService {
               proposal_id: proposal.id,
               proposal_type: proposal.proposalType,
             },
+            idempotencyKey: `governance_proposal:${proposal.id}`,
           });
         } catch (rewardEventError) {
           // Log but don't throw - main operation already succeeded

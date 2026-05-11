@@ -306,10 +306,13 @@ export class DraftVaultsService {
       if (data.assetsWhitelist !== undefined && data.assetsWhitelist.length > 0) {
         // Fetch LP token metadata AND verify valuation methods
         const policyIds = data.assetsWhitelist.map(item => item.policyId).filter(Boolean);
-        const lpTokensData = await this.tokenVerificationRepo.find({
-          where: { policy_id: In(policyIds) },
-          select: ['policy_id', 'lp_pool_onchain_id', 'is_lp_token'],
-        });
+        const lpTokensData =
+          policyIds.length > 0
+            ? await this.tokenVerificationRepo.find({
+                where: { policy_id: In(policyIds) },
+                select: ['policy_id', 'lp_pool_onchain_id', 'is_lp_token'],
+              })
+            : [];
         const lpTokenMap = new Map(
           lpTokensData.map(lp => [lp.policy_id, { onchainId: lp.lp_pool_onchain_id, isLp: lp.is_lp_token }])
         );

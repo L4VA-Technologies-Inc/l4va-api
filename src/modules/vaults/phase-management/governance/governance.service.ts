@@ -1785,6 +1785,7 @@ export class GovernanceService {
         eventType: RewardActivityType.GOVERNANCE_VOTE,
         units: 1,
         metadata: { proposal_id: proposalId, vote_type: voteReq.vote },
+        idempotencyKey: `governance_vote:${vote.id}`,
       });
     } catch (rewardEventError) {
       // Log but don't throw - main operation already succeeded
@@ -1950,6 +1951,7 @@ export class GovernanceService {
           txHash,
           units: 1,
           metadata: { proposal_id: proposalId, proposal_type: proposal.proposalType },
+          idempotencyKey: `governance_proposal:${proposal.id}`,
         });
       } catch (rewardEventError) {
         // Log but don't throw - main operation already succeeded
