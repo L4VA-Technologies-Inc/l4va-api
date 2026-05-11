@@ -1522,32 +1522,21 @@ export class TaptoolsService {
   }
 
   /**
-   * Fetch LP token total supply from TapTools
-   * @param lpTokenUnit - Full LP token unit (policyId + assetName)
+   * Fetch LP token total supply from Blockfrost
+   * @param lpTokenUnit - Full LP token unit (policyId + assetName in hex)
    * @returns Total supply or null
    */
   private async fetchLpTokenTotalSupply(lpTokenUnit: string): Promise<number | null> {
-    if (!this.isMainnet) {
-      this.logger.debug('Skipping TapTools LP metadata fetch for testnet');
-      return null;
-    }
-
     try {
-      const response = await this.axiosTapToolsInstance.get('/token/metadata', {
-        params: { unit: lpTokenUnit },
-        timeout: 10000,
-        headers: {
-          Accept: 'application/json',
-        },
-      });
+      const assetInfo = await this.blockfrost.assetsById(lpTokenUnit);
 
-      if (response.data && response.data.totalSupply) {
-        return response.data.totalSupply;
+      if (assetInfo && assetInfo.quantity) {
+        return parseInt(assetInfo.quantity);
       }
 
       return null;
     } catch (error) {
-      this.logger.warn(`Failed to fetch LP token metadata from TapTools: ${error.message}`);
+      this.logger.warn(`Failed to fetch LP token metadata from Blockfrost: ${error.message}`);
       return null;
     }
   }
