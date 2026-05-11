@@ -71,6 +71,9 @@ export const VAULT_SEARCH_STATUSES: VaultStatus[] = [
   VaultStatus.burned,
 ];
 
+/** Vaults that owner or admin may cancel (upcoming + contribution), subject to other checks. */
+export const VAULT_CANCELLABLE_STATUSES: VaultStatus[] = [VaultStatus.published, VaultStatus.contribution];
+
 // Mapping for smart contract vault status
 export enum SmartContractVaultStatus {
   PENDING = 0,
