@@ -3,44 +3,12 @@ import * as path from 'path';
 
 import * as dotenv from 'dotenv';
 
-// Define sensitive secrets that this script should avoid adding or updating in .env.
-// Note: If these keys already exist in the .env file, they may still be preserved by merges.
-const SENSITIVE_KEYS = [
-  'ADMIN_S_KEY',
-  'VAULT_SCRIPT_SKEY',
-  'TAPTOOLS_API_KEY',
-  'CHARLI3_API_KEY',
-  'GOOGLE_BUCKET_CREDENTIALS',
-  'GCP_KMS_KEY',
-  'GCP_KMS_KEYRING',
-  'SENTRY_DNS_KEY',
-  'SLACK_BOT_TOKEN',
-  'NOVU_API_KEY',
-  'REDIS_PASSWORD',
-  'DB_PASSWORD',
-  'DB_USERNAME',
-  'DB_NAME',
-  'JWT_SECRET',
-  'ANVIL_API_KEY',
-  'GITHUB_TOKEN',
-  'BLOCKFROST_WEBHOOK_AUTH_TOKEN',
-  'BLOCKFROST_API_KEY',
-  'ADMIN_SERVICE_TOKEN',
-];
-
 export async function loadSecrets(): Promise<void> {
-  // Step 1: Load .env file first (from git repository)
+  // Step 1: Load .env file (for local/development configuration only)
+  // This file should only contain non-sensitive config committed to git
   dotenv.config();
 
   const nodeEnv = process.env.NODE_ENV;
-  const envFilePath = path.join(process.cwd(), '.env');
-  const envExists = fs.existsSync(envFilePath);
-
-  if (envExists) {
-    const envContent = fs.readFileSync(envFilePath, 'utf8');
-    const parsed = dotenv.parse(envContent);
-    Object.assign(process.env, parsed);
-  }
 
   // Support both testnet and mainnet
   const shouldLoadGcpSecrets = nodeEnv === 'mainnet' || nodeEnv === 'testnet';
@@ -101,20 +69,8 @@ export async function loadSecrets(): Promise<void> {
 
     const parsed = dotenv.parse(secrets);
 
-    // Separate sensitive and non-sensitive secrets
-    let sensitiveSecretsCount = 0;
-    const nonSensitiveSecrets: Record<string, string> = {};
-
-    Object.entries(parsed).forEach(([key, value]) => {
-      if (SENSITIVE_KEYS.includes(key)) {
-        sensitiveSecretsCount++;
-      } else {
-        nonSensitiveSecrets[key] = value;
-      }
-    });
-
-    // Load ALL secrets into process.env (memory)
-    // But preserve environment-specific values that are already set (e.g., from docker-compose)
+    // Load ALL secrets into process.env (memory only - never written to disk)
+    // Preserve environment-specific values that are already set (e.g., from docker-compose)
     const ENV_SPECIFIC_KEYS = ['DB_HOST', 'REDIS_HOST'];
     const secretsToLoad = { ...parsed };
 
@@ -135,25 +91,8 @@ export async function loadSecrets(): Promise<void> {
       console.warn(`⚠️  Missing critical secrets in process.env: ${missingKeys.join(', ')}`);
     }
 
-    // Only write non-sensitive secrets to .env file
-    const existingEnv = dotenv.parse(envExists ? fs.readFileSync(envFilePath, 'utf8') : '');
-
-    // Filter out sensitive keys from existing .env to ensure they are removed from disk
-    const filteredExistingEnv = Object.fromEntries(
-      Object.entries(existingEnv).filter(([key]) => !SENSITIVE_KEYS.includes(key))
-    );
-
-    const mergedEnv = { ...filteredExistingEnv, ...nonSensitiveSecrets };
-
-    const envContent = Object.entries(mergedEnv)
-      .map(([key, value]) => `${key}=${value}`)
-      .join('\n');
-    fs.writeFileSync(envFilePath, envContent, 'utf8');
-
     // eslint-disable-next-line no-console
-    console.log(
-      `✅ Loaded ${Object.keys(parsed).length} secrets from GCP (${sensitiveSecretsCount} kept in memory only)`
-    );
+    console.log(`✅ Loaded ${Object.keys(parsed).length} secrets from GCP into memory`);
   } catch (e) {
     console.error('Failed to load GCP secrets:', e.stack || e.message || e);
 
