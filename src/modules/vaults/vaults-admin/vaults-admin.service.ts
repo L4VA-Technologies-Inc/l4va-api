@@ -9,7 +9,12 @@ import { ClaimsService } from '@/modules/vaults/claims/claims.service';
 import { PaginatedResponseDto } from '@/modules/vaults/dto/paginated-response.dto';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { SmartContractVaultStatus, VaultFailureReason, VaultStatus } from '@/types/vault.types';
+import {
+  SmartContractVaultStatus,
+  VaultFailureReason,
+  VaultStatus,
+  VAULT_CANCELLABLE_STATUSES,
+} from '@/types/vault.types';
 
 @Injectable()
 export class VaultsAdminService {
@@ -34,8 +39,7 @@ export class VaultsAdminService {
     const safePage = page > 0 ? page : 1;
     const safeLimit = limit > 0 ? limit : 10;
     const offset = (safePage - 1) * safeLimit;
-    const now = Date.now();
-    const oneDayAgo = new Date(now - 86_400_000);
+    const oneDayAgo = new Date(Date.now() - 86_400_000);
 
     const queryBuilder = this.vaultsRepository
       .createQueryBuilder('vault')
@@ -43,16 +47,14 @@ export class VaultsAdminService {
       .where('vault.deleted = false')
       .andWhere(
         new Brackets(qb => {
-          qb.where(
-            'vault.vault_status = :contributionStatus AND vault.contribution_phase_start IS NOT NULL AND vault.contribution_phase_start >= :oneDayAgo',
+          qb.where('vault.vault_status = :publishedStatus', {
+            publishedStatus: VaultStatus.published,
+          }).orWhere(
+            `vault.vault_status = :contributionStatus AND (
+              vault.contribution_phase_start IS NULL OR vault.contribution_phase_start >= :oneDayAgo
+            )`,
             {
               contributionStatus: VaultStatus.contribution,
-              oneDayAgo,
-            }
-          ).orWhere(
-            'vault.vault_status = :acquireStatus AND vault.acquire_phase_start IS NOT NULL AND vault.acquire_phase_start >= :oneDayAgo',
-            {
-              acquireStatus: VaultStatus.acquire,
               oneDayAgo,
             }
           );
@@ -131,21 +133,19 @@ export class VaultsAdminService {
   }
 
   private async canCancelVaultByAdmin(vault: Vault): Promise<boolean> {
-    const cancellableStatuses: VaultStatus[] = [VaultStatus.contribution];
-    if (!cancellableStatuses.includes(vault.vault_status)) {
+    if (!VAULT_CANCELLABLE_STATUSES.includes(vault.vault_status)) {
       return false;
     }
 
-    const oneDayMs = 86_400_000;
-    const phaseStart = vault.contribution_phase_start;
-
-    if (!phaseStart) {
-      return false;
-    }
-
-    const ageMs = Date.now() - new Date(phaseStart).getTime();
-    if (ageMs > oneDayMs) {
-      return false;
+    if (vault.vault_status === VaultStatus.contribution) {
+      const oneDayMs = 86_400_000;
+      const phaseStart = vault.contribution_phase_start;
+      if (phaseStart) {
+        const ageMs = Date.now() - new Date(phaseStart).getTime();
+        if (ageMs > oneDayMs) {
+          return false;
+        }
+      }
     }
 
     const ownerId = vault.owner?.id;

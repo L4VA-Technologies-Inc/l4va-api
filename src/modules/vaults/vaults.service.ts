@@ -57,6 +57,7 @@ import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import {
   ContributionWindowType,
   InvestmentWindowType,
+  VAULT_CANCELLABLE_STATUSES,
   VAULT_SEARCH_STATUSES,
   ValueMethod,
   VaultPrivacy,
@@ -2145,19 +2146,21 @@ export class VaultsService {
       throw new UnauthorizedException('You must be an owner of vault!');
     }
 
-    const cancellableStatuses: VaultStatus[] = [VaultStatus.contribution];
-    if (!cancellableStatuses.includes(vault.vault_status)) {
+    if (!VAULT_CANCELLABLE_STATUSES.includes(vault.vault_status)) {
       throw new BadRequestException('Vault cannot be cancelled in its current status');
     }
 
-    const oneDayMs = 86_400_000;
-    const phaseStart = vault.contribution_phase_start;
-    if (!phaseStart) {
-      throw new BadRequestException('Vault phase start is not defined');
-    }
-    const ageMs = Date.now() - new Date(phaseStart).getTime();
-    if (ageMs > oneDayMs) {
-      throw new BadRequestException('Vault can only be cancelled within 24 hours of creation');
+    if (vault.vault_status === VaultStatus.contribution) {
+      const oneDayMs = 86_400_000;
+      const phaseStart = vault.contribution_phase_start;
+      if (phaseStart) {
+        const ageMs = Date.now() - new Date(phaseStart).getTime();
+        if (ageMs > oneDayMs) {
+          throw new BadRequestException(
+            'Vault can only be cancelled within 24 hours after the contribution phase has started'
+          );
+        }
+      }
     }
 
     const hasForeignAssets = await this.assetsRepository
