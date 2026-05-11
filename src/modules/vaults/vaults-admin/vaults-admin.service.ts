@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, Repository } from 'typeorm';
 
@@ -18,8 +18,6 @@ import {
 
 @Injectable()
 export class VaultsAdminService {
-  private readonly logger = new Logger(VaultsAdminService.name);
-
   constructor(
     @InjectRepository(Vault)
     private readonly vaultsRepository: Repository<Vault>,

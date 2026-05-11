@@ -72,11 +72,8 @@ ON CONFLICT (idempotency_key) DO NOTHING;
 -- -----------------------------------------------------------------------
 -- 3. GOVERNANCE_PROPOSAL
 --    One event per active/passed/executed proposal.
---    Idempotency key:
---      Paid proposals (metadata has paymentTxHash):
---        "GOVERNANCE_PROPOSAL:{txHash}"  — same as live producer, no dup.
---      Free proposals (no paymentTxHash):
---        "GOVERNANCE_PROPOSAL:proposal:{id}" — backfill-only key.
+--    Idempotency key: "governance_proposal:{proposal.id}"
+--    (Matches live producer pattern to prevent duplicates.)
 -- -----------------------------------------------------------------------
 INSERT INTO events.outbox
   (aggregate_id, aggregate_type, event_type, event_data, idempotency_key, status, created_at)
@@ -93,10 +90,7 @@ SELECT
     'proposal_type',   p.proposal_type,
     'event_timestamp', p.created_at
   ),
-  CASE WHEN p.metadata->>'paymentTxHash' IS NOT NULL
-    THEN 'governance_proposal:' || (p.metadata->>'paymentTxHash')
-    ELSE 'governance_proposal:proposal:' || p.id
-  END,
+  'governance_proposal:' || p.id,
   'pending',
   p.created_at
 FROM proposal p
@@ -108,9 +102,8 @@ ON CONFLICT (idempotency_key) DO NOTHING;
 -- -----------------------------------------------------------------------
 -- 4. GOVERNANCE_VOTE
 --    One event per vote.
---    Key: "GOVERNANCE_VOTE:vote:{vote.id}"
---    (The live producer emits votes without an idempotency key, so
---    backfill keys are guaranteed not to collide with live entries.)
+--    Idempotency key: "governance_vote:{vote.id}"
+--    (Matches live producer pattern to prevent duplicates.)
 -- -----------------------------------------------------------------------
 INSERT INTO events.outbox
   (aggregate_id, aggregate_type, event_type, event_data, idempotency_key, status, created_at)
@@ -126,7 +119,7 @@ SELECT
     'proposal_id',     v.proposal_id,
     'event_timestamp', v.timestamp
   ),
-  'governance_vote:vote:' || v.id,
+  'governance_vote:' || v.id,
   'pending',
   v.timestamp
 FROM vote v

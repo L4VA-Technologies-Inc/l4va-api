@@ -257,6 +257,7 @@ export class Vault {
   liquidity_pool_contribution?: number;
 
   @Expose({ name: 'vaultWeight' })
+  @Transform(({ value }) => Number(value ?? 1.0))
   @Column({
     name: 'vault_weight',
     type: 'numeric',

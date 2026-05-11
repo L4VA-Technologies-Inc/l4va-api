@@ -5,7 +5,7 @@ import { RewardEventProducer } from './services/reward-event-producer.service';
 
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
-import { RewardActivityType, WidgetSwapEventData, WidgetSwapItemData } from '@/types/rewards.types';
+import { WidgetSwapEventData, WidgetSwapItemData } from '@/types/rewards.types';
 
 /**
  * Public rewards controller for l4va-api.
@@ -26,6 +26,12 @@ export class RewardsController {
   /**
    * POST /rewards/widget-swap
    * Called by the frontend DexHunter widget onSuccess callback.
+   *
+   * NOTE: Swap events are not currently indexed as they are not vault-related
+   * and don't fit the aggregate_id (UUID) schema. This endpoint validates
+   * the swap was successful but does not persist to the rewards outbox.
+   * TODO: If swap tracking becomes needed, add wallet-scoped event support
+   *  with nullable aggregate_id or separate wallet event table
    */
   @UseGuards(AuthGuard)
   @Post('widget-swap')
@@ -45,24 +51,28 @@ export class RewardsController {
       return { indexed: false, reason: 'swap not successful' };
     }
 
-    const event = await this.rewardEventProducer.indexEvent({
-      walletAddress: successfulSwap.user_address || req.user.address,
-      eventType: RewardActivityType.WIDGET_SWAP,
-      txHash: successfulSwap.tx_hash,
-      units: 1,
-      metadata: {
-        dex: successfulSwap.dex,
-        tokenIn: successfulSwap.token_id_in,
-        tokenOut: successfulSwap.token_id_out,
-        amountIn: successfulSwap.amount_in,
-        expectedOutput: successfulSwap.expected_output,
-        expectedOutputWithoutSlippage: (successfulSwap as any).expected_output_without_slippage,
-        poolId: (successfulSwap as any).pool_id,
-        type: successfulSwap.type,
-      },
-    });
+    // const event = await this.rewardEventProducer.indexEvent({
+    //   walletAddress: successfulSwap.user_address || req.user.address,
+    //   eventType: RewardActivityType.WIDGET_SWAP,
+    //   txHash: successfulSwap.tx_hash,
+    //   units: 1,
+    //   metadata: {
+    //     dex: successfulSwap.dex,
+    //     tokenIn: successfulSwap.token_id_in,
+    //     tokenOut: successfulSwap.token_id_out,
+    //     amountIn: successfulSwap.amount_in,
+    //     expectedOutput: successfulSwap.expected_output,
+    //     expectedOutputWithoutSlippage: (successfulSwap as any).expected_output_without_slippage,
+    //     poolId: (successfulSwap as any).pool_id,
+    //     type: successfulSwap.type,
+    //   },
+    // });
 
-    return { indexed: !!event, eventId: event?.id };
+    return {
+      indexed: false,
+      reason: 'swap events not currently tracked',
+      acknowledged: true,
+    };
   }
 
   // ============================================================================

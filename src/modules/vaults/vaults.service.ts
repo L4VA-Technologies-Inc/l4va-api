@@ -2230,8 +2230,11 @@ export class VaultsService {
       token_description: data.tokenDescription,
     };
 
+    // Only update fields that are actually provided (not undefined)
     Object.entries(fieldMapping).forEach(([key, value]) => {
-      (vault as any)[key] = value;
+      if (value !== undefined) {
+        (vault as any)[key] = value;
+      }
     });
 
     await this.linksRepository.delete({ vault: { id: vault.id } });

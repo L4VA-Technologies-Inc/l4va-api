@@ -1,4 +1,4 @@
-import { Controller, Get, Logger, Param, ParseUUIDPipe, Post, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, ParseUUIDPipe, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
 
 import { Vault } from '@/database/vault.entity';
@@ -11,7 +11,6 @@ import { VaultsAdminService } from '@/modules/vaults/vaults-admin/vaults-admin.s
 @UseGuards(AdminGuard)
 @ApiSecurity('Admin-Token')
 export class VaultsAdminController {
-  private readonly logger = new Logger(VaultsAdminController.name);
   constructor(private readonly vaultsAdminService: VaultsAdminService) {}
 
   @ApiOperation({ summary: 'Get vaults available for admin cancellation' })
