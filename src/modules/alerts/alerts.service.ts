@@ -74,9 +74,8 @@ export class AlertsService {
         this.logger.log(`Slack alert sent successfully for ${alertType}`);
       } else {
         this.logger.error(`Failed to send Slack alert: ${response.data.error}`);
+        return;
       }
-
-      this.logger.log(`Slack alert sent for ${alertType}`);
     } catch (error) {
       this.logger.error(`Failed to send Slack alert: ${error.message}`);
     }
