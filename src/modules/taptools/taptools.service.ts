@@ -1303,7 +1303,7 @@ export class TaptoolsService {
       const allRelevantVaults = await this.vaultRepository.find({
         where: {
           deleted: false,
-          vault_status: In([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked]),
+          vault_status: In([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked, VaultStatus.expansion]),
         },
         relations: ['owner'],
         select: ['id', 'vault_status', 'ft_token_supply', 'ft_token_decimals', 'initial_total_value_ada', 'owner'],
