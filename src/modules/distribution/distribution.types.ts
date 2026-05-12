@@ -107,7 +107,7 @@ export interface TransactionOutput {
 export interface AssetOutput {
   assetName: { name: string; format: string };
   policyId: string;
-  quantity: number;
+  quantity: number | bigint;
 }
 
 export interface InlineDatum {
