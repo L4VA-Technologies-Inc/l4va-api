@@ -8,6 +8,7 @@ import { Vault } from '@/database/vault.entity';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
 import { PaginatedResponseDto } from '@/modules/vaults/dto/paginated-response.dto';
 import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
+import { AssetStatus } from '@/types/asset.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
 import {
   SmartContractVaultStatus,
@@ -41,7 +42,7 @@ export class VaultsAdminService {
 
     const queryBuilder = this.vaultsRepository
       .createQueryBuilder('vault')
-      .leftJoinAndSelect('vault.owner', 'owner')
+      .innerJoinAndSelect('vault.owner', 'owner')
       .where('vault.deleted = false')
       .andWhere(
         new Brackets(qb => {
@@ -64,8 +65,16 @@ export class VaultsAdminService {
           FROM assets asset
           WHERE asset.vault_id = vault.id
             AND asset.deleted = false
-            AND (asset.added_by IS NULL OR asset.added_by != owner.id)
-        )`
+            AND (
+              asset.status = :pendingAssetStatus
+              OR asset.added_by IS NULL
+              OR (
+                vault.owner_id IS NOT NULL
+                AND asset.added_by <> vault.owner_id
+              )
+            )
+        )`,
+        { pendingAssetStatus: AssetStatus.PENDING }
       );
 
     if (search?.trim()) {
@@ -151,14 +160,20 @@ export class VaultsAdminService {
       return false;
     }
 
-    const hasForeignAssets = await this.assetsRepository
+    const hasBlockingAsset = await this.assetsRepository
       .createQueryBuilder('asset')
       .where('asset.vault_id = :vaultId', { vaultId: vault.id })
       .andWhere('asset.deleted = false')
-      .andWhere('(asset.added_by IS NULL OR asset.added_by != :ownerId)', { ownerId })
+      .andWhere(
+        new Brackets(qb => {
+          qb.where('asset.status = :status', { status: AssetStatus.PENDING })
+            .orWhere('asset.added_by IS NULL')
+            .orWhere('asset.added_by != :ownerId', { ownerId });
+        })
+      )
       .getExists();
 
-    return !hasForeignAssets;
+    return !hasBlockingAsset;
   }
 
   private async getVaultToCancelByIdByAdmin(vaultId: string): Promise<Vault> {

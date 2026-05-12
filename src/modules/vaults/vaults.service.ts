@@ -2166,13 +2166,24 @@ export class VaultsService {
       }
     }
 
-    const hasForeignAssets = await this.assetsRepository
+    const blockingAsset = await this.assetsRepository
       .createQueryBuilder('asset')
       .where('asset.vault_id = :vaultId', { vaultId })
       .andWhere('asset.deleted = false')
-      .andWhere('(asset.added_by IS NULL OR asset.added_by != :ownerId)', { ownerId })
-      .getExists();
-    if (hasForeignAssets) {
+      .andWhere(
+        new Brackets(qb => {
+          qb.where('asset.status = :status', { status: AssetStatus.PENDING })
+            .orWhere('asset.added_by IS NULL')
+            .orWhere('asset.added_by != :ownerId', { ownerId });
+        })
+      )
+      .getOne();
+
+    if (blockingAsset) {
+      if (blockingAsset.status === AssetStatus.PENDING) {
+        throw new BadRequestException('Vault cannot be cancelled because it has pending assets');
+      }
+
       throw new BadRequestException('Vault cannot be cancelled because it already contains assets from other users');
     }
 
