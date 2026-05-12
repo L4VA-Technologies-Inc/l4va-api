@@ -77,6 +77,9 @@ export class Vault {
   @Column({ nullable: true })
   description?: string;
 
+  @Column({ name: 'token_description', nullable: true })
+  token_description?: string;
+
   @Expose({ name: 'valueMethod' })
   @Column({
     type: 'enum',
@@ -253,6 +256,18 @@ export class Vault {
   })
   liquidity_pool_contribution?: number;
 
+  @Expose({ name: 'vaultWeight' })
+  @Transform(({ value }) => Number(value ?? 1.0))
+  @Column({
+    name: 'vault_weight',
+    type: 'numeric',
+    precision: 10,
+    scale: 4,
+    default: 1.0,
+    nullable: false,
+  })
+  vault_weight: number;
+
   @Expose({ name: 'hasActiveLp' })
   @Column({
     name: 'has_active_lp',
@@ -287,7 +302,7 @@ export class Vault {
   @Expose({ name: 'ftTokenDecimals' })
   @Column({ name: 'ft_token_decimals', type: 'smallint', default: 1, nullable: true })
   @Transform(({ value }) => (value ? Number(value) : null))
-  @Check('"ft_token_decimals" BETWEEN 0 AND 9')
+  @Check('"ft_token_decimals" BETWEEN 0 AND 20')
   ft_token_decimals?: number;
 
   @Expose({ name: 'terminationType' })
@@ -360,7 +375,7 @@ export class Vault {
     type: 'numeric',
     nullable: true,
   })
-  cosigning_threshold?: number; // Not used for now
+  cosigning_threshold?: number;
 
   @Expose({ name: 'totalAssetsCostUsd' })
   @Transform(({ value }) => (value ? Number(value) : null))

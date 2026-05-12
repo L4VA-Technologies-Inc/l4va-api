@@ -35,6 +35,13 @@ export class AcquireService {
     txId: string;
     assets: ContributionAsset[];
   }> {
+    // Check acquire kill switch
+    if (!this.systemSettingsService.acquireEnabled) {
+      throw new BadRequestException(
+        'Acquiring vault tokens is temporarily unavailable. Please try again later or contact support if this persists.'
+      );
+    }
+
     const vault = await this.vaultRepository.findOne({
       where: { id: vaultId },
       relations: ['acquirer_whitelist', 'owner'],

@@ -177,7 +177,7 @@ export class VaultMarketStatsService {
           const liquidityCheck = await this.dexHunterPricingService.checkTokenLiquidity(unit);
 
           if (!liquidityCheck?.hasLiquidity) {
-            this.logger.debug(`${vault.name}: No liquidity detected by DexHunter, skipping Taptools API`);
+            // this.logger.debug(`${vault.name}: No liquidity detected by DexHunter, skipping Taptools API`);
 
             // Update LP status to false and record check time, but do NOT upsert market data
             await this.vaultRepository.update({ id: vault.id }, { has_active_lp: false, lp_last_checked: new Date() });

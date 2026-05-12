@@ -309,7 +309,7 @@ export class LifecycleService {
     claims: Partial<Claim>[],
     acquireMultiplier: [string, string | null, number][]
   ): Promise<boolean> {
-    const totalClaimAmount = claims.reduce((sum, claim) => sum + (claim.amount || 0), 0);
+    const totalClaimAmount = claims.reduce((sum, claim) => sum + Number(claim.amount || 0), 0);
     const totalSupplyWithDecimals = vault.ft_token_supply * Math.pow(10, vault.ft_token_decimals);
     const minExpectedAmount = totalSupplyWithDecimals * 0.1; // 10% threshold
     const claimPercentage = totalSupplyWithDecimals > 0 ? (totalClaimAmount / totalSupplyWithDecimals) * 100 : 0;

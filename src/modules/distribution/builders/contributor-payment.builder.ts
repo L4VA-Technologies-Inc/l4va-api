@@ -60,7 +60,7 @@ export class ContributorPaymentBuilder {
 
     const scriptInteractions: ScriptInteraction[] = [];
     const outputs: TransactionOutput[] = [];
-    const mintAssets: { vaultTokenQuantity: number; receiptBurn: number }[] = [];
+    const mintAssets: { vaultTokenQuantity: bigint; receiptBurn: number }[] = [];
 
     const hasDispatchFunding = dispatchUtxos.length > 0;
     let totalPaymentAmount = 0;
@@ -99,7 +99,7 @@ export class ContributorPaymentBuilder {
 
       // CRITICAL VALIDATION: Never burn receipt if VT would be 0!
       // This prevents catastrophic loss where receipt is burned but no VT minted
-      if (vaultTokenQuantity === 0) {
+      if (vaultTokenQuantity === 0n) {
         this.logger.error(
           `CRITICAL: Claim ${claim.id} would mint 0 VT! ` +
             `This indicates multipliers for this claim's assets are NOT on-chain. ` +
@@ -113,10 +113,11 @@ export class ContributorPaymentBuilder {
       }
 
       // VALIDATION: Warn if calculated VT differs significantly from expected
-      const expectedVt = Number(claim.amount);
+      const expectedVt = BigInt(claim.amount);
       if (vaultTokenQuantity !== expectedVt) {
-        const difference = Math.abs(vaultTokenQuantity - expectedVt);
-        const percentDiff = (difference / expectedVt) * 100;
+        const difference =
+          vaultTokenQuantity > expectedVt ? vaultTokenQuantity - expectedVt : expectedVt - vaultTokenQuantity;
+        const percentDiff = expectedVt > 0n ? Number((difference * 10000n) / expectedVt) / 100 : 0;
         // Log warning for any discrepancy, but only error on large differences
         this.logger.warn(
           `VT mismatch for claim ${claim.id}: calculated=${vaultTokenQuantity}, expected=${expectedVt}, diff=${percentDiff.toFixed(2)}%`
@@ -194,12 +195,12 @@ export class ContributorPaymentBuilder {
       }
 
       // Only add vault tokens if quantity > 0
-      if (vaultTokenQuantity > 0) {
+      if (vaultTokenQuantity > 0n) {
         userOutput.assets = [
           {
             assetName: { name: vault.asset_vault_name, format: 'hex' },
             policyId: vault.script_hash,
-            quantity: vaultTokenQuantity,
+            quantity: vaultTokenQuantity.toString(),
           },
         ];
       }
@@ -295,19 +296,19 @@ export class ContributorPaymentBuilder {
     });
 
     // Calculate total mint quantities
-    const totalVaultTokenQuantity = mintAssets.reduce((sum, m) => sum + m.vaultTokenQuantity, 0);
+    const totalVaultTokenQuantity = mintAssets.reduce((sum, m) => sum + m.vaultTokenQuantity, 0n);
     const totalReceiptBurn = mintAssets.reduce((sum, m) => sum + m.receiptBurn, 0);
 
     // Build mint array - only include vault tokens if quantity > 0
     const mintArray: any[] = [];
 
-    if (totalVaultTokenQuantity > 0) {
+    if (totalVaultTokenQuantity > 0n) {
       mintArray.push({
         version: 'cip25',
         assetName: { name: vault.asset_vault_name, format: 'hex' },
         policyId: vault.script_hash,
         type: 'plutus',
-        quantity: totalVaultTokenQuantity,
+        quantity: totalVaultTokenQuantity.toString(),
       });
     }
 
@@ -411,14 +412,14 @@ export class ContributorPaymentBuilder {
     utxoAmounts: Array<{ unit: string; quantity: string }>,
     acquireMultiplier: Array<[string, string | null, number]> | undefined,
     vaultPolicyId: string
-  ): number {
+  ): bigint {
     if (!acquireMultiplier || acquireMultiplier.length === 0) {
-      return 0;
+      return 0n;
     }
 
-    let totalVtAmount = 0;
+    let totalVtAmount = 0n;
     const receiptUnit = vaultPolicyId + '72656365697074'; // "receipt" in hex
-    const unmatchedAssets: Array<{ policyId: string; assetName: string; quantity: number }> = [];
+    const unmatchedAssets: Array<{ policyId: string; assetName: string; quantity: string }> = [];
 
     for (const amount of utxoAmounts) {
       // Skip lovelace and receipt token
@@ -429,16 +430,17 @@ export class ContributorPaymentBuilder {
       // Parse unit into policyId and assetName
       const policyId = amount.unit.substring(0, 56);
       const assetName = amount.unit.substring(56);
-      const quantity = Number(amount.quantity);
+      const quantity = BigInt(amount.quantity);
 
       // Find matching multiplier
       const multiplier = this.findMultiplier(acquireMultiplier, policyId, assetName);
 
       if (multiplier > 0) {
-        totalVtAmount += multiplier * quantity;
+        // Use BigInt arithmetic to match on-chain exact integer calculation
+        totalVtAmount += BigInt(multiplier) * quantity;
       } else {
         // Track unmatched assets for debugging
-        unmatchedAssets.push({ policyId, assetName, quantity });
+        unmatchedAssets.push({ policyId, assetName, quantity: amount.quantity });
       }
     }
 

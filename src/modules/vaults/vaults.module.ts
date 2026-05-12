@@ -27,12 +27,15 @@ import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { DistributionModule } from '@/modules/distribution/distribution.module';
+import { ClaimsModule } from '@/modules/vaults/claims/claims.module';
 import { MarketStatsModule } from '@/modules/vaults/market-stats/market-stats.module';
 import { GovernanceModule } from '@/modules/vaults/phase-management/governance/governance.module';
 import { LifecycleModule } from '@/modules/vaults/phase-management/lifecycle/lifecycle.module';
 import { TransactionsModule } from '@/modules/vaults/processing-tx/offchain-tx/transactions.module';
 import { BlockchainModule } from '@/modules/vaults/processing-tx/onchain/blockchain.module';
 import { StatisticsService } from '@/modules/vaults/statistics/statistics.service';
+import { VaultsAdminController } from '@/modules/vaults/vaults-admin/vaults-admin.controller';
+import { VaultsAdminService } from '@/modules/vaults/vaults-admin/vaults-admin.service';
 
 @Module({
   imports: [
@@ -46,6 +49,7 @@ import { StatisticsService } from '@/modules/vaults/statistics/statistics.servic
     TaptoolsModule,
     WayUpPricingModule,
     DexHunterModule,
+    ClaimsModule,
     TypeOrmModule.forFeature([
       Vault,
       User,
@@ -69,8 +73,9 @@ import { StatisticsService } from '@/modules/vaults/statistics/statistics.servic
     StatisticsService,
     VaultFilesCleanupService,
     TokenVerificationRefreshService,
+    VaultsAdminService,
   ],
-  controllers: [VaultsController],
+  controllers: [VaultsController, VaultsAdminController],
   exports: [VaultsService, DraftVaultsService],
 })
 export class VaultsModule {}

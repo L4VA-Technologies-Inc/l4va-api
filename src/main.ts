@@ -7,7 +7,7 @@ import * as bodyParser from 'body-parser';
 import { AppModule } from './app.module';
 import { loadSecrets } from './load-gcp-secrets';
 
-async function bootstrap() {
+async function bootstrap(): Promise<void> {
   try {
     await loadSecrets();
     // eslint-disable-next-line no-console

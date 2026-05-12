@@ -107,7 +107,7 @@ export interface TransactionOutput {
 export interface AssetOutput {
   assetName: { name: string; format: string };
   policyId: string;
-  quantity: number;
+  quantity: number | string;
 }
 
 export interface InlineDatum {
@@ -153,7 +153,7 @@ export interface MintAsset {
   assetName: { name: string; format: string };
   policyId: string;
   type: string;
-  quantity: number;
+  quantity: number | string;
   metadata: Record<string, any>;
 }
 

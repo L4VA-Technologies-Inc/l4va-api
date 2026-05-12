@@ -21,6 +21,7 @@ import { TokenRegistry } from '@/database/tokenRegistry.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { RewardsModule } from '@/modules/rewards/rewards.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { Vault } from '@/database/vault.entity';
     HttpModule,
     TransactionsModule,
     AssetsModule,
+    RewardsModule,
     TypeOrmModule.forFeature([Vault, Transaction, AssetsWhitelistEntity, TokenRegistry, Asset, Claim, User, Proposal]),
   ],
   controllers: [BlockchainController],

@@ -18,6 +18,11 @@ export interface SystemSettingsData {
   auto_create_treasury_wallets_testnet: boolean;
   vault_creator_whitelist: string[];
   hidden_mainnet_vault_ids: string[];
+  // Kill switches for sensitive flows
+  vault_creation_enabled: boolean;
+  contribution_enabled: boolean;
+  acquire_enabled: boolean;
+  governance_enabled: boolean;
   // Governance fees (in lovelace)
   governance_fee_proposal_staking: number;
   governance_fee_proposal_distribution: number;
@@ -43,6 +48,11 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   max_acquire_amount_ada: 10000000, // 10M ADA default limit
   auto_create_treasury_wallets: false, // Disabled by default for mainnet
   auto_create_treasury_wallets_testnet: false, // Disabled by default for testnet
+  // Kill switches for sensitive flows
+  vault_creation_enabled: true,
+  contribution_enabled: true,
+  acquire_enabled: true,
+  governance_enabled: true,
   // Governance fees (in lovelace)
   governance_fee_proposal_staking: 5000000, // 5 ADA
   governance_fee_proposal_distribution: 5000000, // 5 ADA
@@ -218,6 +228,23 @@ export class SystemSettingsService implements OnModuleInit {
 
   get maxVotingDuration(): number {
     return this.settings.max_voting_duration || 259200000; // 3 days default
+  }
+
+  // Kill switch getters
+  get vaultCreationEnabled(): boolean {
+    return this.settings.vault_creation_enabled !== false; // Default true if not set
+  }
+
+  get contributionEnabled(): boolean {
+    return this.settings.contribution_enabled !== false; // Default true if not set
+  }
+
+  get acquireEnabled(): boolean {
+    return this.settings.acquire_enabled !== false; // Default true if not set
+  }
+
+  get governanceEnabled(): boolean {
+    return this.settings.governance_enabled !== false; // Default true if not set
   }
 
   /**

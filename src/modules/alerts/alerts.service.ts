@@ -13,6 +13,7 @@ export type SlackAlertType =
   | 'admin_utxos_exhausted'
   | 'expansion_invalid_vtprice'
   | 'multiplier_underflow_detected'
+  | 'stake_reward_insufficient_funds'
   | string;
 
 @Injectable()
@@ -73,9 +74,8 @@ export class AlertsService {
         this.logger.log(`Slack alert sent successfully for ${alertType}`);
       } else {
         this.logger.error(`Failed to send Slack alert: ${response.data.error}`);
+        return;
       }
-
-      this.logger.log(`Slack alert sent for ${alertType}`);
     } catch (error) {
       this.logger.error(`Failed to send Slack alert: ${error.message}`);
     }
@@ -421,6 +421,62 @@ export class AlertsService {
                 {
                   type: 'mrkdwn',
                   text: `*Action:* ${data.action} | *Timestamp:* ${timestamp}`,
+                },
+              ],
+            },
+          ],
+        };
+
+      case 'stake_reward_insufficient_funds':
+        return {
+          text: `🚨 Stake Reward Distribution Failed - Insufficient Funds`,
+          blocks: [
+            {
+              type: 'header',
+              text: {
+                type: 'plain_text',
+                text: '🚨 Insufficient Admin Funds for Rewards',
+                emoji: true,
+              },
+            },
+            {
+              type: 'section',
+              fields: [
+                {
+                  type: 'mrkdwn',
+                  text: `*Action:*\n${data.action ?? 'unknown'}`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*User Address:*\n${data.userAddress ?? 'unknown'}`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Admin Address:*\n${data.adminAddress ?? 'unknown'}`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Error:*\n${data.error ?? 'unknown'}`,
+                },
+              ],
+            },
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text:
+                  `*Current Admin Wallet Balances:*\n` +
+                  `• ADA: ${data.balances?.ada ?? '0'}\n` +
+                  `• VLRM: ${data.balances?.vlrm ?? '0'}\n` +
+                  `• L4VA: ${data.balances?.l4va ?? '0'}`,
+              },
+            },
+            {
+              type: 'context',
+              elements: [
+                {
+                  type: 'mrkdwn',
+                  text: `*Timestamp:* ${timestamp}`,
                 },
               ],
             },

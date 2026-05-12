@@ -11,6 +11,7 @@ import {
   ParseUUIDPipe,
   Delete,
   HttpCode,
+  Patch,
 } from '@nestjs/common';
 import { ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 
@@ -23,6 +24,8 @@ import { DraftVaultsService } from './draft-vaults.service';
 import { BuildBurnTransactionRes } from './dto/build-burn-transaction.res';
 import { CreateVaultRes } from './dto/create-vault.res';
 import { CreateVaultReq } from './dto/createVault.req';
+import { EditUpcomingVaultDto } from './dto/edit-upcoming-vault.dto';
+import { GetAssetsWhitelistDto } from './dto/get-assets-whitelist.dto';
 import {
   CollectionNameItem,
   GetCollectionNamesReq,
@@ -103,6 +106,24 @@ export class VaultsController {
   }
 
   @ApiDoc({
+    summary: 'Edit upcoming vault settings',
+    description:
+      'Updates editable settings for upcoming vaults (published): thresholds, reserve settings, description, social links and tags.',
+    status: 200,
+  })
+  @UseGuards(AuthGuard)
+  @Patch(':id/upcoming-settings')
+  async editUpcomingVaultSettings(
+    @Param('id', new ParseUUIDPipe()) vaultId: string,
+    @Request() req: AuthRequest,
+    @Body() data: EditUpcomingVaultDto
+  ): Promise<{ success: boolean }> {
+    const userId = req.user.sub;
+    await this.vaultsService.editUpcomingVaultSettings(userId, vaultId, data);
+    return { success: true };
+  }
+
+  @ApiDoc({
     summary: 'List of vaults - works with or without authentication',
     description:
       'Returns paginated list of vaults. For authenticated users, includes private vaults they have access to. For unauthenticated users, shows only public vaults. Default page: 1, default limit: 10. Supports sorting by name, created_at, or updated_at.',
@@ -148,6 +169,21 @@ export class VaultsController {
   @Get('acquire/top')
   async getTopPublicAcquireVaults(): Promise<VaultAcquireResponse[]> {
     return this.vaultsService.getTopPublicAcquireVaults();
+  }
+
+  @ApiDoc({
+    summary: 'Get unique assets whitelist',
+    description:
+      'Returns paginated unique assets from assets whitelist as collection name and policy ID. Supports myVaults, page, limit and search query params.',
+    status: 200,
+  })
+  @UseGuards(OptionalAuthGuard)
+  @Get('assets-whitelist')
+  async getAssetsWhitelist(
+    @Query() query: GetAssetsWhitelistDto,
+    @Request() req?: AuthRequest
+  ): Promise<PaginatedResponseDto<{ name: string; policyId: string }>> {
+    return this.vaultsService.getAssetsWhitelist({ ...query, userId: req?.user?.sub });
   }
 
   @ApiDoc({
@@ -259,6 +295,20 @@ export class VaultsController {
   ): Promise<PublishBurnTransactionRes> {
     const userId = req.user.sub;
     return await this.vaultsService.publishBurnTransaction(params.id, userId, publishDto);
+  }
+
+  @ApiDoc({
+    summary: 'Cancel vault (owner)',
+    description: 'Allowed only for the owner and only within 24 hours of vault start phase.',
+    status: 200,
+  })
+  @UseGuards(AuthGuard)
+  @Delete(':id/cancel')
+  async cancelVaultByOwner(
+    @Param('id', new ParseUUIDPipe()) vaultId: string,
+    @Request() req: AuthRequest
+  ): Promise<{ success: boolean }> {
+    return this.vaultsService.cancelVaultByOwner(vaultId, req.user.sub);
   }
 
   @ApiDoc({

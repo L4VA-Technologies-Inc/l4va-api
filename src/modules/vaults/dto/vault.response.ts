@@ -42,6 +42,13 @@ export class VaultShortResponse {
   })
   description?: string;
 
+  @ApiProperty({ description: 'Description of the vault token', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'token_description' },
+  })
+  tokenDescription?: string;
+
   @ApiProperty({
     description: 'Total value of locked vaults in USD',
     example: 1250000,
@@ -310,6 +317,17 @@ export class VaultFullResponse extends VaultShortResponse {
     expose: true,
   })
   canCreateProposal: boolean;
+
+  @ApiProperty({
+    description: 'Indicates whether the user can cancel this vault',
+    type: Boolean,
+    default: false,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  canCancelVault: boolean;
 
   @ApiProperty({
     description: 'Indicates whether the user can acquire from this vault',
@@ -717,12 +735,24 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   expansionNoLimit?: boolean;
 
-  @ApiProperty({ description: 'Expansion assets grouped by policy', required: false })
+  @ApiProperty({
+    description: 'Expansion assets grouped by policy',
+    required: false,
+    type: 'array',
+    items: {
+      type: 'object',
+      properties: {
+        policyId: { type: 'string' },
+        quantity: { type: 'number' },
+        collectionName: { type: 'string', nullable: true },
+      },
+    },
+  })
   @DtoRepresent({
     transform: false,
     expose: { name: 'expansionAssetsByPolicy' },
   })
-  expansionAssetsByPolicy?: Array<{ policyId: string; quantity: number }>;
+  expansionAssetsByPolicy?: Array<{ policyId: string; quantity: number; collectionName: string | null }>;
 
   @ApiProperty({
     description: 'Expansion whitelisted collections with names',
