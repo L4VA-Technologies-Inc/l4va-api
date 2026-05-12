@@ -758,6 +758,8 @@ export class StakeService {
         );
       }
 
+      txBuilder = txBuilder.pay.ToAddress(this.adminAddress, { lovelace: 2_000_000n });
+
       const tx = await txBuilder
         .validTo(currentTimeMs + TX_VALIDITY_WINDOW_MS)
         .addSignerKey(ownerHash)
