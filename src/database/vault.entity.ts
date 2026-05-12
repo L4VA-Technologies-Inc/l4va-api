@@ -302,7 +302,7 @@ export class Vault {
   @Expose({ name: 'ftTokenDecimals' })
   @Column({ name: 'ft_token_decimals', type: 'smallint', default: 1, nullable: true })
   @Transform(({ value }) => (value ? Number(value) : null))
-  @Check('"ft_token_decimals" BETWEEN 0 AND 9')
+  @Check('"ft_token_decimals" BETWEEN 0 AND 20')
   ft_token_decimals?: number;
 
   @Expose({ name: 'terminationType' })
