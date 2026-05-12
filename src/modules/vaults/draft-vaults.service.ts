@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { classToPlain, plainToInstance } from 'class-transformer';
 import { In, Repository } from 'typeorm';
@@ -6,7 +6,7 @@ import { In, Repository } from 'typeorm';
 import { transformImageToUrl } from '../../helpers';
 import { VaultStatus } from '../../types/vault.types';
 
-import { VaultSortField, SortOrder } from './dto/get-vaults.dto';
+import { SortOrder, VaultSortField } from './dto/get-vaults.dto';
 import { PaginatedResponseDto } from './dto/paginated-response.dto';
 import { SaveDraftReq } from './dto/saveDraft.req';
 import { VaultShortResponse } from './dto/vault.response';
@@ -152,9 +152,6 @@ export class DraftVaultsService {
       }
 
       if (existingVault) {
-        if (existingVault.social_links?.length > 0) {
-          await this.linksRepository.remove(existingVault.social_links);
-        }
         if (existingVault.assets_whitelist?.length > 0) {
           await this.assetsWhitelistRepository.remove(existingVault.assets_whitelist);
         }
@@ -271,34 +268,44 @@ export class DraftVaultsService {
         vault = await this.vaultsRepository.save(vaultData as Vault);
       }
 
-      // Handle social links only if provided
-      if (data.socialLinks !== undefined && data.socialLinks.length > 0) {
-        const links = data.socialLinks.map(linkItem => {
-          return this.linksRepository.create({
-            vault: vault,
-            name: linkItem.name,
-            url: linkItem.url,
-          });
-        });
-        await this.linksRepository.save(links);
+      // Social links: only touch DB when the client sends the field; empty array clears them.
+      if (data.socialLinks !== undefined && data.socialLinks !== null) {
+        await this.linksRepository.delete({ vault: { id: vault.id } });
+        if (data.socialLinks.length > 0) {
+          const newLinks = data.socialLinks.map(linkItem =>
+            this.linksRepository.create({
+              name: linkItem.name,
+              url: linkItem.url,
+              vault: vault,
+            })
+          );
+          vault.social_links = await this.linksRepository.save(newLinks);
+        } else {
+          vault.social_links = [];
+        }
       }
 
-      // Handle tags if provided
-      if (data.tags?.length > 0) {
-        const tags = await Promise.all(
-          data.tags.map(async tagName => {
-            let tag = await this.tagsRepository.findOne({
-              where: { name: tagName },
-            });
-            if (!tag) {
-              tag = await this.tagsRepository.save({
-                name: tagName,
-              });
-            }
-            return tag;
-          })
-        );
-        vault.tags = tags;
+      if (data.tags !== undefined && data.tags !== null) {
+        const normalizedTagNames = [...new Set(data.tags.map(tag => tag.trim()).filter(tag => tag.length > 0))];
+        if (normalizedTagNames.length > 0) {
+          const existingTags = await this.tagsRepository.find({
+            where: { name: In(normalizedTagNames) },
+          });
+
+          const existingTagNames = new Set(existingTags.map(tag => tag.name));
+          const missingTagNames = normalizedTagNames.filter(tagName => !existingTagNames.has(tagName));
+
+          let newTags = [];
+          if (missingTagNames.length > 0) {
+            const tagsToCreate = missingTagNames.map(name => ({ name }));
+            newTags = await this.tagsRepository.save(tagsToCreate);
+          }
+
+          vault.tags = [...existingTags, ...newTags];
+        } else {
+          vault.tags = [];
+        }
+
         await this.vaultsRepository.save(vault);
       }
 
@@ -401,7 +408,17 @@ export class DraftVaultsService {
     });
 
     if (canDelete) {
-      await this.vaultsRepository.delete(vaultId);
+      await this.vaultsRepository.manager.transaction(async manager => {
+        await manager
+          .createQueryBuilder()
+          .delete()
+          .from('vault_tags')
+          .where('vault_id = :vaultId', { vaultId })
+          .execute();
+
+        await manager.delete(Vault, vaultId);
+      });
+
       return { success: true };
     }
 
