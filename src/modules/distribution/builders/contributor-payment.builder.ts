@@ -200,7 +200,7 @@ export class ContributorPaymentBuilder {
           {
             assetName: { name: vault.asset_vault_name, format: 'hex' },
             policyId: vault.script_hash,
-            quantity: vaultTokenQuantity,
+            quantity: vaultTokenQuantity.toString(),
           },
         ];
       }
@@ -308,7 +308,7 @@ export class ContributorPaymentBuilder {
         assetName: { name: vault.asset_vault_name, format: 'hex' },
         policyId: vault.script_hash,
         type: 'plutus',
-        quantity: totalVaultTokenQuantity,
+        quantity: totalVaultTokenQuantity.toString(),
       });
     }
 
