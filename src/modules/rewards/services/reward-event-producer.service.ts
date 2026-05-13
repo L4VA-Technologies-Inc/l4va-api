@@ -7,7 +7,7 @@ import { RewardActivityType } from '@/types/rewards.types';
 
 interface IndexEventInput {
   walletAddress: string;
-  vaultId?: string;
+  vaultId: string;
   eventType: RewardActivityType;
   txHash?: string;
   units?: number;
@@ -39,7 +39,7 @@ export class RewardEventProducer {
 
       const event = this.outboxRepository.create({
         aggregate_id: aggregateId,
-        aggregate_type: input.vaultId ? 'vault' : 'wallet',
+        aggregate_type: 'vault',
         event_type: input.eventType,
         event_data: {
           wallet_address: input.walletAddress,
