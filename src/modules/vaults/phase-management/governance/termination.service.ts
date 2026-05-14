@@ -57,17 +57,26 @@ export interface TerminationMetadata {
   nftBurnTxHash?: string;
   ftExtractionTxHash?: string; // FTs extracted to treasury for distribution
   lpRemovalTxHash?: string;
+  lpAmountRemoved?: string; // Actual LP tokens sent to VyFi (may be partial if not all LP in admin)
+  lpTotalClaimed?: string; // Total LP tokens claimed by users (from LP claim metadata)
+  lpRecoveryPercentage?: number; // Percentage of claimed LP that was recovered (lpAmountRemoved / lpTotalClaimed * 100)
+  isPartialLpRecovery?: boolean; // True if not all claimed LP tokens were in admin wallet
+  vyfiOrderAddress?: string; // VyFi order address to track returns from
+  lpRemovalTimestamp?: string; // ISO timestamp when LP removal was submitted
   lpReturnTxHash?: string;
+  actualVtReturn?: string; // Actual VT received from VyFi
+  actualAdaReturn?: string; // Actual ADA received from VyFi (in lovelace)
   vtBurnTxHash?: string;
   adaTransferTxHash?: string;
   treasurySweepTxHash?: string;
   sweptLovelace?: string;
   totalAdaForDistribution?: string; // In lovelace
   ftsForDistribution?: Array<{ policyId: string; assetId: string; quantity: string; name?: string }>; // FTs to distribute to VT holders
-  expectedVtReturn?: string;
-  expectedAdaReturn?: string;
+  expectedVtReturn?: string; // Calculated based on pool reserves at removal time
+  expectedAdaReturn?: string; // Calculated based on pool reserves at removal time
   claimsCreatedAt?: string;
   lastCheckedAt?: string;
+  partialRecoveryWarning?: string; // Warning message if LP recovery was partial
   error?: string;
 }
 
@@ -480,17 +489,78 @@ export class TerminationService {
       return;
     }
 
+    // Get total LP claimed from claim metadata
+    const lpClaimMetadata = lpClaim.metadata as any;
+    const totalLpClaimed = lpClaimMetadata?.lpAmount ? BigInt(lpClaimMetadata.lpAmount) : BigInt(0);
+
     try {
-      // Use VyfiService to remove liquidity
+      // Use VyfiService to remove liquidity (removes only what's in admin wallet)
       const result = await this.vyfiService.removeLiquidityForVault(vault.id);
 
-      this.logger.log(`LP removal transaction submitted: ${result.txHash}`);
+      const lpRemoved = BigInt(result.lpAmount);
 
-      // Update status to awaiting return
+      // Check if this is a partial LP recovery
+      const isPartial = totalLpClaimed > BigInt(0) && lpRemoved < totalLpClaimed;
+      const recoveryPercentage =
+        totalLpClaimed > BigInt(0) ? Number((lpRemoved * BigInt(10000)) / totalLpClaimed) / 100 : 100;
+
+      // Log LP recovery status
+      if (isPartial) {
+        this.logger.warn(
+          `⚠️  PARTIAL LP RECOVERY for vault ${vault.id}:\n` +
+            `   Total LP claimed: ${totalLpClaimed}\n` +
+            `   LP in admin wallet: ${lpRemoved}\n` +
+            `   Recovery rate: ${recoveryPercentage.toFixed(2)}%\n` +
+            `   Missing LP: ${totalLpClaimed - lpRemoved} (${(100 - recoveryPercentage).toFixed(2)}%)\n` +
+            `   ⚠️  VT holders will receive reduced distribution based on recovered LP only`
+        );
+      } else {
+        this.logger.log(
+          `✓ Full LP recovery for vault ${vault.id}: ${lpRemoved} LP tokens (${recoveryPercentage.toFixed(2)}%)`
+        );
+      }
+
+      this.logger.log(`LP removal transaction submitted: ${result.txHash}`);
+      this.logger.log(`Tracking returns from VyFi order address: ${result.poolInfo.orderAddress}`);
+
+      // Calculate expected returns based on pool reserves
+      // Note: These are estimates based on current pool state, actual returns may differ due to:
+      // - Pool state changes between submission and execution
+      // - VyFi fees
+      // - Slippage
+      const poolReserveA = result.poolInfo?.reserveA ? BigInt(result.poolInfo.reserveA) : BigInt(0);
+      const poolReserveB = result.poolInfo?.reserveB ? BigInt(result.poolInfo.reserveB) : BigInt(0);
+      const lpTotalSupply = result.poolInfo?.lpQuantity ? BigInt(result.poolInfo.lpQuantity) : BigInt(0);
+
+      let expectedVt = '0';
+      let expectedAda = '0';
+
+      if (lpTotalSupply > 0) {
+        // Proportional calculation: (lpRemoved / lpTotalSupply) * reserves
+        expectedVt = ((lpRemoved * poolReserveA) / lpTotalSupply).toString();
+        expectedAda = ((lpRemoved * poolReserveB) / lpTotalSupply).toString();
+      }
+
+      this.logger.log(`Expected returns: ~${expectedVt} VT, ~${expectedAda} lovelace`);
+
+      // Build partial recovery warning if applicable
+      const partialWarning = isPartial
+        ? `Only ${recoveryPercentage.toFixed(2)}% of LP tokens were recovered. ` +
+          `${totalLpClaimed - lpRemoved} LP tokens (${(100 - recoveryPercentage).toFixed(2)}%) remain with users/other addresses and their value is not included in this distribution.`
+        : undefined;
+
+      // Update status to awaiting return with tracking metadata
       await this.updateTerminationStatus(vault.id, TerminationStatus.LP_REMOVAL_AWAITING, {
         lpRemovalTxHash: result.txHash,
-        expectedVtReturn: result.poolInfo?.reserveA?.toString(),
-        expectedAdaReturn: result.poolInfo?.reserveB?.toString(),
+        lpAmountRemoved: result.lpAmount,
+        lpTotalClaimed: totalLpClaimed.toString(),
+        lpRecoveryPercentage: recoveryPercentage,
+        isPartialLpRecovery: isPartial,
+        partialRecoveryWarning: partialWarning,
+        vyfiOrderAddress: result.poolInfo.orderAddress,
+        lpRemovalTimestamp: new Date().toISOString(),
+        expectedVtReturn: expectedVt,
+        expectedAdaReturn: expectedAda,
       });
     } catch (error) {
       this.logger.error(`Failed to remove liquidity for vault ${vault.id}: ${error.message}`, error.stack);
@@ -512,47 +582,258 @@ export class TerminationService {
 
   /**
    * Step 3: Check if VyFi has returned VT + ADA to admin wallet
+   *
+   * Tracks the specific transaction from VyFi order address returning assets.
+   * This ensures we capture the exact amounts returned by VyFi, not random VT transfers.
+   *
+   * Validations performed:
+   * - Transaction must have input from VyFi order address
+   * - Transaction must be after LP removal timestamp
+   * - Aggregates all VT and ADA amounts across all outputs to admin
+   * - Validates minimum amounts (prevents dust attacks)
+   * - Tracks slippage vs expected returns (warns if >5%)
+   * - Logs effective LP value (VT/LP and ADA/LP ratios)
+   * - Progressive timeout warnings (2h, 3h, 6h)
    */
   private async stepCheckLPReturn(vault: Vault): Promise<void> {
     this.logger.debug(`[Step 3] Checking LP return for vault ${vault.id}`);
+
+    const terminationMeta = vault.termination_metadata as TerminationMetadata;
 
     // Update last checked timestamp
     await this.updateTerminationMetadata(vault.id, {
       lastCheckedAt: new Date().toISOString(),
     });
 
-    // Check admin wallet for incoming VT tokens
+    // Verify we have the required metadata to track returns
+    if (!terminationMeta.vyfiOrderAddress) {
+      this.logger.error(`Missing VyFi order address for vault ${vault.id}, cannot track LP return`);
+      return;
+    }
+
     const vtUnit = `${vault.script_hash}${vault.asset_vault_name}`;
-    const adminUtxos = await this.blockfrost.addressesUtxos(this.adminAddress);
+    const vyfiOrderAddress = terminationMeta.vyfiOrderAddress;
+    const lpRemovalTime = terminationMeta.lpRemovalTimestamp
+      ? new Date(terminationMeta.lpRemovalTimestamp).getTime()
+      : Date.now() - 24 * 60 * 60 * 1000; // Default to 24h ago if not set
 
-    // Look for UTXOs containing the vault's VT
-    const vtUtxo = adminUtxos.find(utxo => utxo.amount.some(a => a.unit === vtUnit && BigInt(a.quantity) > 0));
-
-    if (vtUtxo) {
-      const vtAmount = vtUtxo.amount.find(a => a.unit === vtUnit)?.quantity || '0';
-      const adaAmount = vtUtxo.amount.find(a => a.unit === 'lovelace')?.quantity || '0';
-
-      this.logger.log(`LP return received for vault ${vault.id}: ${vtAmount} VT, ${adaAmount} lovelace`);
-
-      await this.updateTerminationStatus(vault.id, TerminationStatus.LP_RETURN_RECEIVED, {
-        lpReturnTxHash: vtUtxo.tx_hash,
-        expectedVtReturn: vtAmount,
-        expectedAdaReturn: adaAmount,
+    try {
+      // Get recent transactions to admin address
+      // We'll check the last 100 transactions (should be more than enough)
+      const adminTxs = await this.blockfrost.addressesTransactions(this.adminAddress, {
+        order: 'desc',
+        count: 100,
       });
-    } else {
-      this.logger.debug(`LP return not yet received for vault ${vault.id}`);
+
+      // Find transaction where VyFi returned assets
+      for (const txInfo of adminTxs) {
+        const txHash = txInfo.tx_hash;
+        const txTime = txInfo.block_time * 1000; // Convert to milliseconds
+
+        // Skip if this transaction is older than our LP removal
+        if (txTime < lpRemovalTime) {
+          continue;
+        }
+
+        // Get transaction UTXOs to check inputs/outputs
+        const txUtxos = await this.blockfrost.txsUtxos(txHash);
+
+        // Check if any input comes from VyFi order address
+        const hasVyfiInput = txUtxos.inputs.some(input => input.address === vyfiOrderAddress);
+
+        if (!hasVyfiInput) {
+          continue;
+        }
+
+        this.logger.log(`Found potential VyFi return transaction: ${txHash}`);
+
+        // Find all outputs to admin address and aggregate VT + ADA amounts
+        const adminOutputs = txUtxos.outputs.filter(output => output.address === this.adminAddress);
+
+        let totalVtReturned = BigInt(0);
+        let totalAdaReturned = BigInt(0);
+        let foundVtReturn = false;
+
+        // Aggregate all VT and ADA from admin outputs
+        for (const output of adminOutputs) {
+          const vtAmount = output.amount.find(a => a.unit === vtUnit);
+          const adaAmount = output.amount.find(a => a.unit === 'lovelace');
+
+          if (vtAmount && BigInt(vtAmount.quantity) > 0) {
+            totalVtReturned += BigInt(vtAmount.quantity);
+            foundVtReturn = true;
+          }
+
+          if (adaAmount) {
+            totalAdaReturned += BigInt(adaAmount.quantity);
+          }
+        }
+
+        if (!foundVtReturn) {
+          continue; // This VyFi transaction doesn't contain VT returns
+        }
+
+        // Validate that we got reasonable amounts back
+        const MIN_VT_RETURN = BigInt(1000000); // At least 1 VT (assuming 6 decimals)
+        const MIN_ADA_RETURN = BigInt(1000000); // At least 1 ADA
+
+        if (totalVtReturned < MIN_VT_RETURN) {
+          this.logger.warn(
+            `VT return amount too low for vault ${vault.id}: ${totalVtReturned} (expected at least ${MIN_VT_RETURN}). Skipping this transaction.`
+          );
+          continue;
+        }
+
+        if (totalAdaReturned < MIN_ADA_RETURN) {
+          this.logger.warn(
+            `ADA return amount too low for vault ${vault.id}: ${totalAdaReturned} (expected at least ${MIN_ADA_RETURN}). Skipping this transaction.`
+          );
+          continue;
+        }
+
+        const actualVt = totalVtReturned.toString();
+        const actualAda = totalAdaReturned.toString();
+
+        this.logger.log(
+          `✓ LP return received for vault ${vault.id}:\n` +
+            `   VT returned: ${actualVt} (${(Number(totalVtReturned) / 1_000_000).toFixed(2)} VT)\n` +
+            `   ADA returned: ${actualAda} (${(Number(totalAdaReturned) / 1_000_000).toFixed(2)} ADA)\n` +
+            `   Transaction: ${txHash}`
+        );
+
+        // Compare with expected values and validate slippage
+        if (terminationMeta.expectedVtReturn) {
+          const expectedVt = BigInt(terminationMeta.expectedVtReturn);
+          const actualVtBig = BigInt(actualVt);
+          const diffPercent = Number(((actualVtBig - expectedVt) * BigInt(10000)) / expectedVt) / 100;
+
+          this.logger.log(`   VT return variance: ${diffPercent > 0 ? '+' : ''}${diffPercent.toFixed(2)}%`);
+
+          // Warn if we got significantly less than expected (more than 5% slippage)
+          if (diffPercent < -5) {
+            this.logger.warn(
+              `⚠️  High VT slippage detected: ${Math.abs(diffPercent).toFixed(2)}% less than expected. ` +
+                `Expected: ${expectedVt}, Actual: ${actualVtBig}`
+            );
+          }
+
+          // Also warn if we got significantly MORE (could indicate pool manipulation)
+          if (diffPercent > 5) {
+            this.logger.warn(
+              `⚠️  VT return higher than expected: ${diffPercent.toFixed(2)}% more. ` +
+                `Expected: ${expectedVt}, Actual: ${actualVtBig}. Verify pool state.`
+            );
+          }
+        }
+
+        if (terminationMeta.expectedAdaReturn) {
+          const expectedAda = BigInt(terminationMeta.expectedAdaReturn);
+          const actualAdaBig = BigInt(actualAda);
+          const diffPercent = Number(((actualAdaBig - expectedAda) * BigInt(10000)) / expectedAda) / 100;
+
+          this.logger.log(`   ADA return variance: ${diffPercent > 0 ? '+' : ''}${diffPercent.toFixed(2)}%`);
+
+          // Warn if we got significantly less than expected
+          if (diffPercent < -5) {
+            this.logger.warn(
+              `⚠️  High ADA slippage detected: ${Math.abs(diffPercent).toFixed(2)}% less than expected. ` +
+                `Expected: ${expectedAda}, Actual: ${actualAdaBig}`
+            );
+          }
+
+          if (diffPercent > 5) {
+            this.logger.warn(
+              `⚠️  ADA return higher than expected: ${diffPercent.toFixed(2)}% more. ` +
+                `Expected: ${expectedAda}, Actual: ${actualAdaBig}. Verify pool state.`
+            );
+          }
+        }
+
+        // Calculate effective LP value recovered
+        const lpAmountRemoved = terminationMeta.lpAmountRemoved ? BigInt(terminationMeta.lpAmountRemoved) : BigInt(0);
+        if (lpAmountRemoved > 0) {
+          const vtPerLp = Number(totalVtReturned) / Number(lpAmountRemoved);
+          const adaPerLp = Number(totalAdaReturned) / Number(lpAmountRemoved);
+          this.logger.log(
+            `   Effective LP value: ${vtPerLp.toFixed(2)} VT/LP, ${(adaPerLp / 1_000_000).toFixed(2)} ADA/LP`
+          );
+        }
+
+        await this.updateTerminationStatus(vault.id, TerminationStatus.LP_RETURN_RECEIVED, {
+          lpReturnTxHash: txHash,
+          actualVtReturn: actualVt,
+          actualAdaReturn: actualAda,
+        });
+
+        return; // Exit after finding the return
+      }
+
+      // No return found yet
+      const minutesSinceRemoval = Math.floor((Date.now() - lpRemovalTime) / (60 * 1000));
+      const hoursSinceRemoval = (minutesSinceRemoval / 60).toFixed(1);
+
+      this.logger.debug(
+        `LP return not yet received for vault ${vault.id} (${hoursSinceRemoval} hours since removal at ${new Date(lpRemovalTime).toISOString()})`
+      );
+
+      // Progressive warnings based on time elapsed
+      if (minutesSinceRemoval > 360) {
+        // 6+ hours
+        this.logger.error(
+          `⚠️  CRITICAL: LP return severely delayed for vault ${vault.id} (${hoursSinceRemoval} hours). ` +
+            `LP removal tx: ${terminationMeta.lpRemovalTxHash}. ` +
+            `VyFi order address: ${vyfiOrderAddress}. ` +
+            `Manual investigation required.`
+        );
+      } else if (minutesSinceRemoval > 180) {
+        // 3+ hours
+        this.logger.warn(
+          `⚠️  LP return significantly delayed for vault ${vault.id} (${hoursSinceRemoval} hours). ` +
+            `Expected within 1-2 hours. Check VyFi order status.`
+        );
+      } else if (minutesSinceRemoval > 120) {
+        // 2+ hours
+        this.logger.warn(
+          `⚠️  LP return taking longer than usual for vault ${vault.id} (${hoursSinceRemoval} hours). ` +
+            `Will continue monitoring.`
+        );
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorStack = error instanceof Error ? error.stack : undefined;
+
+      this.logger.error(
+        `Error checking LP return for vault ${vault.id}: ${errorMessage}\n` +
+          `   VyFi order address: ${terminationMeta.vyfiOrderAddress}\n` +
+          `   LP removal tx: ${terminationMeta.lpRemovalTxHash}\n` +
+          `   Time since removal: ${Math.floor((Date.now() - lpRemovalTime) / (60 * 1000))} minutes`,
+        errorStack
+      );
+
+      // Don't throw - we'll retry on next cron run
+      await this.updateTerminationMetadata(vault.id, {
+        error: `LP return check failed: ${errorMessage}`,
+      });
     }
   }
 
   /**
    * Step 4: Burn the returned VT tokens (send to burn wallet)
+   * Uses the actual VT amount returned by VyFi (not estimated)
    */
   private async stepBurnReturnedVT(vault: Vault): Promise<void> {
     this.logger.log(`[Step 4] Burning returned VT for vault ${vault.id}`);
 
     const termination = vault.termination_metadata as TerminationMetadata;
     const vtUnit = `${vault.script_hash}${vault.asset_vault_name}`;
-    const vtAmountToBurn = BigInt(termination.expectedVtReturn || '0');
+
+    // Use actual returned VT amount, fallback to expected if not available
+    const vtAmountToBurn = BigInt(termination.actualVtReturn || termination.expectedVtReturn || '0');
+
+    if (vtAmountToBurn === BigInt(0)) {
+      this.logger.warn(`No VT amount to burn for vault ${vault.id}`);
+      return;
+    }
 
     // Get admin UTXOs containing VT
     const { utxos: adminUtxos, requiredInputs } = await getUtxosExtract(
@@ -627,6 +908,7 @@ export class TerminationService {
 
   /**
    * Step 5: Transfer ADA from admin wallet to treasury
+   * Uses the actual ADA amount returned by VyFi (not estimated)
    */
   private async stepTransferAdaToTreasury(vault: Vault): Promise<void> {
     this.logger.log(`[Step 5] Transferring ADA to treasury for vault ${vault.id}`);
@@ -639,10 +921,14 @@ export class TerminationService {
       return;
     }
 
-    const adaToTransfer = BigInt(termination.expectedAdaReturn || '0') - BigInt(2000000); // Subtract min UTXO sent with VT
+    // Use actual returned ADA amount, fallback to expected if not available
+    const actualAda = BigInt(termination.actualAdaReturn || termination.expectedAdaReturn || '0');
+
+    // Subtract minimum UTXO that was used to send VT to burn wallet (2 ADA)
+    const adaToTransfer = actualAda - BigInt(2000000);
 
     if (adaToTransfer <= 0) {
-      this.logger.warn(`No ADA to transfer for vault ${vault.id}`);
+      this.logger.warn(`No ADA to transfer for vault ${vault.id} (received: ${actualAda}, min UTXO: 2 ADA)`);
       await this.updateTerminationStatus(vault.id, TerminationStatus.ADA_IN_TREASURY, {
         totalAdaForDistribution: '0',
       });

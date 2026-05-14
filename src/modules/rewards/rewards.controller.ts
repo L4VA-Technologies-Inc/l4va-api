@@ -1,11 +1,14 @@
 import { Body, Controller, Get, Param, Post, Query, Request, UseGuards } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 
 import { RewardClaimProxy } from './services/reward-claim-proxy.service';
 import { RewardEventProducer } from './services/reward-event-producer.service';
 
+import { Vault } from '@/database/vault.entity';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
-import { WidgetSwapEventData, WidgetSwapItemData } from '@/types/rewards.types';
+import { RewardActivityType, WidgetSwapEventData, WidgetSwapItemData } from '@/types/rewards.types';
 
 /**
  * Public rewards controller for l4va-api.
@@ -20,18 +23,22 @@ import { WidgetSwapEventData, WidgetSwapItemData } from '@/types/rewards.types';
 export class RewardsController {
   constructor(
     private readonly rewardEventProducer: RewardEventProducer,
-    private readonly rewardClaimProxy: RewardClaimProxy
+    private readonly rewardClaimProxy: RewardClaimProxy,
+    @InjectRepository(Vault)
+    private readonly vaultRepository: Repository<Vault>
   ) {}
 
   /**
    * POST /rewards/widget-swap
    * Called by the frontend DexHunter widget onSuccess callback.
    *
-   * NOTE: Swap events are not currently indexed as they are not vault-related
-   * and don't fit the aggregate_id (UUID) schema. This endpoint validates
-   * the swap was successful but does not persist to the rewards outbox.
-   * TODO: If swap tracking becomes needed, add wallet-scoped event support
-   *  with nullable aggregate_id or separate wallet event table
+   * Only tracks swaps involving Vault Tokens (VT):
+   * - Extracts policy IDs from token_id_in/token_id_out
+   * - Queries vaults table to match against vault policy_ids
+   * - If VT is involved, indexes event with vault_id (vault-scoped)
+   * - Non-VT swaps are acknowledged but not indexed
+   *
+   * This ensures swap rewards are vault-centric and tied to specific vaults.
    */
   @UseGuards(AuthGuard)
   @Post('widget-swap')
@@ -51,27 +58,56 @@ export class RewardsController {
       return { indexed: false, reason: 'swap not successful' };
     }
 
-    // const event = await this.rewardEventProducer.indexEvent({
-    //   walletAddress: successfulSwap.user_address || req.user.address,
-    //   eventType: RewardActivityType.WIDGET_SWAP,
-    //   txHash: successfulSwap.tx_hash,
-    //   units: 1,
-    //   metadata: {
-    //     dex: successfulSwap.dex,
-    //     tokenIn: successfulSwap.token_id_in,
-    //     tokenOut: successfulSwap.token_id_out,
-    //     amountIn: successfulSwap.amount_in,
-    //     expectedOutput: successfulSwap.expected_output,
-    //     expectedOutputWithoutSlippage: (successfulSwap as any).expected_output_without_slippage,
-    //     poolId: (successfulSwap as any).pool_id,
-    //     type: successfulSwap.type,
-    //   },
-    // });
+    // Extract policy IDs from token units (first 56 characters)
+    const extractPolicyId = (tokenUnit: string): string | null => {
+      if (!tokenUnit || tokenUnit === '' || tokenUnit.toLowerCase() === 'lovelace') {
+        return null; // ADA has no policy ID
+      }
+      // Cardano policy IDs are 56 characters (28 bytes hex-encoded)
+      return tokenUnit.length >= 56 ? tokenUnit.substring(0, 56) : tokenUnit;
+    };
+
+    const policyIdIn = extractPolicyId(successfulSwap.token_id_in);
+    const policyIdOut = extractPolicyId(successfulSwap.token_id_out);
+
+    // Check if either token is a VT (matches a vault's policy_id)
+    const policyIds = [policyIdIn, policyIdOut].filter(Boolean);
+    if (policyIds.length === 0) {
+      return { indexed: false, reason: 'no vault tokens involved (ADA-only swap)' };
+    }
+
+    const vault: Pick<Vault, 'id' | 'script_hash' | 'name'> = await this.vaultRepository.findOne({
+      where: policyIds.map(policyId => ({ script_hash: policyId })),
+      select: ['id', 'script_hash', 'name'],
+    });
+
+    if (!vault) {
+      return { indexed: false, reason: 'no vault tokens involved' };
+    }
+
+    // Index VT swap event (vault-scoped)
+    const event = await this.rewardEventProducer.indexEvent({
+      walletAddress: successfulSwap.user_address || req.user.address,
+      vaultId: vault.id,
+      eventType: RewardActivityType.WIDGET_SWAP,
+      txHash: successfulSwap.tx_hash,
+      units: 1,
+      metadata: {
+        dex: successfulSwap.dex,
+        tokenIn: successfulSwap.token_id_in,
+        tokenOut: successfulSwap.token_id_out,
+        amountIn: successfulSwap.amount_in,
+        expectedOutput: successfulSwap.expected_output,
+        vaultName: vault.name,
+        vaultPolicyId: vault.script_hash,
+      },
+    });
 
     return {
-      indexed: false,
-      reason: 'swap events not currently tracked',
-      acknowledged: true,
+      indexed: !!event,
+      eventId: event?.id,
+      vaultId: vault.id,
+      vaultName: vault.name,
     };
   }
 

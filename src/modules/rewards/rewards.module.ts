@@ -10,6 +10,7 @@ import { RewardEpochConfigProxy } from './services/reward-epoch-config-proxy.ser
 import { RewardEventProducer } from './services/reward-event-producer.service';
 
 import { RewardEventOutbox } from '@/database/rewardEventOutbox.entity';
+import { Vault } from '@/database/vault.entity';
 
 /**
  * Rewards module for l4va-api (BFF layer).
@@ -22,10 +23,9 @@ import { RewardEventOutbox } from '@/database/rewardEventOutbox.entity';
  * Cardano tx building now lives entirely in l4va-rewards (ClaimTxBuilderService).
  */
 @Module({
-  imports: [HttpModule, ConfigModule, TypeOrmModule.forFeature([RewardEventOutbox])],
+  imports: [HttpModule, ConfigModule, TypeOrmModule.forFeature([RewardEventOutbox, Vault])],
   controllers: [RewardsController, RewardAdminController],
   providers: [RewardEventProducer, RewardClaimProxy, RewardEpochConfigProxy],
   exports: [RewardEventProducer],
 })
 export class RewardsModule {}
-

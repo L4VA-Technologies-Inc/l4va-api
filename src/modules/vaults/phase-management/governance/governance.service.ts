@@ -417,10 +417,10 @@ export class GovernanceService {
       );
     }
 
-    const vault: Pick<Vault, 'id' | 'vault_status' | 'policy_id' | 'asset_vault_name' | 'name' | 'assets_whitelist'> =
+    const vault: Pick<Vault, 'id' | 'vault_status' | 'script_hash' | 'asset_vault_name' | 'name' | 'assets_whitelist'> =
       await this.vaultRepository.findOne({
         where: { id: vaultId },
-        select: ['id', 'vault_status', 'policy_id', 'asset_vault_name', 'name', 'assets_whitelist'],
+        select: ['id', 'vault_status', 'script_hash', 'asset_vault_name', 'name', 'assets_whitelist'],
       });
 
     if (!vault) {
@@ -607,13 +607,144 @@ export class GovernanceService {
         break;
       }
 
-      case ProposalType.TERMINATION:
+      case ProposalType.TERMINATION: {
         if (createProposalReq.metadata) {
           proposal.terminationDate = createProposalReq.metadata.terminationDate
             ? new Date(createProposalReq.metadata.terminationDate)
             : undefined;
         }
+
+        // Skip LP pool validation on testnet (no real DEXes)
+        if (!this.isMainnet) {
+          this.logger.log('Skipping LP pool validation for termination on testnet');
+          break;
+        }
+
+        // Check for unrecoverable LP pools before allowing termination
+        if (!vault.script_hash || !vault.asset_vault_name) {
+          this.logger.warn(
+            `Cannot validate LP pools for termination: vault ${vault.id} missing script_hash or asset_vault_name`
+          );
+          break;
+        }
+
+        try {
+          const vtUnit = `${vault.script_hash}${vault.asset_vault_name}`;
+
+          // Get all pools for this token from TapTools (includes lpTokenUnit)
+          const allPools = await this.taptoolsService.getTokenPools(vtUnit);
+
+          if (!allPools || allPools.length === 0) {
+            this.logger.log(`No LP pools detected for vault ${vault.id}. Termination can proceed.`);
+            break;
+          }
+
+          // Get VyFi pools and check which LP tokens exist in admin wallet
+          const vyfiPools = allPools.filter(pool => pool.exchange.toLowerCase().includes('vyfi'));
+          let recoverableLpTokenUnit: string | null = null;
+
+          if (vyfiPools.length > 0) {
+            try {
+              // Get admin wallet assets to check which VyFi LP tokens we actually hold
+              const adminAddressInfo = await this.blockfrost.addressesExtended(this.adminAddress);
+              const adminAssetUnits = adminAddressInfo.amount?.map(a => a.unit) || [];
+
+              // Find which VyFi LP token unit exists in admin wallet
+              for (const vyfiPool of vyfiPools) {
+                if (adminAssetUnits.includes(vyfiPool.lpTokenUnit)) {
+                  recoverableLpTokenUnit = vyfiPool.lpTokenUnit;
+                  this.logger.log(
+                    `Found recoverable VyFi LP token in admin wallet: ${recoverableLpTokenUnit.slice(0, 16)}...${recoverableLpTokenUnit.slice(-8)}`
+                  );
+                  break;
+                }
+              }
+
+              if (!recoverableLpTokenUnit) {
+                this.logger.warn(
+                  `Found ${vyfiPools.length} VyFi pool(s) but none of the LP tokens exist in admin wallet`
+                );
+              }
+            } catch (error) {
+              const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+              this.logger.warn(`Failed to check admin wallet for VyFi LP tokens: ${errorMessage}`);
+            }
+          }
+
+          // Now check for unrecoverable pools
+          // A pool is unrecoverable if:
+          // 1. It's not VyFi, OR
+          // 2. It's VyFi but the LP token unit is not in admin wallet
+          const unrecoverablePools = allPools.filter(pool => {
+            const isVyFi = pool.exchange.toLowerCase().includes('vyfi');
+
+            if (!isVyFi) {
+              // Non-VyFi pools are always unrecoverable
+              return true;
+            }
+
+            // For VyFi pools, check if we hold this specific LP token in admin wallet
+            // If we don't have a recoverable LP token unit, all VyFi pools are unrecoverable
+            if (!recoverableLpTokenUnit) {
+              return true;
+            }
+
+            // VyFi pool is unrecoverable if its LP token doesn't match what we hold
+            return pool.lpTokenUnit !== recoverableLpTokenUnit;
+          });
+
+          if (unrecoverablePools.length > 0) {
+            // Calculate total ADA in unrecoverable pools
+            // tokenB is null for ADA, so use tokenBLocked when tokenB is null/empty
+            const totalUnrecoverableAda = unrecoverablePools.reduce((sum, pool) => {
+              const adaAmount = !pool.tokenB || pool.tokenB === '' ? pool.tokenBLocked : pool.tokenALocked;
+              return sum + adaAmount;
+            }, 0);
+
+            // Only block if there's more than 10 ADA in unrecoverable pools
+            const MIN_ADA_TO_BLOCK_TERMINATION = 10;
+
+            if (totalUnrecoverableAda >= MIN_ADA_TO_BLOCK_TERMINATION) {
+              const poolDetails = unrecoverablePools
+                .map(pool => {
+                  const adaAmount = !pool.tokenB || pool.tokenB === '' ? pool.tokenBLocked : pool.tokenALocked;
+                  const vtAmount = !pool.tokenB || pool.tokenB === '' ? pool.tokenALocked : pool.tokenBLocked;
+                  return `${pool.exchange} (${adaAmount.toFixed(2)} ADA, ~${vtAmount.toFixed(0)} VT)`;
+                })
+                .join(', ');
+
+              throw new BadRequestException(
+                `Cannot initiate termination: Vault has ${totalUnrecoverableAda.toFixed(2)} ADA in unrecoverable liquidity pools. ` +
+                  `Found on: ${poolDetails}. ` +
+                  `${recoverableLpTokenUnit ? `Only the VyFi pool with LP token ${recoverableLpTokenUnit.slice(0, 16)}... can be automatically recovered.` : 'No recoverable VyFi LP found.'} ` +
+                  `Please remove liquidity from ${unrecoverablePools.map(p => p.exchange).join(', ')} before creating a termination proposal, ` +
+                  `or create a marketplace proposal to remove LP tokens first.`
+              );
+            } else {
+              // Log warning but allow termination
+              this.logger.warn(
+                `Termination proposal for vault ${vault.id} has ${totalUnrecoverableAda.toFixed(2)} ADA in unrecoverable pools (below ${MIN_ADA_TO_BLOCK_TERMINATION} ADA threshold). ` +
+                  `Pools: ${unrecoverablePools.map(p => p.exchange).join(', ')}. Proceeding with termination.`
+              );
+            }
+          } else {
+            this.logger.log(
+              `Termination proposal validated: All ${allPools.length} LP pool(s) are recoverable. Safe to proceed.`
+            );
+          }
+        } catch (error) {
+          // If it's already a BadRequestException (from our validation), re-throw it
+          if (error instanceof BadRequestException) {
+            throw error;
+          }
+          // For other errors (API failures, etc), log warning but don't block termination
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+          this.logger.warn(
+            `Failed to check LP pools for termination validation: ${errorMessage}. Proceeding with termination proposal.`
+          );
+        }
         break;
+      }
 
       case ProposalType.BURNING:
         if (createProposalReq.metadata) {
