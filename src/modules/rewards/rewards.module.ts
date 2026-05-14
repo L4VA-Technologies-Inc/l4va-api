@@ -29,4 +29,3 @@ import { Vault } from '@/database/vault.entity';
   exports: [RewardEventProducer],
 })
 export class RewardsModule {}
-
