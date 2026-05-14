@@ -24,6 +24,7 @@ export enum ProposalType {
   BUY_SELL = 'buy_sell', // Deprecated
   MARKETPLACE_ACTION = 'marketplace_action',
   EXPANSION = 'expansion',
+  ASSET_WHITELIST_UPDATE = 'asset_whitelist_update',
 }
 
 export enum MarketplaceAction {

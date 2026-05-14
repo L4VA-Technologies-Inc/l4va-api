@@ -4,6 +4,7 @@ import {
   ArrayMaxSize,
   ArrayNotEmpty,
   IsArray,
+  IsBoolean,
   IsEnum,
   IsNotEmpty,
   IsNumber,
@@ -412,4 +413,14 @@ export class CreateVaultReq {
   @IsString({ each: true })
   @Expose()
   tags?: string[];
+
+  @ApiProperty({
+    description: 'Whether the vault whitelist supports expansion',
+    required: false,
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  @Expose()
+  isExpandable?: boolean;
 }

@@ -786,6 +786,13 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   expansionLimitPrice?: number;
 
+  @ApiProperty({ description: 'Whether the vault supports expansion', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'isExpandable' },
+  })
+  isExpandable?: boolean;
+
   @ApiProperty({ description: 'Owner of the vault', type: () => User })
   @DtoRepresent({
     transform: false,

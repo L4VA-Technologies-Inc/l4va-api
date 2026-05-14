@@ -120,6 +120,8 @@ export class DraftVaultsService {
     const plain = classToPlain(vault) as Record<string, unknown>;
     plain.tokenDescription = plain.token_description;
     delete plain.token_description;
+    plain.isExpandable = vault.is_expandable;
+    delete plain.is_expandable;
     plain.tags = vault.tags?.map(t => t.name) ?? [];
 
     // todo need to create additional model for remove owner, and transform image to link
@@ -230,6 +232,7 @@ export class DraftVaultsService {
       if (data.executionThreshold) vaultData.execution_threshold = data.executionThreshold;
       if (data.cosigningThreshold) vaultData.cosigning_threshold = data.cosigningThreshold;
       if (data.vaultAppreciation) vaultData.vault_appreciation = data.vaultAppreciation;
+      if (data.isExpandable !== undefined) vaultData.is_expandable = data.isExpandable;
 
       if (data.contributionDuration !== undefined) {
         vaultData.contribution_duration = data.contributionDuration;

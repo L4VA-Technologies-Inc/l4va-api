@@ -2,6 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsEnum,
   IsNumber,
   IsOptional,
@@ -416,4 +417,16 @@ export class SaveDraftReq {
   @IsString({ each: true })
   @Expose()
   tags?: string[] | null;
+
+  @ApiProperty({
+    description: 'Whether the vault supports expansion',
+    required: false,
+    nullable: true,
+    default: false,
+  })
+  @IsOptional()
+  @ValidateIf((o, v) => v !== null)
+  @IsBoolean()
+  @Expose()
+  isExpandable?: boolean | null;
 }

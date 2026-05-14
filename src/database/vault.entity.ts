@@ -733,6 +733,10 @@ export class Vault {
   @Column({ name: 'deleted', type: 'boolean', nullable: false, default: false })
   deleted: boolean;
 
+  @Expose({ name: 'isExpandable' })
+  @Column({ name: 'is_expandable', type: 'boolean', nullable: false, default: false })
+  is_expandable: boolean;
+
   @Expose({ name: 'governancePhaseStart' })
   @Column({ name: 'governance_phase_start', type: 'timestamptz', nullable: true })
   governance_phase_start?: Date;
