@@ -2182,13 +2182,6 @@ export class GovernanceExecutionService {
         }
       );
 
-      this.eventEmitter.emit('proposal.asset-whitelist-update.executed', {
-        proposalId: proposal.id,
-        vaultId: proposal.vaultId,
-        insertedCount,
-        onChainTxHash: onChainResult.txHash,
-      });
-
       return true;
     } catch (error) {
       await this.storeExecutionError(proposal, error);

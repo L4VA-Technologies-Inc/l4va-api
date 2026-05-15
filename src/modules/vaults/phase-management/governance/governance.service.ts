@@ -420,11 +420,13 @@ export class GovernanceService {
       );
     }
 
-    const vault: Pick<Vault, 'id' | 'vault_status' | 'script_hash' | 'asset_vault_name' | 'name' | 'assets_whitelist' | 'is_expandable'> =
-      await this.vaultRepository.findOne({
-        where: { id: vaultId },
-        select: ['id', 'vault_status', 'script_hash', 'asset_vault_name', 'name', 'assets_whitelist', 'is_expandable'],
-      });
+    const vault: Pick<
+      Vault,
+      'id' | 'vault_status' | 'script_hash' | 'asset_vault_name' | 'name' | 'assets_whitelist' | 'is_expandable'
+    > = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: ['id', 'vault_status', 'script_hash', 'asset_vault_name', 'name', 'assets_whitelist', 'is_expandable'],
+    });
 
     if (!vault) {
       throw new NotFoundException('Vault not found');
@@ -492,6 +494,23 @@ export class GovernanceService {
         throw new BadRequestException(
           `Only one expansion proposal can be active at a time. ` +
             `Please wait for the current expansion proposal "${activeExpansionProposal.title}" to complete before creating a new one.`
+        );
+      }
+    }
+
+    if (createProposalReq.type === ProposalType.ASSET_WHITELIST_UPDATE) {
+      const activeAssetWhitelistProposal = await this.proposalRepository.findOne({
+        where: {
+          vaultId,
+          proposalType: ProposalType.ASSET_WHITELIST_UPDATE,
+          status: In([ProposalStatus.ACTIVE, ProposalStatus.UPCOMING]),
+        },
+      });
+
+      if (activeAssetWhitelistProposal) {
+        throw new BadRequestException(
+          `Only one asset whitelist update proposal can be active at a time. ` +
+            `Please wait for the current proposal "${activeAssetWhitelistProposal.title}" to complete before creating a new one.`
         );
       }
     }
