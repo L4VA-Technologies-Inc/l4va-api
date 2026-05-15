@@ -117,8 +117,8 @@ export class StakeService {
     this.blockfrost = new BlockFrostAPI({ projectId: this.blockfrostProjectId });
     this.referenceScriptTxHash = this.configService.getOrThrow<string>('REFERENCE_SCRIPT_TX_HASH');
     this.referenceScriptIndex = parseInt(this.configService.get<string>('REFERENCE_SCRIPT_INDEX') ?? '0', 10);
-    this.adminAddress = this.configService.getOrThrow<string>('ADMIN_ADDRESS');
-    this.adminSKey = this.configService.getOrThrow<string>('ADMIN_S_KEY');
+    this.adminAddress = this.configService.getOrThrow<string>('L4VA_TREASURY_ADDRESS');
+    this.adminSKey = this.configService.getOrThrow<string>('L4VA_TREASURY_KEY');
 
     const apyPercentRaw = this.configService.get<string>('STAKING_APY') ?? '8';
     const apyPercent = Number.parseFloat(apyPercentRaw);
