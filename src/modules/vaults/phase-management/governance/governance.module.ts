@@ -25,6 +25,7 @@ import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
+import { TokenVerification } from '@/database/token-verification.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
@@ -54,6 +55,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
       Transaction,
       VaultTreasuryWallet,
       AssetsWhitelistEntity,
+      TokenVerification,
     ]),
     RedisModule,
     AssetsModule,

@@ -15,6 +15,7 @@ import { TerminationService } from './termination.service';
 import { VoteCountingService } from './vote-counting.service';
 
 import { Asset } from '@/database/asset.entity';
+import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
@@ -22,6 +23,7 @@ import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
+import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { TreasuryExtractionService } from '@/modules/vaults/treasure/treasury-extraction.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
@@ -31,7 +33,7 @@ import { ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { RewardActivityType } from '@/types/rewards.types';
 import { TransactionStatus } from '@/types/transaction.types';
-import { VaultStatus } from '@/types/vault.types';
+import { VaultStatus, SmartContractVaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class GovernanceExecutionService {
@@ -56,6 +58,8 @@ export class GovernanceExecutionService {
     private readonly assetRepository: Repository<Asset>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
+    @InjectRepository(AssetsWhitelistEntity)
+    private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
     private readonly eventEmitter: EventEmitter2,
     private readonly assetsService: AssetsService,
     private readonly wayUpService: WayUpService,
@@ -68,6 +72,7 @@ export class GovernanceExecutionService {
     private readonly distributionService: DistributionService,
     private readonly dexHunterService: DexHunterService,
     private readonly expansionService: ExpansionService,
+    private readonly vaultManagingService: VaultManagingService,
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly treasuryWalletService: TreasuryWalletService,
     private readonly governanceRefundService: GovernanceRefundService,
@@ -657,6 +662,9 @@ export class GovernanceExecutionService {
 
         case ProposalType.EXPANSION:
           return await this.executeExpansionProposal(proposal);
+
+        case ProposalType.ASSET_WHITELIST_UPDATE:
+          return await this.executeAssetWhitelistUpdateProposal(proposal);
 
         default:
           this.logger.warn(`Unknown proposal type: ${proposal.proposalType}`);
@@ -2046,6 +2054,85 @@ export class GovernanceExecutionService {
   async executeExpansionProposal(proposal: Proposal): Promise<boolean> {
     try {
       return await this.expansionService.executeExpansion(proposal);
+    } catch (error) {
+      await this.storeExecutionError(proposal, error);
+      throw error;
+    }
+  }
+
+  async executeAssetWhitelistUpdateProposal(proposal: Proposal): Promise<boolean> {
+    const whitelistItems = proposal.metadata?.assetsWhitelist;
+
+    if (!whitelistItems || whitelistItems.length === 0) {
+      this.logger.warn(`Asset whitelist update proposal ${proposal.id} has no whitelist entries`);
+      return false;
+    }
+
+    try {
+      const vault = await this.vaultRepository.findOne({
+        where: { id: proposal.vaultId },
+        select: [
+          'id',
+          'asset_vault_name',
+          'privacy',
+          'contribution_phase_start',
+          'contribution_duration',
+          'value_method',
+          'vault_sc_status',
+        ],
+      });
+
+      if (!vault) {
+        throw new Error(`Vault ${proposal.vaultId} not found`);
+      }
+
+      let insertedCount = 0;
+
+      for (const item of whitelistItems) {
+        const result = await this.assetsWhitelistRepository
+          .createQueryBuilder()
+          .insert()
+          .values({
+            vault: { id: vault.id },
+            policy_id: item.policyId,
+            collection_name: item.collectionName ?? null,
+            valuation_method: item.valuationMethod || 'market',
+            custom_price_ada: item.customPriceAda ?? null,
+            lp_pool_onchain_id: item.lpPoolOnchainId ?? null,
+          })
+          .orIgnore()
+          .execute();
+
+        if (result.identifiers.length > 0) {
+          insertedCount += 1;
+        }
+      }
+
+      if (insertedCount === 0) {
+        this.logger.warn(`Asset whitelist update proposal ${proposal.id} did not insert any new whitelist entries`);
+        return false;
+      }
+
+      const onChainResult = await this.vaultManagingService.updateVaultMetadataTx({
+        vault,
+        vaultStatus: vault.vault_sc_status || SmartContractVaultStatus.SUCCESSFUL,
+      });
+
+      await this.vaultRepository.update(
+        { id: vault.id },
+        {
+          last_update_tx_hash: onChainResult.txHash,
+        }
+      );
+
+      this.eventEmitter.emit('proposal.asset-whitelist-update.executed', {
+        proposalId: proposal.id,
+        vaultId: proposal.vaultId,
+        insertedCount,
+        onChainTxHash: onChainResult.txHash,
+      });
+
+      return true;
     } catch (error) {
       await this.storeExecutionError(proposal, error);
       throw error;

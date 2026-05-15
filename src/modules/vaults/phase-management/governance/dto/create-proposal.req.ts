@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, OmitType } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
 import {
   IsNotEmpty,
@@ -11,8 +11,11 @@ import {
   IsNumber,
   IsNumberString,
   Matches,
+  ArrayMinSize,
+  ValidateIf,
 } from 'class-validator';
 
+import { AssetWhitelistDto } from '@/modules/vaults/dto/assetWhitelist.dto';
 import { MarketplaceAction, ProposalType } from '@/types/proposal.types';
 
 // Common FT asset class for staking
@@ -278,6 +281,8 @@ export class ExpansionPolicyIdDto {
   label?: string;
 }
 
+export class AssetWhitelistProposalDto extends OmitType(AssetWhitelistDto, ['countCapMin', 'countCapMax'] as const) {}
+
 export class CreateProposalReq {
   @ApiProperty({
     description: 'Title of the proposal',
@@ -455,6 +460,19 @@ export class CreateProposalReq {
   @IsNumber()
   @Expose()
   expansionLimitPrice?: number;
+
+  @ApiProperty({
+    description: 'Assets to add to the vault whitelist for asset whitelist update proposals',
+    type: [AssetWhitelistProposalDto],
+    required: false,
+  })
+  @ValidateIf(o => o.type === ProposalType.ASSET_WHITELIST_UPDATE)
+  @IsArray()
+  @ArrayMinSize(1, { message: 'At least one asset must be provided for asset whitelist update proposals' })
+  @ValidateNested({ each: true })
+  @Type(() => AssetWhitelistProposalDto)
+  @Expose()
+  assetsWhitelist?: AssetWhitelistProposalDto[];
 
   @ApiProperty({
     description: 'Additional metadata for the proposal',

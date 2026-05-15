@@ -107,6 +107,16 @@ export class Proposal {
       currentAssetCount?: number; // Track progress
     };
 
+    // Asset whitelist update data
+    assetsWhitelist?: Array<{
+      policyId: string;
+      assetName?: string;
+      collectionName?: string | null;
+      valuationMethod?: string;
+      customPriceAda?: number | null;
+      lpPoolOnchainId?: string | null;
+    }>;
+
     // Swap execution results (for DexHunter swaps)
     swapResults?: Array<{
       assetId: string;
