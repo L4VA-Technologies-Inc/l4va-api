@@ -49,6 +49,13 @@ export class GetGovernanceFeesRes {
   proposalFeeExpansion: number;
 
   @ApiProperty({
+    description: 'Governance fee for asset whitelist update proposals (in lovelace)',
+    example: 5000000,
+  })
+  @Expose()
+  proposalFeeAssetWhitelistUpdate: number;
+
+  @ApiProperty({
     description: 'Governance fee for voting (in lovelace)',
     example: 0,
   })

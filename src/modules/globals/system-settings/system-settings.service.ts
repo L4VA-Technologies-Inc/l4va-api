@@ -30,6 +30,7 @@ export interface SystemSettingsData {
   governance_fee_proposal_burning: number;
   governance_fee_proposal_marketplace_action: number;
   governance_fee_proposal_expansion: number;
+  governance_fee_proposal_asset_whitelist_update: number;
   governance_fee_voting: number; // Fee per vote
   // Voting duration constraints (in milliseconds)
   min_voting_duration: number;
@@ -60,6 +61,7 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   governance_fee_proposal_burning: 3000000, // 3 ADA
   governance_fee_proposal_marketplace_action: 5000000, // 5 ADA
   governance_fee_proposal_expansion: 10000000, // 10 ADA
+  governance_fee_proposal_asset_whitelist_update: 5000000, // 5 ADA
   governance_fee_voting: 0, // No voting fee by default
   // Voting duration constraints (in milliseconds)
   min_voting_duration: 86400000, // 24 hours in ms
@@ -218,6 +220,10 @@ export class SystemSettingsService implements OnModuleInit {
     return this.settings.governance_fee_proposal_expansion || 0;
   }
 
+  get governanceFeeProposalAssetWhitelistUpdate(): number {
+    return this.settings.governance_fee_proposal_asset_whitelist_update || 0;
+  }
+
   get governanceFeeVoting(): number {
     return this.settings.governance_fee_voting || 0;
   }
@@ -268,6 +274,8 @@ export class SystemSettingsService implements OnModuleInit {
         return this.governanceFeeProposalMarketplaceAction;
       case 'expansion':
         return this.governanceFeeProposalExpansion;
+      case 'asset_whitelist_update':
+        return this.governanceFeeProposalAssetWhitelistUpdate;
       default:
         this.logger.warn(`Unknown proposal type: "${proposalType}" - returning 0`);
         return 0;
