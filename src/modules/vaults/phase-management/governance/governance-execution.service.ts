@@ -640,6 +640,30 @@ export class GovernanceExecutionService {
       }
     }
 
+    if (proposal.proposalType === ProposalType.ASSET_WHITELIST_UPDATE) {
+      if (vault.vault_status !== VaultStatus.locked) {
+        this.logger.warn(
+          `Cannot execute asset whitelist update proposal ${proposal.id}: vault must be LOCKED. Current status: ${vault.vault_status}`
+        );
+        await this.proposalRepository.update(
+          { id: proposal.id },
+          {
+            metadata: {
+              ...proposal.metadata,
+              executionError: {
+                message: `Asset whitelist updates require the vault to be in LOCKED status. Current status: ${vault.vault_status}.`,
+                timestamp: new Date().toISOString(),
+                errorCode: 'VAULT_STATUS_NOT_LOCKED_WHITELIST',
+                userFriendlyMessage:
+                  'This proposal will retry automatically once the vault is back in LOCKED status (for example, after expansion ends).',
+              },
+            },
+          }
+        );
+        return false;
+      }
+    }
+
     try {
       switch (proposal.proposalType) {
         case ProposalType.MARKETPLACE_ACTION:
@@ -2064,30 +2088,45 @@ export class GovernanceExecutionService {
     const whitelistItems = proposal.metadata?.assetsWhitelist;
 
     if (!whitelistItems || whitelistItems.length === 0) {
-      this.logger.warn(`Asset whitelist update proposal ${proposal.id} has no whitelist entries`);
-      return false;
+      const err = new Error(
+        'This proposal has no assetsWhitelist payload in metadata; it cannot be executed as an asset whitelist update.'
+      );
+      this.logger.warn(`Asset whitelist update proposal ${proposal.id} has no whitelist entries in metadata`);
+      await this.storeExecutionError(proposal, err);
+      throw err;
     }
 
+    const vault = await this.vaultRepository.findOne({
+      where: { id: proposal.vaultId },
+      select: [
+        'id',
+        'asset_vault_name',
+        'privacy',
+        'contribution_phase_start',
+        'contribution_duration',
+        'value_method',
+        'vault_sc_status',
+        'is_expandable',
+      ],
+    });
+
+    if (!vault) {
+      const err = new Error(`Vault ${proposal.vaultId} not found`);
+      await this.storeExecutionError(proposal, err);
+      throw err;
+    }
+
+    if (!vault.is_expandable) {
+      const err = new Error(
+        'This vault is not marked as expandable; asset whitelist update proposals cannot be executed.'
+      );
+      await this.storeExecutionError(proposal, err);
+      throw err;
+    }
+
+    let insertedCount = 0;
+
     try {
-      const vault = await this.vaultRepository.findOne({
-        where: { id: proposal.vaultId },
-        select: [
-          'id',
-          'asset_vault_name',
-          'privacy',
-          'contribution_phase_start',
-          'contribution_duration',
-          'value_method',
-          'vault_sc_status',
-        ],
-      });
-
-      if (!vault) {
-        throw new Error(`Vault ${proposal.vaultId} not found`);
-      }
-
-      let insertedCount = 0;
-
       for (const item of whitelistItems) {
         const result = await this.assetsWhitelistRepository
           .createQueryBuilder()
@@ -2107,12 +2146,21 @@ export class GovernanceExecutionService {
           insertedCount += 1;
         }
       }
+    } catch (error) {
+      await this.storeExecutionError(proposal, error);
+      throw error;
+    }
 
-      if (insertedCount === 0) {
-        this.logger.warn(`Asset whitelist update proposal ${proposal.id} did not insert any new whitelist entries`);
-        return false;
-      }
+    if (insertedCount === 0) {
+      const err = new Error(
+        'No new whitelist rows were inserted: every policy in this proposal already exists for this vault (unique vault_id + policy_id).'
+      );
+      this.logger.warn(`Asset whitelist update proposal ${proposal.id} did not insert any new whitelist entries`);
+      await this.storeExecutionError(proposal, err);
+      throw err;
+    }
 
+    try {
       const onChainResult = await this.vaultManagingService.updateVaultMetadataTx({
         vault,
         vaultStatus: vault.vault_sc_status || SmartContractVaultStatus.SUCCESSFUL,
@@ -2186,6 +2234,14 @@ export class GovernanceExecutionService {
    */
   private getUserFriendlyErrorMessage(errorCode: string): string {
     const errorMessages: Record<string, string> = {
+      VAULT_NOT_EXPANDABLE:
+        'This vault does not allow whitelist expansion. Asset whitelist update proposals cannot run on this vault.',
+      WHITELIST_METADATA_MISSING:
+        'This proposal is missing whitelist data in metadata, so it cannot be executed. Recreate the proposal if needed.',
+      WHITELIST_NO_NEW_ENTRIES:
+        'Every policy in this proposal was already on the vault whitelist, so nothing was left to apply.',
+      WHITELIST_DUPLICATE_KEY:
+        'A database constraint blocked a whitelist row (duplicate policy for this vault). Contact support if this persists.',
       INSUFFICIENT_FUNDS: 'Insufficient ADA in treasury to cover transaction fees.',
       ASSET_NOT_AVAILABLE: 'Assets no longer available or already sold.',
       ASSET_ALREADY_LISTED: 'Assets already listed on marketplace. Unlist them first.',
@@ -2212,6 +2268,29 @@ export class GovernanceExecutionService {
   private categorizeError(error: Error): string {
     const errorMessage = error.message || '';
     const errorStack = error.stack || '';
+
+    // Asset whitelist update (execution-time validation)
+    if (errorMessage.includes('has no assetsWhitelist payload')) {
+      return 'WHITELIST_METADATA_MISSING';
+    }
+
+    if (
+      errorMessage.includes('not marked as expandable') ||
+      errorMessage.toLowerCase().includes('whitelist update proposals cannot be executed')
+    ) {
+      return 'VAULT_NOT_EXPANDABLE';
+    }
+
+    if (
+      errorMessage.includes('No new whitelist rows were inserted') ||
+      errorMessage.includes('already exists for this vault')
+    ) {
+      return 'WHITELIST_NO_NEW_ENTRIES';
+    }
+
+    if (errorMessage.includes('23505') || errorMessage.toLowerCase().includes('duplicate key')) {
+      return 'WHITELIST_DUPLICATE_KEY';
+    }
 
     // Insufficient funds errors
     if (
