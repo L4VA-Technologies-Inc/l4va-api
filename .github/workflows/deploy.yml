@@ -113,7 +113,15 @@ jobs:
             exit 1
           fi
 
-          echo "Waiting for health (migrations run during app startup)..."
+          echo "Running migrations..."
+          docker exec $NEW_CONTAINER npm run migration:run:gcp || {
+            echo "Migration failed"
+            docker logs $NEW_CONTAINER --tail 100
+            docker stop $NEW_CONTAINER || true
+            exit 1
+          }
+
+          echo "Waiting for health..."
           MAX_ATTEMPTS=60
           ATTEMPT=0
           until curl -sf http://127.0.0.1:$NEW_PORT/api/v1/health; do
@@ -243,7 +251,15 @@ jobs:
             exit 1
           fi
 
-          echo "Waiting for health (migrations run during app startup)..."
+          echo "Running migrations..."
+          docker exec $NEW_CONTAINER npm run migration:run:gcp || {
+            echo "Migration failed"
+            docker logs $NEW_CONTAINER --tail 100
+            docker stop $NEW_CONTAINER || true
+            exit 1
+          }
+
+          echo "Waiting for health..."
           MAX_ATTEMPTS=60
           ATTEMPT=0
           until curl -sf http://127.0.0.1:$NEW_PORT/api/v1/health; do
