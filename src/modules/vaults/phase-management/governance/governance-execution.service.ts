@@ -2125,6 +2125,7 @@ export class GovernanceExecutionService {
     }
 
     let insertedCount = 0;
+    const insertedPolicyIds: string[] = [];
 
     try {
       for (const item of whitelistItems) {
@@ -2144,6 +2145,7 @@ export class GovernanceExecutionService {
 
         if (result.identifiers.length > 0) {
           insertedCount += 1;
+          insertedPolicyIds.push(item.policyId);
         }
       }
     } catch (error) {
@@ -2160,12 +2162,19 @@ export class GovernanceExecutionService {
       throw err;
     }
 
+    let onChainResult: { txHash: string };
     try {
-      const onChainResult = await this.vaultManagingService.updateVaultMetadataTx({
+      onChainResult = await this.vaultManagingService.updateVaultMetadataTx({
         vault,
         vaultStatus: vault.vault_sc_status || SmartContractVaultStatus.SUCCESSFUL,
       });
+    } catch (error) {
+      await this.rollbackAssetWhitelistInserts(proposal.id, vault.id, insertedPolicyIds);
+      await this.storeExecutionError(proposal, error);
+      throw error;
+    }
 
+    try {
       await this.vaultRepository.update(
         { id: vault.id },
         {
@@ -2184,6 +2193,34 @@ export class GovernanceExecutionService {
     } catch (error) {
       await this.storeExecutionError(proposal, error);
       throw error;
+    }
+  }
+
+  /**
+   * Removes whitelist rows inserted during a failed asset whitelist update execution
+   * so off-chain state stays aligned when the on-chain metadata update does not complete.
+   */
+  private async rollbackAssetWhitelistInserts(proposalId: string, vaultId: string, policyIds: string[]): Promise<void> {
+    if (policyIds.length === 0) {
+      return;
+    }
+
+    try {
+      const result = await this.assetsWhitelistRepository.delete({
+        vault: { id: vaultId },
+        policy_id: In(policyIds),
+      });
+
+      this.logger.warn(
+        `Rolled back ${result.affected ?? 0} asset whitelist row(s) for vault ${vaultId} ` +
+          `after on-chain update failed for proposal ${proposalId}`
+      );
+    } catch (rollbackError) {
+      this.logger.error(
+        `Failed to roll back asset whitelist rows for proposal ${proposalId} (vault ${vaultId}, policies: ${policyIds.join(', ')}): ` +
+          `${rollbackError instanceof Error ? rollbackError.message : rollbackError}`,
+        rollbackError instanceof Error ? rollbackError.stack : undefined
+      );
     }
   }
 
