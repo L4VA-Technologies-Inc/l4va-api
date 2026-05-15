@@ -3,9 +3,36 @@ import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import * as bodyParser from 'body-parser';
+import { DataSource } from 'typeorm';
 
 import { AppModule } from './app.module';
 import { loadSecrets } from './load-gcp-secrets';
+
+async function runMigrations(): Promise<void> {
+  const dataSource = new DataSource({
+    type: 'postgres',
+    host: process.env.DB_HOST,
+    port: parseInt(process.env.DB_PORT || '5432', 10),
+    username: process.env.DB_USERNAME,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+    synchronize: false,
+    entities: ['src/**/*.entity.ts'],
+    migrations: ['src/database/migrations/*.ts'],
+    migrationsRun: false,
+    logging: true,
+  });
+  await dataSource.initialize();
+  const migrations = await dataSource.runMigrations();
+  if (migrations.length === 0) {
+    // eslint-disable-next-line no-console
+    console.log('No migrations to run');
+  } else {
+    // eslint-disable-next-line no-console
+    console.log(`Ran ${migrations.length} migration(s): ${migrations.map(m => m.name).join(', ')}`);
+  }
+  await dataSource.destroy();
+}
 
 async function bootstrap(): Promise<void> {
   try {
@@ -16,6 +43,25 @@ async function bootstrap(): Promise<void> {
     // eslint-disable-next-line no-console
     console.error('Failed to load secrets:', error.message || error);
   }
+
+  const nodeEnv = process.env.NODE_ENV;
+  if (nodeEnv === 'testnet' || nodeEnv === 'mainnet') {
+    try {
+      // eslint-disable-next-line no-console
+      console.log('Running migrations...');
+      await runMigrations();
+      // eslint-disable-next-line no-console
+      console.log('Migrations completed successfully');
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error('Migration failed, aborting startup:', error.message || error);
+      process.exit(1);
+    }
+  } else {
+    // eslint-disable-next-line no-console
+    console.log(`Skipping auto-migrations (NODE_ENV="${nodeEnv}")`);
+  }
+
   const app = await NestFactory.create(AppModule, {
     bodyParser: false, // Disable default body parser so we can configure it manually
   });

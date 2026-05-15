@@ -4,43 +4,33 @@ import { DataSource } from 'typeorm';
 
 import { loadSecrets } from '../load-gcp-secrets';
 
-function buildDataSource() {
-  return new DataSource({
-    type: 'postgres',
-    host: process.env.DB_HOST,
-    port: parseInt(process.env.DB_PORT || '5432', 10),
-    username: process.env.DB_USERNAME,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-    synchronize: false,
-    entities: ['src/**/*.entity.ts'],
-    migrations: ['src/database/migrations/*.ts'],
-    migrationsRun: false,
-    logging: true,
-  });
-}
-
 async function runMigrations(): Promise<void> {
   try {
-    // Load .env first (no-op if vars already in environment)
+    // Load .env first
     config();
 
-    let dataSource = buildDataSource();
+    // Load GCP secrets (which populate process.env)
+    console.log('Loading secrets from GCP...');
+    await loadSecrets();
+    console.log('Secrets loaded successfully');
 
-    // Try connecting with current environment (fast path: secrets already loaded by app container)
+    // Create DataSource AFTER secrets are loaded
+    const dataSource = new DataSource({
+      type: 'postgres',
+      host: process.env.DB_HOST,
+      port: parseInt(process.env.DB_PORT || '5432', 10),
+      username: process.env.DB_USERNAME,
+      password: process.env.DB_PASSWORD,
+      database: process.env.DB_NAME,
+      synchronize: false,
+      entities: ['src/**/*.entity.ts'],
+      migrations: ['src/database/migrations/*.ts'],
+      migrationsRun: false,
+      logging: true,
+    });
+
     console.log('Initializing database connection...');
-    try {
-      await dataSource.initialize();
-    } catch (connError) {
-      console.error('Initial connection failed:', connError);
-      // Connection failed — likely missing credentials in a local/manual run; try loading GCP secrets
-      console.log('Initial connection failed, loading secrets from GCP...');
-      await loadSecrets();
-      console.log('Secrets loaded, retrying connection...');
-
-      dataSource = buildDataSource();
-      await dataSource.initialize(); // throws real error if still failing
-    }
+    await dataSource.initialize();
     console.log('Database connected');
 
     console.log('Running migrations...');
