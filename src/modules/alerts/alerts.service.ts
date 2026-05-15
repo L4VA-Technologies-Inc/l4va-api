@@ -8,6 +8,7 @@ export interface SlackAlertData {
 
 export type SlackAlertType =
   | 'asset_price_fetch_failed'
+  | 'asset_price_deviation_exceeded'
   | 'wallet_fetch_failed'
   | 'general_error'
   | 'admin_utxos_exhausted'
@@ -127,6 +128,90 @@ export class AlertsService {
                 {
                   type: 'mrkdwn',
                   text: `*Timestamp:*\n${timestamp}`,
+                },
+              ],
+            },
+          ],
+        };
+
+      case 'asset_price_deviation_exceeded':
+        return {
+          text: `🚨 Asset Price Deviation Exceeded - Manual Review Required`,
+          blocks: [
+            {
+              type: 'header',
+              text: {
+                type: 'plain_text',
+                text: '🚨 Asset Price Deviation Exceeded',
+                emoji: true,
+              },
+            },
+            {
+              type: 'section',
+              fields: [
+                {
+                  type: 'mrkdwn',
+                  text: `*Policy ID:*
+${data.policyId}`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Asset ID:*
+${data.assetId}`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Asset Class:*
+${data.assetClass}`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Price Source:*
+${data.source}`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Previous Price (ADA):*
+${data.previousPrice}`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*New Price (ADA):*
+${data.nextPrice}`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Deviation:*
+${data.deviationPercent}%`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Threshold:*
+±${data.thresholdPercent}%`,
+                },
+              ],
+            },
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text:
+                  `*⚠️ Automatic Action Taken:*
+` +
+                  `Price update was rejected and marked for manual review to avoid accepting potentially manipulated valuation data.
+
+` +
+                  `*Direction:* ${data.direction}
+` +
+                  `*Action:* ${data.action || 'price_update_rejected_manual_review_required'}`,
+              },
+            },
+            {
+              type: 'context',
+              elements: [
+                {
+                  type: 'mrkdwn',
+                  text: `*Timestamp:* ${timestamp}`,
                 },
               ],
             },
