@@ -32,6 +32,7 @@ async function runMigrations(): Promise<void> {
     try {
       await dataSource.initialize();
     } catch (connError) {
+      console.error('Initial connection failed:', connError);
       // Connection failed — likely missing credentials in a local/manual run; try loading GCP secrets
       console.log('Initial connection failed, loading secrets from GCP...');
       await loadSecrets();
