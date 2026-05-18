@@ -21,6 +21,7 @@ import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AlertsService } from '@/modules/alerts/alerts.service';
+import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { PriceService } from '@/modules/price/price.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
@@ -64,10 +65,6 @@ export class TaptoolsService {
   private readonly logger = new Logger(TaptoolsService.name);
 
   private readonly isMainnet: boolean;
-  private readonly maxAllowedPriceDeviationPercent: number;
-  private readonly maxAllowedPriceDeviationPercentNft: number;
-  private readonly maxAllowedPriceDeviationPercentFt: number;
-  private readonly minAbsolutePriceMoveAda: number;
   private readonly priceDeviationProtectionEnabled: boolean;
   private cache = new NodeCache({ stdTTL: 600 }); // cache for 10 minutes to reduce API calls for ADA price
   private readonly blockfrost: BlockFrostAPI;
@@ -126,16 +123,13 @@ export class TaptoolsService {
     private readonly assetsService: AssetsService,
     private readonly priceService: PriceService,
     private readonly configService: ConfigService,
+    private readonly systemSettingsService: SystemSettingsService,
     private readonly dexHunterPricingService: DexHunterPricingService,
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly alertsService: AlertsService,
     @Optional() @Inject('TreasuryWalletService') private readonly treasuryWalletService?: TreasuryWalletService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
-    this.maxAllowedPriceDeviationPercent = this.getDeviationThresholdPercent();
-    this.maxAllowedPriceDeviationPercentNft = this.getDeviationThresholdPercentByClass(true);
-    this.maxAllowedPriceDeviationPercentFt = this.getDeviationThresholdPercentByClass(false);
-    this.minAbsolutePriceMoveAda = this.getMinAbsolutePriceMoveAda();
     this.priceDeviationProtectionEnabled = this.getDeviationProtectionEnabled();
 
     this.blockfrost = new BlockFrostAPI({
@@ -153,33 +147,14 @@ export class TaptoolsService {
     });
   }
 
-  private getDeviationThresholdPercent(): number {
-    const configuredThreshold = Number(this.configService.get<string>('PRICE_MAX_DEVIATION_PERCENT') ?? 200);
-    if (Number.isFinite(configuredThreshold) && configuredThreshold > 0) {
-      return configuredThreshold;
-    }
-
-    return 200;
-  }
-
   private getDeviationThresholdPercentByClass(isNFT: boolean): number {
-    const configKey = isNFT ? 'PRICE_MAX_DEVIATION_PERCENT_NFT' : 'PRICE_MAX_DEVIATION_PERCENT_FT';
-    const configuredThreshold = Number(this.configService.get<string>(configKey));
-
-    if (Number.isFinite(configuredThreshold) && configuredThreshold > 0) {
-      return configuredThreshold;
-    }
-
-    return this.maxAllowedPriceDeviationPercent;
+    return isNFT
+      ? this.systemSettingsService.priceMaxDeviationPercentNft
+      : this.systemSettingsService.priceMaxDeviationPercentFt;
   }
 
   private getMinAbsolutePriceMoveAda(): number {
-    const configuredMinMove = Number(this.configService.get<string>('PRICE_MIN_ABSOLUTE_MOVE_ADA') ?? 0);
-    if (Number.isFinite(configuredMinMove) && configuredMinMove >= 0) {
-      return configuredMinMove;
-    }
-
-    return 0;
+    return this.systemSettingsService.priceMinAbsoluteMoveAda;
   }
 
   private getDeviationProtectionEnabled(): boolean {
@@ -214,12 +189,18 @@ export class TaptoolsService {
       return true;
     }
 
-    const absoluteMoveAda = Math.abs(nextPrice - previousPrice);
-    if (absoluteMoveAda < this.minAbsolutePriceMoveAda) {
+    const minAssetPriceForDeviationCheckAda = this.systemSettingsService.priceMinAssetPriceForDeviationCheckAda;
+    if (previousPrice < minAssetPriceForDeviationCheckAda || nextPrice < minAssetPriceForDeviationCheckAda) {
       return true;
     }
 
-    const thresholdPercent = isNFT ? this.maxAllowedPriceDeviationPercentNft : this.maxAllowedPriceDeviationPercentFt;
+    const absoluteMoveAda = Math.abs(nextPrice - previousPrice);
+    const minAbsoluteMoveAda = this.getMinAbsolutePriceMoveAda();
+    if (absoluteMoveAda < minAbsoluteMoveAda) {
+      return true;
+    }
+
+    const thresholdPercent = this.getDeviationThresholdPercentByClass(isNFT);
 
     const deviationPercent = Math.abs(((nextPrice - previousPrice) / previousPrice) * 100);
     if (deviationPercent <= thresholdPercent) {
@@ -238,7 +219,7 @@ export class TaptoolsService {
       previousPrice,
       nextPrice,
       absoluteMoveAda: Number(absoluteMoveAda.toFixed(8)),
-      minAbsoluteMoveAda: this.minAbsolutePriceMoveAda,
+      minAbsoluteMoveAda,
       deviationPercent: Number(deviationPercent.toFixed(4)),
       thresholdPercent,
       action: 'price_update_rejected_manual_review_required',

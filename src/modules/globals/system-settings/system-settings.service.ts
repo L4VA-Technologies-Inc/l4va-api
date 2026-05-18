@@ -34,6 +34,11 @@ export interface SystemSettingsData {
   // Voting duration constraints (in milliseconds)
   min_voting_duration: number;
   max_voting_duration: number;
+  // Price deviation protection settings
+  price_max_deviation_percent_nft: number;
+  price_max_deviation_percent_ft: number;
+  price_min_absolute_move_ada: number;
+  price_min_asset_price_for_deviation_check_ada: number;
 }
 
 const DEFAULT_SETTINGS: SystemSettingsData = {
@@ -64,6 +69,11 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   // Voting duration constraints (in milliseconds)
   min_voting_duration: 86400000, // 24 hours in ms
   max_voting_duration: 259200000, // 3 days in ms
+  // Price deviation protection defaults
+  price_max_deviation_percent_nft: 200,
+  price_max_deviation_percent_ft: 200,
+  price_min_absolute_move_ada: 0,
+  price_min_asset_price_for_deviation_check_ada: 50,
   hidden_mainnet_vault_ids: [
     '1a6e7495-178b-464e-b37e-00997ef1e9c2',
     '2761c805-77c5-443e-b352-f0afaf4860c0',
@@ -228,6 +238,26 @@ export class SystemSettingsService implements OnModuleInit {
 
   get maxVotingDuration(): number {
     return this.settings.max_voting_duration || 259200000; // 3 days default
+  }
+
+  get priceMaxDeviationPercentNft(): number {
+    const value = Number(this.settings.price_max_deviation_percent_nft);
+    return Number.isFinite(value) && value > 0 ? value : 200;
+  }
+
+  get priceMaxDeviationPercentFt(): number {
+    const value = Number(this.settings.price_max_deviation_percent_ft);
+    return Number.isFinite(value) && value > 0 ? value : 200;
+  }
+
+  get priceMinAbsoluteMoveAda(): number {
+    const value = Number(this.settings.price_min_absolute_move_ada);
+    return Number.isFinite(value) && value >= 0 ? value : 0;
+  }
+
+  get priceMinAssetPriceForDeviationCheckAda(): number {
+    const value = Number(this.settings.price_min_asset_price_for_deviation_check_ada);
+    return Number.isFinite(value) && value >= 0 ? value : 50;
   }
 
   // Kill switch getters
