@@ -139,8 +139,6 @@ export class VaultMarketStatsService {
       return;
     }
 
-    this.logger.log(`Found ${vaults.length} vaults to update market stats`);
-
     const vaultIds = vaults.map(v => v.id);
 
     const assets = await this.assetRepository.find({
@@ -258,27 +256,29 @@ export class VaultMarketStatsService {
     const successfulUpdates = tokensMarketData.filter(data => data !== null).length;
     const withMarketData = tokensMarketData.filter(data => data?.has_market_data).length;
 
-    this.logger.log(
-      `Market stats update complete: ${successfulUpdates}/${vaults.length} processed, ` +
-        `${withMarketData} with active market data (LP exists on DEX)`
-    );
-
     // Update user gains for vaults that got price updates
     const vaultIdsWithPriceUpdates = tokensMarketData
       .filter(data => data !== null && data.vt_price)
       .map(data => data.vault_id);
 
     if (vaultIdsWithPriceUpdates.length > 0) {
-      this.logger.log(`Triggering user gains recalculation for ${vaultIdsWithPriceUpdates.length} vaults`);
       try {
         await this.taptoolsService.updateMultipleVaultTotals(vaultIdsWithPriceUpdates);
-        this.logger.log(`Successfully updated user gains for vaults with price changes`);
+        this.logger.log(
+          `Market update complete: ${successfulUpdates}/${vaults.length} vaults processed, ` +
+            `${withMarketData} with active LP, ${vaultIdsWithPriceUpdates.length} user gains updated`
+        );
       } catch (error) {
         this.logger.error(
           `Error updating user gains after price updates:`,
           error instanceof Error ? error.stack : undefined
         );
       }
+    } else {
+      this.logger.log(
+        `Market update complete: ${successfulUpdates}/${vaults.length} vaults processed, ` +
+          `${withMarketData} with active LP, no price changes`
+      );
     }
   }
 

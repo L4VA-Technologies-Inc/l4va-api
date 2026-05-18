@@ -696,7 +696,9 @@ export class TaptoolsService {
         100 // 100ms delay between batches
       );
 
-      this.logger.log(`Successfully updated prices for ${updatedCount} assets`);
+      if (updatedCount > 0) {
+        this.logger.log(`Updated prices for ${updatedCount} assets across ${vaultIds.length} vaults`);
+      }
 
       // Calculate and return TVL for all affected vaults
       return await this.calculateVaultsTvl(vaultIds);
@@ -1297,7 +1299,7 @@ export class TaptoolsService {
 
     // Recalculate complete TVL and gains for all affected users from ALL their vaults
     if (affectedUserIds.size > 0) {
-      this.logger.log(`Recalculating complete TVL and gains for ${affectedUserIds.size} affected users`);
+      this.logger.debug(`Recalculating TVL and gains for ${affectedUserIds.size} users`);
 
       // Batch query: Get all relevant vaults
       const allRelevantVaults = await this.vaultRepository.find({
