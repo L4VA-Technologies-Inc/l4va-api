@@ -1,29 +1,8 @@
-import { EpochStatus } from '../../../types/rewards.types';
-
 /**
  * Data Transfer Objects for Rewards API (l4va-api)
- * These DTOs represent UI-ready responses for the frontend.
- * They abstract away internal rewards service details.
+ * Interfaces mirror the responses returned by l4va-rewards service.
+ * No runtime validation is needed here — l4va-api is a thin BFF proxy.
  */
-
-// ============================================================================
-// Summary DTO - Overview of user's rewards
-// ============================================================================
-
-export interface RewardsSummaryDto {
-  totalEarned: string;
-  totalClaimable: string;
-  totalVested: string;
-  totalClaimed: string;
-  currentEpoch?: {
-    epochId: string;
-    epochNumber: number;
-    estimatedReward?: string;
-    immediateAmount?: string;
-    vestedAmount?: string;
-    endsAt: string;
-  };
-}
 
 // ============================================================================
 // Epoch DTOs
@@ -34,28 +13,26 @@ export interface EpochDto {
   epochNumber: number;
   startDate: string;
   endDate: string;
-  status: EpochStatus;
-  totalEmission?: string;
-  userReward?: {
-    total: string;
-    immediate: string;
-    vested: string;
-    score: number;
-    isCapped: boolean;
-  };
+  emissionTotal: number;
+  walletCapAmount: number;
+  status: string;
+  createdAt: string;
+  finalizedAt: string | null;
+  isActive: boolean;
+  isProcessing: boolean;
+  isFinalized: boolean;
 }
 
-export interface EpochsListDto {
+export interface EpochsResponseDto {
   epochs: EpochDto[];
   total: number;
 }
 
-export interface CurrentEpochDto {
+export interface CurrentEpochResponseDto {
   epoch: EpochDto | null;
-  eventSummary?: {
-    totalEvents: number;
-    eventBreakdown: Record<string, number>;
-  };
+  eventSummary?: Record<string, any>;
+  message?: string;
+  claimsEnabled: boolean;
 }
 
 // ============================================================================
@@ -64,164 +41,310 @@ export interface CurrentEpochDto {
 
 export interface WalletScoreDto {
   walletAddress: string;
-  currentEpochScore: number;
-  currentEpochId: string;
-  currentEpochNumber: number;
-  breakdown?: {
-    creatorScore: number;
-    participantScore: number;
-    lpScore: number;
-    governanceScore: number;
+  epochId: string;
+  epochNumber: number;
+  activityScore: number;
+  alignmentMultiplier: number;
+  creatorRewards: number;
+  participantRewards: number;
+  totalRewardBeforeCap: number;
+  finalReward: number;
+  wasCapped: boolean;
+  immediateReward: number;
+  vestedReward: number;
+  metadata: Record<string, any>;
+}
+
+interface AlignmentBonusDetailDto {
+  bonus: number;
+  bonusPercent: number;
+  achieved: boolean;
+}
+
+export interface AlignmentDetailsDto {
+  multiplier: number;
+  multiplierPercent: number;
+  bonuses: {
+    l4va: AlignmentBonusDetailDto & { stakedAmount: number; requiredAmount: number };
+    vlrm: AlignmentBonusDetailDto & { stakedAmount: number; requiredAmount: number };
+    oracle: AlignmentBonusDetailDto & { balance: number; minimumRequired: number };
+    alignment: AlignmentBonusDetailDto & { description: string };
   };
-  estimatedReward?: string;
+  maxMultiplier: number;
+  maxMultiplierPercent: number;
 }
 
-export interface RewardHistoryItemDto {
+export interface RewardSplitDto {
+  immediate: number;
+  vested: number;
+  immediatePercentage: number;
+  vestedPercentage: number;
+}
+
+export interface WalletHistoryItemDto {
+  id: string;
   epochId: string;
-  epochNumber: number;
-  epochStartDate: string;
-  epochEndDate: string;
-  score: number;
-  totalReward: string;
-  immediateReward: string;
-  vestedReward: string;
-  isCapped: boolean;
-  claimedAt?: string;
-  claimTransactionId?: string;
+  walletAddress: string;
+  creatorRewardTotal: number;
+  participantRewardTotal: number;
+  totalRewardBeforeCap: number;
+  finalReward: number;
+  immediateReward: number;
+  vestedReward: number;
+  wasCapped: boolean;
+  metadata: Record<string, any>;
+  createdAt: Date;
+  totalReward: number;
+  hasVestedReward: boolean;
+  hasImmediateReward: boolean;
+  rewardSplit: RewardSplitDto;
 }
 
-export interface WalletHistoryDto {
+export interface WalletHistoryResponseDto {
   walletAddress: string;
-  history: RewardHistoryItemDto[];
+  history: WalletHistoryItemDto[];
+  totalEarned: number;
+  epochCount: number;
 }
 
 // ============================================================================
-// Vault Rewards DTOs
+// Vault DTOs
 // ============================================================================
 
-export interface VaultScoreEntryDto {
+export interface VaultParticipantDto {
   walletAddress: string;
-  score: number;
-  rank: number;
-  role: 'creator' | 'participant';
-  estimatedReward?: string;
+  role: string;
+  activityScore: number;
+  rewardAmount: number;
 }
 
-export interface VaultScoresDto {
+export interface VaultScoreDto {
   vaultId: string;
-  vaultName?: string;
   epochId: string;
   epochNumber: number;
-  scores: VaultScoreEntryDto[];
-  totalParticipants: number;
+  totalScore: number;
+  totalReward: number;
+  creatorReward: number;
+  participantReward: number;
+  participantCount: number;
+  participants: VaultParticipantDto[];
 }
 
 export interface WalletVaultRewardDto {
+  walletAddress: string;
   vaultId: string;
-  vaultName?: string;
-  role: 'creator' | 'participant' | 'both';
-  score: number;
-  creatorScore?: number;
-  participantScore?: number;
-  estimatedReward?: string;
-  breakdown?: {
-    creator?: string;
-    participant?: string;
-  };
+  epochId: string;
+  epochNumber: number;
+  role: string;
+  activityScore: number;
+  rewardAmount: number;
+  isCreator: boolean;
+  isParticipant: boolean;
 }
 
-export interface WalletVaultsDto {
+export interface VaultScoreWithWalletsDto {
+  vault: VaultScoreDto;
+  walletScores: WalletVaultRewardDto[];
+}
+
+export interface WalletVaultDetailsDto {
+  walletAddress: string;
+  vaultId: string;
+  epochId: string;
+  epochNumber: number;
+  role: string;
+  totalReward: number;
+  creatorReward: number;
+  participantReward: number;
+  immediateReward: number;
+  vestedReward: number;
+}
+
+export interface VaultBreakdownDto {
+  vaultId: string;
+  vaultName: string;
+  totalReward: number;
+  epochCount: number;
+  role: string;
+}
+
+export interface WalletVaultsResponseDto {
   walletAddress: string;
   epochId: string;
   epochNumber: number;
-  vaults: WalletVaultRewardDto[];
-  totalReward: string;
+  totalReward: number;
+  totalRewardBeforeCap: number;
+  totalFinalReward: number;
+  wasCapped: boolean;
+  capDifference: number;
+  vaults: VaultBreakdownDto[];
+}
+
+export interface VaultTimelineItemDto {
+  epochId: string;
+  epochEnd: string;
+  epochNumber: number;
+  vaultId: string;
+  vaultName: string;
+  rewardAmount: number;
+}
+
+export interface WalletVaultTimelineDto {
+  walletAddress: string;
+  timeline: VaultTimelineItemDto[];
+}
+
+export interface ActivityTimelineItemDto {
+  epochId: string;
+  epochEnd: string;
+  epochNumber: number;
+  activityType: string;
+  rewardAmount: number;
+}
+
+export interface WalletActivityTimelineDto {
+  walletAddress: string;
+  timeline: ActivityTimelineItemDto[];
+}
+
+export interface CurrentEpochEstimateDto {
+  estimatedReward: number;
+  confidence: 'low' | 'stabilizing' | 'near-final';
+  confidenceLabel: string;
+  epochProgress: number;
+  epochNumber: number;
+  hasActivity: boolean;
 }
 
 // ============================================================================
 // Claims DTOs
 // ============================================================================
 
-export interface ClaimableRewardDto {
+export interface AvailableRewardDto {
   epochId: string;
   epochNumber: number;
-  immediateAmount: string;
-  vestedAmount: string;
-  totalAmount: string;
-  status: 'available' | 'pending' | 'processing' | 'partially_claimed' | 'claimed';
+  immediateAmount: number;
+  vestedAmount: number;
+  totalAmount: number;
+  claimableNow: number;
+  hasVestedReward: boolean;
+  hasImmediateReward: boolean;
 }
 
 export interface ClaimsSummaryDto {
   walletAddress: string;
-  totalClaimable: string;
-  immediateClaimable: string;
-  vestedClaimable: string;
-  totalClaimed: string;
+  totalClaimable: number;
+  immediateClaimable: number;
+  vestedClaimable: number;
+  totalClaimed: number;
   pendingClaims: number;
-  availableRewards: ClaimableRewardDto[];
-  lastClaimDate?: string;
+  lastClaimDate: string | null;
+  availableRewards: AvailableRewardDto[];
 }
 
 export interface ClaimHistoryItemDto {
-  claimId: string;
+  id: string;
   epochId: string;
-  epochNumber: number;
-  amount: string;
-  type: 'immediate' | 'vested';
-  claimedAt: string;
-  transactionId: string;
-  transactionStatus: 'pending' | 'confirmed' | 'failed';
+  walletAddress: string;
+  rewardAmount: number;
+  immediateAmount: number;
+  vestedAmount: number;
+  claimedImmediateAmount: number;
+  claimedVestedAmount: number;
+  remainingImmediateAmount: number;
+  remainingVestedAmount: number;
+  status: string;
+  claimTransactionId: string | null;
+  claimedAt: string | null;
 }
 
 export interface ClaimTransactionDto {
   transactionId: string;
-  totalAmount: string;
+  totalAmount: number;
   claimsCount: number;
-  status: 'pending' | 'confirmed' | 'failed';
+  status: string;
   createdAt: string;
-  confirmedAt?: string;
-  txHash?: string;
+  confirmedAt: string | null;
+  failedAt: string | null;
+  txHash: string | null;
+  isPending: boolean;
+  isConfirmed: boolean;
+  isFailed: boolean;
+}
+
+export interface PrepareClaimResponseDto {
+  reservationId: string;
+  txCbor: string;
+  claimableImmediateAmount: number;
+  claimableVestedAmount: number;
+  totalClaimableAmount: number;
+}
+
+export interface SubmitClaimResponseDto {
+  success: boolean;
+  txHash: string;
+  claimedAmount: number;
+  claimedImmediateAmount: number;
+  claimedVestedAmount: number;
+}
+
+export interface CancelClaimResponseDto {
+  cancelled: boolean;
+  message?: string;
 }
 
 // ============================================================================
 // Vesting DTOs
 // ============================================================================
 
+export interface NextReleaseDto {
+  amount: number;
+  date: string;
+}
+
 export interface VestingPositionDto {
   vestingId: string;
   epochId: string;
   epochNumber: number;
-  totalAmount: string;
-  releasedAmount: string;
-  remainingAmount: string;
+  walletAddress: string;
+  totalAmount: number;
+  vestedAmount: number;
+  unlockedAmount: number;
+  claimedAmount: number;
+  releasedAmount: number;
+  remainingAmount: number;
   startDate: string;
   endDate: string;
-  vestingDuration: number; // days
-  status: 'active' | 'completed' | 'cancelled';
-  nextRelease?: {
-    amount: string;
-    date: string;
-  };
+  unlockDate: string | null;
+  vestingDuration: number;
+  status: string;
+  isActive: boolean;
+  isCompleted: boolean;
+  isCancelled: boolean;
+  hasStarted: boolean;
+  hasEnded: boolean;
+  isUpcoming: boolean;
+  progressPercentage: number;
+  daysUntilUnlock: number | null;
+  nextRelease: NextReleaseDto | null;
+}
+
+export interface VestingPositionsResponseDto {
+  walletAddress: string;
+  positions: VestingPositionDto[];
+  totalPositions: number;
+  activePositions: number;
 }
 
 export interface VestingSummaryDto {
   walletAddress: string;
-  totalVested: string;
-  totalReleased: string;
-  totalRemaining: string;
-  activePositions: VestingPositionDto[];
-  completedPositions: VestingPositionDto[];
-}
-
-// ============================================================================
-// Configuration DTOs
-// ============================================================================
-
-export interface RewardsWeightsDto {
-  activityWeights: Record<string, number>;
-  creatorShare: number; // percentage
-  participantShare: number; // percentage
-  immediateRelease: number; // percentage
-  vestingDuration: number; // days
-  walletCap: string;
+  totalVested: number;
+  totalUnlocked: number;
+  totalClaimed: number;
+  totalRemaining: number;
+  availableToClaim: number;
+  activePositionsCount: number;
+  overallProgress: number;
+  nextUnlock?: { amount: number; date: string };
+  positions: VestingPositionDto[];
 }
