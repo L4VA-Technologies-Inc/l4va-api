@@ -23,7 +23,10 @@ import { GovernanceService } from './governance.service';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
 import { OptionalAuthGuard } from '@/modules/auth/optional-auth.guard';
-import { AssetBuySellDto } from '@/modules/vaults/phase-management/governance/dto/get-assets.dto';
+import {
+  AssetBuySellDto,
+  GetTerminationAssetsDto,
+} from '@/modules/vaults/phase-management/governance/dto/get-assets.dto';
 
 @ApiTags('Governance')
 @Controller('governance')
@@ -185,13 +188,16 @@ export class GovernanceController {
 
   @Get('vaults/:vaultId/assets/terminate')
   @UseGuards(AuthGuard)
-  @ApiOperation({ summary: 'Get assets to terminate for a vault' })
+  @ApiOperation({
+    summary: 'Get assets and LP validation info for termination',
+    description: 'Returns assets to terminate along with LP pool validation and overall validation status',
+  })
   @ApiResponse({
     status: 200,
-    description: 'List of assets to terminate',
-    type: [AssetBuySellDto],
+    description: 'Termination assets and validation information',
+    type: GetTerminationAssetsDto,
   })
-  async getAssetsToTerminate(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<AssetBuySellDto[]> {
+  async getAssetsToTerminate(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<GetTerminationAssetsDto> {
     return this.governanceService.getAssetsToTerminate(vaultId);
   }
 

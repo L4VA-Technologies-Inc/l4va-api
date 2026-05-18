@@ -22,7 +22,7 @@ import { BlockchainService } from '../../processing-tx/onchain/blockchain.servic
 import { DistributionService } from './distribution.service';
 import { CreateProposalReq, ExecType } from './dto/create-proposal.req';
 import { CreateProposalRes } from './dto/create-proposal.res';
-import { AssetBuySellDto } from './dto/get-assets.dto';
+import { AssetBuySellDto, GetTerminationAssetsDto } from './dto/get-assets.dto';
 import { GetProposalDetailRes } from './dto/get-proposal-detail.res';
 import { GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';
@@ -2407,8 +2407,18 @@ export class GovernanceService {
     }
   }
 
-  async getAssetsToTerminate(vaultId: string): Promise<AssetBuySellDto[]> {
+  async getAssetsToTerminate(vaultId: string): Promise<GetTerminationAssetsDto> {
     try {
+      // Get vault for LP validation
+      const vault = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        relations: ['treasury_wallet'],
+      });
+
+      if (!vault) {
+        throw new NotFoundException(`Vault ${vaultId} not found`);
+      }
+
       // Get all assets in the vault eligible for termination
       const assets = await this.assetRepository.find({
         where: {
@@ -2422,12 +2432,185 @@ export class GovernanceService {
         select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'dex_price', 'floor_price', 'metadata'],
       });
 
-      return plainToInstance(AssetBuySellDto, assets, {
+      const assetDtos = plainToInstance(AssetBuySellDto, assets, {
         excludeExtraneousValues: true,
       });
+
+      // Get LP validation info
+      const lpValidation = await this.validateLpForTermination(vault);
+
+      return {
+        assets: assetDtos,
+        lpInfo: {
+          hasLp: lpValidation.hasLp,
+          pools: lpValidation.pools,
+          recoverableLpTokenUnit: lpValidation.recoverableLpTokenUnit,
+          totalUnrecoverableAda: lpValidation.totalUnrecoverableAda,
+        },
+        validation: {
+          canCreateProposal: lpValidation.canTerminate,
+          warnings: lpValidation.warning ? [lpValidation.warning] : [],
+          blockingReason: lpValidation.blockingReason,
+        },
+      };
     } catch (error) {
-      this.logger.error(`Error getting assets to terminate for vault ${vaultId}: ${error.message}`, error.stack);
-      throw new InternalServerErrorException('Error getting assets to terminate');
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+      this.logger.error(
+        `Error getting termination info for vault ${vaultId}: ${error instanceof Error ? error.message : 'Unknown'}`,
+        error instanceof Error ? error.stack : undefined
+      );
+      throw new InternalServerErrorException('Error getting termination info');
+    }
+  }
+
+  /**
+   * Validate LP pools for termination (internal helper method)
+   * Returns LP pool information and validation status
+   */
+  private async validateLpForTermination(vault: Vault): Promise<{
+    hasLp: boolean;
+    canTerminate: boolean;
+    pools: Array<{
+      dex: string;
+      lpTokenUnit: string;
+      adaAmount: number;
+      vtAmount: number;
+      isRecoverable: boolean;
+    }>;
+    recoverableLpTokenUnit: string | null;
+    totalUnrecoverableAda: number;
+    blockingReason: string | null;
+    warning: string | null;
+  }> {
+    // Skip LP pool validation on testnet (no real DEXes)
+    if (!this.isMainnet) {
+      return {
+        hasLp: false,
+        canTerminate: true,
+        pools: [],
+        recoverableLpTokenUnit: null,
+        totalUnrecoverableAda: 0,
+        blockingReason: null,
+        warning: 'Testnet: LP validation skipped',
+      };
+    }
+
+    // Check if vault has necessary data
+    if (!vault.script_hash || !vault.asset_vault_name) {
+      return {
+        hasLp: false,
+        canTerminate: true,
+        pools: [],
+        recoverableLpTokenUnit: null,
+        totalUnrecoverableAda: 0,
+        blockingReason: null,
+        warning: null,
+      };
+    }
+
+    try {
+      const vtUnit = `${vault.script_hash}${vault.asset_vault_name}`;
+
+      // Get all pools for this token from TapTools
+      const allPools = await this.taptoolsService.getTokenPools(vtUnit);
+
+      if (!allPools || allPools.length === 0) {
+        return {
+          hasLp: false,
+          canTerminate: true,
+          pools: [],
+          recoverableLpTokenUnit: null,
+          totalUnrecoverableAda: 0,
+          blockingReason: null,
+          warning: null,
+        };
+      }
+
+      // Get VyFi pools and check which LP tokens exist in admin wallet
+      const vyfiPools = allPools.filter(pool => pool.exchange.toLowerCase().includes('vyfi'));
+      let recoverableLpTokenUnit: string | null = null;
+
+      if (vyfiPools.length > 0) {
+        try {
+          // Get admin wallet assets to check which VyFi LP tokens we actually hold
+          const adminAddressInfo = await this.blockfrost.addressesExtended(this.adminAddress);
+          const adminAssetUnits = adminAddressInfo.amount?.map(a => a.unit) || [];
+
+          // Find which VyFi LP token unit exists in admin wallet
+          for (const vyfiPool of vyfiPools) {
+            if (adminAssetUnits.includes(vyfiPool.lpTokenUnit)) {
+              recoverableLpTokenUnit = vyfiPool.lpTokenUnit;
+              break;
+            }
+          }
+        } catch (error) {
+          this.logger.warn(
+            `Failed to check admin wallet for VyFi LP tokens: ${error instanceof Error ? error.message : 'Unknown'}`
+          );
+        }
+      }
+
+      // Build pool information with recoverability status
+      const poolsInfo = allPools.map(pool => {
+        const isVyFi = pool.exchange.toLowerCase().includes('vyfi');
+        const adaAmount = !pool.tokenB || pool.tokenB === '' ? pool.tokenBLocked : pool.tokenALocked;
+        const vtAmount = !pool.tokenB || pool.tokenB === '' ? pool.tokenALocked : pool.tokenBLocked;
+        const isRecoverable = isVyFi && pool.lpTokenUnit === recoverableLpTokenUnit;
+
+        return {
+          dex: pool.exchange,
+          lpTokenUnit: pool.lpTokenUnit,
+          adaAmount,
+          vtAmount,
+          isRecoverable,
+        };
+      });
+
+      // Calculate total ADA in unrecoverable pools
+      const unrecoverablePools = poolsInfo.filter(p => !p.isRecoverable);
+      const totalUnrecoverableAda = unrecoverablePools.reduce((sum, pool) => sum + pool.adaAmount, 0);
+
+      const MIN_ADA_TO_BLOCK_TERMINATION = 10;
+      const canTerminate = totalUnrecoverableAda < MIN_ADA_TO_BLOCK_TERMINATION;
+
+      let blockingReason: string | null = null;
+      let warning: string | null = null;
+
+      if (!canTerminate) {
+        const poolList = unrecoverablePools.map(p => p.dex).join(', ');
+        blockingReason =
+          `Vault has ${totalUnrecoverableAda.toFixed(2)} ADA in unrecoverable LP pools (${poolList}). ` +
+          `Please remove liquidity before termination.`;
+      } else if (totalUnrecoverableAda > 0) {
+        warning =
+          `Vault has ${totalUnrecoverableAda.toFixed(2)} ADA in unrecoverable pools ` +
+          `(below ${MIN_ADA_TO_BLOCK_TERMINATION} ADA threshold). Termination can proceed but this value will be lost.`;
+      }
+
+      return {
+        hasLp: true,
+        canTerminate,
+        pools: poolsInfo,
+        recoverableLpTokenUnit,
+        totalUnrecoverableAda,
+        blockingReason,
+        warning,
+      };
+    } catch (error) {
+      this.logger.error(`Error validating LP for termination: ${error instanceof Error ? error.message : 'Unknown'}`);
+
+      // On error, allow termination but warn
+      return {
+        hasLp: false,
+        canTerminate: true,
+        pools: [],
+        recoverableLpTokenUnit: null,
+        totalUnrecoverableAda: 0,
+        blockingReason: null,
+        warning: 'Failed to check LP pools. Proceed with caution.',
+      };
     }
   }
 
