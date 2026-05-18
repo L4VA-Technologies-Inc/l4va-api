@@ -1275,6 +1275,11 @@ export class VaultsService {
       tvlCurrency,
       minTvl,
       maxTvl,
+      minFdv,
+      maxFdv,
+      fdvCurrency,
+      minFdvTvl,
+      maxFdvTvl,
       minInitialVaultOffered,
       maxInitialVaultOffered,
       contributionWindow,
@@ -1284,6 +1289,7 @@ export class VaultsService {
       myVaults,
       filter,
       reserveMet,
+      isOfficialPartner,
       search,
       page = 1,
       limit = 10,
@@ -1483,6 +1489,27 @@ export class VaultsService {
       }
     }
 
+    if (minFdv || maxFdv) {
+      const fdvDivider = fdvCurrency === TVLCurrency.USD ? await this.priceService.getAdaPrice() : 1;
+      const effectiveFdvDivider = fdvDivider > 0 ? fdvDivider : 1;
+
+      if (minFdv) {
+        queryBuilder.andWhere('vault.fdv >= :minFdv', { minFdv: minFdv / effectiveFdvDivider });
+      }
+
+      if (maxFdv) {
+        queryBuilder.andWhere('vault.fdv <= :maxFdv', { maxFdv: maxFdv / effectiveFdvDivider });
+      }
+    }
+
+    if (minFdvTvl) {
+      queryBuilder.andWhere('vault.fdv_tvl >= :minFdvTvl', { minFdvTvl });
+    }
+
+    if (maxFdvTvl) {
+      queryBuilder.andWhere('vault.fdv_tvl <= :maxFdvTvl', { maxFdvTvl });
+    }
+
     if (maxInitialVaultOffered) {
       queryBuilder.andWhere('(100 - vault.acquire_reserve) <= :maxInitialVaultOffered', { maxInitialVaultOffered });
     }
@@ -1501,6 +1528,10 @@ export class VaultsService {
         )`,
         { assetWhitelist }
       );
+    }
+
+    if (isOfficialPartner !== undefined) {
+      queryBuilder.andWhere('vault.is_official_partner = :isOfficialPartner', { isOfficialPartner });
     }
 
     // Apply sorting
