@@ -9,6 +9,7 @@ export interface SlackAlertData {
 export type SlackAlertType =
   | 'asset_price_fetch_failed'
   | 'asset_price_deviation_exceeded'
+  | 'asset_price_deviation_batch_exceeded'
   | 'wallet_fetch_failed'
   | 'general_error'
   | 'admin_utxos_exhausted'
@@ -151,43 +152,35 @@ export class AlertsService {
               fields: [
                 {
                   type: 'mrkdwn',
-                  text: `*Policy ID:*
-${data.policyId}`,
+                  text: `*Policy ID:*\n${data.policyId}`,
                 },
                 {
                   type: 'mrkdwn',
-                  text: `*Asset ID:*
-${data.assetId}`,
+                  text: `*Asset ID:*\n${data.assetId}`,
                 },
                 {
                   type: 'mrkdwn',
-                  text: `*Asset Class:*
-${data.assetClass}`,
+                  text: `*Asset Class:*\n${data.assetClass}`,
                 },
                 {
                   type: 'mrkdwn',
-                  text: `*Price Source:*
-${data.source}`,
+                  text: `*Price Source:*\n${data.source}`,
                 },
                 {
                   type: 'mrkdwn',
-                  text: `*Previous Price (ADA):*
-${data.previousPrice}`,
+                  text: `*Previous Price (ADA):*\n${data.previousPrice}`,
                 },
                 {
                   type: 'mrkdwn',
-                  text: `*New Price (ADA):*
-${data.nextPrice}`,
+                  text: `*New Price (ADA):*\n${data.nextPrice}`,
                 },
                 {
                   type: 'mrkdwn',
-                  text: `*Deviation:*
-${data.deviationPercent}%`,
+                  text: `*Deviation:*\n${data.deviationPercent}%`,
                 },
                 {
                   type: 'mrkdwn',
-                  text: `*Threshold:*
-±${data.thresholdPercent}%`,
+                  text: `*Threshold:*\n±${data.thresholdPercent}%`,
                 },
               ],
             },
@@ -196,13 +189,9 @@ ${data.deviationPercent}%`,
               text: {
                 type: 'mrkdwn',
                 text:
-                  `*⚠️ Automatic Action Taken:*
-` +
-                  `Price update was rejected and marked for manual review to avoid accepting potentially manipulated valuation data.
-
-` +
-                  `*Direction:* ${data.direction}
-` +
+                  `*⚠️ Automatic Action Taken:*\n` +
+                  `Price update was rejected and marked for manual review to avoid accepting potentially manipulated valuation data.\n\n` +
+                  `*Direction:* ${data.direction}\n` +
                   `*Action:* ${data.action || 'price_update_rejected_manual_review_required'}`,
               },
             },
@@ -217,6 +206,59 @@ ${data.deviationPercent}%`,
             },
           ],
         };
+
+      case 'asset_price_deviation_batch_exceeded': {
+        const rejectedAssets = data.rejectedAssets || [];
+        const assetListText = rejectedAssets
+          .slice(0, 10)
+          .map(
+            (asset: any) =>
+              `• ${asset.assetClass} ${asset.policyId}.${asset.assetId}: ` +
+              `${asset.previousPrice}→${asset.nextPrice} ADA (${asset.direction} ${asset.deviationPercent}%, threshold ±${asset.thresholdPercent}%)`
+          )
+          .join('\n');
+        const hasMore = rejectedAssets.length > 10;
+
+        return {
+          text: `🚨 Multiple Asset Price Deviations Detected - Manual Review Required`,
+          blocks: [
+            {
+              type: 'header',
+              text: {
+                type: 'plain_text',
+                text: `🚨 ${data.totalRejected} Asset Price Deviations Detected`,
+                emoji: true,
+              },
+            },
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text:
+                  `*⚠️ Automatic Action Taken:*\n` +
+                  `${data.totalRejected} asset price updates exceeded deviation thresholds and were rejected to prevent potentially manipulated valuations from affecting TVL calculations.\n\n` +
+                  `*Action:* ${data.action || 'price_updates_rejected_manual_review_required'}`,
+              },
+            },
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: `*Rejected Assets${hasMore ? ` (showing 10 of ${data.totalRejected})` : ''}:*\n${assetListText}`,
+              },
+            },
+            {
+              type: 'context',
+              elements: [
+                {
+                  type: 'mrkdwn',
+                  text: `*Timestamp:* ${timestamp}`,
+                },
+              ],
+            },
+          ],
+        };
+      }
 
       case 'wallet_fetch_failed':
         return {

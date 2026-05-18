@@ -70,10 +70,11 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   min_voting_duration: 86400000, // 24 hours in ms
   max_voting_duration: 259200000, // 3 days in ms
   // Price deviation protection defaults
-  price_max_deviation_percent_nft: 200,
-  price_max_deviation_percent_ft: 200,
+  price_max_deviation_percent_nft: 400,
+  price_max_deviation_percent_ft: 150,
   price_min_absolute_move_ada: 0,
-  price_min_asset_price_for_deviation_check_ada: 50,
+  // Keep this low so deviation checks apply to typical FT price feeds by default
+  price_min_asset_price_for_deviation_check_ada: 0.1,
   hidden_mainnet_vault_ids: [
     '1a6e7495-178b-464e-b37e-00997ef1e9c2',
     '2761c805-77c5-443e-b352-f0afaf4860c0',
