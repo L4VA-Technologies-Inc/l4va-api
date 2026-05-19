@@ -173,16 +173,34 @@ export class StakeService {
   private async alertInsufficientRewardFunds(
     action: 'unstake' | 'harvest' | 'compound',
     userAddress: string,
-    error: unknown
+    error: unknown,
+    processedBoxes?: ProcessedBox[]
   ): Promise<void> {
     try {
       const balances = await this.getAdminBalancesSnapshot();
+
+      let transactionDetails;
+      if (processedBoxes && processedBoxes.length > 0) {
+        const tokensSummary = this.buildTokensSummary(processedBoxes);
+        transactionDetails = {
+          utxoCount: processedBoxes.length,
+          tokens: tokensSummary.map(t => ({
+            type: this.getTokenDisplayName(t.unit),
+            depositAmount: t.depositAmount,
+            rewardAmount: t.rewardAmount,
+            payoutAmount: t.payoutAmount,
+            decimals: t.decimals,
+          })),
+        };
+      }
+
       await this.alertsService.sendAlert('stake_reward_insufficient_funds', {
         action,
         userAddress,
         adminAddress: this.adminAddress,
         error: formatError(error, `${action} failed`),
         balances,
+        transactionDetails,
       });
     } catch (alertError: unknown) {
       this.logger.error(
@@ -842,11 +860,21 @@ export class StakeService {
    * Unstake: collect selected boxes, send full payout (deposit + reward) to the user.
    */
   async buildUnstakeTx(userId: string, userAddress: string, utxoRefs: UtxoRefDto[]): Promise<BuildTxRes> {
+    let processedBoxes: ProcessedBox[] | undefined;
     try {
       const prep = await this.prepareAdminTxData(userId, userAddress, utxoRefs);
       if (prep.ok === false) return { success: false, message: prep.message };
 
-      const { lucid, ownerHash, referenceUtxo, eligibleBoxes, processedBoxes, totalDepositAll, totalRewardAll } = prep;
+      const {
+        lucid,
+        ownerHash,
+        referenceUtxo,
+        eligibleBoxes,
+        processedBoxes: boxes,
+        totalDepositAll,
+        totalRewardAll,
+      } = prep;
+      processedBoxes = boxes;
 
       const aggByUnit = this.aggregateByUnit(processedBoxes);
 
@@ -892,7 +920,7 @@ export class StakeService {
       return { success: true, txCbor: unsignedTxCbor, transactionId: saved.id };
     } catch (error: unknown) {
       if (this.isInsufficientFundsError(error)) {
-        await this.alertInsufficientRewardFunds('unstake', userAddress, error);
+        await this.alertInsufficientRewardFunds('unstake', userAddress, error, processedBoxes);
       }
       this.logger.error('buildUnstakeTx failed', error instanceof Error ? error.stack : String(error));
       return { success: false, message: formatError(error, 'buildUnstakeTx failed') };
@@ -904,11 +932,21 @@ export class StakeService {
    * in new boxes with staked_at = now (resetting the reward timer).
    */
   async buildHarvestTx(userId: string, userAddress: string, utxoRefs: UtxoRefDto[]): Promise<BuildTxRes> {
+    let processedBoxes: ProcessedBox[] | undefined;
     try {
       const prep = await this.prepareAdminTxData(userId, userAddress, utxoRefs);
       if (prep.ok === false) return { success: false, message: prep.message };
 
-      const { lucid, ownerHash, referenceUtxo, eligibleBoxes, processedBoxes, totalDepositAll, totalRewardAll } = prep;
+      const {
+        lucid,
+        ownerHash,
+        referenceUtxo,
+        eligibleBoxes,
+        processedBoxes: boxes,
+        totalDepositAll,
+        totalRewardAll,
+      } = prep;
+      processedBoxes = boxes;
 
       const aggByUnit = this.aggregateByUnit(processedBoxes);
 
@@ -961,7 +999,7 @@ export class StakeService {
       return { success: true, txCbor: unsignedTxCbor, transactionId: saved.id };
     } catch (error: unknown) {
       if (this.isInsufficientFundsError(error)) {
-        await this.alertInsufficientRewardFunds('harvest', userAddress, error);
+        await this.alertInsufficientRewardFunds('harvest', userAddress, error, processedBoxes);
       }
       this.logger.error('buildHarvestTx failed', error instanceof Error ? error.stack : String(error));
       return { success: false, message: formatError(error, 'buildHarvestTx failed') };
@@ -972,11 +1010,21 @@ export class StakeService {
    * Compound: collect selected boxes, re-lock deposit + reward in new boxes with staked_at = now.
    */
   async buildCompoundTx(userId: string, userAddress: string, utxoRefs: UtxoRefDto[]): Promise<BuildTxRes> {
+    let processedBoxes: ProcessedBox[] | undefined;
     try {
       const prep = await this.prepareAdminTxData(userId, userAddress, utxoRefs);
       if (prep.ok === false) return { success: false, message: prep.message };
 
-      const { lucid, ownerHash, referenceUtxo, eligibleBoxes, processedBoxes, totalDepositAll, totalRewardAll } = prep;
+      const {
+        lucid,
+        ownerHash,
+        referenceUtxo,
+        eligibleBoxes,
+        processedBoxes: boxes,
+        totalDepositAll,
+        totalRewardAll,
+      } = prep;
+      processedBoxes = boxes;
 
       const aggByUnit = this.aggregateByUnit(processedBoxes);
 
@@ -1025,7 +1073,7 @@ export class StakeService {
       return { success: true, txCbor: unsignedTxCbor, transactionId: saved.id };
     } catch (error: unknown) {
       if (this.isInsufficientFundsError(error)) {
-        await this.alertInsufficientRewardFunds('compound', userAddress, error);
+        await this.alertInsufficientRewardFunds('compound', userAddress, error, processedBoxes);
       }
       this.logger.error('buildCompoundTx failed', error instanceof Error ? error.stack : String(error));
       return { success: false, message: formatError(error, 'buildCompoundTx failed') };

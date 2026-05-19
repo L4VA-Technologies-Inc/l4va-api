@@ -77,7 +77,8 @@ export class AlertsService {
         return;
       }
     } catch (error) {
-      this.logger.error(`Failed to send Slack alert: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to send Slack alert: ${errorMessage}`);
     }
   }
 
@@ -427,61 +428,104 @@ export class AlertsService {
           ],
         };
 
-      case 'stake_reward_insufficient_funds':
-        return {
-          text: `🚨 Stake Reward Distribution Failed - Insufficient Funds`,
-          blocks: [
-            {
-              type: 'header',
-              text: {
-                type: 'plain_text',
-                text: '🚨 Insufficient Admin Funds for Rewards',
-                emoji: true,
-              },
+      case 'stake_reward_insufficient_funds': {
+        const blocks: any[] = [
+          {
+            type: 'header',
+            text: {
+              type: 'plain_text',
+              text: '🚨 Insufficient Admin Funds for Rewards',
+              emoji: true,
             },
-            {
-              type: 'section',
-              fields: [
-                {
-                  type: 'mrkdwn',
-                  text: `*Action:*\n${data.action ?? 'unknown'}`,
-                },
-                {
-                  type: 'mrkdwn',
-                  text: `*User Address:*\n${data.userAddress ?? 'unknown'}`,
-                },
-                {
-                  type: 'mrkdwn',
-                  text: `*Admin Address:*\n${data.adminAddress ?? 'unknown'}`,
-                },
-                {
-                  type: 'mrkdwn',
-                  text: `*Error:*\n${data.error ?? 'unknown'}`,
-                },
-              ],
-            },
-            {
-              type: 'section',
-              text: {
+          },
+          {
+            type: 'section',
+            fields: [
+              {
                 type: 'mrkdwn',
-                text:
-                  `*Current Admin Wallet Balances:*\n` +
-                  `• ADA: ${data.balances?.ada ?? '0'}\n` +
-                  `• VLRM: ${data.balances?.vlrm ?? '0'}\n` +
-                  `• L4VA: ${data.balances?.l4va ?? '0'}`,
+                text: `*Action:*\n${data.action ?? 'unknown'}`,
               },
+              {
+                type: 'mrkdwn',
+                text: `*User Address:*\n${data.userAddress ?? 'unknown'}`,
+              },
+              {
+                type: 'mrkdwn',
+                text: `*Admin Address:*\n${data.adminAddress ?? 'unknown'}`,
+              },
+              {
+                type: 'mrkdwn',
+                text: `*Error:*\n${data.error ?? 'unknown'}`,
+              },
+            ],
+          },
+        ];
+
+        // Add transaction details if available
+        if (data.transactionDetails) {
+          const { utxoCount, tokens } = data.transactionDetails;
+          let tokenBreakdown = '';
+
+          for (const token of tokens) {
+            tokenBreakdown += `\n\n*${token.type.toUpperCase()}:*\n`;
+            tokenBreakdown += `• Deposit: ${token.depositAmount.toFixed(token.decimals)}\n`;
+            tokenBreakdown += `• Reward: ${token.rewardAmount.toFixed(token.decimals)}\n`;
+            tokenBreakdown += `• Total Payout: ${token.payoutAmount.toFixed(token.decimals)}`;
+          }
+
+          blocks.push({
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `*Transaction Details:*\n• UTxOs to Process: ${utxoCount}${tokenBreakdown}`,
             },
+          });
+        }
+
+        // Current balances
+        blocks.push({
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text:
+              `*Current Admin Wallet Balances:*\n` +
+              `• ADA: ${data.balances?.ada ?? '0'}\n` +
+              `• VLRM: ${data.balances?.vlrm ?? '0'}\n` +
+              `• L4VA: ${data.balances?.l4va ?? '0'}`,
+          },
+        });
+
+        // Recommendations section
+        if (data.transactionDetails) {
+          let recommendations = '*Recommendations:*\n';
+          recommendations += '• Check if admin wallet has sufficient token balances for rewards\n';
+          recommendations += '• Verify no funds are locked in reference-script UTxOs\n';
+          recommendations += '• Consider topping up the admin wallet with required tokens';
+
+          blocks.push({
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: recommendations,
+            },
+          });
+        }
+
+        blocks.push({
+          type: 'context',
+          elements: [
             {
-              type: 'context',
-              elements: [
-                {
-                  type: 'mrkdwn',
-                  text: `*Timestamp:* ${timestamp}`,
-                },
-              ],
+              type: 'mrkdwn',
+              text: `*Timestamp:* ${timestamp}`,
             },
           ],
+        });
+
+        return {
+          text: `🚨 Stake Reward Distribution Failed - Insufficient Funds`,
+          blocks,
         };
+      }
 
       default:
         return {
