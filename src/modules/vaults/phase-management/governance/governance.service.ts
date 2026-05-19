@@ -2552,11 +2552,14 @@ export class GovernanceService {
         }
       }
 
-      // Build pool information with recoverability status
+      // Build pool information with recoverability status.
+      // Per TapTools pool semantics, an empty/null tokenB indicates an ADA-quoted pair.
+      // Non-empty tokenB entries are non-ADA pairs and must not be counted as ADA liquidity.
       const poolsInfo = allPools.map(pool => {
         const isVyFi = pool.exchange.toLowerCase().includes('vyfi');
-        const adaAmount = !pool.tokenB || pool.tokenB === '' ? pool.tokenBLocked : pool.tokenALocked;
-        const vtAmount = !pool.tokenB || pool.tokenB === '' ? pool.tokenALocked : pool.tokenBLocked;
+        const isAdaQuotedPool = !pool.tokenB || pool.tokenB === '';
+        const adaAmount = isAdaQuotedPool ? pool.tokenBLocked : 0;
+        const vtAmount = pool.tokenALocked;
         const isRecoverable = isVyFi && pool.lpTokenUnit === recoverableLpTokenUnit;
 
         return {
