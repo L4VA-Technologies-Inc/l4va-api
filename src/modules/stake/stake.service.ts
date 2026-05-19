@@ -24,6 +24,7 @@ import { toHumanAmountNumber } from './stake-amounts';
 import { encodeStakeDatum, tryDecodeStakeDatum } from './stake-datum';
 
 import { createLucidBlockfrostProvider, lucidNetworkFromCardanoEnv } from '@/common/cardano/blockfrost-lucid';
+import { formatCip674MetadataMessage } from '@/common/cardano/cip674-metadata';
 import { normalizeLucidCardanoError } from '@/common/cardano/lucid-error-normalizer';
 import { buildStakeTokenRegistry, type TokenMeta } from '@/common/cardano/token-registry';
 import { StakingStatus, TokenStakingPosition, TokenType } from '@/database/tokenStakingPosition.entity';
@@ -253,6 +254,43 @@ export class StakeService {
       referenceScript: { txHash: this.referenceScriptTxHash, outputIndex: this.referenceScriptIndex },
       cardanoNetwork: this.isMainnet ? 'mainnet' : 'preprod',
     };
+  }
+
+  private getTokenDisplayName(unit: string): string {
+    return this.getTokenTypeForUnit(unit) ?? 'token';
+  }
+
+  private formatHumanTokenAmounts(amounts: Array<{ unit: string; amount: number }>): string {
+    return amounts.map(({ unit, amount }) => `${amount} ${this.getTokenDisplayName(unit)}`).join(', ');
+  }
+
+  private buildStakeMetadataMessage(entries: Array<{ unit: string; rawAmount: bigint; decimals: number }>): {
+    msg: string[];
+  } {
+    const amounts = this.formatHumanTokenAmounts(
+      entries.map(e => ({ unit: e.unit, amount: toHumanAmountNumber(e.rawAmount, e.decimals) }))
+    );
+    return formatCip674MetadataMessage(`L4VA: Stake ${amounts}`);
+  }
+
+  private buildUnstakeMetadataMessage(processedBoxes: ProcessedBox[]): { msg: string[] } {
+    const summary = this.buildTokensSummary(processedBoxes);
+    const amounts = this.formatHumanTokenAmounts(summary.map(t => ({ unit: t.unit, amount: t.payoutAmount })));
+    const boxCount = processedBoxes.length;
+    const positionsLabel = boxCount === 1 ? '1 position' : `${boxCount} positions`;
+    return formatCip674MetadataMessage(`L4VA: Unstake ${positionsLabel} - withdraw ${amounts}`);
+  }
+
+  private buildHarvestMetadataMessage(processedBoxes: ProcessedBox[]): { msg: string[] } {
+    const summary = this.buildTokensSummary(processedBoxes);
+    const amounts = this.formatHumanTokenAmounts(summary.map(t => ({ unit: t.unit, amount: t.rewardAmount })));
+    return formatCip674MetadataMessage(`L4VA: Harvest staking rewards - ${amounts}`);
+  }
+
+  private buildCompoundMetadataMessage(processedBoxes: ProcessedBox[]): { msg: string[] } {
+    const summary = this.buildTokensSummary(processedBoxes);
+    const amounts = this.formatHumanTokenAmounts(summary.map(t => ({ unit: t.unit, amount: t.payoutAmount })));
+    return formatCip674MetadataMessage(`L4VA: Compound rewards into stake - ${amounts}`);
   }
 
   /**
@@ -763,6 +801,7 @@ export class StakeService {
       const tx = await txBuilder
         .validTo(currentTimeMs + TX_VALIDITY_WINDOW_MS)
         .addSignerKey(ownerHash)
+        .attachMetadata(674, this.buildStakeMetadataMessage(entries))
         .complete();
       const unsignedTxCbor = tx.toCBOR();
 
@@ -831,6 +870,7 @@ export class StakeService {
         .pay.ToAddress(userAddress, Object.fromEntries(payoutByUnit.entries()))
         .validTo(validTo)
         .addSignerKey(ownerHash)
+        .attachMetadata(674, this.buildUnstakeMetadataMessage(processedBoxes))
         .complete();
 
       const unsignedTxCbor = tx.toCBOR();
@@ -895,7 +935,11 @@ export class StakeService {
 
       txBuilder = txBuilder.pay.ToAddress(userAddress, Object.fromEntries(rewardByUnit.entries()));
 
-      const tx = await txBuilder.validTo(validTo).addSignerKey(ownerHash).complete();
+      const tx = await txBuilder
+        .validTo(validTo)
+        .addSignerKey(ownerHash)
+        .attachMetadata(674, this.buildHarvestMetadataMessage(processedBoxes))
+        .complete();
       const unsignedTxCbor = tx.toCBOR();
 
       const saved = await this.transactionRepository.save({
@@ -955,7 +999,11 @@ export class StakeService {
         );
       }
 
-      const tx = await txBuilder.validTo(validTo).addSignerKey(ownerHash).complete();
+      const tx = await txBuilder
+        .validTo(validTo)
+        .addSignerKey(ownerHash)
+        .attachMetadata(674, this.buildCompoundMetadataMessage(processedBoxes))
+        .complete();
       const unsignedTxCbor = tx.toCBOR();
 
       const saved = await this.transactionRepository.save({
