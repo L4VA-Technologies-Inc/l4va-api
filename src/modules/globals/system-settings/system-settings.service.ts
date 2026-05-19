@@ -243,22 +243,24 @@ export class SystemSettingsService implements OnModuleInit {
 
   get priceMaxDeviationPercentNft(): number {
     const value = Number(this.settings.price_max_deviation_percent_nft);
-    return Number.isFinite(value) && value > 0 ? value : 200;
+    return Number.isFinite(value) && value > 0 ? value : DEFAULT_SETTINGS.price_max_deviation_percent_nft;
   }
 
   get priceMaxDeviationPercentFt(): number {
     const value = Number(this.settings.price_max_deviation_percent_ft);
-    return Number.isFinite(value) && value > 0 ? value : 200;
+    return Number.isFinite(value) && value > 0 ? value : DEFAULT_SETTINGS.price_max_deviation_percent_ft;
   }
 
   get priceMinAbsoluteMoveAda(): number {
     const value = Number(this.settings.price_min_absolute_move_ada);
-    return Number.isFinite(value) && value >= 0 ? value : 0;
+    return Number.isFinite(value) && value >= 0 ? value : DEFAULT_SETTINGS.price_min_absolute_move_ada;
   }
 
   get priceMinAssetPriceForDeviationCheckAda(): number {
     const value = Number(this.settings.price_min_asset_price_for_deviation_check_ada);
-    return Number.isFinite(value) && value >= 0 ? value : 50;
+    return Number.isFinite(value) && value >= 0
+      ? value
+      : DEFAULT_SETTINGS.price_min_asset_price_for_deviation_check_ada;
   }
 
   // Kill switch getters
