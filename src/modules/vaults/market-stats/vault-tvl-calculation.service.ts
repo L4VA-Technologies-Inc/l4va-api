@@ -1,5 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 
@@ -23,9 +23,13 @@ import { VaultStatus } from '@/types/vault.types';
  *   Calculation: (current_assets_value - initial_assets_value) / initial_assets_value
  */
 @Injectable()
-export class VaultTvlCalculationService {
+export class VaultTvlCalculationService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(VaultTvlCalculationService.name);
   private isProcessing = false;
+  private updateTimeout: NodeJS.Timeout | null = null;
+
+  private readonly baseIntervalMs: number;
+  private readonly jitterMs: number;
   private readonly activeVaultStatuses = [
     VaultStatus.contribution,
     VaultStatus.acquire,
@@ -36,11 +40,56 @@ export class VaultTvlCalculationService {
   constructor(
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
-    private readonly taptoolsService: TaptoolsService
-  ) {}
+    private readonly taptoolsService: TaptoolsService,
+    private readonly configService: ConfigService
+  ) {
+    const baseIntervalMinutes = this.configService.get<number>('VAULT_TVL_UPDATE_BASE_MINUTES') ?? 30;
+    const jitterMinutes = this.configService.get<number>('VAULT_TVL_UPDATE_JITTER_MINUTES') ?? 5;
+
+    this.baseIntervalMs = Math.max(1, baseIntervalMinutes) * 60 * 1000;
+    this.jitterMs = Math.max(0, jitterMinutes) * 60 * 1000;
+  }
+
+  onModuleInit(): void {
+    this.scheduleNextUpdate();
+  }
+
+  onModuleDestroy(): void {
+    if (this.updateTimeout) {
+      clearTimeout(this.updateTimeout);
+      this.updateTimeout = null;
+    }
+  }
+
+  private getNextIntervalMs(): number {
+    if (this.jitterMs === 0) {
+      return this.baseIntervalMs;
+    }
+
+    const jitterOffset = Math.floor(Math.random() * (this.jitterMs * 2 + 1)) - this.jitterMs;
+    return Math.max(60_000, this.baseIntervalMs + jitterOffset);
+  }
+
+  private scheduleNextUpdate(): void {
+    const delayMs = this.getNextIntervalMs();
+    const delayMinutes = (delayMs / 60_000).toFixed(2);
+    this.logger.debug(`Next vault valuation update scheduled in ${delayMinutes} minutes`);
+
+    this.updateTimeout = setTimeout(() => {
+      void this.executeScheduledUpdate();
+    }, delayMs);
+  }
+
+  private async executeScheduledUpdate(): Promise<void> {
+    try {
+      await this.updateActiveVaultTotals();
+    } finally {
+      this.scheduleNextUpdate();
+    }
+  }
 
   /**
-   * Update asset prices and vault TVL every 30 minutes
+   * Update asset prices and vault TVL on a randomized interval
    *
    * Process:
    * 1. Updates asset prices from APIs (DexHunter for FTs, WayUp for NFTs)
@@ -49,7 +98,6 @@ export class VaultTvlCalculationService {
    *
    * Only processes vaults in contribution, acquire, locked, or expansion phases.
    */
-  @Cron(CronExpression.EVERY_30_MINUTES)
   async updateActiveVaultTotals(): Promise<void> {
     if (this.isProcessing) {
       this.logger.warn('Vault valuation update already in progress, skipping...');

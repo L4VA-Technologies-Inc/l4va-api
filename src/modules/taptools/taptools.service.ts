@@ -20,6 +20,8 @@ import { Asset } from '@/database/asset.entity';
 import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
+import { AlertsService } from '@/modules/alerts/alerts.service';
+import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { PriceService } from '@/modules/price/price.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
@@ -63,6 +65,7 @@ export class TaptoolsService {
   private readonly logger = new Logger(TaptoolsService.name);
 
   private readonly isMainnet: boolean;
+  private readonly priceDeviationProtectionEnabled: boolean;
   private cache = new NodeCache({ stdTTL: 600 }); // cache for 10 minutes to reduce API calls for ADA price
   private readonly blockfrost: BlockFrostAPI;
   private readonly axiosTapToolsInstance: AxiosInstance;
@@ -120,11 +123,15 @@ export class TaptoolsService {
     private readonly assetsService: AssetsService,
     private readonly priceService: PriceService,
     private readonly configService: ConfigService,
+    private readonly systemSettingsService: SystemSettingsService,
     private readonly dexHunterPricingService: DexHunterPricingService,
     private readonly wayUpPricingService: WayUpPricingService,
+    private readonly alertsService: AlertsService,
     @Optional() @Inject('TreasuryWalletService') private readonly treasuryWalletService?: TreasuryWalletService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+    this.priceDeviationProtectionEnabled = this.getDeviationProtectionEnabled();
+
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
@@ -138,6 +145,108 @@ export class TaptoolsService {
         'x-api-key': tapToolsApiKey,
       },
     });
+  }
+
+  private getDeviationThresholdPercentByClass(isNFT: boolean): number {
+    return isNFT
+      ? this.systemSettingsService.priceMaxDeviationPercentNft
+      : this.systemSettingsService.priceMaxDeviationPercentFt;
+  }
+
+  private getMinAbsolutePriceMoveAda(): number {
+    return this.systemSettingsService.priceMinAbsoluteMoveAda;
+  }
+
+  private getDeviationProtectionEnabled(): boolean {
+    const configuredValue = this.configService.get<boolean | string>('PRICE_DEVIATION_PROTECTION_ENABLED');
+    if (typeof configuredValue === 'boolean') {
+      return configuredValue;
+    }
+
+    if (typeof configuredValue === 'string') {
+      return ['1', 'true', 'yes', 'on'].includes(configuredValue.toLowerCase());
+    }
+
+    return true;
+  }
+
+  private async shouldAcceptPriceUpdate(params: {
+    policyId: string;
+    assetId: string;
+    isNFT: boolean;
+    previousPrice?: number | null;
+    nextPrice: number;
+    source: 'custom' | 'testnet' | 'api';
+  }): Promise<{
+    accepted: boolean;
+    rejectionReason?: {
+      policyId: string;
+      assetId: string;
+      assetClass: 'NFT' | 'FT';
+      source: string;
+      direction: 'up' | 'down';
+      previousPrice: number;
+      nextPrice: number;
+      absoluteMoveAda: number;
+      minAbsoluteMoveAda: number;
+      deviationPercent: number;
+      thresholdPercent: number;
+    };
+  }> {
+    const { policyId, assetId, isNFT, previousPrice, nextPrice, source } = params;
+
+    // Custom/testnet values are intentional overrides and should not be blocked.
+    if (!this.priceDeviationProtectionEnabled || source !== 'api') {
+      return { accepted: true };
+    }
+
+    if (previousPrice === null || previousPrice === undefined || previousPrice <= 0 || nextPrice <= 0) {
+      return { accepted: true };
+    }
+
+    const minAssetPriceForDeviationCheckAda = this.systemSettingsService.priceMinAssetPriceForDeviationCheckAda;
+    if (previousPrice < minAssetPriceForDeviationCheckAda || nextPrice < minAssetPriceForDeviationCheckAda) {
+      return { accepted: true };
+    }
+
+    const absoluteMoveAda = Math.abs(nextPrice - previousPrice);
+    const minAbsoluteMoveAda = this.getMinAbsolutePriceMoveAda();
+    if (absoluteMoveAda < minAbsoluteMoveAda) {
+      return { accepted: true };
+    }
+
+    const thresholdPercent = this.getDeviationThresholdPercentByClass(isNFT);
+
+    const deviationPercent = Math.abs(((nextPrice - previousPrice) / previousPrice) * 100);
+    if (deviationPercent <= thresholdPercent) {
+      return { accepted: true };
+    }
+
+    const assetClass = isNFT ? 'NFT' : 'FT';
+    const direction = nextPrice > previousPrice ? 'up' : 'down';
+
+    this.logger.error(
+      `[MANUAL_REVIEW_REQUIRED] ${assetClass} price update rejected for ${policyId}.${assetId}. ` +
+        `Deviation ${deviationPercent.toFixed(2)}% (${direction}) exceeds threshold ±${thresholdPercent}% ` +
+        `(prev=${previousPrice}, next=${nextPrice}, source=${source}).`
+    );
+
+    return {
+      accepted: false,
+      rejectionReason: {
+        policyId,
+        assetId,
+        assetClass,
+        source,
+        direction,
+        previousPrice,
+        nextPrice,
+        absoluteMoveAda: Number(absoluteMoveAda.toFixed(8)),
+        minAbsoluteMoveAda,
+        deviationPercent: Number(deviationPercent.toFixed(4)),
+        thresholdPercent,
+      },
+    };
   }
 
   private calculateBalances(data: BlockfrostAddressTotalDto): Map<string, number> {
@@ -598,7 +707,7 @@ export class TaptoolsService {
           deleted: false,
           vault: { id: In(vaultIds) },
         },
-        select: ['policy_id', 'asset_id', 'type', 'name', 'vault_id'],
+        select: ['policy_id', 'asset_id', 'type', 'name', 'vault_id', 'dex_price', 'floor_price'],
       });
 
       // Deduplicate by policy_id + asset_id + vault_id
@@ -622,6 +731,19 @@ export class TaptoolsService {
       }
 
       let updatedCount = 0;
+      const rejectedUpdates: Array<{
+        policyId: string;
+        assetId: string;
+        assetClass: 'NFT' | 'FT';
+        source: string;
+        direction: 'up' | 'down';
+        previousPrice: number;
+        nextPrice: number;
+        absoluteMoveAda: number;
+        minAbsoluteMoveAda: number;
+        deviationPercent: number;
+        thresholdPercent: number;
+      }> = [];
 
       // Process with controlled concurrency: 5 concurrent API calls, 100ms delay between batches
       await this.processWithConcurrency(
@@ -636,15 +758,18 @@ export class TaptoolsService {
             const isNFT = asset.type === AssetType.NFT;
 
             let priceAda: number | null = null;
+            let priceSource: 'custom' | 'testnet' | 'api' = 'api';
 
             // Priority 1: Check for custom price from vault whitelist
             const vaultCustomPrices = customPricesByVault.get(asset.vault_id);
             if (vaultCustomPrices && vaultCustomPrices.has(asset.policy_id)) {
               priceAda = vaultCustomPrices.get(asset.policy_id)!;
+              priceSource = 'custom';
             }
             // Priority 2: Use hardcoded testnet prices if available
             else if (!this.isMainnet) {
               priceAda = this.testnetPrices[asset.policy_id] || 5.0;
+              priceSource = 'testnet';
             }
             // Priority 3: Fetch from external APIs
             else if (isNFT) {
@@ -674,6 +799,21 @@ export class TaptoolsService {
             }
 
             if (priceAda !== null) {
+              const previousPrice = isNFT ? asset.floor_price : asset.dex_price;
+              const updateDecision = await this.shouldAcceptPriceUpdate({
+                policyId: asset.policy_id,
+                assetId: asset.asset_id,
+                isNFT,
+                previousPrice,
+                nextPrice: priceAda,
+                source: priceSource,
+              });
+
+              if (!updateDecision.accepted) {
+                rejectedUpdates.push(updateDecision.rejectionReason!);
+                return;
+              }
+
               // Update all assets with this policy_id and asset_id
               await this.assetRepository.update(
                 {
@@ -696,7 +836,21 @@ export class TaptoolsService {
         100 // 100ms delay between batches
       );
 
-      this.logger.log(`Successfully updated prices for ${updatedCount} assets`);
+      if (updatedCount > 0) {
+        this.logger.log(`Updated prices for ${updatedCount} assets across ${vaultIds.length} vaults`);
+      }
+
+      // Send aggregated alert for all rejected updates in this batch
+      if (rejectedUpdates.length > 0) {
+        this.logger.warn(
+          `${rejectedUpdates.length} asset price updates exceeded deviation threshold and were skipped for manual review`
+        );
+        await this.alertsService.sendAlert('asset_price_deviation_batch_exceeded', {
+          totalRejected: rejectedUpdates.length,
+          rejectedAssets: rejectedUpdates,
+          action: 'price_updates_rejected_manual_review_required',
+        });
+      }
 
       // Calculate and return TVL for all affected vaults
       return await this.calculateVaultsTvl(vaultIds);
@@ -1297,7 +1451,7 @@ export class TaptoolsService {
 
     // Recalculate complete TVL and gains for all affected users from ALL their vaults
     if (affectedUserIds.size > 0) {
-      this.logger.log(`Recalculating complete TVL and gains for ${affectedUserIds.size} affected users`);
+      this.logger.debug(`Recalculating TVL and gains for ${affectedUserIds.size} users`);
 
       // Batch query: Get all relevant vaults
       const allRelevantVaults = await this.vaultRepository.find({

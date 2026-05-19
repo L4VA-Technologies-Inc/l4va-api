@@ -314,7 +314,7 @@ export class DexHunterPricingService {
         fee: pool.pool_fee,
       }));
 
-      this.logger.log(
+      this.logger.debug(
         `Token ${tokenId.slice(0, 6)}...${tokenId.slice(-6)} has liquidity across ${pools.length} DEX(es): ` +
           `${pools.map(p => `${p.dex} (${p.adaAmount.toFixed(2)} ADA)`).join(', ')}`
       );

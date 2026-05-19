@@ -3,6 +3,28 @@ import { BadRequestException, Injectable, Logger, ConflictException, NotFoundExc
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 
+import {
+  AlignmentDetailsDto,
+  ClaimHistoryItemDto,
+  ClaimsSummaryDto,
+  ClaimTransactionDto,
+  CurrentEpochEstimateDto,
+  CurrentEpochResponseDto,
+  EpochDto,
+  EpochsResponseDto,
+  PrepareClaimResponseDto,
+  SubmitClaimResponseDto,
+  VaultScoreWithWalletsDto,
+  VestingPositionsResponseDto,
+  VestingSummaryDto,
+  WalletActivityTimelineDto,
+  WalletHistoryResponseDto,
+  WalletScoreDto,
+  WalletVaultDetailsDto,
+  WalletVaultTimelineDto,
+  WalletVaultsResponseDto,
+} from '../dto/rewards.dto';
+
 /**
  * Internal proxy client for l4va-rewards service.
  * Used by l4va-api to fetch rewards data from the internal rewards service.
@@ -30,7 +52,7 @@ export class RewardClaimProxy {
   // Epoch Methods
   // ============================================================================
 
-  async getEpochs(limit = 20, offset = 0): Promise<any> {
+  async getEpochs(limit = 20, offset = 0): Promise<EpochsResponseDto> {
     const url = `${this.rewardsBaseUrl}/api/v1/rewards/epochs?limit=${limit}&offset=${offset}`;
     const { data } = await firstValueFrom(
       this.httpService.get(url, { headers: { 'X-Internal-Service-Token': this.internalToken } })
@@ -38,7 +60,7 @@ export class RewardClaimProxy {
     return data;
   }
 
-  async getCurrentEpoch(): Promise<any> {
+  async getCurrentEpoch(): Promise<CurrentEpochResponseDto> {
     const url = `${this.rewardsBaseUrl}/api/v1/rewards/epochs/current`;
     const { data } = await firstValueFrom(
       this.httpService.get(url, { headers: { 'X-Internal-Service-Token': this.internalToken } })
@@ -46,7 +68,7 @@ export class RewardClaimProxy {
     return data;
   }
 
-  async getEpochById(epochId: string): Promise<any> {
+  async getEpochById(epochId: string): Promise<EpochDto> {
     const url = `${this.rewardsBaseUrl}/api/v1/rewards/epochs/${epochId}`;
     const { data } = await firstValueFrom(
       this.httpService.get(url, { headers: { 'X-Internal-Service-Token': this.internalToken } })
@@ -58,7 +80,7 @@ export class RewardClaimProxy {
   // Score & History Methods
   // ============================================================================
 
-  async getWalletScore(walletAddress: string): Promise<any> {
+  async getWalletScore(walletAddress: string): Promise<WalletScoreDto> {
     const url = `${this.rewardsBaseUrl}/api/v1/rewards/score/${walletAddress}`;
     const { data } = await firstValueFrom(
       this.httpService.get(url, { headers: { 'X-Internal-Service-Token': this.internalToken } })
@@ -66,7 +88,7 @@ export class RewardClaimProxy {
     return data;
   }
 
-  async getAlignmentDetails(walletAddress: string): Promise<any> {
+  async getAlignmentDetails(walletAddress: string): Promise<AlignmentDetailsDto> {
     const url = `${this.rewardsBaseUrl}/api/v1/rewards/alignment/${walletAddress}`;
     const { data } = await firstValueFrom(
       this.httpService.get(url, { headers: { 'X-Internal-Service-Token': this.internalToken } })
@@ -74,7 +96,7 @@ export class RewardClaimProxy {
     return data;
   }
 
-  async getWalletHistory(walletAddress: string, limit = 20): Promise<any> {
+  async getWalletHistory(walletAddress: string, limit = 20): Promise<WalletHistoryResponseDto> {
     const url = `${this.rewardsBaseUrl}/api/v1/rewards/history/${walletAddress}?limit=${limit}`;
     const { data } = await firstValueFrom(
       this.httpService.get(url, { headers: { 'X-Internal-Service-Token': this.internalToken } })
@@ -86,7 +108,7 @@ export class RewardClaimProxy {
   // Vault Rewards Methods
   // ============================================================================
 
-  async getVaultScores(vaultId: string, epochId?: string): Promise<any> {
+  async getVaultScores(vaultId: string, epochId?: string): Promise<VaultScoreWithWalletsDto> {
     const url = `${this.rewardsBaseUrl}/api/v1/rewards/vault/${vaultId}/scores${epochId ? `?epochId=${epochId}` : ''}`;
     const { data } = await firstValueFrom(
       this.httpService.get(url, { headers: { 'X-Internal-Service-Token': this.internalToken } })
@@ -94,7 +116,7 @@ export class RewardClaimProxy {
     return data;
   }
 
-  async getWalletVaultReward(walletAddress: string, vaultId: string, epochId?: string): Promise<any> {
+  async getWalletVaultReward(walletAddress: string, vaultId: string, epochId?: string): Promise<WalletVaultDetailsDto> {
     const url = `${this.rewardsBaseUrl}/api/v1/rewards/wallet/${walletAddress}/vault/${vaultId}${epochId ? `?epochId=${epochId}` : ''}`;
     const { data } = await firstValueFrom(
       this.httpService.get(url, { headers: { 'X-Internal-Service-Token': this.internalToken } })
@@ -102,7 +124,7 @@ export class RewardClaimProxy {
     return data;
   }
 
-  async getWalletVaults(walletAddress: string, epochId?: string): Promise<any> {
+  async getWalletVaults(walletAddress: string, epochId?: string): Promise<WalletVaultsResponseDto> {
     const url = `${this.rewardsBaseUrl}/api/v1/rewards/wallet/${walletAddress}/vaults${epochId ? `?epochId=${epochId}` : ''}`;
     const { data } = await firstValueFrom(
       this.httpService.get(url, { headers: { 'X-Internal-Service-Token': this.internalToken } })
@@ -110,7 +132,7 @@ export class RewardClaimProxy {
     return data;
   }
 
-  async getWalletVaultTimeline(walletAddress: string): Promise<any> {
+  async getWalletVaultTimeline(walletAddress: string): Promise<WalletVaultTimelineDto> {
     const url = `${this.rewardsBaseUrl}/api/v1/rewards/wallet/${walletAddress}/timeline/vaults`;
     const { data } = await firstValueFrom(
       this.httpService.get(url, { headers: { 'X-Internal-Service-Token': this.internalToken } })
@@ -118,7 +140,7 @@ export class RewardClaimProxy {
     return data;
   }
 
-  async getWalletActivityTimeline(walletAddress: string): Promise<any> {
+  async getWalletActivityTimeline(walletAddress: string): Promise<WalletActivityTimelineDto> {
     const url = `${this.rewardsBaseUrl}/api/v1/rewards/wallet/${walletAddress}/timeline/activities`;
     const { data } = await firstValueFrom(
       this.httpService.get(url, { headers: { 'X-Internal-Service-Token': this.internalToken } })
@@ -126,7 +148,7 @@ export class RewardClaimProxy {
     return data;
   }
 
-  async getCurrentEpochEstimate(walletAddress: string): Promise<any> {
+  async getCurrentEpochEstimate(walletAddress: string): Promise<CurrentEpochEstimateDto> {
     const url = `${this.rewardsBaseUrl}/api/v1/rewards/wallet/${walletAddress}/current-estimate`;
     const { data } = await firstValueFrom(
       this.httpService.get(url, { headers: { 'X-Internal-Service-Token': this.internalToken } })
@@ -138,7 +160,7 @@ export class RewardClaimProxy {
   // Claims Methods
   // ============================================================================
 
-  async getAvailableClaims(walletAddress: string): Promise<any> {
+  async getAvailableClaims(walletAddress: string): Promise<ClaimsSummaryDto> {
     const url = `${this.rewardsBaseUrl}/api/v1/rewards/claims/${walletAddress}`;
     const { data } = await firstValueFrom(
       this.httpService.get(url, { headers: { 'X-Internal-Service-Token': this.internalToken } })
@@ -146,7 +168,7 @@ export class RewardClaimProxy {
     return data;
   }
 
-  async getClaimableSummary(walletAddress: string): Promise<any> {
+  async getClaimableSummary(walletAddress: string): Promise<ClaimsSummaryDto> {
     const url = `${this.rewardsBaseUrl}/api/v1/rewards/claims/${walletAddress}/claimable`;
     const { data } = await firstValueFrom(
       this.httpService.get(url, { headers: { 'X-Internal-Service-Token': this.internalToken } })
@@ -154,7 +176,7 @@ export class RewardClaimProxy {
     return data;
   }
 
-  async getClaimHistory(walletAddress: string, limit = 50): Promise<any> {
+  async getClaimHistory(walletAddress: string, limit = 50): Promise<ClaimHistoryItemDto[]> {
     const url = `${this.rewardsBaseUrl}/api/v1/rewards/claims/${walletAddress}/history?limit=${limit}`;
     const { data } = await firstValueFrom(
       this.httpService.get(url, { headers: { 'X-Internal-Service-Token': this.internalToken } })
@@ -162,7 +184,7 @@ export class RewardClaimProxy {
     return data;
   }
 
-  async getClaimTransactions(walletAddress: string, limit = 50): Promise<any> {
+  async getClaimTransactions(walletAddress: string, limit = 50): Promise<ClaimTransactionDto[]> {
     const url = `${this.rewardsBaseUrl}/api/v1/rewards/claims/${walletAddress}/transactions?limit=${limit}`;
     const { data } = await firstValueFrom(
       this.httpService.get(url, { headers: { 'X-Internal-Service-Token': this.internalToken } })
@@ -201,13 +223,7 @@ export class RewardClaimProxy {
   async prepareClaim(
     walletAddress: string,
     payload: { epochIds?: string[]; claimImmediate?: boolean; claimVested?: boolean }
-  ): Promise<{
-    reservationId: string;
-    txCbor: string;
-    claimableImmediateAmount: number;
-    claimableVestedAmount: number;
-    totalClaimableAmount: number;
-  }> {
+  ): Promise<PrepareClaimResponseDto> {
     try {
       const url = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/${walletAddress}/prepare`;
       const { data } = await firstValueFrom(
@@ -260,13 +276,7 @@ export class RewardClaimProxy {
     reservationId: string,
     _txCbor: string, // kept for API compatibility; txCbor is now stored server-side
     userWitness: string
-  ): Promise<{
-    success: boolean;
-    txHash: string;
-    claimedAmount: number;
-    claimedImmediateAmount: number;
-    claimedVestedAmount: number;
-  }> {
+  ): Promise<SubmitClaimResponseDto> {
     try {
       const url = `${this.rewardsBaseUrl}/api/v1/internal/rewards/claims/submit`;
       const { data } = await firstValueFrom(
@@ -334,7 +344,7 @@ export class RewardClaimProxy {
   // Vesting Methods
   // ============================================================================
 
-  async getVestingPositions(walletAddress: string): Promise<any> {
+  async getVestingPositions(walletAddress: string): Promise<VestingSummaryDto> {
     const url = `${this.rewardsBaseUrl}/api/v1/rewards/vesting/${walletAddress}/summary`;
     const { data } = await firstValueFrom(
       this.httpService.get(url, { headers: { 'X-Internal-Service-Token': this.internalToken } })
@@ -342,7 +352,7 @@ export class RewardClaimProxy {
     return data;
   }
 
-  async getActiveVesting(walletAddress: string): Promise<any> {
+  async getActiveVesting(walletAddress: string): Promise<VestingPositionsResponseDto> {
     const url = `${this.rewardsBaseUrl}/api/v1/rewards/vesting/${walletAddress}/active`;
     const { data } = await firstValueFrom(
       this.httpService.get(url, { headers: { 'X-Internal-Service-Token': this.internalToken } })
@@ -354,7 +364,7 @@ export class RewardClaimProxy {
   // Configuration Methods
   // ============================================================================
 
-  async getWeights(): Promise<any> {
+  async getWeights(): Promise<Record<string, any>> {
     const url = `${this.rewardsBaseUrl}/api/v1/rewards/weights`;
     const { data } = await firstValueFrom(
       this.httpService.get(url, { headers: { 'X-Internal-Service-Token': this.internalToken } })

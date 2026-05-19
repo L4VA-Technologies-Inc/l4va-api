@@ -737,6 +737,10 @@ export class Vault {
   @Column({ name: 'governance_phase_start', type: 'timestamptz', nullable: true })
   governance_phase_start?: Date;
 
+  @Expose({ name: 'isOfficialPartner' })
+  @Column({ name: 'is_official_partner', type: 'boolean', default: false })
+  is_official_partner: boolean;
+
   @BeforeInsert()
   setDate(): void {
     const now = new Date();

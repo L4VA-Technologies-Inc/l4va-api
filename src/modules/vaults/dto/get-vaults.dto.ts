@@ -178,6 +178,22 @@ export class GetVaultsDto extends PaginationDto {
   })
   reserveMet?: boolean;
 
+  @IsBoolean()
+  @IsOptional()
+  @ApiProperty({
+    type: Boolean,
+    required: false,
+    description: 'Filter by official partner vaults',
+  })
+  @Expose()
+  @Transform(({ value }) => {
+    if (typeof value === 'string') {
+      return value === 'true';
+    }
+    return value;
+  })
+  isOfficialPartner?: boolean;
+
   // Initial % Vault Offered Range
   @IsNumber()
   @IsOptional()
@@ -276,6 +292,71 @@ export class GetVaultsDto extends PaginationDto {
   })
   @Expose()
   tvlCurrency?: TVLCurrency = TVLCurrency.USD;
+
+  // FDV Range (stored in vault.fdv as ADA; USD filters use fdvCurrency)
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  @ApiProperty({
+    type: Number,
+    required: false,
+    minimum: 0,
+    description: 'Minimum FDV value',
+  })
+  @Expose()
+  @Type(() => Number)
+  minFdv?: number;
+
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  @ApiProperty({
+    type: Number,
+    required: false,
+    minimum: 0,
+    description: 'Maximum FDV value',
+  })
+  @Expose()
+  @Type(() => Number)
+  maxFdv?: number;
+
+  @IsEnum(TVLCurrency)
+  @IsOptional()
+  @ApiProperty({
+    enum: TVLCurrency,
+    required: false,
+    default: TVLCurrency.USD,
+    description: 'Currency for FDV filtering (ADA or USD)',
+  })
+  @Expose()
+  fdvCurrency?: TVLCurrency = TVLCurrency.USD;
+
+  // FDV/TVL ratio range (stored in vault.fdv_tvl)
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  @ApiProperty({
+    type: Number,
+    required: false,
+    minimum: 0,
+    description: 'Minimum FDV/TVL ratio',
+  })
+  @Expose()
+  @Type(() => Number)
+  minFdvTvl?: number;
+
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  @ApiProperty({
+    type: Number,
+    required: false,
+    minimum: 0,
+    description: 'Maximum FDV/TVL ratio',
+  })
+  @Expose()
+  @Type(() => Number)
+  maxFdvTvl?: number;
 
   // Contribution Window Filters
   @ApiProperty({

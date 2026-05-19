@@ -2,6 +2,28 @@ import { Body, Controller, Get, Param, Post, Query, Request, UseGuards } from '@
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
+import {
+  AlignmentDetailsDto,
+  CancelClaimResponseDto,
+  ClaimHistoryItemDto,
+  ClaimsSummaryDto,
+  ClaimTransactionDto,
+  CurrentEpochEstimateDto,
+  CurrentEpochResponseDto,
+  EpochDto,
+  EpochsResponseDto,
+  PrepareClaimResponseDto,
+  SubmitClaimResponseDto,
+  VaultScoreWithWalletsDto,
+  VestingPositionsResponseDto,
+  VestingSummaryDto,
+  WalletActivityTimelineDto,
+  WalletHistoryResponseDto,
+  WalletScoreDto,
+  WalletVaultDetailsDto,
+  WalletVaultTimelineDto,
+  WalletVaultsResponseDto,
+} from './dto/rewards.dto';
 import { RewardClaimProxy } from './services/reward-claim-proxy.service';
 import { RewardEventProducer } from './services/reward-event-producer.service';
 
@@ -42,7 +64,16 @@ export class RewardsController {
    */
   @UseGuards(AuthGuard)
   @Post('widget-swap')
-  async trackWidgetSwap(@Request() req: AuthRequest, @Body() body: WidgetSwapEventData): Promise<any> {
+  async trackWidgetSwap(
+    @Request() req: AuthRequest,
+    @Body() body: WidgetSwapEventData
+  ): Promise<{
+    indexed: boolean;
+    reason?: string;
+    eventId?: string;
+    vaultId?: string;
+    vaultName?: string;
+  }> {
     const swaps: WidgetSwapItemData[] = Array.isArray(body?.data)
       ? body.data
       : body?.tx_hash
@@ -116,17 +147,17 @@ export class RewardsController {
   // ============================================================================
 
   @Get('epochs')
-  async getEpochs(@Query('limit') limit = '20', @Query('offset') offset = '0'): Promise<any> {
+  async getEpochs(@Query('limit') limit = '20', @Query('offset') offset = '0'): Promise<EpochsResponseDto> {
     return this.rewardClaimProxy.getEpochs(parseInt(limit, 10), parseInt(offset, 10));
   }
 
   @Get('epochs/current')
-  async getCurrentEpoch(): Promise<any> {
+  async getCurrentEpoch(): Promise<CurrentEpochResponseDto> {
     return this.rewardClaimProxy.getCurrentEpoch();
   }
 
   @Get('epochs/:id')
-  async getEpochDetails(@Param('id') id: string): Promise<any> {
+  async getEpochDetails(@Param('id') id: string): Promise<EpochDto> {
     return this.rewardClaimProxy.getEpochById(id);
   }
 
@@ -136,21 +167,21 @@ export class RewardsController {
 
   @UseGuards(AuthGuard)
   @Get('me/score')
-  async getWalletScore(@Request() req: AuthRequest): Promise<any> {
+  async getWalletScore(@Request() req: AuthRequest): Promise<WalletScoreDto> {
     const walletAddress = req.user.address;
     return this.rewardClaimProxy.getWalletScore(walletAddress);
   }
 
   @UseGuards(AuthGuard)
   @Get('me/alignment')
-  async getAlignmentDetails(@Request() req: AuthRequest): Promise<any> {
+  async getAlignmentDetails(@Request() req: AuthRequest): Promise<AlignmentDetailsDto> {
     const walletAddress = req.user.address;
     return this.rewardClaimProxy.getAlignmentDetails(walletAddress);
   }
 
   @UseGuards(AuthGuard)
   @Get('me/history')
-  async getWalletHistory(@Request() req: AuthRequest, @Query('limit') limit = '20'): Promise<any> {
+  async getWalletHistory(@Request() req: AuthRequest, @Query('limit') limit = '20'): Promise<WalletHistoryResponseDto> {
     const walletAddress = req.user.address;
     return this.rewardClaimProxy.getWalletHistory(walletAddress, parseInt(limit, 10));
   }
@@ -160,7 +191,10 @@ export class RewardsController {
   // ============================================================================
 
   @Get('vault/:vaultId/scores')
-  async getVaultScores(@Param('vaultId') vaultId: string, @Query('epochId') epochId?: string): Promise<any> {
+  async getVaultScores(
+    @Param('vaultId') vaultId: string,
+    @Query('epochId') epochId?: string
+  ): Promise<VaultScoreWithWalletsDto> {
     return this.rewardClaimProxy.getVaultScores(vaultId, epochId);
   }
 
@@ -170,35 +204,38 @@ export class RewardsController {
     @Request() req: AuthRequest,
     @Param('vaultId') vaultId: string,
     @Query('epochId') epochId?: string
-  ): Promise<any> {
+  ): Promise<WalletVaultDetailsDto> {
     const walletAddress = req.user.address;
     return this.rewardClaimProxy.getWalletVaultReward(walletAddress, vaultId, epochId);
   }
 
   @UseGuards(AuthGuard)
   @Get('me/vaults')
-  async getWalletVaults(@Request() req: AuthRequest, @Query('epochId') epochId?: string): Promise<any> {
+  async getWalletVaults(
+    @Request() req: AuthRequest,
+    @Query('epochId') epochId?: string
+  ): Promise<WalletVaultsResponseDto> {
     const walletAddress = req.user.address;
     return this.rewardClaimProxy.getWalletVaults(walletAddress, epochId);
   }
 
   @UseGuards(AuthGuard)
   @Get('me/timeline/vaults')
-  async getWalletVaultTimeline(@Request() req: AuthRequest): Promise<any> {
+  async getWalletVaultTimeline(@Request() req: AuthRequest): Promise<WalletVaultTimelineDto> {
     const walletAddress = req.user.address;
     return this.rewardClaimProxy.getWalletVaultTimeline(walletAddress);
   }
 
   @UseGuards(AuthGuard)
   @Get('me/timeline/activities')
-  async getWalletActivityTimeline(@Request() req: AuthRequest): Promise<any> {
+  async getWalletActivityTimeline(@Request() req: AuthRequest): Promise<WalletActivityTimelineDto> {
     const walletAddress = req.user.address;
     return this.rewardClaimProxy.getWalletActivityTimeline(walletAddress);
   }
 
   @UseGuards(AuthGuard)
   @Get('me/current-estimate')
-  async getCurrentEpochEstimate(@Request() req: AuthRequest): Promise<any> {
+  async getCurrentEpochEstimate(@Request() req: AuthRequest): Promise<CurrentEpochEstimateDto> {
     const walletAddress = req.user.address;
     return this.rewardClaimProxy.getCurrentEpochEstimate(walletAddress);
   }
@@ -209,28 +246,31 @@ export class RewardsController {
 
   @UseGuards(AuthGuard)
   @Get('me/claims')
-  async getClaimsSummary(@Request() req: AuthRequest): Promise<any> {
+  async getClaimsSummary(@Request() req: AuthRequest): Promise<ClaimsSummaryDto> {
     const walletAddress = req.user.address;
     return this.rewardClaimProxy.getAvailableClaims(walletAddress);
   }
 
   @UseGuards(AuthGuard)
   @Get('me/claims/claimable')
-  async getClaimableAmount(@Request() req: AuthRequest): Promise<any> {
+  async getClaimableAmount(@Request() req: AuthRequest): Promise<ClaimsSummaryDto> {
     const walletAddress = req.user.address;
     return this.rewardClaimProxy.getClaimableSummary(walletAddress);
   }
 
   @UseGuards(AuthGuard)
   @Get('me/claims/history')
-  async getClaimHistory(@Request() req: AuthRequest, @Query('limit') limit = '50'): Promise<any> {
+  async getClaimHistory(@Request() req: AuthRequest, @Query('limit') limit = '50'): Promise<ClaimHistoryItemDto[]> {
     const walletAddress = req.user.address;
     return this.rewardClaimProxy.getClaimHistory(walletAddress, parseInt(limit, 10));
   }
 
   @UseGuards(AuthGuard)
   @Get('me/claims/transactions')
-  async getClaimTransactions(@Request() req: AuthRequest, @Query('limit') limit = '50'): Promise<any> {
+  async getClaimTransactions(
+    @Request() req: AuthRequest,
+    @Query('limit') limit = '50'
+  ): Promise<ClaimTransactionDto[]> {
     const walletAddress = req.user.address;
     return this.rewardClaimProxy.getClaimTransactions(walletAddress, parseInt(limit, 10));
   }
@@ -253,13 +293,7 @@ export class RewardsController {
       claimImmediate?: boolean;
       claimVested?: boolean;
     }
-  ): Promise<{
-    reservationId: string;
-    txCbor: string;
-    claimableImmediateAmount: number;
-    claimableVestedAmount: number;
-    totalClaimableAmount: number;
-  }> {
+  ): Promise<PrepareClaimResponseDto> {
     const walletAddress = req.user.address;
     return this.rewardClaimProxy.prepareClaim(walletAddress, body);
   }
@@ -277,13 +311,7 @@ export class RewardsController {
   async submitClaimTransaction(
     @Request() req: AuthRequest,
     @Body() body: { reservationId: string; txCbor: string; userWitness: string }
-  ): Promise<{
-    success: boolean;
-    txHash: string;
-    claimedAmount: number;
-    claimedImmediateAmount: number;
-    claimedVestedAmount: number;
-  }> {
+  ): Promise<SubmitClaimResponseDto> {
     const walletAddress = req.user.address;
     return this.rewardClaimProxy.submitClaim(walletAddress, body.reservationId, body.txCbor, body.userWitness);
   }
@@ -299,7 +327,7 @@ export class RewardsController {
   async cancelClaimTransaction(
     @Request() req: AuthRequest,
     @Body() body: { reservationId: string }
-  ): Promise<{ cancelled: boolean; message?: string }> {
+  ): Promise<CancelClaimResponseDto> {
     const result = await this.rewardClaimProxy.cancelClaim(req.user.address, body.reservationId);
     return { cancelled: result.success, message: result.message };
   }
@@ -310,14 +338,14 @@ export class RewardsController {
 
   @UseGuards(AuthGuard)
   @Get('me/vesting')
-  async getVestingSummary(@Request() req: AuthRequest): Promise<any> {
+  async getVestingSummary(@Request() req: AuthRequest): Promise<VestingSummaryDto> {
     const walletAddress = req.user.address;
     return this.rewardClaimProxy.getVestingPositions(walletAddress);
   }
 
   @UseGuards(AuthGuard)
   @Get('me/vesting/active')
-  async getActiveVesting(@Request() req: AuthRequest): Promise<any> {
+  async getActiveVesting(@Request() req: AuthRequest): Promise<VestingPositionsResponseDto> {
     const walletAddress = req.user.address;
     return this.rewardClaimProxy.getActiveVesting(walletAddress);
   }

@@ -7,6 +7,7 @@ import { Repository } from 'typeorm';
 
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
 
+import { formatCip674MetadataMessage } from '@/common/cardano/cip674-metadata';
 import { Proposal } from '@/database/proposal.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { ProposalStatus } from '@/types/proposal.types';
@@ -236,28 +237,7 @@ export class GovernanceRefundService {
 
   private formatRefundMetadataMessage(proposalId: string, proposalTitle?: string): { msg: string[] } {
     const proposalLabel = proposalTitle?.trim() || proposalId;
-    const raw = `L4VA: Governance fee refund for proposal ${proposalLabel}`;
-
-    const chunks: string[] = [];
-    let remaining = raw;
-    while (remaining.length > 0) {
-      if (remaining.length <= 64) {
-        chunks.push(remaining);
-        break;
-      }
-
-      let breakPoint = 64;
-      const searchSpace = remaining.slice(0, 65);
-      const lastSpace = searchSpace.lastIndexOf(' ');
-      if (lastSpace > 40) {
-        breakPoint = lastSpace;
-      }
-
-      chunks.push(remaining.slice(0, breakPoint).trimEnd());
-      remaining = remaining.slice(breakPoint).trimStart();
-    }
-
-    return { msg: chunks };
+    return formatCip674MetadataMessage(`L4VA: Governance fee refund for proposal ${proposalLabel}`);
   }
 
   // Retry failed/pending refunds on rejected proposals.

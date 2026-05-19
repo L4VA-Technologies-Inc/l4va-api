@@ -151,6 +151,13 @@ export class VaultShortResponse {
     expose: true,
   })
   vaultTokenTicker?: string;
+
+  @ApiProperty({ description: 'Whether the vault is an official partner', default: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'isOfficialPartner' },
+  })
+  isOfficialPartner: boolean;
 }
 
 export class VaultFullResponse extends VaultShortResponse {

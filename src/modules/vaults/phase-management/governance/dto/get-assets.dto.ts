@@ -67,3 +67,57 @@ export class AssetBuySellDto {
   @Expose()
   listed_at?: Date;
 }
+
+// LP Pool DTOs for Termination
+export class LpPoolDto {
+  @ApiProperty({ description: 'DEX name', example: 'VyFinance' })
+  dex: string;
+
+  @ApiProperty({ description: 'LP token unit identifier' })
+  lpTokenUnit: string;
+
+  @ApiProperty({ description: 'ADA amount locked in pool', example: 50.5 })
+  adaAmount: number;
+
+  @ApiProperty({ description: 'VT amount locked in pool', example: 1000 })
+  vtAmount: number;
+
+  @ApiProperty({ description: 'Whether this LP can be automatically recovered' })
+  isRecoverable: boolean;
+}
+
+export class TerminationLpInfoDto {
+  @ApiProperty({ description: 'Whether vault has any LP pools' })
+  hasLp: boolean;
+
+  @ApiProperty({ description: 'Array of LP pools with recovery status', type: [LpPoolDto] })
+  pools: LpPoolDto[];
+
+  @ApiPropertyOptional({ description: 'LP token unit that can be recovered', nullable: true })
+  recoverableLpTokenUnit: string | null;
+
+  @ApiProperty({ description: 'Total ADA in unrecoverable pools', example: 0 })
+  totalUnrecoverableAda: number;
+}
+
+export class TerminationValidationDto {
+  @ApiProperty({ description: 'Whether termination proposal can be created' })
+  canCreateProposal: boolean;
+
+  @ApiProperty({ description: 'Array of warning messages', type: [String] })
+  warnings: string[];
+
+  @ApiPropertyOptional({ description: 'Reason why proposal creation is blocked', nullable: true })
+  blockingReason: string | null;
+}
+
+export class GetTerminationAssetsDto {
+  @ApiProperty({ description: 'Assets to be terminated', type: [AssetBuySellDto] })
+  assets: AssetBuySellDto[];
+
+  @ApiProperty({ description: 'LP pool information and validation', type: TerminationLpInfoDto })
+  lpInfo: TerminationLpInfoDto;
+
+  @ApiProperty({ description: 'Overall validation status', type: TerminationValidationDto })
+  validation: TerminationValidationDto;
+}
