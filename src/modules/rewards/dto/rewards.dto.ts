@@ -93,7 +93,7 @@ export interface WalletHistoryItemDto {
   vestedReward: number;
   wasCapped: boolean;
   metadata: Record<string, any>;
-  createdAt: Date;
+  createdAt: string;
   totalReward: number;
   hasVestedReward: boolean;
   hasImmediateReward: boolean;
