@@ -4,6 +4,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, MoreThan, Not, Repository } from 'typeorm';
 
+import { AcquireOnlyDistributionOrchestrator } from './orchestrators/acquire-only-distribution.orchestrator';
 import { AcquirerDistributionOrchestrator } from './orchestrators/acquirer-distribution.orchestrator';
 import {
   ContributorDistributionOrchestrator,
@@ -53,6 +54,7 @@ export class AutomatedDistributionService {
     private readonly governanceService: GovernanceService,
     private readonly vyfiService: VyfiService,
     private readonly acquirerOrchestrator: AcquirerDistributionOrchestrator,
+    private readonly acquireOnlyOrchestrator: AcquireOnlyDistributionOrchestrator,
     private readonly contributorOrchestrator: ContributorDistributionOrchestrator
   ) {
     this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
@@ -107,7 +109,12 @@ export class AutomatedDistributionService {
   private async processLockedVaultsForDistribution(): Promise<void> {
     const readyVaults: Pick<
       Vault,
-      'id' | 'tokens_for_acquires' | 'dispatch_parametized_hash' | 'script_hash' | 'asset_vault_name'
+      | 'id'
+      | 'tokens_for_acquires'
+      | 'dispatch_parametized_hash'
+      | 'script_hash'
+      | 'asset_vault_name'
+      | 'is_acquire_only'
     >[] = await this.vaultRepository.find({
       where: {
         vault_status: VaultStatus.locked,
@@ -117,7 +124,14 @@ export class AutomatedDistributionService {
         created_at: MoreThan(new Date('2025-10-22')),
         manual_distribution_mode: false,
       },
-      select: ['id', 'tokens_for_acquires', 'dispatch_parametized_hash', 'script_hash', 'asset_vault_name'],
+      select: [
+        'id',
+        'tokens_for_acquires',
+        'dispatch_parametized_hash',
+        'script_hash',
+        'asset_vault_name',
+        'is_acquire_only',
+      ],
     });
 
     for (const vault of readyVaults) {
@@ -125,6 +139,13 @@ export class AutomatedDistributionService {
         this.logger.log(`Processing vault ${vault.id} for distribution`);
 
         await this.vaultRepository.update({ id: vault.id }, { distribution_in_progress: true });
+
+        // Acquire-only vaults bypass the dispatch contract entirely
+        if (vault.is_acquire_only) {
+          this.logger.log(`Vault ${vault.id} is acquire-only — using acquire-only distribution orchestrator`);
+          await this.acquireOnlyOrchestrator.processAcquireOnlyExtractions(vault.id, this.getConfig());
+          continue;
+        }
 
         await this.ensureDispatchParameterized(vault);
 
@@ -162,6 +183,7 @@ export class AutomatedDistributionService {
         'vault.last_update_tx_hash',
         'vault.acquire_multiplier',
         'vault.manual_distribution_mode',
+        'vault.is_acquire_only',
       ])
       .leftJoin(
         'claims',
@@ -194,6 +216,12 @@ export class AutomatedDistributionService {
 
       try {
         this.logger.log(`Checking vault ${vault.id} - ${remainingAcquirerClaims} acquirer claims remaining`);
+
+        // Acquire-only vaults are fully handled by processAcquireOnlyExtractions; skip here
+        if (vault.is_acquire_only) {
+          this.logger.log(`Vault ${vault.id} is acquire-only — skipping contributor payment check`);
+          continue;
+        }
 
         // Check if vault has 0% for acquirers (skip acquirer check)
         const shouldSkipAcquirerCheck = vault.tokens_for_acquires === 0;

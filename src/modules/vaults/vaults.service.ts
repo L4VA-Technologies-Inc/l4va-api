@@ -598,60 +598,100 @@ export class VaultsService {
 
       // Calculate start time based on contribution window type
       let startTime: number;
-      if (finalVault.contribution_open_window_type === ContributionWindowType.uponVaultLaunch) {
-        startTime = new Date().getTime();
-      } else if (
-        finalVault.contribution_open_window_type === ContributionWindowType.custom &&
-        finalVault.contribution_open_window_time
-      ) {
-        // contribution_open_window_time is already in milliseconds due to @Transform in entity
-        startTime = Number(finalVault.contribution_open_window_time);
-      } else {
-        throw new BadRequestException('Invalid contribution window configuration');
-      }
+      let assetWindow: { start: number; end: number };
+      let acquireWindow: { start: number; end: number };
 
-      const assetWindow = {
-        start: startTime,
-        end: startTime + Number(finalVault.contribution_duration),
-      };
-
-      // Calculate acquire window start time
-      let acquireStartTime: number;
-      if (finalVault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
-        acquireStartTime = assetWindow.end;
-      } else if (
-        finalVault.acquire_open_window_type === InvestmentWindowType.custom &&
-        finalVault.acquire_open_window_time
-      ) {
-        // acquire_open_window_time is already in milliseconds due to @Transform in entity
-        const customTime = Number(finalVault.acquire_open_window_time);
-        const currentTime = new Date().getTime();
-        const timeDifference = customTime - currentTime;
-
-        let adjustmentAmount = 1800000; // 30 minutes in milliseconds
-
-        // If custom time is less than 30 minutes in the future, adjust the buffer
-        if (timeDifference < 1800000) {
-          if (timeDifference > 60000) {
-            // If more than 1 minute in future, use half the time difference as buffer (minimum 30 seconds)
-            adjustmentAmount = Math.max(Math.floor(timeDifference / 2), 30000);
-          } else if (timeDifference > 0) {
-            // Less than 1 minute - use minimal 10 second buffer
-            adjustmentAmount = 10000;
-          } else {
-            adjustmentAmount = 0;
+      if (finalVault.is_acquire_only) {
+        // Acquire-only vaults have no contribution phase.
+        // Compute acquire window start based on acquire_open_window_type.
+        let acquireStartTime: number;
+        if (finalVault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
+          acquireStartTime = new Date().getTime();
+        } else if (
+          finalVault.acquire_open_window_type === InvestmentWindowType.custom &&
+          finalVault.acquire_open_window_time
+        ) {
+          const customTime = Number(finalVault.acquire_open_window_time);
+          const currentTime = new Date().getTime();
+          const timeDifference = customTime - currentTime;
+          let adjustmentAmount = 1800000;
+          if (timeDifference < 1800000) {
+            if (timeDifference > 60000) {
+              adjustmentAmount = Math.max(Math.floor(timeDifference / 2), 30000);
+            } else if (timeDifference > 0) {
+              adjustmentAmount = 10000;
+            } else {
+              adjustmentAmount = 0;
+            }
           }
+          acquireStartTime = customTime - adjustmentAmount;
+        } else {
+          throw new BadRequestException('Invalid acquire window configuration for acquire-only vault');
         }
 
-        acquireStartTime = customTime - adjustmentAmount;
+        // Use a zero-duration asset window coinciding with the acquire start
+        // (no contributions are expected, the SC won't be used for asset UTXOs)
+        assetWindow = { start: acquireStartTime, end: acquireStartTime };
+        acquireWindow = {
+          start: acquireStartTime,
+          end: acquireStartTime + Number(finalVault.acquire_window_duration),
+        };
       } else {
-        throw new BadRequestException('Invalid acquire window configuration');
-      }
+        if (finalVault.contribution_open_window_type === ContributionWindowType.uponVaultLaunch) {
+          startTime = new Date().getTime();
+        } else if (
+          finalVault.contribution_open_window_type === ContributionWindowType.custom &&
+          finalVault.contribution_open_window_time
+        ) {
+          // contribution_open_window_time is already in milliseconds due to @Transform in entity
+          startTime = Number(finalVault.contribution_open_window_time);
+        } else {
+          throw new BadRequestException('Invalid contribution window configuration');
+        }
 
-      const acquireWindow = {
-        start: acquireStartTime,
-        end: acquireStartTime + Number(finalVault.acquire_window_duration),
-      };
+        assetWindow = {
+          start: startTime,
+          end: startTime + Number(finalVault.contribution_duration),
+        };
+
+        // Calculate acquire window start time
+        let acquireStartTime: number;
+        if (finalVault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
+          acquireStartTime = assetWindow.end;
+        } else if (
+          finalVault.acquire_open_window_type === InvestmentWindowType.custom &&
+          finalVault.acquire_open_window_time
+        ) {
+          // acquire_open_window_time is already in milliseconds due to @Transform in entity
+          const customTime = Number(finalVault.acquire_open_window_time);
+          const currentTime = new Date().getTime();
+          const timeDifference = customTime - currentTime;
+
+          let adjustmentAmount = 1800000; // 30 minutes in milliseconds
+
+          // If custom time is less than 30 minutes in the future, adjust the buffer
+          if (timeDifference < 1800000) {
+            if (timeDifference > 60000) {
+              // If more than 1 minute in future, use half the time difference as buffer (minimum 30 seconds)
+              adjustmentAmount = Math.max(Math.floor(timeDifference / 2), 30000);
+            } else if (timeDifference > 0) {
+              // Less than 1 minute - use minimal 10 second buffer
+              adjustmentAmount = 10000;
+            } else {
+              adjustmentAmount = 0;
+            }
+          }
+
+          acquireStartTime = customTime - adjustmentAmount;
+        } else {
+          throw new BadRequestException('Invalid acquire window configuration');
+        }
+
+        acquireWindow = {
+          start: acquireStartTime,
+          end: acquireStartTime + Number(finalVault.acquire_window_duration),
+        };
+      }
 
       const { presignedTx, contractAddress, vaultAssetName, scriptHash, applyParamsResult, transactionId } =
         await this.vaultContractService.createOnChainVaultTx({
