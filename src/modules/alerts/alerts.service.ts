@@ -8,6 +8,7 @@ export interface SlackAlertData {
 
 export type SlackAlertType =
   | 'asset_price_fetch_failed'
+  | 'asset_price_deviation_batch_exceeded'
   | 'wallet_fetch_failed'
   | 'general_error'
   | 'admin_utxos_exhausted'
@@ -133,6 +134,59 @@ export class AlertsService {
             },
           ],
         };
+
+      case 'asset_price_deviation_batch_exceeded': {
+        const rejectedAssets = data.rejectedAssets || [];
+        const assetListText = rejectedAssets
+          .slice(0, 10)
+          .map(
+            (asset: any) =>
+              `• ${asset.assetClass} ${asset.policyId}.${asset.assetId}: ` +
+              `${asset.previousPrice}→${asset.nextPrice} ADA (${asset.direction} ${asset.deviationPercent}%, threshold ±${asset.thresholdPercent}%)`
+          )
+          .join('\n');
+        const hasMore = rejectedAssets.length > 10;
+
+        return {
+          text: `🚨 Multiple Asset Price Deviations Detected - Manual Review Required`,
+          blocks: [
+            {
+              type: 'header',
+              text: {
+                type: 'plain_text',
+                text: `🚨 ${data.totalRejected} Asset Price Deviations Detected`,
+                emoji: true,
+              },
+            },
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text:
+                  `*⚠️ Automatic Action Taken:*\n` +
+                  `${data.totalRejected} asset price updates exceeded deviation thresholds and were rejected to prevent potentially manipulated valuations from affecting TVL calculations.\n\n` +
+                  `*Action:* ${data.action || 'price_updates_rejected_manual_review_required'}`,
+              },
+            },
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: `*Rejected Assets${hasMore ? ` (showing 10 of ${data.totalRejected})` : ''}:*\n${assetListText}`,
+              },
+            },
+            {
+              type: 'context',
+              elements: [
+                {
+                  type: 'mrkdwn',
+                  text: `*Timestamp:* ${timestamp}`,
+                },
+              ],
+            },
+          ],
+        };
+      }
 
       case 'wallet_fetch_failed':
         return {
