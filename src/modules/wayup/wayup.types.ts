@@ -227,3 +227,34 @@ export interface GetCollectionAssetsResponse {
   pageState: string | null;
   count: number;
 }
+
+/** Offer returned by Anvil GET /marketplace/wallets/{address}/offers */
+export interface AnvilWalletOffer {
+  policyId: string;
+  assetName: string;
+  price: number;
+  priceCurrency: string;
+  outputRef: string;
+  offererStakeKeyhash?: string;
+  receiverStakeKeyhash?: string;
+}
+
+export interface AnvilWalletOffersResponse {
+  results: AnvilWalletOffer[];
+  cursor?: string;
+}
+
+/** Asset held in wallet from Anvil GET /marketplace/wallets/{address}/assets */
+export interface AnvilWalletAsset {
+  policyId: string;
+  assetName: string;
+  unit: string;
+  name?: string;
+}
+
+export interface AnvilWalletAssetsResponse {
+  results: AnvilWalletAsset[];
+  cursor?: string;
+}
+
+export type OfferResolutionStatus = 'active' | 'accepted' | 'cancelled';

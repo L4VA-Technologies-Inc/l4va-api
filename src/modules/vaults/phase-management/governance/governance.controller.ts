@@ -19,7 +19,7 @@ import {
 import { VoteReq } from './dto/vote.req';
 import { VoteRes } from './dto/vote.res';
 import { GovernanceFeeService } from './governance-fee.service';
-import { GovernanceService } from './governance.service';
+import GovernanceService from './governance.service';
 
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';

@@ -12,7 +12,7 @@ import {
 
 import { Claim } from '@/database/claim.entity';
 import { Vault } from '@/database/vault.entity';
-import { GovernanceService } from '@/modules/vaults/phase-management/governance/governance.service';
+import GovernanceService from '@/modules/vaults/phase-management/governance/governance.service';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { VyfiService } from '@/modules/vyfi/vyfi.service';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';

@@ -18,7 +18,10 @@ export enum AssetStatus {
   LISTED = 'listed',
   SOLD = 'sold',
   BURNED = 'burned',
+  /** Active marketplace offer placed by vault treasury */
   OFFERED = 'offered',
+  /** Offer was canceled or rejected on WayUp */
+  CANCEL_OFFER = 'cancel_offer',
 }
 
 export enum AssetOriginType {
@@ -26,6 +29,7 @@ export enum AssetOriginType {
   CONTRIBUTED = 'contributed',
   FEE = 'fee',
   BOUGHT = 'bought',
+  OFFERED = 'offered',
 }
 
 export enum AssetValuationMethod {

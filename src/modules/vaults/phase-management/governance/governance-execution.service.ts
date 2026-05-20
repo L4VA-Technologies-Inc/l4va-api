@@ -26,7 +26,7 @@ import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet
 import { TreasuryExtractionService } from '@/modules/vaults/treasure/treasury-extraction.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
 import { WayUpService } from '@/modules/wayup/wayup.service';
-import { AssetStatus } from '@/types/asset.types';
+import { AssetOriginType, AssetStatus } from '@/types/asset.types';
 import { ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { RewardActivityType } from '@/types/rewards.types';
@@ -868,7 +868,33 @@ export class GovernanceExecutionService {
         unlistedAssetIds.push(option.assetId);
       }
 
-      // Process CANCEL_OFFER operations
+      // Process CANCEL_OFFER operations (verify offer still exists on WayUp before on-chain cancel)
+      const treasuryAddress = proposal.vault.treasury_wallet?.treasury_address;
+      let cancelOfferMarketplaceKeys: { active: Set<string>; treasury: Set<string> } | null = null;
+
+      if (operations.cancelOffers.length > 0 && treasuryAddress) {
+        try {
+          const [sentOffers, treasuryAssets] = await Promise.all([
+            this.wayUpPricingService.getWalletSentOffers(treasuryAddress),
+            this.wayUpPricingService.getWalletAssets(treasuryAddress),
+          ]);
+          cancelOfferMarketplaceKeys = {
+            active: new Set(sentOffers.map(o => this.wayUpPricingService.offerAssetKey(o.policyId, o.assetName))),
+            treasury: new Set(treasuryAssets.map(a => this.wayUpPricingService.offerAssetKey(a.policyId, a.assetName))),
+          };
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          this.logger.error(
+            `Failed to fetch WayUp offer state for cancel-offer execution in proposal ${proposal.id}: ${errorMessage}`,
+            error instanceof Error ? error.stack : undefined
+          );
+          throw new Error(`Unable to verify offer status on WayUp before cancel-offer execution: ${errorMessage}`);
+        }
+      }
+
+      const autoResolvedAcceptedOfferIds: string[] = [];
+      const autoResolvedCancelledOfferIds: string[] = [];
+
       for (const option of operations.cancelOffers) {
         const asset = assetMap.get(option.assetId);
         if (!asset) {
@@ -884,8 +910,55 @@ export class GovernanceExecutionService {
           continue;
         }
 
+        if (cancelOfferMarketplaceKeys) {
+          const offerState = this.wayUpPricingService.resolveOfferStatus(
+            asset.policy_id,
+            asset.asset_id,
+            cancelOfferMarketplaceKeys.active,
+            cancelOfferMarketplaceKeys.treasury
+          );
+
+          if (offerState === 'accepted') {
+            autoResolvedAcceptedOfferIds.push(option.assetId);
+            this.logger.log(
+              `Cancel-offer skipped for "${asset.name}": offer already accepted on WayUp, marking asset as bought/extracted`
+            );
+            continue;
+          }
+
+          if (offerState === 'cancelled') {
+            autoResolvedCancelledOfferIds.push(option.assetId);
+            this.logger.log(
+              `Cancel-offer skipped for "${asset.name}": offer no longer active on WayUp, marking as cancel_offer`
+            );
+            continue;
+          }
+        } else if (operations.cancelOffers.length > 0) {
+          this.logger.warn(
+            `Treasury wallet not configured for vault ${proposal.vaultId}; cancel-offer cannot be verified on WayUp`
+          );
+          skipped.cancelOffers.push(asset.name || option.assetId);
+          continue;
+        }
+
         unlistOffers.push({ policyId: asset.policy_id, txHashIndex });
         cancelledOfferAssetIds.push(option.assetId);
+      }
+
+      if (autoResolvedAcceptedOfferIds.length > 0) {
+        try {
+          await this.assetsService.markOffersAsAccepted(autoResolvedAcceptedOfferIds);
+        } catch (statusError) {
+          this.logger.warn(`Failed to mark accepted offers after WayUp check: ${statusError.message}`);
+        }
+      }
+
+      if (autoResolvedCancelledOfferIds.length > 0) {
+        try {
+          await this.assetsService.markOffersAsCancelled(autoResolvedCancelledOfferIds);
+        } catch (statusError) {
+          this.logger.warn(`Failed to mark cancelled offers after WayUp check: ${statusError.message}`);
+        }
       }
 
       // Process UPDATE_LISTING operations
@@ -1097,6 +1170,19 @@ export class GovernanceExecutionService {
         purchases.length > 0 ||
         offers.length > 0;
 
+      const allCancelOffersResolvedOnWayUp =
+        operations.cancelOffers.length > 0 &&
+        unlistOffers.length === 0 &&
+        skipped.cancelOffers.length === 0 &&
+        autoResolvedAcceptedOfferIds.length + autoResolvedCancelledOfferIds.length === operations.cancelOffers.length;
+
+      if (!hasOperations && allCancelOffersResolvedOnWayUp) {
+        this.logger.log(
+          `Proposal ${proposal.id}: all ${operations.cancelOffers.length} cancel-offer(s) resolved from WayUp state (no on-chain tx needed)`
+        );
+        return true;
+      }
+
       if (!hasOperations) {
         const totalSkipped =
           skipped.sells.length +
@@ -1254,17 +1340,8 @@ export class GovernanceExecutionService {
       // Update canceled offers
       if (unlistOffers.length > 0) {
         try {
-          await this.assetRepository.update(
-            { id: In(cancelledOfferAssetIds) },
-            {
-              status: AssetStatus.EXTRACTED,
-              listing_tx_hash: null,
-              listing_market: null,
-              listing_price: null,
-              listed_at: null,
-            }
-          );
-          this.logger.log(`Marked ${cancelledOfferAssetIds.length} asset(s) as EXTRACTED (offer cancelled)`);
+          await this.assetsService.markOffersAsCancelled(cancelledOfferAssetIds);
+          this.logger.log(`Marked ${cancelledOfferAssetIds.length} asset(s) as CANCEL_OFFER`);
         } catch (statusError) {
           this.logger.warn(`Failed to update cancelled offer asset statuses: ${statusError.message}`);
         }
@@ -1286,7 +1363,7 @@ export class GovernanceExecutionService {
         }
       }
 
-      // Record bought assets to the vault with origin_type BOUGHT, status EXTRACTED, added_by null
+      // Record bought assets: origin BOUGHT, status EXTRACTED
       if (purchases.length > 0) {
         for (const purchase of purchases) {
           try {
@@ -1298,6 +1375,7 @@ export class GovernanceExecutionService {
               image: purchase.image,
               floorPrice: purchase.priceAda,
               metadata: purchase.metadata,
+              originType: AssetOriginType.BOUGHT,
               status: AssetStatus.EXTRACTED,
             });
             this.logger.log(
@@ -1309,7 +1387,7 @@ export class GovernanceExecutionService {
         }
       }
 
-      // Record offered assets to the vault with origin_type BOUGHT, status OFFERED, added_by null
+      // Record offered assets: origin OFFERED, status OFFERED
       if (offers.length > 0) {
         for (const offer of offers) {
           try {
@@ -1321,6 +1399,7 @@ export class GovernanceExecutionService {
               image: offer.image,
               floorPrice: offer.priceAda,
               metadata: offer.metadata,
+              originType: AssetOriginType.OFFERED,
               status: AssetStatus.OFFERED,
             });
             await this.assetRepository.update(

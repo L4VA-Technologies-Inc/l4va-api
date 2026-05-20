@@ -5,11 +5,19 @@ import { InjectRepository } from '@nestjs/typeorm';
 import NodeCache from 'node-cache';
 import { Repository } from 'typeorm';
 
-import { GetCollectionAssetsQuery, GetCollectionAssetsResponse } from './wayup.types';
+import {
+  AnvilWalletAsset,
+  AnvilWalletOffer,
+  AnvilWalletOffersResponse,
+  AnvilWalletAssetsResponse,
+  GetCollectionAssetsQuery,
+  GetCollectionAssetsResponse,
+  OfferResolutionStatus,
+} from './wayup.types';
 
 import { Asset } from '@/database/asset.entity';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
-import { AssetStatus } from '@/types/asset.types';
+import { AssetOriginType, AssetStatus } from '@/types/asset.types';
 
 /**
  * WayUp Pricing Service - Handles only pricing queries without transaction building
@@ -19,12 +27,15 @@ import { AssetStatus } from '@/types/asset.types';
 export class WayUpPricingService {
   private readonly logger = new Logger(WayUpPricingService.name);
   private readonly baseUrl = 'https://prod.api.ada-anvil.app/marketplace/api/get-collection-assets';
+  private readonly anvilMarketplaceApi: string;
+  private readonly anvilApiKey: string;
   private readonly isMainnet: boolean;
   private readonly tapToolsApiKey: string;
   private readonly tapToolsApiUrl: string;
   private floorPriceCache = new NodeCache({ stdTTL: 300 }); // 5 minute cache for floor prices
 
   private isTrackingInProgress = false;
+  private isOfferTrackingInProgress = false;
 
   constructor(
     private readonly configService: ConfigService,
@@ -35,6 +46,9 @@ export class WayUpPricingService {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.tapToolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
     this.tapToolsApiUrl = this.configService.get<string>('TAPTOOLS_API_URL');
+    const anvilApiUrl = this.configService.get<string>('ANVIL_API_URL') ?? 'https://prod.api.ada-anvil.app/v2';
+    this.anvilMarketplaceApi = `${anvilApiUrl.replace(/\/$/, '')}/services/marketplace`;
+    this.anvilApiKey = this.configService.get<string>('ANVIL_API_KEY') ?? '';
   }
 
   /**
@@ -229,6 +243,255 @@ export class WayUpPricingService {
   }
 
   /**
+   * Fetch all sent offers for a treasury wallet from Anvil marketplace API.
+   * @see https://prod.api.ada-anvil.app/v2/services/swagger/ui#tag/marketplace/GET/marketplace/wallets/{address}/offers
+   */
+  async getWalletSentOffers(walletAddress: string): Promise<AnvilWalletOffer[]> {
+    const allOffers: AnvilWalletOffer[] = [];
+    let cursor: string | undefined;
+
+    do {
+      const params = new URLSearchParams({
+        direction: 'sent',
+        limit: '60',
+      });
+      if (cursor) {
+        params.append('cursor', cursor);
+      }
+
+      const response = await fetch(
+        `${this.anvilMarketplaceApi}/wallets/${encodeURIComponent(walletAddress)}/offers?${params.toString()}`,
+        {
+          headers: {
+            'x-api-key': this.anvilApiKey,
+          },
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Anvil wallet offers API error: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+
+      const data: AnvilWalletOffersResponse = await response.json();
+      allOffers.push(...(data.results ?? []));
+      cursor = data.cursor;
+    } while (cursor);
+
+    return allOffers;
+  }
+
+  /**
+   * Fetch NFTs held by a treasury wallet from Anvil marketplace API.
+   */
+  async getWalletAssets(walletAddress: string): Promise<AnvilWalletAsset[]> {
+    const allAssets: AnvilWalletAsset[] = [];
+    let cursor: string | undefined;
+
+    do {
+      const params = new URLSearchParams({ limit: '60' });
+      if (cursor) {
+        params.append('cursor', cursor);
+      }
+
+      const response = await fetch(
+        `${this.anvilMarketplaceApi}/wallets/${encodeURIComponent(walletAddress)}/assets?${params.toString()}`,
+        {
+          headers: {
+            'x-api-key': this.anvilApiKey,
+          },
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Anvil wallet assets API error: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+
+      const data: AnvilWalletAssetsResponse = await response.json();
+      allAssets.push(...(data.results ?? []));
+      cursor = data.cursor;
+    } while (cursor);
+
+    return allAssets;
+  }
+
+  offerAssetKey(policyId: string, assetName: string): string {
+    return `${policyId.toLowerCase()}:${assetName.toLowerCase()}`;
+  }
+
+  /**
+   * Resolve a single vault offer against live Anvil marketplace state.
+   */
+  async getVaultOfferMarketplaceState(
+    treasuryAddress: string,
+    policyId: string,
+    assetNameHex: string
+  ): Promise<OfferResolutionStatus> {
+    const [sentOffers, treasuryAssets] = await Promise.all([
+      this.getWalletSentOffers(treasuryAddress),
+      this.getWalletAssets(treasuryAddress),
+    ]);
+
+    const activeOfferKeys = new Set(sentOffers.map(offer => this.offerAssetKey(offer.policyId, offer.assetName)));
+    const treasuryAssetKeys = new Set(treasuryAssets.map(asset => this.offerAssetKey(asset.policyId, asset.assetName)));
+
+    return this.resolveOfferStatus(policyId, assetNameHex, activeOfferKeys, treasuryAssetKeys);
+  }
+
+  getOfferResolutionUserMessage(state: OfferResolutionStatus, assetLabel: string): string {
+    switch (state) {
+      case 'active':
+        return `Offer for ${assetLabel} is active on WayUp.`;
+      case 'accepted':
+        return `Offer for ${assetLabel} was already accepted — the NFT is in the treasury wallet.`;
+      case 'cancelled':
+        return `Offer for ${assetLabel} is no longer active on WayUp (cancelled or expired).`;
+    }
+  }
+
+  /**
+   * Determine whether a vault offer is still active, was accepted, or was cancelled.
+   */
+  resolveOfferStatus(
+    policyId: string,
+    assetNameHex: string,
+    activeOfferKeys: Set<string>,
+    treasuryAssetKeys: Set<string>
+  ): OfferResolutionStatus {
+    const key = this.offerAssetKey(policyId, assetNameHex);
+
+    if (activeOfferKeys.has(key)) {
+      return 'active';
+    }
+
+    if (treasuryAssetKeys.has(key)) {
+      return 'accepted';
+    }
+
+    return 'cancelled';
+  }
+
+  /**
+   * Reconcile active offers in the database with Anvil marketplace state.
+   * - Active sent offer → keep OFFERED status / OFFERED origin
+   * - Offer gone + NFT in treasury → accepted → BOUGHT origin + EXTRACTED status
+   * - Offer gone + NFT not in treasury → cancelled → CANCEL_OFFER status
+   */
+  async syncOfferStatuses(): Promise<{
+    checked: number;
+    accepted: number;
+    cancelled: number;
+    stillActive: number;
+  }> {
+    const offeredAssets = await this.assetRepository.find({
+      where: {
+        status: AssetStatus.OFFERED,
+        origin_type: AssetOriginType.OFFERED,
+        deleted: false,
+      },
+      relations: ['vault', 'vault.treasury_wallet'],
+      select: {
+        id: true,
+        policy_id: true,
+        asset_id: true,
+        name: true,
+        vault_id: true,
+        vault: {
+          id: true,
+          treasury_wallet: {
+            treasury_address: true,
+          },
+        },
+      },
+    });
+
+    if (offeredAssets.length === 0) {
+      return { checked: 0, accepted: 0, cancelled: 0, stillActive: 0 };
+    }
+
+    const assetsByTreasury = new Map<string, Asset[]>();
+
+    for (const asset of offeredAssets) {
+      const treasuryAddress = asset.vault?.treasury_wallet?.treasury_address;
+      if (!treasuryAddress) {
+        this.logger.warn(`Skipping offer asset ${asset.id}: vault ${asset.vault_id} has no treasury wallet`);
+        continue;
+      }
+
+      const group = assetsByTreasury.get(treasuryAddress) ?? [];
+      group.push(asset);
+      assetsByTreasury.set(treasuryAddress, group);
+    }
+
+    const acceptedIds: string[] = [];
+    const cancelledIds: string[] = [];
+    let stillActive = 0;
+
+    for (const [treasuryAddress, assets] of assetsByTreasury) {
+      try {
+        const [sentOffers, treasuryAssets] = await Promise.all([
+          this.getWalletSentOffers(treasuryAddress),
+          this.getWalletAssets(treasuryAddress),
+        ]);
+
+        const activeOfferKeys = new Set(sentOffers.map(offer => this.offerAssetKey(offer.policyId, offer.assetName)));
+        const treasuryAssetKeys = new Set(
+          treasuryAssets.map(asset => this.offerAssetKey(asset.policyId, asset.assetName))
+        );
+
+        for (const asset of assets) {
+          const resolution = this.resolveOfferStatus(
+            asset.policy_id,
+            asset.asset_id,
+            activeOfferKeys,
+            treasuryAssetKeys
+          );
+
+          switch (resolution) {
+            case 'active':
+              stillActive++;
+              break;
+            case 'accepted':
+              acceptedIds.push(asset.id);
+              this.logger.log(
+                `Offer accepted for "${asset.name}" (${asset.policy_id}${asset.asset_id}) in treasury ${treasuryAddress}`
+              );
+              break;
+            case 'cancelled':
+              cancelledIds.push(asset.id);
+              this.logger.log(
+                `Offer cancelled for "${asset.name}" (${asset.policy_id}${asset.asset_id}) from treasury ${treasuryAddress}`
+              );
+              break;
+          }
+        }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.logger.error(
+          `Failed to sync offer statuses for treasury ${treasuryAddress}: ${errorMessage}`,
+          error instanceof Error ? error.stack : undefined
+        );
+      }
+    }
+
+    if (acceptedIds.length > 0) {
+      await this.assetsService.markOffersAsAccepted(acceptedIds);
+    }
+
+    if (cancelledIds.length > 0) {
+      await this.assetsService.markOffersAsCancelled(cancelledIds);
+    }
+
+    return {
+      checked: offeredAssets.length,
+      accepted: acceptedIds.length,
+      cancelled: cancelledIds.length,
+      stillActive,
+    };
+  }
+
+  /**
    * Cron job that tracks NFT sales by checking if LISTED assets are still on WayUp
    * Implements locking mechanism to prevent concurrent executions
    */
@@ -306,6 +569,50 @@ export class WayUpPricingService {
     } finally {
       // Release lock
       this.isTrackingInProgress = false;
+    }
+  }
+
+  /**
+   * Cron job that reconciles OFFERED assets with Anvil marketplace wallet offers.
+   * Detects accepted offers (NFT in treasury) and cancelled offers (no longer sent).
+   */
+  @Cron(CronExpression.EVERY_30_MINUTES)
+  async trackOfferStatuses(): Promise<void> {
+    if (!this.isMainnet) {
+      this.logger.debug('Skipping offer status tracking for testnet');
+      return;
+    }
+
+    if (!this.anvilApiKey) {
+      this.logger.warn('Skipping offer status tracking: ANVIL_API_KEY is not configured');
+      return;
+    }
+
+    if (this.isOfferTrackingInProgress) {
+      this.logger.warn('Offer status tracking is already in progress, skipping this execution');
+      return;
+    }
+
+    this.isOfferTrackingInProgress = true;
+
+    try {
+      const result = await this.syncOfferStatuses();
+
+      if (result.checked === 0) {
+        this.logger.log('No offered assets found to track');
+        return;
+      }
+
+      this.logger.log(
+        `Offer status tracking completed: checked=${result.checked}, active=${result.stillActive}, ` +
+          `accepted=${result.accepted}, cancelled=${result.cancelled}`
+      );
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      this.logger.error(`Offer status tracking cron job failed: ${errorMessage}`, errorStack);
+    } finally {
+      this.isOfferTrackingInProgress = false;
     }
   }
 }

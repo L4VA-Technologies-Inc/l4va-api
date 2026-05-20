@@ -696,6 +696,56 @@ export class AssetsService {
     );
   }
 
+  private clearOfferListingFields(): {
+    listing_market: null;
+    listing_price: null;
+    listing_tx_hash: null;
+    listed_at: null;
+  } {
+    return {
+      listing_market: null,
+      listing_price: null,
+      listing_tx_hash: null,
+      listed_at: null,
+    };
+  }
+
+  /** Offer accepted on WayUp — NFT is in treasury. */
+  async markOffersAsAccepted(assetIds: string[]): Promise<void> {
+    if (assetIds.length === 0) return;
+
+    await this.assetsRepository.update(
+      {
+        id: In(assetIds),
+        status: AssetStatus.OFFERED,
+        origin_type: AssetOriginType.OFFERED,
+        deleted: false,
+      },
+      {
+        status: AssetStatus.EXTRACTED,
+        origin_type: AssetOriginType.BOUGHT,
+        ...this.clearOfferListingFields(),
+      }
+    );
+  }
+
+  /** Offer cancelled or rejected on WayUp (or via governance CANCEL_OFFER). */
+  async markOffersAsCancelled(assetIds: string[]): Promise<void> {
+    if (assetIds.length === 0) return;
+
+    await this.assetsRepository.update(
+      {
+        id: In(assetIds),
+        status: AssetStatus.OFFERED,
+        deleted: false,
+      },
+      {
+        status: AssetStatus.CANCEL_OFFER,
+        ...this.clearOfferListingFields(),
+      }
+    );
+  }
+
   /**
    * Mark multiple assets as listed with individual listing prices
    */
@@ -827,6 +877,7 @@ export class AssetsService {
     floorPrice: number;
     metadata?: any;
     status?: AssetStatus;
+    originType?: AssetOriginType;
   }): Promise<Asset> {
     const vault = await this.vaultsRepository.findOne({ where: { id: params.vaultId } });
 
@@ -844,6 +895,9 @@ export class AssetsService {
       }
     }
 
+    const originType = params.originType ?? AssetOriginType.BOUGHT;
+    const defaultStatus = originType === AssetOriginType.OFFERED ? AssetStatus.OFFERED : AssetStatus.EXTRACTED;
+
     const asset = this.assetsRepository.create({
       vault,
       policy_id: params.policyId,
@@ -853,8 +907,8 @@ export class AssetsService {
       type: AssetType.NFT,
       quantity: 1,
       floor_price: params.floorPrice,
-      status: params.status ?? AssetStatus.LOCKED,
-      origin_type: AssetOriginType.BOUGHT,
+      status: params.status ?? defaultStatus,
+      origin_type: originType,
       added_by: null,
       metadata: params.metadata ?? null,
     });

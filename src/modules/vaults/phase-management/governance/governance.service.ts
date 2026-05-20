@@ -1,4 +1,4 @@
-﻿import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import {
   BadRequestException,
   ForbiddenException,
@@ -987,6 +987,7 @@ export class GovernanceService {
                     policy_id: exactAsset.policyId,
                     asset_id: exactAsset.assetName,
                     status: AssetStatus.OFFERED,
+                    origin_type: AssetOriginType.OFFERED,
                     deleted: false,
                   },
                   select: ['id', 'name'],
@@ -1025,6 +1026,7 @@ export class GovernanceService {
                 select: [
                   'id',
                   'status',
+                  'origin_type',
                   'type',
                   'policy_id',
                   'asset_id',
@@ -1054,10 +1056,52 @@ export class GovernanceService {
                 );
               }
 
+              if (offeredAsset.origin_type !== AssetOriginType.OFFERED) {
+                throw new BadRequestException(
+                  `Asset "${offeredAsset.name || action.assetId}" is not an active vault offer. Only OFFERED-origin assets can be cancelled.`
+                );
+              }
+
               if (!offeredAsset.listing_tx_hash) {
                 throw new BadRequestException(
                   `Asset "${offeredAsset.name || action.assetId}" is missing offer transaction reference. Cannot create cancel-offer proposal.`
                 );
+              }
+
+              if (this.isMainnet) {
+                const treasuryWallet = await this.treasuryWalletService.getTreasuryWallet(vaultId);
+                if (!treasuryWallet?.address) {
+                  throw new BadRequestException(
+                    'Treasury wallet is not configured for this vault. Cannot verify offer status on WayUp.'
+                  );
+                }
+
+                try {
+                  const offerState = await this.wayUpPricingService.getVaultOfferMarketplaceState(
+                    treasuryWallet.address,
+                    offeredAsset.policy_id,
+                    offeredAsset.asset_id
+                  );
+
+                  if (offerState !== 'active') {
+                    const assetLabel = offeredAsset.name || action.assetId;
+                    throw new BadRequestException(
+                      this.wayUpPricingService.getOfferResolutionUserMessage(offerState, assetLabel) +
+                        ' Cancel-offer proposal cannot be created.'
+                    );
+                  }
+                } catch (error) {
+                  if (error instanceof BadRequestException) {
+                    throw error;
+                  }
+
+                  const errorMessage = error instanceof Error ? error.message : String(error);
+                  this.logger.error(
+                    `Failed to verify offer status on WayUp for asset ${offeredAsset.id}: ${errorMessage}`,
+                    error instanceof Error ? error.stack : undefined
+                  );
+                  throw new BadRequestException('Unable to verify offer status on WayUp. Please try again later.');
+                }
               }
 
               const offerPriceAda = Number(offeredAsset.listing_price ?? offeredAsset.floor_price ?? 0);
@@ -2811,6 +2855,7 @@ export class GovernanceService {
         .where('asset.vault_id = :vaultId', { vaultId })
         .andWhere('asset.type = :type', { type: AssetType.NFT })
         .andWhere('asset.status = :status', { status: AssetStatus.OFFERED })
+        .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.OFFERED })
         .andWhere('asset.deleted = :deleted', { deleted: false })
         .andWhere('asset.listing_tx_hash IS NOT NULL');
 
@@ -3324,3 +3369,5 @@ export class GovernanceService {
     return BigInt(intPart + fracPart.padEnd(decimals, '0').slice(0, decimals));
   }
 }
+
+export default GovernanceService;
