@@ -595,6 +595,7 @@ export class WayUpService {
     summary: {
       listedCount: number;
       unlistedCount: number;
+      unlistedOffersCount: number;
       updatedCount: number;
       offersCount: number;
       purchasedCount: number;
@@ -606,6 +607,7 @@ export class WayUpService {
     const hasActions =
       (actions.listings?.length ?? 0) > 0 ||
       (actions.unlistings?.length ?? 0) > 0 ||
+      (actions.unlistOffers?.length ?? 0) > 0 ||
       (actions.updates?.length ?? 0) > 0 ||
       (actions.offers?.length ?? 0) > 0 ||
       (actions.purchases?.length ?? 0) > 0;
@@ -624,6 +626,7 @@ export class WayUpService {
         summary: {
           listedCount: actions.listings?.length ?? 0,
           unlistedCount: actions.unlistings?.length ?? 0,
+          unlistedOffersCount: actions.unlistOffers?.length ?? 0,
           updatedCount: actions.updates?.length ?? 0,
           offersCount: actions.offers?.length ?? 0,
           purchasedCount: actions.purchases?.length ?? 0,
@@ -709,6 +712,7 @@ export class WayUpService {
       const actionParts: string[] = [];
       if (actions.listings?.length) actionParts.push(`listing ${actions.listings.length} NFT(s)`);
       if (actions.unlistings?.length) actionParts.push(`unlisting ${actions.unlistings.length}`);
+      if (actions.unlistOffers?.length) actionParts.push(`unlisting ${actions.unlistOffers.length} offer(s)`);
       if (actions.updates?.length) actionParts.push(`updating ${actions.updates.length}`);
       if (actions.offers?.length) actionParts.push(`offering on ${actions.offers.length}`);
       if (actions.purchases?.length) actionParts.push(`buying ${actions.purchases.length}`);
@@ -784,6 +788,11 @@ export class WayUpService {
         combinedPayload.createOffer = actions.offers;
       }
 
+      // Add unlist offers if provided
+      if (actions.unlistOffers?.length > 0) {
+        combinedPayload.unlistOffer = actions.unlistOffers;
+      }
+
       // Add purchases if provided
       if (actions.purchases?.length > 0) {
         combinedPayload.buy = actions.purchases;
@@ -793,6 +802,7 @@ export class WayUpService {
         `Building combined transaction: ` +
           `${actions.listings?.length ?? 0} listings, ` +
           `${actions.unlistings?.length ?? 0} unlistings, ` +
+          `${actions.unlistOffers?.length ?? 0} unlist offers, ` +
           `${actions.updates?.length ?? 0} updates, ` +
           `${actions.offers?.length ?? 0} offers, ` +
           `${actions.purchases?.length ?? 0} purchases`
@@ -814,6 +824,7 @@ export class WayUpService {
       const summary = {
         listedCount: actions.listings?.length ?? 0,
         unlistedCount: actions.unlistings?.length ?? 0,
+        unlistedOffersCount: actions.unlistOffers?.length ?? 0,
         updatedCount: actions.updates?.length ?? 0,
         offersCount: actions.offers?.length ?? 0,
         purchasedCount: actions.purchases?.length ?? 0,

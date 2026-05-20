@@ -111,6 +111,7 @@ export interface BuyNFTPayload {
 export interface CombinedMarketplaceActionsInput {
   listings?: NFTListingInput[]; // NFTs to list for sale
   unlistings?: UnlistInput[]; // Listings to cancel
+  unlistOffers?: Array<{ policyId: string; txHashIndex: string }>; // Offers to cancel
   updates?: UpdateListingInput[]; // Listings to update price
   offers?: MakeOfferInput[]; // Offers to make
   purchases?: BuyNFTInput[]; // NFTs to buy
@@ -141,6 +142,10 @@ export interface WayUpTransactionInput {
     policyId: string;
     assetName: string;
     priceAda: number;
+  }[];
+  unlistOffer?: {
+    policyId: string;
+    txHashIndex: string;
   }[];
   buy?: {
     policyId: string;
