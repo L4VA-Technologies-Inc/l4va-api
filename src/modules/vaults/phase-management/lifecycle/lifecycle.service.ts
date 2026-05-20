@@ -2039,10 +2039,13 @@ export class LifecycleService {
 
       if (meetsThreshold) {
         const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
-        // Acquire-only: 100% of VT goes to acquirers, no LP, no contributors
-        const ASSETS_OFFERED_PERCENT = 1.0;
 
-        // Build acquirer claims (proportional VT based on ADA sent)
+        // Calculate ONE multiplier for the entire vault (all ADA claims use the same multiplier)
+        // Multiplier = VT tokens / ADA acquired (in lovelace)
+        const totalAcquiredLovelace = totalAcquiredAda * 1_000_000;
+        const vaultMultiplier = totalAcquiredLovelace > 0 ? Math.floor(vtSupply / totalAcquiredLovelace) : 0;
+
+        // Build acquirer claims (all using the same vault-level multiplier)
         const acquirerClaims: Partial<Claim>[] = [];
 
         for (const tx of acquisitionTransactions) {
@@ -2055,41 +2058,29 @@ export class LifecycleService {
           });
           if (claimExists) continue;
 
-          const { vtReceived, multiplier } = this.distributionCalculationService.calculateAcquirerTokens({
-            adaSent,
-            totalAcquiredValueAda: totalAcquiredAda,
-            lpAdaAmount: 0,
-            lpVtAmount: 0,
-            vtPrice: totalAcquiredAda > 0 ? totalAcquiredAda / vtSupply : 0,
-            vtSupply,
-            ASSETS_OFFERED_PERCENT,
-          });
+          // Calculate claim amount: multiplier * ADA sent (in lovelace)
+          const claimAmount = vaultMultiplier * adaSent * 1_000_000;
 
           acquirerClaims.push(
             this.claimRepository.create({
               user: { id: tx.user.id },
               vault: { id: vault.id },
               type: ClaimType.ACQUIRER,
-              amount: vtReceived,
+              amount: claimAmount,
               status: ClaimStatus.PENDING,
               transaction: { id: tx.id },
-              multiplier,
+              multiplier: vaultMultiplier,
             })
           );
         }
 
         if (acquirerClaims.length > 0) {
-          const minMultiplier = Math.min(...(acquirerClaims as any[]).map((c: any) => c.multiplier));
-          for (const claim of acquirerClaims) {
-            const tx = acquisitionTransactions.find(t => t.id === (claim as any).transaction.id);
-            (claim as any).amount = minMultiplier * tx.amount * 1_000_000;
-            (claim as any).multiplier = minMultiplier;
-          }
           await this.claimRepository.save(acquirerClaims);
         }
 
-        // For acquire-only: no asset multipliers, empty distributions
-        const acquireMultiplier: [string, string | null, number][] = [];
+        // For acquire-only: asset multipliers for ADA (empty policy/name for ADA)
+        const acquireMultiplier: [string, string | null, number][] =
+          vaultMultiplier > 0 ? [['', '', vaultMultiplier]] : [];
         const adaDistribution: [string, string | null, number][] = [];
 
         const response = await this.vaultManagingService.updateVaultMetadataTx({
