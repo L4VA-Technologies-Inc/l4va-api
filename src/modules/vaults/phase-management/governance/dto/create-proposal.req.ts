@@ -122,14 +122,14 @@ export class MarketplaceActionDto {
   assetId: string;
 
   @ApiProperty({
-    description: 'Action type: BUY, SELL, UNLIST, or UPDATE_LISTING',
+    description: 'Action type: BUY, OFFER, SELL, UNLIST, or UPDATE_LISTING',
     enum: ExecType,
   })
   @IsEnum(ExecType)
   exec: ExecType;
 
   @ApiProperty({
-    description: 'Asset name to buy',
+    description: 'NFT display name for WayUp lookup (required for BUY and OFFER)',
     required: false,
   })
   @IsOptional()
@@ -172,7 +172,7 @@ export class MarketplaceActionDto {
   method?: MethodType;
 
   @ApiProperty({
-    description: 'Price in ADA (for SELL)',
+    description: 'Price in ADA: listing price (SELL), max willing to pay (BUY), or offer amount (OFFER)',
     required: false,
   })
   @IsOptional()
@@ -242,7 +242,7 @@ export class MarketplaceActionDto {
   }>;
 
   @ApiProperty({
-    description: 'NFT metadata snapshot at proposal creation time (auto-populated for BUY actions)',
+    description: 'NFT metadata snapshot at proposal creation time (auto-populated for BUY and OFFER actions)',
     required: false,
   })
   @IsOptional()
@@ -364,7 +364,7 @@ export class CreateProposalReq {
   distributionLovelaceAmount?: number;
 
   @ApiProperty({
-    description: 'Marketplace actions for buy/sell proposals',
+    description: 'Marketplace actions for marketplace proposals (buy, offer, sell, unlist, update)',
     type: [MarketplaceActionDto],
     required: false,
   })

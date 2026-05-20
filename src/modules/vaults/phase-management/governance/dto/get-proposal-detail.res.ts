@@ -214,7 +214,10 @@ export class MarketplaceActionDetailDto {
   assetId: string;
 
   @Expose()
-  @ApiProperty({ description: 'Action type: BUY, SELL, UNLIST, or UPDATE_LISTING', example: 'SELL' })
+  @ApiProperty({
+    description: 'Action type: BUY, OFFER, SELL, UNLIST, or UPDATE_LISTING',
+    example: 'SELL',
+  })
   exec: string;
 
   @Expose()

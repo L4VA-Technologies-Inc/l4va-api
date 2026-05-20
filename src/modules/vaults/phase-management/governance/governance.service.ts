@@ -954,6 +954,24 @@ export class GovernanceService {
                   );
                 }
 
+                const existingOfferedAsset = await this.assetRepository.findOne({
+                  where: {
+                    vault: { id: vaultId },
+                    policy_id: exactAsset.policyId,
+                    asset_id: exactAsset.assetName,
+                    status: AssetStatus.OFFERED,
+                    deleted: false,
+                  },
+                  select: ['id', 'name'],
+                });
+
+                if (existingOfferedAsset) {
+                  throw new BadRequestException(
+                    `An active offer already exists in this vault for NFT ${displayName}. ` +
+                      `Wait until the offer is accepted, cancelled, or removed before creating a new offer proposal.`
+                  );
+                }
+
                 const offerPriceAda = parseFloat(action.price);
                 const currentListingPriceAda = exactAsset.listing ? exactAsset.listing.price / 1_000_000 : null;
 

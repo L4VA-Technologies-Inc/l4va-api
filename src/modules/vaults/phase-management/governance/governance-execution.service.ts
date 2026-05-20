@@ -563,6 +563,14 @@ export class GovernanceExecutionService {
         return;
       }
 
+      // Check if this is a handled rejection due to skipped offer operations
+      if (error.message === 'PROPOSAL_REJECTED_OFFER_OPERATION_SKIPPED') {
+        this.logger.log(
+          `Proposal ${proposalId}: REJECTED - One or more offer operations could not be executed (NFT not found or invalid)`
+        );
+        return;
+      }
+
       // Check if this is a handled rejection due to insufficient treasury ADA for buys
       if (error.message === 'PROPOSAL_REJECTED_INSUFFICIENT_TREASURY_ADA') {
         this.logger.log(
@@ -670,6 +678,7 @@ export class GovernanceExecutionService {
         error.message === 'PROPOSAL_REJECTED_ASSETS_NOT_LOCKED' ||
         error.message === 'PROPOSAL_REJECTED_PRICE_EXCEEDED' ||
         error.message === 'PROPOSAL_REJECTED_BUY_OPERATION_SKIPPED' ||
+        error.message === 'PROPOSAL_REJECTED_OFFER_OPERATION_SKIPPED' ||
         error.message === 'PROPOSAL_REJECTED_INSUFFICIENT_TREASURY_ADA'
       ) {
         throw error;
@@ -1019,7 +1028,7 @@ export class GovernanceExecutionService {
       // If any offer was requested but skipped — reject entire proposal
       if (operations.offers.length > 0 && skipped.offers.length > 0) {
         const reason = `Cannot execute all offer operations: ${skipped.offers.join(', ')}`;
-        await this.rejectMarketplaceProposal(proposal, reason, 'PROPOSAL_REJECTED_BUY_OPERATION_SKIPPED');
+        await this.rejectMarketplaceProposal(proposal, reason, 'PROPOSAL_REJECTED_OFFER_OPERATION_SKIPPED');
       }
 
       // Log skipped operations
@@ -2112,6 +2121,8 @@ export class GovernanceExecutionService {
         'This marketplace proposal cannot be executed because all requested operations became invalid (assets already listed/unlisted or not available).',
       PRICE_EXCEEDED:
         'One or more NFTs now have a listing price higher than the maximum price specified in the proposal.',
+      OFFER_OPERATION_SKIPPED:
+        'One or more offer operations could not be executed (NFT not found on WayUp or invalid offer price).',
       CONTRACT_ERROR: 'Smart contract validation error.',
       EXECUTION_ERROR: 'Unexpected error. Review details or contact support.',
     };
@@ -2223,6 +2234,14 @@ export class GovernanceExecutionService {
       errorMessage.toLowerCase().includes('price exceeded')
     ) {
       return 'PRICE_EXCEEDED';
+    }
+
+    // Offer operations skipped at execution
+    if (
+      errorMessage.toLowerCase().includes('cannot execute all offer operations') ||
+      errorMessage.includes('PROPOSAL_REJECTED_OFFER_OPERATION_SKIPPED')
+    ) {
+      return 'OFFER_OPERATION_SKIPPED';
     }
 
     // Contract/Smart contract errors
