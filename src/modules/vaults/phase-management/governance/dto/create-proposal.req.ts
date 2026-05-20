@@ -101,6 +101,7 @@ export class MarketplaceAssetDto {
 export enum ExecType {
   BUY = 'BUY',
   OFFER = 'OFFER',
+  CANCEL_OFFER = 'CANCEL_OFFER',
   SELL = 'SELL',
   UNLIST = 'UNLIST',
   UPDATE_LISTING = 'UPDATE_LISTING',
@@ -122,7 +123,7 @@ export class MarketplaceActionDto {
   assetId: string;
 
   @ApiProperty({
-    description: 'Action type: BUY, OFFER, SELL, UNLIST, or UPDATE_LISTING',
+    description: 'Action type: BUY, OFFER, CANCEL_OFFER, SELL, UNLIST, or UPDATE_LISTING',
     enum: ExecType,
   })
   @IsEnum(ExecType)
@@ -242,7 +243,8 @@ export class MarketplaceActionDto {
   }>;
 
   @ApiProperty({
-    description: 'NFT metadata snapshot at proposal creation time (auto-populated for BUY and OFFER actions)',
+    description:
+      'NFT metadata snapshot at proposal creation time (auto-populated for BUY, OFFER, and CANCEL_OFFER actions)',
     required: false,
   })
   @IsOptional()
@@ -364,7 +366,7 @@ export class CreateProposalReq {
   distributionLovelaceAmount?: number;
 
   @ApiProperty({
-    description: 'Marketplace actions for marketplace proposals (buy, offer, sell, unlist, update)',
+    description: 'Marketplace actions for marketplace proposals (buy, offer, cancel offer, sell, unlist, update)',
     type: [MarketplaceActionDto],
     required: false,
   })

@@ -510,6 +510,10 @@ export class GovernanceService {
           .filter(action => action.exec === ExecType.OFFER)
           .map(action => action.assetId);
 
+        const requestedCancelOfferAssetIds = requestedActions
+          .filter(action => action.exec === ExecType.CANCEL_OFFER)
+          .map(action => action.assetId);
+
         const activeMarketProposals = await this.proposalRepository.find({
           where: {
             vaultId,
@@ -524,7 +528,7 @@ export class GovernanceService {
           // Check DB assets (SELL / UNLIST / UPDATE_LISTING)
           if (requestedAssetIds.length > 0) {
             const existingDbAssetIds = existingActions
-              .filter((a: any) => a.exec !== ExecType.BUY)
+              .filter((a: any) => a.exec !== ExecType.BUY && a.exec !== ExecType.OFFER)
               .map((a: any) => a.assetId);
 
             const overlapping = requestedAssetIds.filter(id => existingDbAssetIds.includes(id));
@@ -558,6 +562,28 @@ export class GovernanceService {
               throw new BadRequestException(
                 `Cannot create proposal. Some NFTs already have an active buy or offer proposal "${existingProposal.title}". ` +
                   `Please wait for that proposal to complete before creating a new one for these NFTs.`
+              );
+            }
+          }
+
+          // Check CANCEL_OFFER assets — one active cancel-offer proposal per offered asset
+          if (requestedCancelOfferAssetIds.length > 0) {
+            const existingCancelOfferAssetIds = existingActions
+              .filter((a: any) => a.exec === ExecType.CANCEL_OFFER)
+              .map((a: any) => a.assetId);
+
+            const overlapping = requestedCancelOfferAssetIds.filter(id => existingCancelOfferAssetIds.includes(id));
+
+            if (overlapping.length > 0) {
+              const records = await this.assetRepository.find({
+                where: { id: In(overlapping) },
+                select: ['id', 'name'],
+              });
+              const assetNames = records.map(a => a.name || a.id).join(', ');
+
+              throw new BadRequestException(
+                `Cannot create cancel-offer proposal. The following assets already have an active cancel-offer proposal "${existingProposal.title}": ${assetNames}. ` +
+                  `Please wait for that proposal to complete before creating a new one for these assets.`
               );
             }
           }
@@ -987,11 +1013,73 @@ export class GovernanceService {
               return;
             }
 
-            const asset: Pick<Asset, 'id' | 'status' | 'type' | 'policy_id' | 'asset_id' | 'quantity' | 'name'> =
-              await this.assetRepository.findOne({
-                where: { id: action.assetId },
-                select: ['id', 'status', 'type', 'policy_id', 'asset_id', 'quantity', 'name'],
+            // CANCEL_OFFER actions cancel an existing vault offer (DB asset with OFFERED status)
+            if (action.exec === ExecType.CANCEL_OFFER) {
+              if (market !== 'WayUp') {
+                throw new BadRequestException('CANCEL_OFFER is only supported on WayUp marketplace');
+              }
+
+              const offeredAsset = await this.assetRepository.findOne({
+                where: { id: action.assetId, vault: { id: vaultId }, deleted: false },
+                select: [
+                  'id',
+                  'status',
+                  'type',
+                  'policy_id',
+                  'asset_id',
+                  'quantity',
+                  'name',
+                  'image',
+                  'metadata',
+                  'listing_tx_hash',
+                  'listing_price',
+                  'floor_price',
+                ],
               });
+
+              if (!offeredAsset) {
+                throw new BadRequestException(`Asset with ID ${action.assetId} not found`);
+              }
+
+              if (offeredAsset.type !== AssetType.NFT) {
+                throw new BadRequestException(
+                  `CANCEL_OFFER only supports NFT assets. Asset ${action.assetId} is not an NFT.`
+                );
+              }
+
+              if (offeredAsset.status !== AssetStatus.OFFERED) {
+                throw new BadRequestException(
+                  `Asset "${offeredAsset.name || action.assetId}" is not in OFFERED status. Only active offers can be cancelled.`
+                );
+              }
+
+              if (!offeredAsset.listing_tx_hash) {
+                throw new BadRequestException(
+                  `Asset "${offeredAsset.name || action.assetId}" is missing offer transaction reference. Cannot create cancel-offer proposal.`
+                );
+              }
+
+              const offerPriceAda = Number(offeredAsset.listing_price ?? offeredAsset.floor_price ?? 0);
+
+              action.nftSnapshot = {
+                name: offeredAsset.name || offeredAsset.metadata?.name || 'Unknown NFT',
+                image: offeredAsset.image ?? null,
+                listingPriceAda: offerPriceAda,
+                policyId: offeredAsset.policy_id,
+                assetName: offeredAsset.asset_id,
+                collectionName: null,
+              };
+
+              return;
+            }
+
+            const asset: Pick<
+              Asset,
+              'id' | 'status' | 'type' | 'policy_id' | 'asset_id' | 'quantity' | 'name' | 'listing_tx_hash'
+            > = await this.assetRepository.findOne({
+              where: { id: action.assetId },
+              select: ['id', 'status', 'type', 'policy_id', 'asset_id', 'quantity', 'name', 'listing_tx_hash'],
+            });
 
             if (!asset) {
               throw new BadRequestException(`Asset with ID ${action.assetId} not found`);
@@ -1724,9 +1812,10 @@ export class GovernanceService {
     const marketplaceActions = (proposal.metadata?.marketplaceActions || []).map(action => {
       const isBuy = action.exec === 'BUY';
       const isOffer = action.exec === 'OFFER';
+      const isCancelOffer = action.exec === 'CANCEL_OFFER';
       const isSwapAction = action.slippage !== undefined || action.market === 'DexHunter';
 
-      if (isBuy || isOffer) {
+      if (isBuy || isOffer || isCancelOffer) {
         let wayupUrl: string | undefined;
         if (!isSwapAction && action.nftSnapshot) {
           wayupUrl = `https://www.wayup.io/collection/${action.nftSnapshot.policyId}/asset/${action.nftSnapshot.assetName}?tab=activity`;
@@ -2702,6 +2791,44 @@ export class GovernanceService {
     } catch (error) {
       this.logger.error(`Error getting assets for buy-sell proposals for vault ${vaultId}: ${error.message}`);
       throw new InternalServerErrorException('Error getting assets for buying/selling');
+    }
+  }
+
+  async getAssetsToCancelOffer(vaultId: string): Promise<AssetBuySellDto[]> {
+    try {
+      const assets = await this.assetRepository.find({
+        where: {
+          vault: { id: vaultId },
+          type: AssetType.NFT,
+          status: AssetStatus.OFFERED,
+          deleted: false,
+        },
+        select: [
+          'id',
+          'name',
+          'policy_id',
+          'asset_id',
+          'quantity',
+          'dex_price',
+          'floor_price',
+          'image',
+          'metadata',
+          'type',
+          'listing_market',
+          'listing_price',
+          'listing_tx_hash',
+          'listed_at',
+        ],
+      });
+
+      const cancellableOffers = assets.filter(asset => !!asset.listing_tx_hash);
+
+      return plainToInstance(AssetBuySellDto, cancellableOffers, {
+        excludeExtraneousValues: true,
+      });
+    } catch (error) {
+      this.logger.error(`Error getting assets to cancel offer for vault ${vaultId}: ${error.message}`);
+      throw new InternalServerErrorException('Error getting assets for cancel-offer proposals');
     }
   }
 

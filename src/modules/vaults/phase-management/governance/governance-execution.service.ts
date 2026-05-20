@@ -737,6 +737,7 @@ export class GovernanceExecutionService {
     const dbAssetIds = [
       ...(operations.sells?.map(opt => opt.assetId) || []),
       ...(operations.unlists?.map(opt => opt.assetId) || []),
+      ...(operations.cancelOffers?.map(opt => opt.assetId) || []),
       ...(operations.updates?.map(opt => opt.assetId) || []),
     ];
 
@@ -759,7 +760,7 @@ export class GovernanceExecutionService {
     try {
       this.logger.log(
         `Processing ${operations.sells.length} sell(s), ${operations.buys.length} buy(s), ` +
-          `${operations.offers.length} offer(s), ${operations.unlists.length} unlist(s), ` +
+          `${operations.offers.length} offer(s), ${operations.cancelOffers.length} cancel-offer(s), ${operations.unlists.length} unlist(s), ` +
           `and ${operations.updates.length} update(s) for WayUp`
       );
 
@@ -769,6 +770,8 @@ export class GovernanceExecutionService {
       const assetsToExtract: string[] = [];
       const unlistings: { policyId: string; assetName: string; txHashIndex: string }[] = [];
       const unlistedAssetIds: string[] = [];
+      const unlistOffers: { policyId: string; txHashIndex: string }[] = [];
+      const cancelledOfferAssetIds: string[] = [];
       const updates: { policyId: string; assetName: string; txHashIndex: string; newPriceAda: number }[] = [];
       const updateAssetInfos: { assetId: string; newPrice: number }[] = [];
       const purchases: {
@@ -790,10 +793,18 @@ export class GovernanceExecutionService {
         metadata?: any;
       }[] = [];
 
-      const skipped: { sells: string[]; buys: string[]; offers: string[]; unlists: string[]; updates: string[] } = {
+      const skipped: {
+        sells: string[];
+        buys: string[];
+        offers: string[];
+        cancelOffers: string[];
+        unlists: string[];
+        updates: string[];
+      } = {
         sells: [],
         buys: [],
         offers: [],
+        cancelOffers: [],
         unlists: [],
         updates: [],
       };
@@ -855,6 +866,26 @@ export class GovernanceExecutionService {
 
         unlistings.push({ policyId: asset.policy_id, assetName: asset.asset_id, txHashIndex });
         unlistedAssetIds.push(option.assetId);
+      }
+
+      // Process CANCEL_OFFER operations
+      for (const option of operations.cancelOffers) {
+        const asset = assetMap.get(option.assetId);
+        if (!asset) {
+          this.logger.warn(`Asset not found for cancel-offer assetId: ${option.assetId}`);
+          skipped.cancelOffers.push(option.assetId);
+          continue;
+        }
+
+        const txHashIndex = asset.listing_tx_hash;
+        if (!txHashIndex) {
+          this.logger.warn(`Cannot cancel offer - missing listing_tx_hash for ${asset.name}`);
+          skipped.cancelOffers.push(asset.name || option.assetId);
+          continue;
+        }
+
+        unlistOffers.push({ policyId: asset.policy_id, txHashIndex });
+        cancelledOfferAssetIds.push(option.assetId);
       }
 
       // Process UPDATE_LISTING operations
@@ -1031,6 +1062,12 @@ export class GovernanceExecutionService {
         await this.rejectMarketplaceProposal(proposal, reason, 'PROPOSAL_REJECTED_OFFER_OPERATION_SKIPPED');
       }
 
+      // If any cancel-offer was requested but skipped — reject entire proposal
+      if (operations.cancelOffers.length > 0 && skipped.cancelOffers.length > 0) {
+        const reason = `Cannot execute all cancel-offer operations: ${skipped.cancelOffers.join(', ')}`;
+        await this.rejectMarketplaceProposal(proposal, reason, 'PROPOSAL_REJECTED_OFFER_OPERATION_SKIPPED');
+      }
+
       // Log skipped operations
       if (skipped.sells.length > 0) {
         this.logger.warn(`Skipped ${skipped.sells.length} sell(s): ${skipped.sells.join(', ')}`);
@@ -1041,6 +1078,9 @@ export class GovernanceExecutionService {
       if (skipped.offers.length > 0) {
         this.logger.warn(`Skipped ${skipped.offers.length} offer(s): ${skipped.offers.join(', ')}`);
       }
+      if (skipped.cancelOffers.length > 0) {
+        this.logger.warn(`Skipped ${skipped.cancelOffers.length} cancel-offer(s): ${skipped.cancelOffers.join(', ')}`);
+      }
       if (skipped.unlists.length > 0) {
         this.logger.warn(`Skipped ${skipped.unlists.length} unlist(s): ${skipped.unlists.join(', ')}`);
       }
@@ -1050,13 +1090,19 @@ export class GovernanceExecutionService {
 
       // Check if there are any valid operations
       const hasOperations =
-        listings.length > 0 || unlistings.length > 0 || updates.length > 0 || purchases.length > 0 || offers.length > 0;
+        listings.length > 0 ||
+        unlistings.length > 0 ||
+        unlistOffers.length > 0 ||
+        updates.length > 0 ||
+        purchases.length > 0 ||
+        offers.length > 0;
 
       if (!hasOperations) {
         const totalSkipped =
           skipped.sells.length +
           skipped.buys.length +
           skipped.offers.length +
+          skipped.cancelOffers.length +
           skipped.unlists.length +
           skipped.updates.length;
         let reason = 'No valid marketplace operations to execute';
@@ -1077,6 +1123,9 @@ export class GovernanceExecutionService {
           }
           if (skipped.offers.length > 0) {
             reasons.push(`${skipped.offers.length} asset(s) could not be offered on`);
+          }
+          if (skipped.cancelOffers.length > 0) {
+            reasons.push(`${skipped.cancelOffers.length} offer(s) could not be cancelled`);
           }
           reason = `All operations skipped: ${reasons.join(', ')}`;
         }
@@ -1159,12 +1208,13 @@ export class GovernanceExecutionService {
       // STEP 2: Execute all marketplace actions in a single atomic transaction
       this.logger.log(
         `Executing combined marketplace actions: ${listings.length} listings, ${unlistings.length} unlistings, ` +
-          `${updates.length} updates, ${purchases.length} purchases, ${offers.length} offers`
+          `${unlistOffers.length} cancel-offers, ${updates.length} updates, ${purchases.length} purchases, ${offers.length} offers`
       );
 
       const result = await this.wayUpService.executeCombinedMarketplaceActions(proposal.vaultId, {
         listings: listings.length > 0 ? listings : undefined,
         unlistings: unlistings.length > 0 ? unlistings : undefined,
+        unlistOffers: unlistOffers.length > 0 ? unlistOffers : undefined,
         updates: updates.length > 0 ? updates : undefined,
         purchases: purchases.length > 0 ? purchases : undefined,
         offers: offers.length > 0 ? offers : undefined,
@@ -1198,6 +1248,25 @@ export class GovernanceExecutionService {
           this.logger.log(`Marked ${unlistedAssetIds.length} asset(s) as EXTRACTED (unlisted)`);
         } catch (statusError) {
           this.logger.warn(`Failed to update asset statuses to EXTRACTED: ${statusError.message}`);
+        }
+      }
+
+      // Update cancelled offers
+      if (unlistOffers.length > 0) {
+        try {
+          await this.assetRepository.update(
+            { id: In(cancelledOfferAssetIds) },
+            {
+              status: AssetStatus.EXTRACTED,
+              listing_tx_hash: null,
+              listing_market: null,
+              listing_price: null,
+              listed_at: null,
+            }
+          );
+          this.logger.log(`Marked ${cancelledOfferAssetIds.length} asset(s) as EXTRACTED (offer cancelled)`);
+        } catch (statusError) {
+          this.logger.warn(`Failed to update cancelled offer asset statuses: ${statusError.message}`);
         }
       }
 
@@ -1244,7 +1313,7 @@ export class GovernanceExecutionService {
       if (offers.length > 0) {
         for (const offer of offers) {
           try {
-            await this.assetsService.recordBoughtAsset({
+            const offeredAsset = await this.assetsService.recordBoughtAsset({
               vaultId: proposal.vaultId,
               policyId: offer.policyId,
               assetId: offer.assetName,
@@ -1254,6 +1323,15 @@ export class GovernanceExecutionService {
               metadata: offer.metadata,
               status: AssetStatus.OFFERED,
             });
+            await this.assetRepository.update(
+              { id: offeredAsset.id },
+              {
+                listing_market: 'wayup',
+                listing_price: offer.priceAda,
+                listing_tx_hash: result.txHash,
+                listed_at: new Date(),
+              }
+            );
             this.logger.log(`Recorded offered asset "${offer.name}" (${offer.policyId}) to vault ${proposal.vaultId}`);
           } catch (recordError) {
             this.logger.warn(`Failed to record offered asset "${offer.name}": ${recordError.message}`);
@@ -1749,6 +1827,7 @@ export class GovernanceExecutionService {
       sells: MarketplaceActionDto[];
       buys: MarketplaceActionDto[];
       offers: MarketplaceActionDto[];
+      cancelOffers: MarketplaceActionDto[];
       unlists: MarketplaceActionDto[];
       updates: MarketplaceActionDto[];
     }
@@ -1759,6 +1838,7 @@ export class GovernanceExecutionService {
         sells: MarketplaceActionDto[];
         buys: MarketplaceActionDto[];
         offers: MarketplaceActionDto[];
+        cancelOffers: MarketplaceActionDto[];
         unlists: MarketplaceActionDto[];
         updates: MarketplaceActionDto[];
       }
@@ -1767,7 +1847,7 @@ export class GovernanceExecutionService {
     for (const option of options) {
       const market = (option.market || 'wayup').toLowerCase(); // Normalize to lowercase
       if (!grouped[market]) {
-        grouped[market] = { sells: [], buys: [], offers: [], unlists: [], updates: [] };
+        grouped[market] = { sells: [], buys: [], offers: [], cancelOffers: [], unlists: [], updates: [] };
       }
 
       if (option.exec === ExecType.SELL) {
@@ -1776,6 +1856,8 @@ export class GovernanceExecutionService {
         grouped[market].buys.push(option);
       } else if (option.exec === ExecType.OFFER) {
         grouped[market].offers.push(option);
+      } else if (option.exec === ExecType.CANCEL_OFFER) {
+        grouped[market].cancelOffers.push(option);
       } else if (option.exec === ExecType.UNLIST) {
         grouped[market].unlists.push(option);
       } else if (option.exec === ExecType.UPDATE_LISTING) {

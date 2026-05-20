@@ -142,6 +142,18 @@ export class GovernanceController {
     return await this.governanceService.getAssetsToList(vaultId);
   }
 
+  @Get('vaults/:vaultId/assets/cancel-offer')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Get assets available for cancel-offer proposals' })
+  @ApiResponse({
+    status: 200,
+    description: 'List of offered assets that can be cancelled',
+    type: [AssetBuySellDto],
+  })
+  async getAssetsToCancelOffer(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<AssetBuySellDto[]> {
+    return this.governanceService.getAssetsToCancelOffer(vaultId);
+  }
+
   @Get('vaults/:vaultId/assets/unlist')
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Get assets available for unlisting proposals' })
