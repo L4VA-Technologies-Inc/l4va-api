@@ -14,7 +14,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
-import { In, IsNull, Not, Repository } from 'typeorm';
+import { Brackets, In, IsNull, Not, Repository } from 'typeorm';
 
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from '../../processing-tx/onchain/blockchain.service';
@@ -44,6 +44,7 @@ import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
+import { PaginatedResponseDto } from '@/modules/vaults/dto/paginated-response.dto';
 import { GetAssetsToListRes } from '@/modules/vaults/phase-management/governance/dto/get-assets-to-list.res';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
@@ -2794,41 +2795,72 @@ export class GovernanceService {
     }
   }
 
-  async getAssetsToCancelOffer(vaultId: string): Promise<AssetBuySellDto[]> {
+  async getOffersToCancel(
+    vaultId: string,
+    page: number = 1,
+    limit: number = 10,
+    search?: string
+  ): Promise<PaginatedResponseDto<AssetBuySellDto>> {
     try {
-      const assets = await this.assetRepository.find({
-        where: {
-          vault: { id: vaultId },
-          type: AssetType.NFT,
-          status: AssetStatus.OFFERED,
-          deleted: false,
-        },
-        select: [
-          'id',
-          'name',
-          'policy_id',
-          'asset_id',
-          'quantity',
-          'dex_price',
-          'floor_price',
-          'image',
-          'metadata',
-          'type',
-          'listing_market',
-          'listing_price',
-          'listing_tx_hash',
-          'listed_at',
-        ],
-      });
+      const safePage = page > 0 ? page : 1;
+      const safeLimit = limit > 0 ? limit : 10;
+      const skip = (safePage - 1) * safeLimit;
 
-      const cancellableOffers = assets.filter(asset => !!asset.listing_tx_hash);
+      const query = this.assetRepository
+        .createQueryBuilder('asset')
+        .where('asset.vault_id = :vaultId', { vaultId })
+        .andWhere('asset.type = :type', { type: AssetType.NFT })
+        .andWhere('asset.status = :status', { status: AssetStatus.OFFERED })
+        .andWhere('asset.deleted = :deleted', { deleted: false })
+        .andWhere('asset.listing_tx_hash IS NOT NULL');
 
-      return plainToInstance(AssetBuySellDto, cancellableOffers, {
+      const trimmedSearch = search?.trim();
+      if (trimmedSearch) {
+        query.andWhere(
+          new Brackets(qb => {
+            qb.where('asset.name ILIKE :search', { search: `%${trimmedSearch}%` })
+              .orWhere('asset.policy_id ILIKE :search', { search: `%${trimmedSearch}%` })
+              .orWhere('asset.asset_id ILIKE :search', { search: `%${trimmedSearch}%` });
+          })
+        );
+      }
+
+      const [assets, total] = await query
+        .select([
+          'asset.id',
+          'asset.name',
+          'asset.policy_id',
+          'asset.asset_id',
+          'asset.quantity',
+          'asset.dex_price',
+          'asset.floor_price',
+          'asset.image',
+          'asset.metadata',
+          'asset.type',
+          'asset.listing_market',
+          'asset.listing_price',
+          'asset.listing_tx_hash',
+          'asset.listed_at',
+        ])
+        .orderBy('asset.listed_at', 'DESC')
+        .skip(skip)
+        .take(safeLimit)
+        .getManyAndCount();
+
+      const items = plainToInstance(AssetBuySellDto, assets, {
         excludeExtraneousValues: true,
       });
+
+      return {
+        items,
+        total,
+        page: safePage,
+        limit: safeLimit,
+        totalPages: Math.ceil(total / safeLimit) || 0,
+      };
     } catch (error) {
-      this.logger.error(`Error getting assets to cancel offer for vault ${vaultId}: ${error.message}`);
-      throw new InternalServerErrorException('Error getting assets for cancel-offer proposals');
+      this.logger.error(`Error getting offers to cancel for vault ${vaultId}: ${error.message}`);
+      throw new InternalServerErrorException('Error getting offers to cancel');
     }
   }
 

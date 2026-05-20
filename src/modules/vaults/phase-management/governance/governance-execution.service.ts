@@ -1251,7 +1251,7 @@ export class GovernanceExecutionService {
         }
       }
 
-      // Update cancelled offers
+      // Update canceled offers
       if (unlistOffers.length > 0) {
         try {
           await this.assetRepository.update(

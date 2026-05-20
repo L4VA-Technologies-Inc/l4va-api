@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { DistributionService } from './distribution.service';
@@ -7,6 +7,7 @@ import { CreateProposalRes } from './dto/create-proposal.res';
 import { GetDistributionInfoRes } from './dto/distribution.dto';
 import { GetAssetsToListRes } from './dto/get-assets-to-list.res';
 import { GetAssetsToStakeRes } from './dto/get-assets-to-stake.res';
+import { GetOffersToCancelDto, PaginatedOffersToCancelResponseDto } from './dto/get-offers-to-cancel.dto';
 import { GetProposalDetailRes } from './dto/get-proposal-detail.res';
 import { GetProposalsRes, GetProposalsResItem } from './dto/get-proposal.dto';
 import { GetVotingPowerRes } from './dto/get-voting-power.res';
@@ -23,6 +24,7 @@ import { GovernanceService } from './governance.service';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
 import { OptionalAuthGuard } from '@/modules/auth/optional-auth.guard';
+import { PaginatedResponseDto } from '@/modules/vaults/dto/paginated-response.dto';
 import {
   AssetBuySellDto,
   GetTerminationAssetsDto,
@@ -142,16 +144,23 @@ export class GovernanceController {
     return await this.governanceService.getAssetsToList(vaultId);
   }
 
-  @Get('vaults/:vaultId/assets/cancel-offer')
+  @Get('vaults/:vaultId/offers-to-cancel')
   @UseGuards(AuthGuard)
-  @ApiOperation({ summary: 'Get assets available for cancel-offer proposals' })
+  @ApiOperation({
+    summary: 'Get offers available for CANCEL_OFFER proposals',
+    description:
+      'Returns paginated active vault offers (OFFERED status) that can be cancelled via governance. Supports search by name, policy ID, or asset ID.',
+  })
   @ApiResponse({
     status: 200,
-    description: 'List of offered assets that can be cancelled',
-    type: [AssetBuySellDto],
+    description: 'Paginated list of offers to cancel',
+    type: PaginatedOffersToCancelResponseDto,
   })
-  async getAssetsToCancelOffer(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<AssetBuySellDto[]> {
-    return this.governanceService.getAssetsToCancelOffer(vaultId);
+  async getOffersToCancel(
+    @Param('vaultId', ParseUUIDPipe) vaultId: string,
+    @Query() query: GetOffersToCancelDto
+  ): Promise<PaginatedResponseDto<AssetBuySellDto>> {
+    return this.governanceService.getOffersToCancel(vaultId, query.page, query.limit, query.search);
   }
 
   @Get('vaults/:vaultId/assets/unlist')
