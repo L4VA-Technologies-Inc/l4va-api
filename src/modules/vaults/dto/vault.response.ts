@@ -679,6 +679,17 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   acquirePhaseStart?: string;
 
+  @ApiProperty({
+    description: 'Whether vault is acquire-only (skips contribution phase)',
+    type: Boolean,
+    default: false,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'isAcquireOnly' },
+  })
+  isAcquireOnly: boolean;
+
   @ApiProperty({ description: 'Expansion phase start time', required: false })
   @DtoRepresent({
     transform: ({ value }) => (value ? new Date(value).toISOString() : null),

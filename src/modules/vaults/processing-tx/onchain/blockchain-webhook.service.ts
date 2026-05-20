@@ -18,7 +18,7 @@ import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { ClaimStatus } from '@/types/claim.types';
 import { RewardActivityType } from '@/types/rewards.types';
 import { TransactionStatus, TransactionType } from '@/types/transaction.types';
-import { ContributionWindowType, VaultStatus } from '@/types/vault.types';
+import { ContributionWindowType, InvestmentWindowType, VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class BlockchainWebhookService {
@@ -408,9 +408,24 @@ export class BlockchainWebhookService {
    */
   private async handleCreateVaultConfirmation(vaultId: string): Promise<void> {
     try {
-      const vault = await this.vaultRepository.findOne({
+      const vault: Pick<
+        Vault,
+        | 'id'
+        | 'vault_status'
+        | 'contribution_open_window_type'
+        | 'acquire_open_window_type'
+        | 'is_acquire_only'
+        | 'name'
+      > = await this.vaultRepository.findOne({
         where: { id: vaultId },
-        select: ['id', 'vault_status', 'contribution_open_window_type', 'name'],
+        select: [
+          'id',
+          'vault_status',
+          'contribution_open_window_type',
+          'acquire_open_window_type',
+          'is_acquire_only',
+          'name',
+        ],
       });
 
       if (!vault) {
@@ -418,22 +433,41 @@ export class BlockchainWebhookService {
         return;
       }
 
-      // Only transition if vault is published and has uponVaultLaunch type
-      if (
-        vault.vault_status === VaultStatus.published &&
-        vault.contribution_open_window_type === ContributionWindowType.uponVaultLaunch
-      ) {
-        await this.vaultRepository.update(
-          { id: vaultId },
-          {
-            vault_status: VaultStatus.contribution,
-            contribution_phase_start: new Date(),
-          }
-        );
+      // Only transition if vault is published and has uponVaultLaunch type.
+      // Acquire-only vaults skip contribution and move directly into acquire phase.
+      if (vault.vault_status === VaultStatus.published) {
+        const transitionTimestamp = new Date();
 
-        this.logger.log(
-          `WH: Vault "${vault.name}" (${vaultId}) transitioned to contribution phase on createVault confirmation`
-        );
+        if (vault.is_acquire_only) {
+          if (vault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
+            await this.vaultRepository.update(
+              { id: vaultId },
+              {
+                vault_status: VaultStatus.acquire,
+                acquire_phase_start: transitionTimestamp,
+              }
+            );
+
+            this.logger.log(
+              `WH: Vault "${vault.name}" (${vaultId}) transitioned to acquire phase on createVault confirmation`
+            );
+            return;
+          }
+        } else {
+          if (vault.contribution_open_window_type !== ContributionWindowType.uponVaultLaunch) {
+            await this.vaultRepository.update(
+              { id: vaultId },
+              {
+                vault_status: VaultStatus.contribution,
+                contribution_phase_start: transitionTimestamp,
+              }
+            );
+
+            this.logger.log(
+              `WH: Vault "${vault.name}" (${vaultId}) transitioned to contribution phase on createVault confirmation`
+            );
+          }
+        }
       }
     } catch (error) {
       this.logger.error(`WH: Failed to handle createVault confirmation for vault ${vaultId}: ${error.message}`);

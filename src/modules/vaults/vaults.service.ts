@@ -340,13 +340,14 @@ export class VaultsService {
       const acquireOpenWindowTime = data.acquireOpenWindowTime ? new Date(data.acquireOpenWindowTime) : null;
 
       // Prepare vault data
+      // For acquire-only vaults, exclude contribution-related fields (they skip contribution phase)
       const vaultData = transformToSnakeCase({
         ...data,
         owner: owner,
-        contributionDuration: data.contributionDuration,
+        contributionDuration: data.isAcquireOnly ? null : data.contributionDuration,
         acquireWindowDuration: data.acquireWindowDuration,
         acquireOpenWindowTime,
-        contributionOpenWindowTime,
+        contributionOpenWindowTime: data.isAcquireOnly ? null : contributionOpenWindowTime,
         timeElapsedIsEqualToTime: data.timeElapsedIsEqualToTime,
         vaultStatus: VaultStatus.created,
         vaultImage: vaultImg,
@@ -1129,9 +1130,24 @@ export class VaultsService {
     const lpMinLiquidityAda = lpMinLiquidityLovelace / 1_000_000;
     const lpMinLiquidityUsd = lpMinLiquidityAda * adaPrice;
 
-    // Calculate projected LP ADA if vault reaches 100% reserve threshold
-    const requireReservedCostAda =
-      assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01);
+    // Calculate reserve cost threshold
+    // For acquire-only vaults, use min_acquire_threshold if set, otherwise 0
+    // For normal vaults, calculate based on asset value and reserve percentages
+    let requireReservedCostAda: number;
+    let requireReservedCostUsd: number;
+
+    if (vault.is_acquire_only) {
+      // Acquire-only vault: use min_acquire_threshold (in lovelace) or 0 if not set
+      requireReservedCostAda = vault.min_acquire_threshold ? vault.min_acquire_threshold / 1_000_000 : 0;
+      requireReservedCostUsd = requireReservedCostAda * adaPrice;
+    } else {
+      // Normal vault: calculate based on asset value and percentages
+      requireReservedCostAda =
+        assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01);
+      requireReservedCostUsd =
+        assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01);
+    }
+
     // Use raw units for LP calculations (on-chain transactions need decimal-adjusted amounts)
     const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
     const ASSETS_OFFERED_PERCENT = vault.tokens_for_acquires * 0.01;
@@ -1153,8 +1169,7 @@ export class VaultsService {
 
     const additionalData = {
       maxContributeAssets: Number(vault.max_contribute_assets),
-      requireReservedCostUsd:
-        assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01),
+      requireReservedCostUsd,
       requireReservedCostAda,
       lpMinLiquidityAda,
       lpMinLiquidityUsd,
