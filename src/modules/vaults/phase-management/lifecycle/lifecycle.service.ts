@@ -1676,7 +1676,7 @@ export class LifecycleService {
       // Submit token metadata PR now that decimals are finalized
       try {
         this.logger.log(
-          `Submitting token metadata PR for vault ${vault.id} with finalized decimals: ${optimalDecimals}`
+          `Submitting token metadata PR for vault ${vault.id} with finalized decimals: ${vault.ft_token_decimals}`
         );
         await this.metadataRegistryApiService.submitVaultTokenMetadata(vault.id);
       } catch (metadataError) {
