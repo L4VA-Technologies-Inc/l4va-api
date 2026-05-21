@@ -80,14 +80,22 @@ export class RewardsController {
         ? [body as WidgetSwapItemData]
         : [];
 
+    // Find successful swap: if tx_hash exists, the swap was successful
+    // Also normalize field names for DexHunter compatibility (token_in/out → token_id_in/out)
     const successfulSwap = swaps.find(swap => {
-      const status = String(swap?.status ?? '').toLowerCase();
-      return !!swap?.tx_hash && (status === 'submitted' || status === 'success');
+      return !!swap?.tx_hash;
     });
 
     if (!successfulSwap) {
-      return { indexed: false, reason: 'swap not successful' };
+      return { indexed: false, reason: 'no transaction hash found' };
     }
+
+    // Normalize DexHunter field names for backward compatibility
+    const normalizedSwap = {
+      ...successfulSwap,
+      token_id_in: successfulSwap.token_id_in || (successfulSwap as any).token_in || '',
+      token_id_out: successfulSwap.token_id_out || (successfulSwap as any).token_out || '',
+    };
 
     // Extract policy IDs from token units (first 56 characters)
     const extractPolicyId = (tokenUnit: string): string | null => {
@@ -98,8 +106,8 @@ export class RewardsController {
       return tokenUnit.length >= 56 ? tokenUnit.substring(0, 56) : tokenUnit;
     };
 
-    const policyIdIn = extractPolicyId(successfulSwap.token_id_in);
-    const policyIdOut = extractPolicyId(successfulSwap.token_id_out);
+    const policyIdIn = extractPolicyId(normalizedSwap.token_id_in);
+    const policyIdOut = extractPolicyId(normalizedSwap.token_id_out);
 
     // Check if either token is a VT (matches a vault's policy_id)
     const policyIds = [policyIdIn, policyIdOut].filter(Boolean);
@@ -118,17 +126,17 @@ export class RewardsController {
 
     // Index VT swap event (vault-scoped)
     const event = await this.rewardEventProducer.indexEvent({
-      walletAddress: successfulSwap.user_address || req.user.address,
+      walletAddress: normalizedSwap.user_address || req.user.address,
       vaultId: vault.id,
       eventType: RewardActivityType.WIDGET_SWAP,
-      txHash: successfulSwap.tx_hash,
+      txHash: normalizedSwap.tx_hash,
       units: 1,
       metadata: {
-        dex: successfulSwap.dex,
-        tokenIn: successfulSwap.token_id_in,
-        tokenOut: successfulSwap.token_id_out,
-        amountIn: successfulSwap.amount_in,
-        expectedOutput: successfulSwap.expected_output,
+        dex: normalizedSwap.dex,
+        tokenIn: normalizedSwap.token_id_in,
+        tokenOut: normalizedSwap.token_id_out,
+        amountIn: normalizedSwap.amount_in,
+        expectedOutput: normalizedSwap.expected_output,
         vaultName: vault.name,
         vaultPolicyId: vault.script_hash,
       },
