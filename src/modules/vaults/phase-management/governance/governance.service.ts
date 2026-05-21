@@ -31,6 +31,7 @@ import { GovernanceFeeService } from './governance-fee.service';
 import { GovernanceRefundService } from './governance-refund.service';
 import { VoteCountingService } from './vote-counting.service';
 
+import { MIN_LP_LIQUIDITY_FOR_MARKET_EXPANSION } from '@/constants/expansion.constants';
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
@@ -1329,6 +1330,151 @@ export class GovernanceService {
           limitPrice: expansionPriceType === 'limit' ? expansionLimitPrice : undefined,
           currentAssetCount: 0,
         };
+
+        break;
+      }
+
+      case ProposalType.ACQUIRE_EXPANSION: {
+        // Validate acquire expansion fields
+        const {
+          acquireExpansionDuration,
+          acquireExpansionNoLimit,
+          acquireExpansionMaxAda,
+          acquireExpansionNoMax,
+          acquireExpansionPriceType,
+          acquireExpansionLimitPrice,
+        } = createProposalReq;
+
+        // Validate vault allows acquire expansion
+        const vaultForAcquireExpansionCheck = await this.vaultRepository.findOne({
+          where: { id: vaultId },
+          select: ['allow_acquire_expansion', 'policy_id', 'asset_vault_name', 'name'],
+        });
+
+        if (!vaultForAcquireExpansionCheck.allow_acquire_expansion) {
+          throw new BadRequestException(
+            'This vault does not allow acquire expansion proposals. Acquire expansion must be enabled during vault creation.'
+          );
+        }
+
+        // Validate that at least one limit is set
+        if (acquireExpansionNoLimit && acquireExpansionNoMax) {
+          throw new BadRequestException(
+            'At least one limit must be specified. You cannot have both "No Duration Limit" and "No Max ADA" enabled simultaneously.'
+          );
+        }
+
+        // Validate duration if no limit is not set
+        if (!acquireExpansionNoLimit && (!acquireExpansionDuration || acquireExpansionDuration <= 0)) {
+          throw new BadRequestException('Expansion duration is required when "No Limit" is not selected');
+        }
+
+        // Validate max ADA if no max is not set
+        if (!acquireExpansionNoMax && (!acquireExpansionMaxAda || acquireExpansionMaxAda <= 0)) {
+          throw new BadRequestException('Max ADA is required when "No Max" is not selected');
+        }
+
+        // Validate price type
+        if (!acquireExpansionPriceType || !['limit', 'market'].includes(acquireExpansionPriceType)) {
+          throw new BadRequestException('Price type must be either "limit" or "market"');
+        }
+
+        // Validate limit price if using limit pricing
+        if (acquireExpansionPriceType === 'limit') {
+          if (!acquireExpansionLimitPrice || acquireExpansionLimitPrice <= 0) {
+            throw new BadRequestException('Limit price is required when using limit pricing');
+          }
+
+          const MAX_LIMIT_PRICE = 1_000_000; // 1 million VT per 1 ADA
+          if (acquireExpansionLimitPrice > MAX_LIMIT_PRICE) {
+            throw new BadRequestException(
+              `Limit price cannot exceed ${MAX_LIMIT_PRICE.toLocaleString()} VT per 1 ADA. ` +
+                'Please set a reasonable price.'
+            );
+          }
+        }
+
+        // Validate market pricing requirements
+        if (acquireExpansionPriceType === 'market') {
+          // Check if vault has FT token configured (required for market pricing)
+          if (!vaultForAcquireExpansionCheck.policy_id || !vaultForAcquireExpansionCheck.asset_vault_name) {
+            throw new BadRequestException(
+              'Market pricing requires vault token configuration. Vault must have a policy_id and asset_vault_name.'
+            );
+          }
+
+          try {
+            const liquidityCheck = await this.dexHunterPricingService.checkTokenLiquidity(
+              `${vaultForAcquireExpansionCheck.policy_id}${vaultForAcquireExpansionCheck.asset_vault_name}`
+            );
+
+            if (!liquidityCheck || !liquidityCheck.hasLiquidity) {
+              throw new BadRequestException(
+                'Market pricing requires an active Liquidity Pool. ' +
+                  'No LP found on any DEX (checked MinSwap, VyFi, SundaeSwap, Spectrum). ' +
+                  'Please use limit pricing or create an LP first.'
+              );
+            }
+
+            // Check minimum liquidity (1000 ADA)
+            const minLiquidityAda = MIN_LP_LIQUIDITY_FOR_MARKET_EXPANSION / 1_000_000;
+            if (liquidityCheck.totalAdaLiquidity < minLiquidityAda) {
+              const dexList = liquidityCheck.pools.map(p => `${p.dex} (${p.adaAmount.toFixed(2)} ADA)`).join(', ');
+              throw new BadRequestException(
+                `Market pricing requires LP TVL of at least ${minLiquidityAda.toLocaleString()} ADA across all DEXes. ` +
+                  `Current total LP TVL: ${liquidityCheck.totalAdaLiquidity.toFixed(2)} ADA. ` +
+                  `Found on: ${dexList}. ` +
+                  'Please use limit pricing or wait for LP to accumulate more liquidity.'
+              );
+            }
+
+            // Log success with DEX details
+            const dexList = liquidityCheck.pools.map(p => p.dex).join(', ');
+            this.logger.log(
+              `Acquire expansion proposal validated: Vault ${vaultForAcquireExpansionCheck.name} has active LP on ${liquidityCheck.pools.length} DEX(es): ${dexList}. ` +
+                `Total TVL: ${liquidityCheck.totalAdaLiquidity.toFixed(2)} ADA`
+            );
+
+            // Store market price snapshot for display
+            const currentVtPrice = await this.dexHunterPricingService.getTokenPrice(
+              vaultForAcquireExpansionCheck.policy_id,
+              vaultForAcquireExpansionCheck.asset_vault_name
+            );
+
+            // Store acquire expansion config in metadata
+            proposal.metadata.acquireExpansion = {
+              duration: acquireExpansionNoLimit ? undefined : acquireExpansionDuration,
+              noLimit: acquireExpansionNoLimit || false,
+              maxAda: acquireExpansionNoMax ? undefined : acquireExpansionMaxAda,
+              noMax: acquireExpansionNoMax || false,
+              priceType: acquireExpansionPriceType,
+              limitPrice: acquireExpansionPriceType === 'limit' ? acquireExpansionLimitPrice : undefined,
+              currentAdaRaised: 0,
+              marketPriceSnapshot: currentVtPrice, // Store for display purposes only
+            };
+          } catch (error) {
+            // If it's already a BadRequestException, re-throw it
+            if (error instanceof BadRequestException) {
+              throw error;
+            }
+            // For other errors (API failures, etc), log and throw a user-friendly error
+            this.logger.error(`Error checking LP status for acquire expansion proposal: ${error.message}`, error.stack);
+            throw new BadRequestException(
+              'Unable to verify Liquidity Pool status. Please try again later or contact support.'
+            );
+          }
+        } else {
+          // Store acquire expansion config for limit pricing (no market price snapshot needed)
+          proposal.metadata.acquireExpansion = {
+            duration: acquireExpansionNoLimit ? undefined : acquireExpansionDuration,
+            noLimit: acquireExpansionNoLimit || false,
+            maxAda: acquireExpansionNoMax ? undefined : acquireExpansionMaxAda,
+            noMax: acquireExpansionNoMax || false,
+            priceType: acquireExpansionPriceType,
+            limitPrice: acquireExpansionPriceType === 'limit' ? acquireExpansionLimitPrice : undefined,
+            currentAdaRaised: 0,
+          };
+        }
 
         break;
       }

@@ -624,6 +624,16 @@ export class Vault {
   })
   min_acquire_threshold?: number;
 
+  @Expose({ name: 'allowAcquireExpansion' })
+  @Column({
+    name: 'allow_acquire_expansion',
+    type: 'boolean',
+    nullable: false,
+    default: false,
+    comment: 'If true, vault allows governance proposals for acquire expansion (ADA → VT minting).',
+  })
+  allow_acquire_expansion: boolean;
+
   @Exclude()
   @Column({
     name: 'script_hash',

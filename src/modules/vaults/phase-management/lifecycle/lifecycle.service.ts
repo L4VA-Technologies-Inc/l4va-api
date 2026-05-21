@@ -85,6 +85,7 @@ export class LifecycleService {
       await this.handleAcquireToGovernance(); // Handle acquire -> governance transitions
       await this.handleAcquireOnlyToLockedOrFailed(); // Handle acquire-only vault: acquire -> locked or failed
       await this.handleExpansionToLocked(); // Handle expansion -> locked transitions
+      await this.handleAcquireExpansionToLocked(); // Handle acquire expansion -> locked transitions
     } finally {
       this.isRunning = false;
     }
@@ -1873,6 +1874,191 @@ export class LifecycleService {
       if (currentAssetCount >= expansionConfig.assetMax) {
         this.logger.log(
           `Vault ${vault.id} reached expansion asset max: ${currentAssetCount}/${expansionConfig.assetMax}`
+        );
+        vaultsAtMax.push(vault);
+      }
+    }
+
+    return vaultsAtMax;
+  }
+
+  /**
+   * Handle transition from Expansion phase back to Locked (governance) phase for acquire expansion
+   * Runs periodically to check for vaults whose acquire expansion duration has expired OR max ADA is reached
+   * Calculates and creates claims for new acquirers during expansion
+   */
+  private async handleAcquireExpansionToLocked(): Promise<void> {
+    const now = new Date();
+
+    // Find vaults in expansion phase with active acquire expansion proposals whose duration has expired
+    const durationExpiredVaults: Pick<
+      Vault,
+      'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals' | 'ft_token_supply'
+    >[] = await this.vaultRepository
+      .createQueryBuilder('vault')
+      .where('vault.vault_status = :status', { status: VaultStatus.expansion })
+      .andWhere('vault.expansion_phase_start IS NOT NULL')
+      .andWhere('vault.expansion_duration IS NOT NULL')
+      .andWhere(`vault.expansion_phase_start + (vault.expansion_duration * interval '1 millisecond') <= :now`, { now })
+      .andWhere('vault.id NOT IN (:...processingIds)', {
+        processingIds:
+          this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'],
+      })
+      .select([
+        'vault.id',
+        'vault.vault_status',
+        'vault.expansion_phase_start',
+        'vault.vt_price',
+        'vault.ft_token_decimals',
+        'vault.ft_token_supply',
+      ])
+      .getMany();
+
+    // Filter for acquire expansion proposals only
+    const acquireExpansionDurationExpired = await this.filterVaultsWithAcquireExpansion(durationExpiredVaults);
+
+    if (acquireExpansionDurationExpired.length > 0) {
+      this.logger.log(
+        `Found ${acquireExpansionDurationExpired.length} vault(s) with expired acquire expansion phase: ${acquireExpansionDurationExpired.map(v => v.id).join(', ')}`
+      );
+    }
+
+    // Find vaults in expansion phase with active acquire expansion whose max ADA has been reached
+    const adaMaxReachedVaults = await this.findAcquireExpansionVaultsAtAdaMax();
+
+    // Combine both sets, removing duplicates
+    const acquireExpansionVaultsMap = new Map<
+      string,
+      Pick<
+        Vault,
+        'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals' | 'ft_token_supply'
+      >
+    >();
+    for (const vault of [...acquireExpansionDurationExpired, ...adaMaxReachedVaults]) {
+      acquireExpansionVaultsMap.set(vault.id, vault);
+    }
+    const acquireExpansionVaults = Array.from(acquireExpansionVaultsMap.values());
+
+    for (const vault of acquireExpansionVaults) {
+      // Skip if vault is already being processed
+      if (this.processingVaults.has(vault.id)) {
+        continue;
+      }
+
+      this.processingVaults.add(vault.id);
+
+      try {
+        await this.expansionService.executeAcquireExpansionToLockedTransition(vault);
+      } catch (error) {
+        this.logger.error(
+          `Failed to process acquire expansion->locked transition for vault ${vault.id}: ${error.message}`,
+          error.stack
+        );
+      } finally {
+        this.processingVaults.delete(vault.id);
+      }
+    }
+  }
+
+  /**
+   * Filter vaults to only include those with active ACQUIRE_EXPANSION proposals
+   */
+  private async filterVaultsWithAcquireExpansion(
+    vaults: Pick<
+      Vault,
+      'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals' | 'ft_token_supply'
+    >[]
+  ): Promise<
+    Pick<
+      Vault,
+      'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals' | 'ft_token_supply'
+    >[]
+  > {
+    const acquireExpansionVaults: typeof vaults = [];
+
+    for (const vault of vaults) {
+      if (this.processingVaults.has(vault.id)) {
+        continue;
+      }
+
+      // Find the active acquire expansion proposal for this vault
+      const acquireExpansionProposal = await this.proposalRepository.findOne({
+        where: {
+          vaultId: vault.id,
+          proposalType: ProposalType.ACQUIRE_EXPANSION,
+          status: ProposalStatus.EXECUTED,
+        },
+        order: { executionDate: 'DESC' },
+        select: ['id'],
+      });
+
+      if (acquireExpansionProposal) {
+        acquireExpansionVaults.push(vault);
+      }
+    }
+
+    return acquireExpansionVaults;
+  }
+
+  /**
+   * Find acquire expansion vaults that have reached their ADA maximum
+   * Queries acquire expansion proposals to check if currentAdaRaised >= maxAda
+   */
+  private async findAcquireExpansionVaultsAtAdaMax(): Promise<
+    Pick<
+      Vault,
+      'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals' | 'ft_token_supply'
+    >[]
+  > {
+    // Find all expansion vaults not already being processed
+    const expansionVaults: Pick<
+      Vault,
+      'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals' | 'ft_token_supply'
+    >[] = await this.vaultRepository.find({
+      where: {
+        vault_status: VaultStatus.expansion,
+      },
+      select: ['id', 'vault_status', 'expansion_phase_start', 'vt_price', 'ft_token_decimals', 'ft_token_supply'],
+    });
+
+    const vaultsAtMax: Pick<
+      Vault,
+      'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals' | 'ft_token_supply'
+    >[] = [];
+
+    for (const vault of expansionVaults) {
+      if (this.processingVaults.has(vault.id)) {
+        continue;
+      }
+
+      // Find the active acquire expansion proposal for this vault
+      const acquireExpansionProposal: Pick<Proposal, 'id' | 'metadata' | 'executionDate'> =
+        await this.proposalRepository.findOne({
+          where: {
+            vaultId: vault.id,
+            proposalType: ProposalType.ACQUIRE_EXPANSION,
+            status: ProposalStatus.EXECUTED,
+          },
+          order: { executionDate: 'DESC' },
+          select: ['id', 'metadata', 'executionDate'],
+        });
+
+      if (!acquireExpansionProposal?.metadata?.acquireExpansion) {
+        continue;
+      }
+
+      const expansionConfig = acquireExpansionProposal.metadata.acquireExpansion;
+
+      // Skip if no max configured
+      if (expansionConfig.noMax || !expansionConfig.maxAda) {
+        continue;
+      }
+
+      // Check if currentAdaRaised >= maxAda
+      const currentAdaRaised = expansionConfig.currentAdaRaised || 0;
+      if (currentAdaRaised >= expansionConfig.maxAda) {
+        this.logger.log(
+          `Vault ${vault.id} reached acquire expansion ADA max: ${currentAdaRaised}/${expansionConfig.maxAda} lovelace`
         );
         vaultsAtMax.push(vault);
       }

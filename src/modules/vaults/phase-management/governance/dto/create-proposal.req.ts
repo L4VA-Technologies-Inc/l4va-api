@@ -456,6 +456,66 @@ export class CreateProposalReq {
   @Expose()
   expansionLimitPrice?: number;
 
+  // ===== ACQUIRE EXPANSION fields =====
+  @ApiProperty({
+    description: 'Duration in milliseconds for acquire expansion period',
+    required: false,
+    example: 604800000,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Expose()
+  acquireExpansionDuration?: number;
+
+  @ApiProperty({
+    description: 'No time limit for acquire expansion period',
+    required: false,
+    default: false,
+  })
+  @IsOptional()
+  @Expose()
+  acquireExpansionNoLimit?: boolean;
+
+  @ApiProperty({
+    description: 'Maximum ADA allowed for acquire expansion (in lovelace)',
+    required: false,
+    example: 1000000000,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Expose()
+  acquireExpansionMaxAda?: number;
+
+  @ApiProperty({
+    description: 'No maximum ADA for acquire expansion',
+    required: false,
+    default: false,
+  })
+  @IsOptional()
+  @Expose()
+  acquireExpansionNoMax?: boolean;
+
+  @ApiProperty({
+    description: 'Pricing method for acquire expansion: "limit" or "market"',
+    required: false,
+    enum: ['limit', 'market'],
+    example: 'market',
+  })
+  @IsOptional()
+  @IsString()
+  @Expose()
+  acquireExpansionPriceType?: 'limit' | 'market';
+
+  @ApiProperty({
+    description: 'Limit price (VT per 1 ADA, up to 6 decimals) when using limit pricing',
+    required: false,
+    example: 10.5,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Expose()
+  acquireExpansionLimitPrice?: number;
+
   @ApiProperty({
     description: 'Additional metadata for the proposal',
     required: false,
