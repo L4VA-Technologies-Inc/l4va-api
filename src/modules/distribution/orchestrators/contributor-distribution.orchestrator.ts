@@ -17,6 +17,7 @@ import { ClaimsService } from '@/modules/vaults/claims/claims.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { MissingUtxoException } from '@/modules/vaults/processing-tx/onchain/exceptions/utxo-missing.exception';
+import { UtxoSpentException } from '@/modules/vaults/processing-tx/onchain/exceptions/utxo-spent.exception';
 import {
   getAddressFromHash,
   getTransactionSize,
@@ -426,11 +427,17 @@ export class ContributorDistributionOrchestrator {
         // Success - exit the retry loop
         return;
       } catch (error) {
-        // Check if this is a MissingUtxoException and we can retry
-        if (error instanceof MissingUtxoException && error.fullTxHash && utxoRetryCount < MAX_UTXO_RETRIES) {
-          const spentUtxoRef = error.getUtxoReference();
+        // Check if this is a UTXO-related error (MissingUtxoException during build or UtxoSpentException during submission)
+        const isMissingUtxo =
+          error instanceof MissingUtxoException && error.fullTxHash && utxoRetryCount < MAX_UTXO_RETRIES;
+        const isSpentUtxo = error instanceof UtxoSpentException && error.txHash && utxoRetryCount < MAX_UTXO_RETRIES;
+
+        if (isMissingUtxo || isSpentUtxo) {
+          const spentUtxoRef =
+            error instanceof MissingUtxoException ? error.getUtxoReference() : `${error.txHash}#${error.outputIndex}`;
+
           this.logger.warn(
-            `Detected spent admin UTXO: ${spentUtxoRef}, ` +
+            `Detected spent admin UTXO during ${error instanceof MissingUtxoException ? 'build' : 'submission'}: ${spentUtxoRef}, ` +
               `removing from pool and retrying (attempt ${utxoRetryCount + 1}/${MAX_UTXO_RETRIES})`
           );
           excludedUtxos.add(spentUtxoRef);
@@ -442,7 +449,7 @@ export class ContributorDistributionOrchestrator {
         }
 
         // Max retries reached for UTXO errors - throw special exception to stop vault processing
-        if (error instanceof MissingUtxoException) {
+        if (error instanceof MissingUtxoException || error instanceof UtxoSpentException) {
           this.logger.error(
             `Exhausted UTXO retries (${MAX_UTXO_RETRIES}) for vault ${vault.id}. ` +
               `Excluded ${excludedUtxos.size} UTXOs. Stopping vault processing, will retry in next cron cycle.`
