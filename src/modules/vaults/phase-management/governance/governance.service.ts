@@ -1346,9 +1346,12 @@ export class GovernanceService {
         } = createProposalReq;
 
         // Validate vault allows acquire expansion
-        const vaultForAcquireExpansionCheck = await this.vaultRepository.findOne({
+        const vaultForAcquireExpansionCheck: Pick<
+          Vault,
+          'allow_acquire_expansion' | 'script_hash' | 'asset_vault_name' | 'name'
+        > = await this.vaultRepository.findOne({
           where: { id: vaultId },
-          select: ['allow_acquire_expansion', 'policy_id', 'asset_vault_name', 'name'],
+          select: ['allow_acquire_expansion', 'script_hash', 'asset_vault_name', 'name'],
         });
 
         if (!vaultForAcquireExpansionCheck.allow_acquire_expansion) {
@@ -1397,15 +1400,15 @@ export class GovernanceService {
         // Validate market pricing requirements
         if (acquireExpansionPriceType === 'market') {
           // Check if vault has FT token configured (required for market pricing)
-          if (!vaultForAcquireExpansionCheck.policy_id || !vaultForAcquireExpansionCheck.asset_vault_name) {
+          if (!vaultForAcquireExpansionCheck.script_hash || !vaultForAcquireExpansionCheck.asset_vault_name) {
             throw new BadRequestException(
-              'Market pricing requires vault token configuration. Vault must have a policy_id and asset_vault_name.'
+              'Market pricing requires vault token configuration. Vault must have a script_hash and asset_vault_name.'
             );
           }
 
           try {
             const liquidityCheck = await this.dexHunterPricingService.checkTokenLiquidity(
-              `${vaultForAcquireExpansionCheck.policy_id}${vaultForAcquireExpansionCheck.asset_vault_name}`
+              `${vaultForAcquireExpansionCheck.script_hash}${vaultForAcquireExpansionCheck.asset_vault_name}`
             );
 
             if (!liquidityCheck || !liquidityCheck.hasLiquidity) {
@@ -1437,8 +1440,7 @@ export class GovernanceService {
 
             // Store market price snapshot for display
             const currentVtPrice = await this.dexHunterPricingService.getTokenPrice(
-              vaultForAcquireExpansionCheck.policy_id,
-              vaultForAcquireExpansionCheck.asset_vault_name
+              `${vaultForAcquireExpansionCheck.script_hash}${vaultForAcquireExpansionCheck.asset_vault_name}`
             );
 
             // Store acquire expansion config in metadata
@@ -1448,7 +1450,7 @@ export class GovernanceService {
               maxAda: acquireExpansionNoMax ? undefined : acquireExpansionMaxAda,
               noMax: acquireExpansionNoMax || false,
               priceType: acquireExpansionPriceType,
-              limitPrice: acquireExpansionPriceType === 'limit' ? acquireExpansionLimitPrice : undefined,
+              limitPrice: undefined, // Market pricing doesn't use limit price
               currentAdaRaised: 0,
               marketPriceSnapshot: currentVtPrice, // Store for display purposes only
             };
@@ -1471,7 +1473,7 @@ export class GovernanceService {
             maxAda: acquireExpansionNoMax ? undefined : acquireExpansionMaxAda,
             noMax: acquireExpansionNoMax || false,
             priceType: acquireExpansionPriceType,
-            limitPrice: acquireExpansionPriceType === 'limit' ? acquireExpansionLimitPrice : undefined,
+            limitPrice: acquireExpansionLimitPrice, // Limit pricing uses the configured limit price
             currentAdaRaised: 0,
           };
         }

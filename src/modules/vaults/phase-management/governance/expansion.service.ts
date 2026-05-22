@@ -668,9 +668,7 @@ export class ExpansionService {
           vtPrice = expansionConfig.limitPrice;
 
           if (!vtPrice || vtPrice <= 0 || !Number.isFinite(vtPrice)) {
-            this.logger.error(
-              `Invalid limit price for acquire expansion proposal ${expansionProposal.id}: ${vtPrice}`
-            );
+            this.logger.error(`Invalid limit price for acquire expansion proposal ${expansionProposal.id}: ${vtPrice}`);
             await this.closeAcquireExpansion(vault.id, expansionProposal.id, closeReason, 0);
             return;
           }
@@ -686,23 +684,21 @@ export class ExpansionService {
 
             // Try to fetch from DexHunter as fallback
             try {
-              const vaultWithToken = await this.vaultRepository.findOne({
-                where: { id: vault.id },
-                select: ['policy_id', 'asset_vault_name'],
-              });
+              const vaultWithToken: Pick<Vault, 'script_hash' | 'asset_vault_name'> =
+                await this.vaultRepository.findOne({
+                  where: { id: vault.id },
+                  select: ['script_hash', 'asset_vault_name'],
+                });
 
-              if (vaultWithToken.policy_id && vaultWithToken.asset_vault_name) {
+              if (vaultWithToken.script_hash && vaultWithToken.asset_vault_name) {
                 vtPrice = await this.dexHunterPricingService.getTokenPrice(
-                  vaultWithToken.policy_id,
-                  vaultWithToken.asset_vault_name
+                  `${vaultWithToken.script_hash}${vaultWithToken.asset_vault_name}`
                 );
               } else {
                 throw new Error('Vault token not configured');
               }
             } catch (priceError) {
-              this.logger.error(
-                `Failed to fetch VT price from DexHunter for vault ${vault.id}: ${priceError.message}`
-              );
+              this.logger.error(`Failed to fetch VT price from DexHunter for vault ${vault.id}: ${priceError.message}`);
               await this.closeAcquireExpansion(vault.id, expansionProposal.id, closeReason, 0);
               return;
             }
@@ -786,7 +782,7 @@ export class ExpansionService {
               metadata: {
                 adaSent: transaction.amount,
                 isExpansion: true,
-              },
+              } as const,
             });
 
             createdClaims.push(claim);
@@ -866,4 +862,3 @@ export class ExpansionService {
     return adaMultiplier ? Number(adaMultiplier[2]) : 0;
   }
 }
-
