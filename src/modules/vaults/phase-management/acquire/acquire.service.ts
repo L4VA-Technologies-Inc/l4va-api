@@ -55,7 +55,7 @@ export class AcquireService {
       throw new NotFoundException('Vault not found');
     }
 
-    if (vault.vault_status !== VaultStatus.acquire) {
+    if (vault.vault_status !== VaultStatus.acquire && vault.vault_status !== VaultStatus.acquire_expansion) {
       throw new BadRequestException('Vault is not in acquire phase');
     }
 

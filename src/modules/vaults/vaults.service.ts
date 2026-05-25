@@ -1245,6 +1245,56 @@ export class VaultsService {
     additionalData['canCreateProposal'] = canCreateProposal;
     additionalData['canCancelVault'] = canCancelVault;
     additionalData['isChatVisible'] = isChatVisible;
+
+    // Calculate if acquire window is currently active
+    // Considers both acquire and expansion windows for acquire_expansion status
+    const BUTTON_DISABLE_THRESHOLD_MS = 120000; // 2 minutes buffer before window closes
+    const now = Date.now();
+    let isAcquireWindowActive = false;
+
+    if (vault.vault_status === VaultStatus.acquire && vault.acquire_phase_start && vault.acquire_window_duration) {
+      const acquireEndTime = new Date(vault.acquire_phase_start).getTime() + vault.acquire_window_duration;
+      isAcquireWindowActive = acquireEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+    } else if (vault.vault_status === VaultStatus.acquire_expansion) {
+      // For acquire_expansion: button is active if EITHER acquire OR expansion window is open
+      let acquireWindowOpen = false;
+      let expansionWindowOpen = false;
+
+      if (vault.acquire_phase_start && vault.acquire_window_duration) {
+        const acquireEndTime = new Date(vault.acquire_phase_start).getTime() + vault.acquire_window_duration;
+        acquireWindowOpen = acquireEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+      }
+
+      if (vault.expansion_phase_start && vault.expansion_duration) {
+        const expansionEndTime = new Date(vault.expansion_phase_start).getTime() + vault.expansion_duration;
+        expansionWindowOpen = expansionEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+      }
+
+      isAcquireWindowActive = acquireWindowOpen || expansionWindowOpen;
+    }
+
+    additionalData['isAcquireWindowActive'] = isAcquireWindowActive;
+
+    // Calculate if vault is in phase transition (phase ended but blockchain transition not yet complete)
+    let isPhaseTransitioning = false;
+
+    if (
+      vault.vault_status === VaultStatus.contribution &&
+      vault.contribution_phase_start &&
+      vault.contribution_duration
+    ) {
+      const contributionEndTime = new Date(vault.contribution_phase_start).getTime() + vault.contribution_duration;
+      isPhaseTransitioning = now >= contributionEndTime;
+    } else if (
+      vault.vault_status === VaultStatus.acquire &&
+      vault.acquire_phase_start &&
+      vault.acquire_window_duration
+    ) {
+      const acquireEndTime = new Date(vault.acquire_phase_start).getTime() + vault.acquire_window_duration;
+      isPhaseTransitioning = now >= acquireEndTime;
+    }
+
+    additionalData['isPhaseTransitioning'] = isPhaseTransitioning;
     additionalData['valuationAmount'] =
       assetsPrices.totalAcquiredAda && vault.tokens_for_acquires
         ? parseFloat((assetsPrices.totalAcquiredAda / (vault.tokens_for_acquires * 0.01)).toFixed(2))

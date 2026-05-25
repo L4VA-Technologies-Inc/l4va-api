@@ -359,6 +359,30 @@ export class VaultFullResponse extends VaultShortResponse {
   isWhitelistedContributor: boolean;
 
   @ApiProperty({
+    description:
+      'Indicates whether the acquire window is currently active (considers both acquire and expansion phases for acquire_expansion status)',
+    type: Boolean,
+    default: false,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  isAcquireWindowActive: boolean;
+
+  @ApiProperty({
+    description:
+      'Indicates whether the vault is transitioning between phases (phase ended but blockchain transition not yet complete)',
+    type: Boolean,
+    default: false,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  isPhaseTransitioning: boolean;
+
+  @ApiProperty({
     description: 'Indicates whether the user can see a chat',
     type: Boolean,
     default: false,
