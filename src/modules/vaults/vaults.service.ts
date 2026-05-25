@@ -1443,14 +1443,22 @@ export class VaultsService {
       switch (filter) {
         case VaultFilter.open:
           queryBuilder.andWhere('vault.vault_status IN (:...statuses)', {
-            statuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire, VaultStatus.expansion],
+            statuses: [
+              VaultStatus.published,
+              VaultStatus.contribution,
+              VaultStatus.acquire,
+              VaultStatus.expansion,
+              VaultStatus.acquire_expansion,
+            ],
           });
           break;
         case VaultFilter.contribution:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.contribution });
           break;
         case VaultFilter.expansion:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.expansion });
+          queryBuilder.andWhere('vault.vault_status IN (:...statuses)', {
+            statuses: [VaultStatus.expansion, VaultStatus.acquire_expansion],
+          });
           break;
         case VaultFilter.acquire:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.acquire });

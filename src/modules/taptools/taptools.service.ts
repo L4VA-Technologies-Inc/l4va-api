@@ -1313,20 +1313,20 @@ export class TaptoolsService {
    * Update cached vault totals for multiple vaults
    * Includes assets with PENDING, LOCKED, EXTRACTED (in treasury), and DISTRIBUTED status
    *
-   * User TVL and Gains Calculation (ONLY for locked/expansion vaults):
-   * - Locked vaults WITH LP: VT token price appreciation from historical OHLCV data
+   * User TVL and Gains Calculation:
+   * - Locked/Expansion/Acquire_Expansion vaults WITH LP: VT token price appreciation from historical OHLCV data
    *   Uses VaultMarketStatsService.calculateTokenPriceDelta() to get true price from LP inception
-   * - Locked/Expansion vaults WITHOUT LP: VT token holdings × proportional TVL ownership
+   * - Locked/Expansion/Acquire_Expansion vaults WITHOUT LP: VT token holdings × proportional TVL ownership
    * - Active vaults (contribution/acquire): NO user gains calculated (users don't have VT tokens yet)
    *
-   * For locked vaults, also calculates FDV/TVL ratio
+   * For locked, expansion, and acquire_expansion vaults, also calculates FDV/TVL ratio
    *
    * GAINS CALCULATION OVERVIEW:
    * - LP vaults: Uses full OHLCV history (first day open → latest close) from TapTools to
    *   derive the percentage change in VT token price from inception, and then applies this
    *   percentage change to the user's VT token holdings (scaled by the current VT price) to
    *   compute user_gains_ada.
-   * - Non-LP locked/expansion vaults: DO NOT use historical TVL snapshots for gains calculation. Instead, calculate the user's
+   * - Non-LP locked/expansion/acquire_expansion vaults: DO NOT use historical TVL snapshots for gains calculation. Instead, calculate the user's
    * proportional ownership of the vault based on their VT token holdings relative to total supply, and then apply this ownership percentage to the current TVL to derive user_gains_ada. This approach avoids inaccuracies that can arise from using historical snapshots in volatile markets.
    * - Contribution/Acquire: No calculation (users don't own VT tokens yet)
    *
@@ -1457,7 +1457,13 @@ export class TaptoolsService {
       const allRelevantVaults = await this.vaultRepository.find({
         where: {
           deleted: false,
-          vault_status: In([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked, VaultStatus.expansion]),
+          vault_status: In([
+            VaultStatus.contribution,
+            VaultStatus.acquire,
+            VaultStatus.locked,
+            VaultStatus.expansion,
+            VaultStatus.acquire_expansion,
+          ]),
         },
         relations: ['owner'],
         select: ['id', 'vault_status', 'ft_token_supply', 'ft_token_decimals', 'initial_total_value_ada', 'owner'],
@@ -1467,8 +1473,15 @@ export class TaptoolsService {
       const allVaultIds = allRelevantVaults.map(v => v.id);
       const allVaultValues = await this.calculateVaultsTvl(allVaultIds);
 
-      // Batch query: Get all snapshots for locked vaults
-      const allLockedVaultIds = allRelevantVaults.filter(v => v.vault_status === VaultStatus.locked).map(v => v.id);
+      // Batch query: Get all snapshots for locked, expansion, and acquire_expansion vaults
+      const allLockedVaultIds = allRelevantVaults
+        .filter(
+          v =>
+            v.vault_status === VaultStatus.locked ||
+            v.vault_status === VaultStatus.expansion ||
+            v.vault_status === VaultStatus.acquire_expansion
+        )
+        .map(v => v.id);
       const allSnapshots =
         allLockedVaultIds.length > 0
           ? await this.snapshotRepository
@@ -1537,8 +1550,12 @@ export class TaptoolsService {
           const summary = allVaultValues.get(vault.id);
           if (!summary) continue;
 
-          if (vault.vault_status === VaultStatus.locked) {
-            // Get user's share from VT token holdings
+          if (
+            vault.vault_status === VaultStatus.locked ||
+            vault.vault_status === VaultStatus.expansion ||
+            vault.vault_status === VaultStatus.acquire_expansion
+          ) {
+            // Get user's share from VT token holdings (applies to locked, expansion, and acquire_expansion)
             const snapshot = snapshotByVaultId.get(vault.id);
 
             if (snapshot?.addressBalances && vault.ft_token_supply) {

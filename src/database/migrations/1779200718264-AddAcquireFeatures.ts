@@ -44,6 +44,16 @@ export class AddAcquireFeatures1779200718264 implements MigrationInterface {
     );
     await queryRunner.query(`DROP TYPE "public"."proposal_proposal_type_enum_old"`);
 
+    // Update vault_status enum to include acquire_expansion
+    await queryRunner.query(`ALTER TYPE "public"."vaults_vault_status_enum" RENAME TO "vaults_vault_status_enum_old"`);
+    await queryRunner.query(
+      `CREATE TYPE "public"."vaults_vault_status_enum" AS ENUM('draft', 'created', 'published', 'contribution', 'acquire', 'investment', 'locked', 'failed', 'burned', 'govern', 'terminating', 'expansion', 'acquire_expansion')`
+    );
+    await queryRunner.query(
+      `ALTER TABLE "vaults" ALTER COLUMN "vault_status" TYPE "public"."vaults_vault_status_enum" USING "vault_status"::"text"::"public"."vaults_vault_status_enum"`
+    );
+    await queryRunner.query(`DROP TYPE "public"."vaults_vault_status_enum_old"`);
+
     // Insert the acquire_only preset
     await queryRunner.query(`
       INSERT INTO "vault_preset" ("id", "name", "type", "config", "is_active", "created_at", "updated_at") VALUES
@@ -62,6 +72,24 @@ export class AddAcquireFeatures1779200718264 implements MigrationInterface {
   public async down(queryRunner: QueryRunner): Promise<void> {
     // Remove acquire_only preset
     await queryRunner.query(`DELETE FROM "vault_preset" WHERE "type" = 'acquire_only'`);
+
+    // Update existing proposals with acquire_expansion to expansion before changing enum
+    await queryRunner.query(
+      `UPDATE "proposal" SET "proposal_type" = 'expansion' WHERE "proposal_type" = 'acquire_expansion'`
+    );
+
+    // Update existing vaults with acquire_expansion status to locked before changing enum
+    await queryRunner.query(`UPDATE "vaults" SET "vault_status" = 'locked' WHERE "vault_status" = 'acquire_expansion'`);
+
+    // Reverse vault_status enum change
+    await queryRunner.query(
+      `CREATE TYPE "public"."vaults_vault_status_enum_old" AS ENUM('draft', 'created', 'published', 'contribution', 'acquire', 'investment', 'locked', 'failed', 'burned', 'govern', 'terminating', 'expansion')`
+    );
+    await queryRunner.query(
+      `ALTER TABLE "vaults" ALTER COLUMN "vault_status" TYPE "public"."vaults_vault_status_enum_old" USING "vault_status"::"text"::"public"."vaults_vault_status_enum_old"`
+    );
+    await queryRunner.query(`DROP TYPE "public"."vaults_vault_status_enum"`);
+    await queryRunner.query(`ALTER TYPE "public"."vaults_vault_status_enum_old" RENAME TO "vaults_vault_status_enum"`);
 
     // Reverse proposal_type enum change
     await queryRunner.query(

@@ -472,10 +472,15 @@ export class ExpansionService {
       }
 
       // Update vault metadata on-chain (OPEN status for acquire transactions)
+      // For acquire expansion: close asset_window, open acquire_window
       const onChainResult = await this.vaultManagingService.updateVaultMetadataTx({
         vault,
         vaultStatus: SmartContractVaultStatus.OPEN,
-        asset_window: expansionConfig.noLimit
+        asset_window: {
+          start: Date.now(),
+          end: Date.now(), // Close asset window for acquire expansion
+        },
+        acquire_window: expansionConfig.noLimit
           ? {
               start: Date.now(),
               end: Date.now() + 365 * 24 * 60 * 60 * 1000, // Set to 1 year for no limit (effectively infinite)
@@ -486,11 +491,11 @@ export class ExpansionService {
             },
       });
 
-      // Update vault status to EXPANSION in database
+      // Update vault status to ACQUIRE_EXPANSION in database
       await this.vaultRepository.update(
         { id: proposal.vaultId },
         {
-          vault_status: VaultStatus.expansion,
+          vault_status: VaultStatus.acquire_expansion,
           vault_sc_status: SmartContractVaultStatus.OPEN,
           expansion_phase_start: new Date(),
           expansion_duration: expansionConfig.noLimit ? 365 * 24 * 60 * 60 * 1000 : expansionConfig.duration,

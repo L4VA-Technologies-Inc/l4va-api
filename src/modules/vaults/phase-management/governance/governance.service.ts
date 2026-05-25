@@ -428,15 +428,19 @@ export class GovernanceService {
       throw new NotFoundException('Vault not found');
     }
 
-    // Allow governance for both locked and expansion statuses
+    // Allow governance for locked, expansion, and acquire_expansion statuses
     // Expansion windows can be long/indefinite, so governance should continue
-    if (vault.vault_status !== VaultStatus.locked && vault.vault_status !== VaultStatus.expansion) {
-      throw new BadRequestException('Governance is only available for locked or expansion vaults');
+    if (
+      vault.vault_status !== VaultStatus.locked &&
+      vault.vault_status !== VaultStatus.expansion &&
+      vault.vault_status !== VaultStatus.acquire_expansion
+    ) {
+      throw new BadRequestException('Governance is only available for locked, expansion, or acquire expansion vaults');
     }
 
-    // During expansion, only Distribution proposals are allowed
+    // During expansion or acquire expansion, only Distribution proposals are allowed
     // All other proposal types involve extracting assets from vault which conflicts with expansion
-    if (vault.vault_status === VaultStatus.expansion) {
+    if (vault.vault_status === VaultStatus.expansion || vault.vault_status === VaultStatus.acquire_expansion) {
       if (createProposalReq.type !== ProposalType.DISTRIBUTION) {
         throw new BadRequestException(
           'During vault expansion, only Distribution proposals are allowed. ' +

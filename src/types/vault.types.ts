@@ -60,6 +60,7 @@ export enum VaultStatus {
   govern = 'govern',
   terminating = 'terminating',
   expansion = 'expansion',
+  acquire_expansion = 'acquire_expansion',
 }
 
 export const VAULT_SEARCH_STATUSES: VaultStatus[] = [
