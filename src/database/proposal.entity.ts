@@ -109,14 +109,22 @@ export class Proposal {
 
     // Acquire Expansion data (ADA → VT minting)
     acquireExpansion?: {
-      duration?: number; // Expansion window duration in ms
-      noLimit?: boolean; // No time limit (always open)
-      maxAda?: number; // Max ADA per expansion window (in lovelace)
-      noMax?: boolean; // No max ADA limit
-      priceType: 'limit' | 'market'; // Pricing mode
-      limitPrice?: number; // For limit: VT per 1 ADA
-      currentAdaRaised?: number; // Track progress during expansion
-      marketPriceSnapshot?: number; // For market: VT/ADA price at proposal creation (for display)
+      /** Expansion window duration in ms */
+      duration?: number;
+      /** No time limit (always open) */
+      noLimit?: boolean;
+      /** Max ADA per expansion window (in lovelace) */
+      maxAda?: number;
+      /** No max ADA limit */
+      noMax?: boolean;
+      /** Pricing mode */
+      priceType: 'limit' | 'market';
+      /** For limit: VT per 1 ADA */
+      limitPrice?: number;
+      /** Track progress during expansion */
+      currentAdaRaised?: number;
+      /** For market: VT/ADA price at proposal creation (for display) */
+      marketPriceSnapshot?: number;
     };
 
     // Swap execution results (for DexHunter swaps)

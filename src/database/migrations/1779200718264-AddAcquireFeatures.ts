@@ -54,6 +54,18 @@ export class AddAcquireFeatures1779200718264 implements MigrationInterface {
     );
     await queryRunner.query(`DROP TYPE "public"."vaults_vault_status_enum_old"`);
 
+    // Add is_expansion flag to transactions for tracking expansion-phase transactions
+    await queryRunner.query(`ALTER TABLE "transactions" ADD "is_expansion" boolean NOT NULL DEFAULT false`);
+    await queryRunner.query(
+      `COMMENT ON COLUMN "transactions"."is_expansion" IS 'If true, this transaction occurred during an expansion phase (acquire_expansion or contribution expansion).'`
+    );
+
+    // Add expansion_proposal_id to track which proposal triggered the expansion
+    await queryRunner.query(`ALTER TABLE "transactions" ADD "expansion_proposal_id" uuid`);
+    await queryRunner.query(
+      `COMMENT ON COLUMN "transactions"."expansion_proposal_id" IS 'ID of the proposal that triggered this expansion transaction.'`
+    );
+
     // Insert the acquire_only preset
     await queryRunner.query(`
       INSERT INTO "vault_preset" ("id", "name", "type", "config", "is_active", "created_at", "updated_at") VALUES
@@ -114,6 +126,10 @@ export class AddAcquireFeatures1779200718264 implements MigrationInterface {
     await queryRunner.query(`ALTER TABLE "vault_preset" ALTER COLUMN "type" SET DEFAULT 'simple'`);
     await queryRunner.query(`DROP TYPE "public"."vault_preset_type_enum"`);
     await queryRunner.query(`ALTER TYPE "public"."vault_preset_type_enum_old" RENAME TO "vault_preset_type_enum"`);
+
+    // Remove expansion tracking from transactions
+    await queryRunner.query(`ALTER TABLE "transactions" DROP COLUMN "expansion_proposal_id"`);
+    await queryRunner.query(`ALTER TABLE "transactions" DROP COLUMN "is_expansion"`);
 
     // Remove acquire columns
     await queryRunner.query(`ALTER TABLE "vaults" DROP COLUMN "allow_acquire_expansion"`);
