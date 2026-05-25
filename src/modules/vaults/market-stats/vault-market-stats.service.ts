@@ -13,7 +13,7 @@ import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.s
 import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { AssetType } from '@/types/asset.types';
-import { VaultStatus } from '@/types/vault.types';
+import { VAULT_STATUSES_WITH_POTENTIAL_LP } from '@/types/vault.types';
 
 /**
  * Service responsible for fetching and updating vault token market statistics from external APIs
@@ -130,7 +130,7 @@ export class VaultMarketStatsService {
         'v.lp_last_checked',
       ])
       .where('v.vault_status IN (:...statuses)', {
-        statuses: [VaultStatus.locked, VaultStatus.expansion, VaultStatus.acquire_expansion],
+        statuses: VAULT_STATUSES_WITH_POTENTIAL_LP,
       })
       .andWhere('v.script_hash IS NOT NULL')
       .andWhere('v.asset_vault_name IS NOT NULL')

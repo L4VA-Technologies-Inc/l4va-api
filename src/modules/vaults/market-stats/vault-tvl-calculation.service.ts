@@ -5,7 +5,7 @@ import { Repository, In } from 'typeorm';
 
 import { Vault } from '@/database/vault.entity';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
-import { VaultStatus } from '@/types/vault.types';
+import { VAULT_STATUSES_ACTIVE } from '@/types/vault.types';
 
 /**
  * Service responsible for periodically updating vault asset prices and TVL calculations
@@ -30,13 +30,7 @@ export class VaultTvlCalculationService implements OnModuleInit, OnModuleDestroy
 
   private readonly baseIntervalMs: number;
   private readonly jitterMs: number;
-  private readonly activeVaultStatuses = [
-    VaultStatus.contribution,
-    VaultStatus.acquire,
-    VaultStatus.locked,
-    VaultStatus.expansion,
-    VaultStatus.acquire_expansion,
-  ];
+  private readonly activeVaultStatuses = VAULT_STATUSES_ACTIVE;
 
   constructor(
     @InjectRepository(Vault)
