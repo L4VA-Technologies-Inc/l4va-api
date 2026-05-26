@@ -51,7 +51,9 @@ export class AcquireOnlyExtractionBuilder {
       }
 
       const datumTag = generate_tag_from_txhash_index(originalTx.tx_hash, 0);
-      const adaPairMultiplier = Number(vault.ada_pair_multiplier);
+      const isExpansionClaim = originalTx.is_expansion === true;
+      // For acquire expansion: no LP share, all VT goes to user
+      const adaPairMultiplier = isExpansionClaim ? 0 : Number(vault.ada_pair_multiplier);
       const claimMultiplier = Number(claim.multiplier);
       const originalAmount = Number(originalTx.amount);
 

@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
-import { MoreThanOrEqual, Repository } from 'typeorm';
+import { In, MoreThanOrEqual, Repository } from 'typeorm';
 
 import { Asset } from '@/database/asset.entity';
 import { Claim } from '@/database/claim.entity';
@@ -657,7 +657,6 @@ export class ExpansionService {
       // Calculate and create VT claims for expansion participants
       if (expansionTransactions.length > 0) {
         const createdClaims: Claim[] = [];
-        let totalNewVt = 0;
         const decimals = vault.ft_token_decimals ?? 6;
         const decimalMultiplier = Math.pow(10, decimals);
 
@@ -781,13 +780,11 @@ export class ExpansionService {
               proposal_id: expansionProposal.id,
               description: `Acquire expansion: ${transaction.amount} ADA → ${Number(vtAmount) / decimalMultiplier} VT`,
               metadata: {
-                adaSent: transaction.amount,
                 isExpansion: true,
               } as const,
             });
 
             createdClaims.push(claim);
-            totalNewVt += Number(vtAmount);
 
             this.logger.log(
               `Created acquire expansion claim for user ${transaction.user_id}: ${transaction.amount} ADA → ${Number(vtAmount) / decimalMultiplier} VT`
@@ -802,23 +799,35 @@ export class ExpansionService {
           await this.claimRepository.save(createdClaims);
           this.logger.log(`Saved ${createdClaims.length} acquire expansion claim(s) for vault ${vault.id}`);
 
-          // Calculate multiplier for on-chain metadata
-          // Multiplier represents VT tokens (in raw units) per 1 ADA
+          // Calculate multiplier for on-chain metadata and claims
+          // Same logic as FT expansion: (vtPrice × VT_decimals) / ADA_decimals
+          // Multiplier represents VT basic units per lovelace
+          // Examples:
+          //   1 VT (6 dec) per 1 ADA: (1 × 10^6) / 10^6 = 1
+          //   50 VT (6 dec) per 1 ADA: (50 × 10^6) / 10^6 = 50
+          //   1 VT (8 dec) per 1 ADA: (1 × 10^8) / 10^6 = 100
+          const ADA_DECIMALS = 6;
+          const vtDecimalMultiplier = Math.pow(10, decimals);
+          const adaDecimalMultiplier = Math.pow(10, ADA_DECIMALS);
+
           let multiplier: number;
 
           if (expansionConfig.priceType === 'limit') {
-            // Limit price: multiplier = limitPrice (VT per ADA) * decimals
-            multiplier = Math.floor(vtPrice * decimalMultiplier);
+            // Limit price: (limitPrice × VT decimals) / ADA decimals
+            multiplier = Math.floor((vtPrice * vtDecimalMultiplier) / adaDecimalMultiplier);
           } else {
-            // Market price: multiplier = (1 / vtPrice) * decimals
+            // Market price: (1/vtPrice × VT decimals) / ADA decimals
             // vtPrice is ADA per VT, so 1/vtPrice gives VT per ADA
-            multiplier = Math.floor((1 / vtPrice) * decimalMultiplier);
+            multiplier = Math.floor(((1 / vtPrice) * vtDecimalMultiplier) / adaDecimalMultiplier);
           }
 
           this.logger.log(
             `Calculated acquire expansion multiplier for vault ${vault.id}: ${multiplier} ` +
-              `(priceType: ${expansionConfig.priceType}, vtPrice: ${vtPrice}, decimals: ${vault.ft_token_decimals})`
+              `(priceType: ${expansionConfig.priceType}, vtPrice: ${vtPrice}, decimals: ${decimals})`
           );
+
+          // Update claims with multiplier
+          await this.claimRepository.update({ id: In(createdClaims.map(c => c.id)) }, { multiplier: multiplier });
 
           // Close expansion with new multiplier
           // This will update on-chain metadata and set vault to LOCKED

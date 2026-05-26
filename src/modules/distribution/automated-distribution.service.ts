@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, MoreThan, Not, Repository } from 'typeorm';
+import { IsNull, MoreThan, Not, Repository, In } from 'typeorm';
 
 import { AcquireOnlyDistributionOrchestrator } from './orchestrators/acquire-only-distribution.orchestrator';
 import { AcquirerDistributionOrchestrator } from './orchestrators/acquirer-distribution.orchestrator';
@@ -149,16 +149,54 @@ export class AutomatedDistributionService {
 
         await this.ensureDispatchParameterized(vault);
 
-        if (Number(vault.tokens_for_acquires) === 0) {
+        // Check if vault has acquirer claims (including from acquire expansion)
+        const acquirerClaims = await this.claimRepository.find({
+          where: {
+            vault: { id: vault.id },
+            type: ClaimType.ACQUIRER,
+            status: In([ClaimStatus.PENDING, ClaimStatus.FAILED]),
+          },
+          relations: ['transaction'],
+        });
+
+        if (acquirerClaims.length === 0) {
           this.logger.log(
-            `Vault ${vault.id} has 0% tokens for acquirers. ` +
-              `Skipping acquirer extractions, proceeding directly to contributor payments.`
+            `Vault ${vault.id} has no acquirer claims. ` + `Proceeding directly to contributor payments.`
           );
           continue; // Will be picked up by checkExtractionsAndTriggerPayments
         }
 
-        // Delegate to acquirer orchestrator
-        await this.acquirerOrchestrator.processAcquirerExtractions(vault.id, this.getConfig());
+        // Check if claims are from acquire expansion (is_expansion = true)
+        const expansionClaimsCount = acquirerClaims.filter(c => c.transaction?.is_expansion).length;
+        const regularClaimsCount = acquirerClaims.length - expansionClaimsCount;
+
+        this.logger.log(
+          `Vault ${vault.id} has ${acquirerClaims.length} acquirer claim(s): ` +
+            `${regularClaimsCount} regular, ${expansionClaimsCount} from acquire expansion`
+        );
+
+        // Acquire expansion claims need to be minted (use acquire-only orchestrator)
+        // Regular claims need to be extracted from dispatch (use acquirer orchestrator)
+        if (expansionClaimsCount > 0 && regularClaimsCount === 0) {
+          this.logger.log(
+            `All acquirer claims are from acquire expansion. Using acquire-only orchestrator to mint tokens.`
+          );
+          await this.acquireOnlyOrchestrator.processAcquireOnlyExtractions(vault.id, this.getConfig());
+        } else if (expansionClaimsCount === 0 && regularClaimsCount > 0) {
+          this.logger.log(`All acquirer claims are regular. Using acquirer orchestrator to extract from dispatch.`);
+          await this.acquirerOrchestrator.processAcquirerExtractions(vault.id, this.getConfig());
+        } else {
+          // Mixed case: process expansion claims first (minting), then regular claims (extraction)
+          this.logger.log(
+            `Vault has mixed acquirer claims. Processing ${expansionClaimsCount} expansion claims first, ` +
+              `then ${regularClaimsCount} regular claims.`
+          );
+          // TODO: Handle mixed case - for now, log warning and use regular orchestrator
+          this.logger.warn(
+            `Mixed acquirer claim types not fully implemented. ` + `Vault ${vault.id} may require manual distribution.`
+          );
+          await this.vaultRepository.update({ id: vault.id }, { manual_distribution_mode: true });
+        }
       } catch (error) {
         this.logger.error(`Error processing vault ${vault.id}:`, error);
       }
@@ -223,22 +261,16 @@ export class AutomatedDistributionService {
           continue;
         }
 
-        // Check if vault has 0% for acquirers (skip acquirer check)
-        const shouldSkipAcquirerCheck = vault.tokens_for_acquires === 0;
-
-        if (!shouldSkipAcquirerCheck && remainingAcquirerClaims > 0) {
+        // Wait for all acquirer claims to complete (including acquire expansion claims)
+        if (remainingAcquirerClaims > 0) {
           this.logger.log(
-            `Vault ${vault.id} still has ${remainingAcquirerClaims} acquirer claims pending. ` +
+            `Vault ${vault.id} still has ${remainingAcquirerClaims} acquirer claim(s) pending. ` +
               `Skipping contributor payments for now.`
           );
           continue;
         }
 
-        this.logger.log(
-          shouldSkipAcquirerCheck
-            ? `Vault ${vault.id} has 0% for acquirers, proceeding to contributor payments.`
-            : `All acquirer extractions complete for vault ${vault.id}`
-        );
+        this.logger.log(`All acquirer extractions complete for vault ${vault.id}`);
 
         // Delegate to contributor orchestrator
         await this.contributorOrchestrator.processContributorPayments(vault.id, vault, this.getConfig());
