@@ -20,6 +20,13 @@ export class AddAcquireFeatures1779200718264 implements MigrationInterface {
       `COMMENT ON COLUMN "vaults"."allow_acquire_expansion" IS 'If true, vault allows governance proposals for acquire expansion (ADA → VT minting).'`
     );
 
+    // Set allow_acquire_expansion to true for vaults created on or before 2026-05-25
+    await queryRunner.query(`
+      UPDATE "vaults"
+      SET "allow_acquire_expansion" = true
+      WHERE "created_at" <= '2026-05-25 23:59:59'
+    `);
+
     // Update vault_preset_type_enum to include acquire_only
     await queryRunner.query(`ALTER TYPE "public"."vault_preset_type_enum" RENAME TO "vault_preset_type_enum_old"`);
     await queryRunner.query(
