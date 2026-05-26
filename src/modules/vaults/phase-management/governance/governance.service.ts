@@ -1352,10 +1352,10 @@ export class GovernanceService {
         // Validate vault allows acquire expansion
         const vaultForAcquireExpansionCheck: Pick<
           Vault,
-          'allow_acquire_expansion' | 'script_hash' | 'asset_vault_name' | 'name'
+          'allow_acquire_expansion' | 'script_hash' | 'asset_vault_name' | 'name' | 'ft_token_decimals'
         > = await this.vaultRepository.findOne({
           where: { id: vaultId },
-          select: ['allow_acquire_expansion', 'script_hash', 'asset_vault_name', 'name'],
+          select: ['allow_acquire_expansion', 'script_hash', 'asset_vault_name', 'name', 'ft_token_decimals'],
         });
 
         if (!vaultForAcquireExpansionCheck.allow_acquire_expansion) {
@@ -1397,6 +1397,25 @@ export class GovernanceService {
             throw new BadRequestException(
               `Limit price cannot exceed ${MAX_LIMIT_PRICE.toLocaleString()} VT per 1 ADA. ` +
                 'Please set a reasonable price.'
+            );
+          }
+
+          // Prevent multiplier = 0: limitPrice must be >= 10^(-decimals)
+          const decimals = vaultForAcquireExpansionCheck.ft_token_decimals || 6;
+          const minLimitPrice = Math.pow(10, -decimals);
+          if (acquireExpansionLimitPrice < minLimitPrice) {
+            throw new BadRequestException(
+              `Limit price too low: With ${decimals} decimals, minimum limit price is ${minLimitPrice} VT per 1 ADA. ` +
+                `Current: ${acquireExpansionLimitPrice}. This would result in 0 tokens minted per ADA.`
+            );
+          }
+
+          // Verify multiplier calculation won't be 0
+          const testMultiplier = Math.floor(acquireExpansionLimitPrice * Math.pow(10, decimals));
+          if (testMultiplier === 0) {
+            throw new BadRequestException(
+              `Invalid limit price: Would result in 0 multiplier. ` +
+                `With ${decimals} decimals, limit price must be at least ${minLimitPrice} VT per 1 ADA.`
             );
           }
         }
@@ -1446,6 +1465,27 @@ export class GovernanceService {
             const currentVtPrice = await this.dexHunterPricingService.getTokenPrice(
               `${vaultForAcquireExpansionCheck.script_hash}${vaultForAcquireExpansionCheck.asset_vault_name}`
             );
+
+            // Prevent multiplier = 0: vtPrice must be <= 10^decimals (VT cannot be too expensive in ADA)
+            const decimals = vaultForAcquireExpansionCheck.ft_token_decimals || 6;
+            const maxVtPrice = Math.pow(10, decimals);
+            if (currentVtPrice > maxVtPrice) {
+              throw new BadRequestException(
+                `Market price too high: With ${decimals} decimals, max VT price is ${maxVtPrice.toLocaleString()} ADA per VT. ` +
+                  `Current market price: ${currentVtPrice.toFixed(6)} ADA per VT. This would result in 0 tokens minted per ADA. ` +
+                  'Please use limit pricing or wait for market price to decrease.'
+              );
+            }
+
+            // Verify multiplier calculation won't be 0
+            const testMultiplier = Math.floor((1 / currentVtPrice) * Math.pow(10, decimals));
+            if (testMultiplier === 0) {
+              throw new BadRequestException(
+                `Invalid market price: Would result in 0 multiplier. ` +
+                  `With ${decimals} decimals, VT price must be at most ${maxVtPrice.toLocaleString()} ADA per VT. ` +
+                  `Current: ${currentVtPrice.toFixed(6)} ADA per VT.`
+              );
+            }
 
             // Store acquire expansion config in metadata
             proposal.metadata.acquireExpansion = {
