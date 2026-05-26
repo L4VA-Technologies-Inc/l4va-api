@@ -111,6 +111,16 @@ export class CreateVaultReq {
   minAcquireThreshold?: number;
 
   @ApiProperty({
+    description: 'If true, vault allows governance proposals for acquire expansion (ADA → VT minting).',
+    required: false,
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  @Expose()
+  allowAcquireExpansion?: boolean;
+
+  @ApiProperty({
     required: false,
   })
   @ValidateIf(o => !o.isAcquireOnly)
