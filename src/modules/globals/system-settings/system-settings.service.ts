@@ -301,6 +301,8 @@ export class SystemSettingsService implements OnModuleInit {
         return this.governanceFeeProposalMarketplaceAction;
       case 'expansion':
         return this.governanceFeeProposalExpansion;
+      case 'acquire_expansion':
+        return this.governanceFeeProposalExpansion;
       default:
         this.logger.warn(`Unknown proposal type: "${proposalType}" - returning 0`);
         return 0;

@@ -828,6 +828,48 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   expansionLimitPrice?: number;
 
+  @ApiProperty({ description: 'Acquire expansion current ADA raised', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'acquireExpansionCurrentAda' },
+  })
+  acquireExpansionCurrentAda?: number;
+
+  @ApiProperty({ description: 'Acquire expansion current amount raised in USD', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'acquireExpansionCurrentUsd' },
+  })
+  acquireExpansionCurrentUsd?: number;
+
+  @ApiProperty({ description: 'Acquire expansion maximum ADA in lovelace', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'acquireExpansionMaxAdaLovelace' },
+  })
+  acquireExpansionMaxAdaLovelace?: number;
+
+  @ApiProperty({ description: 'Acquire expansion maximum ADA', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'acquireExpansionMaxAda' },
+  })
+  acquireExpansionMaxAda?: number;
+
+  @ApiProperty({ description: 'Acquire expansion maximum amount in USD', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'acquireExpansionMaxUsd' },
+  })
+  acquireExpansionMaxUsd?: number;
+
+  @ApiProperty({ description: 'Whether acquire expansion has no max limit', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'acquireExpansionNoMax' },
+  })
+  acquireExpansionNoMax?: boolean;
+
   @ApiProperty({ description: 'Owner of the vault', type: () => User })
   @DtoRepresent({
     transform: false,

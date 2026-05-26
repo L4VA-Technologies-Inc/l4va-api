@@ -978,6 +978,11 @@ export class VaultsService {
     let expansionAssetsByPolicy: Array<{ policyId: string; quantity: number; collectionName: string | null }> = [];
     let expansionWhitelist: Array<{ policyId: string; collectionName: string | null }> = [];
 
+    // Acquire expansion data
+    let acquireExpansionCurrentAdaLovelace: number | undefined;
+    let acquireExpansionMaxAdaLovelace: number | undefined;
+    let acquireExpansionNoMax: boolean | undefined;
+
     // Only check vault_status to determine if vault is currently in expansion
     // expansion_phase_start is preserved as a historical timestamp
     if (vault.vault_status === VaultStatus.expansion) {
@@ -1074,6 +1079,25 @@ export class VaultsService {
         }));
 
         expansionAssetsCount = Array.from(policyMap.values()).reduce((sum, qty) => sum + qty, 0);
+      }
+    }
+
+    // Fetch acquire expansion data if vault is in acquire_expansion phase
+    if (vault.vault_status === VaultStatus.acquire_expansion) {
+      const acquireExpansionProposal = await this.proposalRepository.findOne({
+        where: {
+          vaultId: vault.id,
+          proposalType: ProposalType.ACQUIRE_EXPANSION,
+          status: ProposalStatus.EXECUTED,
+        },
+        order: { executionDate: 'DESC' },
+      });
+
+      if (acquireExpansionProposal?.metadata?.acquireExpansion) {
+        const config = acquireExpansionProposal.metadata.acquireExpansion;
+        acquireExpansionNoMax = config.noMax;
+        acquireExpansionMaxAdaLovelace = config.maxAda;
+        acquireExpansionCurrentAdaLovelace = config.currentAdaRaised || 0;
       }
     }
 
@@ -1198,6 +1222,20 @@ export class VaultsService {
       expansionLimitPrice,
       expansionAssetsByPolicy,
       expansionWhitelist,
+      // Acquire expansion data
+      acquireExpansionCurrentAdaLovelace,
+      acquireExpansionCurrentAda: acquireExpansionCurrentAdaLovelace
+        ? acquireExpansionCurrentAdaLovelace / 1_000_000
+        : undefined,
+      acquireExpansionCurrentUsd: acquireExpansionCurrentAdaLovelace
+        ? (acquireExpansionCurrentAdaLovelace / 1_000_000) * adaPrice
+        : undefined,
+      acquireExpansionMaxAdaLovelace,
+      acquireExpansionMaxAda: acquireExpansionMaxAdaLovelace ? acquireExpansionMaxAdaLovelace / 1_000_000 : undefined,
+      acquireExpansionMaxUsd: acquireExpansionMaxAdaLovelace
+        ? (acquireExpansionMaxAdaLovelace / 1_000_000) * adaPrice
+        : undefined,
+      acquireExpansionNoMax,
       // Protocol fees
       protocolContributorsFeeLovelace: this.systemSettingsService.protocolContributorsFee,
       protocolContributorsFeeAda: this.systemSettingsService.protocolContributorsFee / 1_000_000,
