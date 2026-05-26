@@ -1890,13 +1890,13 @@ export class LifecycleService {
   private async handleAcquireExpansionToLocked(): Promise<void> {
     const now = new Date();
 
-    // Find vaults in expansion phase with active acquire expansion proposals whose duration has expired
+    // Find vaults in acquire_expansion phase with active acquire expansion proposals whose duration has expired
     const durationExpiredVaults: Pick<
       Vault,
       'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals' | 'ft_token_supply'
     >[] = await this.vaultRepository
       .createQueryBuilder('vault')
-      .where('vault.vault_status = :status', { status: VaultStatus.expansion })
+      .where('vault.vault_status = :status', { status: VaultStatus.acquire_expansion })
       .andWhere('vault.expansion_phase_start IS NOT NULL')
       .andWhere('vault.expansion_duration IS NOT NULL')
       .andWhere(`vault.expansion_phase_start + (vault.expansion_duration * interval '1 millisecond') <= :now`, { now })
@@ -2010,13 +2010,13 @@ export class LifecycleService {
       'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals' | 'ft_token_supply'
     >[]
   > {
-    // Find all expansion vaults not already being processed
+    // Find all acquire_expansion vaults not already being processed
     const expansionVaults: Pick<
       Vault,
       'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals' | 'ft_token_supply'
     >[] = await this.vaultRepository.find({
       where: {
-        vault_status: VaultStatus.expansion,
+        vault_status: VaultStatus.acquire_expansion,
       },
       select: ['id', 'vault_status', 'expansion_phase_start', 'vt_price', 'ft_token_decimals', 'ft_token_supply'],
     });

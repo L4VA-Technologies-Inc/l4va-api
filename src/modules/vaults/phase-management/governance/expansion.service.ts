@@ -637,22 +637,18 @@ export class ExpansionService {
       // Sync all transactions for this vault
       await this.transactionsService.syncVaultTransactions(vault.id);
 
-      // Find all acquire transactions during the expansion window with isExpansion flag
-      const expansionAcquisitions = await this.transactionsRepository.find({
+      // Find all acquire transactions during the expansion window with is_expansion flag
+      const expansionTransactions = await this.transactionsRepository.find({
         where: {
           vault_id: vault.id,
           type: TransactionType.acquire,
           status: TransactionStatus.confirmed,
+          is_expansion: true,
           created_at: MoreThanOrEqual(vault.expansion_phase_start), // Only consider transactions from expansion phase start
         },
         relations: ['user'],
         order: { created_at: 'ASC' },
       });
-
-      // Filter for expansion transactions (metadata.isExpansion === true)
-      const expansionTransactions = expansionAcquisitions.filter(
-        tx => tx.metadata && typeof tx.metadata === 'object' && (tx.metadata as any).isExpansion === true
-      );
 
       this.logger.log(
         `Found ${expansionTransactions.length} acquire expansion transaction(s) during expansion for vault ${vault.id}`
@@ -806,27 +802,29 @@ export class ExpansionService {
           await this.claimRepository.save(createdClaims);
           this.logger.log(`Saved ${createdClaims.length} acquire expansion claim(s) for vault ${vault.id}`);
 
-          // Calculate new global multiplier
-          // New multiplier = (old_supply * old_multiplier + total_new_vt) / (old_supply + total_new_vt)
-          const oldSupply = (vault.ft_token_supply || 0) * decimalMultiplier;
-          const currentMultiplier = await this.getCurrentMultiplier(vault.id);
-          const newSupply = oldSupply + totalNewVt;
+          // Calculate multiplier for on-chain metadata
+          // Multiplier represents VT tokens (in raw units) per 1 ADA
+          let multiplier: number;
 
-          let newMultiplier = 0;
-          if (newSupply > 0) {
-            newMultiplier = Math.floor((oldSupply * currentMultiplier + totalNewVt) / newSupply);
+          if (expansionConfig.priceType === 'limit') {
+            // Limit price: multiplier = limitPrice (VT per ADA) * decimals
+            multiplier = Math.floor(vtPrice * decimalMultiplier);
+          } else {
+            // Market price: multiplier = (1 / vtPrice) * decimals
+            // vtPrice is ADA per VT, so 1/vtPrice gives VT per ADA
+            multiplier = Math.floor((1 / vtPrice) * decimalMultiplier);
           }
 
           this.logger.log(
-            `Calculated new multiplier for vault ${vault.id}: ${newMultiplier} ` +
-              `(old: ${currentMultiplier}, newVT: ${totalNewVt / decimalMultiplier}, newSupply: ${newSupply / decimalMultiplier})`
+            `Calculated acquire expansion multiplier for vault ${vault.id}: ${multiplier} ` +
+              `(priceType: ${expansionConfig.priceType}, vtPrice: ${vtPrice}, decimals: ${vault.ft_token_decimals})`
           );
 
           // Close expansion with new multiplier
-          // This will mint VTs on-chain and set vault to LOCKED
-          await this.closeAcquireExpansion(vault.id, expansionProposal.id, closeReason, newMultiplier);
+          // This will update on-chain metadata and set vault to LOCKED
+          await this.closeAcquireExpansion(vault.id, expansionProposal.id, closeReason, multiplier);
 
-          // Claims are PENDING - automated distribution service will extract ADA to treasury
+          // Claims are PENDING - automated distribution service will extract ADA to treasury and mint VT
         } else {
           // No valid claims, close without minting
           await this.closeAcquireExpansion(vault.id, expansionProposal.id, closeReason, 0);
