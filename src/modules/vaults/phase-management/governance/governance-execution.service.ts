@@ -2154,12 +2154,9 @@ export class GovernanceExecutionService {
     }
 
     if (insertedCount === 0) {
-      const err = new Error(
-        'No new whitelist rows were inserted: every policy in this proposal already exists for this vault (unique vault_id + policy_id).'
+      this.logger.warn(
+        `Asset whitelist update proposal ${proposal.id} did not insert any new whitelist entries; proceeding with on-chain metadata update because whitelist rows may already exist`
       );
-      this.logger.warn(`Asset whitelist update proposal ${proposal.id} did not insert any new whitelist entries`);
-      await this.storeExecutionError(proposal, err);
-      throw err;
     }
 
     let onChainResult: { txHash: string };
