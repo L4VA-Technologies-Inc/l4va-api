@@ -1288,7 +1288,7 @@ export class VaultsService {
 
     // Calculate if acquire window is currently active
     // Considers both acquire and expansion windows for acquire_expansion status
-    const BUTTON_DISABLE_THRESHOLD_MS = 120000; // 2 minutes buffer before window closes
+    const BUTTON_DISABLE_THRESHOLD_MS = 300000; // 5 minutes buffer before window closes
     const now = Date.now();
     let isAcquireWindowActive = false;
 
@@ -1314,6 +1314,33 @@ export class VaultsService {
     }
 
     additionalData['isAcquireWindowActive'] = isAcquireWindowActive;
+
+    // Calculate if contribution/expansion window is currently active
+    let isContributionWindowActive = false;
+
+    if (
+      vault.vault_status === VaultStatus.contribution &&
+      vault.contribution_phase_start &&
+      vault.contribution_duration
+    ) {
+      const contributionEndTime = new Date(vault.contribution_phase_start).getTime() + vault.contribution_duration;
+      isContributionWindowActive = contributionEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+    } else if (
+      vault.vault_status === VaultStatus.expansion &&
+      vault.expansion_phase_start &&
+      vault.expansion_duration
+    ) {
+      const expansionEndTime = new Date(vault.expansion_phase_start).getTime() + vault.expansion_duration;
+      isContributionWindowActive = expansionEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+    } else if (vault.vault_status === VaultStatus.acquire_expansion) {
+      // For acquire_expansion: contribution button is active if expansion window is open
+      if (vault.expansion_phase_start && vault.expansion_duration) {
+        const expansionEndTime = new Date(vault.expansion_phase_start).getTime() + vault.expansion_duration;
+        isContributionWindowActive = expansionEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+      }
+    }
+
+    additionalData['isContributionWindowActive'] = isContributionWindowActive;
 
     additionalData['valuationAmount'] =
       assetsPrices.totalAcquiredAda && vault.tokens_for_acquires
