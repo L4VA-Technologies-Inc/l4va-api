@@ -2747,40 +2747,53 @@ export class GovernanceService {
 
     const unverifiedPolicyIds: string[] = [];
 
-    await Promise.all(
-      whitelistItems.map(async item => {
-        const existing = await this.tokenVerificationRepository.findOne({
-          where: { policy_id: item.policyId },
+    // Batch fetch all token verifications in a single query to avoid N+1
+    const policyIds = [...new Set(whitelistItems.map(item => item.policyId))];
+    const existingVerifications = policyIds.length
+      ? await this.tokenVerificationRepository.find({
+          where: { policy_id: In(policyIds) },
           order: { updated_at: 'DESC' },
-        });
+        })
+      : [];
 
-        if (existing?.is_verified) {
-          return;
+    // Build a map of policy_id -> most recent verification
+    const latestVerificationByPolicyId = new Map<string, TokenVerification>();
+    for (const verification of existingVerifications) {
+      if (!latestVerificationByPolicyId.has(verification.policy_id)) {
+        latestVerificationByPolicyId.set(verification.policy_id, verification);
+      }
+    }
+
+    // Process sequentially to avoid wasting external API calls
+    for (const item of whitelistItems) {
+      const existing = latestVerificationByPolicyId.get(item.policyId);
+
+      if (existing?.is_verified) {
+        continue;
+      }
+
+      const tokenId = `${item.policyId}${item.assetName || ''}`;
+      const dexHunterData = await this.dexHunterService.fetchTokenVerification(tokenId);
+      if (dexHunterData?.isVerified) {
+        continue;
+      }
+
+      try {
+        const wayupResponse = await this.wayUpPricingService.getCollectionAssets({ policyId: item.policyId });
+        const firstAsset = wayupResponse.results?.[0];
+        const hasResults = Array.isArray(wayupResponse.results) && wayupResponse.results.length > 0;
+
+        if (hasResults && firstAsset?.collection?.verified) {
+          continue;
         }
+      } catch (error) {
+        this.logger.warn(
+          `Failed to verify whitelist token ${item.policyId}: ${error instanceof Error ? error.message : error}`
+        );
+      }
 
-        const tokenId = `${item.policyId}${item.assetName || ''}`;
-        const dexHunterData = await this.dexHunterService.fetchTokenVerification(tokenId);
-        if (dexHunterData?.isVerified) {
-          return;
-        }
-
-        try {
-          const wayupResponse = await this.wayUpPricingService.getCollectionAssets({ policyId: item.policyId });
-          const firstAsset = wayupResponse.results?.[0];
-          const hasResults = Array.isArray(wayupResponse.results) && wayupResponse.results.length > 0;
-
-          if (hasResults && firstAsset?.collection?.verified) {
-            return;
-          }
-        } catch (error) {
-          this.logger.warn(
-            `Failed to verify whitelist token ${item.policyId}: ${error instanceof Error ? error.message : error}`
-          );
-        }
-
-        unverifiedPolicyIds.push(item.policyId);
-      })
-    );
+      unverifiedPolicyIds.push(item.policyId);
+    }
 
     if (unverifiedPolicyIds.length > 0) {
       throw new BadRequestException(`All whitelist tokens must be verified.`);
