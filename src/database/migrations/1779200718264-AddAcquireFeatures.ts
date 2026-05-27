@@ -80,7 +80,7 @@ export class AddAcquireFeatures1779200718264 implements MigrationInterface {
         'f7e8d9c0-1234-5678-90ab-cdef12345678',
         'Acquire Only',
         'acquire_only',
-        '{"voteThreshold": 5, "acquireReserve": 100, "creationThreshold": 1, "tokensForAcquires": 100, "executionThreshold": 51, "liquidityPoolContribution": 0}',
+        '{"voteThreshold": 5, "acquireReserve": 100, "cosigningThreshold": 34, "creationThreshold": 1, "tokensForAcquires": 100, "executionThreshold": 51, "liquidityPoolContribution": 0}',
         true,
         CURRENT_TIMESTAMP,
         CURRENT_TIMESTAMP
