@@ -203,6 +203,7 @@ export class GovernanceFeeService {
       marketplace_action: 'Marketplace Action',
       expansion: 'Expansion',
       buy_sell: 'Marketplace Action',
+      acquire_expansion: 'Acquire Expansion',
     };
     return labels[proposalType] || proposalType;
   }

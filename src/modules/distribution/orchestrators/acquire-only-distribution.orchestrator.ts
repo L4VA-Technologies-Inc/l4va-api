@@ -213,7 +213,7 @@ export class AcquireOnlyDistributionOrchestrator {
       );
     }
 
-    const input = await this.extractionBuilder.buildExtractionInput(vault, validClaims, adminUtxos, config);
+    const input = await this.extractionBuilder.buildAcquireOnlyExtractionInput(vault, validClaims, adminUtxos, config);
     const buildResponse = await this.blockchainService.buildTransaction(input);
     const actualTxSize = getTransactionSize(buildResponse.complete);
 

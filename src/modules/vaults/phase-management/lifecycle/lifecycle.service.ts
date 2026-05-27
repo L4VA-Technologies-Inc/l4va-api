@@ -2126,8 +2126,14 @@ export class LifecycleService {
   /**
    * Handle transition from Acquire phase to Locked or Failed for acquire-only vaults.
    * Triggered when the acquire window expires.
-   * Success: totalAcquiredAda >= vault.min_acquire_threshold → locked
-   * Failure: totalAcquiredAda <  vault.min_acquire_threshold → failed
+   *
+   * If min_acquire_threshold is set:
+   *   Success: totalAcquiredAda >= min_acquire_threshold → locked
+   *   Failure: totalAcquiredAda < min_acquire_threshold → failed
+   *
+   * If min_acquire_threshold is NOT set:
+   *   Success: totalAcquiredAda > 0 → locked
+   *   Failure: totalAcquiredAda === 0 → failed
    */
   private async handleAcquireOnlyToLockedOrFailed(): Promise<void> {
     const now = new Date();
@@ -2180,7 +2186,7 @@ export class LifecycleService {
    * Execute the acquire-only vault end-of-acquire-window transition.
    *
    * Unlike the standard acquire→governance flow this method:
-   *  - Uses vault.min_acquire_threshold (absolute lovelace) as the success threshold
+   *  - Uses vault.min_acquire_threshold if set, otherwise checks if any ADA was acquired
    *  - Creates only acquirer claims (no contributor claims, no LP)
    *  - Transitions directly to locked on success (skips governance)
    *  - Sends ADA to treasury_wallet (done by the distribution service)
@@ -2213,14 +2219,23 @@ export class LifecycleService {
 
       await this.vaultRepository.update({ id: vault.id }, { total_acquired_value_ada: totalAcquiredAda });
 
-      const minThresholdLovelace = vault.min_acquire_threshold ?? 0;
-      // totalAcquiredAda is stored in ADA; convert to lovelace for comparison
+      // Check threshold based on whether min_acquire_threshold is set
+      const minThresholdLovelace = vault.min_acquire_threshold ?? null;
       const totalAcquiredLovelace = Math.floor(totalAcquiredAda * 1_000_000);
-      const meetsThreshold = totalAcquiredLovelace >= minThresholdLovelace;
+
+      let meetsThreshold: boolean;
+      if (minThresholdLovelace !== null && minThresholdLovelace > 0) {
+        // If threshold is set, check if acquired amount meets or exceeds it
+        meetsThreshold = totalAcquiredLovelace >= minThresholdLovelace;
+      } else {
+        // If threshold is not set, vault succeeds if ANY ADA was acquired
+        meetsThreshold = totalAcquiredAda > 0;
+      }
 
       this.logger.log(
-        `Acquire-only vault ${vault.id}: acquired ${totalAcquiredLovelace} lovelace, ` +
-          `threshold ${minThresholdLovelace} lovelace, meets=${meetsThreshold}`
+        `Acquire-only vault ${vault.id}: acquired ${totalAcquiredLovelace} lovelace (${totalAcquiredAda} ADA), ` +
+          `threshold: ${minThresholdLovelace !== null ? `${minThresholdLovelace} lovelace` : 'none (any amount)'}, ` +
+          `meets threshold: ${meetsThreshold}`
       );
 
       if (meetsThreshold) {
@@ -2324,10 +2339,12 @@ export class LifecycleService {
           this.logger.error(`Error emitting success events for acquire-only vault ${vault.id}:`, err);
         }
       } else {
-        this.logger.warn(
-          `Acquire-only vault ${vault.id} failed threshold: ` +
-            `acquired ${totalAcquiredLovelace} lovelace, required ${minThresholdLovelace} lovelace`
-        );
+        const failureMessage =
+          minThresholdLovelace !== null && minThresholdLovelace > 0
+            ? `Acquire-only vault ${vault.id} failed: threshold not met (acquired ${totalAcquiredLovelace} lovelace, required ${minThresholdLovelace} lovelace)`
+            : `Acquire-only vault ${vault.id} failed: no ADA was acquired during the acquire window`;
+
+        this.logger.warn(failureMessage);
 
         const response = await this.vaultManagingService.updateVaultMetadataTx({
           vault,
@@ -2342,9 +2359,13 @@ export class LifecycleService {
           txHash: response.txHash,
           failureReason: VaultFailureReason.ACQUIRE_ONLY_THRESHOLD_NOT_MET,
           failureDetails: {
-            message: 'Acquire-only vault minimum threshold not met',
+            message:
+              minThresholdLovelace !== null && minThresholdLovelace > 0
+                ? `Acquire-only vault minimum threshold not met`
+                : `Acquire-only vault failed: no ADA was acquired`,
             requiredLovelace: minThresholdLovelace,
             actualLovelace: totalAcquiredLovelace,
+            acquiredAda: totalAcquiredAda,
           },
         });
 

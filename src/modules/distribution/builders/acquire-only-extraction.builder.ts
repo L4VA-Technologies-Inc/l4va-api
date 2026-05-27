@@ -25,7 +25,7 @@ export class AcquireOnlyExtractionBuilder {
   /**
    * Build extraction transaction input for a batch of acquire-only claims.
    */
-  async buildExtractionInput(
+  async buildAcquireOnlyExtractionInput(
     vault: Pick<Vault, 'script_hash' | 'asset_vault_name' | 'last_update_tx_hash' | 'ada_pair_multiplier'>,
     claims: Claim[],
     adminUtxos: string[],

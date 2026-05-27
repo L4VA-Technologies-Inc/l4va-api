@@ -101,11 +101,11 @@ export class CreateVaultReq {
   isAcquireOnly?: boolean;
 
   @ApiProperty({
-    description: 'Minimum ADA (in lovelace) required for the vault to lock. Required when isAcquireOnly is true.',
+    description:
+      'Minimum ADA (in lovelace) required for the vault to lock. Optional. If not set or if nothing is acquired, the vault will fail.',
     required: false,
   })
-  @ValidateIf(o => o.isAcquireOnly === true)
-  @IsNotEmpty()
+  @IsOptional()
   @IsNumber()
   @Expose()
   minAcquireThreshold?: number;

@@ -1156,6 +1156,8 @@ export class VaultsService {
 
     // Calculate reserve cost threshold
     // For acquire-only vaults, use min_acquire_threshold if set, otherwise 0
+    // This is displayed to users as "required reserve" but does not affect vault success/failure
+    // Vault succeeds if any ADA is acquired, regardless of threshold
     // For normal vaults, calculate based on asset value and reserve percentages
     let requireReservedCostAda: number;
     let requireReservedCostUsd: number;

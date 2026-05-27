@@ -2863,9 +2863,7 @@ export class GovernanceService {
         ],
       });
 
-      const treasuryWalletBalance = this.isMainnet
-        ? await this.treasuryWalletService.getTreasuryWalletBalance(vaultId)
-        : null;
+      const treasuryWalletBalance = await this.treasuryWalletService.getTreasuryWalletBalance(vaultId);
 
       return {
         assets: plainToInstance(AssetBuySellDto, assets, {
