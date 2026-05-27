@@ -18,6 +18,8 @@ export class AddIsExpandableAndAssetWhitelistProposalType1778752796390 implement
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
+    // Delete any proposals with the new proposal type before rolling back the enum
+    await queryRunner.query(`DELETE FROM "proposal" WHERE "proposal_type" = 'asset_whitelist_update'`);
     await queryRunner.query(
       `CREATE TYPE "public"."proposal_proposal_type_enum_old" AS ENUM('staking', 'distribution', 'termination', 'burning', 'buy_sell', 'marketplace_action', 'expansion')`
     );
