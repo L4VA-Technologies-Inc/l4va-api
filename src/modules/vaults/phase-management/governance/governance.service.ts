@@ -1384,9 +1384,8 @@ export class GovernanceService {
           );
         }
 
-        const uniqueWhitelistItems = Array.from(
-          new Map(assetsWhitelist.map(item => [`${item.policyId}:${item.assetName || ''}`, item])).values()
-        );
+        // Deduplicate by policyId only (matching the DB constraint: unique on vault + policy_id)
+        const uniqueWhitelistItems = Array.from(new Map(assetsWhitelist.map(item => [item.policyId, item])).values());
 
         const existingWhitelist = await this.assetsWhitelistRepository.find({
           where: { vault: { id: vaultId } },
