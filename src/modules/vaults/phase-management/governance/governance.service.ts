@@ -422,10 +422,24 @@ export class GovernanceService {
 
     const vault: Pick<
       Vault,
-      'id' | 'vault_status' | 'script_hash' | 'asset_vault_name' | 'name' | 'assets_whitelist' | 'is_expandable'
+      | 'id'
+      | 'vault_status'
+      | 'script_hash'
+      | 'asset_vault_name'
+      | 'name'
+      | 'assets_whitelist'
+      | 'is_expandable_asset_whitelist'
     > = await this.vaultRepository.findOne({
       where: { id: vaultId },
-      select: ['id', 'vault_status', 'script_hash', 'asset_vault_name', 'name', 'assets_whitelist', 'is_expandable'],
+      select: [
+        'id',
+        'vault_status',
+        'script_hash',
+        'asset_vault_name',
+        'name',
+        'assets_whitelist',
+        'is_expandable_asset_whitelist',
+      ],
     });
 
     if (!vault) {
@@ -1356,7 +1370,7 @@ export class GovernanceService {
       }
 
       case ProposalType.ASSET_WHITELIST_UPDATE: {
-        if (!vault.is_expandable) {
+        if (!vault.is_expandable_asset_whitelist) {
           throw new BadRequestException(
             'This vault does not allow expanding the asset whitelist. Only vaults marked as expandable can create asset whitelist update proposals.'
           );

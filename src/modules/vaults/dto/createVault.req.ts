@@ -422,5 +422,5 @@ export class CreateVaultReq {
   @IsOptional()
   @IsBoolean()
   @Expose()
-  isExpandable?: boolean;
+  isExpandableAssetWhitelist?: boolean;
 }

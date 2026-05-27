@@ -2106,7 +2106,7 @@ export class GovernanceExecutionService {
         'contribution_duration',
         'value_method',
         'vault_sc_status',
-        'is_expandable',
+        'is_expandable_asset_whitelist',
       ],
     });
 
@@ -2116,7 +2116,7 @@ export class GovernanceExecutionService {
       throw err;
     }
 
-    if (!vault.is_expandable) {
+    if (!vault.is_expandable_asset_whitelist) {
       const err = new Error(
         'This vault is not marked as expandable; asset whitelist update proposals cannot be executed.'
       );

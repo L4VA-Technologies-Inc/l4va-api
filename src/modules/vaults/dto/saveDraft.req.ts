@@ -428,5 +428,5 @@ export class SaveDraftReq {
   @ValidateIf((o, v) => v !== null)
   @IsBoolean()
   @Expose()
-  isExpandable?: boolean | null;
+  isExpandableAssetWhitelist?: boolean | null;
 }

@@ -786,12 +786,12 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   expansionLimitPrice?: number;
 
-  @ApiProperty({ description: 'Whether the vault supports expansion', required: false })
+  @ApiProperty({ description: 'Whether the vault supports asset whitelist expansion', required: false })
   @DtoRepresent({
     transform: false,
-    expose: { name: 'isExpandable' },
+    expose: { name: 'isExpandableAssetWhitelist' },
   })
-  isExpandable?: boolean;
+  isExpandableAssetWhitelist?: boolean;
 
   @ApiProperty({ description: 'Owner of the vault', type: () => User })
   @DtoRepresent({
