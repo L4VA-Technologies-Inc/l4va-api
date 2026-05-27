@@ -1315,26 +1315,6 @@ export class VaultsService {
 
     additionalData['isAcquireWindowActive'] = isAcquireWindowActive;
 
-    // Calculate if vault is in phase transition (phase ended but blockchain transition not yet complete)
-    let isPhaseTransitioning = false;
-
-    if (
-      vault.vault_status === VaultStatus.contribution &&
-      vault.contribution_phase_start &&
-      vault.contribution_duration
-    ) {
-      const contributionEndTime = new Date(vault.contribution_phase_start).getTime() + vault.contribution_duration;
-      isPhaseTransitioning = now >= contributionEndTime;
-    } else if (
-      vault.vault_status === VaultStatus.acquire &&
-      vault.acquire_phase_start &&
-      vault.acquire_window_duration
-    ) {
-      const acquireEndTime = new Date(vault.acquire_phase_start).getTime() + vault.acquire_window_duration;
-      isPhaseTransitioning = now >= acquireEndTime;
-    }
-
-    additionalData['isPhaseTransitioning'] = isPhaseTransitioning;
     additionalData['valuationAmount'] =
       assetsPrices.totalAcquiredAda && vault.tokens_for_acquires
         ? parseFloat((assetsPrices.totalAcquiredAda / (vault.tokens_for_acquires * 0.01)).toFixed(2))

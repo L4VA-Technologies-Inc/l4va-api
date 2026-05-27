@@ -371,18 +371,6 @@ export class VaultFullResponse extends VaultShortResponse {
   isAcquireWindowActive: boolean;
 
   @ApiProperty({
-    description:
-      'Indicates whether the vault is transitioning between phases (phase ended but blockchain transition not yet complete)',
-    type: Boolean,
-    default: false,
-  })
-  @DtoRepresent({
-    transform: false,
-    expose: true,
-  })
-  isPhaseTransitioning: boolean;
-
-  @ApiProperty({
     description: 'Indicates whether the user can see a chat',
     type: Boolean,
     default: false,
