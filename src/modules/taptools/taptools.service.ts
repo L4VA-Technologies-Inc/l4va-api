@@ -9,6 +9,7 @@ import { In, Repository } from 'typeorm';
 
 import { DexHunterPricingService } from '../dexhunter/dexhunter-pricing.service';
 import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
+import { VyfiService } from '../vyfi/vyfi.service';
 import { WayUpPricingService } from '../wayup/wayup-pricing.service';
 
 import { AssetValueDto, BlockfrostAssetResponseDto } from './dto/asset-value.dto';
@@ -132,6 +133,7 @@ export class TaptoolsService {
     private readonly dexHunterPricingService: DexHunterPricingService,
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly alertsService: AlertsService,
+    private readonly vyfiService?: VyfiService,
     @Optional() @Inject('TreasuryWalletService') private readonly treasuryWalletService?: TreasuryWalletService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
@@ -1703,18 +1705,128 @@ export class TaptoolsService {
   }
 
   /**
+   * Calculate LP token price from VyFi pool data
+   * Used as fallback when TapTools doesn't have the pool
+   * @param tokenAUnit - TokenA unit (hex)
+   * @param tokenBUnit - TokenB unit (hex or empty for ADA)
+   * @param lpTokenUnit - Full LP token unit for supply lookup
+   * @returns LP token price in ADA per normalized unit
+   */
+  private async calculateLpTokenPriceFromVyFi(
+    tokenAUnit: string,
+    tokenBUnit: string,
+    lpTokenUnit: string
+  ): Promise<number | null> {
+    if (!this.vyfiService) {
+      this.logger.warn('VyfiService not available for LP price calculation');
+      return null;
+    }
+
+    try {
+      // Convert empty tokenB to 'lovelace' for VyFi API
+      const tokenBQuery = !tokenBUnit || tokenBUnit === '' ? 'lovelace' : tokenBUnit;
+
+      const poolData = await this.vyfiService.getVyFiPoolData(tokenAUnit, tokenBQuery);
+      if (!poolData) {
+        this.logger.warn(`No VyFi pool found for ${tokenAUnit}/${tokenBQuery}`);
+        return null;
+      }
+
+      const totalSupply = await this.fetchLpTokenTotalSupply(lpTokenUnit);
+      if (!totalSupply) {
+        this.logger.warn(`No total supply found for LP token ${lpTokenUnit}`);
+        return null;
+      }
+
+      // VyFi returns quantities in base units, normalize them
+      const tokenALocked = poolData.tokenAQuantity;
+      const tokenBLocked = poolData.tokenBQuantity;
+
+      this.logger.debug(
+        `VyFi pool data - tokenALocked: ${tokenALocked}, tokenBLocked: ${tokenBLocked}, lpSupply: ${totalSupply}`
+      );
+
+      // Get token decimals from Blockfrost
+      let tokenADecimals = 6; // Default to 6
+      let tokenBDecimals = 6; // Default to 6 (ADA standard)
+
+      try {
+        const tokenAMetadata = await this.blockfrost.assetsById(tokenAUnit);
+        tokenADecimals = tokenAMetadata.metadata?.decimals ?? 6;
+      } catch (error) {
+        this.logger.warn(`Failed to fetch decimals for tokenA ${tokenAUnit}, using default 6`);
+      }
+
+      // TokenB decimals
+      const isTokenBAda = !tokenBUnit || tokenBUnit === '' || tokenBUnit === 'lovelace';
+      if (!isTokenBAda) {
+        try {
+          const tokenBMetadata = await this.blockfrost.assetsById(tokenBUnit);
+          tokenBDecimals = tokenBMetadata.metadata?.decimals ?? 6;
+        } catch (error) {
+          this.logger.warn(`Failed to fetch decimals for tokenB ${tokenBUnit}, using default 6`);
+        }
+      }
+
+      // Get token prices
+      let tokenAPrice = 0;
+      let tokenBPrice = 0;
+
+      // TokenB is ADA if tokenBUnit is empty or 'lovelace'
+      if (isTokenBAda) {
+        tokenBPrice = 1;
+      } else {
+        tokenBPrice = (await this.dexHunterPricingService.getTokenPrice(tokenBUnit)) || 0;
+      }
+
+      // TokenA price (could be another LP token!)
+      tokenAPrice = (await this.dexHunterPricingService.getTokenPrice(tokenAUnit)) || 0;
+
+      // Calculate TVL
+      // VyFi returns quantities in base units, normalize using actual decimals from Blockfrost
+      const tokenANormalized = tokenALocked / Math.pow(10, tokenADecimals);
+      const tokenBNormalized = tokenBLocked / Math.pow(10, tokenBDecimals);
+
+      const tvl = tokenANormalized * tokenAPrice + tokenBNormalized * tokenBPrice;
+      const lpTokenPrice = tvl / totalSupply;
+
+      this.logger.debug(
+        `VyFi LP price calculation - tokenAPrice: ${tokenAPrice} (decimals: ${tokenADecimals}), tokenBPrice: ${tokenBPrice} (decimals: ${tokenBDecimals}), TVL: ${tvl}, LP price: ${lpTokenPrice}`
+      );
+
+      return lpTokenPrice;
+    } catch (error) {
+      this.logger.error(`Failed to calculate LP price from VyFi: ${error.message}`, error);
+      return null;
+    }
+  }
+
+  /**
    * Calculate LP token price dynamically from pool TVL
    * Formula: LP Token Price = TVL / Total LP Token Supply
    * TVL = (tokenALocked * tokenAPrice) + (tokenBLocked * tokenBPrice)
    *
-   * @param onchainID - Pool onchain ID
+   * Falls back to VyFi API if TapTools doesn't have the pool data
+   *
+   * @param onchainID - Pool onchain ID (can be VyFi onchain ID format)
+   * @param lpTokenUnit - Optional: Full LP token unit to enable VyFi fallback
    * @returns LP token price in ADA per normalized unit
    */
-  private async calculateLpTokenPrice(onchainID: string): Promise<number | null> {
+  private async calculateLpTokenPrice(onchainID: string, lpTokenUnit?: string): Promise<number | null> {
     try {
       const poolData = await this.fetchLpPoolData(onchainID);
       if (!poolData || !poolData.lpTokenUnit) {
-        this.logger.warn(`No pool data found for onchain ID ${onchainID}`);
+        this.logger.warn(`No pool data found in TapTools for onchain ID ${onchainID}`);
+
+        // Try VyFi fallback if LP token unit is provided
+        if (lpTokenUnit && this.vyfiService) {
+          this.logger.debug('Attempting VyFi fallback for LP price calculation');
+          // We need to extract tokenA and tokenB from somewhere
+          // For now, return null - caller should use calculateLpTokenPriceFromVyFi directly
+          // when they know it's a VyFi-only pool
+          return null;
+        }
+
         return null;
       }
 
@@ -1780,9 +1892,44 @@ export class TaptoolsService {
           whitelistItem.valuation_method === AssetValuationMethod.LP_TOKEN_DYNAMIC &&
           whitelistItem.lp_pool_onchain_id
         ) {
-          const lpPrice = await this.calculateLpTokenPrice(whitelistItem.lp_pool_onchain_id);
+          let lpPrice: number | null = null;
+
+          // Check if this is a VyFi pool (format: tokenA:tokenB)
+          if (whitelistItem.lp_pool_onchain_id.includes(':')) {
+            // VyFi LP token: parse tokenA and tokenB from colon-separated format
+            const [tokenAUnit, tokenBUnit] = whitelistItem.lp_pool_onchain_id.split(':');
+
+            // Get the full LP token unit from assets table
+            const lpAsset = await this.assetRepository.findOne({
+              where: {
+                vault_id: vaultId,
+                policy_id: whitelistItem.policy_id,
+              },
+            });
+
+            if (lpAsset) {
+              const lpTokenUnit = lpAsset.policy_id + lpAsset.asset_id;
+
+              this.logger.debug(
+                `VyFi LP token detected for ${whitelistItem.policy_id}: tokenA=${tokenAUnit}, tokenB=${tokenBUnit}, lpUnit=${lpTokenUnit}`
+              );
+
+              lpPrice = await this.calculateLpTokenPriceFromVyFi(tokenAUnit, tokenBUnit || '', lpTokenUnit);
+            } else {
+              this.logger.warn(
+                `VyFi LP token ${whitelistItem.policy_id} not found in vault ${vaultId} assets - cannot calculate price`
+              );
+            }
+          } else {
+            // TapTools LP token: use onchainID directly
+            lpPrice = await this.calculateLpTokenPrice(whitelistItem.lp_pool_onchain_id);
+          }
+
           if (lpPrice !== null && lpPrice !== undefined && Number.isFinite(lpPrice)) {
             customPriceMap.set(whitelistItem.policy_id, lpPrice);
+            this.logger.debug(`LP price for ${whitelistItem.policy_id}: ${lpPrice} ADA`);
+          } else {
+            this.logger.warn(`Failed to calculate LP price for ${whitelistItem.policy_id}`);
           }
         }
       }
@@ -2168,6 +2315,31 @@ export class TaptoolsService {
       this.logger.error(`Failed to fetch token pools for asset ${assetId}: ${errorMessage}`);
       throw new HttpException('Failed to fetch token pools from TapTools', 502);
     }
+  }
+
+  /**
+   * Calculate VyFi LP token price for pools not indexed by TapTools
+   * Useful for VLRM/ORACLE and other VyFi-only pools
+   *
+   * @param tokenAUnit - TokenA unit (hex format, e.g., VLRM policy+assetName)
+   * @param tokenBUnit - TokenB unit (hex format, or empty string for ADA)
+   * @param lpTokenUnit - Full LP token unit (policyId + assetName in hex)
+   * @returns LP token price in ADA per normalized unit, or null if calculation fails
+   *
+   * @example
+   * // For VLRM/ORACLE LP token
+   * const price = await taptoolsService.calculateVyFiLpTokenPrice(
+   *   '63efb704b7396890e4d9539d030c0e667739043add65c00f96c586c056616c6f72756d', // VLRM
+   *   '328a18bac517630826a106bff1a55caf455de84cdba98416f8e093b27393c37310950f58596be5013b942d52accb931c2800cf132db36fb5fd7d71c4', // ORACLE
+   *   'f12b73089d28ebcdc15ca0d853e076af12cbf4facbc33441e935ca3e567946695f564c524d2f4f5241434c455f4c50' // LP token
+   * );
+   */
+  public async calculateVyFiLpTokenPrice(
+    tokenAUnit: string,
+    tokenBUnit: string,
+    lpTokenUnit: string
+  ): Promise<number | null> {
+    return this.calculateLpTokenPriceFromVyFi(tokenAUnit, tokenBUnit, lpTokenUnit);
   }
 
   public invalidateWalletCache(walletAddress: string): void {
