@@ -7,7 +7,6 @@ import { BlockchainModule } from '../vaults/processing-tx/onchain/blockchain.mod
 import { TreasureWalletModule } from '../vaults/treasure/treasure-wallet.module';
 
 import { DexHunterPricingModule } from './dexhunter-pricing.module';
-import { DexHunterPricingService } from './dexhunter-pricing.service';
 import { DexHunterController } from './dexhunter.controller';
 import { DexHunterService } from './dexhunter.service';
 
