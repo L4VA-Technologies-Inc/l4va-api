@@ -1,4 +1,4 @@
-import { Controller, UseGuards, Body, Post, Get, Query } from '@nestjs/common';
+import { Controller, UseGuards, Body, Post } from '@nestjs/common';
 import { ApiBody, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { ApiDoc } from '../../decorators/api-doc.decorator';
@@ -24,36 +24,5 @@ export class TaptoolsController {
   @UseGuards(AuthGuard)
   async getWalletSummaryPaginated(@Body() body: PaginationQueryDto): Promise<PaginatedWalletSummaryDto> {
     return this.taptoolsService.getWalletSummaryPaginated(body);
-  }
-
-  // TODO: TEMPORARY TEST ENDPOINT - DELETE AFTER TESTING
-  @Get('test-vyfi-lp-price')
-  @ApiDoc({
-    summary: '[TEST] Calculate VyFi LP token price',
-    description: 'Temporary endpoint to test VyFi LP token price calculation. DELETE AFTER TESTING.',
-    status: 200,
-  })
-  async testVyFiLpPrice(
-    @Query('tokenA') tokenAUnit: string,
-    @Query('tokenB') tokenBUnit: string,
-    @Query('lpToken') lpTokenUnit: string
-  ): Promise<{
-    success: boolean;
-    price: number | null;
-    priceAda: number | null;
-    tokenA: string;
-    tokenB: string;
-    lpToken: string;
-  }> {
-    const price = await this.taptoolsService.calculateVyFiLpTokenPrice(tokenAUnit, tokenBUnit, lpTokenUnit);
-
-    return {
-      success: price !== null,
-      price,
-      priceAda: price,
-      tokenA: tokenAUnit,
-      tokenB: tokenBUnit,
-      lpToken: lpTokenUnit,
-    };
   }
 }

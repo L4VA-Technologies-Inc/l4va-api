@@ -1,7 +1,5 @@
-import { Module, forwardRef } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-
-import { VyfiModule } from '../vyfi/vyfi.module';
 
 import { TaptoolsController } from './taptools.controller';
 import { TaptoolsService } from './taptools.service';
@@ -23,7 +21,6 @@ import { WayUpPricingModule } from '@/modules/wayup/wayup-pricing.module';
     AssetsModule,
     DexHunterPricingModule,
     WayUpPricingModule,
-    forwardRef(() => VyfiModule),
   ],
   providers: [TaptoolsService],
   exports: [TaptoolsService],
