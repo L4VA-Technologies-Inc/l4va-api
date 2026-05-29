@@ -1,9 +1,22 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import NodeCache from 'node-cache';
+
+import { TapToolsClient } from '../taptools/taptools.client';
+
+import { DexHunterPricingClient } from './dexhunter-pricing.client';
 
 /**
- * Build Swap Flow
+ * DexHunter Pricing Service - Orchestrates token pricing from multiple sources
+ *
+ * Pricing Strategy (TapTools-first with DexHunter fallback):
+ * 1. Try TapToolsClient first (primary source)
+ * 2. If TapTools fails or returns null, try DexHunterPricingClient as fallback
+ * 3. Return null only if both sources fail or have no data
+ *
+ * Both clients handle their own caching (5-minute TTL) to reduce redundant API calls.
+ * This service acts as an orchestrator, delegating to specialized clients.
+ *
+ * Build Swap Flow:
  * 1. Estimate Swap - Get price quote and fee breakdown
  * 2. Build Swap Transaction - Get unsigned transaction CBOR from DexHunter | /swap/build
  * 3. Sign Transaction - Sign with treasury wallet private key
@@ -16,22 +29,22 @@ export class DexHunterPricingService {
   private readonly logger = new Logger(DexHunterPricingService.name);
   private readonly dexHunterBaseUrl: string;
   private readonly dexHunterApiKey: string;
-  private readonly tapToolsApiKey: string;
-  private readonly tapToolsApiUrl: string;
   private readonly isMainnet: boolean;
-  private priceCache = new NodeCache({ stdTTL: 300 }); // 5 minute cache for token prices
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly tapToolsClient: TapToolsClient,
+    private readonly dexHunterClient: DexHunterPricingClient
+  ) {
     this.dexHunterBaseUrl = this.configService.get<string>('DEXHUNTER_BASE_URL');
     this.dexHunterApiKey = this.configService.get<string>('DEXHUNTER_API_KEY');
-    this.tapToolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
-    this.tapToolsApiUrl = this.configService.get<string>('TAPTOOLS_API_URL');
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
   }
 
   /**
    * Sanitize error response text - detect HTML error pages and extract concise error info
    * Prevents massive HTML dumps in logs when external APIs return error pages
+   * Used by checkTokenLiquidity method for DexHunter pool aggregation endpoint
    */
   private sanitizeErrorText(text: string, statusCode: number): string {
     // Detect HTML error pages (Cloudflare, nginx, etc.)
@@ -57,143 +70,54 @@ export class DexHunterPricingService {
   }
 
   /**
-  /**
-   * Fetch token prices from TapTools API in batch
-   * @param tokenIds - Array of token identifiers
-   * @returns Map of tokenId to price in ADA
-   */
-  private async fetchTokenPricesFromTapTools(tokenIds: string[]): Promise<Map<string, number | null>> {
-    const priceMap = new Map<string, number | null>();
-
-    // TapTools supports max 100 tokens per batch
-    const batchSize = 100;
-    for (let i = 0; i < tokenIds.length; i += batchSize) {
-      const batch = tokenIds.slice(i, i + batchSize);
-
-      try {
-        const response = await fetch(`${this.tapToolsApiUrl}/token/prices`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': this.tapToolsApiKey,
-          },
-          body: JSON.stringify(batch),
-        });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          this.logger.warn(`TapTools batch API failed: ${response.status} - ${errorText}`);
-          // Set all tokens in batch to null
-          batch.forEach(tokenId => priceMap.set(tokenId, null));
-          continue;
-        }
-
-        const data = await response.json();
-
-        // Map response to price map
-        batch.forEach(tokenId => {
-          const price = data[tokenId];
-          priceMap.set(tokenId, price !== undefined && price !== null ? price : null);
-        });
-      } catch (error) {
-        this.logger.warn(`TapTools batch request failed for batch ${i / batchSize + 1}`, error);
-        // Set all tokens in batch to null
-        batch.forEach(tokenId => priceMap.set(tokenId, null));
-      }
-    }
-
-    return priceMap;
-  }
-
-  /**
-   * Get current token price in ADA with TapTools fallback
-   * Uses DexHunter API first, falls back to TapTools if DexHunter fails or returns null
-   * Results are cached for 5 minutes to reduce API calls
+   * Get current token price in ADA with DexHunter fallback
+   * Uses TapToolsClient first, falls back to DexHunterPricingClient if TapTools fails or returns null
+   * Results are cached by clients for 5 minutes to reduce API calls
    *
    * Fallback strategy:
-   * 1. Try DexHunter API first
-   * 2. If DexHunter fails (404, 500, 401, etc.) or returns null - try TapTools API
-   * 3. Return null only if both APIs fail or have no data
+   * 1. Try TapToolsClient first (primary source)
+   * 2. If TapTools fails or returns null - try DexHunterPricingClient as fallback
+   * 3. Return null only if both sources fail or have no data
    *
    * @param tokenId - The token identifier (policyId + assetName in hex)
    * @returns Token price in ADA, or null if token not found/no liquidity
    */
   async getTokenPrice(tokenId: string): Promise<number | null> {
-    // Check cache first
-    const cacheKey = `token_price_${tokenId}`;
-    const cached = this.priceCache.get<number | null>(cacheKey);
-    if (cached !== undefined) {
-      return cached;
+    // Try TapTools API first (primary source)
+    const tapToolsResult = await this.tapToolsClient.getTokenPrices([tokenId]);
+    const tapToolsPrice = tapToolsResult.get(tokenId);
+
+    if (tapToolsPrice !== null && tapToolsPrice > 0) {
+      this.logger.debug(
+        `Successfully fetched token price from TapTools (primary) for ${tokenId}: ${tapToolsPrice} ADA`
+      );
+      return tapToolsPrice;
     }
 
-    // Skip API calls for testnet - DexHunter doesn't support preprod
-    if (!this.isMainnet) {
-      this.logger.debug(`Skipping DexHunter API call for testnet token ${tokenId}`);
-      return null;
+    // Fallback to DexHunter API
+    this.logger.debug(`TapTools returned no price for token ${tokenId}, trying DexHunter fallback`);
+    const dexHunterResult = await this.dexHunterClient.getTokenPrices([tokenId]);
+    const dexHunterPrice = dexHunterResult.get(tokenId);
+
+    if (dexHunterPrice !== null && dexHunterPrice > 0) {
+      this.logger.log(`DexHunter provided fallback price for token ${tokenId}: ${dexHunterPrice} ADA`);
+      return dexHunterPrice;
     }
 
-    let dexHunterResult: number | null = null;
-
-    // Try DexHunter API first
-    try {
-      const response = await fetch(`${this.dexHunterBaseUrl}/swap/averagePrice/ADA/${tokenId}`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Partner-Id': this.dexHunterApiKey,
-        },
-      });
-
-      if (!response.ok) {
-        if (response.status === 404) {
-          this.logger.debug(`DexHunter: Token ${tokenId} not found or has no liquidity, trying TapTools fallback`);
-        } else {
-          const errorText = await response.text();
-          const sanitizedError = this.sanitizeErrorText(errorText, response.status);
-          this.logger.warn(`DexHunter API error (${response.status}): ${sanitizedError}, trying TapTools fallback`);
-        }
-      } else {
-        const data = await response.json();
-        const priceAda = data.price_ba;
-
-        if (priceAda && priceAda > 0) {
-          dexHunterResult = priceAda;
-        } else {
-          this.logger.debug(`DexHunter returned zero/null price for token ${tokenId}, trying TapTools fallback`);
-        }
-      }
-    } catch (error) {
-      this.logger.warn(`DexHunter API failed for token ${tokenId}, trying TapTools fallback`, error);
-    }
-
-    // If DexHunter succeeded with valid data, cache and return it
-    if (dexHunterResult) {
-      this.priceCache.set(cacheKey, dexHunterResult);
-      return dexHunterResult;
-    }
-
-    // Fallback to TapTools API
-    const tapToolsResult = await this.fetchTokenPricesFromTapTools([tokenId]).then(map => map.get(tokenId) || null);
-
-    if (tapToolsResult !== null && tapToolsResult > 0) {
-      this.logger.log(`Successfully fetched token price from TapTools for ${tokenId}: ${tapToolsResult} ADA`);
-      this.priceCache.set(cacheKey, tapToolsResult);
-      return tapToolsResult;
-    }
-
-    // Both APIs failed or returned no data - cache null to avoid repeated failed lookups
-    this.logger.debug(`No price data available from DexHunter or TapTools for token ${tokenId}`);
-    this.priceCache.set(cacheKey, null);
+    // Both sources failed or returned no data
+    this.logger.debug(`No price data available from TapTools or DexHunter for token ${tokenId}`);
     return null;
   }
 
   /**
-   * Get prices for multiple tokens in ADA with TapTools fallback
-   * Batch fetches prices for efficiency
+   * Get prices for multiple tokens in ADA with DexHunter fallback
+   * Batch fetches prices for efficiency using dedicated pricing clients
    *
    * Fallback strategy:
-   * 1. Try fetching all prices from DexHunter first (in parallel batches)
-   * 2. For any tokens that returned null, try TapTools as fallback (in single batch)
+   * 1. Try fetching all prices from TapToolsClient first (primary source, native batch support)
+   * 2. For any tokens that returned null, try DexHunterPricingClient as fallback (in batch)
+   *
+   * Both clients handle their own caching and batch optimization.
    *
    * @param tokenIds - Array of token identifiers (policyId + assetName in hex)
    * @returns Map of tokenId to price in ADA (null if not found)
@@ -201,43 +125,39 @@ export class DexHunterPricingService {
   async getTokenPrices(tokenIds: string[]): Promise<Map<string, number | null>> {
     this.logger.log(`Fetching prices for ${tokenIds.length} tokens`);
 
-    const priceMap = new Map<string, number | null>();
+    // Try TapTools API first (primary source with native batch support)
+    const tapToolsResults = await this.tapToolsClient.getTokenPrices(tokenIds);
 
-    // Fetch prices in parallel with concurrency limit
-    const batchSize = 10;
-    for (let i = 0; i < tokenIds.length; i += batchSize) {
-      const batch = tokenIds.slice(i, i + batchSize);
-      const prices = await Promise.all(batch.map(tokenId => this.getTokenPrice(tokenId)));
-
-      batch.forEach((tokenId, index) => {
-        priceMap.set(tokenId, prices[index]);
-      });
-    }
-
-    // Find tokens that still have null prices and try TapTools fallback
-    const tokensNeedingFallback = tokenIds.filter(tokenId => priceMap.get(tokenId) === null);
+    // Find tokens that still have null prices and need DexHunter fallback
+    const tokensNeedingFallback = tokenIds.filter(tokenId => {
+      const price = tapToolsResults.get(tokenId);
+      return price === null || price === undefined;
+    });
 
     if (tokensNeedingFallback.length > 0) {
       this.logger.log(
-        `${tokensNeedingFallback.length} tokens had no price from DexHunter, trying TapTools fallback in batch`
+        `${tokensNeedingFallback.length} tokens had no price from TapTools, trying DexHunter fallback in batch`
       );
-      const tapToolsPrices = await this.fetchTokenPricesFromTapTools(tokensNeedingFallback);
+      const dexHunterResults = await this.dexHunterClient.getTokenPrices(tokensNeedingFallback);
 
-      // Update price map with TapTools results
-      tapToolsPrices.forEach((price, tokenId) => {
+      // Merge DexHunter fallback results into main result map
+      dexHunterResults.forEach((price, tokenId) => {
         if (price !== null && price > 0) {
-          priceMap.set(tokenId, price);
-          this.logger.debug(`TapTools provided fallback price for token ${tokenId}: ${price} ADA`);
+          tapToolsResults.set(tokenId, price);
+          this.logger.debug(`DexHunter provided fallback price for token ${tokenId}: ${price} ADA`);
         }
       });
     }
 
-    return priceMap;
+    return tapToolsResults;
   }
 
   /**
    * Check if token has liquidity pools across ALL DEXes
    * Returns aggregated pool data from MinSwap, VyFi, SundaeSwap, Spectrum, etc.
+   *
+   * Note: This method uses DexHunter's pool aggregation endpoint (/stats/pools) directly,
+   * not the pricing clients. DexHunter is currently the only source for multi-DEX pool aggregation.
    *
    * This is superior to checking individual DEX APIs because:
    * - Community can create LP on ANY DEX, not just VyFi

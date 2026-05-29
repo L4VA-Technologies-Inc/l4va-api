@@ -11,6 +11,7 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { AlertsModule } from '@/modules/alerts/alerts.module';
 import { DexHunterPricingModule } from '@/modules/dexhunter/dexhunter-pricing.module';
+import { TapToolsPricingModule } from '@/modules/taptools/taptools-pricing.module';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
 import { WayUpPricingModule } from '@/modules/wayup/wayup-pricing.module';
 
@@ -20,6 +21,7 @@ import { WayUpPricingModule } from '@/modules/wayup/wayup-pricing.module';
     AlertsModule,
     AssetsModule,
     DexHunterPricingModule,
+    TapToolsPricingModule,
     WayUpPricingModule,
   ],
   providers: [TaptoolsService],

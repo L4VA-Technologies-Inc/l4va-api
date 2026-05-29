@@ -1,16 +1,27 @@
 import { HttpModule } from '@nestjs/axios';
 import { Module } from '@nestjs/common';
 
+import { TapToolsPricingModule } from '../taptools/taptools-pricing.module';
+
+import { DexHunterPricingClient } from './dexhunter-pricing.client';
 import { DexHunterPricingService } from './dexhunter-pricing.service';
 
 /**
- * DexHunter Pricing Module - Provides only pricing/query functionality
- * No dependencies on BlockchainModule or transaction building
- * This module is safe to import in TaptoolsModule without creating circular dependencies
+ * DexHunter Pricing Module - Provides token pricing functionality with multi-source support
+ *
+ * Imports TapToolsPricingModule to access TapToolsClient for primary token pricing.
+ * Provides both DexHunterPricingClient (fallback source) and DexHunterPricingService (orchestrator).
+ *
+ * No circular dependencies:
+ * - This module imports TapToolsPricingModule (lightweight, only exports TapToolsClient)
+ * - TapToolsModule (the main module with TaptoolsService) imports DexHunterPricingModule
+ * - TapToolsPricingModule and TapToolsModule are separate modules to break circular dependency
+ *
+ * This module is safe to import in other modules without creating circular dependencies.
  */
 @Module({
-  imports: [HttpModule],
-  providers: [DexHunterPricingService],
+  imports: [HttpModule, TapToolsPricingModule],
+  providers: [DexHunterPricingClient, DexHunterPricingService],
   exports: [DexHunterPricingService],
 })
 export class DexHunterPricingModule {}

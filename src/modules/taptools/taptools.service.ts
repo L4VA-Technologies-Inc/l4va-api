@@ -15,6 +15,7 @@ import { AssetValueDto, BlockfrostAssetResponseDto } from './dto/asset-value.dto
 import { BlockfrostAddressTotalDto } from './dto/blockfrost-address.dto';
 import { PaginationMetaDto, PaginationQueryDto } from './dto/pagination.dto';
 import { PaginatedWalletSummaryDto, WalletOverviewDto } from './dto/wallet-summary.dto';
+import { TapToolsClient } from './taptools.client';
 
 import { Asset } from '@/database/asset.entity';
 import { Snapshot } from '@/database/snapshot.entity';
@@ -45,19 +46,6 @@ interface GetAssetValueParams {
 interface AssetPriceResult {
   priceAda: number;
   priceUsd: number;
-}
-
-export interface TapToolsTokenPoolDto {
-  exchange: string;
-  lpTokenUnit: string;
-  onchainID: string;
-  tokenA: string;
-  tokenALocked: number;
-  tokenATicker: string;
-  /** empty for ADA */
-  tokenB: string | null; // empty for ADA
-  tokenBLocked: number;
-  tokenBTicker: string;
 }
 
 @Injectable()
@@ -127,6 +115,7 @@ export class TaptoolsService {
     private readonly dexHunterPricingService: DexHunterPricingService,
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly alertsService: AlertsService,
+    private readonly tapToolsClient: TapToolsClient,
     @Optional() @Inject('TreasuryWalletService') private readonly treasuryWalletService?: TreasuryWalletService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
@@ -1645,37 +1634,6 @@ export class TaptoolsService {
   }
 
   /**
-   * Fetch pool data from TapTools using onchain pool ID
-   * @param onchainID - Pool onchain ID
-   * @returns Pool data with token reserves
-   */
-  private async fetchLpPoolData(onchainID: string): Promise<TapToolsTokenPoolDto | null> {
-    if (!this.isMainnet) {
-      this.logger.debug('Skipping TapTools LP pool fetch for testnet');
-      return null;
-    }
-
-    try {
-      const response = await this.axiosTapToolsInstance.get('/token/pools', {
-        params: { onchainID },
-        timeout: 10000,
-        headers: {
-          Accept: 'application/json',
-        },
-      });
-
-      if (response.data && Array.isArray(response.data) && response.data.length > 0) {
-        return response.data[0];
-      }
-
-      return null;
-    } catch (error) {
-      this.logger.warn(`Failed to fetch LP pool data from TapTools: ${error.message}`);
-      return null;
-    }
-  }
-
-  /**
    * Fetch LP token total supply from Blockfrost
    * @param lpTokenUnit - Full LP token unit (policyId + assetName in hex)
    * @returns Total supply or null
@@ -1705,7 +1663,7 @@ export class TaptoolsService {
    */
   private async calculateLpTokenPrice(onchainID: string): Promise<number | null> {
     try {
-      const poolData = await this.fetchLpPoolData(onchainID);
+      const poolData = await this.tapToolsClient.getPoolByOnchainId(onchainID);
       if (!poolData || !poolData.lpTokenUnit) {
         this.logger.warn(`No pool data found for onchain ID ${onchainID}`);
         return null;
@@ -2129,38 +2087,6 @@ export class TaptoolsService {
 
     // 5. If quantity > 1 and no NFT indicators, it's a fungible token
     return false;
-  }
-
-  public async getTokenPools(assetId: string): Promise<TapToolsTokenPoolDto[]> {
-    try {
-      const tapToolsResponse = await this.axiosTapToolsInstance.get<TapToolsTokenPoolDto[]>(
-        `/token/pools?unit=${encodeURIComponent(assetId)}`
-      );
-
-      return tapToolsResponse.data;
-    } catch (error: unknown) {
-      if (axios.isAxiosError(error)) {
-        const status = error.response?.status;
-        const errorData = error.response?.data as any;
-        const upstreamMessage =
-          (typeof errorData === 'string' ? errorData : errorData?.message) ?? error.message ?? 'Unknown error';
-
-        this.logger.error(
-          `Failed to fetch token pools for asset ${assetId} from TapTools (status: ${status ?? 'unknown'}): ${upstreamMessage}`
-        );
-
-        if (status) {
-          throw new HttpException(`TapTools error: ${upstreamMessage}`, status);
-        }
-
-        // No HTTP status available (network error, timeout, etc.)
-        throw new HttpException('Failed to reach TapTools service', 502);
-      }
-
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.logger.error(`Failed to fetch token pools for asset ${assetId}: ${errorMessage}`);
-      throw new HttpException('Failed to fetch token pools from TapTools', 502);
-    }
   }
 
   public invalidateWalletCache(walletAddress: string): void {

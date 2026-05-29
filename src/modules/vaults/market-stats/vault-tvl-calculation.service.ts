@@ -72,8 +72,6 @@ export class VaultTvlCalculationService implements OnModuleInit, OnModuleDestroy
 
   private scheduleNextUpdate(): void {
     const delayMs = this.getNextIntervalMs();
-    const delayMinutes = (delayMs / 60_000).toFixed(2);
-    this.logger.debug(`Next vault valuation update scheduled in ${delayMinutes} minutes`);
 
     this.updateTimeout = setTimeout(() => {
       void this.executeScheduledUpdate();
