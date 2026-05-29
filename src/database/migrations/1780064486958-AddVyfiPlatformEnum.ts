@@ -34,6 +34,9 @@ export class AddVyfiPlatformEnum1780064486958 implements MigrationInterface {
       `CREATE TYPE "public"."token_verifications_platform_enum" AS ENUM('dexhunter', 'wayup', 'taptools', 'manual', 'jpg.store')`
     );
 
+    // Map any 'vyfi' rows to NULL so the down migration can run safely
+    await queryRunner.query(`UPDATE "token_verifications" SET "platform" = NULL WHERE "platform" = 'vyfi'`);
+
     // Update the column to use the old enum type
     await queryRunner.query(
       `ALTER TABLE "token_verifications" ALTER COLUMN "platform" TYPE "public"."token_verifications_platform_enum" USING "platform"::"text"::"public"."token_verifications_platform_enum"`
