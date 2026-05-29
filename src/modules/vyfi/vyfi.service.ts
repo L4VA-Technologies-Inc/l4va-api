@@ -168,10 +168,13 @@ export class VyfiService {
   }
 
   /**
-   * Get pool data by LP token unit
-   * Queries all VyFi pools and finds the one matching the LP token
+   * Get pool data by LP token unit.
+   *
+   * Note: VyFi API doesn't currently provide a reverse-lookup endpoint for LP token units,
+   * so this method returns null for now.
+   *
    * @param lpTokenUnit - Full LP token unit (policyId + assetName in hex)
-   * @returns VyFi pool data or null if not found
+   * @returns VyFi pool data or null (always null until reverse lookup is implemented)
    */
   async getPoolByLpToken(lpTokenUnit: string): Promise<VyFiPoolData | null> {
     try {

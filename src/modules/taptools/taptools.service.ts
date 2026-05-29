@@ -1684,8 +1684,8 @@ export class TaptoolsService {
       }
 
       const totalSupply = await this.fetchLpTokenTotalSupply(lpTokenUnit);
-      if (!totalSupply) {
-        this.logger.warn(`No total supply found for LP token ${lpTokenUnit}`);
+      if (!totalSupply || totalSupply <= 0 || !Number.isSafeInteger(totalSupply)) {
+        this.logger.warn(`Invalid/unsafe total supply for LP token ${lpTokenUnit}: ${totalSupply}`);
         return null;
       }
 
@@ -1769,13 +1769,11 @@ export class TaptoolsService {
       if (!poolData || !poolData.lpTokenUnit) {
         this.logger.warn(`No pool data found in TapTools for onchain ID ${onchainID}`);
 
-        // Try VyFi fallback if LP token unit is provided
-        if (lpTokenUnit && this.vyfiService) {
+        // VyFi fallback: when onchainID is encoded as "tokenAUnit:tokenBUnit"
+        if (lpTokenUnit && this.vyfiService && onchainID.includes(':')) {
           this.logger.debug('Attempting VyFi fallback for LP price calculation');
-          // We need to extract tokenA and tokenB from somewhere
-          // For now, return null - caller should use calculateLpTokenPriceFromVyFi directly
-          // when they know it's a VyFi-only pool
-          return null;
+          const [tokenAUnit, tokenBUnit] = onchainID.split(':');
+          return this.calculateLpTokenPriceFromVyFi(tokenAUnit, tokenBUnit || '', lpTokenUnit);
         }
 
         return null;
