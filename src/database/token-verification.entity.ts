@@ -4,6 +4,7 @@ export enum VerificationPlatform {
   DEXHUNTER = 'dexhunter',
   WAYUP = 'wayup',
   TAPTOOLS = 'taptools',
+  VYFI = 'vyfi',
   MANUAL = 'manual',
   JPG_STORE = 'jpg.store',
 }

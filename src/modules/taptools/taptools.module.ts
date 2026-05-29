@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { VyfiModule } from '../vyfi/vyfi.module';
+
 import { TaptoolsController } from './taptools.controller';
 import { TaptoolsService } from './taptools.service';
 
@@ -23,6 +25,7 @@ import { WayUpPricingModule } from '@/modules/wayup/wayup-pricing.module';
     DexHunterPricingModule,
     TapToolsPricingModule,
     WayUpPricingModule,
+    VyfiModule,
   ],
   providers: [TaptoolsService],
   exports: [TaptoolsService],
