@@ -1,4 +1,4 @@
-import { Module, forwardRef } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { VyfiModule } from '../vyfi/vyfi.module';
@@ -25,7 +25,7 @@ import { WayUpPricingModule } from '@/modules/wayup/wayup-pricing.module';
     DexHunterPricingModule,
     TapToolsPricingModule,
     WayUpPricingModule,
-    forwardRef(() => VyfiModule),
+    VyfiModule,
   ],
   providers: [TaptoolsService],
   exports: [TaptoolsService],

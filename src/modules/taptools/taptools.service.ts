@@ -117,7 +117,7 @@ export class TaptoolsService {
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly alertsService: AlertsService,
     private readonly tapToolsClient: TapToolsClient,
-    private readonly vyfiService?: VyfiService,
+    private readonly vyfiService: VyfiService,
     @Optional() @Inject('TreasuryWalletService') private readonly treasuryWalletService?: TreasuryWalletService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
