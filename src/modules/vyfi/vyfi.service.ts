@@ -168,6 +168,76 @@ export class VyfiService {
   }
 
   /**
+   * Get pool data by LP token unit.
+   *
+   * Note: VyFi API doesn't currently provide a reverse-lookup endpoint for LP token units,
+   * so this method returns null for now.
+   *
+   * @param lpTokenUnit - Full LP token unit (policyId + assetName in hex)
+   * @returns VyFi pool data or null (always null until reverse lookup is implemented)
+   */
+  async getPoolByLpToken(lpTokenUnit: string): Promise<VyFiPoolData | null> {
+    try {
+      // Extract policy and asset from full unit
+      const policyId = lpTokenUnit.substring(0, 56);
+      const assetName = lpTokenUnit.substring(56);
+      const lpTokenIdentifier = `${policyId}-${assetName}`;
+
+      // VyFi doesn't have a direct endpoint for LP token lookup
+      // We need to try to parse the asset name to extract token pair
+      // Asset name format: "VyFi_VLRM/ORACLE_LP" or similar
+      // But we can also use the checkPool endpoint by iterating through possible pairs
+      // For now, let's use a more direct approach - query VyFi's all pools endpoint if available
+      // Or we can check if the LP token identifier matches
+
+      this.logger.debug(`Looking up VyFi pool for LP token: ${lpTokenIdentifier}`);
+
+      // Try to decode the asset name to get token pair hints
+      // Asset name is in hex, decode it
+      const decodedAssetName = Buffer.from(assetName, 'hex').toString('utf8');
+      this.logger.debug(`Decoded LP token name: ${decodedAssetName}`);
+
+      // The problem is we need to know the token pair to query VyFi
+      // VyFi doesn't have a reverse lookup endpoint
+      // For now, return null and let caller handle it differently
+      // In the future, could implement a cache or registry of known pools
+
+      return null;
+    } catch (error) {
+      this.logger.error(`Failed to get pool by LP token: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Get VyFi pool data directly from API by token units
+   * This method returns the raw VyFi pool data with quantities in base units
+   * @param tokenAUnit - First token unit (hex)
+   * @param tokenBUnit - Second token unit (hex or 'lovelace' for ADA)
+   * @returns Raw VyFi pool data with quantities or null
+   */
+  async getVyFiPoolData(tokenAUnit: string, tokenBUnit: string = 'lovelace'): Promise<VyFiPoolData | null> {
+    try {
+      const poolCheck = await this.checkPool({
+        tokenAUnit,
+        tokenBUnit,
+      });
+
+      if (!poolCheck.exists || !poolCheck.data) {
+        return null;
+      }
+
+      // VyFi API returns an array, get the first pool
+      const poolData: VyFiPoolData | undefined = Array.isArray(poolCheck.data) ? poolCheck.data[0] : poolCheck.data;
+
+      return poolData || null;
+    } catch (error) {
+      this.logger.error(`Failed to get VyFi pool data: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
    * Get pool info by token pair
    * Returns pool data including pool validator address, order validator address, LP token unit, and reserves
    */
