@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
-import { TapToolsPricingClient } from '../taptools/taptools-pricing.client';
+import { TapToolsClient } from '../taptools/taptools.client';
 
 import { DexHunterPricingClient } from './dexhunter-pricing.client';
 
@@ -9,7 +9,7 @@ import { DexHunterPricingClient } from './dexhunter-pricing.client';
  * DexHunter Pricing Service - Orchestrates token pricing from multiple sources
  *
  * Pricing Strategy (TapTools-first with DexHunter fallback):
- * 1. Try TapToolsPricingClient first (primary source)
+ * 1. Try TapToolsClient first (primary source)
  * 2. If TapTools fails or returns null, try DexHunterPricingClient as fallback
  * 3. Return null only if both sources fail or have no data
  *
@@ -33,7 +33,7 @@ export class DexHunterPricingService {
 
   constructor(
     private readonly configService: ConfigService,
-    private readonly tapToolsClient: TapToolsPricingClient,
+    private readonly tapToolsClient: TapToolsClient,
     private readonly dexHunterClient: DexHunterPricingClient
   ) {
     this.dexHunterBaseUrl = this.configService.get<string>('DEXHUNTER_BASE_URL');
@@ -71,11 +71,11 @@ export class DexHunterPricingService {
 
   /**
    * Get current token price in ADA with DexHunter fallback
-   * Uses TapToolsPricingClient first, falls back to DexHunterPricingClient if TapTools fails or returns null
+   * Uses TapToolsClient first, falls back to DexHunterPricingClient if TapTools fails or returns null
    * Results are cached by clients for 5 minutes to reduce API calls
    *
    * Fallback strategy:
-   * 1. Try TapToolsPricingClient first (primary source)
+   * 1. Try TapToolsClient first (primary source)
    * 2. If TapTools fails or returns null - try DexHunterPricingClient as fallback
    * 3. Return null only if both sources fail or have no data
    *
@@ -114,7 +114,7 @@ export class DexHunterPricingService {
    * Batch fetches prices for efficiency using dedicated pricing clients
    *
    * Fallback strategy:
-   * 1. Try fetching all prices from TapToolsPricingClient first (primary source, native batch support)
+   * 1. Try fetching all prices from TapToolsClient first (primary source, native batch support)
    * 2. For any tokens that returned null, try DexHunterPricingClient as fallback (in batch)
    *
    * Both clients handle their own caching and batch optimization.

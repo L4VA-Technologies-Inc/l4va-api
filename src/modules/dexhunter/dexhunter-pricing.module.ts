@@ -9,11 +9,11 @@ import { DexHunterPricingService } from './dexhunter-pricing.service';
 /**
  * DexHunter Pricing Module - Provides token pricing functionality with multi-source support
  *
- * Imports TapToolsPricingModule to access TapToolsPricingClient for primary token pricing.
+ * Imports TapToolsPricingModule to access TapToolsClient for primary token pricing.
  * Provides both DexHunterPricingClient (fallback source) and DexHunterPricingService (orchestrator).
  *
  * No circular dependencies:
- * - This module imports TapToolsPricingModule (lightweight, only exports TapToolsPricingClient)
+ * - This module imports TapToolsPricingModule (lightweight, only exports TapToolsClient)
  * - TapToolsModule (the main module with TaptoolsService) imports DexHunterPricingModule
  * - TapToolsPricingModule and TapToolsModule are separate modules to break circular dependency
  *

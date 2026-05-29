@@ -2,11 +2,11 @@ import { HttpModule } from '@nestjs/axios';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 
-import { TapToolsPricingClient } from './taptools-pricing.client';
+import { TapToolsClient } from './taptools.client';
 
 /**
  * TapTools Pricing Module - Provides only token pricing client
- * Lightweight module that exports TapToolsPricingClient without other dependencies
+ * Lightweight module that exports TapToolsClient without other dependencies
  *
  * This module is separate from TaptoolsModule to avoid circular dependencies:
  * - TaptoolsModule imports DexHunterPricingModule
@@ -21,7 +21,7 @@ import { TapToolsPricingClient } from './taptools-pricing.client';
     }),
     ConfigModule,
   ],
-  providers: [TapToolsPricingClient],
-  exports: [TapToolsPricingClient],
+  providers: [TapToolsClient],
+  exports: [TapToolsClient],
 })
 export class TapToolsPricingModule {}

@@ -43,7 +43,7 @@ import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.s
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
-import { TaptoolsService } from '@/modules/taptools/taptools.service';
+import { TapToolsClient } from '@/modules/taptools/taptools.client';
 import { GetAssetsToListRes } from '@/modules/vaults/phase-management/governance/dto/get-assets-to-list.res';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
@@ -132,7 +132,7 @@ export class GovernanceService {
     private readonly blockchainService: BlockchainService,
     private readonly systemSettingsService: SystemSettingsService,
     private readonly wayUpPricingService: WayUpPricingService,
-    private readonly taptoolsService: TaptoolsService,
+    private readonly tapToolsClient: TapToolsClient,
     private readonly treasuryWalletService: TreasuryWalletService,
     private readonly rewardEventProducer: RewardEventProducer
   ) {
@@ -295,7 +295,7 @@ export class GovernanceService {
       }
 
       if (vault.has_active_lp) {
-        const pools = await this.taptoolsService.getTokenPools(assetId);
+        const pools = await this.tapToolsClient.getTokenPools(assetId);
 
         // Collect locked VT raw amounts per pool to identify DEX pool contract addresses later
         const lpPoolLockedAmounts = new Set<bigint>();
@@ -632,7 +632,7 @@ export class GovernanceService {
           const vtUnit = `${vault.script_hash}${vault.asset_vault_name}`;
 
           // Get all pools for this token from TapTools (includes lpTokenUnit)
-          const allPools = await this.taptoolsService.getTokenPools(vtUnit);
+          const allPools = await this.tapToolsClient.getTokenPools(vtUnit);
 
           if (!allPools || allPools.length === 0) {
             this.logger.log(`No LP pools detected for vault ${vault.id}. Termination can proceed.`);
@@ -2514,7 +2514,7 @@ export class GovernanceService {
       const vtUnit = `${vault.script_hash}${vault.asset_vault_name}`;
 
       // Get all pools for this token from TapTools
-      const allPools = await this.taptoolsService.getTokenPools(vtUnit);
+      const allPools = await this.tapToolsClient.getTokenPools(vtUnit);
 
       if (!allPools || allPools.length === 0) {
         return {
