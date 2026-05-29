@@ -15,7 +15,6 @@ import { AssetValueDto, BlockfrostAssetResponseDto } from './dto/asset-value.dto
 import { BlockfrostAddressTotalDto } from './dto/blockfrost-address.dto';
 import { PaginationMetaDto, PaginationQueryDto } from './dto/pagination.dto';
 import { PaginatedWalletSummaryDto, WalletOverviewDto } from './dto/wallet-summary.dto';
-import { TapToolsTokenPoolDto } from './interfaces/taptools.interface';
 import { TapToolsClient } from './taptools.client';
 
 import { Asset } from '@/database/asset.entity';

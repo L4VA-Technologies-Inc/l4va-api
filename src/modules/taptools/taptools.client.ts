@@ -160,8 +160,9 @@ export class TapToolsClient {
       return [];
     }
 
-    // Check cache first
-    const cached = this.poolCache.get<TapToolsTokenPoolDto[]>(tokenUnit);
+    // Check cache first (prefix key to avoid collision with onchainID keys)
+    const cacheKey = `tokenUnit_${tokenUnit}`;
+    const cached = this.poolCache.get<TapToolsTokenPoolDto[]>(cacheKey);
     if (cached !== undefined) {
       // this.logger.debug(`Cache HIT for token ${tokenUnit.slice(0, 5)}... (${cached.length} pools)`);
       return cached;
@@ -178,24 +179,27 @@ export class TapToolsClient {
       );
 
       // Cache the result (TTL handled automatically by node-cache)
-      this.poolCache.set(tokenUnit, response.data);
+      this.poolCache.set(cacheKey, response.data);
 
       // this.logger.debug(`Retrieved ${response.data.length} pools for token ${tokenUnit.slice(0, 6)}...`);
 
       return response.data;
     } catch (error) {
-      // 404 is expected when tokens don't have LP pools - log as debug, not error
+      // 404 is expected when tokens don't have LP pools - cache empty result and return
       const isAxiosError = error && typeof error === 'object' && 'response' in error;
       if (isAxiosError && (error as any).response?.status === 404) {
         // Cache empty results too (tokens without pools shouldn't be queried repeatedly)
-        this.poolCache.set(tokenUnit, []);
+        this.poolCache.set(cacheKey, []);
         // this.logger.debug(`No LP pools found in TapTools for token ${tokenUnit.slice(0, 5)}... `);
-      } else {
-        this.logger.error(
-          `Failed to get token pools from TapTools for ${tokenUnit.slice(0, 5)}...: ${error instanceof Error ? error.message : String(error)}`
-        );
+        return [];
       }
-      return [];
+
+      // For all other errors (network, 500, timeout, etc.) - rethrow to preserve error handling
+      // Caller should decide whether to fail or handle the error
+      this.logger.error(
+        `Failed to get token pools from TapTools for ${tokenUnit.slice(0, 5)}...: ${error instanceof Error ? error.message : String(error)}`
+      );
+      throw error;
     }
   }
 
