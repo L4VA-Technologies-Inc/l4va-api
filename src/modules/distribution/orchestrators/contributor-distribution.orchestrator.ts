@@ -430,12 +430,15 @@ export class ContributorDistributionOrchestrator {
         // Check if this is a UTXO-related error (MissingUtxoException during build or UtxoSpentException during submission)
         const isMissingUtxo =
           error instanceof MissingUtxoException && error.fullTxHash && utxoRetryCount < MAX_UTXO_RETRIES;
-        const isSpentUtxo = error instanceof UtxoSpentException && error.txHash && utxoRetryCount < MAX_UTXO_RETRIES;
+        const isSpentUtxo =
+          error instanceof UtxoSpentException &&
+          /^[a-f0-9]{64}$/i.test(error.txHash) &&
+          Number.isInteger(error.outputIndex) &&
+          utxoRetryCount < MAX_UTXO_RETRIES;
 
         if (isMissingUtxo || isSpentUtxo) {
           const spentUtxoRef =
             error instanceof MissingUtxoException ? error.getUtxoReference() : `${error.txHash}#${error.outputIndex}`;
-
           this.logger.warn(
             `Detected spent admin UTXO during ${error instanceof MissingUtxoException ? 'build' : 'submission'}: ${spentUtxoRef}, ` +
               `removing from pool and retrying (attempt ${utxoRetryCount + 1}/${MAX_UTXO_RETRIES})`
