@@ -1741,9 +1741,9 @@ export class TaptoolsService {
       const tvl = tokenANormalized * tokenAPrice + tokenBNormalized * tokenBPrice;
       const lpTokenPrice = tvl / totalSupply;
 
-      this.logger.debug(
-        `VyFi LP price calculation - tokenAPrice: ${tokenAPrice} (decimals: ${tokenADecimals}), tokenBPrice: ${tokenBPrice} (decimals: ${tokenBDecimals}), TVL: ${tvl}, LP price: ${lpTokenPrice}`
-      );
+      // this.logger.debug(
+      //   `VyFi LP price calculation - tokenAPrice: ${tokenAPrice} (decimals: ${tokenADecimals}), tokenBPrice: ${tokenBPrice} (decimals: ${tokenBDecimals}), TVL: ${tvl}, LP price: ${lpTokenPrice}`
+      // );
 
       return lpTokenPrice;
     } catch (error) {
@@ -1876,7 +1876,7 @@ export class TaptoolsService {
 
           if (lpPrice !== null && lpPrice !== undefined && Number.isFinite(lpPrice)) {
             customPriceMap.set(whitelistItem.policy_id, lpPrice);
-            this.logger.debug(`LP price for ${whitelistItem.policy_id}: ${lpPrice} ADA`);
+            // this.logger.debug(`LP price for ${whitelistItem.policy_id}: ${lpPrice} ADA`);
           } else {
             this.logger.warn(`Failed to calculate LP price for ${whitelistItem.policy_id}`);
           }

@@ -88,9 +88,9 @@ export class DexHunterPricingService {
     const tapToolsPrice = tapToolsResult.get(tokenId);
 
     if (tapToolsPrice !== null && tapToolsPrice > 0) {
-      this.logger.debug(
-        `Successfully fetched token price from TapTools (primary) for ${tokenId}: ${tapToolsPrice} ADA`
-      );
+      // this.logger.debug(
+      //   `Successfully fetched token price from TapTools (primary) for ${tokenId}: ${tapToolsPrice} ADA`
+      // );
       return tapToolsPrice;
     }
 

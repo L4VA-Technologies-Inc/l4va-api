@@ -2331,7 +2331,7 @@ export class GovernanceService {
       }>(cacheKey);
 
       if (cached !== undefined) {
-        this.logger.debug(`Cache hit for voting power: ${cacheKey}`);
+        // this.logger.debug(`Cache hit for voting power: ${cacheKey}`);
         if (cached.error) {
           // Re-throw cached error
           if (cached.error.type === 'BadRequestException') {
