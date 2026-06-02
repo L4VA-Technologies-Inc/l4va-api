@@ -12,7 +12,6 @@ import { Claim } from '@/database/claim.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 import { ClaimsService } from '@/modules/vaults/claims/claims.service';
-import { GovernanceService } from '@/modules/vaults/phase-management/governance/governance.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from '@/modules/vaults/processing-tx/onchain/blockchain.service';
 import { getTransactionSize, getUtxosExtract } from '@/modules/vaults/processing-tx/onchain/utils/lib';
@@ -42,8 +41,7 @@ export class AcquireOnlyDistributionOrchestrator {
     private readonly claimsService: ClaimsService,
     private readonly transactionService: TransactionsService,
     private readonly extractionBuilder: AcquireOnlyExtractionBuilder,
-    private readonly blockfrost: BlockFrostAPI,
-    private readonly governanceService: GovernanceService
+    private readonly blockfrost: BlockFrostAPI
   ) {}
 
   /**
@@ -125,16 +123,10 @@ export class AcquireOnlyDistributionOrchestrator {
       }
     }
 
-    // All batches processed — mark distribution complete
-    await this.vaultRepository.update({ id: vaultId }, { distribution_processed: true });
+    // All batches processed
     this.logger.log(`Acquire-only vault ${vaultId} distribution complete.`);
-
-    // Create governance snapshot
-    try {
-      await this.governanceService.createAutomaticSnapshot(vaultId, `${vault.script_hash}${vault.asset_vault_name}`);
-    } catch (error) {
-      this.logger.error(`Error creating governance snapshot for vault ${vaultId}:`, error);
-    }
+    // NOTE: distribution_processed, LP creation, and snapshot are handled by
+    // AutomatedDistributionService.finalizeVaultDistribution after this method returns
   }
 
   private async processAcquireOnlyBatch(

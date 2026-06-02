@@ -144,6 +144,8 @@ export class AutomatedDistributionService {
         if (vault.is_acquire_only) {
           this.logger.log(`Vault ${vault.id} is acquire-only — using acquire-only distribution orchestrator`);
           await this.acquireOnlyOrchestrator.processAcquireOnlyExtractions(vault.id, this.getConfig());
+          // LP creation + snapshot + mark processed — same finalization path as regular vaults
+          await this.finalizeVaultDistribution(vault.id, vault.script_hash, vault.asset_vault_name);
           continue;
         }
 
@@ -351,10 +353,16 @@ export class AutomatedDistributionService {
     try {
       const vault: Pick<
         Vault,
-        'id' | 'liquidity_pool_contribution' | 'governance_phase_start' | 'total_assets_cost_ada'
+        'id' | 'liquidity_pool_contribution' | 'governance_phase_start' | 'total_assets_cost_ada' | 'is_acquire_only'
       > = await this.vaultRepository.findOne({
         where: { id: vaultId },
-        select: ['id', 'liquidity_pool_contribution', 'governance_phase_start', 'total_assets_cost_ada'],
+        select: [
+          'id',
+          'liquidity_pool_contribution',
+          'governance_phase_start',
+          'total_assets_cost_ada',
+          'is_acquire_only',
+        ],
       });
 
       if (!vault) {
@@ -363,7 +371,7 @@ export class AutomatedDistributionService {
 
       // Check if this is an expansion distribution (has EXPANSION claims)
       // If so, skip LP creation - LP was already created during initial distribution
-      const hasExpansionClaims = await this.claimRepository.exist({
+      const hasExpansionClaims = await this.claimRepository.exists({
         where: { vault: { id: vaultId }, type: ClaimType.EXPANSION },
       });
 
@@ -381,11 +389,17 @@ export class AutomatedDistributionService {
 
         // Create LP if LP percentage > 0 AND LP claim exists
         if (lpPercent > 0 && lpClaim) {
-          const { withdrawalTxHash, lpCreationTxHash } =
-            await this.vyfiService.createLiquidityPoolWithWithdrawal(vaultId);
-          this.logger.log(
-            `LP created for vault ${vaultId}. ` + `Withdrawal: ${withdrawalTxHash}, LP Creation: ${lpCreationTxHash}`
-          );
+          if (vault.is_acquire_only) {
+            // Acquire-only vaults: ADA already in admin wallet, no dispatch withdrawal needed
+            const { txHash: lpCreationTxHash } = await this.vyfiService.createLiquidityPoolSimple(vaultId);
+            this.logger.log(`LP created for acquire-only vault ${vaultId}. TX: ${lpCreationTxHash}`);
+          } else {
+            const { withdrawalTxHash, lpCreationTxHash } =
+              await this.vyfiService.createLiquidityPoolWithWithdrawal(vaultId);
+            this.logger.log(
+              `LP created for vault ${vaultId}. ` + `Withdrawal: ${withdrawalTxHash}, LP Creation: ${lpCreationTxHash}`
+            );
+          }
         } else if (lpPercent > 0 && !lpClaim) {
           this.logger.log(
             `Vault ${vaultId} has LP contribution but no LP claim (likely ADA < 500). Skipping LP creation.`
