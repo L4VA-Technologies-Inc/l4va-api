@@ -2241,11 +2241,82 @@ export class LifecycleService {
 
       if (meetsThreshold) {
         const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
+        const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
+        const hasLpConfigured = vault.liquidity_pool_contribution > 0;
 
-        // Calculate ONE multiplier for the entire vault (all ADA claims use the same multiplier)
-        // Multiplier = VT tokens / ADA acquired (in lovelace)
+        // Calculate LP amounts (assetsOfferedPercent=1 because 100% tokens go to acquirers, no contributors)
+        const { lpAdaAmount, lpVtAmount, adjustedVtLpAmount, adaPairMultiplier } =
+          this.distributionCalculationService.calculateLpTokens({
+            vtSupply,
+            totalAcquiredAda,
+            totalContributedValueAda: 0,
+            assetsOfferedPercent: 1,
+            lpPercent: LP_PERCENT,
+          });
+
+        const lpAdaInLovelace = Math.floor(lpAdaAmount * 1_000_000);
+        const minLpLiquidity = this.systemSettingsService.lpRecommendedMinLiquidity;
+
+        if (hasLpConfigured && lpAdaInLovelace < minLpLiquidity) {
+          this.logger.error(
+            `Acquire-only vault ${vault.id} FAILED: LP configured but insufficient liquidity. ` +
+              `LP ADA: ${lpAdaAmount} ADA (${lpAdaInLovelace} lovelace) is below ` +
+              `required minimum ${minLpLiquidity / 1_000_000} ADA (${minLpLiquidity} lovelace).`
+          );
+
+          const cancellationResponse = await this.vaultManagingService.updateVaultMetadataTx({
+            vault,
+            acquireMultiplier: [],
+            adaDistribution: [],
+            adaPairMultiplier: 0,
+            vaultStatus: SmartContractVaultStatus.CANCELLED,
+          });
+
+          await this.claimsService.createCancellationClaims(vault, 'lp_minimum_not_met');
+          await this.executePhaseTransition({
+            vaultId: vault.id,
+            newStatus: VaultStatus.failed,
+            newScStatus: SmartContractVaultStatus.CANCELLED,
+            txHash: cancellationResponse.txHash,
+            failureReason: VaultFailureReason.ACQUIRE_ONLY_THRESHOLD_NOT_MET,
+            failureDetails: {
+              message: `Acquire-only vault LP minimum liquidity not met`,
+              requiredLovelace: minLpLiquidity,
+              actualLovelace: lpAdaInLovelace,
+            },
+          });
+          return;
+        }
+
+        // Create LP claim if LP is configured and has enough liquidity
+        if (hasLpConfigured && adjustedVtLpAmount > 0 && lpAdaAmount > 0) {
+          const existingLpClaim = await this.claimRepository.findOne({
+            where: { vault: { id: vault.id }, type: ClaimType.LP },
+          });
+          if (existingLpClaim) {
+            await this.claimRepository.update(existingLpClaim.id, {
+              amount: adjustedVtLpAmount,
+              lovelace_amount: lpAdaInLovelace,
+            });
+            this.logger.log(`Updated existing LP claim: ${adjustedVtLpAmount} VT, ${lpAdaAmount} ADA`);
+          } else {
+            await this.claimRepository.save({
+              vault: { id: vault.id },
+              type: ClaimType.LP,
+              amount: adjustedVtLpAmount,
+              status: ClaimStatus.AVAILABLE,
+              lovelace_amount: lpAdaInLovelace,
+            });
+            this.logger.log(`Created LP claim: ${adjustedVtLpAmount} VT, ${lpAdaAmount} ADA`);
+          }
+        }
+
+        // Calculate ONE multiplier for the entire vault, excluding LP VT from supply
+        // Multiplier = (vtSupply - lpVtAmount) / ADA acquired (in lovelace)
         const totalAcquiredLovelace = totalAcquiredAda * 1_000_000;
-        const vaultMultiplier = totalAcquiredLovelace > 0 ? Math.floor(vtSupply / totalAcquiredLovelace) : 0;
+        const distributableVtSupply = vtSupply - (hasLpConfigured ? lpVtAmount : 0);
+        const vaultMultiplier =
+          totalAcquiredLovelace > 0 ? Math.floor(distributableVtSupply / totalAcquiredLovelace) : 0;
 
         // Build acquirer claims (all using the same vault-level multiplier)
         const acquirerClaims: Partial<Claim>[] = [];
@@ -2289,7 +2360,7 @@ export class LifecycleService {
           vault,
           acquireMultiplier,
           adaDistribution,
-          adaPairMultiplier: 0,
+          adaPairMultiplier: hasLpConfigured ? adaPairMultiplier : 0,
           vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
         });
 
@@ -2315,7 +2386,7 @@ export class LifecycleService {
           txHash: response.txHash,
           acquire_multiplier: acquireMultiplier,
           ada_distribution: adaDistribution,
-          ada_pair_multiplier: 0,
+          ada_pair_multiplier: hasLpConfigured ? adaPairMultiplier : 0,
           vtPrice,
           fdv,
           fdvTvl: 1,

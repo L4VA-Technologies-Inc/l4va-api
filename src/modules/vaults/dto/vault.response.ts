@@ -20,6 +20,35 @@ import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
 import { User } from '@/database/user.entity';
 
+export class VaultStatsDto {
+  @ApiProperty({ description: 'TVL in ADA', nullable: true, required: false })
+  tvlAda: number | null;
+
+  @ApiProperty({ description: 'TVL in USD', nullable: true, required: false })
+  tvlUsd: number | null;
+
+  @ApiProperty({ description: 'FDV in ADA', nullable: true, required: false })
+  fdvAda: number | null;
+
+  @ApiProperty({ description: 'FDV in USD', nullable: true, required: false })
+  fdvUsd: number | null;
+
+  @ApiProperty({ description: 'FDV / TVL ratio', nullable: true, required: false })
+  fdvTvl: number | null;
+
+  @ApiProperty({ description: 'FT gains in ADA (null when no active LP)', nullable: true, required: false })
+  ftGainsAda: number | null;
+
+  @ApiProperty({ description: 'FT gains in USD (null when no active LP)', nullable: true, required: false })
+  ftGainsUsd: number | null;
+
+  @ApiProperty({ description: 'VT token price in ADA (null when no active LP)', nullable: true, required: false })
+  vtPriceAda: number | null;
+
+  @ApiProperty({ description: 'VT token price in USD (null when no active LP)', nullable: true, required: false })
+  vtPriceUsd: number | null;
+}
+
 export class VaultShortResponse {
   @ApiProperty({ description: 'Unique identifier of the vault' })
   @DtoRepresent({
@@ -639,6 +668,17 @@ export class VaultFullResponse extends VaultShortResponse {
     expose: { name: 'gainsUsd' },
   })
   gainsUsd?: number;
+
+  @ApiProperty({
+    description: 'Pre-computed vault stats for the stats bar',
+    type: () => VaultStatsDto,
+    required: false,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'vaultStats' },
+  })
+  vaultStats?: VaultStatsDto;
 
   @ApiProperty({ description: 'Assets whitelist', type: [AssetsWhitelistEntity], required: false })
   @DtoRepresent({

@@ -1347,6 +1347,37 @@ export class VaultsService {
         ? parseFloat((assetsPrices.totalAcquiredAda / (vault.tokens_for_acquires * 0.01)).toFixed(2))
         : 0;
 
+    // Compute vaultStats object for frontend stats bar consumption
+    const isAcquirePhase = vault.vault_status === VaultStatus.acquire;
+    const hasActiveLp = vault.has_active_lp ?? false;
+    // TVL: acquire-only vaults use totalAcquiredAda (no contributed assets)
+    const vaultStatsTvlAda = vault.is_acquire_only ? assetsPrices.totalAcquiredAda : assetsPrices.totalValueAda;
+    const vaultStatsTvlUsd = vault.is_acquire_only ? assetsPrices.totalAcquiredUsd : assetsPrices.totalValueUsd;
+    // FDV: for acquire-only vaults FDV = TVL (all acquired ADA is the market cap proxy), so FDV/TVL = 1
+    let vaultStatsFdvAda: number | null = null;
+    let vaultStatsFdvUsd: number | null = null;
+    let vaultStatsFdvTvl: number | null = null;
+    if (vault.is_acquire_only && isAcquirePhase) {
+      vaultStatsFdvAda = assetsPrices.totalAcquiredAda > 0 ? assetsPrices.totalAcquiredAda : null;
+      vaultStatsFdvUsd = assetsPrices.totalAcquiredUsd > 0 ? assetsPrices.totalAcquiredUsd : null;
+      vaultStatsFdvTvl = assetsPrices.totalAcquiredAda > 0 ? 1 : null;
+    } else if (hasActiveLp || isAcquirePhase) {
+      vaultStatsFdvAda = additionalData.fdv ?? null;
+      vaultStatsFdvUsd = additionalData.fdvUsd ?? null;
+      vaultStatsFdvTvl = additionalData.fdvTvl ?? null;
+    }
+    additionalData['vaultStats'] = {
+      tvlAda: vaultStatsTvlAda ?? null,
+      tvlUsd: vaultStatsTvlUsd ?? null,
+      fdvAda: vaultStatsFdvAda,
+      fdvUsd: vaultStatsFdvUsd,
+      fdvTvl: vaultStatsFdvTvl,
+      ftGainsAda: hasActiveLp ? (vault.gains_ada != null ? Number(vault.gains_ada) : null) : null,
+      ftGainsUsd: hasActiveLp ? (vault.gains_usd != null ? Number(vault.gains_usd) : null) : null,
+      vtPriceAda: hasActiveLp ? (vault.vt_price != null ? Number(vault.vt_price) : null) : null,
+      vtPriceUsd: hasActiveLp ? (vault.vt_price != null ? Number(vault.vt_price) * adaPrice : null) : null,
+    };
+
     // First transform the vault to plain object with class-transformer
     const plainVault = instanceToPlain(vault);
 
