@@ -74,6 +74,14 @@ export class Transaction {
   })
   metadata?: Record<string, any>;
 
+  @ApiProperty({ description: 'Whether this transaction occurred during an expansion phase' })
+  @Column({ name: 'is_expansion', type: 'boolean', default: false, nullable: false })
+  is_expansion: boolean;
+
+  @ApiProperty({ description: 'Proposal ID related to this expansion transaction' })
+  @Column({ name: 'expansion_proposal_id', nullable: true, type: 'uuid' })
+  expansion_proposal_id?: string;
+
   @Exclude()
   @OneToMany(() => Asset, (asset: Asset) => asset.transaction)
   public assets: Asset[];

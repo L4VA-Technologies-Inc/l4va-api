@@ -658,6 +658,9 @@ export class GovernanceExecutionService {
         case ProposalType.EXPANSION:
           return await this.executeExpansionProposal(proposal);
 
+        case ProposalType.ACQUIRE_EXPANSION:
+          return await this.executeAcquireExpansionProposal(proposal);
+
         default:
           this.logger.warn(`Unknown proposal type: ${proposal.proposalType}`);
           return false;
@@ -2046,6 +2049,15 @@ export class GovernanceExecutionService {
   async executeExpansionProposal(proposal: Proposal): Promise<boolean> {
     try {
       return await this.expansionService.executeExpansion(proposal);
+    } catch (error) {
+      await this.storeExecutionError(proposal, error);
+      throw error;
+    }
+  }
+
+  async executeAcquireExpansionProposal(proposal: Proposal): Promise<boolean> {
+    try {
+      return await this.expansionService.executeAcquireExpansion(proposal);
     } catch (error) {
       await this.storeExecutionError(proposal, error);
       throw error;

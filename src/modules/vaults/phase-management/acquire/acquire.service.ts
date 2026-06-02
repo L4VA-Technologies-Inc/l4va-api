@@ -7,9 +7,11 @@ import { ContributionAsset } from '../contribution/dto/contribute.req';
 
 import { AcquireReq } from './dto/acquire.req';
 
+import { Proposal } from '@/database/proposal.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { SystemSettingsService } from '@/modules/globals/system-settings';
+import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { TransactionType } from '@/types/transaction.types';
 import { VaultStatus } from '@/types/vault.types';
 
@@ -20,6 +22,8 @@ export class AcquireService {
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(Proposal)
+    private readonly proposalRepository: Repository<Proposal>,
     private readonly transactionsService: TransactionsService,
     private readonly systemSettingsService: SystemSettingsService
   ) {}
@@ -55,7 +59,7 @@ export class AcquireService {
       throw new NotFoundException('Vault not found');
     }
 
-    if (vault.vault_status !== VaultStatus.acquire) {
+    if (vault.vault_status !== VaultStatus.acquire && vault.vault_status !== VaultStatus.acquire_expansion) {
       throw new BadRequestException('Vault is not in acquire phase');
     }
 
@@ -75,6 +79,45 @@ export class AcquireService {
         throw new BadRequestException(
           `Acquire amount exceeds maximum limit of ${maxAcquireAmountAda.toLocaleString()} ADA per transaction`
         );
+      }
+    }
+
+    // Validate acquire expansion ADA limit if in acquire_expansion phase
+    let expansionProposalId: string | undefined;
+    if (vault.vault_status === VaultStatus.acquire_expansion && adaAsset) {
+      const acquireExpansionProposal: Pick<Proposal, 'id' | 'metadata' | 'executionDate'> =
+        await this.proposalRepository.findOne({
+          where: {
+            vaultId,
+            proposalType: ProposalType.ACQUIRE_EXPANSION,
+            status: ProposalStatus.EXECUTED,
+          },
+          order: { executionDate: 'DESC' },
+          select: ['id', 'metadata', 'executionDate'],
+        });
+
+      if (acquireExpansionProposal) {
+        expansionProposalId = acquireExpansionProposal.id;
+
+        if (acquireExpansionProposal.metadata?.acquireExpansion) {
+          const expansionConfig = acquireExpansionProposal.metadata.acquireExpansion;
+
+          // Check if there's a max ADA limit configured
+          if (!expansionConfig.noMax && expansionConfig.maxAda) {
+            const currentAdaRaised = expansionConfig.currentAdaRaised || 0;
+            const requestedLovelace = adaAsset.quantity * 1_000_000; // Convert ADA to lovelace
+            const remainingLovelace = expansionConfig.maxAda - currentAdaRaised;
+
+            if (requestedLovelace > remainingLovelace) {
+              const remainingAda = remainingLovelace / 1_000_000;
+              const requestedAda = adaAsset.quantity;
+              throw new BadRequestException(
+                `Acquire expansion has reached or will exceed its maximum ADA limit. ` +
+                  `Remaining: ${remainingAda.toLocaleString()} ADA, Requested: ${requestedAda.toLocaleString()} ADA`
+              );
+            }
+          }
+        }
       }
     }
 
@@ -102,7 +145,11 @@ export class AcquireService {
       assets: [],
       userId,
       fee: this.systemSettingsService.protocolAcquiresFee,
-      metadata: acquireReq.assets,
+      is_expansion: vault.vault_status === VaultStatus.acquire_expansion,
+      expansion_proposal_id: expansionProposalId,
+      metadata: {
+        assets: acquireReq.assets,
+      },
     });
 
     return {
