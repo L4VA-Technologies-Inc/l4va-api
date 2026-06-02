@@ -454,7 +454,7 @@ export class BlockchainWebhookService {
             return;
           }
         } else {
-          if (vault.contribution_open_window_type !== ContributionWindowType.uponVaultLaunch) {
+          if (vault.contribution_open_window_type === ContributionWindowType.uponVaultLaunch) {
             await this.vaultRepository.update(
               { id: vaultId },
               {
