@@ -2272,19 +2272,35 @@ export class LifecycleService {
             vaultStatus: SmartContractVaultStatus.CANCELLED,
           });
 
-          await this.claimsService.createCancellationClaims(vault, 'lp_minimum_not_met');
+          if (!cancellationResponse.txHash) {
+            this.logger.error(`Failed to get txHash for vault ${vault.id} cancellation transaction`);
+            return;
+          }
+
+          await this.claimsService.createCancellationClaims(vault, 'insufficient_lp_liquidity');
           await this.executePhaseTransition({
             vaultId: vault.id,
             newStatus: VaultStatus.failed,
             newScStatus: SmartContractVaultStatus.CANCELLED,
             txHash: cancellationResponse.txHash,
-            failureReason: VaultFailureReason.ACQUIRE_ONLY_THRESHOLD_NOT_MET,
+            failureReason: VaultFailureReason.INSUFFICIENT_LP_LIQUIDITY,
             failureDetails: {
-              message: `Acquire-only vault LP minimum liquidity not met`,
-              requiredLovelace: minLpLiquidity,
-              actualLovelace: lpAdaInLovelace,
+              lpAdaAmount,
+              lpAdaInLovelace,
+              minLpLiquidity,
+              minLpLiquidityAda: minLpLiquidity / 1_000_000,
+              message: `LP liquidity ${lpAdaAmount} ADA is below required minimum ${minLpLiquidity / 1_000_000} ADA`,
             },
           });
+
+          this.eventEmitter.emit('vault.failed', {
+            vaultId: vault.id,
+            vaultName: vault.name,
+            reason: VaultFailureReason.INSUFFICIENT_LP_LIQUIDITY,
+            lpAdaAmount,
+            minLpLiquidityAda: minLpLiquidity / 1_000_000,
+          });
+
           return;
         }
 
