@@ -2334,6 +2334,32 @@ export class LifecycleService {
         const vaultMultiplier =
           totalAcquiredLovelace > 0 ? Math.floor(distributableVtSupply / totalAcquiredLovelace) : 0;
 
+        // Handle multiplier underflow: increase decimals and skip this cycle
+        if (vaultMultiplier === 0 && totalAcquiredLovelace > 0 && distributableVtSupply > 0) {
+          // Calculate additional decimals needed: ensure multiplier >= 1
+          // We need: (distributableVtSupply * 10^n) / totalAcquiredLovelace >= 1
+          // So: n >= log10(totalAcquiredLovelace / distributableVtSupply)
+          const ratio = totalAcquiredLovelace / distributableVtSupply;
+          const additionalDecimals = Math.ceil(Math.log10(ratio));
+          const newDecimals = vault.ft_token_decimals + additionalDecimals;
+
+          this.logger.warn(
+            `Acquire-only vault ${vault.id}: multiplier would be 0. ` +
+              `Increasing decimals from ${vault.ft_token_decimals} to ${newDecimals} ` +
+              `(+${additionalDecimals} decimals). Deleting existing claims and skipping this cycle.`
+          );
+
+          // Delete any existing claims so next cycle can create them fresh with correct amounts
+          await this.claimRepository.delete({
+            vault: { id: vault.id },
+            type: In([ClaimType.ACQUIRER, ClaimType.LP]),
+          });
+
+          // Update vault decimals and exit - next cycle will handle distribution with correct decimals
+          await this.vaultRepository.update({ id: vault.id }, { ft_token_decimals: newDecimals });
+          return;
+        }
+
         // Build acquirer claims (all using the same vault-level multiplier)
         const acquirerClaims: Partial<Claim>[] = [];
 
