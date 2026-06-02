@@ -104,7 +104,13 @@ export class AcquireOnlyDistributionOrchestrator {
 
     if (claims.length === 0) {
       // Nothing to extract — mark distribution done
-      await this.vaultRepository.update({ id: vaultId }, { distribution_processed: true });
+      await this.vaultRepository.update(
+        { id: vaultId },
+        {
+          distribution_in_progress: false,
+          distribution_processed: true,
+        }
+      );
       return;
     }
 
