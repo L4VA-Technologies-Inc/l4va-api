@@ -68,6 +68,7 @@ export class AcquireOnlyDistributionOrchestrator {
         'vault.ada_pair_multiplier',
         'vault.last_update_tx_hash',
         'vault.manual_distribution_mode',
+        'vault.liquidity_pool_contribution',
       ])
       .leftJoinAndSelect('vault.treasury_wallet', 'treasury_wallet')
       .where('vault.id = :vaultId', { vaultId })
@@ -112,6 +113,7 @@ export class AcquireOnlyDistributionOrchestrator {
     const enrichedConfig = {
       ...config,
       treasuryAddress,
+      lpPercent: vault.liquidity_pool_contribution || 0,
     };
 
     for (let i = 0; i < claims.length; i += this.MAX_BATCH_SIZE) {
@@ -145,6 +147,7 @@ export class AcquireOnlyDistributionOrchestrator {
       adminSKey: string;
       unparametizedDispatchHash: string;
       treasuryAddress: string;
+      lpPercent: number;
     }
   ): Promise<void> {
     const extractionTx = await this.transactionRepository.save({
@@ -192,6 +195,7 @@ export class AcquireOnlyDistributionOrchestrator {
       adminSKey: string;
       unparametizedDispatchHash: string;
       treasuryAddress: string;
+      lpPercent: number;
     }
   ): Promise<void> {
     const { utxos: adminUtxos } = await getUtxosExtract(Address.from_bech32(config.adminAddress), this.blockfrost, {

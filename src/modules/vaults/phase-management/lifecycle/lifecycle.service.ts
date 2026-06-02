@@ -1172,6 +1172,7 @@ export class LifecycleService {
               status: ClaimStatus.PENDING,
               transaction: { id: tx.id },
               multiplier: multiplier,
+              is_treasury_claim: vault.is_acquire_only === true,
             });
             acquirerClaims.push(claim);
           } catch (error) {

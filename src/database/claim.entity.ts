@@ -130,6 +130,10 @@ export class Claim {
   @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   updated_at: Date;
 
+  @Expose({ name: 'isTreasuryClaim' })
+  @Column({ name: 'is_treasury_claim', type: 'boolean', default: false })
+  is_treasury_claim: boolean;
+
   @BeforeInsert()
   setDate(): void {
     const now = new Date();

@@ -34,6 +34,8 @@ export class AcquireOnlyExtractionBuilder {
       adminHash: string;
       unparametizedDispatchHash: string;
       treasuryAddress: string;
+      /** LP % as a whole number (e.g. 20 = 20%). 0 means no LP. */
+      lpPercent: number;
     }
   ): Promise<ExtractInput> {
     const scriptInteractions: ScriptInteraction[] = [];
@@ -129,10 +131,21 @@ export class AcquireOnlyExtractionBuilder {
       },
     });
 
-    // ADA goes directly to treasury wallet (not dispatch contract)
+    // ADA goes to admin (LP portion) and treasury (remainder)
+    const lpAdaLovelace =
+      config.lpPercent > 0 ? Math.floor(totalTreasuryLovelace * (config.lpPercent / 200)) : 0;
+    const netTreasuryLovelace = totalTreasuryLovelace - lpAdaLovelace;
+
+    if (lpAdaLovelace > 0) {
+      outputs.push({
+        address: config.adminAddress,
+        lovelace: lpAdaLovelace,
+      });
+    }
+
     outputs.push({
       address: config.treasuryAddress,
-      lovelace: totalTreasuryLovelace,
+      lovelace: netTreasuryLovelace,
     });
 
     mintAssets.push(

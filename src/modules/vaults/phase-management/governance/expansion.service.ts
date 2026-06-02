@@ -779,6 +779,7 @@ export class ExpansionService {
               amount: Number(vtAmount),
               proposal_id: expansionProposal.id,
               description: `Acquire expansion: ${transaction.amount} ADA → ${Number(vtAmount) / decimalMultiplier} VT`,
+              is_treasury_claim: true,
               metadata: {
                 isExpansion: true,
               } as const,
