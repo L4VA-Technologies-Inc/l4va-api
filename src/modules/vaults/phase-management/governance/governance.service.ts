@@ -1232,6 +1232,13 @@ export class GovernanceService {
           throw new BadRequestException('Expansion duration is required when "No Limit" is not selected');
         }
 
+        const minExpansionDuration = this.systemSettingsService.minExpansionDuration;
+        if (!expansionNoLimit && expansionDuration < minExpansionDuration) {
+          throw new BadRequestException(
+            `Expansion duration must be at least ${minExpansionDuration / 86400000} day(s) (${minExpansionDuration}ms). Provided: ${expansionDuration}ms`
+          );
+        }
+
         // Validate asset max if no max is not set
         if (!expansionNoMax && (!expansionAssetMax || expansionAssetMax <= 0)) {
           throw new BadRequestException('Asset max is required when "No Max" is not selected');
@@ -1374,6 +1381,14 @@ export class GovernanceService {
         // Validate duration if no limit is not set
         if (!acquireExpansionNoLimit && (!acquireExpansionDuration || acquireExpansionDuration <= 0)) {
           throw new BadRequestException('Expansion duration is required when "No Limit" is not selected');
+        }
+
+        // Validate minimum expansion duration (1 day)
+        const minAcquireExpansionDuration = this.systemSettingsService.minExpansionDuration;
+        if (!acquireExpansionNoLimit && acquireExpansionDuration < minAcquireExpansionDuration) {
+          throw new BadRequestException(
+            `Acquire expansion duration must be at least ${minAcquireExpansionDuration / 86400000} day(s) (${minAcquireExpansionDuration}ms). Provided: ${acquireExpansionDuration}ms`
+          );
         }
 
         // Validate max ADA if no max is not set

@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -102,11 +103,15 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
 export class SystemSettingsService implements OnModuleInit {
   private readonly logger = new Logger(SystemSettingsService.name);
   private settings: SystemSettingsData = { ...DEFAULT_SETTINGS };
+  private readonly isMainnet: boolean;
 
   constructor(
     @InjectRepository(SystemSettings)
-    private readonly systemSettingsRepository: Repository<SystemSettings>
-  ) {}
+    private readonly systemSettingsRepository: Repository<SystemSettings>,
+    private readonly configService: ConfigService
+  ) {
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+  }
 
   async onModuleInit(): Promise<void> {
     await this.loadSettings();
@@ -234,11 +239,30 @@ export class SystemSettingsService implements OnModuleInit {
   }
 
   get minVotingDuration(): number {
-    return this.settings.min_voting_duration || 86400000; // 24 hours default
+    // Environment-based: 5 min (preprod) / 1 day (mainnet)
+    // Always use environment-based value (database setting is ignored for this)
+    return this.isMainnet ? 86400000 : 300000;
   }
 
   get maxVotingDuration(): number {
     return this.settings.max_voting_duration || 259200000; // 3 days default
+  }
+
+  get minContributionDuration(): number {
+    // Environment-based: 10 min (preprod) / 5 days (mainnet)
+    // Always use environment-based value
+    return this.isMainnet ? 432000000 : 600000;
+  }
+
+  get minAcquireWindowDuration(): number {
+    // Environment-based: 10 min (preprod) / 5 days (mainnet)
+    // Always use environment-based value
+    return this.isMainnet ? 432000000 : 600000;
+  }
+
+  get minExpansionDuration(): number {
+    // 1 day minimum for both environments
+    return 86400000;
   }
 
   get priceMaxDeviationPercentNft(): number {
