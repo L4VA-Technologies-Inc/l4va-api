@@ -2343,6 +2343,7 @@ export class LifecycleService {
               status: ClaimStatus.PENDING,
               transaction: { id: tx.id },
               multiplier: vaultMultiplier,
+              is_treasury_claim: true,
             })
           );
         }
