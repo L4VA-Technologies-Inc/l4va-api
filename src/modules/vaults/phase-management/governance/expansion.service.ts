@@ -621,9 +621,29 @@ export class ExpansionService {
 
     // Determine the reason for closing expansion
     const expansionConfig = expansionProposal.metadata?.acquireExpansion;
+
+    if (!expansionConfig || !expansionConfig.priceType) {
+      this.logger.error(
+        `Acquire expansion proposal ${expansionProposal.id} missing acquireExpansion config. ` +
+          `Closing expansion and enabling manual distribution mode.`
+      );
+
+      await this.closeAcquireExpansion(vault.id, expansionProposal.id, 'duration_expired', 0);
+
+      // Avoid leaving the vault stuck in distribution mode when we cannot safely compute minting amounts
+      await this.vaultRepository.update(
+        { id: vault.id },
+        {
+          manual_distribution_mode: true,
+          distribution_in_progress: false,
+        }
+      );
+      return;
+    }
+
     let closeReason: 'duration_expired' | 'max_ada_reached' = 'duration_expired';
 
-    if (expansionConfig && !expansionConfig.noMax && expansionConfig.maxAda) {
+    if (!expansionConfig.noMax && expansionConfig.maxAda) {
       const currentAdaRaised = expansionConfig.currentAdaRaised || 0;
       if (currentAdaRaised >= expansionConfig.maxAda) {
         closeReason = 'max_ada_reached';
@@ -632,7 +652,6 @@ export class ExpansionService {
         );
       }
     }
-
     try {
       // Sync all transactions for this vault
       await this.transactionsService.syncVaultTransactions(vault.id);
