@@ -24,6 +24,7 @@ import { toHumanAmountNumber } from './stake-amounts';
 import { encodeStakeDatum, tryDecodeStakeDatum } from './stake-datum';
 
 import { createLucidBlockfrostProvider, lucidNetworkFromCardanoEnv } from '@/common/cardano/blockfrost-lucid';
+import { formatCip674MetadataMessage } from '@/common/cardano/cip674-metadata';
 import { normalizeLucidCardanoError } from '@/common/cardano/lucid-error-normalizer';
 import { buildStakeTokenRegistry, type TokenMeta } from '@/common/cardano/token-registry';
 import { StakingStatus, TokenStakingPosition, TokenType } from '@/database/tokenStakingPosition.entity';
@@ -117,8 +118,8 @@ export class StakeService {
     this.blockfrost = new BlockFrostAPI({ projectId: this.blockfrostProjectId });
     this.referenceScriptTxHash = this.configService.getOrThrow<string>('REFERENCE_SCRIPT_TX_HASH');
     this.referenceScriptIndex = parseInt(this.configService.get<string>('REFERENCE_SCRIPT_INDEX') ?? '0', 10);
-    this.adminAddress = this.configService.getOrThrow<string>('ADMIN_ADDRESS');
-    this.adminSKey = this.configService.getOrThrow<string>('ADMIN_S_KEY');
+    this.adminAddress = this.configService.getOrThrow<string>('L4VA_TREASURY_ADDRESS');
+    this.adminSKey = this.configService.getOrThrow<string>('L4VA_TREASURY_KEY');
 
     const apyPercentRaw = this.configService.get<string>('STAKING_APY') ?? '8';
     const apyPercent = Number.parseFloat(apyPercentRaw);
@@ -172,16 +173,34 @@ export class StakeService {
   private async alertInsufficientRewardFunds(
     action: 'unstake' | 'harvest' | 'compound',
     userAddress: string,
-    error: unknown
+    error: unknown,
+    processedBoxes?: ProcessedBox[]
   ): Promise<void> {
     try {
       const balances = await this.getAdminBalancesSnapshot();
+
+      let transactionDetails;
+      if (processedBoxes && processedBoxes.length > 0) {
+        const tokensSummary = this.buildTokensSummary(processedBoxes);
+        transactionDetails = {
+          utxoCount: processedBoxes.length,
+          tokens: tokensSummary.map(t => ({
+            type: this.getTokenDisplayName(t.unit),
+            depositAmount: t.depositAmount,
+            rewardAmount: t.rewardAmount,
+            payoutAmount: t.payoutAmount,
+            decimals: t.decimals,
+          })),
+        };
+      }
+
       await this.alertsService.sendAlert('stake_reward_insufficient_funds', {
         action,
         userAddress,
         adminAddress: this.adminAddress,
         error: formatError(error, `${action} failed`),
         balances,
+        transactionDetails,
       });
     } catch (alertError: unknown) {
       this.logger.error(
@@ -253,6 +272,43 @@ export class StakeService {
       referenceScript: { txHash: this.referenceScriptTxHash, outputIndex: this.referenceScriptIndex },
       cardanoNetwork: this.isMainnet ? 'mainnet' : 'preprod',
     };
+  }
+
+  private getTokenDisplayName(unit: string): string {
+    return this.getTokenTypeForUnit(unit) ?? 'token';
+  }
+
+  private formatHumanTokenAmounts(amounts: Array<{ unit: string; amount: number }>): string {
+    return amounts.map(({ unit, amount }) => `${amount} ${this.getTokenDisplayName(unit)}`).join(', ');
+  }
+
+  private buildStakeMetadataMessage(entries: Array<{ unit: string; rawAmount: bigint; decimals: number }>): {
+    msg: string[];
+  } {
+    const amounts = this.formatHumanTokenAmounts(
+      entries.map(e => ({ unit: e.unit, amount: toHumanAmountNumber(e.rawAmount, e.decimals) }))
+    );
+    return formatCip674MetadataMessage(`L4VA: Stake ${amounts}`);
+  }
+
+  private buildUnstakeMetadataMessage(processedBoxes: ProcessedBox[]): { msg: string[] } {
+    const summary = this.buildTokensSummary(processedBoxes);
+    const amounts = this.formatHumanTokenAmounts(summary.map(t => ({ unit: t.unit, amount: t.payoutAmount })));
+    const boxCount = processedBoxes.length;
+    const positionsLabel = boxCount === 1 ? '1 position' : `${boxCount} positions`;
+    return formatCip674MetadataMessage(`L4VA: Unstake ${positionsLabel} - withdraw ${amounts}`);
+  }
+
+  private buildHarvestMetadataMessage(processedBoxes: ProcessedBox[]): { msg: string[] } {
+    const summary = this.buildTokensSummary(processedBoxes);
+    const amounts = this.formatHumanTokenAmounts(summary.map(t => ({ unit: t.unit, amount: t.rewardAmount })));
+    return formatCip674MetadataMessage(`L4VA: Harvest staking rewards - ${amounts}`);
+  }
+
+  private buildCompoundMetadataMessage(processedBoxes: ProcessedBox[]): { msg: string[] } {
+    const summary = this.buildTokensSummary(processedBoxes);
+    const amounts = this.formatHumanTokenAmounts(summary.map(t => ({ unit: t.unit, amount: t.payoutAmount })));
+    return formatCip674MetadataMessage(`L4VA: Compound rewards into stake - ${amounts}`);
   }
 
   /**
@@ -763,6 +819,7 @@ export class StakeService {
       const tx = await txBuilder
         .validTo(currentTimeMs + TX_VALIDITY_WINDOW_MS)
         .addSignerKey(ownerHash)
+        .attachMetadata(674, this.buildStakeMetadataMessage(entries))
         .complete();
       const unsignedTxCbor = tx.toCBOR();
 
@@ -803,11 +860,21 @@ export class StakeService {
    * Unstake: collect selected boxes, send full payout (deposit + reward) to the user.
    */
   async buildUnstakeTx(userId: string, userAddress: string, utxoRefs: UtxoRefDto[]): Promise<BuildTxRes> {
+    let processedBoxes: ProcessedBox[] | undefined;
     try {
       const prep = await this.prepareAdminTxData(userId, userAddress, utxoRefs);
       if (prep.ok === false) return { success: false, message: prep.message };
 
-      const { lucid, ownerHash, referenceUtxo, eligibleBoxes, processedBoxes, totalDepositAll, totalRewardAll } = prep;
+      const {
+        lucid,
+        ownerHash,
+        referenceUtxo,
+        eligibleBoxes,
+        processedBoxes: boxes,
+        totalDepositAll,
+        totalRewardAll,
+      } = prep;
+      processedBoxes = boxes;
 
       const aggByUnit = this.aggregateByUnit(processedBoxes);
 
@@ -831,6 +898,7 @@ export class StakeService {
         .pay.ToAddress(userAddress, Object.fromEntries(payoutByUnit.entries()))
         .validTo(validTo)
         .addSignerKey(ownerHash)
+        .attachMetadata(674, this.buildUnstakeMetadataMessage(processedBoxes))
         .complete();
 
       const unsignedTxCbor = tx.toCBOR();
@@ -852,7 +920,7 @@ export class StakeService {
       return { success: true, txCbor: unsignedTxCbor, transactionId: saved.id };
     } catch (error: unknown) {
       if (this.isInsufficientFundsError(error)) {
-        await this.alertInsufficientRewardFunds('unstake', userAddress, error);
+        await this.alertInsufficientRewardFunds('unstake', userAddress, error, processedBoxes);
       }
       this.logger.error('buildUnstakeTx failed', error instanceof Error ? error.stack : String(error));
       return { success: false, message: formatError(error, 'buildUnstakeTx failed') };
@@ -864,11 +932,21 @@ export class StakeService {
    * in new boxes with staked_at = now (resetting the reward timer).
    */
   async buildHarvestTx(userId: string, userAddress: string, utxoRefs: UtxoRefDto[]): Promise<BuildTxRes> {
+    let processedBoxes: ProcessedBox[] | undefined;
     try {
       const prep = await this.prepareAdminTxData(userId, userAddress, utxoRefs);
       if (prep.ok === false) return { success: false, message: prep.message };
 
-      const { lucid, ownerHash, referenceUtxo, eligibleBoxes, processedBoxes, totalDepositAll, totalRewardAll } = prep;
+      const {
+        lucid,
+        ownerHash,
+        referenceUtxo,
+        eligibleBoxes,
+        processedBoxes: boxes,
+        totalDepositAll,
+        totalRewardAll,
+      } = prep;
+      processedBoxes = boxes;
 
       const aggByUnit = this.aggregateByUnit(processedBoxes);
 
@@ -895,7 +973,11 @@ export class StakeService {
 
       txBuilder = txBuilder.pay.ToAddress(userAddress, Object.fromEntries(rewardByUnit.entries()));
 
-      const tx = await txBuilder.validTo(validTo).addSignerKey(ownerHash).complete();
+      const tx = await txBuilder
+        .validTo(validTo)
+        .addSignerKey(ownerHash)
+        .attachMetadata(674, this.buildHarvestMetadataMessage(processedBoxes))
+        .complete();
       const unsignedTxCbor = tx.toCBOR();
 
       const saved = await this.transactionRepository.save({
@@ -917,7 +999,7 @@ export class StakeService {
       return { success: true, txCbor: unsignedTxCbor, transactionId: saved.id };
     } catch (error: unknown) {
       if (this.isInsufficientFundsError(error)) {
-        await this.alertInsufficientRewardFunds('harvest', userAddress, error);
+        await this.alertInsufficientRewardFunds('harvest', userAddress, error, processedBoxes);
       }
       this.logger.error('buildHarvestTx failed', error instanceof Error ? error.stack : String(error));
       return { success: false, message: formatError(error, 'buildHarvestTx failed') };
@@ -928,11 +1010,21 @@ export class StakeService {
    * Compound: collect selected boxes, re-lock deposit + reward in new boxes with staked_at = now.
    */
   async buildCompoundTx(userId: string, userAddress: string, utxoRefs: UtxoRefDto[]): Promise<BuildTxRes> {
+    let processedBoxes: ProcessedBox[] | undefined;
     try {
       const prep = await this.prepareAdminTxData(userId, userAddress, utxoRefs);
       if (prep.ok === false) return { success: false, message: prep.message };
 
-      const { lucid, ownerHash, referenceUtxo, eligibleBoxes, processedBoxes, totalDepositAll, totalRewardAll } = prep;
+      const {
+        lucid,
+        ownerHash,
+        referenceUtxo,
+        eligibleBoxes,
+        processedBoxes: boxes,
+        totalDepositAll,
+        totalRewardAll,
+      } = prep;
+      processedBoxes = boxes;
 
       const aggByUnit = this.aggregateByUnit(processedBoxes);
 
@@ -955,7 +1047,11 @@ export class StakeService {
         );
       }
 
-      const tx = await txBuilder.validTo(validTo).addSignerKey(ownerHash).complete();
+      const tx = await txBuilder
+        .validTo(validTo)
+        .addSignerKey(ownerHash)
+        .attachMetadata(674, this.buildCompoundMetadataMessage(processedBoxes))
+        .complete();
       const unsignedTxCbor = tx.toCBOR();
 
       const saved = await this.transactionRepository.save({
@@ -977,7 +1073,7 @@ export class StakeService {
       return { success: true, txCbor: unsignedTxCbor, transactionId: saved.id };
     } catch (error: unknown) {
       if (this.isInsufficientFundsError(error)) {
-        await this.alertInsufficientRewardFunds('compound', userAddress, error);
+        await this.alertInsufficientRewardFunds('compound', userAddress, error, processedBoxes);
       }
       this.logger.error('buildCompoundTx failed', error instanceof Error ? error.stack : String(error));
       return { success: false, message: formatError(error, 'buildCompoundTx failed') };

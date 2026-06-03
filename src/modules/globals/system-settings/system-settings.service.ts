@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -35,6 +36,11 @@ export interface SystemSettingsData {
   // Voting duration constraints (in milliseconds)
   min_voting_duration: number;
   max_voting_duration: number;
+  // Price deviation protection settings
+  price_max_deviation_percent_nft: number;
+  price_max_deviation_percent_ft: number;
+  price_min_absolute_move_ada: number;
+  price_min_asset_price_for_deviation_check_ada: number;
 }
 
 const DEFAULT_SETTINGS: SystemSettingsData = {
@@ -66,6 +72,12 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   // Voting duration constraints (in milliseconds)
   min_voting_duration: 86400000, // 24 hours in ms
   max_voting_duration: 259200000, // 3 days in ms
+  // Price deviation protection defaults
+  price_max_deviation_percent_nft: 400,
+  price_max_deviation_percent_ft: 150,
+  price_min_absolute_move_ada: 0,
+  // Keep this low so deviation checks apply to typical FT price feeds by default
+  price_min_asset_price_for_deviation_check_ada: 0.1,
   hidden_mainnet_vault_ids: [
     '1a6e7495-178b-464e-b37e-00997ef1e9c2',
     '2761c805-77c5-443e-b352-f0afaf4860c0',
@@ -93,11 +105,15 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
 export class SystemSettingsService implements OnModuleInit {
   private readonly logger = new Logger(SystemSettingsService.name);
   private settings: SystemSettingsData = { ...DEFAULT_SETTINGS };
+  private readonly isMainnet: boolean;
 
   constructor(
     @InjectRepository(SystemSettings)
-    private readonly systemSettingsRepository: Repository<SystemSettings>
-  ) {}
+    private readonly systemSettingsRepository: Repository<SystemSettings>,
+    private readonly configService: ConfigService
+  ) {
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+  }
 
   async onModuleInit(): Promise<void> {
     await this.loadSettings();
@@ -229,11 +245,52 @@ export class SystemSettingsService implements OnModuleInit {
   }
 
   get minVotingDuration(): number {
-    return this.settings.min_voting_duration || 86400000; // 24 hours default
+    // Environment-based: 5 min (preprod) / 1 day (mainnet)
+    // Always use environment-based value (database setting is ignored for this)
+    return this.isMainnet ? 86400000 : 300000;
   }
 
   get maxVotingDuration(): number {
     return this.settings.max_voting_duration || 259200000; // 3 days default
+  }
+
+  get minContributionDuration(): number {
+    // Environment-based: 10 min (preprod) / 5 days (mainnet)
+    // Always use environment-based value
+    return this.isMainnet ? 432000000 : 600000;
+  }
+
+  get minAcquireWindowDuration(): number {
+    // Environment-based: 10 min (preprod) / 5 days (mainnet)
+    // Always use environment-based value
+    return this.isMainnet ? 432000000 : 600000;
+  }
+
+  get minExpansionDuration(): number {
+    // 1 day minimum for both environments
+    return 86400000;
+  }
+
+  get priceMaxDeviationPercentNft(): number {
+    const value = Number(this.settings.price_max_deviation_percent_nft);
+    return Number.isFinite(value) && value > 0 ? value : DEFAULT_SETTINGS.price_max_deviation_percent_nft;
+  }
+
+  get priceMaxDeviationPercentFt(): number {
+    const value = Number(this.settings.price_max_deviation_percent_ft);
+    return Number.isFinite(value) && value > 0 ? value : DEFAULT_SETTINGS.price_max_deviation_percent_ft;
+  }
+
+  get priceMinAbsoluteMoveAda(): number {
+    const value = Number(this.settings.price_min_absolute_move_ada);
+    return Number.isFinite(value) && value >= 0 ? value : DEFAULT_SETTINGS.price_min_absolute_move_ada;
+  }
+
+  get priceMinAssetPriceForDeviationCheckAda(): number {
+    const value = Number(this.settings.price_min_asset_price_for_deviation_check_ada);
+    return Number.isFinite(value) && value >= 0
+      ? value
+      : DEFAULT_SETTINGS.price_min_asset_price_for_deviation_check_ada;
   }
 
   // Kill switch getters
@@ -273,6 +330,8 @@ export class SystemSettingsService implements OnModuleInit {
       case 'buy_sell':
         return this.governanceFeeProposalMarketplaceAction;
       case 'expansion':
+        return this.governanceFeeProposalExpansion;
+      case 'acquire_expansion':
         return this.governanceFeeProposalExpansion;
       case 'asset_whitelist_update':
         return this.governanceFeeProposalAssetWhitelistUpdate;

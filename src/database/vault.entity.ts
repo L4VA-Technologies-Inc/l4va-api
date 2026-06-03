@@ -603,6 +603,37 @@ export class Vault {
   })
   manual_distribution_mode: boolean;
 
+  @Expose({ name: 'isAcquireOnly' })
+  @Column({
+    name: 'is_acquire_only',
+    type: 'boolean',
+    nullable: false,
+    default: false,
+    comment: 'If true, vault skips contribution phase and goes directly to acquire phase.',
+  })
+  is_acquire_only: boolean;
+
+  @Expose({ name: 'minAcquireThreshold' })
+  @Transform(({ value }) => (value ? Number(value) : null))
+  @Column({
+    name: 'min_acquire_threshold',
+    type: 'bigint',
+    nullable: true,
+    comment:
+      'Minimum ADA (in lovelace) that must be acquired for the vault to lock. Only used for acquire-only vaults.',
+  })
+  min_acquire_threshold?: number;
+
+  @Expose({ name: 'allowAcquireExpansion' })
+  @Column({
+    name: 'allow_acquire_expansion',
+    type: 'boolean',
+    nullable: false,
+    default: false,
+    comment: 'If true, vault allows governance proposals for acquire expansion (ADA → VT minting).',
+  })
+  allow_acquire_expansion: boolean;
+
   @Exclude()
   @Column({
     name: 'script_hash',
@@ -740,6 +771,10 @@ export class Vault {
   @Expose({ name: 'governancePhaseStart' })
   @Column({ name: 'governance_phase_start', type: 'timestamptz', nullable: true })
   governance_phase_start?: Date;
+
+  @Expose({ name: 'isOfficialPartner' })
+  @Column({ name: 'is_official_partner', type: 'boolean', default: false })
+  is_official_partner: boolean;
 
   @BeforeInsert()
   setDate(): void {

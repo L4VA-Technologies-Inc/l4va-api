@@ -2,8 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, MoreThan, Not, Repository } from 'typeorm';
+import { IsNull, MoreThan, Not, Repository, In } from 'typeorm';
 
+import { AcquireOnlyDistributionOrchestrator } from './orchestrators/acquire-only-distribution.orchestrator';
 import { AcquirerDistributionOrchestrator } from './orchestrators/acquirer-distribution.orchestrator';
 import {
   ContributorDistributionOrchestrator,
@@ -53,6 +54,7 @@ export class AutomatedDistributionService {
     private readonly governanceService: GovernanceService,
     private readonly vyfiService: VyfiService,
     private readonly acquirerOrchestrator: AcquirerDistributionOrchestrator,
+    private readonly acquireOnlyOrchestrator: AcquireOnlyDistributionOrchestrator,
     private readonly contributorOrchestrator: ContributorDistributionOrchestrator
   ) {
     this.unparametizedDispatchHash = this.configService.get<string>('DISPATCH_SCRIPT_HASH');
@@ -107,7 +109,12 @@ export class AutomatedDistributionService {
   private async processLockedVaultsForDistribution(): Promise<void> {
     const readyVaults: Pick<
       Vault,
-      'id' | 'tokens_for_acquires' | 'dispatch_parametized_hash' | 'script_hash' | 'asset_vault_name'
+      | 'id'
+      | 'tokens_for_acquires'
+      | 'dispatch_parametized_hash'
+      | 'script_hash'
+      | 'asset_vault_name'
+      | 'is_acquire_only'
     >[] = await this.vaultRepository.find({
       where: {
         vault_status: VaultStatus.locked,
@@ -117,7 +124,14 @@ export class AutomatedDistributionService {
         created_at: MoreThan(new Date('2025-10-22')),
         manual_distribution_mode: false,
       },
-      select: ['id', 'tokens_for_acquires', 'dispatch_parametized_hash', 'script_hash', 'asset_vault_name'],
+      select: [
+        'id',
+        'tokens_for_acquires',
+        'dispatch_parametized_hash',
+        'script_hash',
+        'asset_vault_name',
+        'is_acquire_only',
+      ],
     });
 
     for (const vault of readyVaults) {
@@ -126,18 +140,65 @@ export class AutomatedDistributionService {
 
         await this.vaultRepository.update({ id: vault.id }, { distribution_in_progress: true });
 
+        // Acquire-only vaults bypass the dispatch contract entirely
+        if (vault.is_acquire_only) {
+          this.logger.log(`Vault ${vault.id} is acquire-only — using acquire-only distribution orchestrator`);
+          await this.acquireOnlyOrchestrator.processAcquireOnlyExtractions(vault.id, this.getConfig());
+          // LP creation + snapshot + mark processed — same finalization path as regular vaults
+          await this.finalizeVaultDistribution(vault.id, vault.script_hash, vault.asset_vault_name);
+          continue;
+        }
+
         await this.ensureDispatchParameterized(vault);
 
-        if (Number(vault.tokens_for_acquires) === 0) {
+        // Check if vault has acquirer claims (including from acquire expansion)
+        const acquirerClaims = await this.claimRepository.find({
+          where: {
+            vault: { id: vault.id },
+            type: ClaimType.ACQUIRER,
+            status: In([ClaimStatus.PENDING, ClaimStatus.FAILED]),
+          },
+          relations: ['transaction'],
+        });
+
+        if (acquirerClaims.length === 0) {
           this.logger.log(
-            `Vault ${vault.id} has 0% tokens for acquirers. ` +
-              `Skipping acquirer extractions, proceeding directly to contributor payments.`
+            `Vault ${vault.id} has no acquirer claims. ` + `Proceeding directly to contributor payments.`
           );
           continue; // Will be picked up by checkExtractionsAndTriggerPayments
         }
 
-        // Delegate to acquirer orchestrator
-        await this.acquirerOrchestrator.processAcquirerExtractions(vault.id, this.getConfig());
+        // Check if claims are from acquire expansion (is_expansion = true)
+        const expansionClaimsCount = acquirerClaims.filter(c => c.transaction?.is_expansion).length;
+        const regularClaimsCount = acquirerClaims.length - expansionClaimsCount;
+
+        this.logger.log(
+          `Vault ${vault.id} has ${acquirerClaims.length} acquirer claim(s): ` +
+            `${regularClaimsCount} regular, ${expansionClaimsCount} from acquire expansion`
+        );
+
+        // Acquire expansion claims need to be minted (use acquire-only orchestrator)
+        // Regular claims need to be extracted from dispatch (use acquirer orchestrator)
+        if (expansionClaimsCount > 0 && regularClaimsCount === 0) {
+          this.logger.log(
+            `All acquirer claims are from acquire expansion. Using acquire-only orchestrator to mint tokens.`
+          );
+          await this.acquireOnlyOrchestrator.processAcquireOnlyExtractions(vault.id, this.getConfig());
+        } else if (expansionClaimsCount === 0 && regularClaimsCount > 0) {
+          this.logger.log(`All acquirer claims are regular. Using acquirer orchestrator to extract from dispatch.`);
+          await this.acquirerOrchestrator.processAcquirerExtractions(vault.id, this.getConfig());
+        } else {
+          // Mixed case: process expansion claims first (minting), then regular claims (extraction)
+          this.logger.log(
+            `Vault has mixed acquirer claims. Processing ${expansionClaimsCount} expansion claims first, ` +
+              `then ${regularClaimsCount} regular claims.`
+          );
+          // TODO: Handle mixed case - for now, log warning and use regular orchestrator
+          this.logger.warn(
+            `Mixed acquirer claim types not fully implemented. ` + `Vault ${vault.id} may require manual distribution.`
+          );
+          await this.vaultRepository.update({ id: vault.id }, { manual_distribution_mode: true });
+        }
       } catch (error) {
         this.logger.error(`Error processing vault ${vault.id}:`, error);
       }
@@ -162,6 +223,7 @@ export class AutomatedDistributionService {
         'vault.last_update_tx_hash',
         'vault.acquire_multiplier',
         'vault.manual_distribution_mode',
+        'vault.is_acquire_only',
       ])
       .leftJoin(
         'claims',
@@ -195,22 +257,22 @@ export class AutomatedDistributionService {
       try {
         this.logger.log(`Checking vault ${vault.id} - ${remainingAcquirerClaims} acquirer claims remaining`);
 
-        // Check if vault has 0% for acquirers (skip acquirer check)
-        const shouldSkipAcquirerCheck = vault.tokens_for_acquires === 0;
+        // Acquire-only vaults are fully handled by processAcquireOnlyExtractions; skip here
+        if (vault.is_acquire_only) {
+          this.logger.log(`Vault ${vault.id} is acquire-only — skipping contributor payment check`);
+          continue;
+        }
 
-        if (!shouldSkipAcquirerCheck && remainingAcquirerClaims > 0) {
+        // Wait for all acquirer claims to complete (including acquire expansion claims)
+        if (remainingAcquirerClaims > 0) {
           this.logger.log(
-            `Vault ${vault.id} still has ${remainingAcquirerClaims} acquirer claims pending. ` +
+            `Vault ${vault.id} still has ${remainingAcquirerClaims} acquirer claim(s) pending. ` +
               `Skipping contributor payments for now.`
           );
           continue;
         }
 
-        this.logger.log(
-          shouldSkipAcquirerCheck
-            ? `Vault ${vault.id} has 0% for acquirers, proceeding to contributor payments.`
-            : `All acquirer extractions complete for vault ${vault.id}`
-        );
+        this.logger.log(`All acquirer extractions complete for vault ${vault.id}`);
 
         // Delegate to contributor orchestrator
         await this.contributorOrchestrator.processContributorPayments(vault.id, vault, this.getConfig());
@@ -291,10 +353,16 @@ export class AutomatedDistributionService {
     try {
       const vault: Pick<
         Vault,
-        'id' | 'liquidity_pool_contribution' | 'governance_phase_start' | 'total_assets_cost_ada'
+        'id' | 'liquidity_pool_contribution' | 'governance_phase_start' | 'total_assets_cost_ada' | 'is_acquire_only'
       > = await this.vaultRepository.findOne({
         where: { id: vaultId },
-        select: ['id', 'liquidity_pool_contribution', 'governance_phase_start', 'total_assets_cost_ada'],
+        select: [
+          'id',
+          'liquidity_pool_contribution',
+          'governance_phase_start',
+          'total_assets_cost_ada',
+          'is_acquire_only',
+        ],
       });
 
       if (!vault) {
@@ -303,7 +371,7 @@ export class AutomatedDistributionService {
 
       // Check if this is an expansion distribution (has EXPANSION claims)
       // If so, skip LP creation - LP was already created during initial distribution
-      const hasExpansionClaims = await this.claimRepository.exist({
+      const hasExpansionClaims = await this.claimRepository.exists({
         where: { vault: { id: vaultId }, type: ClaimType.EXPANSION },
       });
 
@@ -321,11 +389,17 @@ export class AutomatedDistributionService {
 
         // Create LP if LP percentage > 0 AND LP claim exists
         if (lpPercent > 0 && lpClaim) {
-          const { withdrawalTxHash, lpCreationTxHash } =
-            await this.vyfiService.createLiquidityPoolWithWithdrawal(vaultId);
-          this.logger.log(
-            `LP created for vault ${vaultId}. ` + `Withdrawal: ${withdrawalTxHash}, LP Creation: ${lpCreationTxHash}`
-          );
+          if (vault.is_acquire_only) {
+            // Acquire-only vaults: ADA already in admin wallet, no dispatch withdrawal needed
+            const { txHash: lpCreationTxHash } = await this.vyfiService.createLiquidityPoolSimple(vaultId);
+            this.logger.log(`LP created for acquire-only vault ${vaultId}. TX: ${lpCreationTxHash}`);
+          } else {
+            const { withdrawalTxHash, lpCreationTxHash } =
+              await this.vyfiService.createLiquidityPoolWithWithdrawal(vaultId);
+            this.logger.log(
+              `LP created for vault ${vaultId}. ` + `Withdrawal: ${withdrawalTxHash}, LP Creation: ${lpCreationTxHash}`
+            );
+          }
         } else if (lpPercent > 0 && !lpClaim) {
           this.logger.log(
             `Vault ${vaultId} has LP contribution but no LP claim (likely ADA < 500). Skipping LP creation.`

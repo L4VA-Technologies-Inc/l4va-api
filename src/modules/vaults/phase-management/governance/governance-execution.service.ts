@@ -690,6 +690,9 @@ export class GovernanceExecutionService {
         case ProposalType.ASSET_WHITELIST_UPDATE:
           return await this.executeAssetWhitelistUpdateProposal(proposal);
 
+        case ProposalType.ACQUIRE_EXPANSION:
+          return await this.executeAcquireExpansionProposal(proposal);
+
         default:
           this.logger.warn(`Unknown proposal type: ${proposal.proposalType}`);
           return false;
@@ -2211,6 +2214,15 @@ export class GovernanceExecutionService {
           `${rollbackError instanceof Error ? rollbackError.message : rollbackError}`,
         rollbackError instanceof Error ? rollbackError.stack : undefined
       );
+    }
+  }
+
+  async executeAcquireExpansionProposal(proposal: Proposal): Promise<boolean> {
+    try {
+      return await this.expansionService.executeAcquireExpansion(proposal);
+    } catch (error) {
+      await this.storeExecutionError(proposal, error);
+      throw error;
     }
   }
 

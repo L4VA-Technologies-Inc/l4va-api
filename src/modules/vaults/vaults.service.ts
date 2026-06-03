@@ -340,13 +340,14 @@ export class VaultsService {
       const acquireOpenWindowTime = data.acquireOpenWindowTime ? new Date(data.acquireOpenWindowTime) : null;
 
       // Prepare vault data
+      // For acquire-only vaults, exclude contribution-related fields (they skip contribution phase)
       const vaultData = transformToSnakeCase({
         ...data,
         owner: owner,
-        contributionDuration: data.contributionDuration,
+        contributionDuration: data.isAcquireOnly ? null : data.contributionDuration,
         acquireWindowDuration: data.acquireWindowDuration,
         acquireOpenWindowTime,
-        contributionOpenWindowTime,
+        contributionOpenWindowTime: data.isAcquireOnly ? null : contributionOpenWindowTime,
         timeElapsedIsEqualToTime: data.timeElapsedIsEqualToTime,
         vaultStatus: VaultStatus.created,
         vaultImage: vaultImg,
@@ -598,60 +599,100 @@ export class VaultsService {
 
       // Calculate start time based on contribution window type
       let startTime: number;
-      if (finalVault.contribution_open_window_type === ContributionWindowType.uponVaultLaunch) {
-        startTime = new Date().getTime();
-      } else if (
-        finalVault.contribution_open_window_type === ContributionWindowType.custom &&
-        finalVault.contribution_open_window_time
-      ) {
-        // contribution_open_window_time is already in milliseconds due to @Transform in entity
-        startTime = Number(finalVault.contribution_open_window_time);
-      } else {
-        throw new BadRequestException('Invalid contribution window configuration');
-      }
+      let assetWindow: { start: number; end: number };
+      let acquireWindow: { start: number; end: number };
 
-      const assetWindow = {
-        start: startTime,
-        end: startTime + Number(finalVault.contribution_duration),
-      };
-
-      // Calculate acquire window start time
-      let acquireStartTime: number;
-      if (finalVault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
-        acquireStartTime = assetWindow.end;
-      } else if (
-        finalVault.acquire_open_window_type === InvestmentWindowType.custom &&
-        finalVault.acquire_open_window_time
-      ) {
-        // acquire_open_window_time is already in milliseconds due to @Transform in entity
-        const customTime = Number(finalVault.acquire_open_window_time);
-        const currentTime = new Date().getTime();
-        const timeDifference = customTime - currentTime;
-
-        let adjustmentAmount = 1800000; // 30 minutes in milliseconds
-
-        // If custom time is less than 30 minutes in the future, adjust the buffer
-        if (timeDifference < 1800000) {
-          if (timeDifference > 60000) {
-            // If more than 1 minute in future, use half the time difference as buffer (minimum 30 seconds)
-            adjustmentAmount = Math.max(Math.floor(timeDifference / 2), 30000);
-          } else if (timeDifference > 0) {
-            // Less than 1 minute - use minimal 10 second buffer
-            adjustmentAmount = 10000;
-          } else {
-            adjustmentAmount = 0;
+      if (finalVault.is_acquire_only) {
+        // Acquire-only vaults have no contribution phase.
+        // Compute acquire window start based on acquire_open_window_type.
+        let acquireStartTime: number;
+        if (finalVault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
+          acquireStartTime = new Date().getTime();
+        } else if (
+          finalVault.acquire_open_window_type === InvestmentWindowType.custom &&
+          finalVault.acquire_open_window_time
+        ) {
+          const customTime = Number(finalVault.acquire_open_window_time);
+          const currentTime = new Date().getTime();
+          const timeDifference = customTime - currentTime;
+          let adjustmentAmount = 1800000;
+          if (timeDifference < 1800000) {
+            if (timeDifference > 60000) {
+              adjustmentAmount = Math.max(Math.floor(timeDifference / 2), 30000);
+            } else if (timeDifference > 0) {
+              adjustmentAmount = 10000;
+            } else {
+              adjustmentAmount = 0;
+            }
           }
+          acquireStartTime = customTime - adjustmentAmount;
+        } else {
+          throw new BadRequestException('Invalid acquire window configuration for acquire-only vault');
         }
 
-        acquireStartTime = customTime - adjustmentAmount;
+        // Use a zero-duration asset window coinciding with the acquire start
+        // (no contributions are expected, the SC won't be used for asset UTXOs)
+        assetWindow = { start: acquireStartTime, end: acquireStartTime };
+        acquireWindow = {
+          start: acquireStartTime,
+          end: acquireStartTime + Number(finalVault.acquire_window_duration),
+        };
       } else {
-        throw new BadRequestException('Invalid acquire window configuration');
-      }
+        if (finalVault.contribution_open_window_type === ContributionWindowType.uponVaultLaunch) {
+          startTime = new Date().getTime();
+        } else if (
+          finalVault.contribution_open_window_type === ContributionWindowType.custom &&
+          finalVault.contribution_open_window_time
+        ) {
+          // contribution_open_window_time is already in milliseconds due to @Transform in entity
+          startTime = Number(finalVault.contribution_open_window_time);
+        } else {
+          throw new BadRequestException('Invalid contribution window configuration');
+        }
 
-      const acquireWindow = {
-        start: acquireStartTime,
-        end: acquireStartTime + Number(finalVault.acquire_window_duration),
-      };
+        assetWindow = {
+          start: startTime,
+          end: startTime + Number(finalVault.contribution_duration),
+        };
+
+        // Calculate acquire window start time
+        let acquireStartTime: number;
+        if (finalVault.acquire_open_window_type === InvestmentWindowType.uponAssetWindowClosing) {
+          acquireStartTime = assetWindow.end;
+        } else if (
+          finalVault.acquire_open_window_type === InvestmentWindowType.custom &&
+          finalVault.acquire_open_window_time
+        ) {
+          // acquire_open_window_time is already in milliseconds due to @Transform in entity
+          const customTime = Number(finalVault.acquire_open_window_time);
+          const currentTime = new Date().getTime();
+          const timeDifference = customTime - currentTime;
+
+          let adjustmentAmount = 1800000; // 30 minutes in milliseconds
+
+          // If custom time is less than 30 minutes in the future, adjust the buffer
+          if (timeDifference < 1800000) {
+            if (timeDifference > 60000) {
+              // If more than 1 minute in future, use half the time difference as buffer (minimum 30 seconds)
+              adjustmentAmount = Math.max(Math.floor(timeDifference / 2), 30000);
+            } else if (timeDifference > 0) {
+              // Less than 1 minute - use minimal 10 second buffer
+              adjustmentAmount = 10000;
+            } else {
+              adjustmentAmount = 0;
+            }
+          }
+
+          acquireStartTime = customTime - adjustmentAmount;
+        } else {
+          throw new BadRequestException('Invalid acquire window configuration');
+        }
+
+        acquireWindow = {
+          start: acquireStartTime,
+          end: acquireStartTime + Number(finalVault.acquire_window_duration),
+        };
+      }
 
       const { presignedTx, contractAddress, vaultAssetName, scriptHash, applyParamsResult, transactionId } =
         await this.vaultContractService.createOnChainVaultTx({
@@ -937,6 +978,11 @@ export class VaultsService {
     let expansionAssetsByPolicy: Array<{ policyId: string; quantity: number; collectionName: string | null }> = [];
     let expansionWhitelist: Array<{ policyId: string; collectionName: string | null }> = [];
 
+    // Acquire expansion data
+    let acquireExpansionCurrentAdaLovelace: number | undefined;
+    let acquireExpansionMaxAdaLovelace: number | undefined;
+    let acquireExpansionNoMax: boolean | undefined;
+
     // Only check vault_status to determine if vault is currently in expansion
     // expansion_phase_start is preserved as a historical timestamp
     if (vault.vault_status === VaultStatus.expansion) {
@@ -1036,6 +1082,25 @@ export class VaultsService {
       }
     }
 
+    // Fetch acquire expansion data if vault is in acquire_expansion phase
+    if (vault.vault_status === VaultStatus.acquire_expansion) {
+      const acquireExpansionProposal = await this.proposalRepository.findOne({
+        where: {
+          vaultId: vault.id,
+          proposalType: ProposalType.ACQUIRE_EXPANSION,
+          status: ProposalStatus.EXECUTED,
+        },
+        order: { executionDate: 'DESC' },
+      });
+
+      if (acquireExpansionProposal?.metadata?.acquireExpansion) {
+        const config = acquireExpansionProposal.metadata.acquireExpansion;
+        acquireExpansionNoMax = config.noMax;
+        acquireExpansionMaxAdaLovelace = config.maxAda;
+        acquireExpansionCurrentAdaLovelace = config.currentAdaRaised || 0;
+      }
+    }
+
     const rawStats = await this.transactionRepository
       .createQueryBuilder('transaction')
       .select([
@@ -1089,9 +1154,25 @@ export class VaultsService {
     const lpMinLiquidityAda = lpMinLiquidityLovelace / 1_000_000;
     const lpMinLiquidityUsd = lpMinLiquidityAda * adaPrice;
 
-    // Calculate projected LP ADA if vault reaches 100% reserve threshold
-    const requireReservedCostAda =
-      assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01);
+    // Calculate reserve cost threshold
+    // For acquire-only vaults, use min_acquire_threshold if set, otherwise 0
+    // Note: acquire-only vault success/failure uses min_acquire_threshold (if set), otherwise any acquired ADA > 0
+    // For normal vaults, calculate based on asset value and reserve percentages
+    let requireReservedCostAda: number;
+    let requireReservedCostUsd: number;
+
+    if (vault.is_acquire_only) {
+      // Acquire-only vault: use min_acquire_threshold (in lovelace) or 0 if not set
+      requireReservedCostAda = vault.min_acquire_threshold ? vault.min_acquire_threshold / 1_000_000 : 0;
+      requireReservedCostUsd = requireReservedCostAda * adaPrice;
+    } else {
+      // Normal vault: calculate based on asset value and percentages
+      requireReservedCostAda =
+        assetsPrices.totalValueAda * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01);
+      requireReservedCostUsd =
+        assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01);
+    }
+
     // Use raw units for LP calculations (on-chain transactions need decimal-adjusted amounts)
     const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
     const ASSETS_OFFERED_PERCENT = vault.tokens_for_acquires * 0.01;
@@ -1113,8 +1194,7 @@ export class VaultsService {
 
     const additionalData = {
       maxContributeAssets: Number(vault.max_contribute_assets),
-      requireReservedCostUsd:
-        assetsPrices.totalValueUsd * (vault.acquire_reserve * 0.01) * (vault.tokens_for_acquires * 0.01),
+      requireReservedCostUsd,
       requireReservedCostAda,
       lpMinLiquidityAda,
       lpMinLiquidityUsd,
@@ -1143,6 +1223,20 @@ export class VaultsService {
       expansionLimitPrice,
       expansionAssetsByPolicy,
       expansionWhitelist,
+      // Acquire expansion data
+      acquireExpansionCurrentAdaLovelace,
+      acquireExpansionCurrentAda: acquireExpansionCurrentAdaLovelace
+        ? acquireExpansionCurrentAdaLovelace / 1_000_000
+        : undefined,
+      acquireExpansionCurrentUsd: acquireExpansionCurrentAdaLovelace
+        ? (acquireExpansionCurrentAdaLovelace / 1_000_000) * adaPrice
+        : undefined,
+      acquireExpansionMaxAdaLovelace,
+      acquireExpansionMaxAda: acquireExpansionMaxAdaLovelace ? acquireExpansionMaxAdaLovelace / 1_000_000 : undefined,
+      acquireExpansionMaxUsd: acquireExpansionMaxAdaLovelace
+        ? (acquireExpansionMaxAdaLovelace / 1_000_000) * adaPrice
+        : undefined,
+      acquireExpansionNoMax,
       // Protocol fees
       protocolContributorsFeeLovelace: this.systemSettingsService.protocolContributorsFee,
       protocolContributorsFeeAda: this.systemSettingsService.protocolContributorsFee / 1_000_000,
@@ -1190,10 +1284,98 @@ export class VaultsService {
     additionalData['canCreateProposal'] = canCreateProposal;
     additionalData['canCancelVault'] = canCancelVault;
     additionalData['isChatVisible'] = isChatVisible;
+
+    // Calculate if acquire window is currently active
+    // Considers both acquire and expansion windows for acquire_expansion status
+    const BUTTON_DISABLE_THRESHOLD_MS = 300000; // 5 minutes buffer before window closes
+    const now = Date.now();
+    let isAcquireWindowActive = false;
+
+    if (vault.vault_status === VaultStatus.acquire && vault.acquire_phase_start && vault.acquire_window_duration) {
+      const acquireEndTime = new Date(vault.acquire_phase_start).getTime() + vault.acquire_window_duration;
+      isAcquireWindowActive = acquireEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+    } else if (vault.vault_status === VaultStatus.acquire_expansion) {
+      // For acquire_expansion: button is active if EITHER acquire OR expansion window is open
+      let acquireWindowOpen = false;
+      let expansionWindowOpen = false;
+
+      if (vault.acquire_phase_start && vault.acquire_window_duration) {
+        const acquireEndTime = new Date(vault.acquire_phase_start).getTime() + vault.acquire_window_duration;
+        acquireWindowOpen = acquireEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+      }
+
+      if (vault.expansion_phase_start && vault.expansion_duration) {
+        const expansionEndTime = new Date(vault.expansion_phase_start).getTime() + vault.expansion_duration;
+        expansionWindowOpen = expansionEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+      }
+
+      isAcquireWindowActive = acquireWindowOpen || expansionWindowOpen;
+    }
+
+    additionalData['isAcquireWindowActive'] = isAcquireWindowActive;
+
+    // Calculate if contribution/expansion window is currently active
+    let isContributionWindowActive = false;
+
+    if (
+      vault.vault_status === VaultStatus.contribution &&
+      vault.contribution_phase_start &&
+      vault.contribution_duration
+    ) {
+      const contributionEndTime = new Date(vault.contribution_phase_start).getTime() + vault.contribution_duration;
+      isContributionWindowActive = contributionEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+    } else if (
+      vault.vault_status === VaultStatus.expansion &&
+      vault.expansion_phase_start &&
+      vault.expansion_duration
+    ) {
+      const expansionEndTime = new Date(vault.expansion_phase_start).getTime() + vault.expansion_duration;
+      isContributionWindowActive = expansionEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+    } else if (vault.vault_status === VaultStatus.acquire_expansion) {
+      // For acquire_expansion: contribution button is active if expansion window is open
+      if (vault.expansion_phase_start && vault.expansion_duration) {
+        const expansionEndTime = new Date(vault.expansion_phase_start).getTime() + vault.expansion_duration;
+        isContributionWindowActive = expansionEndTime > now + BUTTON_DISABLE_THRESHOLD_MS;
+      }
+    }
+
+    additionalData['isContributionWindowActive'] = isContributionWindowActive;
+
     additionalData['valuationAmount'] =
       assetsPrices.totalAcquiredAda && vault.tokens_for_acquires
         ? parseFloat((assetsPrices.totalAcquiredAda / (vault.tokens_for_acquires * 0.01)).toFixed(2))
         : 0;
+
+    // Compute vaultStats object for frontend stats bar consumption
+    const isAcquirePhase = vault.vault_status === VaultStatus.acquire;
+    const hasActiveLp = vault.has_active_lp ?? false;
+    // TVL: acquire-only vaults use totalAcquiredAda (no contributed assets)
+    const vaultStatsTvlAda = vault.is_acquire_only ? assetsPrices.totalAcquiredAda : assetsPrices.totalValueAda;
+    const vaultStatsTvlUsd = vault.is_acquire_only ? assetsPrices.totalAcquiredUsd : assetsPrices.totalValueUsd;
+    // FDV: for acquire-only vaults FDV = TVL (all acquired ADA is the market cap proxy), so FDV/TVL = 1
+    let vaultStatsFdvAda: number | null = null;
+    let vaultStatsFdvUsd: number | null = null;
+    let vaultStatsFdvTvl: number | null = null;
+    if (vault.is_acquire_only && isAcquirePhase) {
+      vaultStatsFdvAda = assetsPrices.totalAcquiredAda > 0 ? assetsPrices.totalAcquiredAda : null;
+      vaultStatsFdvUsd = assetsPrices.totalAcquiredUsd > 0 ? assetsPrices.totalAcquiredUsd : null;
+      vaultStatsFdvTvl = assetsPrices.totalAcquiredAda > 0 ? 1 : null;
+    } else if (hasActiveLp || isAcquirePhase) {
+      vaultStatsFdvAda = additionalData.fdv ?? null;
+      vaultStatsFdvUsd = additionalData.fdvUsd ?? null;
+      vaultStatsFdvTvl = additionalData.fdvTvl ?? null;
+    }
+    additionalData['vaultStats'] = {
+      tvlAda: vaultStatsTvlAda ?? null,
+      tvlUsd: vaultStatsTvlUsd ?? null,
+      fdvAda: vaultStatsFdvAda,
+      fdvUsd: vaultStatsFdvUsd,
+      fdvTvl: vaultStatsFdvTvl,
+      ftGainsAda: hasActiveLp ? (vault.gains_ada != null ? Number(vault.gains_ada) : null) : null,
+      ftGainsUsd: hasActiveLp ? (vault.gains_usd != null ? Number(vault.gains_usd) : null) : null,
+      vtPriceAda: hasActiveLp ? (vault.vt_price != null ? Number(vault.vt_price) : null) : null,
+      vtPriceUsd: hasActiveLp ? (vault.vt_price != null ? Number(vault.vt_price) * adaPrice : null) : null,
+    };
 
     // First transform the vault to plain object with class-transformer
     const plainVault = instanceToPlain(vault);
@@ -1275,6 +1457,11 @@ export class VaultsService {
       tvlCurrency,
       minTvl,
       maxTvl,
+      minFdv,
+      maxFdv,
+      fdvCurrency,
+      minFdvTvl,
+      maxFdvTvl,
       minInitialVaultOffered,
       maxInitialVaultOffered,
       contributionWindow,
@@ -1284,6 +1471,7 @@ export class VaultsService {
       myVaults,
       filter,
       reserveMet,
+      isOfficialPartner,
       search,
       page = 1,
       limit = 10,
@@ -1382,14 +1570,22 @@ export class VaultsService {
       switch (filter) {
         case VaultFilter.open:
           queryBuilder.andWhere('vault.vault_status IN (:...statuses)', {
-            statuses: [VaultStatus.published, VaultStatus.contribution, VaultStatus.acquire, VaultStatus.expansion],
+            statuses: [
+              VaultStatus.published,
+              VaultStatus.contribution,
+              VaultStatus.acquire,
+              VaultStatus.expansion,
+              VaultStatus.acquire_expansion,
+            ],
           });
           break;
         case VaultFilter.contribution:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.contribution });
           break;
         case VaultFilter.expansion:
-          queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.expansion });
+          queryBuilder.andWhere('vault.vault_status IN (:...statuses)', {
+            statuses: [VaultStatus.expansion, VaultStatus.acquire_expansion],
+          });
           break;
         case VaultFilter.acquire:
           queryBuilder.andWhere('vault.vault_status = :status', { status: VaultStatus.acquire });
@@ -1483,6 +1679,27 @@ export class VaultsService {
       }
     }
 
+    if (minFdv || maxFdv) {
+      const fdvDivider = fdvCurrency === TVLCurrency.USD ? await this.priceService.getAdaPrice() : 1;
+      const effectiveFdvDivider = fdvDivider > 0 ? fdvDivider : 1;
+
+      if (minFdv) {
+        queryBuilder.andWhere('vault.fdv >= :minFdv', { minFdv: minFdv / effectiveFdvDivider });
+      }
+
+      if (maxFdv) {
+        queryBuilder.andWhere('vault.fdv <= :maxFdv', { maxFdv: maxFdv / effectiveFdvDivider });
+      }
+    }
+
+    if (minFdvTvl) {
+      queryBuilder.andWhere('vault.fdv_tvl >= :minFdvTvl', { minFdvTvl });
+    }
+
+    if (maxFdvTvl) {
+      queryBuilder.andWhere('vault.fdv_tvl <= :maxFdvTvl', { maxFdvTvl });
+    }
+
     if (maxInitialVaultOffered) {
       queryBuilder.andWhere('(100 - vault.acquire_reserve) <= :maxInitialVaultOffered', { maxInitialVaultOffered });
     }
@@ -1501,6 +1718,10 @@ export class VaultsService {
         )`,
         { assetWhitelist }
       );
+    }
+
+    if (isOfficialPartner !== undefined) {
+      queryBuilder.andWhere('vault.is_official_partner = :isOfficialPartner', { isOfficialPartner });
     }
 
     // Apply sorting

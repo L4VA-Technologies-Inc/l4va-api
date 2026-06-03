@@ -22,7 +22,7 @@ import { BlockchainService } from '../../processing-tx/onchain/blockchain.servic
 import { DistributionService } from './distribution.service';
 import { CreateProposalReq, ExecType } from './dto/create-proposal.req';
 import { CreateProposalRes } from './dto/create-proposal.res';
-import { AssetBuySellDto } from './dto/get-assets.dto';
+import { AssetBuySellDto, GetTerminationAssetsDto } from './dto/get-assets.dto';
 import { GetProposalDetailRes } from './dto/get-proposal-detail.res';
 import { GetProposalsResItem } from './dto/get-proposal.dto';
 import { VoteReq } from './dto/vote.req';
@@ -31,6 +31,7 @@ import { GovernanceFeeService } from './governance-fee.service';
 import { GovernanceRefundService } from './governance-refund.service';
 import { VoteCountingService } from './vote-counting.service';
 
+import { MIN_LP_LIQUIDITY_FOR_MARKET_EXPANSION } from '@/constants/expansion.constants';
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
@@ -44,7 +45,7 @@ import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.s
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
-import { TaptoolsService } from '@/modules/taptools/taptools.service';
+import { TapToolsClient } from '@/modules/taptools/taptools.client';
 import { GetAssetsToListRes } from '@/modules/vaults/phase-management/governance/dto/get-assets-to-list.res';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
@@ -135,7 +136,7 @@ export class GovernanceService {
     private readonly blockchainService: BlockchainService,
     private readonly systemSettingsService: SystemSettingsService,
     private readonly wayUpPricingService: WayUpPricingService,
-    private readonly taptoolsService: TaptoolsService,
+    private readonly tapToolsClient: TapToolsClient,
     private readonly treasuryWalletService: TreasuryWalletService,
     private readonly rewardEventProducer: RewardEventProducer
   ) {
@@ -298,7 +299,7 @@ export class GovernanceService {
       }
 
       if (vault.has_active_lp) {
-        const pools = await this.taptoolsService.getTokenPools(assetId);
+        const pools = await this.tapToolsClient.getTokenPools(assetId);
 
         // Collect locked VT raw amounts per pool to identify DEX pool contract addresses later
         const lpPoolLockedAmounts = new Set<bigint>();
@@ -446,15 +447,19 @@ export class GovernanceService {
       throw new NotFoundException('Vault not found');
     }
 
-    // Allow governance for both locked and expansion statuses
+    // Allow governance for locked, expansion, and acquire_expansion statuses
     // Expansion windows can be long/indefinite, so governance should continue
-    if (vault.vault_status !== VaultStatus.locked && vault.vault_status !== VaultStatus.expansion) {
-      throw new BadRequestException('Governance is only available for locked or expansion vaults');
+    if (
+      vault.vault_status !== VaultStatus.locked &&
+      vault.vault_status !== VaultStatus.expansion &&
+      vault.vault_status !== VaultStatus.acquire_expansion
+    ) {
+      throw new BadRequestException('Governance is only available for locked, expansion, or acquire expansion vaults');
     }
 
-    // During expansion, only Distribution proposals are allowed
+    // During expansion or acquire expansion, only Distribution proposals are allowed
     // All other proposal types involve extracting assets from vault which conflicts with expansion
-    if (vault.vault_status === VaultStatus.expansion) {
+    if (vault.vault_status === VaultStatus.expansion || vault.vault_status === VaultStatus.acquire_expansion) {
       if (createProposalReq.type !== ProposalType.DISTRIBUTION) {
         throw new BadRequestException(
           'During vault expansion, only Distribution proposals are allowed. ' +
@@ -668,7 +673,7 @@ export class GovernanceService {
           const vtUnit = `${vault.script_hash}${vault.asset_vault_name}`;
 
           // Get all pools for this token from TapTools (includes lpTokenUnit)
-          const allPools = await this.taptoolsService.getTokenPools(vtUnit);
+          const allPools = await this.tapToolsClient.getTokenPools(vtUnit);
 
           if (!allPools || allPools.length === 0) {
             this.logger.log(`No LP pools detected for vault ${vault.id}. Termination can proceed.`);
@@ -1263,6 +1268,13 @@ export class GovernanceService {
           throw new BadRequestException('Expansion duration is required when "No Limit" is not selected');
         }
 
+        const minExpansionDuration = this.systemSettingsService.minExpansionDuration;
+        if (!expansionNoLimit && expansionDuration < minExpansionDuration) {
+          throw new BadRequestException(
+            `Expansion duration must be at least ${minExpansionDuration / 86400000} day(s) (${minExpansionDuration}ms). Provided: ${expansionDuration}ms`
+          );
+        }
+
         // Validate asset max if no max is not set
         if (!expansionNoMax && (!expansionAssetMax || expansionAssetMax <= 0)) {
           throw new BadRequestException('Asset max is required when "No Max" is not selected');
@@ -1455,6 +1467,201 @@ export class GovernanceService {
             lpPoolOnchainId: lpData?.onchainId || null,
           };
         });
+
+        break;
+      }
+
+      case ProposalType.ACQUIRE_EXPANSION: {
+        // Validate acquire expansion fields
+        const {
+          acquireExpansionDuration,
+          acquireExpansionNoLimit,
+          acquireExpansionMaxAda,
+          acquireExpansionNoMax,
+          acquireExpansionPriceType,
+          acquireExpansionLimitPrice,
+        } = createProposalReq;
+
+        // Validate vault allows acquire expansion
+        const vaultForAcquireExpansionCheck: Pick<
+          Vault,
+          'allow_acquire_expansion' | 'script_hash' | 'asset_vault_name' | 'name' | 'ft_token_decimals'
+        > = await this.vaultRepository.findOne({
+          where: { id: vaultId },
+          select: ['allow_acquire_expansion', 'script_hash', 'asset_vault_name', 'name', 'ft_token_decimals'],
+        });
+
+        if (!vaultForAcquireExpansionCheck.allow_acquire_expansion) {
+          throw new BadRequestException(
+            'This vault does not allow acquire expansion proposals. Acquire expansion must be enabled during vault creation.'
+          );
+        }
+
+        // Validate that at least one limit is set
+        if (acquireExpansionNoLimit && acquireExpansionNoMax) {
+          throw new BadRequestException(
+            'At least one limit must be specified. You cannot have both "No Duration Limit" and "No Max ADA" enabled simultaneously.'
+          );
+        }
+
+        // Validate duration if no limit is not set
+        if (!acquireExpansionNoLimit && (!acquireExpansionDuration || acquireExpansionDuration <= 0)) {
+          throw new BadRequestException('Expansion duration is required when "No Limit" is not selected');
+        }
+
+        // Validate minimum expansion duration (1 day)
+        const minAcquireExpansionDuration = this.systemSettingsService.minExpansionDuration;
+        if (!acquireExpansionNoLimit && acquireExpansionDuration < minAcquireExpansionDuration) {
+          throw new BadRequestException(
+            `Acquire expansion duration must be at least ${minAcquireExpansionDuration / 86400000} day(s) (${minAcquireExpansionDuration}ms). Provided: ${acquireExpansionDuration}ms`
+          );
+        }
+
+        // Validate max ADA if no max is not set
+        if (!acquireExpansionNoMax && (!acquireExpansionMaxAda || acquireExpansionMaxAda <= 0)) {
+          throw new BadRequestException('Max ADA is required when "No Max" is not selected');
+        }
+
+        // Validate price type
+        if (!acquireExpansionPriceType || !['limit', 'market'].includes(acquireExpansionPriceType)) {
+          throw new BadRequestException('Price type must be either "limit" or "market"');
+        }
+
+        // Validate limit price if using limit pricing
+        if (acquireExpansionPriceType === 'limit') {
+          if (!acquireExpansionLimitPrice || acquireExpansionLimitPrice <= 0) {
+            throw new BadRequestException('Limit price is required when using limit pricing');
+          }
+
+          const MAX_LIMIT_PRICE = 1_000_000; // 1 million VT per 1 ADA
+          if (acquireExpansionLimitPrice > MAX_LIMIT_PRICE) {
+            throw new BadRequestException(
+              `Limit price cannot exceed ${MAX_LIMIT_PRICE.toLocaleString()} VT per 1 ADA. ` +
+                'Please set a reasonable price.'
+            );
+          }
+
+          // Prevent multiplier = 0: limitPrice must be >= 10^(-decimals)
+          const decimals = vaultForAcquireExpansionCheck.ft_token_decimals || 6;
+          const minLimitPrice = Math.pow(10, -decimals);
+          if (acquireExpansionLimitPrice < minLimitPrice) {
+            throw new BadRequestException(
+              `Limit price too low: With ${decimals} decimals, minimum limit price is ${minLimitPrice} VT per 1 ADA. ` +
+                `Current: ${acquireExpansionLimitPrice}. This would result in 0 tokens minted per ADA.`
+            );
+          }
+
+          // Verify multiplier calculation won't be 0
+          const testMultiplier = Math.floor(acquireExpansionLimitPrice * Math.pow(10, decimals));
+          if (testMultiplier === 0) {
+            throw new BadRequestException(
+              `Invalid limit price: Would result in 0 multiplier. ` +
+                `With ${decimals} decimals, limit price must be at least ${minLimitPrice} VT per 1 ADA.`
+            );
+          }
+        }
+
+        // Validate market pricing requirements
+        if (acquireExpansionPriceType === 'market') {
+          // Check if vault has FT token configured (required for market pricing)
+          if (!vaultForAcquireExpansionCheck.script_hash || !vaultForAcquireExpansionCheck.asset_vault_name) {
+            throw new BadRequestException(
+              'Market pricing requires vault token configuration. Vault must have a script_hash and asset_vault_name.'
+            );
+          }
+
+          try {
+            const liquidityCheck = await this.dexHunterPricingService.checkTokenLiquidity(
+              `${vaultForAcquireExpansionCheck.script_hash}${vaultForAcquireExpansionCheck.asset_vault_name}`
+            );
+
+            if (!liquidityCheck || !liquidityCheck.hasLiquidity) {
+              throw new BadRequestException(
+                'Market pricing requires an active Liquidity Pool. ' +
+                  'No LP found on any DEX (checked MinSwap, VyFi, SundaeSwap, Spectrum). ' +
+                  'Please use limit pricing or create an LP first.'
+              );
+            }
+
+            // Check minimum liquidity (1000 ADA)
+            const minLiquidityAda = MIN_LP_LIQUIDITY_FOR_MARKET_EXPANSION / 1_000_000;
+            if (liquidityCheck.totalAdaLiquidity < minLiquidityAda) {
+              const dexList = liquidityCheck.pools.map(p => `${p.dex} (${p.adaAmount.toFixed(2)} ADA)`).join(', ');
+              throw new BadRequestException(
+                `Market pricing requires LP TVL of at least ${minLiquidityAda.toLocaleString()} ADA across all DEXes. ` +
+                  `Current total LP TVL: ${liquidityCheck.totalAdaLiquidity.toFixed(2)} ADA. ` +
+                  `Found on: ${dexList}. ` +
+                  'Please use limit pricing or wait for LP to accumulate more liquidity.'
+              );
+            }
+
+            // Log success with DEX details
+            const dexList = liquidityCheck.pools.map(p => p.dex).join(', ');
+            this.logger.log(
+              `Acquire expansion proposal validated: Vault ${vaultForAcquireExpansionCheck.name} has active LP on ${liquidityCheck.pools.length} DEX(es): ${dexList}. ` +
+                `Total TVL: ${liquidityCheck.totalAdaLiquidity.toFixed(2)} ADA`
+            );
+
+            // Store market price snapshot for display
+            const currentVtPrice = await this.dexHunterPricingService.getTokenPrice(
+              `${vaultForAcquireExpansionCheck.script_hash}${vaultForAcquireExpansionCheck.asset_vault_name}`
+            );
+
+            // Prevent multiplier = 0: vtPrice must be <= 10^decimals (VT cannot be too expensive in ADA)
+            const decimals = vaultForAcquireExpansionCheck.ft_token_decimals || 6;
+            const maxVtPrice = Math.pow(10, decimals);
+            if (currentVtPrice > maxVtPrice) {
+              throw new BadRequestException(
+                `Market price too high: With ${decimals} decimals, max VT price is ${maxVtPrice.toLocaleString()} ADA per VT. ` +
+                  `Current market price: ${currentVtPrice.toFixed(6)} ADA per VT. This would result in 0 tokens minted per ADA. ` +
+                  'Please use limit pricing or wait for market price to decrease.'
+              );
+            }
+
+            // Verify multiplier calculation won't be 0
+            const testMultiplier = Math.floor((1 / currentVtPrice) * Math.pow(10, decimals));
+            if (testMultiplier === 0) {
+              throw new BadRequestException(
+                `Invalid market price: Would result in 0 multiplier. ` +
+                  `With ${decimals} decimals, VT price must be at most ${maxVtPrice.toLocaleString()} ADA per VT. ` +
+                  `Current: ${currentVtPrice.toFixed(6)} ADA per VT.`
+              );
+            }
+
+            // Store acquire expansion config in metadata
+            proposal.metadata.acquireExpansion = {
+              duration: acquireExpansionNoLimit ? undefined : acquireExpansionDuration,
+              noLimit: acquireExpansionNoLimit || false,
+              maxAda: acquireExpansionNoMax ? undefined : acquireExpansionMaxAda,
+              noMax: acquireExpansionNoMax || false,
+              priceType: acquireExpansionPriceType,
+              limitPrice: undefined, // Market pricing doesn't use limit price
+              currentAdaRaised: 0,
+              marketPriceSnapshot: currentVtPrice, // Store for display purposes only
+            };
+          } catch (error) {
+            // If it's already a BadRequestException, re-throw it
+            if (error instanceof BadRequestException) {
+              throw error;
+            }
+            // For other errors (API failures, etc), log and throw a user-friendly error
+            this.logger.error(`Error checking LP status for acquire expansion proposal: ${error.message}`, error.stack);
+            throw new BadRequestException(
+              'Unable to verify Liquidity Pool status. Please try again later or contact support.'
+            );
+          }
+        } else {
+          // Store acquire expansion config for limit pricing (no market price snapshot needed)
+          proposal.metadata.acquireExpansion = {
+            duration: acquireExpansionNoLimit ? undefined : acquireExpansionDuration,
+            noLimit: acquireExpansionNoLimit || false,
+            maxAda: acquireExpansionNoMax ? undefined : acquireExpansionMaxAda,
+            noMax: acquireExpansionNoMax || false,
+            priceType: acquireExpansionPriceType,
+            limitPrice: acquireExpansionLimitPrice, // Limit pricing uses the configured limit price
+            currentAdaRaised: 0,
+          };
+        }
 
         break;
       }
@@ -2457,7 +2664,7 @@ export class GovernanceService {
       }>(cacheKey);
 
       if (cached !== undefined) {
-        this.logger.debug(`Cache hit for voting power: ${cacheKey}`);
+        // this.logger.debug(`Cache hit for voting power: ${cacheKey}`);
         if (cached.error) {
           // Re-throw cached error
           if (cached.error.type === 'BadRequestException') {
@@ -2533,8 +2740,18 @@ export class GovernanceService {
     }
   }
 
-  async getAssetsToTerminate(vaultId: string): Promise<AssetBuySellDto[]> {
+  async getAssetsToTerminate(vaultId: string): Promise<GetTerminationAssetsDto> {
     try {
+      // Get vault for LP validation
+      const vault = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        relations: ['treasury_wallet'],
+      });
+
+      if (!vault) {
+        throw new NotFoundException(`Vault ${vaultId} not found`);
+      }
+
       // Get all assets in the vault eligible for termination
       const assets = await this.assetRepository.find({
         where: {
@@ -2548,12 +2765,188 @@ export class GovernanceService {
         select: ['id', 'policy_id', 'asset_id', 'type', 'quantity', 'dex_price', 'floor_price', 'metadata'],
       });
 
-      return plainToInstance(AssetBuySellDto, assets, {
+      const assetDtos = plainToInstance(AssetBuySellDto, assets, {
         excludeExtraneousValues: true,
       });
+
+      // Get LP validation info
+      const lpValidation = await this.validateLpForTermination(vault);
+
+      return {
+        assets: assetDtos,
+        lpInfo: {
+          hasLp: lpValidation.hasLp,
+          pools: lpValidation.pools,
+          recoverableLpTokenUnit: lpValidation.recoverableLpTokenUnit,
+          totalUnrecoverableAda: lpValidation.totalUnrecoverableAda,
+        },
+        validation: {
+          canCreateProposal: lpValidation.canTerminate,
+          warnings: lpValidation.warning ? [lpValidation.warning] : [],
+          blockingReason: lpValidation.blockingReason,
+        },
+      };
     } catch (error) {
-      this.logger.error(`Error getting assets to terminate for vault ${vaultId}: ${error.message}`, error.stack);
-      throw new InternalServerErrorException('Error getting assets to terminate');
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+      this.logger.error(
+        `Error getting termination info for vault ${vaultId}: ${error instanceof Error ? error.message : 'Unknown'}`,
+        error instanceof Error ? error.stack : undefined
+      );
+      throw new InternalServerErrorException('Error getting termination info');
+    }
+  }
+
+  /**
+   * Validate LP pools for termination (internal helper method)
+   * Returns LP pool information and validation status
+   */
+  private async validateLpForTermination(vault: Vault): Promise<{
+    hasLp: boolean;
+    canTerminate: boolean;
+    pools: Array<{
+      dex: string;
+      lpTokenUnit: string;
+      adaAmount: number;
+      vtAmount: number;
+      isRecoverable: boolean;
+    }>;
+    recoverableLpTokenUnit: string | null;
+    totalUnrecoverableAda: number;
+    blockingReason: string | null;
+    warning: string | null;
+  }> {
+    // Skip LP pool validation on testnet (no real DEXes)
+    if (!this.isMainnet) {
+      return {
+        hasLp: false,
+        canTerminate: true,
+        pools: [],
+        recoverableLpTokenUnit: null,
+        totalUnrecoverableAda: 0,
+        blockingReason: null,
+        warning: 'Testnet: LP validation skipped',
+      };
+    }
+
+    // Check if vault has necessary data
+    if (!vault.script_hash || !vault.asset_vault_name) {
+      return {
+        hasLp: false,
+        canTerminate: true,
+        pools: [],
+        recoverableLpTokenUnit: null,
+        totalUnrecoverableAda: 0,
+        blockingReason: null,
+        warning: null,
+      };
+    }
+
+    try {
+      const vtUnit = `${vault.script_hash}${vault.asset_vault_name}`;
+
+      // Get all pools for this token from TapTools
+      const allPools = await this.tapToolsClient.getTokenPools(vtUnit);
+
+      if (!allPools || allPools.length === 0) {
+        return {
+          hasLp: false,
+          canTerminate: true,
+          pools: [],
+          recoverableLpTokenUnit: null,
+          totalUnrecoverableAda: 0,
+          blockingReason: null,
+          warning: null,
+        };
+      }
+
+      // Get VyFi pools and check which LP tokens exist in admin wallet
+      const vyfiPools = allPools.filter(pool => pool.exchange.toLowerCase().includes('vyfi'));
+      let recoverableLpTokenUnit: string | null = null;
+
+      if (vyfiPools.length > 0) {
+        try {
+          // Get admin wallet assets to check which VyFi LP tokens we actually hold
+          const adminAddressInfo = await this.blockfrost.addressesExtended(this.adminAddress);
+          const adminAssetUnits = adminAddressInfo.amount?.map(a => a.unit) || [];
+
+          // Find which VyFi LP token unit exists in admin wallet
+          for (const vyfiPool of vyfiPools) {
+            if (adminAssetUnits.includes(vyfiPool.lpTokenUnit)) {
+              recoverableLpTokenUnit = vyfiPool.lpTokenUnit;
+              break;
+            }
+          }
+        } catch (error) {
+          this.logger.warn(
+            `Failed to check admin wallet for VyFi LP tokens: ${error instanceof Error ? error.message : 'Unknown'}`
+          );
+        }
+      }
+
+      // Build pool information with recoverability status.
+      // Per TapTools pool semantics, an empty/null tokenB indicates an ADA-quoted pair.
+      // Non-empty tokenB entries are non-ADA pairs and must not be counted as ADA liquidity.
+      const poolsInfo = allPools.map(pool => {
+        const isVyFi = pool.exchange.toLowerCase().includes('vyfi');
+        const isAdaQuotedPool = !pool.tokenB || pool.tokenB === '';
+        const adaAmount = isAdaQuotedPool ? pool.tokenBLocked : 0;
+        const vtAmount = pool.tokenALocked;
+        const isRecoverable = isVyFi && pool.lpTokenUnit === recoverableLpTokenUnit;
+
+        return {
+          dex: pool.exchange,
+          lpTokenUnit: pool.lpTokenUnit,
+          adaAmount,
+          vtAmount,
+          isRecoverable,
+        };
+      });
+
+      // Calculate total ADA in unrecoverable pools
+      const unrecoverablePools = poolsInfo.filter(p => !p.isRecoverable);
+      const totalUnrecoverableAda = unrecoverablePools.reduce((sum, pool) => sum + pool.adaAmount, 0);
+
+      const MIN_ADA_TO_BLOCK_TERMINATION = 10;
+      const canTerminate = totalUnrecoverableAda < MIN_ADA_TO_BLOCK_TERMINATION;
+
+      let blockingReason: string | null = null;
+      let warning: string | null = null;
+
+      if (!canTerminate) {
+        const poolList = unrecoverablePools.map(p => p.dex).join(', ');
+        blockingReason =
+          `Vault has ${totalUnrecoverableAda.toFixed(2)} ADA in unrecoverable LP pools (${poolList}). ` +
+          `Please remove liquidity before termination.`;
+      } else if (totalUnrecoverableAda > 0) {
+        warning =
+          `Vault has ${totalUnrecoverableAda.toFixed(2)} ADA in unrecoverable pools ` +
+          `(below ${MIN_ADA_TO_BLOCK_TERMINATION} ADA threshold). Termination can proceed but this value will be lost.`;
+      }
+
+      return {
+        hasLp: true,
+        canTerminate,
+        pools: poolsInfo,
+        recoverableLpTokenUnit,
+        totalUnrecoverableAda,
+        blockingReason,
+        warning,
+      };
+    } catch (error) {
+      this.logger.error(`Error validating LP for termination: ${error instanceof Error ? error.message : 'Unknown'}`);
+
+      // On error, allow termination but warn
+      return {
+        hasLp: false,
+        canTerminate: true,
+        pools: [],
+        recoverableLpTokenUnit: null,
+        totalUnrecoverableAda: 0,
+        blockingReason: null,
+        warning: 'Failed to check LP pools. Proceed with caution.',
+      };
     }
   }
 
@@ -2611,9 +3004,7 @@ export class GovernanceService {
         ],
       });
 
-      const treasuryWalletBalance = this.isMainnet
-        ? await this.treasuryWalletService.getTreasuryWalletBalance(vaultId)
-        : null;
+      const treasuryWalletBalance = await this.treasuryWalletService.getTreasuryWalletBalance(vaultId);
 
       return {
         assets: plainToInstance(AssetBuySellDto, assets, {
