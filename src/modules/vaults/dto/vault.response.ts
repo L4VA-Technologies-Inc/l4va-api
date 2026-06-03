@@ -856,6 +856,13 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   expansionLimitPrice?: number;
 
+  @ApiProperty({ description: 'Whether the vault supports asset whitelist expansion', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'isExpandableAssetWhitelist' },
+  })
+  isExpandableAssetWhitelist?: boolean;
+
   @ApiProperty({ description: 'Acquire expansion current ADA raised', required: false })
   @DtoRepresent({
     transform: false,

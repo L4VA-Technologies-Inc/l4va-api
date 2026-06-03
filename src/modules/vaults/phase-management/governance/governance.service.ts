@@ -1,4 +1,4 @@
-﻿import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import {
   BadRequestException,
   ForbiddenException,
@@ -37,6 +37,7 @@ import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
+import { TokenVerification } from '@/database/token-verification.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { Vote } from '@/database/vote.entity';
@@ -48,7 +49,7 @@ import { TapToolsClient } from '@/modules/taptools/taptools.client';
 import { GetAssetsToListRes } from '@/modules/vaults/phase-management/governance/dto/get-assets-to-list.res';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
-import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
+import { AssetOriginType, AssetStatus, AssetType, AssetValuationMethod } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { RewardActivityType } from '@/types/rewards.types';
@@ -119,6 +120,8 @@ export class GovernanceService {
     private readonly assetRepository: Repository<Asset>,
     @InjectRepository(AssetsWhitelistEntity)
     private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
+    @InjectRepository(TokenVerification)
+    private readonly tokenVerificationRepository: Repository<TokenVerification>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly configService: ConfigService,
@@ -418,11 +421,27 @@ export class GovernanceService {
       );
     }
 
-    const vault: Pick<Vault, 'id' | 'vault_status' | 'script_hash' | 'asset_vault_name' | 'name' | 'assets_whitelist'> =
-      await this.vaultRepository.findOne({
-        where: { id: vaultId },
-        select: ['id', 'vault_status', 'script_hash', 'asset_vault_name', 'name', 'assets_whitelist'],
-      });
+    const vault: Pick<
+      Vault,
+      | 'id'
+      | 'vault_status'
+      | 'script_hash'
+      | 'asset_vault_name'
+      | 'name'
+      | 'assets_whitelist'
+      | 'is_expandable_asset_whitelist'
+    > = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: [
+        'id',
+        'vault_status',
+        'script_hash',
+        'asset_vault_name',
+        'name',
+        'assets_whitelist',
+        'is_expandable_asset_whitelist',
+      ],
+    });
 
     if (!vault) {
       throw new NotFoundException('Vault not found');
@@ -494,6 +513,23 @@ export class GovernanceService {
         throw new BadRequestException(
           `Only one expansion proposal can be active at a time. ` +
             `Please wait for the current expansion proposal "${activeExpansionProposal.title}" to complete before creating a new one.`
+        );
+      }
+    }
+
+    if (createProposalReq.type === ProposalType.ASSET_WHITELIST_UPDATE) {
+      const activeAssetWhitelistProposal = await this.proposalRepository.findOne({
+        where: {
+          vaultId,
+          proposalType: ProposalType.ASSET_WHITELIST_UPDATE,
+          status: In([ProposalStatus.ACTIVE, ProposalStatus.UPCOMING]),
+        },
+      });
+
+      if (activeAssetWhitelistProposal) {
+        throw new BadRequestException(
+          `Only one asset whitelist update proposal can be active at a time. ` +
+            `Please wait for the current proposal "${activeAssetWhitelistProposal.title}" to complete before creating a new one.`
         );
       }
     }
@@ -1341,6 +1377,96 @@ export class GovernanceService {
           limitPrice: expansionPriceType === 'limit' ? expansionLimitPrice : undefined,
           currentAssetCount: 0,
         };
+
+        break;
+      }
+
+      case ProposalType.ASSET_WHITELIST_UPDATE: {
+        if (!vault.is_expandable_asset_whitelist) {
+          throw new BadRequestException(
+            'This vault does not allow expanding the asset whitelist. Only vaults marked as expandable can create asset whitelist update proposals.'
+          );
+        }
+
+        const assetsWhitelist = createProposalReq.assetsWhitelist || [];
+
+        if (assetsWhitelist.length === 0) {
+          throw new BadRequestException(
+            'Provide at least one asset to add. Asset whitelist update proposals require a non-empty assetsWhitelist array.'
+          );
+        }
+
+        // Deduplicate by policyId only (matching the DB constraint: unique on vault + policy_id)
+        const uniqueWhitelistItems = Array.from(new Map(assetsWhitelist.map(item => [item.policyId, item])).values());
+
+        const existingWhitelist = await this.assetsWhitelistRepository.find({
+          where: { vault: { id: vaultId } },
+          select: ['policy_id'],
+        });
+
+        if (existingWhitelist.length + uniqueWhitelistItems.length > 30) {
+          throw new BadRequestException(
+            `The vault whitelist cannot exceed 30 policies in total. This vault already has ${existingWhitelist.length}, and this proposal would add ${uniqueWhitelistItems.length}.`
+          );
+        }
+
+        const duplicatePolicyIds = uniqueWhitelistItems
+          .map(item => item.policyId)
+          .filter(policyId => existingWhitelist.some(item => item.policy_id === policyId));
+
+        if (duplicatePolicyIds.length > 0) {
+          throw new BadRequestException(
+            `Provided policy IDs are already on this vault's whitelist and cannot be added again.`
+          );
+        }
+
+        await this.ensureAssetWhitelistTokensAreVerified(uniqueWhitelistItems);
+
+        const policyIds = uniqueWhitelistItems.map(item => item.policyId).filter(Boolean);
+        const lpTokensData =
+          policyIds.length > 0
+            ? await this.tokenVerificationRepository.find({
+                where: { policy_id: In(policyIds) },
+                select: ['policy_id', 'lp_pool_onchain_id', 'is_lp_token'],
+              })
+            : [];
+        const lpTokenMap = new Map(
+          lpTokensData.map(lp => [lp.policy_id, { onchainId: lp.lp_pool_onchain_id, isLp: lp.is_lp_token }])
+        );
+
+        for (const assetItem of uniqueWhitelistItems) {
+          const lpData = lpTokenMap.get(assetItem.policyId);
+
+          if (lpData?.isLp) {
+            if (!lpData.onchainId) {
+              throw new BadRequestException(
+                `Policy ${assetItem.policyId} is registered as an LP token but has no lp_pool_onchain_id in token_verifications. ` +
+                  'Add a valid on-chain pool ID for this token before it can be whitelisted.'
+              );
+            }
+            assetItem.valuationMethod = AssetValuationMethod.LP_TOKEN_DYNAMIC;
+          } else if (assetItem.valuationMethod === AssetValuationMethod.LP_TOKEN_DYNAMIC) {
+            throw new BadRequestException(
+              `Policy ${assetItem.policyId} is not an LP token and cannot use the "lp_token_dynamic" valuation method. ` +
+                'Mark it as an LP token in token_verifications, or choose a different valuation method.'
+            );
+          }
+        }
+
+        proposal.metadata.assetsWhitelist = uniqueWhitelistItems.map(assetItem => {
+          const lpData = lpTokenMap.get(assetItem.policyId);
+          const rawFallbackCollectionName = assetItem.collectionName || assetItem.name || assetItem.policyName || null;
+          const fallbackCollectionName = rawFallbackCollectionName ? rawFallbackCollectionName.slice(0, 255) : null;
+
+          return {
+            policyId: assetItem.policyId,
+            assetName: assetItem.assetName,
+            collectionName: fallbackCollectionName,
+            valuationMethod: assetItem.valuationMethod || AssetValuationMethod.MARKET,
+            customPriceAda: assetItem.customPriceAda ?? null,
+            lpPoolOnchainId: lpData?.onchainId || null,
+          };
+        });
 
         break;
       }
@@ -3000,6 +3126,71 @@ export class GovernanceService {
         this.proposalCreationCache.set(cacheKey, false, this.CACHE_TTL.CAN_CREATE_PROPOSAL);
       }
       return false;
+    }
+  }
+
+  private async ensureAssetWhitelistTokensAreVerified(
+    whitelistItems: Array<{ policyId: string; assetName?: string }>
+  ): Promise<void> {
+    if (!this.isMainnet) {
+      return;
+    }
+
+    const unverifiedPolicyIds: string[] = [];
+
+    // Batch fetch all token verifications in a single query to avoid N+1
+    const policyIds = [...new Set(whitelistItems.map(item => item.policyId))];
+    const existingVerifications = policyIds.length
+      ? await this.tokenVerificationRepository.find({
+          where: { policy_id: In(policyIds) },
+          order: { updated_at: 'DESC' },
+        })
+      : [];
+
+    // Build a map of policy_id -> most recent verification
+    const latestVerificationByPolicyId = new Map<string, TokenVerification>();
+    for (const verification of existingVerifications) {
+      if (!latestVerificationByPolicyId.has(verification.policy_id)) {
+        latestVerificationByPolicyId.set(verification.policy_id, verification);
+      }
+    }
+
+    // Process sequentially to avoid wasting external API calls
+    for (const item of whitelistItems) {
+      const existing = latestVerificationByPolicyId.get(item.policyId);
+
+      if (existing?.is_verified) {
+        continue;
+      }
+
+      const tokenId = `${item.policyId}${item.assetName || ''}`;
+      const dexHunterData = await this.dexHunterService.fetchTokenVerification(tokenId);
+      if (dexHunterData?.isVerified) {
+        continue;
+      }
+
+      try {
+        const wayupResponse = await this.wayUpPricingService.getCollectionAssets({ policyId: item.policyId });
+        const firstAsset = wayupResponse.results?.[0];
+        const hasResults = Array.isArray(wayupResponse.results) && wayupResponse.results.length > 0;
+
+        if (hasResults && firstAsset?.collection?.verified) {
+          continue;
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Failed to verify whitelist token ${item.policyId}: ${error instanceof Error ? error.message : error}`
+        );
+      }
+
+      unverifiedPolicyIds.push(item.policyId);
+    }
+
+    if (unverifiedPolicyIds.length > 0) {
+      const uniquePolicyIds = [...new Set(unverifiedPolicyIds)];
+      throw new BadRequestException(
+        `All whitelist tokens must be verified. Unverified policy IDs: ${uniquePolicyIds.join(', ')}.`
+      );
     }
   }
 

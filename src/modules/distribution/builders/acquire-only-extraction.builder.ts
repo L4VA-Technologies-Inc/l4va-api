@@ -132,8 +132,7 @@ export class AcquireOnlyExtractionBuilder {
     });
 
     // ADA goes to admin (LP portion) and treasury (remainder)
-    const lpAdaLovelace =
-      config.lpPercent > 0 ? Math.floor(totalTreasuryLovelace * (config.lpPercent / 200)) : 0;
+    const lpAdaLovelace = config.lpPercent > 0 ? Math.floor(totalTreasuryLovelace * (config.lpPercent / 200)) : 0;
     const netTreasuryLovelace = totalTreasuryLovelace - lpAdaLovelace;
 
     if (lpAdaLovelace > 0) {

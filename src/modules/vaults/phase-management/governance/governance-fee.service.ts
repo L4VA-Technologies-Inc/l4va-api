@@ -204,6 +204,7 @@ export class GovernanceFeeService {
       expansion: 'Expansion',
       buy_sell: 'Marketplace Action',
       acquire_expansion: 'Acquire Expansion',
+      asset_whitelist_update: 'Asset Whitelist Update',
     };
     return labels[proposalType] || proposalType;
   }

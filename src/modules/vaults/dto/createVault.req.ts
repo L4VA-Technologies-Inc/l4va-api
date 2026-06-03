@@ -4,6 +4,7 @@ import {
   ArrayMaxSize,
   ArrayNotEmpty,
   IsArray,
+  IsBoolean,
   IsEnum,
   IsNotEmpty,
   IsNumber,
@@ -17,7 +18,6 @@ import {
   ValidateIf,
   ArrayMinSize,
   IsUUID,
-  IsBoolean,
 } from 'class-validator';
 
 import { AcquirerWhitelist, ContributorWhitelist, SocialLink, AcquirerWhitelistCsv } from '../types';
@@ -441,4 +441,14 @@ export class CreateVaultReq {
   @IsString({ each: true })
   @Expose()
   tags?: string[];
+
+  @ApiProperty({
+    description: 'Whether the vault whitelist supports expansion',
+    required: false,
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  @Expose()
+  isExpandableAssetWhitelist?: boolean;
 }
