@@ -2065,6 +2065,11 @@ export class GovernanceExecutionService {
     }
   }
 
+  /**
+   * Execute ASSET_WHITELIST_UPDATE proposal actions
+   * Inserts new policy IDs into the assets_whitelist table for the vault
+   * This is an off-chain only operation - no blockchain transaction is submitted
+   */
   async executeAssetWhitelistUpdateProposal(proposal: Proposal): Promise<boolean> {
     const whitelistItems = proposal.metadata?.assetsWhitelist;
 
@@ -2077,18 +2082,9 @@ export class GovernanceExecutionService {
       throw err;
     }
 
-    const vault = await this.vaultRepository.findOne({
+    const vault: Pick<Vault, 'id' | 'is_expandable_asset_whitelist'> = await this.vaultRepository.findOne({
       where: { id: proposal.vaultId },
-      select: [
-        'id',
-        'asset_vault_name',
-        'privacy',
-        'contribution_phase_start',
-        'contribution_duration',
-        'value_method',
-        'vault_sc_status',
-        'is_expandable_asset_whitelist',
-      ],
+      select: ['id', 'is_expandable_asset_whitelist'],
     });
 
     if (!vault) {
@@ -2106,7 +2102,6 @@ export class GovernanceExecutionService {
     }
 
     let insertedCount = 0;
-    const insertedPolicyIds: string[] = [];
 
     try {
       for (const item of whitelistItems) {
@@ -2126,7 +2121,6 @@ export class GovernanceExecutionService {
 
         if (result.identifiers.length > 0) {
           insertedCount += 1;
-          insertedPolicyIds.push(item.policyId);
         }
       }
     } catch (error) {
@@ -2136,63 +2130,15 @@ export class GovernanceExecutionService {
 
     if (insertedCount === 0) {
       this.logger.warn(
-        `Asset whitelist update proposal ${proposal.id} did not insert any new whitelist entries; proceeding with on-chain metadata update because whitelist rows may already exist`
+        `Asset whitelist update proposal ${proposal.id} did not insert any new whitelist entries (policies may already exist in whitelist)`
+      );
+    } else {
+      this.logger.log(
+        `Asset whitelist update proposal ${proposal.id} successfully inserted ${insertedCount} new policy ID(s) into whitelist`
       );
     }
 
-    let onChainResult: { txHash: string };
-    try {
-      onChainResult = await this.vaultManagingService.updateVaultMetadataTx({
-        vault,
-        vaultStatus: vault.vault_sc_status || SmartContractVaultStatus.SUCCESSFUL,
-      });
-    } catch (error) {
-      await this.rollbackAssetWhitelistInserts(proposal.id, vault.id, insertedPolicyIds);
-      await this.storeExecutionError(proposal, error);
-      throw error;
-    }
-
-    try {
-      await this.vaultRepository.update(
-        { id: vault.id },
-        {
-          last_update_tx_hash: onChainResult.txHash,
-        }
-      );
-
-      return true;
-    } catch (error) {
-      await this.storeExecutionError(proposal, error);
-      throw error;
-    }
-  }
-
-  /**
-   * Removes whitelist rows inserted during a failed asset whitelist update execution
-   * so off-chain state stays aligned when the on-chain metadata update does not complete.
-   */
-  private async rollbackAssetWhitelistInserts(proposalId: string, vaultId: string, policyIds: string[]): Promise<void> {
-    if (policyIds.length === 0) {
-      return;
-    }
-
-    try {
-      const result = await this.assetsWhitelistRepository.delete({
-        vault: { id: vaultId },
-        policy_id: In(policyIds),
-      });
-
-      this.logger.warn(
-        `Rolled back ${result.affected ?? 0} asset whitelist row(s) for vault ${vaultId} ` +
-          `after on-chain update failed for proposal ${proposalId}`
-      );
-    } catch (rollbackError) {
-      this.logger.error(
-        `Failed to roll back asset whitelist rows for proposal ${proposalId} (vault ${vaultId}, policies: ${policyIds.join(', ')}): ` +
-          `${rollbackError instanceof Error ? rollbackError.message : rollbackError}`,
-        rollbackError instanceof Error ? rollbackError.stack : undefined
-      );
-    }
+    return true;
   }
 
   async executeAcquireExpansionProposal(proposal: Proposal): Promise<boolean> {
