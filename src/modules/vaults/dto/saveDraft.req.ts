@@ -419,7 +419,7 @@ export class SaveDraftReq {
   tags?: string[] | null;
 
   @ApiProperty({
-    description: 'Whether the vault supports expansion',
+    description: 'Whether the vault supports asset whitelist expansion',
     required: false,
     nullable: true,
     default: false,
