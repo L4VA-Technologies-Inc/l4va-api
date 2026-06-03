@@ -33,7 +33,7 @@ import { ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { RewardActivityType } from '@/types/rewards.types';
 import { TransactionStatus } from '@/types/transaction.types';
-import { VaultStatus, SmartContractVaultStatus } from '@/types/vault.types';
+import { VaultStatus } from '@/types/vault.types';
 
 @Injectable()
 export class GovernanceExecutionService {
