@@ -18,7 +18,6 @@ import {
   ValidateIf,
   ArrayMinSize,
   IsUUID,
-  IsBoolean,
 } from 'class-validator';
 
 import { AcquirerWhitelist, ContributorWhitelist, SocialLink, AcquirerWhitelistCsv } from '../types';
