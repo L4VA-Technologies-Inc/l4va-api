@@ -607,19 +607,21 @@ export class GovernanceExecutionService {
       return false;
     }
 
-    // Proposals that involve asset extraction from vault can only execute when vault is LOCKED
+    // Proposals that require vault to be LOCKED can only execute in that status
     // During EXPANSION, assets are being added and extraction would conflict with the expansion mechanics
-    const extractionProposalTypes = [
+    // Asset whitelist updates also require LOCKED status to ensure consistency with vault state
+    const lockedOnlyProposalTypes = [
       ProposalType.MARKETPLACE_ACTION,
       ProposalType.BUY_SELL,
       ProposalType.BURNING,
       ProposalType.TERMINATION,
+      ProposalType.ASSET_WHITELIST_UPDATE,
     ];
 
-    if (extractionProposalTypes.includes(proposal.proposalType)) {
+    if (lockedOnlyProposalTypes.includes(proposal.proposalType)) {
       if (vault.vault_status !== VaultStatus.locked) {
         this.logger.warn(
-          `Cannot execute ${proposal.proposalType} proposal ${proposal.id}: Vault must be in LOCKED status for asset extraction. Current status: ${vault.vault_status}`
+          `Cannot execute ${proposal.proposalType} proposal ${proposal.id}: Vault must be in LOCKED status. Current status: ${vault.vault_status}`
         );
         // Store error in metadata so it can be retried later
         await this.proposalRepository.update(
@@ -632,30 +634,6 @@ export class GovernanceExecutionService {
                 timestamp: new Date().toISOString(),
                 errorCode: 'VAULT_STATUS_NOT_LOCKED',
                 userFriendlyMessage: 'This proposal will automatically retry when vault returns to LOCKED status.',
-              },
-            },
-          }
-        );
-        return false;
-      }
-    }
-
-    if (proposal.proposalType === ProposalType.ASSET_WHITELIST_UPDATE) {
-      if (vault.vault_status !== VaultStatus.locked) {
-        this.logger.warn(
-          `Cannot execute asset whitelist update proposal ${proposal.id}: vault must be LOCKED. Current status: ${vault.vault_status}`
-        );
-        await this.proposalRepository.update(
-          { id: proposal.id },
-          {
-            metadata: {
-              ...proposal.metadata,
-              executionError: {
-                message: `Asset whitelist updates require the vault to be in LOCKED status. Current status: ${vault.vault_status}.`,
-                timestamp: new Date().toISOString(),
-                errorCode: 'VAULT_STATUS_NOT_LOCKED_WHITELIST',
-                userFriendlyMessage:
-                  'This proposal will retry automatically once the vault is back in LOCKED status (for example, after expansion ends).',
               },
             },
           }
