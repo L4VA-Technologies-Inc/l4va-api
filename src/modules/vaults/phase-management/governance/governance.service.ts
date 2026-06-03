@@ -3187,7 +3187,10 @@ export class GovernanceService {
     }
 
     if (unverifiedPolicyIds.length > 0) {
-      throw new BadRequestException(`All whitelist tokens must be verified.`);
+      const uniquePolicyIds = [...new Set(unverifiedPolicyIds)];
+      throw new BadRequestException(
+        `All whitelist tokens must be verified. Unverified policy IDs: ${uniquePolicyIds.join(', ')}.`
+      );
     }
   }
 
