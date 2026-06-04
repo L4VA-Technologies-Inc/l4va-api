@@ -236,7 +236,6 @@ export interface ApplyParamsResult {
 export enum VaultFailureReason {
   ASSET_THRESHOLD_VIOLATION = 'asset_threshold_violation',
   ACQUIRE_THRESHOLD_NOT_MET = 'acquire_threshold_not_met',
-  ACQUIRE_ONLY_THRESHOLD_NOT_MET = 'acquire_only_threshold_not_met',
   NO_CONTRIBUTIONS = 'no_contributions',
   NO_CONFIRMED_TRANSACTIONS = 'no_confirmed_transactions',
   MANUAL_CANCELLATION = 'manual_cancellation',

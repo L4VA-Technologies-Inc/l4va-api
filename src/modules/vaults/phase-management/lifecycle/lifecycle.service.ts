@@ -2472,7 +2472,7 @@ export class LifecycleService {
           newStatus: VaultStatus.failed,
           newScStatus: SmartContractVaultStatus.CANCELLED,
           txHash: response.txHash,
-          failureReason: VaultFailureReason.ACQUIRE_ONLY_THRESHOLD_NOT_MET,
+          failureReason: VaultFailureReason.ACQUIRE_THRESHOLD_NOT_MET,
           failureDetails: {
             message:
               minThresholdLovelace !== null && minThresholdLovelace > 0
