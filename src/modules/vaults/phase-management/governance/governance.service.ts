@@ -1312,20 +1312,21 @@ export class GovernanceService {
         // Validate market pricing requirements
         if (expansionPriceType === 'market') {
           // Check if vault has FT token configured (required for market pricing)
-          const vaultForLpCheck = await this.vaultRepository.findOne({
-            where: { id: vaultId },
-            select: ['policy_id', 'asset_vault_name', 'name'],
-          });
+          const vaultForLpCheck: Pick<Vault, 'script_hash' | 'asset_vault_name' | 'name'> =
+            await this.vaultRepository.findOne({
+              where: { id: vaultId },
+              select: ['script_hash', 'asset_vault_name', 'name'],
+            });
 
-          if (!vaultForLpCheck.policy_id || !vaultForLpCheck.asset_vault_name) {
+          if (!vaultForLpCheck.script_hash || !vaultForLpCheck.asset_vault_name) {
             throw new BadRequestException(
-              'Market pricing requires vault token configuration. Vault must have a policy_id and asset_vault_name.'
+              'Market pricing requires vault token configuration. Vault must have a Token ID'
             );
           }
 
           try {
             const liquidityCheck = await this.dexHunterPricingService.checkTokenLiquidity(
-              `${vaultForLpCheck.policy_id}${vaultForLpCheck.asset_vault_name}`
+              `${vaultForLpCheck.script_hash}${vaultForLpCheck.asset_vault_name}`
             );
 
             if (!liquidityCheck || !liquidityCheck.hasLiquidity) {
