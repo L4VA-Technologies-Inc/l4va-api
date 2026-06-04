@@ -875,16 +875,14 @@ export class TransactionsService {
       }
 
       // Find the active expansion proposal
-      const expansionProposal: Pick<Proposal, 'id' | 'metadata' | 'executionDate'> =
-        await this.proposalRepository.findOne({
-          where: {
-            vaultId,
-            proposalType: ProposalType.EXPANSION,
-            status: ProposalStatus.EXECUTED,
-          },
-          order: { executionDate: 'DESC' },
-          select: ['id', 'metadata', 'executionDate'],
-        });
+      const expansionProposal = await this.proposalRepository.findOne({
+        where: {
+          vaultId,
+          proposalType: ProposalType.EXPANSION,
+          status: ProposalStatus.EXECUTED,
+        },
+        order: { executionDate: 'DESC' },
+      });
 
       if (!expansionProposal || !expansionProposal.metadata?.expansion) {
         this.logger.warn(`No active expansion proposal found for vault ${vaultId}`);
@@ -951,16 +949,14 @@ export class TransactionsService {
       }
 
       // Find the active acquire expansion proposal
-      const acquireExpansionProposal: Pick<Proposal, 'id' | 'metadata' | 'executionDate'> =
-        await this.proposalRepository.findOne({
-          where: {
-            vaultId,
-            proposalType: ProposalType.ACQUIRE_EXPANSION,
-            status: ProposalStatus.EXECUTED,
-          },
-          order: { executionDate: 'DESC' },
-          select: ['id', 'metadata', 'executionDate'],
-        });
+      const acquireExpansionProposal = await this.proposalRepository.findOne({
+        where: {
+          vaultId,
+          proposalType: ProposalType.ACQUIRE_EXPANSION,
+          status: ProposalStatus.EXECUTED,
+        },
+        order: { executionDate: 'DESC' },
+      });
 
       if (!acquireExpansionProposal || !acquireExpansionProposal.metadata?.acquireExpansion) {
         this.logger.warn(`No active acquire expansion proposal found for vault ${vaultId}`);

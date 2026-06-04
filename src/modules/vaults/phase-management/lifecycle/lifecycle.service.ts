@@ -1848,16 +1848,14 @@ export class LifecycleService {
       }
 
       // Find the active expansion proposal for this vault
-      const expansionProposal: Pick<Proposal, 'id' | 'metadata' | 'executionDate'> =
-        await this.proposalRepository.findOne({
-          where: {
-            vaultId: vault.id,
-            proposalType: ProposalType.EXPANSION,
-            status: ProposalStatus.EXECUTED,
-          },
-          order: { executionDate: 'DESC' },
-          select: ['id', 'metadata', 'executionDate'],
-        });
+      const expansionProposal = await this.proposalRepository.findOne({
+        where: {
+          vaultId: vault.id,
+          proposalType: ProposalType.EXPANSION,
+          status: ProposalStatus.EXECUTED,
+        },
+        order: { executionDate: 'DESC' },
+      });
 
       if (!expansionProposal?.metadata?.expansion) {
         continue;
@@ -1990,7 +1988,6 @@ export class LifecycleService {
           status: ProposalStatus.EXECUTED,
         },
         order: { executionDate: 'DESC' },
-        select: ['id'],
       });
 
       if (acquireExpansionProposal) {
@@ -2033,16 +2030,14 @@ export class LifecycleService {
       }
 
       // Find the active acquire expansion proposal for this vault
-      const acquireExpansionProposal: Pick<Proposal, 'id' | 'metadata' | 'executionDate'> =
-        await this.proposalRepository.findOne({
-          where: {
-            vaultId: vault.id,
-            proposalType: ProposalType.ACQUIRE_EXPANSION,
-            status: ProposalStatus.EXECUTED,
-          },
-          order: { executionDate: 'DESC' },
-          select: ['id', 'metadata', 'executionDate'],
-        });
+      const acquireExpansionProposal = await this.proposalRepository.findOne({
+        where: {
+          vaultId: vault.id,
+          proposalType: ProposalType.ACQUIRE_EXPANSION,
+          status: ProposalStatus.EXECUTED,
+        },
+        order: { executionDate: 'DESC' },
+      });
 
       if (!acquireExpansionProposal?.metadata?.acquireExpansion) {
         continue;

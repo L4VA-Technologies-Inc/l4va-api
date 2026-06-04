@@ -85,16 +85,14 @@ export class AcquireService {
     // Validate acquire expansion ADA limit if in acquire_expansion phase
     let expansionProposalId: string | undefined;
     if (vault.vault_status === VaultStatus.acquire_expansion && adaAsset) {
-      const acquireExpansionProposal: Pick<Proposal, 'id' | 'metadata' | 'executionDate'> =
-        await this.proposalRepository.findOne({
-          where: {
-            vaultId,
-            proposalType: ProposalType.ACQUIRE_EXPANSION,
-            status: ProposalStatus.EXECUTED,
-          },
-          order: { executionDate: 'DESC' },
-          select: ['id', 'metadata', 'executionDate'],
-        });
+      const acquireExpansionProposal = await this.proposalRepository.findOne({
+        where: {
+          vaultId,
+          proposalType: ProposalType.ACQUIRE_EXPANSION,
+          status: ProposalStatus.EXECUTED,
+        },
+        order: { executionDate: 'DESC' },
+      });
 
       if (acquireExpansionProposal) {
         expansionProposalId = acquireExpansionProposal.id;
