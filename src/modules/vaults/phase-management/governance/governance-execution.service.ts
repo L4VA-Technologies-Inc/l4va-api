@@ -18,6 +18,7 @@ import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
+import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
@@ -60,6 +61,8 @@ export class GovernanceExecutionService {
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(AssetsWhitelistEntity)
     private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
     private readonly eventEmitter: EventEmitter2,
     private readonly assetsService: AssetsService,
     private readonly wayUpService: WayUpService,
@@ -390,14 +393,7 @@ export class GovernanceExecutionService {
       );
       const isSuccessful = voteResult.isSuccessful;
 
-      const finalContributorClaims = await this.claimRepository.find({
-        where: {
-          vault: { id: proposal.vaultId },
-          type: ClaimType.CONTRIBUTOR,
-        },
-        relations: ['transaction', 'transaction.assets'],
-        order: { created_at: 'ASC' },
-      });
+      const tokenHolderIds = await this.getTokenHolderIdsFromSnapshot(proposal.snapshot?.addressBalances);
 
       // If proposal is not successful, move to REJECTED
       if (!isSuccessful) {
@@ -414,7 +410,7 @@ export class GovernanceExecutionService {
           vaultName: proposal.vault?.name || null,
           proposalName: proposal.title,
           creatorId: proposal.creatorId,
-          tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+          tokenHolderIds,
         });
 
         const rejectionReason = !voteResult.meetsParticipationThreshold
@@ -465,6 +461,7 @@ export class GovernanceExecutionService {
         .leftJoinAndSelect('proposal.vault', 'vault')
         .leftJoinAndSelect('vault.owner', 'owner')
         .leftJoinAndSelect('vault.treasury_wallet', 'treasury_wallet')
+        .leftJoinAndSelect('proposal.snapshot', 'snapshot')
         .where('proposal.id = :proposalId', { proposalId })
         .andWhere('proposal.status = :status', { status: ProposalStatus.PASSED })
         .select([
@@ -480,6 +477,7 @@ export class GovernanceExecutionService {
           'vault.name',
           'treasury_wallet.treasury_address',
           'owner.address',
+          'snapshot.addressBalances',
         ])
         .getOne();
 
@@ -488,14 +486,7 @@ export class GovernanceExecutionService {
         return;
       }
 
-      const finalContributorClaims = await this.claimRepository.find({
-        where: {
-          vault: { id: proposal.vaultId },
-          type: ClaimType.CONTRIBUTOR,
-        },
-        relations: ['transaction', 'transaction.assets'],
-        order: { created_at: 'ASC' },
-      });
+      const tokenHolderIds = await this.getTokenHolderIdsFromSnapshot(proposal.snapshot?.addressBalances);
 
       // Execute proposal actions
       const executed = await this.executeProposalActions(proposal);
@@ -520,7 +511,7 @@ export class GovernanceExecutionService {
           vaultName: proposal.vault?.name || null,
           proposalName: proposal.title,
           creatorId: proposal.creatorId,
-          tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+          tokenHolderIds,
         });
 
         this.logger.log(`Proposal ${proposal.id}: EXECUTED successfully`);
@@ -590,7 +581,7 @@ export class GovernanceExecutionService {
     const finalContributorClaims = await this.claimRepository.find({
       where: {
         vault: { id: proposal.vaultId },
-        type: ClaimType.CONTRIBUTOR,
+        type: In([ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER]),
       },
       relations: ['transaction', 'transaction.assets'],
       order: { created_at: 'ASC' },
@@ -1949,7 +1940,7 @@ export class GovernanceExecutionService {
         const finalContributorClaims = await this.claimRepository.find({
           where: {
             vault: { id: proposal.vaultId },
-            type: ClaimType.CONTRIBUTOR,
+            type: In([ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER]),
           },
           relations: ['transaction', 'transaction.assets'],
           order: { created_at: 'ASC' },
@@ -2148,6 +2139,21 @@ export class GovernanceExecutionService {
       await this.storeExecutionError(proposal, error);
       throw error;
     }
+  }
+
+  /**
+   * Resolve user IDs from snapshot addressBalances.
+   * Only addresses with a positive VT balance are included; unregistered wallets are silently skipped.
+   */
+  private async getTokenHolderIdsFromSnapshot(addressBalances?: Record<string, string>): Promise<string[]> {
+    if (!addressBalances) return [];
+    const addresses = Object.keys(addressBalances).filter(addr => BigInt(addressBalances[addr]) > BigInt(0));
+    if (addresses.length === 0) return [];
+    const users = await this.userRepository.find({
+      where: { address: In(addresses) },
+      select: ['id'],
+    });
+    return users.map(u => u.id);
   }
 
   /**
