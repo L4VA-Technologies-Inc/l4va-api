@@ -1542,18 +1542,19 @@ export class GovernanceService {
             );
           }
 
-          // Prevent multiplier = 0: limitPrice must be >= 10^(-decimals)
+          // Prevent multiplier = 0: on-chain multiplier = floor(limitPrice * 10^vtDecimals / 10^6)
+          // Must be >= 1, meaning limitPrice >= 10^(6 - vtDecimals) (at least 1 raw VT per lovelace)
           const decimals = vaultForAcquireExpansionCheck.ft_token_decimals || 6;
-          const minLimitPrice = Math.pow(10, -decimals);
+          const minLimitPrice = Math.pow(10, 6 - decimals);
           if (acquireExpansionLimitPrice < minLimitPrice) {
             throw new BadRequestException(
               `Limit price too low: With ${decimals} decimals, minimum limit price is ${minLimitPrice} VT per 1 ADA. ` +
-                `Current: ${acquireExpansionLimitPrice}. This would result in 0 tokens minted per ADA.`
+                `Current: ${acquireExpansionLimitPrice}. This would result in 0 tokens minted per lovelace.`
             );
           }
 
-          // Verify multiplier calculation won't be 0
-          const testMultiplier = Math.floor(acquireExpansionLimitPrice * Math.pow(10, decimals));
+          // Verify on-chain multiplier calculation won't be 0: floor(limitPrice * 10^decimals / 10^6)
+          const testMultiplier = Math.floor((acquireExpansionLimitPrice * Math.pow(10, decimals)) / 1_000_000);
           if (testMultiplier === 0) {
             throw new BadRequestException(
               `Invalid limit price: Would result in 0 multiplier. ` +
@@ -1608,23 +1609,24 @@ export class GovernanceService {
               `${vaultForAcquireExpansionCheck.script_hash}${vaultForAcquireExpansionCheck.asset_vault_name}`
             );
 
-            // Prevent multiplier = 0: vtPrice must be <= 10^decimals (VT cannot be too expensive in ADA)
+            // Prevent multiplier = 0: on-chain multiplier = floor((1/vtPrice) * 10^decimals / 10^6)
+            // Must be >= 1, meaning vtPrice <= 10^(decimals - 6) (at least 1 raw VT per lovelace)
             const decimals = vaultForAcquireExpansionCheck.ft_token_decimals || 6;
-            const maxVtPrice = Math.pow(10, decimals);
+            const maxVtPrice = Math.pow(10, decimals - 6);
             if (currentVtPrice > maxVtPrice) {
               throw new BadRequestException(
-                `Market price too high: With ${decimals} decimals, max VT price is ${maxVtPrice.toLocaleString()} ADA per VT. ` +
-                  `Current market price: ${currentVtPrice.toFixed(6)} ADA per VT. This would result in 0 tokens minted per ADA. ` +
+                `Market price too high: With ${decimals} decimals, max VT price is ${maxVtPrice} ADA per VT. ` +
+                  `Current market price: ${currentVtPrice.toFixed(6)} ADA per VT. This would result in 0 tokens minted per lovelace. ` +
                   'Please use limit pricing or wait for market price to decrease.'
               );
             }
 
-            // Verify multiplier calculation won't be 0
-            const testMultiplier = Math.floor((1 / currentVtPrice) * Math.pow(10, decimals));
+            // Verify on-chain multiplier calculation won't be 0: floor((1/vtPrice) * 10^decimals / 10^6)
+            const testMultiplier = Math.floor(((1 / currentVtPrice) * Math.pow(10, decimals)) / 1_000_000);
             if (testMultiplier === 0) {
               throw new BadRequestException(
                 `Invalid market price: Would result in 0 multiplier. ` +
-                  `With ${decimals} decimals, VT price must be at most ${maxVtPrice.toLocaleString()} ADA per VT. ` +
+                  `With ${decimals} decimals, VT price must be at most ${maxVtPrice} ADA per VT. ` +
                   `Current: ${currentVtPrice.toFixed(6)} ADA per VT.`
               );
             }
