@@ -144,6 +144,17 @@ export interface ExpansionClaimMetadata extends BaseClaimMetadata {
 }
 
 /**
+ * Metadata for ACQUIRER claims
+ * Used when users acquire VT tokens during acquire or acquire expansion phases
+ */
+export interface AcquirerClaimMetadata extends BaseClaimMetadata {
+  /** Amount of ADA sent for acquisition */
+  adaSent?: number;
+  /** True if this claim is from an expansion phase */
+  isExpansion?: boolean;
+}
+
+/**
  * Union type for all claim metadata types
  * Use this for type-safe access to claim metadata based on claim type
  */
@@ -155,6 +166,7 @@ export type ClaimMetadata =
   | DistributionClaimMetadata
   | L4vaClaimMetadata
   | ExpansionClaimMetadata
+  | AcquirerClaimMetadata
   | BaseClaimMetadata;
 
 /**

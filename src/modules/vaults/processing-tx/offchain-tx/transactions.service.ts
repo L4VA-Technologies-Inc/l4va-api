@@ -57,6 +57,8 @@ export class TransactionsService {
     userId?: string;
     fee?: number;
     metadata?: object;
+    is_expansion?: boolean;
+    expansion_proposal_id?: string;
   }): Promise<Transaction> {
     return this.transactionRepository.save({
       vault_id: data.vault_id,
@@ -67,6 +69,8 @@ export class TransactionsService {
       user_id: data.userId,
       fee: data.fee,
       metadata: data.metadata,
+      is_expansion: data.is_expansion || false,
+      expansion_proposal_id: data.expansion_proposal_id,
     });
   }
 
@@ -79,7 +83,13 @@ export class TransactionsService {
       throw new NotFoundException('Transaction not found');
     }
 
-    const pendingAssets = transaction.metadata || [];
+    // Handle metadata structure for acquire transactions
+    // New format: { assets: [...], isExpansion: boolean }
+    // Old format: [...] (array directly)
+    let pendingAssets = transaction.metadata || [];
+    if (transaction.type === TransactionType.acquire && transaction.metadata && !Array.isArray(transaction.metadata)) {
+      pendingAssets = (transaction.metadata as any).assets || [];
+    }
 
     // If everything is ok, create the actual assets and update transaction status
     const user = await this.usersRepository.findOne({
@@ -637,6 +647,9 @@ export class TransactionsService {
     // Update expansion proposal asset count if vault is in expansion
     await this.updateExpansionProposalAssetCount(transaction.vault_id);
 
+    // Update acquire expansion proposal ADA raised if vault is in acquire_expansion
+    await this.updateAcquireExpansionAdaRaised(transaction.vault_id);
+
     return assets.length;
   }
 
@@ -717,6 +730,12 @@ export class TransactionsService {
             total_assets_cost_usd: assetsPrices.totalValueUsd,
             total_acquired_value_ada: assetsPrices.totalAcquiredAda,
           });
+
+          // Update expansion proposal asset count if vault is in expansion
+          await this.updateExpansionProposalAssetCount(vaultId);
+
+          // Update acquire expansion proposal ADA raised if vault is in acquire_expansion
+          await this.updateAcquireExpansionAdaRaised(vaultId);
         }
       }
     }
@@ -856,16 +875,14 @@ export class TransactionsService {
       }
 
       // Find the active expansion proposal
-      const expansionProposal: Pick<Proposal, 'id' | 'metadata' | 'executionDate'> =
-        await this.proposalRepository.findOne({
-          where: {
-            vaultId,
-            proposalType: ProposalType.EXPANSION,
-            status: ProposalStatus.EXECUTED,
-          },
-          order: { executionDate: 'DESC' },
-          select: ['id', 'metadata', 'executionDate'],
-        });
+      const expansionProposal = await this.proposalRepository.findOne({
+        where: {
+          vaultId,
+          proposalType: ProposalType.EXPANSION,
+          status: ProposalStatus.EXECUTED,
+        },
+        order: { executionDate: 'DESC' },
+      });
 
       if (!expansionProposal || !expansionProposal.metadata?.expansion) {
         this.logger.warn(`No active expansion proposal found for vault ${vaultId}`);
@@ -910,6 +927,71 @@ export class TransactionsService {
       this.logger.log(`Updated expansion asset count for vault ${vaultId}: ${currentAssetCount}`);
     } catch (error) {
       this.logger.error(`Failed to update expansion asset count for vault ${vaultId}:`, error);
+      // Don't throw - this is a secondary operation that shouldn't fail the main transaction
+    }
+  }
+
+  /**
+   * Update the currentAdaRaised field in acquire expansion proposal metadata
+   * Sums all confirmed acquire transactions with isExpansion flag during the expansion phase
+   */
+  private async updateAcquireExpansionAdaRaised(vaultId: string): Promise<void> {
+    try {
+      // Check if vault is in acquire_expansion status
+      const vault: Pick<Vault, 'id' | 'vault_status' | 'expansion_phase_start'> = await this.vaultRepository.findOne({
+        where: { id: vaultId },
+        select: ['id', 'vault_status', 'expansion_phase_start'],
+      });
+
+      if (!vault || vault.vault_status !== VaultStatus.acquire_expansion) {
+        // Not in acquire expansion mode, nothing to update
+        return;
+      }
+
+      // Find the active acquire expansion proposal
+      const acquireExpansionProposal = await this.proposalRepository.findOne({
+        where: {
+          vaultId,
+          proposalType: ProposalType.ACQUIRE_EXPANSION,
+          status: ProposalStatus.EXECUTED,
+        },
+        order: { executionDate: 'DESC' },
+      });
+
+      if (!acquireExpansionProposal || !acquireExpansionProposal.metadata?.acquireExpansion) {
+        this.logger.warn(`No active acquire expansion proposal found for vault ${vaultId}`);
+        return;
+      }
+
+      // Sum all confirmed acquire transactions with isExpansionAcquire flag during the expansion phase
+      // Note: transaction.amount is stored in ADA, need to convert to lovelace
+      const result = await this.transactionRepository
+        .createQueryBuilder('tx')
+        .select('COALESCE(SUM(tx.amount), 0)', 'totalAda')
+        .where('tx.vault_id = :vaultId', { vaultId })
+        .andWhere('tx.type = :type', { type: TransactionType.acquire })
+        .andWhere('tx.status = :status', { status: TransactionStatus.confirmed })
+        .andWhere('tx.created_at >= :expansionStart', { expansionStart: vault.expansion_phase_start })
+        .andWhere('tx.is_expansion = :isExpansion', { isExpansion: true })
+        .getRawOne();
+
+      // Convert ADA to lovelace for storage
+      const totalAdaFloat = parseFloat(result?.totalAda || '0');
+      const currentAdaRaisedLovelace = Math.round(totalAdaFloat * 1_000_000);
+
+      // Update proposal metadata
+      acquireExpansionProposal.metadata.acquireExpansion.currentAdaRaised = currentAdaRaisedLovelace;
+
+      await this.proposalRepository.update(
+        { id: acquireExpansionProposal.id },
+        { metadata: acquireExpansionProposal.metadata }
+      );
+
+      this.logger.log(
+        `Updated acquire expansion ADA raised for vault ${vaultId}: ${currentAdaRaisedLovelace} lovelace (${totalAdaFloat.toFixed(2)} ADA)`
+      );
+    } catch (error) {
+      this.logger.error(`Failed to update acquire expansion ADA raised for vault ${vaultId}:`, error);
       // Don't throw - this is a secondary operation that shouldn't fail the main transaction
     }
   }

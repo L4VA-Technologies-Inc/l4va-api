@@ -96,10 +96,6 @@ export class DexHunterPricingClient {
       }
     });
 
-    if (cacheHits.length > 0) {
-      this.logger.debug(`Cache HIT for ${cacheHits.length}/${tokenIds.length} tokens`);
-    }
-
     // If all tokens found in cache, return early
     if (tokensToFetch.length === 0) {
       return priceMap;

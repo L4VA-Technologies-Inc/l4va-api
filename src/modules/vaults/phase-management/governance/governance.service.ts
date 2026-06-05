@@ -1,4 +1,4 @@
-﻿import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import {
   BadRequestException,
   ForbiddenException,
@@ -31,11 +31,13 @@ import { GovernanceFeeService } from './governance-fee.service';
 import { GovernanceRefundService } from './governance-refund.service';
 import { VoteCountingService } from './vote-counting.service';
 
+import { MIN_LP_LIQUIDITY_FOR_MARKET_EXPANSION } from '@/constants/expansion.constants';
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
+import { TokenVerification } from '@/database/token-verification.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { Vote } from '@/database/vote.entity';
@@ -47,7 +49,7 @@ import { TapToolsClient } from '@/modules/taptools/taptools.client';
 import { GetAssetsToListRes } from '@/modules/vaults/phase-management/governance/dto/get-assets-to-list.res';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
-import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
+import { AssetOriginType, AssetStatus, AssetType, AssetValuationMethod } from '@/types/asset.types';
 import { ClaimStatus, ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { RewardActivityType } from '@/types/rewards.types';
@@ -118,6 +120,8 @@ export class GovernanceService {
     private readonly assetRepository: Repository<Asset>,
     @InjectRepository(AssetsWhitelistEntity)
     private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
+    @InjectRepository(TokenVerification)
+    private readonly tokenVerificationRepository: Repository<TokenVerification>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly configService: ConfigService,
@@ -417,25 +421,45 @@ export class GovernanceService {
       );
     }
 
-    const vault: Pick<Vault, 'id' | 'vault_status' | 'script_hash' | 'asset_vault_name' | 'name' | 'assets_whitelist'> =
-      await this.vaultRepository.findOne({
-        where: { id: vaultId },
-        select: ['id', 'vault_status', 'script_hash', 'asset_vault_name', 'name', 'assets_whitelist'],
-      });
+    const vault: Pick<
+      Vault,
+      | 'id'
+      | 'vault_status'
+      | 'script_hash'
+      | 'asset_vault_name'
+      | 'name'
+      | 'assets_whitelist'
+      | 'is_expandable_asset_whitelist'
+    > = await this.vaultRepository.findOne({
+      where: { id: vaultId },
+      select: [
+        'id',
+        'vault_status',
+        'script_hash',
+        'asset_vault_name',
+        'name',
+        'assets_whitelist',
+        'is_expandable_asset_whitelist',
+      ],
+    });
 
     if (!vault) {
       throw new NotFoundException('Vault not found');
     }
 
-    // Allow governance for both locked and expansion statuses
+    // Allow governance for locked, expansion, and acquire_expansion statuses
     // Expansion windows can be long/indefinite, so governance should continue
-    if (vault.vault_status !== VaultStatus.locked && vault.vault_status !== VaultStatus.expansion) {
-      throw new BadRequestException('Governance is only available for locked or expansion vaults');
+    if (
+      vault.vault_status !== VaultStatus.locked &&
+      vault.vault_status !== VaultStatus.expansion &&
+      vault.vault_status !== VaultStatus.acquire_expansion
+    ) {
+      throw new BadRequestException('Governance is only available for locked, expansion, or acquire expansion vaults');
     }
 
-    // During expansion, only Distribution proposals are allowed
+    // During expansion or acquire expansion, only Distribution proposals are allowed
     // All other proposal types involve extracting assets from vault which conflicts with expansion
-    if (vault.vault_status === VaultStatus.expansion) {
+    if (vault.vault_status === VaultStatus.expansion || vault.vault_status === VaultStatus.acquire_expansion) {
       if (createProposalReq.type !== ProposalType.DISTRIBUTION) {
         throw new BadRequestException(
           'During vault expansion, only Distribution proposals are allowed. ' +
@@ -489,6 +513,23 @@ export class GovernanceService {
         throw new BadRequestException(
           `Only one expansion proposal can be active at a time. ` +
             `Please wait for the current expansion proposal "${activeExpansionProposal.title}" to complete before creating a new one.`
+        );
+      }
+    }
+
+    if (createProposalReq.type === ProposalType.ASSET_WHITELIST_UPDATE) {
+      const activeAssetWhitelistProposal = await this.proposalRepository.findOne({
+        where: {
+          vaultId,
+          proposalType: ProposalType.ASSET_WHITELIST_UPDATE,
+          status: In([ProposalStatus.ACTIVE, ProposalStatus.UPCOMING]),
+        },
+      });
+
+      if (activeAssetWhitelistProposal) {
+        throw new BadRequestException(
+          `Only one asset whitelist update proposal can be active at a time. ` +
+            `Please wait for the current proposal "${activeAssetWhitelistProposal.title}" to complete before creating a new one.`
         );
       }
     }
@@ -1227,6 +1268,13 @@ export class GovernanceService {
           throw new BadRequestException('Expansion duration is required when "No Limit" is not selected');
         }
 
+        const minExpansionDuration = this.systemSettingsService.minExpansionDuration;
+        if (!expansionNoLimit && expansionDuration < minExpansionDuration) {
+          throw new BadRequestException(
+            `Expansion duration must be at least ${minExpansionDuration / 86400000} day(s) (${minExpansionDuration}ms). Provided: ${expansionDuration}ms`
+          );
+        }
+
         // Validate asset max if no max is not set
         if (!expansionNoMax && (!expansionAssetMax || expansionAssetMax <= 0)) {
           throw new BadRequestException('Asset max is required when "No Max" is not selected');
@@ -1264,20 +1312,21 @@ export class GovernanceService {
         // Validate market pricing requirements
         if (expansionPriceType === 'market') {
           // Check if vault has FT token configured (required for market pricing)
-          const vaultForLpCheck = await this.vaultRepository.findOne({
-            where: { id: vaultId },
-            select: ['policy_id', 'asset_vault_name', 'name'],
-          });
+          const vaultForLpCheck: Pick<Vault, 'script_hash' | 'asset_vault_name' | 'name'> =
+            await this.vaultRepository.findOne({
+              where: { id: vaultId },
+              select: ['script_hash', 'asset_vault_name', 'name'],
+            });
 
-          if (!vaultForLpCheck.policy_id || !vaultForLpCheck.asset_vault_name) {
+          if (!vaultForLpCheck.script_hash || !vaultForLpCheck.asset_vault_name) {
             throw new BadRequestException(
-              'Market pricing requires vault token configuration. Vault must have a policy_id and asset_vault_name.'
+              'Market pricing requires vault token configuration. Vault must have a Token ID'
             );
           }
 
           try {
             const liquidityCheck = await this.dexHunterPricingService.checkTokenLiquidity(
-              `${vaultForLpCheck.policy_id}${vaultForLpCheck.asset_vault_name}`
+              `${vaultForLpCheck.script_hash}${vaultForLpCheck.asset_vault_name}`
             );
 
             if (!liquidityCheck || !liquidityCheck.hasLiquidity) {
@@ -1329,6 +1378,291 @@ export class GovernanceService {
           limitPrice: expansionPriceType === 'limit' ? expansionLimitPrice : undefined,
           currentAssetCount: 0,
         };
+
+        break;
+      }
+
+      case ProposalType.ASSET_WHITELIST_UPDATE: {
+        if (!vault.is_expandable_asset_whitelist) {
+          throw new BadRequestException(
+            'This vault does not allow expanding the asset whitelist. Only vaults marked as expandable can create asset whitelist update proposals.'
+          );
+        }
+
+        const assetsWhitelist = createProposalReq.assetsWhitelist || [];
+
+        if (assetsWhitelist.length === 0) {
+          throw new BadRequestException(
+            'Provide at least one asset to add. Asset whitelist update proposals require a non-empty assetsWhitelist array.'
+          );
+        }
+
+        // Deduplicate by policyId only (matching the DB constraint: unique on vault + policy_id)
+        const uniqueWhitelistItems = Array.from(new Map(assetsWhitelist.map(item => [item.policyId, item])).values());
+
+        const existingWhitelist = await this.assetsWhitelistRepository.find({
+          where: { vault: { id: vaultId } },
+          select: ['policy_id'],
+        });
+
+        if (existingWhitelist.length + uniqueWhitelistItems.length > 30) {
+          throw new BadRequestException(
+            `The vault whitelist cannot exceed 30 policies in total. This vault already has ${existingWhitelist.length}, and this proposal would add ${uniqueWhitelistItems.length}.`
+          );
+        }
+
+        const duplicatePolicyIds = uniqueWhitelistItems
+          .map(item => item.policyId)
+          .filter(policyId => existingWhitelist.some(item => item.policy_id === policyId));
+
+        if (duplicatePolicyIds.length > 0) {
+          throw new BadRequestException(
+            `Provided policy IDs are already on this vault's whitelist and cannot be added again.`
+          );
+        }
+
+        await this.ensureAssetWhitelistTokensAreVerified(uniqueWhitelistItems);
+
+        const policyIds = uniqueWhitelistItems.map(item => item.policyId).filter(Boolean);
+        const lpTokensData =
+          policyIds.length > 0
+            ? await this.tokenVerificationRepository.find({
+                where: { policy_id: In(policyIds) },
+                select: ['policy_id', 'lp_pool_onchain_id', 'is_lp_token'],
+              })
+            : [];
+        const lpTokenMap = new Map(
+          lpTokensData.map(lp => [lp.policy_id, { onchainId: lp.lp_pool_onchain_id, isLp: lp.is_lp_token }])
+        );
+
+        for (const assetItem of uniqueWhitelistItems) {
+          const lpData = lpTokenMap.get(assetItem.policyId);
+
+          if (lpData?.isLp) {
+            if (!lpData.onchainId) {
+              throw new BadRequestException(
+                `Policy ${assetItem.policyId} is registered as an LP token but has no lp_pool_onchain_id in token_verifications. ` +
+                  'Add a valid on-chain pool ID for this token before it can be whitelisted.'
+              );
+            }
+            assetItem.valuationMethod = AssetValuationMethod.LP_TOKEN_DYNAMIC;
+          } else if (assetItem.valuationMethod === AssetValuationMethod.LP_TOKEN_DYNAMIC) {
+            throw new BadRequestException(
+              `Policy ${assetItem.policyId} is not an LP token and cannot use the "lp_token_dynamic" valuation method. ` +
+                'Mark it as an LP token in token_verifications, or choose a different valuation method.'
+            );
+          }
+        }
+
+        proposal.metadata.assetsWhitelist = uniqueWhitelistItems.map(assetItem => {
+          const lpData = lpTokenMap.get(assetItem.policyId);
+          const rawFallbackCollectionName = assetItem.collectionName || assetItem.name || assetItem.policyName || null;
+          const fallbackCollectionName = rawFallbackCollectionName ? rawFallbackCollectionName.slice(0, 255) : null;
+
+          return {
+            policyId: assetItem.policyId,
+            assetName: assetItem.assetName,
+            collectionName: fallbackCollectionName,
+            valuationMethod: assetItem.valuationMethod || AssetValuationMethod.MARKET,
+            customPriceAda: assetItem.customPriceAda ?? null,
+            lpPoolOnchainId: lpData?.onchainId || null,
+          };
+        });
+
+        break;
+      }
+
+      case ProposalType.ACQUIRE_EXPANSION: {
+        // Validate acquire expansion fields
+        const {
+          acquireExpansionDuration,
+          acquireExpansionNoLimit,
+          acquireExpansionMaxAda,
+          acquireExpansionNoMax,
+          acquireExpansionPriceType,
+          acquireExpansionLimitPrice,
+        } = createProposalReq;
+
+        // Validate vault allows acquire expansion
+        const vaultForAcquireExpansionCheck: Pick<
+          Vault,
+          'allow_acquire_expansion' | 'script_hash' | 'asset_vault_name' | 'name' | 'ft_token_decimals'
+        > = await this.vaultRepository.findOne({
+          where: { id: vaultId },
+          select: ['allow_acquire_expansion', 'script_hash', 'asset_vault_name', 'name', 'ft_token_decimals'],
+        });
+
+        if (!vaultForAcquireExpansionCheck.allow_acquire_expansion) {
+          throw new BadRequestException(
+            'This vault does not allow acquire expansion proposals. Acquire expansion must be enabled during vault creation.'
+          );
+        }
+
+        // Validate that at least one limit is set
+        if (acquireExpansionNoLimit && acquireExpansionNoMax) {
+          throw new BadRequestException(
+            'At least one limit must be specified. You cannot have both "No Duration Limit" and "No Max ADA" enabled simultaneously.'
+          );
+        }
+
+        // Validate duration if no limit is not set
+        if (!acquireExpansionNoLimit && (!acquireExpansionDuration || acquireExpansionDuration <= 0)) {
+          throw new BadRequestException('Expansion duration is required when "No Limit" is not selected');
+        }
+
+        // Validate minimum expansion duration (1 day)
+        const minAcquireExpansionDuration = this.systemSettingsService.minExpansionDuration;
+        if (!acquireExpansionNoLimit && acquireExpansionDuration < minAcquireExpansionDuration) {
+          throw new BadRequestException(
+            `Acquire expansion duration must be at least ${minAcquireExpansionDuration / 86400000} day(s) (${minAcquireExpansionDuration}ms). Provided: ${acquireExpansionDuration}ms`
+          );
+        }
+
+        // Validate max ADA if no max is not set
+        if (!acquireExpansionNoMax && (!acquireExpansionMaxAda || acquireExpansionMaxAda <= 0)) {
+          throw new BadRequestException('Max ADA is required when "No Max" is not selected');
+        }
+
+        // Validate price type
+        if (!acquireExpansionPriceType || !['limit', 'market'].includes(acquireExpansionPriceType)) {
+          throw new BadRequestException('Price type must be either "limit" or "market"');
+        }
+
+        // Validate limit price if using limit pricing
+        if (acquireExpansionPriceType === 'limit') {
+          if (!acquireExpansionLimitPrice || acquireExpansionLimitPrice <= 0) {
+            throw new BadRequestException('Limit price is required when using limit pricing');
+          }
+
+          const MAX_LIMIT_PRICE = 1_000_000; // 1 million VT per 1 ADA
+          if (acquireExpansionLimitPrice > MAX_LIMIT_PRICE) {
+            throw new BadRequestException(
+              `Limit price cannot exceed ${MAX_LIMIT_PRICE.toLocaleString()} VT per 1 ADA. ` +
+                'Please set a reasonable price.'
+            );
+          }
+
+          // Prevent multiplier = 0: limitPrice must be >= 10^(-decimals)
+          const decimals = vaultForAcquireExpansionCheck.ft_token_decimals || 6;
+          const minLimitPrice = Math.pow(10, -decimals);
+          if (acquireExpansionLimitPrice < minLimitPrice) {
+            throw new BadRequestException(
+              `Limit price too low: With ${decimals} decimals, minimum limit price is ${minLimitPrice} VT per 1 ADA. ` +
+                `Current: ${acquireExpansionLimitPrice}. This would result in 0 tokens minted per ADA.`
+            );
+          }
+
+          // Verify multiplier calculation won't be 0
+          const testMultiplier = Math.floor(acquireExpansionLimitPrice * Math.pow(10, decimals));
+          if (testMultiplier === 0) {
+            throw new BadRequestException(
+              `Invalid limit price: Would result in 0 multiplier. ` +
+                `With ${decimals} decimals, limit price must be at least ${minLimitPrice} VT per 1 ADA.`
+            );
+          }
+        }
+
+        // Validate market pricing requirements
+        if (acquireExpansionPriceType === 'market') {
+          // Check if vault has FT token configured (required for market pricing)
+          if (!vaultForAcquireExpansionCheck.script_hash || !vaultForAcquireExpansionCheck.asset_vault_name) {
+            throw new BadRequestException(
+              'Market pricing requires vault token configuration. Vault must have a script_hash and asset_vault_name.'
+            );
+          }
+
+          try {
+            const liquidityCheck = await this.dexHunterPricingService.checkTokenLiquidity(
+              `${vaultForAcquireExpansionCheck.script_hash}${vaultForAcquireExpansionCheck.asset_vault_name}`
+            );
+
+            if (!liquidityCheck || !liquidityCheck.hasLiquidity) {
+              throw new BadRequestException(
+                'Market pricing requires an active Liquidity Pool. ' +
+                  'No LP found on any DEX (checked MinSwap, VyFi, SundaeSwap, Spectrum). ' +
+                  'Please use limit pricing or create an LP first.'
+              );
+            }
+
+            // Check minimum liquidity (1000 ADA)
+            const minLiquidityAda = MIN_LP_LIQUIDITY_FOR_MARKET_EXPANSION / 1_000_000;
+            if (liquidityCheck.totalAdaLiquidity < minLiquidityAda) {
+              const dexList = liquidityCheck.pools.map(p => `${p.dex} (${p.adaAmount.toFixed(2)} ADA)`).join(', ');
+              throw new BadRequestException(
+                `Market pricing requires LP TVL of at least ${minLiquidityAda.toLocaleString()} ADA across all DEXes. ` +
+                  `Current total LP TVL: ${liquidityCheck.totalAdaLiquidity.toFixed(2)} ADA. ` +
+                  `Found on: ${dexList}. ` +
+                  'Please use limit pricing or wait for LP to accumulate more liquidity.'
+              );
+            }
+
+            // Log success with DEX details
+            const dexList = liquidityCheck.pools.map(p => p.dex).join(', ');
+            this.logger.log(
+              `Acquire expansion proposal validated: Vault ${vaultForAcquireExpansionCheck.name} has active LP on ${liquidityCheck.pools.length} DEX(es): ${dexList}. ` +
+                `Total TVL: ${liquidityCheck.totalAdaLiquidity.toFixed(2)} ADA`
+            );
+
+            // Store market price snapshot for display
+            const currentVtPrice = await this.dexHunterPricingService.getTokenPrice(
+              `${vaultForAcquireExpansionCheck.script_hash}${vaultForAcquireExpansionCheck.asset_vault_name}`
+            );
+
+            // Prevent multiplier = 0: vtPrice must be <= 10^decimals (VT cannot be too expensive in ADA)
+            const decimals = vaultForAcquireExpansionCheck.ft_token_decimals || 6;
+            const maxVtPrice = Math.pow(10, decimals);
+            if (currentVtPrice > maxVtPrice) {
+              throw new BadRequestException(
+                `Market price too high: With ${decimals} decimals, max VT price is ${maxVtPrice.toLocaleString()} ADA per VT. ` +
+                  `Current market price: ${currentVtPrice.toFixed(6)} ADA per VT. This would result in 0 tokens minted per ADA. ` +
+                  'Please use limit pricing or wait for market price to decrease.'
+              );
+            }
+
+            // Verify multiplier calculation won't be 0
+            const testMultiplier = Math.floor((1 / currentVtPrice) * Math.pow(10, decimals));
+            if (testMultiplier === 0) {
+              throw new BadRequestException(
+                `Invalid market price: Would result in 0 multiplier. ` +
+                  `With ${decimals} decimals, VT price must be at most ${maxVtPrice.toLocaleString()} ADA per VT. ` +
+                  `Current: ${currentVtPrice.toFixed(6)} ADA per VT.`
+              );
+            }
+
+            // Store acquire expansion config in metadata
+            proposal.metadata.acquireExpansion = {
+              duration: acquireExpansionNoLimit ? undefined : acquireExpansionDuration,
+              noLimit: acquireExpansionNoLimit || false,
+              maxAda: acquireExpansionNoMax ? undefined : acquireExpansionMaxAda,
+              noMax: acquireExpansionNoMax || false,
+              priceType: acquireExpansionPriceType,
+              limitPrice: undefined, // Market pricing doesn't use limit price
+              currentAdaRaised: 0,
+              marketPriceSnapshot: currentVtPrice, // Store for display purposes only
+            };
+          } catch (error) {
+            // If it's already a BadRequestException, re-throw it
+            if (error instanceof BadRequestException) {
+              throw error;
+            }
+            // For other errors (API failures, etc), log and throw a user-friendly error
+            this.logger.error(`Error checking LP status for acquire expansion proposal: ${error.message}`, error.stack);
+            throw new BadRequestException(
+              'Unable to verify Liquidity Pool status. Please try again later or contact support.'
+            );
+          }
+        } else {
+          // Store acquire expansion config for limit pricing (no market price snapshot needed)
+          proposal.metadata.acquireExpansion = {
+            duration: acquireExpansionNoLimit ? undefined : acquireExpansionDuration,
+            noLimit: acquireExpansionNoLimit || false,
+            maxAda: acquireExpansionNoMax ? undefined : acquireExpansionMaxAda,
+            noMax: acquireExpansionNoMax || false,
+            priceType: acquireExpansionPriceType,
+            limitPrice: acquireExpansionLimitPrice, // Limit pricing uses the configured limit price
+            currentAdaRaised: 0,
+          };
+        }
 
         break;
       }
@@ -2331,7 +2665,7 @@ export class GovernanceService {
       }>(cacheKey);
 
       if (cached !== undefined) {
-        this.logger.debug(`Cache hit for voting power: ${cacheKey}`);
+        // this.logger.debug(`Cache hit for voting power: ${cacheKey}`);
         if (cached.error) {
           // Re-throw cached error
           if (cached.error.type === 'BadRequestException') {
@@ -2671,9 +3005,7 @@ export class GovernanceService {
         ],
       });
 
-      const treasuryWalletBalance = this.isMainnet
-        ? await this.treasuryWalletService.getTreasuryWalletBalance(vaultId)
-        : null;
+      const treasuryWalletBalance = await this.treasuryWalletService.getTreasuryWalletBalance(vaultId);
 
       return {
         assets: plainToInstance(AssetBuySellDto, assets, {
@@ -2795,6 +3127,71 @@ export class GovernanceService {
         this.proposalCreationCache.set(cacheKey, false, this.CACHE_TTL.CAN_CREATE_PROPOSAL);
       }
       return false;
+    }
+  }
+
+  private async ensureAssetWhitelistTokensAreVerified(
+    whitelistItems: Array<{ policyId: string; assetName?: string }>
+  ): Promise<void> {
+    if (!this.isMainnet) {
+      return;
+    }
+
+    const unverifiedPolicyIds: string[] = [];
+
+    // Batch fetch all token verifications in a single query to avoid N+1
+    const policyIds = [...new Set(whitelistItems.map(item => item.policyId))];
+    const existingVerifications = policyIds.length
+      ? await this.tokenVerificationRepository.find({
+          where: { policy_id: In(policyIds) },
+          order: { updated_at: 'DESC' },
+        })
+      : [];
+
+    // Build a map of policy_id -> most recent verification
+    const latestVerificationByPolicyId = new Map<string, TokenVerification>();
+    for (const verification of existingVerifications) {
+      if (!latestVerificationByPolicyId.has(verification.policy_id)) {
+        latestVerificationByPolicyId.set(verification.policy_id, verification);
+      }
+    }
+
+    // Process sequentially to avoid wasting external API calls
+    for (const item of whitelistItems) {
+      const existing = latestVerificationByPolicyId.get(item.policyId);
+
+      if (existing?.is_verified) {
+        continue;
+      }
+
+      const tokenId = `${item.policyId}${item.assetName || ''}`;
+      const dexHunterData = await this.dexHunterService.fetchTokenVerification(tokenId);
+      if (dexHunterData?.isVerified) {
+        continue;
+      }
+
+      try {
+        const wayupResponse = await this.wayUpPricingService.getCollectionAssets({ policyId: item.policyId });
+        const firstAsset = wayupResponse.results?.[0];
+        const hasResults = Array.isArray(wayupResponse.results) && wayupResponse.results.length > 0;
+
+        if (hasResults && firstAsset?.collection?.verified) {
+          continue;
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Failed to verify whitelist token ${item.policyId}: ${error instanceof Error ? error.message : error}`
+        );
+      }
+
+      unverifiedPolicyIds.push(item.policyId);
+    }
+
+    if (unverifiedPolicyIds.length > 0) {
+      const uniquePolicyIds = [...new Set(unverifiedPolicyIds)];
+      throw new BadRequestException(
+        `All whitelist tokens must be verified. Unverified policy IDs: ${uniquePolicyIds.join(', ')}.`
+      );
     }
   }
 

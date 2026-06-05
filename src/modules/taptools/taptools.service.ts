@@ -28,7 +28,12 @@ import { PriceService } from '@/modules/price/price.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { AssetOriginType, AssetStatus, AssetType, AssetValuationMethod } from '@/types/asset.types';
-import { VaultStatus } from '@/types/vault.types';
+import {
+  VAULT_STATUSES_ACTIVE,
+  VAULT_STATUSES_WITH_VT_TOKENS,
+  VAULT_STATUSES_WITHOUT_VT_TOKENS,
+  VaultStatus,
+} from '@/types/vault.types';
 import { normalizeAssetImageSource } from '@/utils/asset-image-source.util';
 
 /** Map of policyId -> custom price in ADA for vault-specific asset valuations */
@@ -1304,20 +1309,20 @@ export class TaptoolsService {
    * Update cached vault totals for multiple vaults
    * Includes assets with PENDING, LOCKED, EXTRACTED (in treasury), and DISTRIBUTED status
    *
-   * User TVL and Gains Calculation (ONLY for locked/expansion vaults):
-   * - Locked vaults WITH LP: VT token price appreciation from historical OHLCV data
+   * User TVL and Gains Calculation:
+   * - Locked/Expansion/Acquire_Expansion vaults WITH LP: VT token price appreciation from historical OHLCV data
    *   Uses VaultMarketStatsService.calculateTokenPriceDelta() to get true price from LP inception
-   * - Locked/Expansion vaults WITHOUT LP: VT token holdings × proportional TVL ownership
+   * - Locked/Expansion/Acquire_Expansion vaults WITHOUT LP: VT token holdings × proportional TVL ownership
    * - Active vaults (contribution/acquire): NO user gains calculated (users don't have VT tokens yet)
    *
-   * For locked vaults, also calculates FDV/TVL ratio
+   * For locked, expansion, and acquire_expansion vaults, also calculates FDV/TVL ratio
    *
    * GAINS CALCULATION OVERVIEW:
    * - LP vaults: Uses full OHLCV history (first day open → latest close) from TapTools to
    *   derive the percentage change in VT token price from inception, and then applies this
    *   percentage change to the user's VT token holdings (scaled by the current VT price) to
    *   compute user_gains_ada.
-   * - Non-LP locked/expansion vaults: DO NOT use historical TVL snapshots for gains calculation. Instead, calculate the user's
+   * - Non-LP locked/expansion/acquire_expansion vaults: DO NOT use historical TVL snapshots for gains calculation. Instead, calculate the user's
    * proportional ownership of the vault based on their VT token holdings relative to total supply, and then apply this ownership percentage to the current TVL to derive user_gains_ada. This approach avoids inaccuracies that can arise from using historical snapshots in volatile markets.
    * - Contribution/Acquire: No calculation (users don't own VT tokens yet)
    *
@@ -1448,7 +1453,7 @@ export class TaptoolsService {
       const allRelevantVaults = await this.vaultRepository.find({
         where: {
           deleted: false,
-          vault_status: In([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked, VaultStatus.expansion]),
+          vault_status: In(VAULT_STATUSES_ACTIVE),
         },
         relations: ['owner'],
         select: ['id', 'vault_status', 'ft_token_supply', 'ft_token_decimals', 'initial_total_value_ada', 'owner'],
@@ -1458,8 +1463,10 @@ export class TaptoolsService {
       const allVaultIds = allRelevantVaults.map(v => v.id);
       const allVaultValues = await this.calculateVaultsTvl(allVaultIds);
 
-      // Batch query: Get all snapshots for locked vaults
-      const allLockedVaultIds = allRelevantVaults.filter(v => v.vault_status === VaultStatus.locked).map(v => v.id);
+      // Batch query: Get all snapshots for vaults where users own VT tokens
+      const allLockedVaultIds = allRelevantVaults
+        .filter(v => VAULT_STATUSES_WITH_VT_TOKENS.includes(v.vault_status))
+        .map(v => v.id);
       const allSnapshots =
         allLockedVaultIds.length > 0
           ? await this.snapshotRepository
@@ -1480,9 +1487,9 @@ export class TaptoolsService {
       });
       const userMap = new Map(allUsers.map(u => [u.id, u]));
 
-      // Batch query: Get all contributed assets for all users and active vaults
+      // Batch query: Get all contributed assets for all users and active vaults (contribution/acquire)
       const allActiveVaultIds = allRelevantVaults
-        .filter(v => v.vault_status === VaultStatus.contribution || v.vault_status === VaultStatus.acquire)
+        .filter(v => VAULT_STATUSES_WITHOUT_VT_TOKENS.includes(v.vault_status))
         .map(v => v.id);
 
       const allContributedAssets =
@@ -1528,8 +1535,8 @@ export class TaptoolsService {
           const summary = allVaultValues.get(vault.id);
           if (!summary) continue;
 
-          if (vault.vault_status === VaultStatus.locked) {
-            // Get user's share from VT token holdings
+          if (VAULT_STATUSES_WITH_VT_TOKENS.includes(vault.vault_status)) {
+            // Get user's share from VT token holdings (applies to locked, expansion, and acquire_expansion)
             const snapshot = snapshotByVaultId.get(vault.id);
 
             if (snapshot?.addressBalances && vault.ft_token_supply) {
@@ -1564,7 +1571,7 @@ export class TaptoolsService {
                 }
               }
             }
-          } else if (vault.vault_status === VaultStatus.contribution || vault.vault_status === VaultStatus.acquire) {
+          } else if (VAULT_STATUSES_WITHOUT_VT_TOKENS.includes(vault.vault_status)) {
             // Get contributed asset values from pre-loaded data
             const userVaultAssets = assetsByUserAndVault.get(userId)?.get(vault.id);
             if (userVaultAssets) {
@@ -1741,9 +1748,9 @@ export class TaptoolsService {
       const tvl = tokenANormalized * tokenAPrice + tokenBNormalized * tokenBPrice;
       const lpTokenPrice = tvl / totalSupply;
 
-      this.logger.debug(
-        `VyFi LP price calculation - tokenAPrice: ${tokenAPrice} (decimals: ${tokenADecimals}), tokenBPrice: ${tokenBPrice} (decimals: ${tokenBDecimals}), TVL: ${tvl}, LP price: ${lpTokenPrice}`
-      );
+      // this.logger.debug(
+      //   `VyFi LP price calculation - tokenAPrice: ${tokenAPrice} (decimals: ${tokenADecimals}), tokenBPrice: ${tokenBPrice} (decimals: ${tokenBDecimals}), TVL: ${tvl}, LP price: ${lpTokenPrice}`
+      // );
 
       return lpTokenPrice;
     } catch (error) {
@@ -1876,7 +1883,7 @@ export class TaptoolsService {
 
           if (lpPrice !== null && lpPrice !== undefined && Number.isFinite(lpPrice)) {
             customPriceMap.set(whitelistItem.policy_id, lpPrice);
-            this.logger.debug(`LP price for ${whitelistItem.policy_id}: ${lpPrice} ADA`);
+            // this.logger.debug(`LP price for ${whitelistItem.policy_id}: ${lpPrice} ADA`);
           } else {
             this.logger.warn(`Failed to calculate LP price for ${whitelistItem.policy_id}`);
           }

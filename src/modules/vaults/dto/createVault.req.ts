@@ -4,6 +4,7 @@ import {
   ArrayMaxSize,
   ArrayNotEmpty,
   IsArray,
+  IsBoolean,
   IsEnum,
   IsNotEmpty,
   IsNumber,
@@ -93,13 +94,40 @@ export class CreateVaultReq {
   @Expose()
   valuationAmount?: string;
 
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsBoolean()
+  @Expose()
+  isAcquireOnly?: boolean;
+
   @ApiProperty({
-    required: true,
+    description:
+      'Minimum ADA (in lovelace) required for the vault to lock. Optional. If not set or if nothing is acquired, the vault will fail.',
+    required: false,
   })
+  @IsOptional()
+  @IsNumber()
+  @Expose()
+  minAcquireThreshold?: number;
+
+  @ApiProperty({
+    description: 'If true, vault allows governance proposals for acquire expansion (ADA → VT minting).',
+    required: false,
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  @Expose()
+  allowAcquireExpansion?: boolean;
+
+  @ApiProperty({
+    required: false,
+  })
+  @ValidateIf(o => !o.isAcquireOnly)
   @IsNotEmpty()
   @IsEnum(ContributionWindowType)
   @Expose()
-  contributionOpenWindowType: ContributionWindowType;
+  contributionOpenWindowType?: ContributionWindowType;
 
   @ApiProperty()
   @ValidateIf(o => o.contributionOpenWindowType === ContributionWindowType.custom)
@@ -161,13 +189,14 @@ export class CreateVaultReq {
   contributorWhitelist?: ContributorWhitelist[];
 
   @ApiProperty({
-    required: true,
+    required: false,
     description: 'Duration in milliseconds',
   })
+  @ValidateIf(o => !o.isAcquireOnly)
   @IsNotEmpty()
   @IsNumber()
   @Expose()
-  contributionDuration: number;
+  contributionDuration?: number;
 
   @ApiProperty({
     required: true,
@@ -412,4 +441,14 @@ export class CreateVaultReq {
   @IsString({ each: true })
   @Expose()
   tags?: string[];
+
+  @ApiProperty({
+    description: 'Whether the vault whitelist supports expansion',
+    required: false,
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  @Expose()
+  isExpandableAssetWhitelist?: boolean;
 }

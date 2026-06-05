@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, OmitType } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
 import {
   IsNotEmpty,
@@ -11,8 +11,11 @@ import {
   IsNumber,
   IsNumberString,
   Matches,
+  ArrayMinSize,
+  ValidateIf,
 } from 'class-validator';
 
+import { AssetWhitelistDto } from '@/modules/vaults/dto/assetWhitelist.dto';
 import { MarketplaceAction, ProposalType } from '@/types/proposal.types';
 
 // Common FT asset class for staking
@@ -278,6 +281,8 @@ export class ExpansionPolicyIdDto {
   label?: string;
 }
 
+export class AssetWhitelistProposalDto extends OmitType(AssetWhitelistDto, ['countCapMin', 'countCapMax'] as const) {}
+
 export class CreateProposalReq {
   @ApiProperty({
     description: 'Title of the proposal',
@@ -455,6 +460,79 @@ export class CreateProposalReq {
   @IsNumber()
   @Expose()
   expansionLimitPrice?: number;
+
+  // ===== ACQUIRE EXPANSION fields =====
+  @ApiProperty({
+    description: 'Duration in milliseconds for acquire expansion period',
+    required: false,
+    example: 604800000,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Expose()
+  acquireExpansionDuration?: number;
+
+  @ApiProperty({
+    description: 'No time limit for acquire expansion period',
+    required: false,
+    default: false,
+  })
+  @IsOptional()
+  @Expose()
+  acquireExpansionNoLimit?: boolean;
+
+  @ApiProperty({
+    description: 'Maximum ADA allowed for acquire expansion (in lovelace)',
+    required: false,
+    example: 1000000000,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Expose()
+  acquireExpansionMaxAda?: number;
+
+  @ApiProperty({
+    description: 'No maximum ADA for acquire expansion',
+    required: false,
+    default: false,
+  })
+  @IsOptional()
+  @Expose()
+  acquireExpansionNoMax?: boolean;
+
+  @ApiProperty({
+    description: 'Pricing method for acquire expansion: "limit" or "market"',
+    required: false,
+    enum: ['limit', 'market'],
+    example: 'market',
+  })
+  @IsOptional()
+  @IsString()
+  @Expose()
+  acquireExpansionPriceType?: 'limit' | 'market';
+
+  @ApiProperty({
+    description: 'Limit price (VT per 1 ADA, up to 6 decimals) when using limit pricing',
+    required: false,
+    example: 10.5,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Expose()
+  acquireExpansionLimitPrice?: number;
+
+  @ApiProperty({
+    description: 'Assets to add to the vault whitelist for asset whitelist update proposals',
+    type: [AssetWhitelistProposalDto],
+    required: false,
+  })
+  @ValidateIf(o => o.type === ProposalType.ASSET_WHITELIST_UPDATE)
+  @IsArray()
+  @ArrayMinSize(1, { message: 'At least one asset must be provided for asset whitelist update proposals' })
+  @ValidateNested({ each: true })
+  @Type(() => AssetWhitelistProposalDto)
+  @Expose()
+  assetsWhitelist?: AssetWhitelistProposalDto[];
 
   @ApiProperty({
     description: 'Additional metadata for the proposal',
