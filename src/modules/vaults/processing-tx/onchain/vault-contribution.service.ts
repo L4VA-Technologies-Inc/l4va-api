@@ -392,10 +392,10 @@ export class VaultContributionService {
    */
   async validateContributionLimits(transaction: Transaction, vault: Vault): Promise<void> {
     // Handle metadata structure for acquire transactions
-    // New format: { assets: [...], isExpansion: boolean }
+    // New format: { assets: [...] }
     // Old format: [...] (array directly)
     let contributingAssets = (transaction.metadata as any[]) || [];
-    if (transaction.type === 'acquire' && transaction.metadata && !Array.isArray(transaction.metadata)) {
+    if (transaction.type === TransactionType.acquire && transaction.metadata && !Array.isArray(transaction.metadata)) {
       contributingAssets = (transaction.metadata as any).assets || [];
     }
 
