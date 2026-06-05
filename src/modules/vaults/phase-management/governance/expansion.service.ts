@@ -438,7 +438,7 @@ export class ExpansionService {
   /**
    * Execute acquire expansion proposal
    * Opens time-limited window for users to send ADA → receive newly minted VTs
-   * Changes vault status to EXPANSION and updates on-chain metadata
+   * Changes vault status to ACQUIRE_EXPANSION and updates on-chain metadata
    */
   async executeAcquireExpansion(proposal: Proposal): Promise<boolean> {
     if (!proposal.metadata?.acquireExpansion) {
