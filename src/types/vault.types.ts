@@ -63,9 +63,11 @@ export enum VaultStatus {
   acquire_expansion = 'acquire_expansion',
 }
 
+/** Vault statuses included in search results */
 export const VAULT_SEARCH_STATUSES: VaultStatus[] = [
   VaultStatus.published,
   VaultStatus.expansion,
+  VaultStatus.acquire_expansion,
   VaultStatus.contribution,
   VaultStatus.acquire,
   VaultStatus.locked,
