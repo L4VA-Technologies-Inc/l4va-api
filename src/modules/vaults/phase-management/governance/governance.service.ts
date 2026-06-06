@@ -1689,16 +1689,6 @@ export class GovernanceService {
 
     await this.proposalRepository.save(proposal);
 
-    // Fetch contributor claims early (needed for both fee and non-fee proposals)
-    const finalContributorClaims = await this.claimRepository.find({
-      where: {
-        vault: { id: vault.id },
-        type: ClaimType.CONTRIBUTOR,
-      },
-      relations: ['transaction', 'transaction.assets'],
-      order: { created_at: 'ASC' },
-    });
-
     // If payment is required, build fee transaction and return WITHOUT emitting events
     // Events will be emitted when user submits payment via submitProposalFeePayment
     if (requiresPayment) {
@@ -1753,13 +1743,14 @@ export class GovernanceService {
     });
 
     // 3. proposal.started - notifies token holders
+    const tokenHolderIds = await this.getTokenHolderIdsFromSnapshot(latestSnapshot?.addressBalances);
     this.eventEmitter.emit('proposal.started', {
       address: user.address,
       vaultId: vault.id,
       vaultName: vault.name,
       proposalName: proposal.title,
       creatorId: proposal.creatorId,
-      tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+      tokenHolderIds,
     });
 
     // Note: Reward event for governance proposals is emitted in activateProposal()
@@ -2431,16 +2422,6 @@ export class GovernanceService {
       }
     }
 
-    // Fetch contributor claims for notifications
-    const finalContributorClaims = await this.claimRepository.find({
-      where: {
-        vault: { id: proposal.vault.id },
-        type: ClaimType.CONTRIBUTOR,
-      },
-      relations: ['transaction', 'transaction.assets'],
-      order: { created_at: 'ASC' },
-    });
-
     // Emit all events after payment is confirmed (same as non-payment flow)
     // 1. proposal.created - triggers scheduling in governance-execution service
     this.eventEmitter.emit('proposal.created', {
@@ -2460,13 +2441,17 @@ export class GovernanceService {
     });
 
     // 3. proposal.started - notifies token holders
+    const snapshotForNotif = proposal.snapshotId
+      ? await this.snapshotRepository.findOne({ where: { id: proposal.snapshotId }, select: ['addressBalances'] })
+      : null;
+    const tokenHolderIds = await this.getTokenHolderIdsFromSnapshot(snapshotForNotif?.addressBalances);
     this.eventEmitter.emit('proposal.started', {
       address: proposal.creator.address,
       vaultId: proposal.vault.id,
       vaultName: proposal.vault.name,
       proposalName: proposal.title,
       creatorId: proposal.creatorId,
-      tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+      tokenHolderIds,
     });
 
     this.logger.log(
@@ -3544,5 +3529,20 @@ export class GovernanceService {
     const fixed = value.toFixed(decimals); // e.g. "522963.340000"
     const [intPart, fracPart = ''] = fixed.split('.');
     return BigInt(intPart + fracPart.padEnd(decimals, '0').slice(0, decimals));
+  }
+
+  /**
+   * Resolve user IDs from snapshot addressBalances.
+   * Only addresses with a positive VT balance are included; unregistered wallets are silently skipped.
+   */
+  private async getTokenHolderIdsFromSnapshot(addressBalances?: Record<string, string>): Promise<string[]> {
+    if (!addressBalances) return [];
+    const addresses = Object.keys(addressBalances).filter(addr => BigInt(addressBalances[addr]) > BigInt(0));
+    if (addresses.length === 0) return [];
+    const users = await this.userRepository.find({
+      where: { address: In(addresses) },
+      select: ['id'],
+    });
+    return users.map(u => u.id);
   }
 }

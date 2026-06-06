@@ -30,7 +30,6 @@ import { TreasuryExtractionService } from '@/modules/vaults/treasure/treasury-ex
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
 import { WayUpService } from '@/modules/wayup/wayup.service';
 import { AssetStatus } from '@/types/asset.types';
-import { ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { RewardActivityType } from '@/types/rewards.types';
 import { TransactionStatus } from '@/types/transaction.types';
@@ -578,15 +577,6 @@ export class GovernanceExecutionService {
   }
 
   private async executeProposalActions(proposal: Proposal): Promise<boolean> {
-    const finalContributorClaims = await this.claimRepository.find({
-      where: {
-        vault: { id: proposal.vaultId },
-        type: In([ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER]),
-      },
-      relations: ['transaction', 'transaction.assets'],
-      order: { created_at: 'ASC' },
-    });
-
     // Get vault to check status for extraction-based proposals
     const vault = await this.vaultRepository.findOne({
       where: { id: proposal.vaultId },
@@ -680,13 +670,14 @@ export class GovernanceExecutionService {
       }
 
       // For other errors, store them and emit failure event
+      const tokenHolderIds = await this.getTokenHolderIdsFromSnapshot(proposal.snapshot?.addressBalances);
       this.eventEmitter.emit('proposal.failed', {
         address: proposal.vault?.owner?.address || null,
         vaultId: proposal.vaultId,
         vaultName: proposal.vault?.name || null,
         proposalName: proposal.title,
         creatorId: proposal.creatorId,
-        tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+        tokenHolderIds,
       });
       this.logger.error(`Error executing actions for proposal ${proposal.id}: ${error.message}`, error.stack);
       return false;
@@ -1936,16 +1927,6 @@ export class GovernanceExecutionService {
         // Store execution error before rejecting so users can see the reason
         await this.storeExecutionError(proposal, new Error(rejectionReason));
 
-        // Get contributor claims for event
-        const finalContributorClaims = await this.claimRepository.find({
-          where: {
-            vault: { id: proposal.vaultId },
-            type: In([ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER]),
-          },
-          relations: ['transaction', 'transaction.assets'],
-          order: { created_at: 'ASC' },
-        });
-
         // Move proposal to REJECTED status
         await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
 
@@ -1954,13 +1935,14 @@ export class GovernanceExecutionService {
           throwOnFailure: false,
         });
 
+        const tokenHolderIds = await this.getTokenHolderIdsFromSnapshot(proposal.snapshot?.addressBalances);
         this.eventEmitter.emit('proposal.rejected', {
           address: proposal.vault?.owner?.address || null,
           vaultId: proposal.vaultId,
           vaultName: proposal.vault?.name || null,
           proposalName: proposal.title,
           creatorId: proposal.creatorId,
-          tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+          tokenHolderIds,
           reason: rejectionReason,
         });
 
