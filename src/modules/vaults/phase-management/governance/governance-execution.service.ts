@@ -11,6 +11,7 @@ import { ExecType, MarketplaceActionDto } from './dto/create-proposal.req';
 import { ExpansionService } from './expansion.service';
 import { GovernanceRefundService } from './governance-refund.service';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
+import { SnapshotService } from './snapshot.service';
 import { TerminationService } from './termination.service';
 import { VoteCountingService } from './vote-counting.service';
 
@@ -78,7 +79,8 @@ export class GovernanceExecutionService {
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly treasuryWalletService: TreasuryWalletService,
     private readonly governanceRefundService: GovernanceRefundService,
-    private readonly rewardEventProducer: RewardEventProducer
+    private readonly rewardEventProducer: RewardEventProducer,
+    private readonly snapshotService: SnapshotService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
@@ -392,7 +394,9 @@ export class GovernanceExecutionService {
       );
       const isSuccessful = voteResult.isSuccessful;
 
-      const tokenHolderIds = await this.getTokenHolderIdsFromSnapshot(proposal.snapshot?.addressBalances);
+      const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(
+        proposal.snapshot?.addressBalances
+      );
 
       // If proposal is not successful, move to REJECTED
       if (!isSuccessful) {
@@ -485,7 +489,9 @@ export class GovernanceExecutionService {
         return;
       }
 
-      const tokenHolderIds = await this.getTokenHolderIdsFromSnapshot(proposal.snapshot?.addressBalances);
+      const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(
+        proposal.snapshot?.addressBalances
+      );
 
       // Execute proposal actions
       const executed = await this.executeProposalActions(proposal);
@@ -670,7 +676,9 @@ export class GovernanceExecutionService {
       }
 
       // For other errors, store them and emit failure event
-      const tokenHolderIds = await this.getTokenHolderIdsFromSnapshot(proposal.snapshot?.addressBalances);
+      const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(
+        proposal.snapshot?.addressBalances
+      );
       this.eventEmitter.emit('proposal.failed', {
         address: proposal.vault?.owner?.address || null,
         vaultId: proposal.vaultId,
@@ -1935,7 +1943,9 @@ export class GovernanceExecutionService {
           throwOnFailure: false,
         });
 
-        const tokenHolderIds = await this.getTokenHolderIdsFromSnapshot(proposal.snapshot?.addressBalances);
+        const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(
+          proposal.snapshot?.addressBalances
+        );
         this.eventEmitter.emit('proposal.rejected', {
           address: proposal.vault?.owner?.address || null,
           vaultId: proposal.vaultId,
@@ -2121,21 +2131,6 @@ export class GovernanceExecutionService {
       await this.storeExecutionError(proposal, error);
       throw error;
     }
-  }
-
-  /**
-   * Resolve user IDs from snapshot addressBalances.
-   * Only addresses with a positive VT balance are included; unregistered wallets are silently skipped.
-   */
-  private async getTokenHolderIdsFromSnapshot(addressBalances?: Record<string, string>): Promise<string[]> {
-    if (!addressBalances) return [];
-    const addresses = Object.keys(addressBalances).filter(addr => BigInt(addressBalances[addr]) > BigInt(0));
-    if (addresses.length === 0) return [];
-    const users = await this.userRepository.find({
-      where: { address: In(addresses) },
-      select: ['id'],
-    });
-    return users.map(u => u.id);
   }
 
   /**

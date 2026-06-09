@@ -29,6 +29,7 @@ import { VoteReq } from './dto/vote.req';
 import { VoteRes } from './dto/vote.res';
 import { GovernanceFeeService } from './governance-fee.service';
 import { GovernanceRefundService } from './governance-refund.service';
+import { SnapshotService } from './snapshot.service';
 import { VoteCountingService } from './vote-counting.service';
 
 import { MIN_LP_LIQUIDITY_FOR_MARKET_EXPANSION } from '@/constants/expansion.constants';
@@ -138,7 +139,8 @@ export class GovernanceService {
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly tapToolsClient: TapToolsClient,
     private readonly treasuryWalletService: TreasuryWalletService,
-    private readonly rewardEventProducer: RewardEventProducer
+    private readonly rewardEventProducer: RewardEventProducer,
+    private readonly snapshotService: SnapshotService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
@@ -1743,7 +1745,7 @@ export class GovernanceService {
     });
 
     // 3. proposal.started - notifies token holders
-    const tokenHolderIds = await this.getTokenHolderIdsFromSnapshot(latestSnapshot?.addressBalances);
+    const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(latestSnapshot?.addressBalances);
     this.eventEmitter.emit('proposal.started', {
       address: user.address,
       vaultId: vault.id,
@@ -2444,7 +2446,7 @@ export class GovernanceService {
     const snapshotForNotif = proposal.snapshotId
       ? await this.snapshotRepository.findOne({ where: { id: proposal.snapshotId }, select: ['addressBalances'] })
       : null;
-    const tokenHolderIds = await this.getTokenHolderIdsFromSnapshot(snapshotForNotif?.addressBalances);
+    const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(snapshotForNotif?.addressBalances);
     this.eventEmitter.emit('proposal.started', {
       address: proposal.creator.address,
       vaultId: proposal.vault.id,
@@ -3529,20 +3531,5 @@ export class GovernanceService {
     const fixed = value.toFixed(decimals); // e.g. "522963.340000"
     const [intPart, fracPart = ''] = fixed.split('.');
     return BigInt(intPart + fracPart.padEnd(decimals, '0').slice(0, decimals));
-  }
-
-  /**
-   * Resolve user IDs from snapshot addressBalances.
-   * Only addresses with a positive VT balance are included; unregistered wallets are silently skipped.
-   */
-  private async getTokenHolderIdsFromSnapshot(addressBalances?: Record<string, string>): Promise<string[]> {
-    if (!addressBalances) return [];
-    const addresses = Object.keys(addressBalances).filter(addr => BigInt(addressBalances[addr]) > BigInt(0));
-    if (addresses.length === 0) return [];
-    const users = await this.userRepository.find({
-      where: { address: In(addresses) },
-      select: ['id'],
-    });
-    return users.map(u => u.id);
   }
 }
