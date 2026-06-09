@@ -17,15 +17,12 @@ import { VoteCountingService } from './vote-counting.service';
 
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
-import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
-import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
-import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { TreasuryExtractionService } from '@/modules/vaults/treasure/treasury-extraction.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
@@ -53,16 +50,12 @@ export class GovernanceExecutionService {
   constructor(
     @InjectRepository(Proposal)
     private readonly proposalRepository: Repository<Proposal>,
-    @InjectRepository(Claim)
-    private readonly claimRepository: Repository<Claim>,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(AssetsWhitelistEntity)
     private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
-    @InjectRepository(User)
-    private readonly userRepository: Repository<User>,
     private readonly eventEmitter: EventEmitter2,
     private readonly assetsService: AssetsService,
     private readonly wayUpService: WayUpService,
@@ -75,7 +68,6 @@ export class GovernanceExecutionService {
     private readonly distributionService: DistributionService,
     private readonly dexHunterService: DexHunterService,
     private readonly expansionService: ExpansionService,
-    private readonly vaultManagingService: VaultManagingService,
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly treasuryWalletService: TreasuryWalletService,
     private readonly governanceRefundService: GovernanceRefundService,
