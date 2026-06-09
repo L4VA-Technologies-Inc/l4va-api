@@ -400,6 +400,18 @@ export class VaultFullResponse extends VaultShortResponse {
   isAcquireWindowActive: boolean;
 
   @ApiProperty({
+    description:
+      'Indicates whether the contribution/expansion window is currently active (with 5-minute buffer before closing)',
+    type: Boolean,
+    default: false,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  isContributionWindowActive: boolean;
+
+  @ApiProperty({
     description: 'Indicates whether the user can see a chat',
     type: Boolean,
     default: false,
