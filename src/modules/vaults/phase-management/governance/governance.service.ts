@@ -29,6 +29,7 @@ import { VoteReq } from './dto/vote.req';
 import { VoteRes } from './dto/vote.res';
 import { GovernanceFeeService } from './governance-fee.service';
 import { GovernanceRefundService } from './governance-refund.service';
+import { SnapshotService } from './snapshot.service';
 import { VoteCountingService } from './vote-counting.service';
 
 import { MIN_LP_LIQUIDITY_FOR_MARKET_EXPANSION } from '@/constants/expansion.constants';
@@ -138,7 +139,8 @@ export class GovernanceService {
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly tapToolsClient: TapToolsClient,
     private readonly treasuryWalletService: TreasuryWalletService,
-    private readonly rewardEventProducer: RewardEventProducer
+    private readonly rewardEventProducer: RewardEventProducer,
+    private readonly snapshotService: SnapshotService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.poolAddress = this.configService.get<string>('POOL_ADDRESS');
@@ -1689,16 +1691,6 @@ export class GovernanceService {
 
     await this.proposalRepository.save(proposal);
 
-    // Fetch contributor claims early (needed for both fee and non-fee proposals)
-    const finalContributorClaims = await this.claimRepository.find({
-      where: {
-        vault: { id: vault.id },
-        type: ClaimType.CONTRIBUTOR,
-      },
-      relations: ['transaction', 'transaction.assets'],
-      order: { created_at: 'ASC' },
-    });
-
     // If payment is required, build fee transaction and return WITHOUT emitting events
     // Events will be emitted when user submits payment via submitProposalFeePayment
     if (requiresPayment) {
@@ -1753,13 +1745,14 @@ export class GovernanceService {
     });
 
     // 3. proposal.started - notifies token holders
+    const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(latestSnapshot?.addressBalances);
     this.eventEmitter.emit('proposal.started', {
       address: user.address,
       vaultId: vault.id,
       vaultName: vault.name,
       proposalName: proposal.title,
       creatorId: proposal.creatorId,
-      tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+      tokenHolderIds,
     });
 
     // Note: Reward event for governance proposals is emitted in activateProposal()
@@ -2431,16 +2424,6 @@ export class GovernanceService {
       }
     }
 
-    // Fetch contributor claims for notifications
-    const finalContributorClaims = await this.claimRepository.find({
-      where: {
-        vault: { id: proposal.vault.id },
-        type: ClaimType.CONTRIBUTOR,
-      },
-      relations: ['transaction', 'transaction.assets'],
-      order: { created_at: 'ASC' },
-    });
-
     // Emit all events after payment is confirmed (same as non-payment flow)
     // 1. proposal.created - triggers scheduling in governance-execution service
     this.eventEmitter.emit('proposal.created', {
@@ -2460,13 +2443,17 @@ export class GovernanceService {
     });
 
     // 3. proposal.started - notifies token holders
+    const snapshotForNotif = proposal.snapshotId
+      ? await this.snapshotRepository.findOne({ where: { id: proposal.snapshotId }, select: ['addressBalances'] })
+      : null;
+    const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(snapshotForNotif?.addressBalances);
     this.eventEmitter.emit('proposal.started', {
       address: proposal.creator.address,
       vaultId: proposal.vault.id,
       vaultName: proposal.vault.name,
       proposalName: proposal.title,
       creatorId: proposal.creatorId,
-      tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+      tokenHolderIds,
     });
 
     this.logger.log(

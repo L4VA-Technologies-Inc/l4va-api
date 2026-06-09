@@ -11,26 +11,23 @@ import { ExecType, MarketplaceActionDto } from './dto/create-proposal.req';
 import { ExpansionService } from './expansion.service';
 import { GovernanceRefundService } from './governance-refund.service';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
+import { SnapshotService } from './snapshot.service';
 import { TerminationService } from './termination.service';
 import { VoteCountingService } from './vote-counting.service';
 
 import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
-import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
-import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TransactionsService } from '@/modules/vaults/processing-tx/offchain-tx/transactions.service';
-import { VaultManagingService } from '@/modules/vaults/processing-tx/onchain/vault-managing.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { TreasuryExtractionService } from '@/modules/vaults/treasure/treasury-extraction.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
 import { WayUpService } from '@/modules/wayup/wayup.service';
 import { AssetStatus } from '@/types/asset.types';
-import { ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { RewardActivityType } from '@/types/rewards.types';
 import { TransactionStatus } from '@/types/transaction.types';
@@ -53,16 +50,12 @@ export class GovernanceExecutionService {
   constructor(
     @InjectRepository(Proposal)
     private readonly proposalRepository: Repository<Proposal>,
-    @InjectRepository(Claim)
-    private readonly claimRepository: Repository<Claim>,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(AssetsWhitelistEntity)
     private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
-    @InjectRepository(User)
-    private readonly userRepository: Repository<User>,
     private readonly eventEmitter: EventEmitter2,
     private readonly assetsService: AssetsService,
     private readonly wayUpService: WayUpService,
@@ -75,11 +68,11 @@ export class GovernanceExecutionService {
     private readonly distributionService: DistributionService,
     private readonly dexHunterService: DexHunterService,
     private readonly expansionService: ExpansionService,
-    private readonly vaultManagingService: VaultManagingService,
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly treasuryWalletService: TreasuryWalletService,
     private readonly governanceRefundService: GovernanceRefundService,
-    private readonly rewardEventProducer: RewardEventProducer
+    private readonly rewardEventProducer: RewardEventProducer,
+    private readonly snapshotService: SnapshotService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
@@ -393,7 +386,9 @@ export class GovernanceExecutionService {
       );
       const isSuccessful = voteResult.isSuccessful;
 
-      const tokenHolderIds = await this.getTokenHolderIdsFromSnapshot(proposal.snapshot?.addressBalances);
+      const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(
+        proposal.snapshot?.addressBalances
+      );
 
       // If proposal is not successful, move to REJECTED
       if (!isSuccessful) {
@@ -486,7 +481,9 @@ export class GovernanceExecutionService {
         return;
       }
 
-      const tokenHolderIds = await this.getTokenHolderIdsFromSnapshot(proposal.snapshot?.addressBalances);
+      const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(
+        proposal.snapshot?.addressBalances
+      );
 
       // Execute proposal actions
       const executed = await this.executeProposalActions(proposal);
@@ -578,15 +575,6 @@ export class GovernanceExecutionService {
   }
 
   private async executeProposalActions(proposal: Proposal): Promise<boolean> {
-    const finalContributorClaims = await this.claimRepository.find({
-      where: {
-        vault: { id: proposal.vaultId },
-        type: In([ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER]),
-      },
-      relations: ['transaction', 'transaction.assets'],
-      order: { created_at: 'ASC' },
-    });
-
     // Get vault to check status for extraction-based proposals
     const vault = await this.vaultRepository.findOne({
       where: { id: proposal.vaultId },
@@ -680,13 +668,16 @@ export class GovernanceExecutionService {
       }
 
       // For other errors, store them and emit failure event
+      const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(
+        proposal.snapshot?.addressBalances
+      );
       this.eventEmitter.emit('proposal.failed', {
         address: proposal.vault?.owner?.address || null,
         vaultId: proposal.vaultId,
         vaultName: proposal.vault?.name || null,
         proposalName: proposal.title,
         creatorId: proposal.creatorId,
-        tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+        tokenHolderIds,
       });
       this.logger.error(`Error executing actions for proposal ${proposal.id}: ${error.message}`, error.stack);
       return false;
@@ -1936,16 +1927,6 @@ export class GovernanceExecutionService {
         // Store execution error before rejecting so users can see the reason
         await this.storeExecutionError(proposal, new Error(rejectionReason));
 
-        // Get contributor claims for event
-        const finalContributorClaims = await this.claimRepository.find({
-          where: {
-            vault: { id: proposal.vaultId },
-            type: In([ClaimType.CONTRIBUTOR, ClaimType.ACQUIRER]),
-          },
-          relations: ['transaction', 'transaction.assets'],
-          order: { created_at: 'ASC' },
-        });
-
         // Move proposal to REJECTED status
         await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
 
@@ -1954,13 +1935,16 @@ export class GovernanceExecutionService {
           throwOnFailure: false,
         });
 
+        const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(
+          proposal.snapshot?.addressBalances
+        );
         this.eventEmitter.emit('proposal.rejected', {
           address: proposal.vault?.owner?.address || null,
           vaultId: proposal.vaultId,
           vaultName: proposal.vault?.name || null,
           proposalName: proposal.title,
           creatorId: proposal.creatorId,
-          tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+          tokenHolderIds,
           reason: rejectionReason,
         });
 
@@ -2139,21 +2123,6 @@ export class GovernanceExecutionService {
       await this.storeExecutionError(proposal, error);
       throw error;
     }
-  }
-
-  /**
-   * Resolve user IDs from snapshot addressBalances.
-   * Only addresses with a positive VT balance are included; unregistered wallets are silently skipped.
-   */
-  private async getTokenHolderIdsFromSnapshot(addressBalances?: Record<string, string>): Promise<string[]> {
-    if (!addressBalances) return [];
-    const addresses = Object.keys(addressBalances).filter(addr => BigInt(addressBalances[addr]) > BigInt(0));
-    if (addresses.length === 0) return [];
-    const users = await this.userRepository.find({
-      where: { address: In(addresses) },
-      select: ['id'],
-    });
-    return users.map(u => u.id);
   }
 
   /**
