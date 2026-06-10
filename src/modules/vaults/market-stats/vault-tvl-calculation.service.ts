@@ -5,21 +5,21 @@ import { Repository, In } from 'typeorm';
 
 import { Vault } from '@/database/vault.entity';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
-import { VaultStatus } from '@/types/vault.types';
+import { VAULT_STATUSES_ACTIVE } from '@/types/vault.types';
 
 /**
  * Service responsible for periodically updating vault asset prices and TVL calculations
  * This ensures cached total values (total_assets_cost_ada, total_assets_cost_usd) stay current
  *
  * IMPORTANT - User TVL and Gains Calculation:
- * User TVL and gains are ONLY calculated for locked or expansion vaults.
+ * User TVL and gains are calculated for locked, expansion, and acquire_expansion vaults.
  * During contribution/acquire phases, users don't own VT tokens yet.
  *
  * Gains calculation by vault type:
  * - Locked vaults WITH LP: User gains = VT token price appreciation
  *   Calculation: Uses full OHLCV history from TapTools (first day open → latest close)
  *   Formula: (current_price - initial_price) / initial_price * 100
- * - Locked vaults WITHOUT LP or expansion vaults: User gains = TVL-based asset value changes
+ * - Locked vaults WITHOUT LP, expansion vaults, or acquire_expansion vaults: User gains = TVL-based asset value changes
  *   Calculation: (current_assets_value - initial_assets_value) / initial_assets_value
  */
 @Injectable()
@@ -30,12 +30,7 @@ export class VaultTvlCalculationService implements OnModuleInit, OnModuleDestroy
 
   private readonly baseIntervalMs: number;
   private readonly jitterMs: number;
-  private readonly activeVaultStatuses = [
-    VaultStatus.contribution,
-    VaultStatus.acquire,
-    VaultStatus.locked,
-    VaultStatus.expansion,
-  ];
+  private readonly activeVaultStatuses = VAULT_STATUSES_ACTIVE;
 
   constructor(
     @InjectRepository(Vault)
@@ -72,8 +67,6 @@ export class VaultTvlCalculationService implements OnModuleInit, OnModuleDestroy
 
   private scheduleNextUpdate(): void {
     const delayMs = this.getNextIntervalMs();
-    const delayMinutes = (delayMs / 60_000).toFixed(2);
-    this.logger.debug(`Next vault valuation update scheduled in ${delayMinutes} minutes`);
 
     this.updateTimeout = setTimeout(() => {
       void this.executeScheduledUpdate();

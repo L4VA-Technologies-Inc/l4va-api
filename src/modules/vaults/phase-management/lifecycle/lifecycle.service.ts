@@ -81,8 +81,11 @@ export class LifecycleService {
       this.isRunning = true;
       await this.handlePublishedToContribution(); // Handle created vault -> contribution transitin
       await this.handleContributionToAcquire(); // Handle contribution -> acquire transitions (also handles direct contribution -> governance for 0% acquire vaults)
+      await this.handlePublishedToAcquire(); // Handle acquire-only vault: published -> acquire transition
       await this.handleAcquireToGovernance(); // Handle acquire -> governance transitions
+      await this.handleAcquireOnlyToLockedOrFailed(); // Handle acquire-only vault: acquire -> locked or failed
       await this.handleExpansionToLocked(); // Handle expansion -> locked transitions
+      await this.handleAcquireExpansionToLocked(); // Handle acquire expansion -> locked transitions
     } finally {
       this.isRunning = false;
     }
@@ -396,6 +399,7 @@ export class LifecycleService {
       .leftJoin('transactions', 'tx', 'tx.vault_id = vault.id')
       .where('vault.vault_status = :status', { status: VaultStatus.published })
       .andWhere('vault.contract_address IS NOT NULL')
+      .andWhere('vault.is_acquire_only IS NOT TRUE')
       .andWhere('vault.contribution_open_window_type = :type', { type: ContributionWindowType.uponVaultLaunch })
       .andWhere('tx.type = :txType', { txType: TransactionType.createVault })
       .andWhere('tx.status = :txStatus', { txStatus: TransactionStatus.confirmed })
@@ -418,6 +422,7 @@ export class LifecycleService {
       .andWhere('vault.contribution_open_window_type = :type', { type: ContributionWindowType.custom })
       .andWhere('vault.contribution_open_window_time IS NOT NULL')
       .andWhere('vault.contract_address IS NOT NULL')
+      .andWhere('vault.is_acquire_only IS NOT TRUE')
       .andWhere('tx.type = :txType', { txType: TransactionType.createVault })
       .andWhere('tx.status = :txStatus', { txStatus: TransactionStatus.confirmed })
       .getMany();
@@ -748,6 +753,7 @@ export class LifecycleService {
       .andWhere(`vault.acquire_phase_start + (vault.acquire_window_duration * interval '1 millisecond') <= :now`, {
         now,
       })
+      .andWhere('vault.is_acquire_only IS NOT TRUE')
       .andWhere('vault.id NOT IN (:...processingIds)', {
         processingIds:
           this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'], // Dummy UUID to avoid empty array
@@ -1166,6 +1172,7 @@ export class LifecycleService {
               status: ClaimStatus.PENDING,
               transaction: { id: tx.id },
               multiplier: multiplier,
+              is_treasury_claim: vault.is_acquire_only === true,
             });
             acquirerClaims.push(claim);
           } catch (error) {
@@ -1676,7 +1683,7 @@ export class LifecycleService {
       // Submit token metadata PR now that decimals are finalized
       try {
         this.logger.log(
-          `Submitting token metadata PR for vault ${vault.id} with finalized decimals: ${optimalDecimals}`
+          `Submitting token metadata PR for vault ${vault.id} with finalized decimals: ${vault.ft_token_decimals}`
         );
         await this.metadataRegistryApiService.submitVaultTokenMetadata(vault.id);
       } catch (metadataError) {
@@ -1841,16 +1848,14 @@ export class LifecycleService {
       }
 
       // Find the active expansion proposal for this vault
-      const expansionProposal: Pick<Proposal, 'id' | 'metadata' | 'executionDate'> =
-        await this.proposalRepository.findOne({
-          where: {
-            vaultId: vault.id,
-            proposalType: ProposalType.EXPANSION,
-            status: ProposalStatus.EXECUTED,
-          },
-          order: { executionDate: 'DESC' },
-          select: ['id', 'metadata', 'executionDate'],
-        });
+      const expansionProposal = await this.proposalRepository.findOne({
+        where: {
+          vaultId: vault.id,
+          proposalType: ProposalType.EXPANSION,
+          status: ProposalStatus.EXECUTED,
+        },
+        order: { executionDate: 'DESC' },
+      });
 
       if (!expansionProposal?.metadata?.expansion) {
         continue;
@@ -1874,5 +1879,621 @@ export class LifecycleService {
     }
 
     return vaultsAtMax;
+  }
+
+  /**
+   * Handle transition from Expansion phase back to Locked (governance) phase for acquire expansion
+   * Runs periodically to check for vaults whose acquire expansion duration has expired OR max ADA is reached
+   * Calculates and creates claims for new acquirers during expansion
+   */
+  private async handleAcquireExpansionToLocked(): Promise<void> {
+    const now = new Date();
+
+    // Find vaults in acquire_expansion phase with active acquire expansion proposals whose duration has expired
+    const durationExpiredVaults: Pick<
+      Vault,
+      'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals' | 'ft_token_supply'
+    >[] = await this.vaultRepository
+      .createQueryBuilder('vault')
+      .where('vault.vault_status = :status', { status: VaultStatus.acquire_expansion })
+      .andWhere('vault.expansion_phase_start IS NOT NULL')
+      .andWhere('vault.expansion_duration IS NOT NULL')
+      .andWhere(`vault.expansion_phase_start + (vault.expansion_duration * interval '1 millisecond') <= :now`, { now })
+      .andWhere('vault.id NOT IN (:...processingIds)', {
+        processingIds:
+          this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'],
+      })
+      .select([
+        'vault.id',
+        'vault.vault_status',
+        'vault.expansion_phase_start',
+        'vault.vt_price',
+        'vault.ft_token_decimals',
+        'vault.ft_token_supply',
+      ])
+      .getMany();
+
+    // Filter for acquire expansion proposals only
+    const acquireExpansionDurationExpired = await this.filterVaultsWithAcquireExpansion(durationExpiredVaults);
+
+    if (acquireExpansionDurationExpired.length > 0) {
+      this.logger.log(
+        `Found ${acquireExpansionDurationExpired.length} vault(s) with expired acquire expansion phase: ${acquireExpansionDurationExpired.map(v => v.id).join(', ')}`
+      );
+    }
+
+    // Find vaults in expansion phase with active acquire expansion whose max ADA has been reached
+    const adaMaxReachedVaults = await this.findAcquireExpansionVaultsAtAdaMax();
+
+    // Combine both sets, removing duplicates
+    const acquireExpansionVaultsMap = new Map<
+      string,
+      Pick<
+        Vault,
+        'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals' | 'ft_token_supply'
+      >
+    >();
+    for (const vault of [...acquireExpansionDurationExpired, ...adaMaxReachedVaults]) {
+      acquireExpansionVaultsMap.set(vault.id, vault);
+    }
+    const acquireExpansionVaults = Array.from(acquireExpansionVaultsMap.values());
+
+    for (const vault of acquireExpansionVaults) {
+      // Skip if vault is already being processed
+      if (this.processingVaults.has(vault.id)) {
+        continue;
+      }
+
+      this.processingVaults.add(vault.id);
+
+      try {
+        await this.expansionService.executeAcquireExpansionToLockedTransition(vault);
+      } catch (error) {
+        this.logger.error(
+          `Failed to process acquire expansion->locked transition for vault ${vault.id}: ${error.message}`,
+          error.stack
+        );
+      } finally {
+        this.processingVaults.delete(vault.id);
+      }
+    }
+  }
+
+  /**
+   * Filter vaults to only include those with active ACQUIRE_EXPANSION proposals
+   */
+  private async filterVaultsWithAcquireExpansion(
+    vaults: Pick<
+      Vault,
+      'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals' | 'ft_token_supply'
+    >[]
+  ): Promise<
+    Pick<
+      Vault,
+      'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals' | 'ft_token_supply'
+    >[]
+  > {
+    const acquireExpansionVaults: typeof vaults = [];
+
+    for (const vault of vaults) {
+      if (this.processingVaults.has(vault.id)) {
+        continue;
+      }
+
+      // Find the active acquire expansion proposal for this vault
+      const acquireExpansionProposal = await this.proposalRepository.findOne({
+        where: {
+          vaultId: vault.id,
+          proposalType: ProposalType.ACQUIRE_EXPANSION,
+          status: ProposalStatus.EXECUTED,
+        },
+        order: { executionDate: 'DESC' },
+      });
+
+      if (acquireExpansionProposal) {
+        acquireExpansionVaults.push(vault);
+      }
+    }
+
+    return acquireExpansionVaults;
+  }
+
+  /**
+   * Find acquire expansion vaults that have reached their ADA maximum
+   * Queries acquire expansion proposals to check if currentAdaRaised >= maxAda
+   */
+  private async findAcquireExpansionVaultsAtAdaMax(): Promise<
+    Pick<
+      Vault,
+      'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals' | 'ft_token_supply'
+    >[]
+  > {
+    // Find all acquire_expansion vaults not already being processed
+    const expansionVaults: Pick<
+      Vault,
+      'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals' | 'ft_token_supply'
+    >[] = await this.vaultRepository.find({
+      where: {
+        vault_status: VaultStatus.acquire_expansion,
+      },
+      select: ['id', 'vault_status', 'expansion_phase_start', 'vt_price', 'ft_token_decimals', 'ft_token_supply'],
+    });
+
+    const vaultsAtMax: Pick<
+      Vault,
+      'id' | 'vault_status' | 'expansion_phase_start' | 'vt_price' | 'ft_token_decimals' | 'ft_token_supply'
+    >[] = [];
+
+    for (const vault of expansionVaults) {
+      if (this.processingVaults.has(vault.id)) {
+        continue;
+      }
+
+      // Find the active acquire expansion proposal for this vault
+      const acquireExpansionProposal = await this.proposalRepository.findOne({
+        where: {
+          vaultId: vault.id,
+          proposalType: ProposalType.ACQUIRE_EXPANSION,
+          status: ProposalStatus.EXECUTED,
+        },
+        order: { executionDate: 'DESC' },
+      });
+
+      if (!acquireExpansionProposal?.metadata?.acquireExpansion) {
+        continue;
+      }
+
+      const expansionConfig = acquireExpansionProposal.metadata.acquireExpansion;
+
+      // Skip if no max configured
+      if (expansionConfig.noMax || !expansionConfig.maxAda) {
+        continue;
+      }
+
+      // Check if currentAdaRaised >= maxAda
+      const currentAdaRaised = expansionConfig.currentAdaRaised || 0;
+      if (currentAdaRaised >= expansionConfig.maxAda) {
+        this.logger.log(
+          `Vault ${vault.id} reached acquire expansion ADA max: ${currentAdaRaised}/${expansionConfig.maxAda} lovelace`
+        );
+        vaultsAtMax.push(vault);
+      }
+    }
+
+    return vaultsAtMax;
+  }
+
+  /**
+   * Handle transition from Published to Acquire phase for acquire-only vaults.
+   * These vaults skip the contribution phase entirely.
+   * Transition fires when:
+   *   - uponAssetWindowClosing → immediately after the createVault tx confirms
+   *   - custom               → when the configured acquire_open_window_time has arrived
+   */
+  private async handlePublishedToAcquire(): Promise<void> {
+    // Immediate-start acquire-only vaults (uponAssetWindowClosing = go straight to acquire)
+    const immediateStartVaults = await this.vaultRepository
+      .createQueryBuilder('vault')
+      .leftJoin('transactions', 'tx', 'tx.vault_id = vault.id')
+      .where('vault.vault_status = :status', { status: VaultStatus.published })
+      .andWhere('vault.contract_address IS NOT NULL')
+      .andWhere('vault.is_acquire_only = :isAcquireOnly', { isAcquireOnly: true })
+      .andWhere('vault.acquire_open_window_type = :type', { type: InvestmentWindowType.uponAssetWindowClosing })
+      .andWhere('tx.type = :txType', { txType: TransactionType.createVault })
+      .andWhere('tx.status = :txStatus', { txStatus: TransactionStatus.confirmed })
+      .getMany();
+
+    for (const vault of immediateStartVaults) {
+      await this.executePhaseTransition({
+        vaultId: vault.id,
+        newStatus: VaultStatus.acquire,
+        phaseStartField: 'acquire_phase_start',
+        newScStatus: SmartContractVaultStatus.OPEN,
+      });
+    }
+
+    // Custom-start acquire-only vaults
+    const customStartVaults = await this.vaultRepository
+      .createQueryBuilder('vault')
+      .leftJoin('transactions', 'tx', 'tx.vault_id = vault.id')
+      .where('vault.vault_status = :status', { status: VaultStatus.published })
+      .andWhere('vault.contract_address IS NOT NULL')
+      .andWhere('vault.is_acquire_only = :isAcquireOnly', { isAcquireOnly: true })
+      .andWhere('vault.acquire_open_window_type = :type', { type: InvestmentWindowType.custom })
+      .andWhere('vault.acquire_open_window_time IS NOT NULL')
+      .andWhere('tx.type = :txType', { txType: TransactionType.createVault })
+      .andWhere('tx.status = :txStatus', { txStatus: TransactionStatus.confirmed })
+      .getMany();
+
+    const now = new Date();
+    for (const vault of customStartVaults) {
+      const transitionTime = new Date(vault.acquire_open_window_time);
+      if (now >= transitionTime) {
+        await this.executePhaseTransition({
+          vaultId: vault.id,
+          newStatus: VaultStatus.acquire,
+          phaseStartField: 'acquire_phase_start',
+          newScStatus: SmartContractVaultStatus.OPEN,
+        });
+      }
+    }
+  }
+
+  /**
+   * Handle transition from Acquire phase to Locked or Failed for acquire-only vaults.
+   * Triggered when the acquire window expires.
+   *
+   * If min_acquire_threshold is set:
+   *   Success: totalAcquiredAda >= min_acquire_threshold → locked
+   *   Failure: totalAcquiredAda < min_acquire_threshold → failed
+   *
+   * If min_acquire_threshold is NOT set:
+   *   Success: totalAcquiredAda > 0 → locked
+   *   Failure: totalAcquiredAda === 0 → failed
+   */
+  private async handleAcquireOnlyToLockedOrFailed(): Promise<void> {
+    const now = new Date();
+
+    const acquireOnlyVaults = await this.vaultRepository
+      .createQueryBuilder('vault')
+      .where('vault.vault_status = :status', { status: VaultStatus.acquire })
+      .andWhere('vault.is_acquire_only = :isAcquireOnly', { isAcquireOnly: true })
+      .andWhere('vault.acquire_phase_start IS NOT NULL')
+      .andWhere('vault.acquire_window_duration IS NOT NULL')
+      .andWhere(`vault.acquire_phase_start + (vault.acquire_window_duration * interval '1 millisecond') <= :now`, {
+        now,
+      })
+      .andWhere('vault.id NOT IN (:...processingIds)', {
+        processingIds:
+          this.processingVaults.size > 0 ? Array.from(this.processingVaults) : ['00000000-0000-0000-0000-000000000000'],
+      })
+      .andWhere('(vault.manual_distribution_mode IS NULL OR vault.manual_distribution_mode = :manualDist)', {
+        manualDist: false,
+      })
+      .leftJoinAndSelect('vault.owner', 'owner')
+      .getMany();
+
+    for (const vault of acquireOnlyVaults) {
+      const failedTransactionsCount = await this.transactionsRepository.count({
+        where: {
+          vault_id: vault.id,
+          type: TransactionType.updateVault,
+          status: TransactionStatus.failed,
+        },
+      });
+
+      if (failedTransactionsCount >= this.MAX_FAILED_ATTEMPTS) {
+        this.logger.warn(
+          `Skipping acquire-only vault ${vault.id} - exceeded max failed attempts (${failedTransactionsCount}/${this.MAX_FAILED_ATTEMPTS})`
+        );
+        continue;
+      }
+
+      try {
+        this.processingVaults.add(vault.id);
+        await this.executeAcquireOnlyTransition(vault);
+      } finally {
+        this.processingVaults.delete(vault.id);
+      }
+    }
+  }
+
+  /**
+   * Execute the acquire-only vault end-of-acquire-window transition.
+   *
+   * Unlike the standard acquire→governance flow this method:
+   *  - Uses vault.min_acquire_threshold if set, otherwise checks if any ADA was acquired
+   *  - Creates only acquirer claims (no contributor claims, no LP)
+   *  - Transitions directly to locked on success (skips governance)
+   *  - Sends ADA to treasury_wallet (done by the distribution service)
+   */
+  private async executeAcquireOnlyTransition(vault: Vault): Promise<void> {
+    try {
+      await this.transactionsService.syncVaultTransactions(vault.id);
+
+      const acquisitionTransactions = await this.transactionsRepository.find({
+        where: {
+          vault_id: vault.id,
+          type: TransactionType.acquire,
+          status: TransactionStatus.confirmed,
+        },
+        relations: ['user'],
+        order: { created_at: 'ASC' },
+      });
+
+      let totalAcquiredAda = 0;
+      const userAcquiredAdaMap: Record<string, number> = {};
+
+      for (const tx of acquisitionTransactions) {
+        if (!tx.user_id) continue;
+        totalAcquiredAda += tx.amount || 0;
+        if (!userAcquiredAdaMap[tx.user_id]) {
+          userAcquiredAdaMap[tx.user_id] = 0;
+        }
+        userAcquiredAdaMap[tx.user_id] += tx.amount || 0;
+      }
+
+      await this.vaultRepository.update({ id: vault.id }, { total_acquired_value_ada: totalAcquiredAda });
+
+      // Check threshold based on whether min_acquire_threshold is set
+      const minThresholdLovelace = vault.min_acquire_threshold ?? null;
+      const totalAcquiredLovelace = Math.floor(totalAcquiredAda * 1_000_000);
+
+      let meetsThreshold: boolean;
+      if (minThresholdLovelace !== null && minThresholdLovelace > 0) {
+        // If threshold is set, check if acquired amount meets or exceeds it
+        meetsThreshold = totalAcquiredLovelace >= minThresholdLovelace;
+      } else {
+        // If threshold is not set, vault succeeds if ANY ADA was acquired
+        meetsThreshold = totalAcquiredAda > 0;
+      }
+
+      this.logger.log(
+        `Acquire-only vault ${vault.id}: acquired ${totalAcquiredLovelace} lovelace (${totalAcquiredAda} ADA), ` +
+          `threshold: ${minThresholdLovelace !== null ? `${minThresholdLovelace} lovelace` : 'none (any amount)'}, ` +
+          `meets threshold: ${meetsThreshold}`
+      );
+
+      if (meetsThreshold) {
+        const vtSupply = vault.ft_token_supply * 10 ** vault.ft_token_decimals || 0;
+        const LP_PERCENT = vault.liquidity_pool_contribution * 0.01;
+        const hasLpConfigured = vault.liquidity_pool_contribution > 0;
+
+        // Calculate LP amounts (assetsOfferedPercent=1 because 100% tokens go to acquirers, no contributors)
+        const { lpAdaAmount, lpVtAmount, adjustedVtLpAmount, adaPairMultiplier } =
+          this.distributionCalculationService.calculateLpTokens({
+            vtSupply,
+            totalAcquiredAda,
+            totalContributedValueAda: 0,
+            assetsOfferedPercent: 1,
+            lpPercent: LP_PERCENT,
+          });
+
+        const lpAdaInLovelace = Math.floor(lpAdaAmount * 1_000_000);
+        const minLpLiquidity = this.systemSettingsService.lpRecommendedMinLiquidity;
+
+        if (hasLpConfigured && lpAdaInLovelace < minLpLiquidity) {
+          this.logger.error(
+            `Acquire-only vault ${vault.id} FAILED: LP configured but insufficient liquidity. ` +
+              `LP ADA: ${lpAdaAmount} ADA (${lpAdaInLovelace} lovelace) is below ` +
+              `required minimum ${minLpLiquidity / 1_000_000} ADA (${minLpLiquidity} lovelace).`
+          );
+
+          const cancellationResponse = await this.vaultManagingService.updateVaultMetadataTx({
+            vault,
+            acquireMultiplier: [],
+            adaDistribution: [],
+            adaPairMultiplier: 0,
+            vaultStatus: SmartContractVaultStatus.CANCELLED,
+          });
+
+          if (!cancellationResponse.txHash) {
+            this.logger.error(`Failed to get txHash for vault ${vault.id} cancellation transaction`);
+            return;
+          }
+
+          await this.claimsService.createCancellationClaims(vault, 'insufficient_lp_liquidity');
+          await this.executePhaseTransition({
+            vaultId: vault.id,
+            newStatus: VaultStatus.failed,
+            newScStatus: SmartContractVaultStatus.CANCELLED,
+            txHash: cancellationResponse.txHash,
+            failureReason: VaultFailureReason.INSUFFICIENT_LP_LIQUIDITY,
+            failureDetails: {
+              lpAdaAmount,
+              lpAdaInLovelace,
+              minLpLiquidity,
+              minLpLiquidityAda: minLpLiquidity / 1_000_000,
+              message: `LP liquidity ${lpAdaAmount} ADA is below required minimum ${minLpLiquidity / 1_000_000} ADA`,
+            },
+          });
+
+          this.eventEmitter.emit('vault.failed', {
+            vaultId: vault.id,
+            vaultName: vault.name,
+            reason: VaultFailureReason.INSUFFICIENT_LP_LIQUIDITY,
+            lpAdaAmount,
+            minLpLiquidityAda: minLpLiquidity / 1_000_000,
+          });
+
+          return;
+        }
+
+        // Create LP claim if LP is configured and has enough liquidity
+        if (hasLpConfigured && adjustedVtLpAmount > 0 && lpAdaAmount > 0) {
+          const existingLpClaim = await this.claimRepository.findOne({
+            where: { vault: { id: vault.id }, type: ClaimType.LP },
+          });
+          if (existingLpClaim) {
+            await this.claimRepository.update(existingLpClaim.id, {
+              amount: adjustedVtLpAmount,
+              lovelace_amount: lpAdaInLovelace,
+            });
+            this.logger.log(`Updated existing LP claim: ${adjustedVtLpAmount} VT, ${lpAdaAmount} ADA`);
+          } else {
+            await this.claimRepository.save({
+              vault: { id: vault.id },
+              type: ClaimType.LP,
+              amount: adjustedVtLpAmount,
+              status: ClaimStatus.AVAILABLE,
+              lovelace_amount: lpAdaInLovelace,
+            });
+            this.logger.log(`Created LP claim: ${adjustedVtLpAmount} VT, ${lpAdaAmount} ADA`);
+          }
+        }
+
+        // Calculate ONE multiplier for the entire vault, excluding LP VT from supply
+        // Multiplier = (vtSupply - lpVtAmount) / ADA acquired (in lovelace)
+        const totalAcquiredLovelace = totalAcquiredAda * 1_000_000;
+        const distributableVtSupply = vtSupply - (hasLpConfigured ? lpVtAmount : 0);
+        const vaultMultiplier =
+          totalAcquiredLovelace > 0 ? Math.floor(distributableVtSupply / totalAcquiredLovelace) : 0;
+
+        // Handle multiplier underflow: increase decimals and skip this cycle
+        if (vaultMultiplier === 0 && totalAcquiredLovelace > 0 && distributableVtSupply > 0) {
+          // Calculate additional decimals needed: ensure multiplier >= 1
+          // We need: (distributableVtSupply * 10^n) / totalAcquiredLovelace >= 1
+          // So: n >= log10(totalAcquiredLovelace / distributableVtSupply)
+          const ratio = totalAcquiredLovelace / distributableVtSupply;
+          const additionalDecimals = Math.ceil(Math.log10(ratio));
+          const newDecimals = vault.ft_token_decimals + additionalDecimals;
+
+          this.logger.warn(
+            `Acquire-only vault ${vault.id}: multiplier would be 0. ` +
+              `Increasing decimals from ${vault.ft_token_decimals} to ${newDecimals} ` +
+              `(+${additionalDecimals} decimals). Deleting existing claims and skipping this cycle.`
+          );
+
+          // Delete any existing claims so next cycle can create them fresh with correct amounts
+          await this.claimRepository.delete({
+            vault: { id: vault.id },
+            type: In([ClaimType.ACQUIRER, ClaimType.LP]),
+          });
+
+          // Update vault decimals and exit - next cycle will handle distribution with correct decimals
+          await this.vaultRepository.update({ id: vault.id }, { ft_token_decimals: newDecimals });
+          return;
+        }
+
+        // Build acquirer claims (all using the same vault-level multiplier)
+        const acquirerClaims: Partial<Claim>[] = [];
+
+        for (const tx of acquisitionTransactions) {
+          if (!tx.user || !tx.user.id) continue;
+          const adaSent = tx.amount || 0;
+          if (adaSent <= 0) continue;
+
+          const claimExists = await this.claimRepository.exists({
+            where: { transaction: { id: tx.id }, type: ClaimType.ACQUIRER },
+          });
+          if (claimExists) continue;
+
+          // Calculate claim amount: multiplier * ADA sent (in lovelace)
+          const claimAmount = vaultMultiplier * adaSent * 1_000_000;
+
+          acquirerClaims.push(
+            this.claimRepository.create({
+              user: { id: tx.user.id },
+              vault: { id: vault.id },
+              type: ClaimType.ACQUIRER,
+              amount: claimAmount,
+              status: ClaimStatus.PENDING,
+              transaction: { id: tx.id },
+              multiplier: vaultMultiplier,
+              is_treasury_claim: true,
+            })
+          );
+        }
+
+        if (acquirerClaims.length > 0) {
+          await this.claimRepository.save(acquirerClaims);
+        }
+
+        // For acquire-only: asset multipliers for ADA (empty policy/name for ADA)
+        const acquireMultiplier: [string, string | null, number][] =
+          vaultMultiplier > 0 ? [['', '', vaultMultiplier]] : [];
+        const adaDistribution: [string, string | null, number][] = [];
+
+        const response = await this.vaultManagingService.updateVaultMetadataTx({
+          vault,
+          acquireMultiplier,
+          adaDistribution,
+          adaPairMultiplier: hasLpConfigured ? adaPairMultiplier : 0,
+          vaultStatus: SmartContractVaultStatus.SUCCESSFUL,
+        });
+
+        if (!response.txHash) {
+          this.logger.error(`Failed to get txHash for acquire-only vault ${vault.id} metadata update`);
+          return;
+        }
+
+        try {
+          await this.metadataRegistryApiService.submitVaultTokenMetadata(vault.id);
+        } catch (err) {
+          this.logger.error(`Failed to submit token metadata for acquire-only vault ${vault.id}:`, err.message);
+        }
+
+        const vtPrice = totalAcquiredAda > 0 ? totalAcquiredAda / vtSupply : 0;
+        const fdv = totalAcquiredAda;
+
+        await this.executePhaseTransition({
+          vaultId: vault.id,
+          newStatus: VaultStatus.locked,
+          phaseStartField: 'governance_phase_start',
+          newScStatus: SmartContractVaultStatus.SUCCESSFUL,
+          txHash: response.txHash,
+          acquire_multiplier: acquireMultiplier,
+          ada_distribution: adaDistribution,
+          ada_pair_multiplier: hasLpConfigured ? adaPairMultiplier : 0,
+          vtPrice,
+          fdv,
+          fdvTvl: 1,
+        });
+
+        try {
+          this.eventEmitter.emit('distribution.claim_available', {
+            vaultId: vault.id,
+            vaultName: vault.name,
+            tokenHolderIds: [...new Set(acquisitionTransactions.map(t => t.user_id).filter(Boolean))],
+          });
+          this.eventEmitter.emit('vault.success', {
+            vaultId: vault.id,
+            vaultName: vault.name,
+            tokenHoldersIds: [...new Set(acquisitionTransactions.map(t => t.user_id).filter(Boolean))],
+            adaSpent: totalAcquiredAda,
+            tokenPercentage: 100,
+            tokenTicker: vault.vault_token_ticker,
+            impliedVaultValue: totalAcquiredAda,
+          });
+        } catch (err) {
+          this.logger.error(`Error emitting success events for acquire-only vault ${vault.id}:`, err);
+        }
+      } else {
+        const failureMessage =
+          minThresholdLovelace !== null && minThresholdLovelace > 0
+            ? `Acquire-only vault ${vault.id} failed: threshold not met (acquired ${totalAcquiredLovelace} lovelace, required ${minThresholdLovelace} lovelace)`
+            : `Acquire-only vault ${vault.id} failed: no ADA was acquired during the acquire window`;
+
+        this.logger.warn(failureMessage);
+
+        const response = await this.vaultManagingService.updateVaultMetadataTx({
+          vault,
+          vaultStatus: SmartContractVaultStatus.CANCELLED,
+        });
+        await this.claimsService.createCancellationClaims(vault, 'threshold_not_met');
+
+        await this.executePhaseTransition({
+          vaultId: vault.id,
+          newStatus: VaultStatus.failed,
+          newScStatus: SmartContractVaultStatus.CANCELLED,
+          txHash: response.txHash,
+          failureReason: VaultFailureReason.ACQUIRE_THRESHOLD_NOT_MET,
+          failureDetails: {
+            message:
+              minThresholdLovelace !== null && minThresholdLovelace > 0
+                ? `Acquire-only vault minimum threshold not met`
+                : `Acquire-only vault failed: no ADA was acquired`,
+            requiredLovelace: minThresholdLovelace,
+            actualLovelace: totalAcquiredLovelace,
+            acquiredAda: totalAcquiredAda,
+          },
+        });
+
+        await new Promise(resolve => setTimeout(resolve, 20000));
+
+        try {
+          this.eventEmitter.emit('vault.failed', {
+            vaultId: vault.id,
+            vaultName: vault.name,
+            acquirerIds: [...new Set(acquisitionTransactions.map(t => t.user_id).filter(Boolean))],
+          });
+          this.eventEmitter.emit('vault.failed.email', { vault });
+        } catch (err) {
+          this.logger.error(`Error emitting failure events for acquire-only vault ${vault.id}:`, err);
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Error executing acquire-only transition for vault ${vault.id}:`, error);
+    }
   }
 }

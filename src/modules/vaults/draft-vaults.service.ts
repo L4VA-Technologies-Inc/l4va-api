@@ -42,7 +42,7 @@ export class DraftVaultsService {
     @InjectRepository(TagEntity)
     private readonly tagsRepository: Repository<TagEntity>,
     @InjectRepository(TokenVerification)
-    private readonly tokenVerificationRepo: Repository<TokenVerification>
+    private readonly tokenVerificationRepository: Repository<TokenVerification>
   ) {}
 
   async getMyDraftVaults(
@@ -120,6 +120,8 @@ export class DraftVaultsService {
     const plain = classToPlain(vault) as Record<string, unknown>;
     plain.tokenDescription = plain.token_description;
     delete plain.token_description;
+    plain.isExpandableAssetWhitelist = vault.is_expandable_asset_whitelist;
+    delete plain.is_expandable_asset_whitelist;
     plain.tags = vault.tags?.map(t => t.name) ?? [];
 
     // todo need to create additional model for remove owner, and transform image to link
@@ -230,6 +232,8 @@ export class DraftVaultsService {
       if (data.executionThreshold) vaultData.execution_threshold = data.executionThreshold;
       if (data.cosigningThreshold) vaultData.cosigning_threshold = data.cosigningThreshold;
       if (data.vaultAppreciation) vaultData.vault_appreciation = data.vaultAppreciation;
+      if (data.isExpandableAssetWhitelist !== undefined)
+        vaultData.is_expandable_asset_whitelist = data.isExpandableAssetWhitelist;
 
       if (data.contributionDuration !== undefined) {
         vaultData.contribution_duration = data.contributionDuration;
@@ -315,7 +319,7 @@ export class DraftVaultsService {
         const policyIds = data.assetsWhitelist.map(item => item.policyId).filter(Boolean);
         const lpTokensData =
           policyIds.length > 0
-            ? await this.tokenVerificationRepo.find({
+            ? await this.tokenVerificationRepository.find({
                 where: { policy_id: In(policyIds) },
                 select: ['policy_id', 'lp_pool_onchain_id', 'is_lp_token'],
               })

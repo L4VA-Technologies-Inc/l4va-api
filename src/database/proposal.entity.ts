@@ -107,6 +107,36 @@ export class Proposal {
       currentAssetCount?: number; // Track progress
     };
 
+    // Acquire Expansion data (ADA → VT minting)
+    acquireExpansion?: {
+      /** Expansion window duration in ms */
+      duration?: number;
+      /** No time limit (always open) */
+      noLimit?: boolean;
+      /** Max ADA per expansion window (in lovelace) */
+      maxAda?: number;
+      /** No max ADA limit */
+      noMax?: boolean;
+      /** Pricing mode */
+      priceType: 'limit' | 'market';
+      /** For limit: VT per 1 ADA */
+      limitPrice?: number;
+      /** Track progress during expansion */
+      currentAdaRaised?: number;
+      /** For market: VT/ADA price at proposal creation (for display) */
+      marketPriceSnapshot?: number;
+    };
+
+    // Asset whitelist update data
+    assetsWhitelist?: Array<{
+      policyId: string;
+      assetName?: string;
+      collectionName?: string | null;
+      valuationMethod?: string;
+      customPriceAda?: number | null;
+      lpPoolOnchainId?: string | null;
+    }>;
+
     // Swap execution results (for DexHunter swaps)
     swapResults?: Array<{
       assetId: string;

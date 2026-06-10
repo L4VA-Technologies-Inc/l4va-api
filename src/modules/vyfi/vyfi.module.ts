@@ -1,5 +1,5 @@
 import { HttpModule } from '@nestjs/axios';
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
@@ -12,7 +12,12 @@ import { Transaction } from '@/database/transaction.entity';
 import { Vault } from '@/database/vault.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Claim, Transaction, Vault]), HttpModule, ConfigModule, BlockchainModule],
+  imports: [
+    TypeOrmModule.forFeature([Claim, Transaction, Vault]),
+    HttpModule,
+    ConfigModule,
+    forwardRef(() => BlockchainModule),
+  ],
   providers: [VyfiService],
   exports: [VyfiService],
 })

@@ -535,9 +535,22 @@ export class AssetsService {
       return 0;
     }
 
+    // Exclude transactions whose claims have is_treasury_claim = true
+    // (assets for these should stay LOCKED — the ADA went to treasury, not distributed back)
+    const treasuryClaims = await this.claimsRepository.find({
+      where: { transaction: { id: In(transactionIds) }, is_treasury_claim: true },
+      select: { transaction_id: true },
+    });
+    const treasuryTransactionIds = new Set(treasuryClaims.map(c => c.transaction_id));
+    const distributableIds = transactionIds.filter(id => !treasuryTransactionIds.has(id));
+
+    if (distributableIds.length === 0) {
+      return 0;
+    }
+
     const assets = await this.assetsRepository.find({
       where: {
-        transaction: { id: In(transactionIds) },
+        transaction: { id: In(distributableIds) },
         deleted: false,
         status: AssetStatus.LOCKED, // Only locked assets can be distributed
       },
@@ -551,7 +564,7 @@ export class AssetsService {
 
     const result = await this.assetsRepository.update(
       {
-        transaction: { id: In(transactionIds) },
+        transaction: { id: In(distributableIds) },
         status: AssetStatus.LOCKED,
         deleted: false,
       },

@@ -10,7 +10,13 @@ import { Asset } from '@/database/asset.entity';
 import { Vault } from '@/database/vault.entity';
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { PriceService } from '@/modules/price/price.service';
-import { VaultStatus } from '@/types/vault.types';
+import {
+  VAULT_STATUSES_ACTIVE,
+  VAULT_STATUSES_FOR_CONTRIBUTED_STATS,
+  VAULT_STATUSES_FOR_STAGE_STATS,
+  VAULT_STATUSES_WITH_TVL,
+  VaultStatus,
+} from '@/types/vault.types';
 
 @Injectable()
 export class StatisticsService {
@@ -36,9 +42,9 @@ export class StatisticsService {
    */
   async getVaultStatistics(): Promise<VaultStatisticsResponse> {
     try {
-      // Count active vaults (published, contribution, acquire, locked, expansion), excluding hidden vaults on mainnet
+      // Count active vaults (contribution, acquire, locked, expansion, acquire_expansion), excluding hidden vaults on mainnet
       const activeVaultsWhere: any = {
-        vault_status: In([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked, VaultStatus.expansion]),
+        vault_status: In(VAULT_STATUSES_ACTIVE),
         deleted: false,
       };
       if (this.isMainnet) {
@@ -55,6 +61,7 @@ export class StatisticsService {
           VaultStatus.acquire,
           VaultStatus.locked,
           VaultStatus.expansion,
+          VaultStatus.acquire_expansion,
         ]),
       };
       if (this.isMainnet) {
@@ -63,12 +70,12 @@ export class StatisticsService {
       const totalVaultsCount = await this.vaultsRepository.count({
         where: totalVaultsWhere,
       });
-      // Get sum of total assets value for locked and expansion vaults only, excluding hidden vaults on mainnet
+      // Get sum of total assets value for locked, expansion, and acquire_expansion vaults only, excluding hidden vaults on mainnet
       const totalValueQuery = this.vaultsRepository
         .createQueryBuilder('vault')
         .select('SUM(vault.total_assets_cost_usd)', 'totalValueUsd')
         .addSelect('SUM(vault.total_assets_cost_ada)', 'totalValueAda')
-        .where('vault.vault_status IN (:...statuses)', { statuses: [VaultStatus.locked, VaultStatus.expansion] })
+        .where('vault.vault_status IN (:...statuses)', { statuses: VAULT_STATUSES_WITH_TVL })
         .andWhere('vault.deleted = :deleted', { deleted: false });
       if (this.isMainnet) {
         totalValueQuery.andWhere('vault.id NOT IN (:...hiddenIds)', {
@@ -83,13 +90,7 @@ export class StatisticsService {
         .select('SUM(vault.total_assets_cost_usd)', 'totalValueUsd')
         .addSelect('SUM(vault.total_assets_cost_ada)', 'totalValueAda')
         .where('vault.vault_status IN (:...statuses)', {
-          statuses: [
-            VaultStatus.contribution,
-            VaultStatus.acquire,
-            VaultStatus.locked,
-            VaultStatus.failed,
-            VaultStatus.expansion,
-          ],
+          statuses: VAULT_STATUSES_FOR_CONTRIBUTED_STATS,
         })
         .andWhere('vault.deleted = :deleted', { deleted: false });
       if (this.isMainnet) {
@@ -166,13 +167,7 @@ export class StatisticsService {
         .addSelect('COUNT(vault.id)', 'count')
         .where('vault.deleted = :deleted', { deleted: false })
         .andWhere('vault.vault_status IN (:...statuses)', {
-          statuses: [
-            VaultStatus.contribution,
-            VaultStatus.acquire,
-            VaultStatus.locked,
-            VaultStatus.burned,
-            VaultStatus.expansion,
-          ],
+          statuses: VAULT_STATUSES_FOR_STAGE_STATS,
         });
       if (this.isMainnet) {
         statusQuery.andWhere('vault.id NOT IN (:...hiddenIds)', {

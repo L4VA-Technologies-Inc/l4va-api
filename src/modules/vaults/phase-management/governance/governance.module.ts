@@ -16,6 +16,7 @@ import { GovernanceController } from './governance.controller';
 import GovernanceService from './governance.service';
 import { ProposalHealthService } from './proposal-health.service';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
+import { SnapshotService } from './snapshot.service';
 import { TerminationController } from './termination.controller';
 import { TerminationService } from './termination.service';
 import { VoteCountingService } from './vote-counting.service';
@@ -25,6 +26,7 @@ import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Claim } from '@/database/claim.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Snapshot } from '@/database/snapshot.entity';
+import { TokenVerification } from '@/database/token-verification.entity';
 import { Transaction } from '@/database/transaction.entity';
 import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
@@ -35,7 +37,7 @@ import { DexHunterModule } from '@/modules/dexhunter/dexhunter.module';
 import { DistributionCalculationModule } from '@/modules/distribution/distribution-calculation.module';
 import { RedisModule } from '@/modules/redis/redis.module';
 import { RewardsModule } from '@/modules/rewards/rewards.module';
-import { TaptoolsModule } from '@/modules/taptools/taptools.module';
+import { TapToolsPricingModule } from '@/modules/taptools/taptools-pricing.module';
 import { AssetsModule } from '@/modules/vaults/assets/assets.module';
 import { VyfiModule } from '@/modules/vyfi/vyfi.module';
 import { WayUpPricingModule } from '@/modules/wayup/wayup-pricing.module';
@@ -54,6 +56,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
       Transaction,
       VaultTreasuryWallet,
       AssetsWhitelistEntity,
+      TokenVerification,
     ]),
     RedisModule,
     AssetsModule,
@@ -67,7 +70,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     DistributionCalculationModule,
     RewardsModule,
     WayUpPricingModule,
-    TaptoolsModule,
+    TapToolsPricingModule,
   ],
   controllers: [GovernanceController, TerminationController],
   providers: [
@@ -80,6 +83,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     VoteCountingService,
     TerminationService,
     DistributionService,
+    SnapshotService,
     {
       provide: ProposalHealthService,
       useFactory: (
@@ -100,6 +104,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     TerminationService,
     DistributionService,
     ExpansionService,
+    SnapshotService,
   ],
 })
 export class GovernanceModule {}

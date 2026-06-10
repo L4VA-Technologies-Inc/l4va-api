@@ -35,6 +35,9 @@ export class TransactionsResponseItemsDto {
   status?: TransactionStatus;
 
   @Expose()
+  is_expansion: boolean;
+
+  @Expose()
   amount: string;
 
   @Expose()

@@ -20,6 +20,35 @@ import { FileEntity } from '@/database/file.entity';
 import { LinkEntity } from '@/database/link.entity';
 import { User } from '@/database/user.entity';
 
+export class VaultStatsDto {
+  @ApiProperty({ description: 'TVL in ADA', nullable: true, required: false })
+  tvlAda: number | null;
+
+  @ApiProperty({ description: 'TVL in USD', nullable: true, required: false })
+  tvlUsd: number | null;
+
+  @ApiProperty({ description: 'FDV in ADA', nullable: true, required: false })
+  fdvAda: number | null;
+
+  @ApiProperty({ description: 'FDV in USD', nullable: true, required: false })
+  fdvUsd: number | null;
+
+  @ApiProperty({ description: 'FDV / TVL ratio', nullable: true, required: false })
+  fdvTvl: number | null;
+
+  @ApiProperty({ description: 'FT gains in ADA (null when no active LP)', nullable: true, required: false })
+  ftGainsAda: number | null;
+
+  @ApiProperty({ description: 'FT gains in USD (null when no active LP)', nullable: true, required: false })
+  ftGainsUsd: number | null;
+
+  @ApiProperty({ description: 'VT token price in ADA (null when no active LP)', nullable: true, required: false })
+  vtPriceAda: number | null;
+
+  @ApiProperty({ description: 'VT token price in USD (null when no active LP)', nullable: true, required: false })
+  vtPriceUsd: number | null;
+}
+
 export class VaultShortResponse {
   @ApiProperty({ description: 'Unique identifier of the vault' })
   @DtoRepresent({
@@ -359,6 +388,30 @@ export class VaultFullResponse extends VaultShortResponse {
   isWhitelistedContributor: boolean;
 
   @ApiProperty({
+    description:
+      'Indicates whether the acquire window is currently active (considers both acquire and expansion phases for acquire_expansion status)',
+    type: Boolean,
+    default: false,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  isAcquireWindowActive: boolean;
+
+  @ApiProperty({
+    description:
+      'Indicates whether the contribution/expansion window is currently active (with 5-minute buffer before closing)',
+    type: Boolean,
+    default: false,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: true,
+  })
+  isContributionWindowActive: boolean;
+
+  @ApiProperty({
     description: 'Indicates whether the user can see a chat',
     type: Boolean,
     default: false,
@@ -628,6 +681,17 @@ export class VaultFullResponse extends VaultShortResponse {
   })
   gainsUsd?: number;
 
+  @ApiProperty({
+    description: 'Pre-computed vault stats for the stats bar',
+    type: () => VaultStatsDto,
+    required: false,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'vaultStats' },
+  })
+  vaultStats?: VaultStatsDto;
+
   @ApiProperty({ description: 'Assets whitelist', type: [AssetsWhitelistEntity], required: false })
   @DtoRepresent({
     transform: false,
@@ -678,6 +742,17 @@ export class VaultFullResponse extends VaultShortResponse {
     expose: true,
   })
   acquirePhaseStart?: string;
+
+  @ApiProperty({
+    description: 'Whether vault is acquire-only (skips contribution phase)',
+    type: Boolean,
+    default: false,
+  })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'isAcquireOnly' },
+  })
+  isAcquireOnly: boolean;
 
   @ApiProperty({ description: 'Expansion phase start time', required: false })
   @DtoRepresent({
@@ -792,6 +867,55 @@ export class VaultFullResponse extends VaultShortResponse {
     expose: { name: 'expansionLimitPrice' },
   })
   expansionLimitPrice?: number;
+
+  @ApiProperty({ description: 'Whether the vault supports asset whitelist expansion', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'isExpandableAssetWhitelist' },
+  })
+  isExpandableAssetWhitelist?: boolean;
+
+  @ApiProperty({ description: 'Acquire expansion current ADA raised', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'acquireExpansionCurrentAda' },
+  })
+  acquireExpansionCurrentAda?: number;
+
+  @ApiProperty({ description: 'Acquire expansion current amount raised in USD', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'acquireExpansionCurrentUsd' },
+  })
+  acquireExpansionCurrentUsd?: number;
+
+  @ApiProperty({ description: 'Acquire expansion maximum ADA in lovelace', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'acquireExpansionMaxAdaLovelace' },
+  })
+  acquireExpansionMaxAdaLovelace?: number;
+
+  @ApiProperty({ description: 'Acquire expansion maximum ADA', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'acquireExpansionMaxAda' },
+  })
+  acquireExpansionMaxAda?: number;
+
+  @ApiProperty({ description: 'Acquire expansion maximum amount in USD', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'acquireExpansionMaxUsd' },
+  })
+  acquireExpansionMaxUsd?: number;
+
+  @ApiProperty({ description: 'Whether acquire expansion has no max limit', required: false })
+  @DtoRepresent({
+    transform: false,
+    expose: { name: 'acquireExpansionNoMax' },
+  })
+  acquireExpansionNoMax?: boolean;
 
   @ApiProperty({ description: 'Owner of the vault', type: () => User })
   @DtoRepresent({

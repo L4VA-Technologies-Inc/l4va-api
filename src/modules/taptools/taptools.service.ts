@@ -9,12 +9,14 @@ import { In, Repository } from 'typeorm';
 
 import { DexHunterPricingService } from '../dexhunter/dexhunter-pricing.service';
 import { VaultAssetsSummaryDto } from '../vaults/processing-tx/offchain-tx/dto/vault-assets-summary.dto';
+import { VyfiService } from '../vyfi/vyfi.service';
 import { WayUpPricingService } from '../wayup/wayup-pricing.service';
 
 import { AssetValueDto, BlockfrostAssetResponseDto } from './dto/asset-value.dto';
 import { BlockfrostAddressTotalDto } from './dto/blockfrost-address.dto';
 import { PaginationMetaDto, PaginationQueryDto } from './dto/pagination.dto';
 import { PaginatedWalletSummaryDto, WalletOverviewDto } from './dto/wallet-summary.dto';
+import { TapToolsClient } from './taptools.client';
 
 import { Asset } from '@/database/asset.entity';
 import { Snapshot } from '@/database/snapshot.entity';
@@ -26,7 +28,12 @@ import { PriceService } from '@/modules/price/price.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { AssetOriginType, AssetStatus, AssetType, AssetValuationMethod } from '@/types/asset.types';
-import { VaultStatus } from '@/types/vault.types';
+import {
+  VAULT_STATUSES_ACTIVE,
+  VAULT_STATUSES_WITH_VT_TOKENS,
+  VAULT_STATUSES_WITHOUT_VT_TOKENS,
+  VaultStatus,
+} from '@/types/vault.types';
 import { normalizeAssetImageSource } from '@/utils/asset-image-source.util';
 
 /** Map of policyId -> custom price in ADA for vault-specific asset valuations */
@@ -45,19 +52,6 @@ interface GetAssetValueParams {
 interface AssetPriceResult {
   priceAda: number;
   priceUsd: number;
-}
-
-export interface TapToolsTokenPoolDto {
-  exchange: string;
-  lpTokenUnit: string;
-  onchainID: string;
-  tokenA: string;
-  tokenALocked: number;
-  tokenATicker: string;
-  /** empty for ADA */
-  tokenB: string | null; // empty for ADA
-  tokenBLocked: number;
-  tokenBTicker: string;
 }
 
 @Injectable()
@@ -127,6 +121,8 @@ export class TaptoolsService {
     private readonly dexHunterPricingService: DexHunterPricingService,
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly alertsService: AlertsService,
+    private readonly tapToolsClient: TapToolsClient,
+    private readonly vyfiService: VyfiService,
     @Optional() @Inject('TreasuryWalletService') private readonly treasuryWalletService?: TreasuryWalletService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
@@ -1313,20 +1309,20 @@ export class TaptoolsService {
    * Update cached vault totals for multiple vaults
    * Includes assets with PENDING, LOCKED, EXTRACTED (in treasury), and DISTRIBUTED status
    *
-   * User TVL and Gains Calculation (ONLY for locked/expansion vaults):
-   * - Locked vaults WITH LP: VT token price appreciation from historical OHLCV data
+   * User TVL and Gains Calculation:
+   * - Locked/Expansion/Acquire_Expansion vaults WITH LP: VT token price appreciation from historical OHLCV data
    *   Uses VaultMarketStatsService.calculateTokenPriceDelta() to get true price from LP inception
-   * - Locked/Expansion vaults WITHOUT LP: VT token holdings × proportional TVL ownership
+   * - Locked/Expansion/Acquire_Expansion vaults WITHOUT LP: VT token holdings × proportional TVL ownership
    * - Active vaults (contribution/acquire): NO user gains calculated (users don't have VT tokens yet)
    *
-   * For locked vaults, also calculates FDV/TVL ratio
+   * For locked, expansion, and acquire_expansion vaults, also calculates FDV/TVL ratio
    *
    * GAINS CALCULATION OVERVIEW:
    * - LP vaults: Uses full OHLCV history (first day open → latest close) from TapTools to
    *   derive the percentage change in VT token price from inception, and then applies this
    *   percentage change to the user's VT token holdings (scaled by the current VT price) to
    *   compute user_gains_ada.
-   * - Non-LP locked/expansion vaults: DO NOT use historical TVL snapshots for gains calculation. Instead, calculate the user's
+   * - Non-LP locked/expansion/acquire_expansion vaults: DO NOT use historical TVL snapshots for gains calculation. Instead, calculate the user's
    * proportional ownership of the vault based on their VT token holdings relative to total supply, and then apply this ownership percentage to the current TVL to derive user_gains_ada. This approach avoids inaccuracies that can arise from using historical snapshots in volatile markets.
    * - Contribution/Acquire: No calculation (users don't own VT tokens yet)
    *
@@ -1457,7 +1453,7 @@ export class TaptoolsService {
       const allRelevantVaults = await this.vaultRepository.find({
         where: {
           deleted: false,
-          vault_status: In([VaultStatus.contribution, VaultStatus.acquire, VaultStatus.locked, VaultStatus.expansion]),
+          vault_status: In(VAULT_STATUSES_ACTIVE),
         },
         relations: ['owner'],
         select: ['id', 'vault_status', 'ft_token_supply', 'ft_token_decimals', 'initial_total_value_ada', 'owner'],
@@ -1467,8 +1463,10 @@ export class TaptoolsService {
       const allVaultIds = allRelevantVaults.map(v => v.id);
       const allVaultValues = await this.calculateVaultsTvl(allVaultIds);
 
-      // Batch query: Get all snapshots for locked vaults
-      const allLockedVaultIds = allRelevantVaults.filter(v => v.vault_status === VaultStatus.locked).map(v => v.id);
+      // Batch query: Get all snapshots for vaults where users own VT tokens
+      const allLockedVaultIds = allRelevantVaults
+        .filter(v => VAULT_STATUSES_WITH_VT_TOKENS.includes(v.vault_status))
+        .map(v => v.id);
       const allSnapshots =
         allLockedVaultIds.length > 0
           ? await this.snapshotRepository
@@ -1489,9 +1487,9 @@ export class TaptoolsService {
       });
       const userMap = new Map(allUsers.map(u => [u.id, u]));
 
-      // Batch query: Get all contributed assets for all users and active vaults
+      // Batch query: Get all contributed assets for all users and active vaults (contribution/acquire)
       const allActiveVaultIds = allRelevantVaults
-        .filter(v => v.vault_status === VaultStatus.contribution || v.vault_status === VaultStatus.acquire)
+        .filter(v => VAULT_STATUSES_WITHOUT_VT_TOKENS.includes(v.vault_status))
         .map(v => v.id);
 
       const allContributedAssets =
@@ -1537,8 +1535,8 @@ export class TaptoolsService {
           const summary = allVaultValues.get(vault.id);
           if (!summary) continue;
 
-          if (vault.vault_status === VaultStatus.locked) {
-            // Get user's share from VT token holdings
+          if (VAULT_STATUSES_WITH_VT_TOKENS.includes(vault.vault_status)) {
+            // Get user's share from VT token holdings (applies to locked, expansion, and acquire_expansion)
             const snapshot = snapshotByVaultId.get(vault.id);
 
             if (snapshot?.addressBalances && vault.ft_token_supply) {
@@ -1573,7 +1571,7 @@ export class TaptoolsService {
                 }
               }
             }
-          } else if (vault.vault_status === VaultStatus.contribution || vault.vault_status === VaultStatus.acquire) {
+          } else if (VAULT_STATUSES_WITHOUT_VT_TOKENS.includes(vault.vault_status)) {
             // Get contributed asset values from pre-loaded data
             const userVaultAssets = assetsByUserAndVault.get(userId)?.get(vault.id);
             if (userVaultAssets) {
@@ -1645,37 +1643,6 @@ export class TaptoolsService {
   }
 
   /**
-   * Fetch pool data from TapTools using onchain pool ID
-   * @param onchainID - Pool onchain ID
-   * @returns Pool data with token reserves
-   */
-  private async fetchLpPoolData(onchainID: string): Promise<TapToolsTokenPoolDto | null> {
-    if (!this.isMainnet) {
-      this.logger.debug('Skipping TapTools LP pool fetch for testnet');
-      return null;
-    }
-
-    try {
-      const response = await this.axiosTapToolsInstance.get('/token/pools', {
-        params: { onchainID },
-        timeout: 10000,
-        headers: {
-          Accept: 'application/json',
-        },
-      });
-
-      if (response.data && Array.isArray(response.data) && response.data.length > 0) {
-        return response.data[0];
-      }
-
-      return null;
-    } catch (error) {
-      this.logger.warn(`Failed to fetch LP pool data from TapTools: ${error.message}`);
-      return null;
-    }
-  }
-
-  /**
    * Fetch LP token total supply from Blockfrost
    * @param lpTokenUnit - Full LP token unit (policyId + assetName in hex)
    * @returns Total supply or null
@@ -1696,18 +1663,126 @@ export class TaptoolsService {
   }
 
   /**
+   * Calculate LP token price from VyFi pool data
+   * Used as fallback when TapTools doesn't have the pool
+   * @param tokenAUnit - TokenA unit (hex)
+   * @param tokenBUnit - TokenB unit (hex or empty for ADA)
+   * @param lpTokenUnit - Full LP token unit for supply lookup
+   * @returns LP token price in ADA per normalized unit
+   */
+  private async calculateLpTokenPriceFromVyFi(
+    tokenAUnit: string,
+    tokenBUnit: string,
+    lpTokenUnit: string
+  ): Promise<number | null> {
+    if (!this.vyfiService) {
+      this.logger.warn('VyfiService not available for LP price calculation');
+      return null;
+    }
+
+    try {
+      // Convert empty tokenB to 'lovelace' for VyFi API
+      const tokenBQuery = !tokenBUnit || tokenBUnit === '' ? 'lovelace' : tokenBUnit;
+
+      const poolData = await this.vyfiService.getVyFiPoolData(tokenAUnit, tokenBQuery);
+      if (!poolData) {
+        this.logger.warn(`No VyFi pool found for ${tokenAUnit}/${tokenBQuery}`);
+        return null;
+      }
+
+      const totalSupply = await this.fetchLpTokenTotalSupply(lpTokenUnit);
+      if (!totalSupply || totalSupply <= 0 || !Number.isSafeInteger(totalSupply)) {
+        this.logger.warn(`Invalid/unsafe total supply for LP token ${lpTokenUnit}: ${totalSupply}`);
+        return null;
+      }
+
+      // VyFi returns quantities in base units, normalize them
+      const tokenALocked = poolData.tokenAQuantity;
+      const tokenBLocked = poolData.tokenBQuantity;
+
+      this.logger.debug(
+        `VyFi pool data - tokenALocked: ${tokenALocked}, tokenBLocked: ${tokenBLocked}, lpSupply: ${totalSupply}`
+      );
+
+      // Get token decimals from Blockfrost
+      let tokenADecimals = 6; // Default to 6
+      let tokenBDecimals = 6; // Default to 6 (ADA standard)
+
+      try {
+        const tokenAMetadata = await this.blockfrost.assetsById(tokenAUnit);
+        tokenADecimals = tokenAMetadata.metadata?.decimals ?? 6;
+      } catch (error) {
+        this.logger.warn(`Failed to fetch decimals for tokenA ${tokenAUnit}, using default 6`);
+      }
+
+      // TokenB decimals
+      const isTokenBAda = !tokenBUnit || tokenBUnit === '' || tokenBUnit === 'lovelace';
+      if (!isTokenBAda) {
+        try {
+          const tokenBMetadata = await this.blockfrost.assetsById(tokenBUnit);
+          tokenBDecimals = tokenBMetadata.metadata?.decimals ?? 6;
+        } catch (error) {
+          this.logger.warn(`Failed to fetch decimals for tokenB ${tokenBUnit}, using default 6`);
+        }
+      }
+
+      // Get token prices
+      let tokenAPrice = 0;
+      let tokenBPrice = 0;
+
+      // TokenB is ADA if tokenBUnit is empty or 'lovelace'
+      if (isTokenBAda) {
+        tokenBPrice = 1;
+      } else {
+        tokenBPrice = (await this.dexHunterPricingService.getTokenPrice(tokenBUnit)) || 0;
+      }
+
+      // TokenA price (could be another LP token!)
+      tokenAPrice = (await this.dexHunterPricingService.getTokenPrice(tokenAUnit)) || 0;
+
+      // Calculate TVL
+      // VyFi returns quantities in base units, normalize using actual decimals from Blockfrost
+      const tokenANormalized = tokenALocked / Math.pow(10, tokenADecimals);
+      const tokenBNormalized = tokenBLocked / Math.pow(10, tokenBDecimals);
+
+      const tvl = tokenANormalized * tokenAPrice + tokenBNormalized * tokenBPrice;
+      const lpTokenPrice = tvl / totalSupply;
+
+      // this.logger.debug(
+      //   `VyFi LP price calculation - tokenAPrice: ${tokenAPrice} (decimals: ${tokenADecimals}), tokenBPrice: ${tokenBPrice} (decimals: ${tokenBDecimals}), TVL: ${tvl}, LP price: ${lpTokenPrice}`
+      // );
+
+      return lpTokenPrice;
+    } catch (error) {
+      this.logger.error(`Failed to calculate LP price from VyFi: ${error.message}`, error);
+      return null;
+    }
+  }
+
+  /**
    * Calculate LP token price dynamically from pool TVL
    * Formula: LP Token Price = TVL / Total LP Token Supply
    * TVL = (tokenALocked * tokenAPrice) + (tokenBLocked * tokenBPrice)
    *
-   * @param onchainID - Pool onchain ID
+   * Falls back to VyFi API if TapTools doesn't have the pool data
+   *
+   * @param onchainID - Pool onchain ID (can be VyFi onchain ID format)
+   * @param lpTokenUnit - Optional: Full LP token unit to enable VyFi fallback
    * @returns LP token price in ADA per normalized unit
    */
-  private async calculateLpTokenPrice(onchainID: string): Promise<number | null> {
+  private async calculateLpTokenPrice(onchainID: string, lpTokenUnit?: string): Promise<number | null> {
     try {
-      const poolData = await this.fetchLpPoolData(onchainID);
+      const poolData = await this.tapToolsClient.getPoolByOnchainId(onchainID);
       if (!poolData || !poolData.lpTokenUnit) {
-        this.logger.warn(`No pool data found for onchain ID ${onchainID}`);
+        this.logger.warn(`No pool data found in TapTools for onchain ID ${onchainID}`);
+
+        // VyFi fallback: when onchainID is encoded as "tokenAUnit:tokenBUnit"
+        if (lpTokenUnit && this.vyfiService && onchainID.includes(':')) {
+          this.logger.debug('Attempting VyFi fallback for LP price calculation');
+          const [tokenAUnit, tokenBUnit] = onchainID.split(':');
+          return this.calculateLpTokenPriceFromVyFi(tokenAUnit, tokenBUnit || '', lpTokenUnit);
+        }
+
         return null;
       }
 
@@ -1773,9 +1848,44 @@ export class TaptoolsService {
           whitelistItem.valuation_method === AssetValuationMethod.LP_TOKEN_DYNAMIC &&
           whitelistItem.lp_pool_onchain_id
         ) {
-          const lpPrice = await this.calculateLpTokenPrice(whitelistItem.lp_pool_onchain_id);
+          let lpPrice: number | null = null;
+
+          // Check if this is a VyFi pool (format: tokenA:tokenB)
+          if (whitelistItem.lp_pool_onchain_id.includes(':')) {
+            // VyFi LP token: parse tokenA and tokenB from colon-separated format
+            const [tokenAUnit, tokenBUnit] = whitelistItem.lp_pool_onchain_id.split(':');
+
+            // Get the full LP token unit from assets table
+            const lpAsset = await this.assetRepository.findOne({
+              where: {
+                vault_id: vaultId,
+                policy_id: whitelistItem.policy_id,
+              },
+            });
+
+            if (lpAsset) {
+              const lpTokenUnit = lpAsset.policy_id + lpAsset.asset_id;
+
+              this.logger.debug(
+                `VyFi LP token detected for ${whitelistItem.policy_id}: tokenA=${tokenAUnit}, tokenB=${tokenBUnit}, lpUnit=${lpTokenUnit}`
+              );
+
+              lpPrice = await this.calculateLpTokenPriceFromVyFi(tokenAUnit, tokenBUnit || '', lpTokenUnit);
+            } else {
+              this.logger.warn(
+                `VyFi LP token ${whitelistItem.policy_id} not found in vault ${vaultId} assets - cannot calculate price`
+              );
+            }
+          } else {
+            // TapTools LP token: use onchainID directly
+            lpPrice = await this.calculateLpTokenPrice(whitelistItem.lp_pool_onchain_id);
+          }
+
           if (lpPrice !== null && lpPrice !== undefined && Number.isFinite(lpPrice)) {
             customPriceMap.set(whitelistItem.policy_id, lpPrice);
+            // this.logger.debug(`LP price for ${whitelistItem.policy_id}: ${lpPrice} ADA`);
+          } else {
+            this.logger.warn(`Failed to calculate LP price for ${whitelistItem.policy_id}`);
           }
         }
       }
@@ -2129,38 +2239,6 @@ export class TaptoolsService {
 
     // 5. If quantity > 1 and no NFT indicators, it's a fungible token
     return false;
-  }
-
-  public async getTokenPools(assetId: string): Promise<TapToolsTokenPoolDto[]> {
-    try {
-      const tapToolsResponse = await this.axiosTapToolsInstance.get<TapToolsTokenPoolDto[]>(
-        `/token/pools?unit=${encodeURIComponent(assetId)}`
-      );
-
-      return tapToolsResponse.data;
-    } catch (error: unknown) {
-      if (axios.isAxiosError(error)) {
-        const status = error.response?.status;
-        const errorData = error.response?.data as any;
-        const upstreamMessage =
-          (typeof errorData === 'string' ? errorData : errorData?.message) ?? error.message ?? 'Unknown error';
-
-        this.logger.error(
-          `Failed to fetch token pools for asset ${assetId} from TapTools (status: ${status ?? 'unknown'}): ${upstreamMessage}`
-        );
-
-        if (status) {
-          throw new HttpException(`TapTools error: ${upstreamMessage}`, status);
-        }
-
-        // No HTTP status available (network error, timeout, etc.)
-        throw new HttpException('Failed to reach TapTools service', 502);
-      }
-
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.logger.error(`Failed to fetch token pools for asset ${assetId}: ${errorMessage}`);
-      throw new HttpException('Failed to fetch token pools from TapTools', 502);
-    }
   }
 
   public invalidateWalletCache(walletAddress: string): void {

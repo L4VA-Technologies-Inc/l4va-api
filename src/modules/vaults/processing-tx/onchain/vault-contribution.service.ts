@@ -391,7 +391,14 @@ export class VaultContributionService {
    * Note: Quantities in metadata are raw blockchain values. For limit checking, we need decimal-adjusted quantities.
    */
   async validateContributionLimits(transaction: Transaction, vault: Vault): Promise<void> {
-    const contributingAssets = (transaction.metadata as any[]) || [];
+    // Handle metadata structure for acquire transactions
+    // New format: { assets: [...] }
+    // Old format: [...] (array directly)
+    let contributingAssets = (transaction.metadata as any[]) || [];
+    if (transaction.type === TransactionType.acquire && transaction.metadata && !Array.isArray(transaction.metadata)) {
+      contributingAssets = (transaction.metadata as any).assets || [];
+    }
+
     // Count actual asset quantities: NFTs = 1 each, FTs = raw quantity converted to decimal
     const contributingAssetCount = contributingAssets.reduce((sum, asset: any) => {
       const rawQuantity = Number(asset?.quantity);

@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -30,6 +31,7 @@ export interface SystemSettingsData {
   governance_fee_proposal_burning: number;
   governance_fee_proposal_marketplace_action: number;
   governance_fee_proposal_expansion: number;
+  governance_fee_proposal_asset_whitelist_update: number;
   governance_fee_voting: number; // Fee per vote
   // Voting duration constraints (in milliseconds)
   min_voting_duration: number;
@@ -65,6 +67,7 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   governance_fee_proposal_burning: 3000000, // 3 ADA
   governance_fee_proposal_marketplace_action: 5000000, // 5 ADA
   governance_fee_proposal_expansion: 10000000, // 10 ADA
+  governance_fee_proposal_asset_whitelist_update: 5000000, // 5 ADA
   governance_fee_voting: 0, // No voting fee by default
   // Voting duration constraints (in milliseconds)
   min_voting_duration: 86400000, // 24 hours in ms
@@ -102,11 +105,15 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
 export class SystemSettingsService implements OnModuleInit {
   private readonly logger = new Logger(SystemSettingsService.name);
   private settings: SystemSettingsData = { ...DEFAULT_SETTINGS };
+  private readonly isMainnet: boolean;
 
   constructor(
     @InjectRepository(SystemSettings)
-    private readonly systemSettingsRepository: Repository<SystemSettings>
-  ) {}
+    private readonly systemSettingsRepository: Repository<SystemSettings>,
+    private readonly configService: ConfigService
+  ) {
+    this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+  }
 
   async onModuleInit(): Promise<void> {
     await this.loadSettings();
@@ -229,16 +236,39 @@ export class SystemSettingsService implements OnModuleInit {
     return this.settings.governance_fee_proposal_expansion || 0;
   }
 
+  get governanceFeeProposalAssetWhitelistUpdate(): number {
+    return this.settings.governance_fee_proposal_asset_whitelist_update || 0;
+  }
+
   get governanceFeeVoting(): number {
     return this.settings.governance_fee_voting || 0;
   }
 
   get minVotingDuration(): number {
-    return this.settings.min_voting_duration || 86400000; // 24 hours default
+    // Environment-based: 5 min (preprod) / 1 day (mainnet)
+    // Always use environment-based value (database setting is ignored for this)
+    return this.isMainnet ? 86400000 : 300000;
   }
 
   get maxVotingDuration(): number {
     return this.settings.max_voting_duration || 259200000; // 3 days default
+  }
+
+  get minContributionDuration(): number {
+    // Environment-based: 10 min (preprod) / 5 days (mainnet)
+    // Always use environment-based value
+    return this.isMainnet ? 432000000 : 600000;
+  }
+
+  get minAcquireWindowDuration(): number {
+    // Environment-based: 10 min (preprod) / 5 days (mainnet)
+    // Always use environment-based value
+    return this.isMainnet ? 432000000 : 600000;
+  }
+
+  get minExpansionDuration(): number {
+    // 1 day minimum for both environments
+    return 86400000;
   }
 
   get priceMaxDeviationPercentNft(): number {
@@ -301,6 +331,10 @@ export class SystemSettingsService implements OnModuleInit {
         return this.governanceFeeProposalMarketplaceAction;
       case 'expansion':
         return this.governanceFeeProposalExpansion;
+      case 'acquire_expansion':
+        return this.governanceFeeProposalExpansion;
+      case 'asset_whitelist_update':
+        return this.governanceFeeProposalAssetWhitelistUpdate;
       default:
         this.logger.warn(`Unknown proposal type: "${proposalType}" - returning 0`);
         return 0;

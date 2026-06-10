@@ -7,10 +7,12 @@ import { AlertsModule } from '../alerts/alerts.module';
 import { TransactionsModule } from '../vaults/processing-tx/offchain-tx/transactions.module';
 
 import { AutomatedDistributionService } from './automated-distribution.service';
+import { AcquireOnlyExtractionBuilder } from './builders/acquire-only-extraction.builder';
 import { AcquirerExtractionBuilder } from './builders/acquirer-extraction.builder';
 import { ContributorPaymentBuilder } from './builders/contributor-payment.builder';
 import { DistributionCalculationModule } from './distribution-calculation.module';
 import { MultiBatchDistributionService } from './multi-batch-distribution.service';
+import { AcquireOnlyDistributionOrchestrator } from './orchestrators/acquire-only-distribution.orchestrator';
 import { AcquirerDistributionOrchestrator } from './orchestrators/acquirer-distribution.orchestrator';
 import { ContributorDistributionOrchestrator } from './orchestrators/contributor-distribution.orchestrator';
 
@@ -44,8 +46,10 @@ import { VyfiModule } from '@/modules/vyfi/vyfi.module';
     AutomatedDistributionService,
     MultiBatchDistributionService,
     AcquirerExtractionBuilder,
+    AcquireOnlyExtractionBuilder,
     ContributorPaymentBuilder,
     AcquirerDistributionOrchestrator,
+    AcquireOnlyDistributionOrchestrator,
     ContributorDistributionOrchestrator,
     {
       provide: BlockFrostAPI,

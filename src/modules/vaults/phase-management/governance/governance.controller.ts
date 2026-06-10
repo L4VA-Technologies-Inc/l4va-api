@@ -249,6 +249,7 @@ export class GovernanceController {
       proposalFeeBurning: this.governanceFeeService.getProposalFee('burning'),
       proposalFeeMarketplaceAction: this.governanceFeeService.getProposalFee('marketplace_action'),
       proposalFeeExpansion: this.governanceFeeService.getProposalFee('expansion'),
+      proposalFeeAssetWhitelistUpdate: this.governanceFeeService.getProposalFee('asset_whitelist_update'),
       votingFee: this.governanceFeeService.getVotingFee(),
     };
   }

@@ -11,11 +11,12 @@ import { ExecType, MarketplaceActionDto } from './dto/create-proposal.req';
 import { ExpansionService } from './expansion.service';
 import { GovernanceRefundService } from './governance-refund.service';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
+import { SnapshotService } from './snapshot.service';
 import { TerminationService } from './termination.service';
 import { VoteCountingService } from './vote-counting.service';
 
 import { Asset } from '@/database/asset.entity';
-import { Claim } from '@/database/claim.entity';
+import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
@@ -27,7 +28,6 @@ import { TreasuryExtractionService } from '@/modules/vaults/treasure/treasury-ex
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
 import { WayUpService } from '@/modules/wayup/wayup.service';
 import { AssetOriginType, AssetStatus } from '@/types/asset.types';
-import { ClaimType } from '@/types/claim.types';
 import { ProposalStatus, ProposalType } from '@/types/proposal.types';
 import { RewardActivityType } from '@/types/rewards.types';
 import { TransactionStatus } from '@/types/transaction.types';
@@ -50,12 +50,12 @@ export class GovernanceExecutionService {
   constructor(
     @InjectRepository(Proposal)
     private readonly proposalRepository: Repository<Proposal>,
-    @InjectRepository(Claim)
-    private readonly claimRepository: Repository<Claim>,
     @InjectRepository(Asset)
     private readonly assetRepository: Repository<Asset>,
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
+    @InjectRepository(AssetsWhitelistEntity)
+    private readonly assetsWhitelistRepository: Repository<AssetsWhitelistEntity>,
     private readonly eventEmitter: EventEmitter2,
     private readonly assetsService: AssetsService,
     private readonly wayUpService: WayUpService,
@@ -71,7 +71,8 @@ export class GovernanceExecutionService {
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly treasuryWalletService: TreasuryWalletService,
     private readonly governanceRefundService: GovernanceRefundService,
-    private readonly rewardEventProducer: RewardEventProducer
+    private readonly rewardEventProducer: RewardEventProducer,
+    private readonly snapshotService: SnapshotService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
@@ -385,14 +386,9 @@ export class GovernanceExecutionService {
       );
       const isSuccessful = voteResult.isSuccessful;
 
-      const finalContributorClaims = await this.claimRepository.find({
-        where: {
-          vault: { id: proposal.vaultId },
-          type: ClaimType.CONTRIBUTOR,
-        },
-        relations: ['transaction', 'transaction.assets'],
-        order: { created_at: 'ASC' },
-      });
+      const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(
+        proposal.snapshot?.addressBalances
+      );
 
       // If proposal is not successful, move to REJECTED
       if (!isSuccessful) {
@@ -409,7 +405,7 @@ export class GovernanceExecutionService {
           vaultName: proposal.vault?.name || null,
           proposalName: proposal.title,
           creatorId: proposal.creatorId,
-          tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+          tokenHolderIds,
         });
 
         const rejectionReason = !voteResult.meetsParticipationThreshold
@@ -460,6 +456,7 @@ export class GovernanceExecutionService {
         .leftJoinAndSelect('proposal.vault', 'vault')
         .leftJoinAndSelect('vault.owner', 'owner')
         .leftJoinAndSelect('vault.treasury_wallet', 'treasury_wallet')
+        .leftJoinAndSelect('proposal.snapshot', 'snapshot')
         .where('proposal.id = :proposalId', { proposalId })
         .andWhere('proposal.status = :status', { status: ProposalStatus.PASSED })
         .select([
@@ -475,6 +472,7 @@ export class GovernanceExecutionService {
           'vault.name',
           'treasury_wallet.treasury_address',
           'owner.address',
+          'snapshot.addressBalances',
         ])
         .getOne();
 
@@ -483,14 +481,9 @@ export class GovernanceExecutionService {
         return;
       }
 
-      const finalContributorClaims = await this.claimRepository.find({
-        where: {
-          vault: { id: proposal.vaultId },
-          type: ClaimType.CONTRIBUTOR,
-        },
-        relations: ['transaction', 'transaction.assets'],
-        order: { created_at: 'ASC' },
-      });
+      const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(
+        proposal.snapshot?.addressBalances
+      );
 
       // Execute proposal actions
       const executed = await this.executeProposalActions(proposal);
@@ -515,7 +508,7 @@ export class GovernanceExecutionService {
           vaultName: proposal.vault?.name || null,
           proposalName: proposal.title,
           creatorId: proposal.creatorId,
-          tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+          tokenHolderIds,
         });
 
         this.logger.log(`Proposal ${proposal.id}: EXECUTED successfully`);
@@ -590,15 +583,6 @@ export class GovernanceExecutionService {
   }
 
   private async executeProposalActions(proposal: Proposal): Promise<boolean> {
-    const finalContributorClaims = await this.claimRepository.find({
-      where: {
-        vault: { id: proposal.vaultId },
-        type: ClaimType.CONTRIBUTOR,
-      },
-      relations: ['transaction', 'transaction.assets'],
-      order: { created_at: 'ASC' },
-    });
-
     // Get vault to check status for extraction-based proposals
     const vault = await this.vaultRepository.findOne({
       where: { id: proposal.vaultId },
@@ -610,19 +594,21 @@ export class GovernanceExecutionService {
       return false;
     }
 
-    // Proposals that involve asset extraction from vault can only execute when vault is LOCKED
+    // Proposals that require vault to be LOCKED can only execute in that status
     // During EXPANSION, assets are being added and extraction would conflict with the expansion mechanics
-    const extractionProposalTypes = [
+    // Asset whitelist updates also require LOCKED status to ensure consistency with vault state
+    const lockedOnlyProposalTypes = [
       ProposalType.MARKETPLACE_ACTION,
       ProposalType.BUY_SELL,
       ProposalType.BURNING,
       ProposalType.TERMINATION,
+      ProposalType.ASSET_WHITELIST_UPDATE,
     ];
 
-    if (extractionProposalTypes.includes(proposal.proposalType)) {
+    if (lockedOnlyProposalTypes.includes(proposal.proposalType)) {
       if (vault.vault_status !== VaultStatus.locked) {
         this.logger.warn(
-          `Cannot execute ${proposal.proposalType} proposal ${proposal.id}: Vault must be in LOCKED status for asset extraction. Current status: ${vault.vault_status}`
+          `Cannot execute ${proposal.proposalType} proposal ${proposal.id}: Vault must be in LOCKED status. Current status: ${vault.vault_status}`
         );
         // Store error in metadata so it can be retried later
         await this.proposalRepository.update(
@@ -666,6 +652,12 @@ export class GovernanceExecutionService {
         case ProposalType.EXPANSION:
           return await this.executeExpansionProposal(proposal);
 
+        case ProposalType.ASSET_WHITELIST_UPDATE:
+          return await this.executeAssetWhitelistUpdateProposal(proposal);
+
+        case ProposalType.ACQUIRE_EXPANSION:
+          return await this.executeAcquireExpansionProposal(proposal);
+
         default:
           this.logger.warn(`Unknown proposal type: ${proposal.proposalType}`);
           return false;
@@ -685,13 +677,16 @@ export class GovernanceExecutionService {
       }
 
       // For other errors, store them and emit failure event
+      const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(
+        proposal.snapshot?.addressBalances
+      );
       this.eventEmitter.emit('proposal.failed', {
         address: proposal.vault?.owner?.address || null,
         vaultId: proposal.vaultId,
         vaultName: proposal.vault?.name || null,
         proposalName: proposal.title,
         creatorId: proposal.creatorId,
-        tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+        tokenHolderIds,
       });
       this.logger.error(`Error executing actions for proposal ${proposal.id}: ${error.message}`, error.stack);
       return false;
@@ -2102,16 +2097,6 @@ export class GovernanceExecutionService {
         // Store execution error before rejecting so users can see the reason
         await this.storeExecutionError(proposal, new Error(rejectionReason));
 
-        // Get contributor claims for event
-        const finalContributorClaims = await this.claimRepository.find({
-          where: {
-            vault: { id: proposal.vaultId },
-            type: ClaimType.CONTRIBUTOR,
-          },
-          relations: ['transaction', 'transaction.assets'],
-          order: { created_at: 'ASC' },
-        });
-
         // Move proposal to REJECTED status
         await this.proposalRepository.update({ id: proposal.id }, { status: ProposalStatus.REJECTED });
 
@@ -2120,13 +2105,16 @@ export class GovernanceExecutionService {
           throwOnFailure: false,
         });
 
+        const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromSnapshot(
+          proposal.snapshot?.addressBalances
+        );
         this.eventEmitter.emit('proposal.rejected', {
           address: proposal.vault?.owner?.address || null,
           vaultId: proposal.vaultId,
           vaultName: proposal.vault?.name || null,
           proposalName: proposal.title,
           creatorId: proposal.creatorId,
-          tokenHolderIds: [...new Set(finalContributorClaims.map(c => c.user_id))],
+          tokenHolderIds,
           reason: rejectionReason,
         });
 
@@ -2223,6 +2211,91 @@ export class GovernanceExecutionService {
   }
 
   /**
+   * Execute ASSET_WHITELIST_UPDATE proposal actions
+   * Inserts new policy IDs into the assets_whitelist table for the vault
+   * This is an off-chain only operation - no blockchain transaction is submitted
+   */
+  async executeAssetWhitelistUpdateProposal(proposal: Proposal): Promise<boolean> {
+    const whitelistItems = proposal.metadata?.assetsWhitelist;
+
+    if (!whitelistItems || whitelistItems.length === 0) {
+      const err = new Error(
+        'This proposal has no assetsWhitelist payload in metadata; it cannot be executed as an asset whitelist update.'
+      );
+      this.logger.warn(`Asset whitelist update proposal ${proposal.id} has no whitelist entries in metadata`);
+      await this.storeExecutionError(proposal, err);
+      throw err;
+    }
+
+    const vault: Pick<Vault, 'id' | 'is_expandable_asset_whitelist'> = await this.vaultRepository.findOne({
+      where: { id: proposal.vaultId },
+      select: ['id', 'is_expandable_asset_whitelist'],
+    });
+
+    if (!vault) {
+      const err = new Error(`Vault ${proposal.vaultId} not found`);
+      await this.storeExecutionError(proposal, err);
+      throw err;
+    }
+
+    if (!vault.is_expandable_asset_whitelist) {
+      const err = new Error(
+        'This vault is not marked as expandable; asset whitelist update proposals cannot be executed.'
+      );
+      await this.storeExecutionError(proposal, err);
+      throw err;
+    }
+
+    let insertedCount = 0;
+
+    try {
+      for (const item of whitelistItems) {
+        const result = await this.assetsWhitelistRepository
+          .createQueryBuilder()
+          .insert()
+          .values({
+            vault: { id: vault.id },
+            policy_id: item.policyId,
+            collection_name: item.collectionName ?? null,
+            valuation_method: item.valuationMethod || 'market',
+            custom_price_ada: item.customPriceAda ?? null,
+            lp_pool_onchain_id: item.lpPoolOnchainId ?? null,
+          })
+          .orIgnore()
+          .execute();
+
+        if (result.identifiers.length > 0) {
+          insertedCount += 1;
+        }
+      }
+    } catch (error) {
+      await this.storeExecutionError(proposal, error);
+      throw error;
+    }
+
+    if (insertedCount === 0) {
+      this.logger.warn(
+        `Asset whitelist update proposal ${proposal.id} did not insert any new whitelist entries (policies may already exist in whitelist)`
+      );
+    } else {
+      this.logger.log(
+        `Asset whitelist update proposal ${proposal.id} successfully inserted ${insertedCount} new policy ID(s) into whitelist`
+      );
+    }
+
+    return true;
+  }
+
+  async executeAcquireExpansionProposal(proposal: Proposal): Promise<boolean> {
+    try {
+      return await this.expansionService.executeAcquireExpansion(proposal);
+    } catch (error) {
+      await this.storeExecutionError(proposal, error);
+      throw error;
+    }
+  }
+
+  /**
    * Store execution error in proposal metadata
    * Tracks error details including message, timestamp, error code, user-friendly message, and attempt count
    */
@@ -2269,6 +2342,14 @@ export class GovernanceExecutionService {
    */
   private getUserFriendlyErrorMessage(errorCode: string): string {
     const errorMessages: Record<string, string> = {
+      VAULT_NOT_EXPANDABLE:
+        'This vault does not allow whitelist expansion. Asset whitelist update proposals cannot run on this vault.',
+      WHITELIST_METADATA_MISSING:
+        'This proposal is missing whitelist data in metadata, so it cannot be executed. Recreate the proposal if needed.',
+      WHITELIST_NO_NEW_ENTRIES:
+        'Every policy in this proposal was already on the vault whitelist, so nothing was left to apply.',
+      WHITELIST_DUPLICATE_KEY:
+        'A database constraint blocked a whitelist row (duplicate policy for this vault). Contact support if this persists.',
       INSUFFICIENT_FUNDS: 'Insufficient ADA in treasury to cover transaction fees.',
       ASSET_NOT_AVAILABLE: 'Assets no longer available or already sold.',
       ASSET_ALREADY_LISTED: 'Assets already listed on marketplace. Unlist them first.',
@@ -2297,6 +2378,29 @@ export class GovernanceExecutionService {
   private categorizeError(error: Error): string {
     const errorMessage = error.message || '';
     const errorStack = error.stack || '';
+
+    // Asset whitelist update (execution-time validation)
+    if (errorMessage.includes('has no assetsWhitelist payload')) {
+      return 'WHITELIST_METADATA_MISSING';
+    }
+
+    if (
+      errorMessage.includes('not marked as expandable') ||
+      errorMessage.toLowerCase().includes('whitelist update proposals cannot be executed')
+    ) {
+      return 'VAULT_NOT_EXPANDABLE';
+    }
+
+    if (
+      errorMessage.includes('No new whitelist rows were inserted') ||
+      errorMessage.includes('already exists for this vault')
+    ) {
+      return 'WHITELIST_NO_NEW_ENTRIES';
+    }
+
+    if (errorMessage.includes('23505') || errorMessage.toLowerCase().includes('duplicate key')) {
+      return 'WHITELIST_DUPLICATE_KEY';
+    }
 
     // Insufficient funds errors
     if (

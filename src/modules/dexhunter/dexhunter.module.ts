@@ -6,7 +6,7 @@ import { AssetsModule } from '../vaults/assets/assets.module';
 import { BlockchainModule } from '../vaults/processing-tx/onchain/blockchain.module';
 import { TreasureWalletModule } from '../vaults/treasure/treasure-wallet.module';
 
-import { DexHunterPricingService } from './dexhunter-pricing.service';
+import { DexHunterPricingModule } from './dexhunter-pricing.module';
 import { DexHunterController } from './dexhunter.controller';
 import { DexHunterService } from './dexhunter.service';
 
@@ -22,9 +22,10 @@ import { TransactionsModule } from '@/modules/vaults/processing-tx/offchain-tx/t
     TreasureWalletModule,
     TransactionsModule,
     HttpModule,
+    DexHunterPricingModule,
   ],
   controllers: [DexHunterController],
-  providers: [DexHunterService, DexHunterPricingService],
-  exports: [DexHunterService, DexHunterPricingService],
+  providers: [DexHunterService],
+  exports: [DexHunterService, DexHunterPricingModule],
 })
 export class DexHunterModule {}

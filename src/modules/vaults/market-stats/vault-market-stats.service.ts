@@ -13,7 +13,7 @@ import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.s
 import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { AssetType } from '@/types/asset.types';
-import { VaultStatus } from '@/types/vault.types';
+import { VAULT_STATUSES_WITH_POTENTIAL_LP } from '@/types/vault.types';
 
 /**
  * Service responsible for fetching and updating vault token market statistics from external APIs
@@ -29,10 +29,10 @@ import { VaultStatus } from '@/types/vault.types';
  *    - FDV, vt_price, market cap, price changes (1h, 24h, 7d, 30d)
  *    - Historical OHLCV data for gains calculations
  *
- * Updates both locked and expansion vaults (including community-created LPs)
+ * Updates locked, expansion, and acquire_expansion vaults (including community-created LPs)
  *
  * IMPORTANT - LP Vault Gains Calculation:
- * For locked vaults with active LP, user gains are calculated using full historical price data:
+ * For locked, expansion, and acquire_expansion vaults with active LP, user gains are calculated using full historical price data:
  *
  * CALCULATION METHOD (Historical OHLCV Data):
  * - Use getTokenFullHistory() to fetch complete OHLCV data from LP inception
@@ -104,7 +104,7 @@ export class VaultMarketStatsService {
    * 1. DexHunter API: Always called first to get totalAdaLiquidity across all DEX pools
    * 2. Taptools API: Called if DexHunter confirms liquidity exists (for OHLCV/price data)
    *
-   * Processes both locked and expansion vaults (including those without LP configuration)
+   * Processes locked, expansion, and acquire_expansion vaults (including those without LP configuration)
    * Supports community-created LPs that weren't configured during vault creation
    */
   async updateVaultTokensMarketStats(): Promise<void> {
@@ -129,7 +129,9 @@ export class VaultMarketStatsService {
         'v.has_active_lp',
         'v.lp_last_checked',
       ])
-      .where('v.vault_status IN (:...statuses)', { statuses: [VaultStatus.locked, VaultStatus.expansion] })
+      .where('v.vault_status IN (:...statuses)', {
+        statuses: VAULT_STATUSES_WITH_POTENTIAL_LP,
+      })
       .andWhere('v.script_hash IS NOT NULL')
       .andWhere('v.asset_vault_name IS NOT NULL')
       .getMany();
