@@ -42,7 +42,7 @@ export class DraftVaultsService {
     @InjectRepository(TagEntity)
     private readonly tagsRepository: Repository<TagEntity>,
     @InjectRepository(TokenVerification)
-    private readonly tokenVerificationRepo: Repository<TokenVerification>
+    private readonly tokenVerificationRepository: Repository<TokenVerification>
   ) {}
 
   async getMyDraftVaults(
@@ -319,7 +319,7 @@ export class DraftVaultsService {
         const policyIds = data.assetsWhitelist.map(item => item.policyId).filter(Boolean);
         const lpTokensData =
           policyIds.length > 0
-            ? await this.tokenVerificationRepo.find({
+            ? await this.tokenVerificationRepository.find({
                 where: { policy_id: In(policyIds) },
                 select: ['policy_id', 'lp_pool_onchain_id', 'is_lp_token'],
               })

@@ -17,7 +17,7 @@ export class TokenVerificationRefreshService {
 
   constructor(
     @InjectRepository(TokenVerification)
-    private readonly tokenVerificationRepo: Repository<TokenVerification>,
+    private readonly tokenVerificationRepository: Repository<TokenVerification>,
     private readonly dexHunterService: DexHunterService,
     private readonly wayUpPricingService: WayUpPricingService,
     private readonly configService: ConfigService
@@ -31,7 +31,7 @@ export class TokenVerificationRefreshService {
       return;
     }
 
-    const pending = await this.tokenVerificationRepo.find({
+    const pending = await this.tokenVerificationRepository.find({
       where: { is_verified: false },
       order: { updated_at: 'ASC' },
       take: BATCH_SIZE,
@@ -79,7 +79,7 @@ export class TokenVerificationRefreshService {
       row.is_verified = dexHunterData.isVerified;
       row.platform = VerificationPlatform.DEXHUNTER;
       if (this.hasChanged(prev, row)) {
-        await this.tokenVerificationRepo.save(row);
+        await this.tokenVerificationRepository.save(row);
         return true;
       }
       return false;
@@ -94,7 +94,7 @@ export class TokenVerificationRefreshService {
       row.is_verified = wayupData.isVerified;
       row.platform = VerificationPlatform.WAYUP;
       if (this.hasChanged(prev, row)) {
-        await this.tokenVerificationRepo.save(row);
+        await this.tokenVerificationRepository.save(row);
         return true;
       }
       return false;
