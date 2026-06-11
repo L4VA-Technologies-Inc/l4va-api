@@ -434,6 +434,7 @@ export class TransactionsService {
         'transaction.amount',
         'transaction.metadata',
         'transaction.tx_hash',
+        'transaction.is_expansion',
         'transaction.updated_at',
         'transaction.created_at',
         'transaction.vault_id',

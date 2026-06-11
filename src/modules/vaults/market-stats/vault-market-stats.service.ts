@@ -50,7 +50,7 @@ export class VaultMarketStatsService {
   private readonly isMainnet: boolean;
   private readonly axiosTapToolsInstance: AxiosInstance;
   private readonly ohlcvCache: NodeCache;
-  private readonly validOHLCVIntervals: readonly string[] = ['1h', '24h', '7d', '30d'];
+  private readonly validOHLCVIntervals: readonly string[] = ['1h', '1d', '1w', '1M'];
 
   constructor(
     @InjectRepository(Vault)
@@ -290,7 +290,7 @@ export class VaultMarketStatsService {
    *
    * @param scriptHash - is policyId for vault and its tokens
    * @param assetName - Token asset name (hex)
-   * @param interval - Time interval (1h, 24h, 7d, 30d, 1d)
+   * @param interval - Time interval (1h, 1d, 1w, 1M)
    * @param numIntervals - Optional number of intervals to return (omit for full history)
    * @param cacheKey - Cache key for storing/retrieving cached data
    * @returns OHLCV data array or null if unavailable

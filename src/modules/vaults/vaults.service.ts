@@ -118,7 +118,7 @@ export class VaultsService {
     @InjectRepository(Snapshot)
     private readonly snapshotRepository: Repository<Snapshot>,
     @InjectRepository(TokenVerification)
-    private readonly tokenVerificationRepo: Repository<TokenVerification>,
+    private readonly tokenVerificationRepository: Repository<TokenVerification>,
     private readonly gcsService: GoogleCloudStorageService,
     private readonly vaultContractService: VaultManagingService,
     private readonly blockchainService: BlockchainService,
@@ -415,7 +415,7 @@ export class VaultsService {
       const policyIds = uniquePolicyIds.map(item => item.policyId).filter(Boolean);
       const lpTokensData =
         policyIds.length > 0
-          ? await this.tokenVerificationRepo.find({
+          ? await this.tokenVerificationRepository.find({
               where: { policy_id: In(policyIds) },
               select: ['policy_id', 'lp_pool_onchain_id', 'is_lp_token'],
             })
@@ -2226,7 +2226,7 @@ export class VaultsService {
     const { policyId, assetName } = collection;
 
     // Always check database first for manually registered tokens (including LP tokens)
-    const existing = await this.tokenVerificationRepo.findOne({
+    const existing = await this.tokenVerificationRepository.findOne({
       where: { policy_id: policyId },
       order: { updated_at: 'DESC' },
     });
@@ -2251,7 +2251,7 @@ export class VaultsService {
 
     const dexHunterData = await this.dexHunterService.fetchTokenVerification(tokenId);
     if (dexHunterData !== null) {
-      return await this.tokenVerificationRepo.save(
+      return await this.tokenVerificationRepository.save(
         Object.assign(new TokenVerification(), {
           policy_id: policyId,
           token_id: tokenId,
@@ -2265,7 +2265,7 @@ export class VaultsService {
     try {
       const adaAnvilData = await this.fetchCollectionInfoFromApi(policyId);
       if (!adaAnvilData.hasResults) {
-        return await this.tokenVerificationRepo.save(
+        return await this.tokenVerificationRepository.save(
           Object.assign(new TokenVerification(), {
             policy_id: policyId,
             token_id: null,
@@ -2275,7 +2275,7 @@ export class VaultsService {
           })
         );
       }
-      return await this.tokenVerificationRepo.save(
+      return await this.tokenVerificationRepository.save(
         Object.assign(new TokenVerification(), {
           policy_id: policyId,
           token_id: null,

@@ -22,7 +22,6 @@ import {
   WalletScoreDto,
   WalletVaultDetailsDto,
   WalletVaultTimelineDto,
-  WalletVaultsResponseDto,
 } from '../dto/rewards.dto';
 
 /**
@@ -118,14 +117,6 @@ export class RewardClaimProxy {
 
   async getWalletVaultReward(walletAddress: string, vaultId: string, epochId?: string): Promise<WalletVaultDetailsDto> {
     const url = `${this.rewardsBaseUrl}/api/v1/rewards/wallet/${walletAddress}/vault/${vaultId}${epochId ? `?epochId=${epochId}` : ''}`;
-    const { data } = await firstValueFrom(
-      this.httpService.get(url, { headers: { 'X-Internal-Service-Token': this.internalToken } })
-    );
-    return data;
-  }
-
-  async getWalletVaults(walletAddress: string, epochId?: string): Promise<WalletVaultsResponseDto> {
-    const url = `${this.rewardsBaseUrl}/api/v1/rewards/wallet/${walletAddress}/vaults${epochId ? `?epochId=${epochId}` : ''}`;
     const { data } = await firstValueFrom(
       this.httpService.get(url, { headers: { 'X-Internal-Service-Token': this.internalToken } })
     );
