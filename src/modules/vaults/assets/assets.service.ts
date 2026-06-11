@@ -737,6 +737,7 @@ export class AssetsService {
       {
         status: AssetStatus.EXTRACTED,
         origin_type: AssetOriginType.BOUGHT,
+        updated_at: new Date(),
         ...this.clearOfferListingFields(),
       }
     );
