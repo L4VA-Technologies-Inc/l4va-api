@@ -40,7 +40,8 @@ export interface MakeOfferInput {
  */
 export interface BuyNFTInput {
   policyId: string;
-  txHashIndex: string; // Format: txHash#outputIndex
+  /** Format: txHash#outputIndex */
+  txHashIndex: string;
   priceAda: number;
 }
 
