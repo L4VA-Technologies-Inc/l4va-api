@@ -709,21 +709,7 @@ export class AssetsService {
     );
   }
 
-  private clearOfferListingFields(): {
-    listing_market: null;
-    listing_price: null;
-    listing_tx_hash: null;
-    listed_at: null;
-  } {
-    return {
-      listing_market: null,
-      listing_price: null,
-      listing_tx_hash: null,
-      listed_at: null,
-    };
-  }
-
-  /** Offer accepted on WayUp — NFT is in treasury. */
+  /** Offer accepted on WayUp by NFT owner — NFT is in treasury. */
   async markOffersAsAccepted(assetIds: string[]): Promise<void> {
     if (assetIds.length === 0) return;
 
@@ -738,12 +724,15 @@ export class AssetsService {
         status: AssetStatus.EXTRACTED,
         origin_type: AssetOriginType.BOUGHT,
         updated_at: new Date(),
-        ...this.clearOfferListingFields(),
+        listing_market: null,
+        listing_price: null,
+        listing_tx_hash: null,
+        listed_at: null,
       }
     );
   }
 
-  /** Offer cancelled or rejected on WayUp (or via governance CANCEL_OFFER). */
+  /** Offer cancelled or rejected on WayUp by NFT owner (or via governance CANCEL_OFFER). */
   async markOffersAsCancelled(assetIds: string[]): Promise<void> {
     if (assetIds.length === 0) return;
 
@@ -758,7 +747,6 @@ export class AssetsService {
         status: AssetStatus.CANCEL_OFFER,
         deleted: true,
         updated_at: new Date(),
-        ...this.clearOfferListingFields(),
       }
     );
   }
