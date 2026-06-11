@@ -160,26 +160,6 @@ export interface WalletVaultDetailsDto {
   vestedReward: number;
 }
 
-export interface VaultBreakdownDto {
-  vaultId: string;
-  vaultName: string;
-  totalReward: number;
-  epochCount: number;
-  role: string;
-}
-
-export interface WalletVaultsResponseDto {
-  walletAddress: string;
-  epochId: string;
-  epochNumber: number;
-  totalReward: number;
-  totalRewardBeforeCap: number;
-  totalFinalReward: number;
-  wasCapped: boolean;
-  capDifference: number;
-  vaults: VaultBreakdownDto[];
-}
-
 export interface VaultTimelineItemDto {
   epochId: string;
   epochEnd: string;

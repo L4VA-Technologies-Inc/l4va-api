@@ -22,7 +22,6 @@ import {
   WalletScoreDto,
   WalletVaultDetailsDto,
   WalletVaultTimelineDto,
-  WalletVaultsResponseDto,
 } from './dto/rewards.dto';
 import { RewardClaimProxy } from './services/reward-claim-proxy.service';
 import { RewardEventProducer } from './services/reward-event-producer.service';
@@ -215,16 +214,6 @@ export class RewardsController {
   ): Promise<WalletVaultDetailsDto> {
     const walletAddress = req.user.address;
     return this.rewardClaimProxy.getWalletVaultReward(walletAddress, vaultId, epochId);
-  }
-
-  @UseGuards(AuthGuard)
-  @Get('me/vaults')
-  async getWalletVaults(
-    @Request() req: AuthRequest,
-    @Query('epochId') epochId?: string
-  ): Promise<WalletVaultsResponseDto> {
-    const walletAddress = req.user.address;
-    return this.rewardClaimProxy.getWalletVaults(walletAddress, epochId);
   }
 
   @UseGuards(AuthGuard)
