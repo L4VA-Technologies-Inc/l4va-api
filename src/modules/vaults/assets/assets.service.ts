@@ -750,10 +750,13 @@ export class AssetsService {
       {
         id: In(assetIds),
         status: AssetStatus.OFFERED,
+        origin_type: AssetOriginType.OFFERED,
         deleted: false,
       },
       {
         status: AssetStatus.CANCEL_OFFER,
+        deleted: true,
+        updated_at: new Date(),
         ...this.clearOfferListingFields(),
       }
     );

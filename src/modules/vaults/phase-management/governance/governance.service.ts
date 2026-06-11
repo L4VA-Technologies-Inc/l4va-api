@@ -631,6 +631,42 @@ export class GovernanceService {
               );
             }
           }
+
+          // Check that new OFFER actions don't conflict with existing CANCEL_OFFER proposals for
+          // the same NFT (identified by policy_id + asset_id). An active cancel-offer proposal
+          // means the vault is in the process of withdrawing a prior offer on that NFT — creating
+          // a new offer on the same NFT while cancellation is pending would cause conflicting
+          // on-chain operations.
+          if (requestedOfferAssetIds.length > 0) {
+            const existingCancelOfferDbAssetIds = existingActions
+              .filter((a: any) => a.exec === ExecType.CANCEL_OFFER)
+              .map((a: any) => a.assetId);
+
+            if (existingCancelOfferDbAssetIds.length > 0) {
+              const cancelOfferAssets = await this.assetRepository.find({
+                where: { id: In(existingCancelOfferDbAssetIds) },
+                select: ['id', 'policy_id', 'asset_id', 'name'],
+              });
+
+              for (const action of requestedActions.filter((a: any) => a.exec === ExecType.OFFER)) {
+                const policyId = action.assetId.length >= 56 ? action.assetId.slice(0, 56) : action.assetId;
+                const hexAssetName = action.assetId.length > 56 ? action.assetId.slice(56) : null;
+
+                const conflict = cancelOfferAssets.find(
+                  ca =>
+                    ca.policy_id.toLowerCase() === policyId.toLowerCase() &&
+                    (!hexAssetName || ca.asset_id.toLowerCase() === hexAssetName.toLowerCase())
+                );
+
+                if (conflict) {
+                  throw new BadRequestException(
+                    `Cannot create offer proposal. NFT "${conflict.name || policyId}" already has an active cancel-offer proposal "${existingProposal.title}". ` +
+                      `Please wait for that cancel-offer proposal to complete before placing a new offer on this NFT.`
+                  );
+                }
+              }
+            }
+          }
         }
       }
     }
@@ -1004,6 +1040,13 @@ export class GovernanceService {
                 if (!action.price || isNaN(parseFloat(action.price)) || parseFloat(action.price) <= 0) {
                   throw new BadRequestException(
                     `Offer price is required and must be greater than 0 for OFFER action on NFT ${action.assetName || action.assetId}.`
+                  );
+                }
+
+                const MIN_OFFER_PRICE_ADA = 5;
+                if (parseFloat(action.price) < MIN_OFFER_PRICE_ADA) {
+                  throw new BadRequestException(
+                    `Minimum offer price is ${MIN_OFFER_PRICE_ADA} ADA for NFT ${action.assetName || action.assetId}.`
                   );
                 }
 
@@ -2184,9 +2227,9 @@ export class GovernanceService {
     // Transform marketplace actions with enriched asset data and WayUp URLs
     // For DexHunter swaps, combine quantities by token (policy_id + asset_id)
     const marketplaceActions = (proposal.metadata?.marketplaceActions || []).map(action => {
-      const isBuy = action.exec === 'BUY';
-      const isOffer = action.exec === 'OFFER';
-      const isCancelOffer = action.exec === 'CANCEL_OFFER';
+      const isBuy = action.exec === ExecType.BUY;
+      const isOffer = action.exec === ExecType.OFFER;
+      const isCancelOffer = action.exec === ExecType.CANCEL_OFFER;
       const isSwapAction = action.slippage !== undefined || action.market === 'DexHunter';
 
       if (isBuy || isOffer || isCancelOffer) {

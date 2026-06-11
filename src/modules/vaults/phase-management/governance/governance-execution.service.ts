@@ -898,13 +898,10 @@ export class GovernanceExecutionService {
           continue;
         }
 
-        const txHashIndex = asset.listing_tx_hash;
-        if (!txHashIndex) {
-          this.logger.warn(`Cannot cancel offer - missing listing_tx_hash for ${asset.name}`);
-          skipped.cancelOffers.push(asset.name || option.assetId);
-          continue;
-        }
-
+        // Check WayUp state FIRST — the background offer-sync cron may have already resolved
+        // this offer (accepted or cancelled) and cleared listing_tx_hash before this proposal
+        // executes. Checking listing_tx_hash before WayUp state would incorrectly skip and
+        // ultimately REJECT proposals whose offers were legitimately accepted/cancelled externally.
         if (cancelOfferMarketplaceKeys) {
           const offerState = this.wayUpPricingService.resolveOfferStatus(
             asset.policy_id,
@@ -932,6 +929,14 @@ export class GovernanceExecutionService {
           this.logger.warn(
             `Treasury wallet not configured for vault ${proposal.vaultId}; cancel-offer cannot be verified on WayUp`
           );
+          skipped.cancelOffers.push(asset.name || option.assetId);
+          continue;
+        }
+
+        // Offer is confirmed still 'active' on WayUp — require tx hash for the on-chain cancel
+        const txHashIndex = asset.listing_tx_hash;
+        if (!txHashIndex) {
+          this.logger.warn(`Cannot cancel offer - missing listing_tx_hash for ${asset.name}`);
           skipped.cancelOffers.push(asset.name || option.assetId);
           continue;
         }
@@ -1402,6 +1407,8 @@ export class GovernanceExecutionService {
               {
                 listing_market: 'wayup',
                 listing_price: offer.priceAda,
+                // listing_tx_hash reused here to store the WayUp offer tx hash (not a marketplace
+                // listing). The CANCEL_OFFER execution reads this field to build the on-chain cancel.
                 listing_tx_hash: result.txHash,
                 listed_at: new Date(),
               }
