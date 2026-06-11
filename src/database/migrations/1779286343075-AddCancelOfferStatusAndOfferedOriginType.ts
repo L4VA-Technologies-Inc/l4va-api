@@ -26,6 +26,10 @@ export class AddCancelOfferStatusAndOfferedOriginType1779286343075 implements Mi
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
+    // Normalize values that don't exist in the previous enums to allow casting during rollback
+    await queryRunner.query(`UPDATE "assets" SET "origin_type" = 'bought' WHERE "origin_type" = 'offered'`);
+    await queryRunner.query(`UPDATE "assets" SET "status" = 'offered' WHERE "status" = 'cancel_offer'`);
+
     await queryRunner.query(`ALTER TYPE "public"."assets_origin_type_enum" RENAME TO "assets_origin_type_enum_old"`);
     await queryRunner.query(
       `CREATE TYPE "public"."assets_origin_type_enum" AS ENUM('acquired', 'contributed', 'fee', 'bought')`
