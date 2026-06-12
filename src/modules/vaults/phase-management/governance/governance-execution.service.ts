@@ -765,7 +765,7 @@ export class GovernanceExecutionService {
       const assetsToExtract: string[] = [];
       const unlistings: { policyId: string; assetName: string; txHashIndex: string }[] = [];
       const unlistedAssetIds: string[] = [];
-      const unlistOffers: { policyId: string; txHashIndex: string }[] = [];
+      const unlistOffers: { policyId: string; assetName: string; txHashIndex: string }[] = [];
       const cancelledOfferAssetIds: string[] = [];
       const updates: { policyId: string; assetName: string; txHashIndex: string; newPriceAda: number }[] = [];
       const updateAssetInfos: { assetId: string; newPrice: number }[] = [];
@@ -941,7 +941,7 @@ export class GovernanceExecutionService {
           continue;
         }
 
-        unlistOffers.push({ policyId: asset.policy_id, txHashIndex });
+        unlistOffers.push({ policyId: asset.policy_id, assetName: asset.asset_id, txHashIndex });
         cancelledOfferAssetIds.push(option.assetId);
       }
 

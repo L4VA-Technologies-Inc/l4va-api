@@ -112,7 +112,7 @@ export interface BuyNFTPayload {
 export interface CombinedMarketplaceActionsInput {
   listings?: NFTListingInput[]; // NFTs to list for sale
   unlistings?: UnlistInput[]; // Listings to cancel
-  unlistOffers?: Array<{ policyId: string; txHashIndex: string }>; // Offers to cancel
+  unlistOffers?: Array<{ policyId: string; assetName: string; txHashIndex: string }>; // Offers to cancel (assetName required for output index lookup)
   updates?: UpdateListingInput[]; // Listings to update price
   offers?: MakeOfferInput[]; // Offers to make
   purchases?: BuyNFTInput[]; // NFTs to buy

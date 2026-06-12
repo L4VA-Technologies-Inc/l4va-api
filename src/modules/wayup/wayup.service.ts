@@ -788,9 +788,29 @@ export class WayUpService {
         combinedPayload.createOffer = actions.offers;
       }
 
-      // Add unlist offers if provided
+      // Add unlist offers if provided (need to find output indices)
       if (actions.unlistOffers?.length > 0) {
-        combinedPayload.unlistOffer = actions.unlistOffers;
+        const unlistOffersWithIndices: { policyId: string; txHashIndex: string }[] = [];
+
+        for (const unlistOffer of actions.unlistOffers) {
+          try {
+            // Find the output index for this offer (like unlistings and updates)
+            const outputIndex = await this.findListingOutputIndex(
+              unlistOffer.txHashIndex,
+              unlistOffer.policyId,
+              unlistOffer.assetName
+            );
+            unlistOffersWithIndices.push({
+              policyId: unlistOffer.policyId,
+              txHashIndex: `${unlistOffer.txHashIndex}#${outputIndex}`,
+            });
+          } catch (error) {
+            this.logger.error(`Failed to find output index for offer cancel ${unlistOffer.policyId}: ${error.message}`);
+            throw new Error(`Cannot cancel offer ${unlistOffer.policyId}: ${error.message}`);
+          }
+        }
+
+        combinedPayload.unlistOffer = unlistOffersWithIndices;
       }
 
       // Add purchases if provided
