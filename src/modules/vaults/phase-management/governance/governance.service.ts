@@ -91,6 +91,7 @@ export class GovernanceService {
   private readonly isMainnet: boolean;
   private readonly votingPowerCache: NodeCache;
   private readonly proposalCreationCache: NodeCache;
+  private readonly assetMetadataCache: NodeCache;
   private readonly poolAddress: string;
   private readonly adminAddress: string;
   private readonly MIN_LP_ADA_FOR_MARKET_PRICING = 5000;
@@ -148,7 +149,7 @@ export class GovernanceService {
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
 
     this.blockfrost = new BlockFrostAPI({
-      projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
+      projectId: this.configService.get<string>('BLOCKFROST_API_KEY_MAINNET'),
     });
     this.votingPowerCache = new NodeCache({
       stdTTL: this.CACHE_TTL.VOTING_POWER,
@@ -159,6 +160,12 @@ export class GovernanceService {
     this.proposalCreationCache = new NodeCache({
       stdTTL: this.CACHE_TTL.CAN_CREATE_PROPOSAL,
       checkperiod: 300,
+      useClones: false,
+    });
+
+    this.assetMetadataCache = new NodeCache({
+      stdTTL: 3600, // 1 hour
+      checkperiod: 600,
       useClones: false,
     });
   }
@@ -3344,6 +3351,64 @@ export class GovernanceService {
     } catch (error) {
       this.logger.error(`Error getting assets to update listing for vault ${vaultId}: ${error.message}`);
       throw new InternalServerErrorException('Error getting assets for updating listings');
+    }
+  }
+
+  /**
+   * Get asset metadata by unit from Blockfrost
+   * Validates unit format (56 hex chars for policy + optional asset name)
+   * Returns display name only
+   */
+  async getAssetMetadataByUnit(unit: string): Promise<{ displayName: string }> {
+    // Validate unit format: at least 56 hex characters (policy ID)
+    const hexPattern = /^[a-fA-F0-9]{56,}$/;
+    if (!unit || !hexPattern.test(unit)) {
+      throw new BadRequestException(
+        'Invalid asset unit format. Must be at least 56 hexadecimal characters (policy ID + optional asset name)'
+      );
+    }
+
+    // Check cache first (1 hour TTL)
+    const cacheKey = `asset_metadata:${unit}`;
+    const cached = this.assetMetadataCache.get<{ displayName: string }>(cacheKey);
+
+    if (cached) {
+      this.logger.debug(`Cache hit for asset metadata: ${unit}`);
+      return cached;
+    }
+
+    try {
+      // Fetch from Blockfrost
+      const assetInfo = await this.blockfrost.assetsById(unit);
+
+      // Extract display name with fallback priority: onchain_metadata.name → asset_name → "Unknown Asset"
+      let displayName = 'Unknown Asset';
+      if (assetInfo.onchain_metadata?.name) {
+        displayName = assetInfo?.onchain_metadata?.name as any;
+      } else if (assetInfo.asset_name) {
+        // Convert hex asset name to UTF-8 if possible
+        try {
+          displayName = Buffer.from(assetInfo.asset_name, 'hex').toString('utf8');
+        } catch {
+          displayName = assetInfo.asset_name;
+        }
+      }
+
+      const result = { displayName };
+
+      // Cache for 1 hour
+      this.assetMetadataCache.set(cacheKey, result, 3600);
+
+      return result;
+    } catch (error) {
+      this.logger.error(`Error fetching asset metadata for unit ${unit}: ${error.message}`);
+
+      // Handle Blockfrost-specific errors
+      if (error.status_code === 404) {
+        throw new NotFoundException(`Asset with unit ${unit} not found on-chain`);
+      }
+
+      throw new InternalServerErrorException(`Failed to fetch asset metadata: ${error.message}`);
     }
   }
 

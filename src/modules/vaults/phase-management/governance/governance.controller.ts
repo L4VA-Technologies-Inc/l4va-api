@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Post, Query, Req, 
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { DistributionService } from './distribution.service';
+import { AssetMetadataRes } from './dto/asset-metadata.res';
 import { CreateProposalReq } from './dto/create-proposal.req';
 import { CreateProposalRes } from './dto/create-proposal.res';
 import { GetDistributionInfoRes } from './dto/distribution.dto';
@@ -228,6 +229,23 @@ export class GovernanceController {
   @ApiResponse({ status: 200, description: 'List of assets to burn' })
   async getAssetsToBurn(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<AssetBuySellDto[]> {
     return this.governanceService.getAssetsToBurn(vaultId);
+  }
+
+  @Get('assets/metadata/:unit')
+  @ApiOperation({
+    summary: 'Get asset metadata by unit from Blockfrost',
+    description:
+      'Fetches on-chain asset metadata including display name. Unit must be at least 56 hex characters (policy ID + optional asset name).',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Asset metadata fetched successfully',
+    type: AssetMetadataRes,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid unit format' })
+  @ApiResponse({ status: 404, description: 'Asset not found on-chain' })
+  async getAssetMetadata(@Param('unit') unit: string): Promise<AssetMetadataRes> {
+    return this.governanceService.getAssetMetadataByUnit(unit);
   }
 
   @Get('vaults/:vaultId/swappable-assets')

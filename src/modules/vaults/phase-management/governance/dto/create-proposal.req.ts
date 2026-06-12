@@ -140,6 +140,14 @@ export class MarketplaceActionDto {
   @IsString()
   assetName?: string;
 
+  @ApiProperty({
+    description: 'Asset display name from on-chain metadata (auto-fetched from Blockfrost)',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  displayName?: string;
+
   // ===== SELL fields =====
   @ApiProperty({
     description: 'Quantity to buy/sell',

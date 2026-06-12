@@ -82,7 +82,7 @@ export class Proposal {
     fungibleTokens?: FungibleTokenDto[];
     nonFungibleTokens?: NonFungibleTokenDto[];
 
-    // Buy/Sell data
+    // Buy/Sell data - each action can include a displayName field (fetched from Blockfrost on-chain metadata)
     marketplaceActions?: MarketplaceActionDto[];
 
     // Distribution data - total lovelace amount to distribute
