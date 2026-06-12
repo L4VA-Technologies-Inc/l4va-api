@@ -2371,7 +2371,7 @@ export class GovernanceExecutionService {
       PRICE_EXCEEDED:
         'One or more NFTs now have a listing price higher than the maximum price specified in the proposal.',
       OFFER_OPERATION_SKIPPED:
-        'One or more offer operations could not be executed (NFT not found on WayUp or invalid offer price).',
+        'One or more offer or cancel-offer operations could not be executed (NFT not found on WayUp, offer not active, or invalid offer price).',
       CONTRACT_ERROR: 'Smart contract validation error.',
       EXECUTION_ERROR: 'Unexpected error. Review details or contact support.',
     };
