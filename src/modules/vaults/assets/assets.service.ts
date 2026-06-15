@@ -30,6 +30,27 @@ export class AssetsService {
   private readonly VLRM_POLICY_ID: string;
   private readonly isMainnet: boolean;
 
+  /** Origin types shown in vault assets list (contributed, bought, fee, and offered assets) */
+  private readonly VAULT_ASSETS_ORIGIN_TYPES = [
+    AssetOriginType.CONTRIBUTED,
+    AssetOriginType.BOUGHT,
+    AssetOriginType.FEE,
+    AssetOriginType.OFFERED,
+  ];
+
+  /** Asset statuses shown in vault assets list (all active states) */
+  private readonly VAULT_ASSETS_STATUSES = [
+    AssetStatus.PENDING,
+    AssetStatus.LOCKED,
+    AssetStatus.EXTRACTED,
+    AssetStatus.RELEASED,
+    AssetStatus.LISTED,
+    AssetStatus.OFFERED,
+  ];
+
+  /** Asset statuses shown in acquired assets list (locked, released, and distributed) */
+  private readonly ACQUIRED_ASSETS_STATUSES = [AssetStatus.LOCKED, AssetStatus.RELEASED, AssetStatus.DISTRIBUTED];
+
   constructor(
     @InjectRepository(Asset)
     private readonly assetsRepository: Repository<Asset>,
@@ -228,16 +249,10 @@ export class AssetsService {
       ])
       .where('asset.vault_id = :vaultId', { vaultId })
       .andWhere('asset.origin_type IN (:...originTypes)', {
-        originTypes: [AssetOriginType.CONTRIBUTED, AssetOriginType.BOUGHT, AssetOriginType.FEE],
+        originTypes: this.VAULT_ASSETS_ORIGIN_TYPES,
       })
       .andWhere('asset.status IN (:...statuses)', {
-        statuses: [
-          AssetStatus.PENDING,
-          AssetStatus.LOCKED,
-          AssetStatus.EXTRACTED,
-          AssetStatus.RELEASED,
-          AssetStatus.LISTED,
-        ],
+        statuses: this.VAULT_ASSETS_STATUSES,
       });
 
     if (search) {
@@ -388,7 +403,7 @@ export class AssetsService {
         originType: AssetOriginType.ACQUIRED,
       })
       .andWhere('asset.status IN (:...statuses)', {
-        statuses: [AssetStatus.LOCKED, AssetStatus.RELEASED, AssetStatus.DISTRIBUTED],
+        statuses: this.ACQUIRED_ASSETS_STATUSES,
       });
 
     if (search) {
