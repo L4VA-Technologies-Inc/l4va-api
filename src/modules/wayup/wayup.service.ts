@@ -787,15 +787,26 @@ export class WayUpService {
 
         for (const unlistOffer of actions.unlistOffers) {
           try {
-            // Find the output index for this offer (like unlistings and updates)
-            const outputIndex = await this.findListingOutputIndex(
-              unlistOffer.txHashIndex,
-              unlistOffer.policyId,
-              unlistOffer.assetName
-            );
+            let txHashIndexWithOutput: string;
+
+            // Check if txHashIndex already includes the output index (format: txHash#outputIndex)
+            if (unlistOffer.txHashIndex.includes('#')) {
+              // Already has the output index, use it directly
+              txHashIndexWithOutput = unlistOffer.txHashIndex;
+              this.logger.log(`Using pre-formatted txHashIndex for offer cancel: ${txHashIndexWithOutput}`);
+            } else {
+              // Need to find the output index
+              const outputIndex = await this.findListingOutputIndex(
+                unlistOffer.txHashIndex,
+                unlistOffer.policyId,
+                unlistOffer.assetName
+              );
+              txHashIndexWithOutput = `${unlistOffer.txHashIndex}#${outputIndex}`;
+            }
+
             unlistOffersWithIndices.push({
               policyId: unlistOffer.policyId,
-              txHashIndex: `${unlistOffer.txHashIndex}#${outputIndex}`,
+              txHashIndex: txHashIndexWithOutput,
             });
           } catch (error) {
             this.logger.error(`Failed to find output index for offer cancel ${unlistOffer.policyId}: ${error.message}`);

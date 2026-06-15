@@ -19,6 +19,7 @@ import { Asset } from '@/database/asset.entity';
 import { AssetsWhitelistEntity } from '@/database/assetsWhitelist.entity';
 import { Proposal } from '@/database/proposal.entity';
 import { Vault } from '@/database/vault.entity';
+import { AlertsService } from '@/modules/alerts/alerts.service';
 import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
 import { AssetsService } from '@/modules/vaults/assets/assets.service';
@@ -72,7 +73,8 @@ export class GovernanceExecutionService {
     private readonly treasuryWalletService: TreasuryWalletService,
     private readonly governanceRefundService: GovernanceRefundService,
     private readonly rewardEventProducer: RewardEventProducer,
-    private readonly snapshotService: SnapshotService
+    private readonly snapshotService: SnapshotService,
+    private readonly alertsService: AlertsService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
@@ -866,6 +868,7 @@ export class GovernanceExecutionService {
       // Process CANCEL_OFFER operations (verify offer still exists on WayUp before on-chain cancel)
       const treasuryAddress = proposal.vault.treasury_wallet?.treasury_address;
       let cancelOfferMarketplaceKeys: { active: Set<string>; treasury: Set<string> } | null = null;
+      let sentOffersMap: Map<string, { outputRef: string; policyId: string; assetName: string }> | null = null;
 
       if (operations.cancelOffers.length > 0 && treasuryAddress) {
         try {
@@ -877,6 +880,13 @@ export class GovernanceExecutionService {
             active: new Set(sentOffers.map(o => this.wayUpPricingService.offerAssetKey(o.policyId, o.assetName))),
             treasury: new Set(treasuryAssets.map(a => this.wayUpPricingService.offerAssetKey(a.policyId, a.assetName))),
           };
+          // Store sent offers in a map for easy lookup by asset key
+          sentOffersMap = new Map(
+            sentOffers.map(o => [
+              this.wayUpPricingService.offerAssetKey(o.policyId, o.assetName),
+              { outputRef: o.outputRef, policyId: o.policyId, assetName: o.assetName },
+            ])
+          );
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           this.logger.error(
@@ -933,13 +943,20 @@ export class GovernanceExecutionService {
           continue;
         }
 
-        // Offer is confirmed still 'active' on WayUp — require tx hash for the on-chain cancel
-        const txHashIndex = asset.listing_tx_hash;
-        if (!txHashIndex) {
-          this.logger.warn(`Cannot cancel offer - missing listing_tx_hash for ${asset.name}`);
+        // Offer is confirmed still 'active' on WayUp — get the offer output reference for on-chain cancel
+        const assetKey = this.wayUpPricingService.offerAssetKey(asset.policy_id, asset.asset_id);
+        const sentOffer = sentOffersMap?.get(assetKey);
+
+        if (!sentOffer) {
+          this.logger.warn(
+            `Cannot find offer output reference for "${asset.name}" in sent offers. Asset key: ${assetKey}`
+          );
           skipped.cancelOffers.push(asset.name || option.assetId);
           continue;
         }
+
+        const txHashIndex = sentOffer.outputRef; // Already in format "txHash#outputIndex"
+        this.logger.log(`Retrieved offer output reference from WayUp for "${asset.name}": ${txHashIndex}`);
 
         unlistOffers.push({ policyId: asset.policy_id, assetName: asset.asset_id, txHashIndex });
         cancelledOfferAssetIds.push(option.assetId);
@@ -1052,8 +1069,33 @@ export class GovernanceExecutionService {
           hexAssetName = option.nftSnapshot.assetName;
           nftName = option.nftSnapshot.name || nftName;
           nftImage = option.nftSnapshot.image ?? undefined;
+
+          // Verify NFT is still listed on WayUp
+          try {
+            const collectionResponse = await this.wayUpPricingService.getCollectionAssets({
+              policyId,
+              term: option.assetName,
+              limit: 1,
+            });
+
+            const exactAsset = collectionResponse.results?.[0];
+
+            if (!exactAsset?.listing) {
+              this.logger.warn(
+                `Cannot place offer for ${option.assetName} - NFT is not currently listed on WayUp marketplace`
+              );
+              skipped.offers.push(option.assetName || option.assetId);
+              continue;
+            }
+          } catch (lookupError) {
+            this.logger.warn(
+              `Cannot place offer for ${option.assetName} - WayUp lookup failed: ${lookupError.message}`
+            );
+            skipped.offers.push(option.assetName || option.assetId);
+            continue;
+          }
         } else {
-          // Fallback: query WayUp to resolve hex assetName
+          // Fallback: query WayUp to resolve hex assetName and verify listing
           try {
             const collectionResponse = await this.wayUpPricingService.getCollectionAssets({
               policyId,
@@ -1065,6 +1107,14 @@ export class GovernanceExecutionService {
 
             if (!exactAsset) {
               this.logger.warn(`Cannot place offer for ${option.assetName} - NFT not found on WayUp`);
+              skipped.offers.push(option.assetName || option.assetId);
+              continue;
+            }
+
+            if (!exactAsset.listing) {
+              this.logger.warn(
+                `Cannot place offer for ${option.assetName} - NFT is not currently listed on WayUp marketplace`
+              );
               skipped.offers.push(option.assetName || option.assetId);
               continue;
             }
@@ -1402,18 +1452,23 @@ export class GovernanceExecutionService {
               originType: AssetOriginType.OFFERED,
               status: AssetStatus.OFFERED,
             });
+
+            // Note: listing_tx_hash stores the offer transaction hash, NOT the listing transaction hash
+            // This is because the WayUp API requires the offer output reference to cancel offers
+            // The offer output reference will be retrieved from WayUp when canceling
             await this.assetRepository.update(
               { id: offeredAsset.id },
               {
                 listing_market: 'wayup',
                 listing_price: offer.priceAda,
-                // listing_tx_hash reused here to store the WayUp offer tx hash (not a marketplace
-                // listing). The CANCEL_OFFER execution reads this field to build the on-chain cancel.
+                // Store the offer transaction hash for reference (actual outputRef retrieved from WayUp when canceling)
                 listing_tx_hash: result.txHash,
                 listed_at: new Date(),
               }
             );
-            this.logger.log(`Recorded offered asset "${offer.name}" (${offer.policyId}) to vault ${proposal.vaultId}`);
+            this.logger.log(
+              `Recorded offered asset "${offer.name}" (${offer.policyId}) to vault ${proposal.vaultId} with offer tx: ${result.txHash}`
+            );
           } catch (recordError) {
             this.logger.warn(`Failed to record offered asset "${offer.name}": ${recordError.message}`);
           }
@@ -1432,9 +1487,35 @@ export class GovernanceExecutionService {
     } catch (error) {
       this.logger.error(`Error executing marketplace proposal ${proposal.id}: ${error.message}`, error.stack);
 
+      const errorMessage = error.message || '';
+
+      // Check for insufficient treasury funds - this needs immediate attention via Slack alert
+      if (errorMessage.includes('No utxo with at least') && errorMessage.includes('lovelace')) {
+        const requiredLovelaceMatch = errorMessage.match(/at least (\d+) lovelace/);
+        const requiredAda = requiredLovelaceMatch
+          ? (parseInt(requiredLovelaceMatch[1]) / 1_000_000).toFixed(2)
+          : 'unknown';
+
+        this.logger.error(
+          `Treasury wallet has insufficient funds for proposal ${proposal.id} (${proposal.title}) - needs at least ${requiredAda} ADA`
+        );
+
+        // Send Slack alert for insufficient treasury funds
+        await this.alertsService.sendAlert('treasury_insufficient_funds_marketplace', {
+          proposalId: proposal.id,
+          proposalTitle: proposal.title,
+          proposalType: proposal.proposalType,
+          vaultId: proposal.vaultId,
+          vaultName: proposal.vault?.name || 'Unknown Vault',
+          treasuryAddress: proposal.vault?.treasury_wallet?.treasury_address || 'Unknown',
+          requiredAda,
+          errorMessage,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
       // Check if the error is "Listing not found" - this happens when NFT was already bought
       // In this case, we should reject the proposal instead of leaving it for retry
-      const errorMessage = error.message || '';
       if (errorMessage.includes('Listing not found') || errorMessage.includes('"code":"NOT_FOUND"')) {
         this.logger.warn(
           `Marketplace proposal ${proposal.id} rejected: Listing not found - NFT was likely already purchased`
