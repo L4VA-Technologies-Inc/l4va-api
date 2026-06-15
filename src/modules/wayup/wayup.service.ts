@@ -691,16 +691,9 @@ export class WayUpService {
           amount: 1,
         })) ?? [];
 
-      // Calculate total ADA needed from treasury for offers and purchases
-      const offerAmount = (actions.offers?.reduce((sum, o) => sum + o.priceAda, 0) ?? 0) * 1_000_000;
-      const purchaseAmount = (actions.purchases?.reduce((sum, p) => sum + p.priceAda, 0) ?? 0) * 1_000_000;
-      const totalTreasuryAda = offerAmount + purchaseAmount;
-
       // Get treasury UTXOs - treasury provides NFTs, ADA for offers/purchases, and transaction fees
       const result = await getUtxosExtract(Address.from_bech32(treasuryAddress), this.blockfrost, {
         targetAssets: targetAssets.length > 0 ? targetAssets : undefined,
-        targetAdaAmount: totalTreasuryAda > 0 ? totalTreasuryAda : undefined,
-        maxUtxos: 20,
       });
       const treasuryUtxos = result.utxos;
 

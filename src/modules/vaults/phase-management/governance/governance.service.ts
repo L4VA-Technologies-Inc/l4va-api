@@ -149,7 +149,7 @@ export class GovernanceService {
     this.adminAddress = this.configService.get<string>('ADMIN_ADDRESS');
 
     this.blockfrost = new BlockFrostAPI({
-      projectId: this.configService.get<string>('BLOCKFROST_API_KEY_MAINNET'),
+      projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
     this.votingPowerCache = new NodeCache({
       stdTTL: this.CACHE_TTL.VOTING_POWER,
@@ -451,6 +451,7 @@ export class GovernanceService {
         'assets_whitelist',
         'is_expandable_asset_whitelist',
       ],
+      relations: ['assets_whitelist'],
     });
 
     if (!vault) {
