@@ -891,7 +891,7 @@ export class GovernanceService {
         const actions = createProposalReq.marketplaceActions || [];
 
         // Validate that all actions use the same market (no mixing DexHunter and WayUp)
-        const markets = new Set(actions.map(a => a.market));
+        const markets = new Set(actions.map(a => a.market?.toLowerCase()));
         if (markets.size > 1) {
           throw new BadRequestException(
             'Cannot mix different markets in same proposal. Use either DexHunter or WayUp, not both.'
@@ -901,7 +901,7 @@ export class GovernanceService {
         const market = actions[0]?.market;
 
         // Pre-check (mainnet only): ensure treasury has enough ADA for WayUp BUY and OFFER operations
-        if (this.isMainnet && market === 'WayUp') {
+        if (this.isMainnet && market?.toLowerCase() === 'wayup') {
           const buyActions = actions.filter(a => a.exec === ExecType.BUY);
           const offerActions = actions.filter(a => a.exec === ExecType.OFFER);
 
@@ -951,7 +951,7 @@ export class GovernanceService {
           Array<Pick<Asset, 'id' | 'status' | 'type' | 'policy_id' | 'asset_id' | 'quantity' | 'name'>>
         >();
 
-        if (market === 'DexHunter') {
+        if (market?.toLowerCase() === 'dexhunter') {
           // Fetch all swappable FT assets (LOCKED in vault + EXTRACTED in treasury)
           const allFTs = await this.assetRepository.find({
             where: {
@@ -977,7 +977,7 @@ export class GovernanceService {
           actions.map(async action => {
             // BUY actions target external NFTs (not in our DB) — skip DB lookup, validate via WayUp API below
             if (action.exec === ExecType.BUY) {
-              if (market === 'WayUp') {
+              if (market?.toLowerCase() === 'wayup') {
                 const policyId = action.assetId.length >= 56 ? action.assetId.slice(0, 56) : action.assetId;
 
                 const isWhitelisted = vault.assets_whitelist?.some(
@@ -1032,7 +1032,7 @@ export class GovernanceService {
 
             // OFFER actions target external NFTs — validate policy whitelist and NFT existence via WayUp API
             if (action.exec === ExecType.OFFER) {
-              if (market === 'WayUp') {
+              if (market?.toLowerCase() === 'wayup') {
                 const policyId = action.assetId.length >= 56 ? action.assetId.slice(0, 56) : action.assetId;
 
                 const isWhitelisted = vault.assets_whitelist?.some(
@@ -1111,7 +1111,7 @@ export class GovernanceService {
 
             // CANCEL_OFFER actions cancel an existing vault offer (DB asset with OFFERED status)
             if (action.exec === ExecType.CANCEL_OFFER) {
-              if (market !== 'WayUp') {
+              if (market?.toLowerCase() !== 'wayup') {
                 throw new BadRequestException('CANCEL_OFFER is only supported on WayUp marketplace');
               }
 
@@ -1225,7 +1225,7 @@ export class GovernanceService {
             }
 
             // DexHunter swap validation (FT tokens only)
-            if (market === 'DexHunter') {
+            if (market?.toLowerCase() === 'dexhunter') {
               // Validate it's a fungible token
               if (asset.type !== AssetType.FT) {
                 throw new BadRequestException(
@@ -1321,7 +1321,7 @@ export class GovernanceService {
               }
             }
             // WayUp marketplace validation (NFTs)
-            else if (market === 'WayUp') {
+            else if (market?.toLowerCase() === 'wayup') {
               // Validate price is provided for SELL (LIST) actions
               if (action.exec === ExecType.SELL) {
                 // For List sellType, price is REQUIRED
@@ -1383,7 +1383,7 @@ export class GovernanceService {
         );
 
         // For DexHunter swaps, resolve specific asset IDs needed for each action
-        if (market === 'DexHunter') {
+        if (market?.toLowerCase() === 'dexhunter') {
           for (const action of actions) {
             const asset = await this.assetRepository.findOne({
               where: { id: action.assetId },
@@ -2238,7 +2238,7 @@ export class GovernanceService {
       const isBuy = action.exec === ExecType.BUY;
       const isOffer = action.exec === ExecType.OFFER;
       const isCancelOffer = action.exec === ExecType.CANCEL_OFFER;
-      const isSwapAction = action.slippage !== undefined || action.market === 'DexHunter';
+      const isSwapAction = action.slippage !== undefined || action.market?.toLowerCase() === 'dexhunter';
 
       if (isBuy || isOffer || isCancelOffer) {
         let wayupUrl: string | undefined;

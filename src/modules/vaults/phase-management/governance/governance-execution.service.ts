@@ -717,7 +717,7 @@ export class GovernanceExecutionService {
     const market = proposal.metadata.marketplaceActions[0]?.market;
 
     // Handle DexHunter FT swaps
-    if (market === 'DexHunter') {
+    if (market?.toLowerCase() === 'dexhunter') {
       return this.executeDexHunterSwapProposal(proposal);
     }
 
