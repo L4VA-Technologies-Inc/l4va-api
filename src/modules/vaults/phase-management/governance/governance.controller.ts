@@ -133,12 +133,12 @@ export class GovernanceController {
     return { votingPower };
   }
 
-  @Get('vaults/:vaultId/assets/buy-sell')
+  @Get('vaults/:vaultId/assets/sell')
   @UseGuards(AuthGuard)
-  @ApiOperation({ summary: 'Get assets available for buying/selling proposals' })
+  @ApiOperation({ summary: 'Get assets available for selling proposals' })
   @ApiResponse({
     status: 200,
-    description: 'List of assets available for trading',
+    description: 'List of assets available for selling',
     type: GetAssetsToListRes,
   })
   async getAssetsToList(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<GetAssetsToListRes> {

@@ -148,15 +148,16 @@ export class MarketplaceActionDto {
   @IsString()
   displayName?: string;
 
-  // ===== SELL fields =====
+  // ===== SWAP field (DexHunter only) =====
   @ApiProperty({
-    description: 'Quantity to buy/sell',
+    description: 'Quantity to swap (only used for DexHunter swaps, not for NFT sells)',
     required: false,
   })
   @IsOptional()
   @IsString()
   quantity?: string;
 
+  // ===== SELL fields =====
   @ApiProperty({
     description: 'Market or List sale type',
     enum: SellType,

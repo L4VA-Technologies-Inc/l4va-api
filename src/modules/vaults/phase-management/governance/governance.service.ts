@@ -3178,7 +3178,7 @@ export class GovernanceService {
             vault: { id: vaultId },
             type: In([AssetType.NFT]),
             status: In([AssetStatus.LOCKED, AssetStatus.EXTRACTED]),
-            origin_type: AssetOriginType.CONTRIBUTED,
+            origin_type: In([AssetOriginType.CONTRIBUTED, AssetOriginType.BOUGHT]),
           },
         ],
         select: [
@@ -3206,8 +3206,8 @@ export class GovernanceService {
         treasuryWalletBalance,
       };
     } catch (error) {
-      this.logger.error(`Error getting assets for buy-sell proposals for vault ${vaultId}: ${error.message}`);
-      throw new InternalServerErrorException('Error getting assets for buying/selling');
+      this.logger.error(`Error getting assets for sell proposals for vault ${vaultId}: ${error.message}`);
+      throw new InternalServerErrorException('Error getting assets for selling');
     }
   }
 
