@@ -728,6 +728,20 @@ export class AssetsService {
   async markOffersAsAccepted(assetIds: string[]): Promise<void> {
     if (assetIds.length === 0) return;
 
+    // First, fetch the assets with their prices and vault info before updating
+    const assets = await this.assetsRepository.find({
+      where: {
+        id: In(assetIds),
+        status: AssetStatus.OFFERED,
+        origin_type: AssetOriginType.OFFERED,
+        deleted: false,
+      },
+      select: ['id', 'vault_id', 'listing_price', 'floor_price'],
+    });
+
+    if (assets.length === 0) return;
+
+    // Update asset statuses
     await this.assetsRepository.update(
       {
         id: In(assetIds),
@@ -745,6 +759,56 @@ export class AssetsService {
         listed_at: null,
       }
     );
+
+    // Try to update vault costs, but don't fail the whole operation if this fails
+    try {
+      // Group assets by vault and calculate total cost per vault
+      const vaultCosts = new Map<string, number>();
+
+      for (const asset of assets) {
+        if (!asset.vault_id) continue;
+
+        // Use listing_price (offer price) or fall back to floor_price
+        const price = asset.listing_price ?? asset.floor_price ?? 0;
+        if (price <= 0) continue; // Skip assets without valid pricing
+
+        const currentTotal = vaultCosts.get(asset.vault_id) ?? 0;
+        vaultCosts.set(asset.vault_id, currentTotal + price);
+      }
+
+      if (vaultCosts.size === 0) return; // No vaults with valid pricing
+
+      // Get current ADA price in USD
+      const adaPriceUsd = await this.priceService.getAdaPrice();
+
+      // Update each vault's cost fields to reflect the newly acquired assets
+      for (const [vaultId, totalCostAda] of vaultCosts.entries()) {
+        const totalCostUsd = totalCostAda * adaPriceUsd;
+
+        await this.vaultsRepository
+          .createQueryBuilder()
+          .update(Vault)
+          .set({
+            total_assets_cost_ada: () => `total_assets_cost_ada + ${totalCostAda}`,
+            total_assets_cost_usd: () => `total_assets_cost_usd + ${totalCostUsd}`,
+            last_valuation_update: new Date(),
+          })
+          .where('id = :vaultId', { vaultId })
+          .execute();
+
+        const assetCount = assets.filter(a => a.vault_id === vaultId).length;
+        this.logger.log(
+          `Updated vault ${vaultId} costs: +${totalCostAda.toFixed(2)} ADA (+${totalCostUsd.toFixed(2)} USD) from ${assetCount} accepted offer(s)`
+        );
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `Failed to update vault costs for accepted offers: ${errorMessage}`,
+        error instanceof Error ? error.stack : undefined
+      );
+      // Asset status updates already completed successfully, so we just log the error
+    }
   }
 
   /** Offer cancelled or rejected on WayUp by NFT owner (or via governance CANCEL_OFFER). */
