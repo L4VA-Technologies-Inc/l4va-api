@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 import { useModal, useModalControls } from '@/lib/modals/modal.context';
 import { ModalWrapper } from '@/components/shared/ModalWrapper';
@@ -12,6 +12,8 @@ export const ChartModal = () => {
   const { closeModal } = useModalControls();
   const { vault } = activeModalData?.props || {};
   const [interval, setInterval] = useState('1d');
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  const [cachedMarketData, setCachedMarketData] = useState(null);
 
   const { data, isLoading, isError, error } = useMarketWithOHLCV(vault?.id, interval);
 
@@ -23,10 +25,20 @@ export const ChartModal = () => {
 
   const marketData = !notFound ? data?.data : null;
 
+  useEffect(() => {
+    if (marketData && !isLoading) {
+      setHasLoadedOnce(true);
+      setCachedMarketData(marketData);
+    }
+  }, [marketData, isLoading]);
+
+  // Use cached data for metrics (doesn't change with interval), fresh data for chart
+  const metricsData = cachedMarketData || marketData;
+
   return (
     <ModalWrapper isOpen onClose={closeModal} title="Vault Analytics" className="md:max-w-4xl xl:max-w-6xl">
       <div className="space-y-6">
-        <VaultMetrics marketData={marketData} isLoading={isLoading && !notFound} />
+        <VaultMetrics marketData={metricsData} isLoading={isLoading && !notFound && !hasLoadedOnce} />
 
         {isError && !notFound && (
           <div className="rounded-lg border border-red-500/40 bg-red-950/40 text-red-200 text-sm px-4 py-3">
