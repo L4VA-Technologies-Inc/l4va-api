@@ -22,12 +22,15 @@ export class AlertsService {
   private readonly logger = new Logger(AlertsService.name);
   private readonly slackToken: string;
   private readonly slackChannel: string;
+  private readonly nodeEnv: string;
+
   private readonly SLACK_ALERT_COOLDOWN = 60 * 60 * 1000; // 1 hour in milliseconds
   private lastSlackAlert = new Map<string, number>();
 
   constructor(private readonly configService: ConfigService) {
     this.slackToken = this.configService.get<string>('SLACK_BOT_TOKEN');
     this.slackChannel = `#${this.configService.get<string>('SLACK_CHANNEL')}`;
+    this.nodeEnv = this.configService.get<string>('NODE_ENV');
   }
 
   /**
@@ -39,6 +42,11 @@ export class AlertsService {
     try {
       if (!this.slackToken) {
         this.logger.debug('Slack token not configured, skipping alert');
+        return;
+      }
+
+      if (this.nodeEnv === 'development' || this.nodeEnv === 'dev') {
+        this.logger.debug(`Development environment detected, skipping Slack alert for ${alertType}`);
         return;
       }
 
@@ -578,6 +586,90 @@ export class AlertsService {
         return {
           text: `🚨 Stake Reward Distribution Failed - Insufficient Funds`,
           blocks,
+        };
+      }
+
+      case 'treasury_insufficient_funds_marketplace': {
+        const vaultName = data.vaultName || 'Unknown Vault';
+        const proposalTitle = data.proposalTitle || 'Unknown Proposal';
+        const requiredAda = data.requiredAda || 'unknown';
+        const treasuryAddress = data.treasuryAddress || 'Unknown';
+        const proposalId = data.proposalId || 'Unknown';
+
+        return {
+          text: `🚨 URGENT: Treasury Wallet Insufficient Funds for Marketplace Operation`,
+          blocks: [
+            {
+              type: 'header',
+              text: {
+                type: 'plain_text',
+                text: `🚨 Treasury Wallet Insufficient Funds`,
+                emoji: true,
+              },
+            },
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: `*Critical Issue:* A marketplace proposal cannot execute due to insufficient ADA in the treasury wallet.`,
+              },
+            },
+            {
+              type: 'section',
+              fields: [
+                {
+                  type: 'mrkdwn',
+                  text: `*Vault:*\n${vaultName}`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Vault ID:*\n\`${data.vaultId || 'Unknown'}\``,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Proposal:*\n${proposalTitle}`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Proposal ID:*\n\`${proposalId}\``,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Required ADA:*\n${requiredAda} ADA minimum`,
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Proposal Type:*\n${data.proposalType || 'Unknown'}`,
+                },
+              ],
+            },
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: `*Treasury Address:*\n\`${treasuryAddress}\``,
+              },
+            },
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: `*Action Required:*\nThe treasury wallet needs to be funded with at least ${requiredAda} ADA to execute this marketplace operation. The proposal will automatically retry every 5 minutes.`,
+              },
+            },
+            {
+              type: 'divider',
+            },
+            {
+              type: 'context',
+              elements: [
+                {
+                  type: 'mrkdwn',
+                  text: `*Timestamp:* ${timestamp} | *Environment:* Production`,
+                },
+              ],
+            },
+          ],
         };
       }
 

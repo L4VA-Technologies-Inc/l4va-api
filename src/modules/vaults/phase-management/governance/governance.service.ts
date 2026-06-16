@@ -14,7 +14,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
-import { In, IsNull, Not, Repository } from 'typeorm';
+import { Brackets, In, IsNull, Not, Repository } from 'typeorm';
 
 import { TransactionsService } from '../../processing-tx/offchain-tx/transactions.service';
 import { BlockchainService } from '../../processing-tx/onchain/blockchain.service';
@@ -47,6 +47,7 @@ import { DexHunterService } from '@/modules/dexhunter/dexhunter.service';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { RewardEventProducer } from '@/modules/rewards/services/reward-event-producer.service';
 import { TapToolsClient } from '@/modules/taptools/taptools.client';
+import { PaginatedResponseDto } from '@/modules/vaults/dto/paginated-response.dto';
 import { GetAssetsToListRes } from '@/modules/vaults/phase-management/governance/dto/get-assets-to-list.res';
 import { TreasuryWalletService } from '@/modules/vaults/treasure/treasure-wallet.service';
 import { WayUpPricingService } from '@/modules/wayup/wayup-pricing.service';
@@ -90,6 +91,7 @@ export class GovernanceService {
   private readonly isMainnet: boolean;
   private readonly votingPowerCache: NodeCache;
   private readonly proposalCreationCache: NodeCache;
+  private readonly assetMetadataCache: NodeCache;
   private readonly poolAddress: string;
   private readonly adminAddress: string;
   private readonly MIN_LP_ADA_FOR_MARKET_PRICING = 5000;
@@ -158,6 +160,12 @@ export class GovernanceService {
     this.proposalCreationCache = new NodeCache({
       stdTTL: this.CACHE_TTL.CAN_CREATE_PROPOSAL,
       checkperiod: 300,
+      useClones: false,
+    });
+
+    this.assetMetadataCache = new NodeCache({
+      stdTTL: 3600, // 1 hour
+      checkperiod: 600,
       useClones: false,
     });
   }
@@ -443,6 +451,7 @@ export class GovernanceService {
         'assets_whitelist',
         'is_expandable_asset_whitelist',
       ],
+      relations: ['assets_whitelist'],
     });
 
     if (!vault) {
@@ -553,6 +562,10 @@ export class GovernanceService {
           .filter(action => action.exec === ExecType.OFFER)
           .map(action => action.assetId);
 
+        const requestedCancelOfferAssetIds = requestedActions
+          .filter(action => action.exec === ExecType.CANCEL_OFFER)
+          .map(action => action.assetId);
+
         const activeMarketProposals = await this.proposalRepository.find({
           where: {
             vaultId,
@@ -567,7 +580,7 @@ export class GovernanceService {
           // Check DB assets (SELL / UNLIST / UPDATE_LISTING)
           if (requestedAssetIds.length > 0) {
             const existingDbAssetIds = existingActions
-              .filter((a: any) => a.exec !== ExecType.BUY)
+              .filter((a: any) => a.exec !== ExecType.BUY && a.exec !== ExecType.OFFER)
               .map((a: any) => a.assetId);
 
             const overlapping = requestedAssetIds.filter(id => existingDbAssetIds.includes(id));
@@ -602,6 +615,64 @@ export class GovernanceService {
                 `Cannot create proposal. Some NFTs already have an active buy or offer proposal "${existingProposal.title}". ` +
                   `Please wait for that proposal to complete before creating a new one for these NFTs.`
               );
+            }
+          }
+
+          // Check CANCEL_OFFER assets — one active cancel-offer proposal per offered asset
+          if (requestedCancelOfferAssetIds.length > 0) {
+            const existingCancelOfferAssetIds = existingActions
+              .filter((a: any) => a.exec === ExecType.CANCEL_OFFER)
+              .map((a: any) => a.assetId);
+
+            const overlapping = requestedCancelOfferAssetIds.filter(id => existingCancelOfferAssetIds.includes(id));
+
+            if (overlapping.length > 0) {
+              const records = await this.assetRepository.find({
+                where: { id: In(overlapping) },
+                select: ['id', 'name'],
+              });
+              const assetNames = records.map(a => a.name || a.id).join(', ');
+
+              throw new BadRequestException(
+                `Cannot create cancel-offer proposal. The following assets already have an active cancel-offer proposal "${existingProposal.title}": ${assetNames}. ` +
+                  `Please wait for that proposal to complete before creating a new one for these assets.`
+              );
+            }
+          }
+
+          // Check that new OFFER actions don't conflict with existing CANCEL_OFFER proposals for
+          // the same NFT (identified by policy_id + asset_id). An active cancel-offer proposal
+          // means the vault is in the process of withdrawing a prior offer on that NFT — creating
+          // a new offer on the same NFT while cancellation is pending would cause conflicting
+          // on-chain operations.
+          if (requestedOfferAssetIds.length > 0) {
+            const existingCancelOfferDbAssetIds = existingActions
+              .filter((a: any) => a.exec === ExecType.CANCEL_OFFER)
+              .map((a: any) => a.assetId);
+
+            if (existingCancelOfferDbAssetIds.length > 0) {
+              const cancelOfferAssets = await this.assetRepository.find({
+                where: { id: In(existingCancelOfferDbAssetIds) },
+                select: ['id', 'policy_id', 'asset_id', 'name'],
+              });
+
+              for (const action of requestedActions.filter((a: any) => a.exec === ExecType.OFFER)) {
+                const policyId = action.assetId.length >= 56 ? action.assetId.slice(0, 56) : action.assetId;
+                const hexAssetName = action.assetId.length > 56 ? action.assetId.slice(56) : null;
+
+                const conflict = cancelOfferAssets.find(
+                  ca =>
+                    ca.policy_id.toLowerCase() === policyId.toLowerCase() &&
+                    (!hexAssetName || ca.asset_id.toLowerCase() === hexAssetName.toLowerCase())
+                );
+
+                if (conflict) {
+                  throw new BadRequestException(
+                    `Cannot create offer proposal. NFT "${conflict.name || policyId}" already has an active cancel-offer proposal "${existingProposal.title}". ` +
+                      `Please wait for that cancel-offer proposal to complete before placing a new offer on this NFT.`
+                  );
+                }
+              }
             }
           }
         }
@@ -820,7 +891,7 @@ export class GovernanceService {
         const actions = createProposalReq.marketplaceActions || [];
 
         // Validate that all actions use the same market (no mixing DexHunter and WayUp)
-        const markets = new Set(actions.map(a => a.market));
+        const markets = new Set(actions.map(a => a.market?.toLowerCase()));
         if (markets.size > 1) {
           throw new BadRequestException(
             'Cannot mix different markets in same proposal. Use either DexHunter or WayUp, not both.'
@@ -830,7 +901,7 @@ export class GovernanceService {
         const market = actions[0]?.market;
 
         // Pre-check (mainnet only): ensure treasury has enough ADA for WayUp BUY and OFFER operations
-        if (this.isMainnet && market === 'WayUp') {
+        if (this.isMainnet && market?.toLowerCase() === 'wayup') {
           const buyActions = actions.filter(a => a.exec === ExecType.BUY);
           const offerActions = actions.filter(a => a.exec === ExecType.OFFER);
 
@@ -880,7 +951,7 @@ export class GovernanceService {
           Array<Pick<Asset, 'id' | 'status' | 'type' | 'policy_id' | 'asset_id' | 'quantity' | 'name'>>
         >();
 
-        if (market === 'DexHunter') {
+        if (market?.toLowerCase() === 'dexhunter') {
           // Fetch all swappable FT assets (LOCKED in vault + EXTRACTED in treasury)
           const allFTs = await this.assetRepository.find({
             where: {
@@ -906,7 +977,7 @@ export class GovernanceService {
           actions.map(async action => {
             // BUY actions target external NFTs (not in our DB) — skip DB lookup, validate via WayUp API below
             if (action.exec === ExecType.BUY) {
-              if (market === 'WayUp') {
+              if (market?.toLowerCase() === 'wayup') {
                 const policyId = action.assetId.length >= 56 ? action.assetId.slice(0, 56) : action.assetId;
 
                 const isWhitelisted = vault.assets_whitelist?.some(
@@ -961,7 +1032,7 @@ export class GovernanceService {
 
             // OFFER actions target external NFTs — validate policy whitelist and NFT existence via WayUp API
             if (action.exec === ExecType.OFFER) {
-              if (market === 'WayUp') {
+              if (market?.toLowerCase() === 'wayup') {
                 const policyId = action.assetId.length >= 56 ? action.assetId.slice(0, 56) : action.assetId;
 
                 const isWhitelisted = vault.assets_whitelist?.some(
@@ -977,6 +1048,13 @@ export class GovernanceService {
                 if (!action.price || isNaN(parseFloat(action.price)) || parseFloat(action.price) <= 0) {
                   throw new BadRequestException(
                     `Offer price is required and must be greater than 0 for OFFER action on NFT ${action.assetName || action.assetId}.`
+                  );
+                }
+
+                const MIN_OFFER_PRICE_ADA = 5;
+                if (parseFloat(action.price) < MIN_OFFER_PRICE_ADA) {
+                  throw new BadRequestException(
+                    `Minimum offer price is ${MIN_OFFER_PRICE_ADA} ADA for NFT ${action.assetName || action.assetId}.`
                   );
                 }
 
@@ -997,6 +1075,25 @@ export class GovernanceService {
                   );
                 }
 
+                const existingOfferedAsset = await this.assetRepository.findOne({
+                  where: {
+                    vault: { id: vaultId },
+                    policy_id: exactAsset.policyId,
+                    asset_id: exactAsset.assetName,
+                    status: AssetStatus.OFFERED,
+                    origin_type: AssetOriginType.OFFERED,
+                    deleted: false,
+                  },
+                  select: ['id', 'name'],
+                });
+
+                if (existingOfferedAsset) {
+                  throw new BadRequestException(
+                    `An active offer already exists in this vault for NFT ${displayName}. ` +
+                      `Wait until the offer is accepted, cancelled, or removed before creating a new offer proposal.`
+                  );
+                }
+
                 const offerPriceAda = parseFloat(action.price);
                 const currentListingPriceAda = exactAsset.listing ? exactAsset.listing.price / 1_000_000 : null;
 
@@ -1012,18 +1109,123 @@ export class GovernanceService {
               return;
             }
 
-            const asset: Pick<Asset, 'id' | 'status' | 'type' | 'policy_id' | 'asset_id' | 'quantity' | 'name'> =
-              await this.assetRepository.findOne({
-                where: { id: action.assetId },
-                select: ['id', 'status', 'type', 'policy_id', 'asset_id', 'quantity', 'name'],
+            // CANCEL_OFFER actions cancel an existing vault offer (DB asset with OFFERED status)
+            if (action.exec === ExecType.CANCEL_OFFER) {
+              if (market?.toLowerCase() !== 'wayup') {
+                throw new BadRequestException('CANCEL_OFFER is only supported on WayUp marketplace');
+              }
+
+              const offeredAsset = await this.assetRepository.findOne({
+                where: { id: action.assetId, vault: { id: vaultId }, deleted: false },
+                select: [
+                  'id',
+                  'status',
+                  'origin_type',
+                  'type',
+                  'policy_id',
+                  'asset_id',
+                  'quantity',
+                  'name',
+                  'image',
+                  'metadata',
+                  'listing_tx_hash',
+                  'listing_price',
+                  'floor_price',
+                ],
               });
+
+              if (!offeredAsset) {
+                throw new BadRequestException(`Asset with ID ${action.assetId} not found`);
+              }
+
+              if (offeredAsset.type !== AssetType.NFT) {
+                throw new BadRequestException(
+                  `CANCEL_OFFER only supports NFT assets. Asset ${action.assetId} is not an NFT.`
+                );
+              }
+
+              if (offeredAsset.status !== AssetStatus.OFFERED) {
+                throw new BadRequestException(
+                  `Asset "${offeredAsset.name || action.assetId}" is not in OFFERED status. Only active offers can be cancelled.`
+                );
+              }
+
+              if (offeredAsset.origin_type !== AssetOriginType.OFFERED) {
+                throw new BadRequestException(
+                  `Asset "${offeredAsset.name || action.assetId}" is not an active vault offer. Only OFFERED-origin assets can be cancelled.`
+                );
+              }
+
+              if (!offeredAsset.listing_tx_hash) {
+                throw new BadRequestException(
+                  `Asset "${offeredAsset.name || action.assetId}" is missing offer transaction reference. Cannot create cancel-offer proposal.`
+                );
+              }
+
+              if (this.isMainnet) {
+                const treasuryWallet = await this.treasuryWalletService.getTreasuryWallet(vaultId);
+                if (!treasuryWallet?.address) {
+                  throw new BadRequestException(
+                    'Treasury wallet is not configured for this vault. Cannot verify offer status on WayUp.'
+                  );
+                }
+
+                try {
+                  const offerState = await this.wayUpPricingService.getVaultOfferMarketplaceState(
+                    treasuryWallet.address,
+                    offeredAsset.policy_id,
+                    offeredAsset.asset_id
+                  );
+
+                  if (offerState !== 'active') {
+                    const assetLabel = offeredAsset.name || action.assetId;
+                    throw new BadRequestException(
+                      this.wayUpPricingService.getOfferResolutionUserMessage(offerState, assetLabel) +
+                        ' Cancel-offer proposal cannot be created.'
+                    );
+                  }
+                } catch (error) {
+                  if (error instanceof BadRequestException) {
+                    throw error;
+                  }
+
+                  const errorMessage = error instanceof Error ? error.message : String(error);
+                  this.logger.error(
+                    `Failed to verify offer status on WayUp for asset ${offeredAsset.id}: ${errorMessage}`,
+                    error instanceof Error ? error.stack : undefined
+                  );
+                  throw new BadRequestException('Unable to verify offer status on WayUp. Please try again later.');
+                }
+              }
+
+              const offerPriceAda = Number(offeredAsset.listing_price ?? offeredAsset.floor_price ?? 0);
+
+              action.nftSnapshot = {
+                name: offeredAsset.name || offeredAsset.metadata?.name || 'Unknown NFT',
+                image: offeredAsset.image ?? null,
+                listingPriceAda: offerPriceAda,
+                policyId: offeredAsset.policy_id,
+                assetName: offeredAsset.asset_id,
+                collectionName: null,
+              };
+
+              return;
+            }
+
+            const asset: Pick<
+              Asset,
+              'id' | 'status' | 'type' | 'policy_id' | 'asset_id' | 'quantity' | 'name' | 'listing_tx_hash'
+            > = await this.assetRepository.findOne({
+              where: { id: action.assetId },
+              select: ['id', 'status', 'type', 'policy_id', 'asset_id', 'quantity', 'name', 'listing_tx_hash'],
+            });
 
             if (!asset) {
               throw new BadRequestException(`Asset with ID ${action.assetId} not found`);
             }
 
             // DexHunter swap validation (FT tokens only)
-            if (market === 'DexHunter') {
+            if (market?.toLowerCase() === 'dexhunter') {
               // Validate it's a fungible token
               if (asset.type !== AssetType.FT) {
                 throw new BadRequestException(
@@ -1119,7 +1321,7 @@ export class GovernanceService {
               }
             }
             // WayUp marketplace validation (NFTs)
-            else if (market === 'WayUp') {
+            else if (market?.toLowerCase() === 'wayup') {
               // Validate price is provided for SELL (LIST) actions
               if (action.exec === ExecType.SELL) {
                 // For List sellType, price is REQUIRED
@@ -1181,7 +1383,7 @@ export class GovernanceService {
         );
 
         // For DexHunter swaps, resolve specific asset IDs needed for each action
-        if (market === 'DexHunter') {
+        if (market?.toLowerCase() === 'dexhunter') {
           for (const action of actions) {
             const asset = await this.assetRepository.findOne({
               where: { id: action.assetId },
@@ -2033,11 +2235,12 @@ export class GovernanceService {
     // Transform marketplace actions with enriched asset data and WayUp URLs
     // For DexHunter swaps, combine quantities by token (policy_id + asset_id)
     const marketplaceActions = (proposal.metadata?.marketplaceActions || []).map(action => {
-      const isBuy = action.exec === 'BUY';
-      const isOffer = action.exec === 'OFFER';
-      const isSwapAction = action.slippage !== undefined || action.market === 'DexHunter';
+      const isBuy = action.exec === ExecType.BUY;
+      const isOffer = action.exec === ExecType.OFFER;
+      const isCancelOffer = action.exec === ExecType.CANCEL_OFFER;
+      const isSwapAction = action.slippage !== undefined || action.market?.toLowerCase() === 'dexhunter';
 
-      if (isBuy || isOffer) {
+      if (isBuy || isOffer || isCancelOffer) {
         let wayupUrl: string | undefined;
         if (!isSwapAction && action.nftSnapshot) {
           wayupUrl = `https://www.wayup.io/collection/${action.nftSnapshot.policyId}/asset/${action.nftSnapshot.assetName}?tab=activity`;
@@ -2975,7 +3178,7 @@ export class GovernanceService {
             vault: { id: vaultId },
             type: In([AssetType.NFT]),
             status: In([AssetStatus.LOCKED, AssetStatus.EXTRACTED]),
-            origin_type: AssetOriginType.CONTRIBUTED,
+            origin_type: In([AssetOriginType.CONTRIBUTED, AssetOriginType.BOUGHT]),
           },
         ],
         select: [
@@ -3003,8 +3206,78 @@ export class GovernanceService {
         treasuryWalletBalance,
       };
     } catch (error) {
-      this.logger.error(`Error getting assets for buy-sell proposals for vault ${vaultId}: ${error.message}`);
-      throw new InternalServerErrorException('Error getting assets for buying/selling');
+      this.logger.error(`Error getting assets for sell proposals for vault ${vaultId}: ${error.message}`);
+      throw new InternalServerErrorException('Error getting assets for selling');
+    }
+  }
+
+  async getOffersToCancel(
+    vaultId: string,
+    page: number = 1,
+    limit: number = 10,
+    search?: string
+  ): Promise<PaginatedResponseDto<AssetBuySellDto>> {
+    try {
+      const safePage = page > 0 ? page : 1;
+      const safeLimit = limit > 0 ? limit : 10;
+      const skip = (safePage - 1) * safeLimit;
+
+      const query = this.assetRepository
+        .createQueryBuilder('asset')
+        .where('asset.vault_id = :vaultId', { vaultId })
+        .andWhere('asset.type = :type', { type: AssetType.NFT })
+        .andWhere('asset.status = :status', { status: AssetStatus.OFFERED })
+        .andWhere('asset.origin_type = :originType', { originType: AssetOriginType.OFFERED })
+        .andWhere('asset.deleted = :deleted', { deleted: false })
+        .andWhere('asset.listing_tx_hash IS NOT NULL');
+
+      const trimmedSearch = search?.trim();
+      if (trimmedSearch) {
+        query.andWhere(
+          new Brackets(qb => {
+            qb.where('asset.name ILIKE :search', { search: `%${trimmedSearch}%` })
+              .orWhere('asset.policy_id ILIKE :search', { search: `%${trimmedSearch}%` })
+              .orWhere('asset.asset_id ILIKE :search', { search: `%${trimmedSearch}%` });
+          })
+        );
+      }
+
+      const [assets, total] = await query
+        .select([
+          'asset.id',
+          'asset.name',
+          'asset.policy_id',
+          'asset.asset_id',
+          'asset.quantity',
+          'asset.dex_price',
+          'asset.floor_price',
+          'asset.image',
+          'asset.metadata',
+          'asset.type',
+          'asset.listing_market',
+          'asset.listing_price',
+          'asset.listing_tx_hash',
+          'asset.listed_at',
+        ])
+        .orderBy('asset.listed_at', 'DESC')
+        .skip(skip)
+        .take(safeLimit)
+        .getManyAndCount();
+
+      const items = plainToInstance(AssetBuySellDto, assets, {
+        excludeExtraneousValues: true,
+      });
+
+      return {
+        items,
+        total,
+        page: safePage,
+        limit: safeLimit,
+        totalPages: Math.ceil(total / safeLimit) || 0,
+      };
+    } catch (error) {
+      this.logger.error(`Error getting offers to cancel for vault ${vaultId}: ${error.message}`);
+      throw new InternalServerErrorException('Error getting offers to cancel');
     }
   }
 
@@ -3079,6 +3352,64 @@ export class GovernanceService {
     } catch (error) {
       this.logger.error(`Error getting assets to update listing for vault ${vaultId}: ${error.message}`);
       throw new InternalServerErrorException('Error getting assets for updating listings');
+    }
+  }
+
+  /**
+   * Get asset metadata by unit from Blockfrost
+   * Validates unit format (56 hex chars for policy + optional asset name)
+   * Returns display name only
+   */
+  async getAssetMetadataByUnit(unit: string): Promise<{ displayName: string }> {
+    // Validate unit format: at least 56 hex characters (policy ID)
+    const hexPattern = /^[a-fA-F0-9]{56,}$/;
+    if (!unit || !hexPattern.test(unit)) {
+      throw new BadRequestException(
+        'Invalid asset unit format. Must be at least 56 hexadecimal characters (policy ID + optional asset name)'
+      );
+    }
+
+    // Check cache first (1 hour TTL)
+    const cacheKey = `asset_metadata:${unit}`;
+    const cached = this.assetMetadataCache.get<{ displayName: string }>(cacheKey);
+
+    if (cached) {
+      this.logger.debug(`Cache hit for asset metadata: ${unit}`);
+      return cached;
+    }
+
+    try {
+      // Fetch from Blockfrost
+      const assetInfo = await this.blockfrost.assetsById(unit);
+
+      // Extract display name with fallback priority: onchain_metadata.name → asset_name → "Unknown Asset"
+      let displayName = 'Unknown Asset';
+      if (assetInfo.onchain_metadata?.name) {
+        displayName = assetInfo?.onchain_metadata?.name as any;
+      } else if (assetInfo.asset_name) {
+        // Convert hex asset name to UTF-8 if possible
+        try {
+          displayName = Buffer.from(assetInfo.asset_name, 'hex').toString('utf8');
+        } catch {
+          displayName = assetInfo.asset_name;
+        }
+      }
+
+      const result = { displayName };
+
+      // Cache for 1 hour
+      this.assetMetadataCache.set(cacheKey, result, 3600);
+
+      return result;
+    } catch (error) {
+      this.logger.error(`Error fetching asset metadata for unit ${unit}: ${error.message}`);
+
+      // Handle Blockfrost-specific errors
+      if (error.status_code === 404) {
+        throw new NotFoundException(`Asset with unit ${unit} not found on-chain`);
+      }
+
+      throw new InternalServerErrorException(`Failed to fetch asset metadata: ${error.message}`);
     }
   }
 
@@ -3533,3 +3864,5 @@ export class GovernanceService {
     return BigInt(intPart + fracPart.padEnd(decimals, '0').slice(0, decimals));
   }
 }
+
+export default GovernanceService;

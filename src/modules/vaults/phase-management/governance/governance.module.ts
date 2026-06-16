@@ -13,7 +13,7 @@ import { GovernanceExecutionService } from './governance-execution.service';
 import { GovernanceFeeService } from './governance-fee.service';
 import { GovernanceRefundService } from './governance-refund.service';
 import { GovernanceController } from './governance.controller';
-import { GovernanceService } from './governance.service';
+import GovernanceService from './governance.service';
 import { ProposalHealthService } from './proposal-health.service';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
 import { SnapshotService } from './snapshot.service';

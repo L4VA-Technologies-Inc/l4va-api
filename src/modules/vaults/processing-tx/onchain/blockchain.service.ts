@@ -463,7 +463,7 @@ export class BlockchainService {
   async buildWayUpTransaction(input: WayUpTransactionInput): Promise<WayUpTransactionBuildResponse> {
     try {
       this.logger.log('Building WayUp transaction with input:', input);
-      const response = await fetch(`https://prod.api.ada-anvil.app/marketplace/api/build-tx`, {
+      const response = await fetch(`https://prod.api.ada-anvil.app/v2/services/marketplace/transactions/build`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -595,6 +595,7 @@ export class WayUpService {
     summary: {
       listedCount: number;
       unlistedCount: number;
+      unlistedOffersCount: number;
       updatedCount: number;
       offersCount: number;
       purchasedCount: number;
@@ -606,6 +607,7 @@ export class WayUpService {
     const hasActions =
       (actions.listings?.length ?? 0) > 0 ||
       (actions.unlistings?.length ?? 0) > 0 ||
+      (actions.unlistOffers?.length ?? 0) > 0 ||
       (actions.updates?.length ?? 0) > 0 ||
       (actions.offers?.length ?? 0) > 0 ||
       (actions.purchases?.length ?? 0) > 0;
@@ -624,6 +626,7 @@ export class WayUpService {
         summary: {
           listedCount: actions.listings?.length ?? 0,
           unlistedCount: actions.unlistings?.length ?? 0,
+          unlistedOffersCount: actions.unlistOffers?.length ?? 0,
           updatedCount: actions.updates?.length ?? 0,
           offersCount: actions.offers?.length ?? 0,
           purchasedCount: actions.purchases?.length ?? 0,
@@ -688,16 +691,9 @@ export class WayUpService {
           amount: 1,
         })) ?? [];
 
-      // Calculate total ADA needed from treasury for offers and purchases
-      const offerAmount = (actions.offers?.reduce((sum, o) => sum + o.priceAda, 0) ?? 0) * 1_000_000;
-      const purchaseAmount = (actions.purchases?.reduce((sum, p) => sum + p.priceAda, 0) ?? 0) * 1_000_000;
-      const totalTreasuryAda = offerAmount + purchaseAmount;
-
       // Get treasury UTXOs - treasury provides NFTs, ADA for offers/purchases, and transaction fees
       const result = await getUtxosExtract(Address.from_bech32(treasuryAddress), this.blockfrost, {
         targetAssets: targetAssets.length > 0 ? targetAssets : undefined,
-        targetAdaAmount: totalTreasuryAda > 0 ? totalTreasuryAda : undefined,
-        maxUtxos: 20,
       });
       const treasuryUtxos = result.utxos;
 
@@ -709,6 +705,7 @@ export class WayUpService {
       const actionParts: string[] = [];
       if (actions.listings?.length) actionParts.push(`listing ${actions.listings.length} NFT(s)`);
       if (actions.unlistings?.length) actionParts.push(`unlisting ${actions.unlistings.length}`);
+      if (actions.unlistOffers?.length) actionParts.push(`unlisting ${actions.unlistOffers.length} offer(s)`);
       if (actions.updates?.length) actionParts.push(`updating ${actions.updates.length}`);
       if (actions.offers?.length) actionParts.push(`offering on ${actions.offers.length}`);
       if (actions.purchases?.length) actionParts.push(`buying ${actions.purchases.length}`);
@@ -784,6 +781,42 @@ export class WayUpService {
         combinedPayload.createOffer = actions.offers;
       }
 
+      // Add unlist offers if provided (need to find output indices)
+      if (actions.unlistOffers?.length > 0) {
+        const unlistOffersWithIndices: { policyId: string; txHashIndex: string }[] = [];
+
+        for (const unlistOffer of actions.unlistOffers) {
+          try {
+            let txHashIndexWithOutput: string;
+
+            // Check if txHashIndex already includes the output index (format: txHash#outputIndex)
+            if (unlistOffer.txHashIndex.includes('#')) {
+              // Already has the output index, use it directly
+              txHashIndexWithOutput = unlistOffer.txHashIndex;
+              this.logger.log(`Using pre-formatted txHashIndex for offer cancel: ${txHashIndexWithOutput}`);
+            } else {
+              // Need to find the output index
+              const outputIndex = await this.findListingOutputIndex(
+                unlistOffer.txHashIndex,
+                unlistOffer.policyId,
+                unlistOffer.assetName
+              );
+              txHashIndexWithOutput = `${unlistOffer.txHashIndex}#${outputIndex}`;
+            }
+
+            unlistOffersWithIndices.push({
+              policyId: unlistOffer.policyId,
+              txHashIndex: txHashIndexWithOutput,
+            });
+          } catch (error) {
+            this.logger.error(`Failed to find output index for offer cancel ${unlistOffer.policyId}: ${error.message}`);
+            throw new Error(`Cannot cancel offer ${unlistOffer.policyId}: ${error.message}`);
+          }
+        }
+
+        combinedPayload.unlistOffer = unlistOffersWithIndices;
+      }
+
       // Add purchases if provided
       if (actions.purchases?.length > 0) {
         combinedPayload.buy = actions.purchases;
@@ -793,6 +826,7 @@ export class WayUpService {
         `Building combined transaction: ` +
           `${actions.listings?.length ?? 0} listings, ` +
           `${actions.unlistings?.length ?? 0} unlistings, ` +
+          `${actions.unlistOffers?.length ?? 0} unlist offers, ` +
           `${actions.updates?.length ?? 0} updates, ` +
           `${actions.offers?.length ?? 0} offers, ` +
           `${actions.purchases?.length ?? 0} purchases`
@@ -814,6 +848,7 @@ export class WayUpService {
       const summary = {
         listedCount: actions.listings?.length ?? 0,
         unlistedCount: actions.unlistings?.length ?? 0,
+        unlistedOffersCount: actions.unlistOffers?.length ?? 0,
         updatedCount: actions.updates?.length ?? 0,
         offersCount: actions.offers?.length ?? 0,
         purchasedCount: actions.purchases?.length ?? 0,

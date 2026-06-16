@@ -22,6 +22,10 @@ export class AssetBuySellDto {
   @Expose()
   policy_id: string;
 
+  @ApiProperty({ description: 'Asset ID (hex-encoded asset name)' })
+  @Expose()
+  asset_id: string;
+
   @ApiProperty({ description: 'Asset quantity' })
   @Expose()
   quantity: string;
@@ -66,6 +70,23 @@ export class AssetBuySellDto {
   @ApiPropertyOptional({ description: 'Date when asset was listed' })
   @Expose()
   listed_at?: Date;
+
+  // Computed fields for offer details
+  @ApiPropertyOptional({ description: 'Formatted listing price with ADA suffix', example: '6.00 ADA' })
+  @Expose()
+  @Transform(({ obj }) => {
+    if (!obj.listing_price) return null;
+    return `${parseFloat(obj.listing_price).toFixed(2)} ADA`;
+  })
+  formattedListingPrice?: string;
+
+  @ApiPropertyOptional({ description: 'Formatted floor price with ADA suffix', example: '6 ADA' })
+  @Expose()
+  @Transform(({ obj }) => {
+    if (!obj.floor_price) return null;
+    return `${obj.floor_price} ADA`;
+  })
+  formattedFloorPrice?: string;
 }
 
 // LP Pool DTOs for Termination
