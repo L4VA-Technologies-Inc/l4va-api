@@ -94,8 +94,6 @@ export class TapToolsClient {
       return priceMap;
     }
 
-    this.logger.log(`Fetching ${tokensToFetch.length} token prices from TapTools API`);
-
     // TapTools supports max 100 tokens per batch
     const batchSize = 100;
     for (let i = 0; i < tokensToFetch.length; i += batchSize) {
