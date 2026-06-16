@@ -1700,9 +1700,9 @@ export class TaptoolsService {
       const tokenALocked = poolData.tokenAQuantity;
       const tokenBLocked = poolData.tokenBQuantity;
 
-      this.logger.debug(
-        `VyFi pool data - tokenALocked: ${tokenALocked}, tokenBLocked: ${tokenBLocked}, lpSupply: ${totalSupply}`
-      );
+      // this.logger.debug(
+      //   `VyFi pool data - tokenALocked: ${tokenALocked}, tokenBLocked: ${tokenBLocked}, lpSupply: ${totalSupply}`
+      // );
 
       // Get token decimals from Blockfrost
       let tokenADecimals = 6; // Default to 6
@@ -1866,9 +1866,9 @@ export class TaptoolsService {
             if (lpAsset) {
               const lpTokenUnit = lpAsset.policy_id + lpAsset.asset_id;
 
-              this.logger.debug(
-                `VyFi LP token detected for ${whitelistItem.policy_id}: tokenA=${tokenAUnit}, tokenB=${tokenBUnit}, lpUnit=${lpTokenUnit}`
-              );
+              // this.logger.debug(
+              //   `VyFi LP token detected for ${whitelistItem.policy_id}: tokenA=${tokenAUnit}, tokenB=${tokenBUnit}, lpUnit=${lpTokenUnit}`
+              // );
 
               lpPrice = await this.calculateLpTokenPriceFromVyFi(tokenAUnit, tokenBUnit || '', lpTokenUnit);
             } else {
