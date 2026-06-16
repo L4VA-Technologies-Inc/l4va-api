@@ -247,9 +247,12 @@ export class WayUpPricingService {
    * @see https://prod.api.ada-anvil.app/v2/services/swagger/ui#tag/marketplace/GET/marketplace/wallets/{address}/offers
    */
   async getWalletSentOffers(walletAddress: string): Promise<AnvilWalletOffer[]> {
+    if (!this.anvilApiKey) {
+      throw new Error('ANVIL_API_KEY is not configured');
+    }
+
     const allOffers: AnvilWalletOffer[] = [];
     let cursor: string | undefined;
-
     do {
       const params = new URLSearchParams({
         direction: 'sent',
