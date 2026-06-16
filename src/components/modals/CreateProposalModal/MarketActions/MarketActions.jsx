@@ -7,12 +7,14 @@ import { UnlistAction } from '@/components/modals/CreateProposalModal/MarketActi
 import { UpdateListingAction } from '@/components/modals/CreateProposalModal/MarketActions/UpdateListingAction.jsx';
 import { BuyAction } from '@/components/modals/CreateProposalModal/MarketActions/BuyAction.jsx';
 import { SellAction } from '@/components/modals/CreateProposalModal/MarketActions/SellAction.jsx';
+import { CancelOfferAction } from '@/components/modals/CreateProposalModal/MarketActions/CancelOfferAction.jsx';
 
 const marketOptions = [
   { value: 'sell', label: 'Sell' },
   { value: 'unlist', label: 'Unlist' },
   { value: 'update_list', label: 'Update List' },
-  { value: 'buy', label: 'Buy' },
+  { value: 'buy', label: 'Buy/Offer' },
+  { value: 'cancel_offer', label: 'Cancel Offer' },
   { value: 'swap', label: 'Swap - Coming Soon', disabled: true },
 ];
 
@@ -25,6 +27,7 @@ export const MarketActions = ({ vaultId, onDataChange, error }) => {
       marketActionType: value,
       unlistAssets: [],
       updateListingAssets: [],
+      cancelOfferAssets: [],
       isValid: false,
     });
   };
@@ -56,6 +59,9 @@ export const MarketActions = ({ vaultId, onDataChange, error }) => {
       {selectedOption === 'unlist' && <UnlistAction vaultId={vaultId} onDataChange={handleActionDataChange} />}
       {selectedOption === 'update_list' && (
         <UpdateListingAction vaultId={vaultId} onDataChange={handleActionDataChange} />
+      )}
+      {selectedOption === 'cancel_offer' && (
+        <CancelOfferAction vaultId={vaultId} onDataChange={handleActionDataChange} />
       )}
     </div>
   );

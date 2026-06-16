@@ -86,8 +86,8 @@ export const MarketplaceActionsList = ({ actions, type = 'marketplace' }) => {
                 <>
                   <ActionField label="Exec" value={action.exec} />
                   <ActionField label="Market" value={action.market || 'WayUp'} />
-                  {action.assetPrice && (
-                    <ActionField label="Asset Price" value={`₳${formatAdaPrice(action.assetPrice)}`} />
+                  {action.assetPrice && String(action.exec || '').toLowerCase() !== 'offer' && (
+                    <ActionField label="Floor Price" value={`₳${formatAdaPrice(action.assetPrice)}`} />
                   )}
                   {action.price && (
                     <ActionField
@@ -116,7 +116,7 @@ export const MarketplaceActionsList = ({ actions, type = 'marketplace' }) => {
                     <ActionField label="Status" className="uppercase" value={action.assetStatus} />
                   )}
                   {action.wayupUrl && (
-                    <ActionField label="Listing URL">
+                    <ActionField label="Token URL">
                       <a
                         href={action.wayupUrl}
                         target="_blank"
@@ -142,7 +142,7 @@ export const MarketplaceActionsList = ({ actions, type = 'marketplace' }) => {
                     <ActionField label="Status" className="uppercase" value={action.assetStatus} />
                   )}
                   {action.wayupUrl && (
-                    <ActionField label="Listing URL">
+                    <ActionField label="Token URL">
                       <a
                         href={action.wayupUrl}
                         target="_blank"

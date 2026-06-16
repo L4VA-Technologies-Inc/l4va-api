@@ -417,6 +417,46 @@ export const useSwappableAssets = (vaultId: string) => {
   });
 };
 
+export const useAssetMetadata = (unit: string, enabled: boolean = true) => {
+  return useQuery({
+    queryKey: ['asset-metadata', unit],
+    queryFn: () => GovernanceApiProvider.getAssetMetadata(unit),
+    enabled: enabled && !!unit && unit.length >= 56,
+    retry: 1,
+    staleTime: 1000 * 60 * 60, // 1 hour - asset metadata rarely changes
+  });
+};
+
+export const useOffersToCancel = (vaultId: string, { limit = 20, search = '' } = {}) => {
+  const trimmedSearch = typeof search === 'string' ? search.trim() : '';
+
+  return useInfiniteQuery({
+    queryKey: ['offers-to-cancel', vaultId, limit, trimmedSearch],
+    initialPageParam: 1,
+    queryFn: async ({ pageParam }) => {
+      const response = await GovernanceApiProvider.getOffersToCancel(vaultId, {
+        page: pageParam,
+        limit,
+        search: trimmedSearch || undefined,
+      });
+      const payload = response?.data;
+
+      return {
+        items: Array.isArray(payload?.items) ? payload.items : [],
+        totalPages: Number(payload?.totalPages) || 1,
+        page: Number(payload?.page) || Number(pageParam) || 1,
+      };
+    },
+    getNextPageParam: lastPage => {
+      if (lastPage.page < lastPage.totalPages) {
+        return lastPage.page + 1;
+      }
+      return undefined;
+    },
+    enabled: !!vaultId,
+  });
+};
+
 export const useCreateProposal = () => {
   return useMutation({
     mutationFn: ({ vaultId, proposalData }: { vaultId: string; proposalData: any }) =>

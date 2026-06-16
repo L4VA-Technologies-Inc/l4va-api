@@ -12,7 +12,7 @@ export const buyOptionSchema = yup.object({
       return Number.isNaN(parsed) ? undefined : parsed;
     })
     .typeError('Price must be a number')
-    .moreThan(0, 'Price must be greater than 0')
+    .min(5, 'Minimum price is 5 ADA')
     .required(),
   exec: yup.string().required(),
   id: yup.number().required(),
@@ -20,7 +20,6 @@ export const buyOptionSchema = yup.object({
 
 export const transactionOptionSchema = yup.object({
   assetName: yup.string().required(),
-  quantity: yup.string().required(),
   duration: yup.string().when('method', {
     is: 'GTC',
     then: schema => schema.notRequired().nullable(),
@@ -35,6 +34,5 @@ export const transactionOptionSchema = yup.object({
   sellType: yup.string().required(),
   exec: yup.string().required(),
   id: yup.number().required(),
-  isMax: yup.boolean().required(),
   market: yup.string().required(),
 });

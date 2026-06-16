@@ -49,6 +49,7 @@ export const AssetsList = ({
   searchQuery = '',
   onSearchChange,
   showTabs = true,
+  title = 'Available Assets',
 }) => {
   const filteredAssets = useMemo(() => {
     if (!walletAssets || walletAssets.length === 0) return [];
@@ -92,7 +93,7 @@ export const AssetsList = ({
     <>
       <div className="space-y-4">
         <div className="flex justify-between items-center">
-          <h2 className="text-xl font-medium">Available Assets</h2>
+          <h2 className="text-xl font-medium">{title}</h2>
           {showTabs && (
             <LavaTabs activeTab={activeTab} className="bg-steel-850" tabs={['NFT', 'FT']} onTabChange={onTabChange} />
           )}

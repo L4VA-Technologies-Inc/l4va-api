@@ -218,7 +218,7 @@ export const CreateProposalModal = ({ onClose, isOpen, vault }) => {
           proposalPayload.metadata = proposalData;
         } else if (marketActionType === 'buy') {
           proposalPayload.marketplaceActions = (proposalData.buyingSellingOptions || [])
-            .filter(opt => opt.assetId && opt.assetId.length >= 56 && opt.price && Number(opt.price) > 0)
+            .filter(opt => opt.assetId && opt.assetId.length >= 56 && opt.price && Number(opt.price) >= 5)
             .map(opt => ({
               assetId: opt.assetId,
               exec: opt.exec,
@@ -226,6 +226,12 @@ export const CreateProposalModal = ({ onClose, isOpen, vault }) => {
               market: opt.market || 'WayUp',
               assetName: opt.assetName,
             }));
+        } else if (marketActionType === 'cancel_offer') {
+          proposalPayload.marketplaceActions = (proposalData.cancelOfferAssets || []).map(asset => ({
+            assetId: asset.id,
+            exec: 'CANCEL_OFFER',
+            market: asset.listing_market || asset.market || 'WayUp',
+          }));
         } else {
           proposalPayload.marketplaceActions = (proposalData.unlistAssets || []).map(asset => ({
             assetId: asset.id,
