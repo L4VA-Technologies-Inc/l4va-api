@@ -181,7 +181,14 @@ export class Asset {
   listing_market?: string;
 
   @Expose({ name: 'listingPrice' })
-  @Column({ name: 'listing_price', type: 'decimal', precision: 20, scale: 6, nullable: true })
+  @Column({
+    name: 'listing_price',
+    type: 'decimal',
+    precision: 20,
+    scale: 6,
+    nullable: true,
+    transformer: new ColumnNumericTransformer(),
+  })
   listing_price?: number;
 
   /**
