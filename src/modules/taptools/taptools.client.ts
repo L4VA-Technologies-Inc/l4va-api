@@ -121,7 +121,7 @@ export class TapToolsClient {
           this.priceCache.set(`token_price_${tokenId}`, normalizedPrice);
         });
 
-        this.logger.debug(`Successfully fetched batch ${i / batchSize + 1} (${batch.length} tokens) from TapTools`);
+        // this.logger.debug(`Successfully fetched batch ${i / batchSize + 1} (${batch.length} tokens) from TapTools`);
       } catch (error) {
         // Log the error and set all tokens in batch to null
         const errorMessage = error instanceof Error ? error.message : String(error);
