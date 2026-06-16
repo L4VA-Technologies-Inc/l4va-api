@@ -285,9 +285,12 @@ export class WayUpPricingService {
    * Fetch NFTs held by a treasury wallet from Anvil marketplace API.
    */
   async getWalletAssets(walletAddress: string): Promise<AnvilWalletAsset[]> {
+    if (!this.anvilApiKey) {
+      throw new Error('ANVIL_API_KEY is not configured');
+    }
+
     const allAssets: AnvilWalletAsset[] = [];
     let cursor: string | undefined;
-
     do {
       const params = new URLSearchParams({ limit: '60' });
       if (cursor) {
