@@ -422,6 +422,78 @@ export class NotificationEventsListener {
     );
   }
 
+  @OnEvent('offer.accepted')
+  async handleOfferAccepted(event: {
+    vaultId: string;
+    vaultName: string;
+    assetNames: string[];
+    tokenHolderIds: string[];
+  }): Promise<void> {
+    if (event.tokenHolderIds.length === 0) {
+      this.logger.debug(`No token holders to notify for accepted offers in vault ${event.vaultName}`);
+      return;
+    }
+
+    const assetList =
+      event.assetNames.length === 1
+        ? event.assetNames[0]
+        : event.assetNames.length === 2
+          ? event.assetNames.join(' and ')
+          : `${event.assetNames.slice(0, -1).join(', ')}, and ${event.assetNames[event.assetNames.length - 1]}`;
+
+    const pluralized = event.assetNames.length === 1 ? 'offer has' : 'offers have';
+
+    await this.notificationService.sendBulkNotification(
+      {
+        title: `NFT ${event.assetNames.length === 1 ? 'Offer' : 'Offers'} Accepted`,
+        description: `${pluralized} been accepted for ${assetList} in vault ${event.vaultName}. The NFT${event.assetNames.length === 1 ? ' is' : 's are'} now in the treasury wallet.`,
+        vaultId: event.vaultId,
+        vaultName: event.vaultName,
+      },
+      event.tokenHolderIds
+    );
+
+    this.logger.log(
+      `Sent offer accepted notification to ${event.tokenHolderIds.length} token holders for vault ${event.vaultName}`
+    );
+  }
+
+  @OnEvent('offer.cancelled')
+  async handleOfferCancelled(event: {
+    vaultId: string;
+    vaultName: string;
+    assetNames: string[];
+    tokenHolderIds: string[];
+  }): Promise<void> {
+    if (event.tokenHolderIds.length === 0) {
+      this.logger.debug(`No token holders to notify for cancelled offers in vault ${event.vaultName}`);
+      return;
+    }
+
+    const assetList =
+      event.assetNames.length === 1
+        ? event.assetNames[0]
+        : event.assetNames.length === 2
+          ? event.assetNames.join(' and ')
+          : `${event.assetNames.slice(0, -1).join(', ')}, and ${event.assetNames[event.assetNames.length - 1]}`;
+
+    const pluralized = event.assetNames.length === 1 ? 'offer was' : 'offers were';
+
+    await this.notificationService.sendBulkNotification(
+      {
+        title: `NFT ${event.assetNames.length === 1 ? 'Offer' : 'Offers'} Cancelled`,
+        description: `The ${pluralized} cancelled or rejected for ${assetList} in vault ${event.vaultName}.`,
+        vaultId: event.vaultId,
+        vaultName: event.vaultName,
+      },
+      event.tokenHolderIds
+    );
+
+    this.logger.log(
+      `Sent offer cancelled notification to ${event.tokenHolderIds.length} token holders for vault ${event.vaultName}`
+    );
+  }
+
   // MILESTONE NOTIFICATIONS
   @OnEvent('milestone.tvl_reached') // Haven`t added
   async handleTVLMilestone(event: {

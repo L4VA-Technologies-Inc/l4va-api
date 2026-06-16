@@ -20,6 +20,7 @@ import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.s
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { GoogleCloudStorageService } from '@/modules/google_cloud/google_bucket/bucket.service';
 import { PriceService } from '@/modules/price/price.service';
+import { SnapshotService } from '@/modules/vaults/phase-management/governance/snapshot.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { VaultStatus } from '@/types/vault.types';
 
@@ -69,7 +70,8 @@ export class AssetsService {
     private readonly priceService: PriceService,
     private readonly dexHunterPricingService: DexHunterPricingService,
     private readonly systemSettingsService: SystemSettingsService,
-    private readonly gcsService: GoogleCloudStorageService
+    private readonly gcsService: GoogleCloudStorageService,
+    private readonly snapshotService: SnapshotService
   ) {
     this.VLRM_HEX_ASSET_NAME = this.configService.get<string>('VLRM_HEX_ASSET_NAME');
     this.VLRM_POLICY_ID = this.configService.get<string>('VLRM_POLICY_ID');
@@ -736,7 +738,8 @@ export class AssetsService {
         origin_type: AssetOriginType.OFFERED,
         deleted: false,
       },
-      select: ['id', 'vault_id', 'listing_price', 'floor_price'],
+      select: ['id', 'vault_id', 'listing_price', 'floor_price', 'name'],
+      relations: ['vault'],
     });
 
     if (assets.length === 0) return;
@@ -809,11 +812,26 @@ export class AssetsService {
       );
       // Asset status updates already completed successfully, so we just log the error
     }
+
+    // Emit events for accepted offers grouped by vault
+    await this.emitOfferStatusEvents(assets, 'offer.accepted');
   }
 
   /** Offer cancelled or rejected on WayUp by NFT owner (or via governance CANCEL_OFFER). */
   async markOffersAsCancelled(assetIds: string[]): Promise<void> {
     if (assetIds.length === 0) return;
+
+    // Fetch assets with vault info before updating for notification
+    const assets = await this.assetsRepository.find({
+      where: {
+        id: In(assetIds),
+        status: AssetStatus.OFFERED,
+        origin_type: AssetOriginType.OFFERED,
+        deleted: false,
+      },
+      select: ['id', 'vault_id', 'name'],
+      relations: ['vault'],
+    });
 
     await this.assetsRepository.update(
       {
@@ -832,6 +850,9 @@ export class AssetsService {
         listed_at: null,
       }
     );
+
+    // Emit events for cancelled offers grouped by vault
+    await this.emitOfferStatusEvents(assets, 'offer.cancelled');
   }
 
   /**
@@ -1017,5 +1038,51 @@ export class AssetsService {
     asset.updated_at = new Date();
 
     await this.assetsRepository.save(asset);
+  }
+
+  /**
+   * Group assets by vault and emit events with token holder notifications
+   * @param assets Assets with vault relations loaded
+   * @param eventName Event name to emit (e.g., 'offer.accepted', 'offer.cancelled')
+   */
+  private async emitOfferStatusEvents(
+    assets: Array<{ vault_id?: string; vault?: { name: string }; name?: string }>,
+    eventName: 'offer.accepted' | 'offer.cancelled'
+  ): Promise<void> {
+    try {
+      const vaultGroups = new Map<string, { vaultName: string; assetNames: string[] }>();
+
+      for (const asset of assets) {
+        if (!asset.vault_id || !asset.vault) continue;
+
+        const group = vaultGroups.get(asset.vault_id);
+        if (group) {
+          group.assetNames.push(asset.name || 'Unknown NFT');
+        } else {
+          vaultGroups.set(asset.vault_id, {
+            vaultName: asset.vault.name,
+            assetNames: [asset.name || 'Unknown NFT'],
+          });
+        }
+      }
+
+      // Emit one event per vault with all offers
+      for (const [vaultId, { vaultName, assetNames }] of vaultGroups.entries()) {
+        const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromLatestSnapshot(vaultId);
+
+        this.eventEmitter.emit(eventName, {
+          vaultId,
+          vaultName,
+          assetNames,
+          tokenHolderIds,
+        });
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `Failed to emit ${eventName} events: ${errorMessage}`,
+        error instanceof Error ? error.stack : undefined
+      );
+    }
   }
 }
