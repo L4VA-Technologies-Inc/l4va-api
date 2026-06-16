@@ -663,10 +663,7 @@ export class AlertsService {
             {
               type: 'context',
               elements: [
-                {
-                  type: 'mrkdwn',
-                  text: `*Timestamp:* ${timestamp} | *Environment:* Production`,
-                },
+                  text: `*Timestamp:* ${timestamp} | *Environment:* ${this.nodeEnv || 'unknown'}`,
               ],
             },
           ],
