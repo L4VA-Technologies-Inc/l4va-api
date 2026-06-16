@@ -826,6 +826,10 @@ export class AssetsService {
         status: AssetStatus.CANCEL_OFFER,
         deleted: true,
         updated_at: new Date(),
+        listing_market: null,
+        listing_price: null,
+        listing_tx_hash: null,
+        listed_at: null,
       }
     );
   }
