@@ -26,16 +26,18 @@ export const SelectedAssetItem = ({ asset, onRemove }) => (
         </span>
       </div>
       <div className="flex items-center gap-3 shrink-0">
-        <a
-          href={getPolicyExplorerUrl(asset.metadata?.policyId)}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={e => e.stopPropagation()}
-          className="text-dark-100 hover:text-white hover:underline text-sm whitespace-nowrap transition-colors"
-          title={asset.metadata?.policyId}
-        >
-          {formatPolicyId(asset.metadata?.policyId)}
-        </a>
+        {asset.metadata?.policyId && (
+          <a
+            href={getPolicyExplorerUrl(asset.metadata.policyId)}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={e => e.stopPropagation()}
+            className="text-dark-100 hover:text-white hover:underline text-sm whitespace-nowrap transition-colors"
+            title={asset.metadata.policyId}
+          >
+            {formatPolicyId(asset.metadata.policyId)}
+          </a>
+        )}
         <button
           className="text-dark-100 hover:text-white p-1 rounded-full hover:bg-steel-700 transition-colors"
           type="button"
