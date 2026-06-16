@@ -3361,11 +3361,11 @@ export class GovernanceService {
    * Returns display name only
    */
   async getAssetMetadataByUnit(unit: string): Promise<{ displayName: string }> {
-    // Validate unit format: at least 56 hex characters (policy ID)
-    const hexPattern = /^[a-fA-F0-9]{56,}$/;
+    // Validate unit format: 56 hex chars for policy ID + optional hex asset name (even-length)
+    const hexPattern = /^[a-fA-F0-9]{56}([a-fA-F0-9]{2})*$/;
     if (!unit || !hexPattern.test(unit)) {
       throw new BadRequestException(
-        'Invalid asset unit format. Must be at least 56 hexadecimal characters (policy ID + optional asset name)'
+        'Invalid asset unit format. Must be 56 hexadecimal characters (policy ID) plus an optional even-length hex asset name'
       );
     }
 
