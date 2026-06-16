@@ -22,8 +22,7 @@ export const NoTreasuryWalletAlert = ({ isLoading = false }) => {
         <div>
           <p className="text-red-400 font-medium">No Treasury Wallet</p>
           <p className="text-white/60 text-sm mt-1">
-            This vault does not have a treasury wallet configured. Distribution proposals require a treasury wallet with
-            ADA funds.
+            This vault does not have a treasury wallet configured. This action requires a treasury wallet with ADA funds.
           </p>
         </div>
       </div>
