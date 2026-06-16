@@ -232,6 +232,7 @@ export class GovernanceController {
   }
 
   @Get('assets/metadata/:unit')
+  @UseGuards(AuthGuard)
   @ApiOperation({
     summary: 'Get asset metadata by unit from Blockfrost',
     description:
