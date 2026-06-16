@@ -13,10 +13,10 @@ import { GovernanceExecutionService } from './governance-execution.service';
 import { GovernanceFeeService } from './governance-fee.service';
 import { GovernanceRefundService } from './governance-refund.service';
 import { GovernanceController } from './governance.controller';
-import { GovernanceService } from './governance.service';
+import GovernanceService from './governance.service';
 import { ProposalHealthService } from './proposal-health.service';
 import { ProposalSchedulerService } from './proposal-scheduler.service';
-import { SnapshotService } from './snapshot.service';
+import { SnapshotModule } from './snapshot.module';
 import { TerminationController } from './termination.controller';
 import { TerminationService } from './termination.service';
 import { VoteCountingService } from './vote-counting.service';
@@ -59,6 +59,7 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
       TokenVerification,
     ]),
     RedisModule,
+    SnapshotModule,
     AssetsModule,
     WayUpModule,
     TreasureWalletModule,
@@ -83,7 +84,6 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     VoteCountingService,
     TerminationService,
     DistributionService,
-    SnapshotService,
     {
       provide: ProposalHealthService,
       useFactory: (
@@ -104,7 +104,6 @@ import { WayUpModule } from '@/modules/wayup/wayup.module';
     TerminationService,
     DistributionService,
     ExpansionService,
-    SnapshotService,
   ],
 })
 export class GovernanceModule {}

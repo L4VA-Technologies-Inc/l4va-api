@@ -82,7 +82,7 @@ export class Proposal {
     fungibleTokens?: FungibleTokenDto[];
     nonFungibleTokens?: NonFungibleTokenDto[];
 
-    // Buy/Sell data
+    // Buy/Sell data - each action can include a displayName field (fetched from Blockfrost on-chain metadata)
     marketplaceActions?: MarketplaceActionDto[];
 
     // Distribution data - total lovelace amount to distribute
@@ -99,10 +99,15 @@ export class Proposal {
       policyIds: string[];
       labels?: string[];
       duration?: number;
+      /** No time limit (always open) */
       noLimit?: boolean;
+      /** Max assets per expansion window */
       assetMax?: number;
+      /** No max assets limit */
       noMax?: boolean;
+      /** Pricing mode */
       priceType: 'limit' | 'market';
+      /** For limit: VT per 1 ADA */
       limitPrice?: number;
       currentAssetCount?: number; // Track progress
     };

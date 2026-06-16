@@ -33,4 +33,6 @@ export enum MarketplaceAction {
   UPDATE_LISTING = 'update_listing',
   UNLIST = 'unlist',
   BUY = 'buy',
+  OFFER = 'offer',
+  CANCEL_OFFER = 'cancel_offer',
 }

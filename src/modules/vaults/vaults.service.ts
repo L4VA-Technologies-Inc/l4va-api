@@ -908,7 +908,7 @@ export class VaultsService {
         statuses: [AssetStatus.PENDING, AssetStatus.LOCKED, AssetStatus.EXTRACTED, AssetStatus.OFFERED],
       })
       .andWhere('asset.origin_type IN (:...originTypes)', {
-        originTypes: [AssetOriginType.CONTRIBUTED, AssetOriginType.BOUGHT],
+        originTypes: [AssetOriginType.CONTRIBUTED, AssetOriginType.BOUGHT, AssetOriginType.OFFERED],
       })
       .setParameters({
         nftType: AssetType.NFT,

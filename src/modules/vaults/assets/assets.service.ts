@@ -20,6 +20,7 @@ import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.s
 import { SystemSettingsService } from '@/modules/globals/system-settings';
 import { GoogleCloudStorageService } from '@/modules/google_cloud/google_bucket/bucket.service';
 import { PriceService } from '@/modules/price/price.service';
+import { SnapshotService } from '@/modules/vaults/phase-management/governance/snapshot.service';
 import { AssetOriginType, AssetStatus, AssetType } from '@/types/asset.types';
 import { VaultStatus } from '@/types/vault.types';
 
@@ -29,6 +30,27 @@ export class AssetsService {
   private readonly VLRM_HEX_ASSET_NAME: string;
   private readonly VLRM_POLICY_ID: string;
   private readonly isMainnet: boolean;
+
+  /** Origin types shown in vault assets list (contributed, bought, fee, and offered assets) */
+  private readonly VAULT_ASSETS_ORIGIN_TYPES = [
+    AssetOriginType.CONTRIBUTED,
+    AssetOriginType.BOUGHT,
+    AssetOriginType.FEE,
+    AssetOriginType.OFFERED,
+  ];
+
+  /** Asset statuses shown in vault assets list (all active states) */
+  private readonly VAULT_ASSETS_STATUSES = [
+    AssetStatus.PENDING,
+    AssetStatus.LOCKED,
+    AssetStatus.EXTRACTED,
+    AssetStatus.RELEASED,
+    AssetStatus.LISTED,
+    AssetStatus.OFFERED,
+  ];
+
+  /** Asset statuses shown in acquired assets list (locked, released, and distributed) */
+  private readonly ACQUIRED_ASSETS_STATUSES = [AssetStatus.LOCKED, AssetStatus.RELEASED, AssetStatus.DISTRIBUTED];
 
   constructor(
     @InjectRepository(Asset)
@@ -48,7 +70,8 @@ export class AssetsService {
     private readonly priceService: PriceService,
     private readonly dexHunterPricingService: DexHunterPricingService,
     private readonly systemSettingsService: SystemSettingsService,
-    private readonly gcsService: GoogleCloudStorageService
+    private readonly gcsService: GoogleCloudStorageService,
+    private readonly snapshotService: SnapshotService
   ) {
     this.VLRM_HEX_ASSET_NAME = this.configService.get<string>('VLRM_HEX_ASSET_NAME');
     this.VLRM_POLICY_ID = this.configService.get<string>('VLRM_POLICY_ID');
@@ -228,16 +251,10 @@ export class AssetsService {
       ])
       .where('asset.vault_id = :vaultId', { vaultId })
       .andWhere('asset.origin_type IN (:...originTypes)', {
-        originTypes: [AssetOriginType.CONTRIBUTED, AssetOriginType.BOUGHT, AssetOriginType.FEE],
+        originTypes: this.VAULT_ASSETS_ORIGIN_TYPES,
       })
       .andWhere('asset.status IN (:...statuses)', {
-        statuses: [
-          AssetStatus.PENDING,
-          AssetStatus.LOCKED,
-          AssetStatus.EXTRACTED,
-          AssetStatus.RELEASED,
-          AssetStatus.LISTED,
-        ],
+        statuses: this.VAULT_ASSETS_STATUSES,
       });
 
     if (search) {
@@ -388,7 +405,7 @@ export class AssetsService {
         originType: AssetOriginType.ACQUIRED,
       })
       .andWhere('asset.status IN (:...statuses)', {
-        statuses: [AssetStatus.LOCKED, AssetStatus.RELEASED, AssetStatus.DISTRIBUTED],
+        statuses: this.ACQUIRED_ASSETS_STATUSES,
       });
 
     if (search) {
@@ -709,6 +726,135 @@ export class AssetsService {
     );
   }
 
+  /** Offer accepted on WayUp by NFT owner — NFT is in treasury. */
+  async markOffersAsAccepted(assetIds: string[]): Promise<void> {
+    if (assetIds.length === 0) return;
+
+    // First, fetch the assets with their prices and vault info before updating
+    const assets = await this.assetsRepository.find({
+      where: {
+        id: In(assetIds),
+        status: AssetStatus.OFFERED,
+        origin_type: AssetOriginType.OFFERED,
+        deleted: false,
+      },
+      select: ['id', 'vault_id', 'listing_price', 'floor_price', 'name'],
+      relations: ['vault'],
+    });
+
+    if (assets.length === 0) return;
+
+    // Update asset statuses
+    await this.assetsRepository.update(
+      {
+        id: In(assetIds),
+        status: AssetStatus.OFFERED,
+        origin_type: AssetOriginType.OFFERED,
+        deleted: false,
+      },
+      {
+        status: AssetStatus.EXTRACTED,
+        origin_type: AssetOriginType.BOUGHT,
+        updated_at: new Date(),
+        listing_market: null,
+        listing_price: null,
+        listing_tx_hash: null,
+        listed_at: null,
+      }
+    );
+
+    // Try to update vault costs, but don't fail the whole operation if this fails
+    try {
+      // Group assets by vault and calculate total cost per vault
+      const vaultCosts = new Map<string, number>();
+
+      for (const asset of assets) {
+        if (!asset.vault_id) continue;
+
+        // Use listing_price (offer price) or fall back to floor_price
+        const price = asset.listing_price ?? asset.floor_price ?? 0;
+        if (price <= 0) continue; // Skip assets without valid pricing
+
+        const currentTotal = vaultCosts.get(asset.vault_id) ?? 0;
+        vaultCosts.set(asset.vault_id, currentTotal + price);
+      }
+
+      if (vaultCosts.size === 0) return; // No vaults with valid pricing
+
+      // Get current ADA price in USD
+      const adaPriceUsd = await this.priceService.getAdaPrice();
+
+      // Update each vault's cost fields to reflect the newly acquired assets
+      for (const [vaultId, totalCostAda] of vaultCosts.entries()) {
+        const totalCostUsd = totalCostAda * adaPriceUsd;
+
+        await this.vaultsRepository
+          .createQueryBuilder()
+          .update(Vault)
+          .set({
+            total_assets_cost_ada: () => `total_assets_cost_ada + ${totalCostAda}`,
+            total_assets_cost_usd: () => `total_assets_cost_usd + ${totalCostUsd}`,
+            last_valuation_update: new Date(),
+          })
+          .where('id = :vaultId', { vaultId })
+          .execute();
+
+        const assetCount = assets.filter(a => a.vault_id === vaultId).length;
+        this.logger.log(
+          `Updated vault ${vaultId} costs: +${totalCostAda.toFixed(2)} ADA (+${totalCostUsd.toFixed(2)} USD) from ${assetCount} accepted offer(s)`
+        );
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `Failed to update vault costs for accepted offers: ${errorMessage}`,
+        error instanceof Error ? error.stack : undefined
+      );
+      // Asset status updates already completed successfully, so we just log the error
+    }
+
+    // Emit events for accepted offers grouped by vault
+    await this.emitOfferStatusEvents(assets, 'offer.accepted');
+  }
+
+  /** Offer cancelled or rejected on WayUp by NFT owner (or via governance CANCEL_OFFER). */
+  async markOffersAsCancelled(assetIds: string[]): Promise<void> {
+    if (assetIds.length === 0) return;
+
+    // Fetch assets with vault info before updating for notification
+    const assets = await this.assetsRepository.find({
+      where: {
+        id: In(assetIds),
+        status: AssetStatus.OFFERED,
+        origin_type: AssetOriginType.OFFERED,
+        deleted: false,
+      },
+      select: ['id', 'vault_id', 'name'],
+      relations: ['vault'],
+    });
+
+    await this.assetsRepository.update(
+      {
+        id: In(assetIds),
+        status: AssetStatus.OFFERED,
+        origin_type: AssetOriginType.OFFERED,
+        deleted: false,
+      },
+      {
+        status: AssetStatus.CANCEL_OFFER,
+        deleted: true,
+        updated_at: new Date(),
+        listing_market: null,
+        listing_price: null,
+        listing_tx_hash: null,
+        listed_at: null,
+      }
+    );
+
+    // Emit events for cancelled offers grouped by vault
+    await this.emitOfferStatusEvents(assets, 'offer.cancelled');
+  }
+
   /**
    * Mark multiple assets as listed with individual listing prices
    */
@@ -840,6 +986,7 @@ export class AssetsService {
     floorPrice: number;
     metadata?: any;
     status?: AssetStatus;
+    originType?: AssetOriginType;
   }): Promise<Asset> {
     const vault = await this.vaultsRepository.findOne({ where: { id: params.vaultId } });
 
@@ -857,6 +1004,9 @@ export class AssetsService {
       }
     }
 
+    const originType = params.originType ?? AssetOriginType.BOUGHT;
+    const defaultStatus = originType === AssetOriginType.OFFERED ? AssetStatus.OFFERED : AssetStatus.EXTRACTED;
+
     const asset = this.assetsRepository.create({
       vault,
       policy_id: params.policyId,
@@ -866,8 +1016,8 @@ export class AssetsService {
       type: AssetType.NFT,
       quantity: 1,
       floor_price: params.floorPrice,
-      status: params.status ?? AssetStatus.LOCKED,
-      origin_type: AssetOriginType.BOUGHT,
+      status: params.status ?? defaultStatus,
+      origin_type: originType,
       added_by: null,
       metadata: params.metadata ?? null,
     });
@@ -888,5 +1038,51 @@ export class AssetsService {
     asset.updated_at = new Date();
 
     await this.assetsRepository.save(asset);
+  }
+
+  /**
+   * Group assets by vault and emit events with token holder notifications
+   * @param assets Assets with vault relations loaded
+   * @param eventName Event name to emit (e.g., 'offer.accepted', 'offer.cancelled')
+   */
+  private async emitOfferStatusEvents(
+    assets: Array<{ vault_id?: string; vault?: { name: string }; name?: string }>,
+    eventName: 'offer.accepted' | 'offer.cancelled'
+  ): Promise<void> {
+    try {
+      const vaultGroups = new Map<string, { vaultName: string; assetNames: string[] }>();
+
+      for (const asset of assets) {
+        if (!asset.vault_id || !asset.vault) continue;
+
+        const group = vaultGroups.get(asset.vault_id);
+        if (group) {
+          group.assetNames.push(asset.name || 'Unknown NFT');
+        } else {
+          vaultGroups.set(asset.vault_id, {
+            vaultName: asset.vault.name,
+            assetNames: [asset.name || 'Unknown NFT'],
+          });
+        }
+      }
+
+      // Emit one event per vault with all offers
+      for (const [vaultId, { vaultName, assetNames }] of vaultGroups.entries()) {
+        const tokenHolderIds = await this.snapshotService.getTokenHolderIdsFromLatestSnapshot(vaultId);
+
+        this.eventEmitter.emit(eventName, {
+          vaultId,
+          vaultName,
+          assetNames,
+          tokenHolderIds,
+        });
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `Failed to emit ${eventName} events: ${errorMessage}`,
+        error instanceof Error ? error.stack : undefined
+      );
+    }
   }
 }

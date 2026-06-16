@@ -104,6 +104,7 @@ export class MarketplaceAssetDto {
 export enum ExecType {
   BUY = 'BUY',
   OFFER = 'OFFER',
+  CANCEL_OFFER = 'CANCEL_OFFER',
   SELL = 'SELL',
   UNLIST = 'UNLIST',
   UPDATE_LISTING = 'UPDATE_LISTING',
@@ -125,29 +126,38 @@ export class MarketplaceActionDto {
   assetId: string;
 
   @ApiProperty({
-    description: 'Action type: BUY, SELL, UNLIST, or UPDATE_LISTING',
+    description: 'Action type: BUY, OFFER, CANCEL_OFFER, SELL, UNLIST, or UPDATE_LISTING',
     enum: ExecType,
   })
   @IsEnum(ExecType)
   exec: ExecType;
 
   @ApiProperty({
-    description: 'Asset name to buy',
+    description: 'NFT display name for WayUp lookup (required for BUY and OFFER)',
     required: false,
   })
   @IsOptional()
   @IsString()
   assetName?: string;
 
-  // ===== SELL fields =====
   @ApiProperty({
-    description: 'Quantity to buy/sell',
+    description: 'Asset display name from on-chain metadata (auto-fetched from Blockfrost)',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  displayName?: string;
+
+  // ===== SWAP field (DexHunter only) =====
+  @ApiProperty({
+    description: 'Quantity to swap (only used for DexHunter swaps, not for NFT sells)',
     required: false,
   })
   @IsOptional()
   @IsString()
   quantity?: string;
 
+  // ===== SELL fields =====
   @ApiProperty({
     description: 'Market or List sale type',
     enum: SellType,
@@ -175,7 +185,7 @@ export class MarketplaceActionDto {
   method?: MethodType;
 
   @ApiProperty({
-    description: 'Price in ADA (for SELL)',
+    description: 'Price in ADA: listing price (SELL), max willing to pay (BUY), or offer amount (OFFER)',
     required: false,
   })
   @IsOptional()
@@ -245,7 +255,8 @@ export class MarketplaceActionDto {
   }>;
 
   @ApiProperty({
-    description: 'NFT metadata snapshot at proposal creation time (auto-populated for BUY actions)',
+    description:
+      'NFT metadata snapshot at proposal creation time (auto-populated for BUY, OFFER, and CANCEL_OFFER actions)',
     required: false,
   })
   @IsOptional()
@@ -369,7 +380,7 @@ export class CreateProposalReq {
   distributionLovelaceAmount?: number;
 
   @ApiProperty({
-    description: 'Marketplace actions for buy/sell proposals',
+    description: 'Marketplace actions for marketplace proposals (buy, offer, cancel offer, sell, unlist, update)',
     type: [MarketplaceActionDto],
     required: false,
   })

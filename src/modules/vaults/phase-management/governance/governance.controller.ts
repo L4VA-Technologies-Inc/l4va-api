@@ -1,12 +1,14 @@
-import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { DistributionService } from './distribution.service';
+import { AssetMetadataRes } from './dto/asset-metadata.res';
 import { CreateProposalReq } from './dto/create-proposal.req';
 import { CreateProposalRes } from './dto/create-proposal.res';
 import { GetDistributionInfoRes } from './dto/distribution.dto';
 import { GetAssetsToListRes } from './dto/get-assets-to-list.res';
 import { GetAssetsToStakeRes } from './dto/get-assets-to-stake.res';
+import { GetOffersToCancelDto, PaginatedOffersToCancelResponseDto } from './dto/get-offers-to-cancel.dto';
 import { GetProposalDetailRes } from './dto/get-proposal-detail.res';
 import { GetProposalsRes, GetProposalsResItem } from './dto/get-proposal.dto';
 import { GetVotingPowerRes } from './dto/get-voting-power.res';
@@ -18,11 +20,12 @@ import {
 import { VoteReq } from './dto/vote.req';
 import { VoteRes } from './dto/vote.res';
 import { GovernanceFeeService } from './governance-fee.service';
-import { GovernanceService } from './governance.service';
+import GovernanceService from './governance.service';
 
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { AuthRequest } from '@/modules/auth/dto/auth-user.interface';
 import { OptionalAuthGuard } from '@/modules/auth/optional-auth.guard';
+import { PaginatedResponseDto } from '@/modules/vaults/dto/paginated-response.dto';
 import {
   AssetBuySellDto,
   GetTerminationAssetsDto,
@@ -130,16 +133,35 @@ export class GovernanceController {
     return { votingPower };
   }
 
-  @Get('vaults/:vaultId/assets/buy-sell')
+  @Get('vaults/:vaultId/assets/sell')
   @UseGuards(AuthGuard)
-  @ApiOperation({ summary: 'Get assets available for buying/selling proposals' })
+  @ApiOperation({ summary: 'Get assets available for selling proposals' })
   @ApiResponse({
     status: 200,
-    description: 'List of assets available for trading',
+    description: 'List of assets available for selling',
     type: GetAssetsToListRes,
   })
   async getAssetsToList(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<GetAssetsToListRes> {
     return await this.governanceService.getAssetsToList(vaultId);
+  }
+
+  @Get('vaults/:vaultId/offers-to-cancel')
+  @UseGuards(AuthGuard)
+  @ApiOperation({
+    summary: 'Get offers available for CANCEL_OFFER proposals',
+    description:
+      'Returns paginated active vault offers (OFFERED status) that can be cancelled via governance. Supports search by name, policy ID, or asset ID.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Paginated list of offers to cancel',
+    type: PaginatedOffersToCancelResponseDto,
+  })
+  async getOffersToCancel(
+    @Param('vaultId', ParseUUIDPipe) vaultId: string,
+    @Query() query: GetOffersToCancelDto
+  ): Promise<PaginatedResponseDto<AssetBuySellDto>> {
+    return this.governanceService.getOffersToCancel(vaultId, query.page, query.limit, query.search);
   }
 
   @Get('vaults/:vaultId/assets/unlist')
@@ -207,6 +229,24 @@ export class GovernanceController {
   @ApiResponse({ status: 200, description: 'List of assets to burn' })
   async getAssetsToBurn(@Param('vaultId', ParseUUIDPipe) vaultId: string): Promise<AssetBuySellDto[]> {
     return this.governanceService.getAssetsToBurn(vaultId);
+  }
+
+  @Get('assets/metadata/:unit')
+  @UseGuards(AuthGuard)
+  @ApiOperation({
+    summary: 'Get asset metadata by unit from Blockfrost',
+    description:
+      'Fetches on-chain asset metadata including display name. Unit must be at least 56 hex characters (policy ID + optional asset name).',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Asset metadata fetched successfully',
+    type: AssetMetadataRes,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid unit format' })
+  @ApiResponse({ status: 404, description: 'Asset not found on-chain' })
+  async getAssetMetadata(@Param('unit') unit: string): Promise<AssetMetadataRes> {
+    return this.governanceService.getAssetMetadataByUnit(unit);
   }
 
   @Get('vaults/:vaultId/swappable-assets')

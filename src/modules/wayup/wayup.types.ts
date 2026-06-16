@@ -40,7 +40,8 @@ export interface MakeOfferInput {
  */
 export interface BuyNFTInput {
   policyId: string;
-  txHashIndex: string; // Format: txHash#outputIndex
+  /** Format: txHash#outputIndex */
+  txHashIndex: string;
   priceAda: number;
 }
 
@@ -111,6 +112,7 @@ export interface BuyNFTPayload {
 export interface CombinedMarketplaceActionsInput {
   listings?: NFTListingInput[]; // NFTs to list for sale
   unlistings?: UnlistInput[]; // Listings to cancel
+  unlistOffers?: Array<{ policyId: string; assetName: string; txHashIndex: string }>; // Offers to cancel (assetName required for output index lookup)
   updates?: UpdateListingInput[]; // Listings to update price
   offers?: MakeOfferInput[]; // Offers to make
   purchases?: BuyNFTInput[]; // NFTs to buy
@@ -141,6 +143,10 @@ export interface WayUpTransactionInput {
     policyId: string;
     assetName: string;
     priceAda: number;
+  }[];
+  unlistOffer?: {
+    policyId: string;
+    txHashIndex: string;
   }[];
   buy?: {
     policyId: string;
@@ -222,3 +228,34 @@ export interface GetCollectionAssetsResponse {
   pageState: string | null;
   count: number;
 }
+
+/** Offer returned by Anvil GET /marketplace/wallets/{address}/offers */
+export interface AnvilWalletOffer {
+  policyId: string;
+  assetName: string;
+  price: number;
+  priceCurrency: string;
+  outputRef: string;
+  offererStakeKeyhash?: string;
+  receiverStakeKeyhash?: string;
+}
+
+export interface AnvilWalletOffersResponse {
+  results: AnvilWalletOffer[];
+  cursor?: string;
+}
+
+/** Asset held in wallet from Anvil GET /marketplace/wallets/{address}/assets */
+export interface AnvilWalletAsset {
+  policyId: string;
+  assetName: string;
+  unit: string;
+  name?: string;
+}
+
+export interface AnvilWalletAssetsResponse {
+  results: AnvilWalletAsset[];
+  cursor?: string;
+}
+
+export type OfferResolutionStatus = 'active' | 'accepted' | 'cancelled';

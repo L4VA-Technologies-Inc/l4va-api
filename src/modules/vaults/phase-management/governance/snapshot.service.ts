@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
+import { Snapshot } from '@/database/snapshot.entity';
 import { User } from '@/database/user.entity';
 
 /**
@@ -11,6 +12,8 @@ import { User } from '@/database/user.entity';
 @Injectable()
 export class SnapshotService {
   constructor(
+    @InjectRepository(Snapshot)
+    private readonly snapshotsRepository: Repository<Snapshot>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>
   ) {}
@@ -35,5 +38,22 @@ export class SnapshotService {
 
     // Deduplicate user IDs (though DB should already ensure uniqueness)
     return [...new Set(users.map(u => u.id))];
+  }
+
+  /**
+   * Fetch the latest snapshot for a vault and return token holder IDs.
+   * Returns empty array if no snapshot exists.
+   *
+   * @param vaultId - The vault ID to fetch snapshot for
+   * @returns Array of unique user IDs from the latest snapshot
+   */
+  async getTokenHolderIdsFromLatestSnapshot(vaultId: string): Promise<string[]> {
+    const snapshot = await this.snapshotsRepository.findOne({
+      where: { vaultId },
+      order: { createdAt: 'DESC' },
+      select: ['addressBalances'],
+    });
+
+    return this.getTokenHolderIdsFromSnapshot(snapshot?.addressBalances);
   }
 }

@@ -13,12 +13,14 @@ import { User } from '@/database/user.entity';
 import { Vault } from '@/database/vault.entity';
 import { DexHunterPricingModule } from '@/modules/dexhunter/dexhunter-pricing.module';
 import { GoogleCloudStorageModule } from '@/modules/google_cloud/google_bucket/bucket.module';
+import { SnapshotModule } from '@/modules/vaults/phase-management/governance/snapshot.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Asset, Vault, Transaction, User, Claim, Snapshot, Market]),
     GoogleCloudStorageModule,
     DexHunterPricingModule,
+    SnapshotModule,
   ],
   controllers: [AssetsController],
   providers: [AssetsService],

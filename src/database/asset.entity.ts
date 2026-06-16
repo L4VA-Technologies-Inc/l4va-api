@@ -181,9 +181,21 @@ export class Asset {
   listing_market?: string;
 
   @Expose({ name: 'listingPrice' })
-  @Column({ name: 'listing_price', type: 'decimal', precision: 20, scale: 6, nullable: true })
+  @Column({
+    name: 'listing_price',
+    type: 'decimal',
+    precision: 20,
+    scale: 6,
+    nullable: true,
+    transformer: new ColumnNumericTransformer(),
+  })
   listing_price?: number;
 
+  /**
+   * For LISTED assets: the marketplace listing tx hash (used for unlist/update).
+   *
+   * For OFFERED assets (origin_type=OFFERED): the WayUp offer placement tx hash (used for cancel-offer).
+   */
   @Expose({ name: 'listingTxHash' })
   @Column({ name: 'listing_tx_hash', type: 'text', nullable: true })
   listing_tx_hash?: string;
