@@ -7,6 +7,7 @@ import { TapToolsTokenPoolDto } from './interfaces/taptools.interface';
 
 import { AnvilClient } from '@/modules/anvil/anvil.client';
 import { Charli3Client } from '@/modules/charli3/charli3.client';
+import { DexHunterPricingClient } from '@/modules/dexhunter/dexhunter-pricing.client';
 import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
 
 /** Minimal VyFi pool shape needed for LP token resolution */
@@ -96,7 +97,8 @@ export class TapToolsClient {
   constructor(
     private readonly configService: ConfigService,
     private readonly charli3Client: Charli3Client,
-    private readonly anvilClient: AnvilClient
+    private readonly anvilClient: AnvilClient,
+    private readonly dexHunterPricingClient: DexHunterPricingClient
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.blockfrost = new BlockFrostAPI({
@@ -509,7 +511,8 @@ export class TapToolsClient {
   /**
    * Get price changes for a token.
    * Charli3 is the PRIMARY source (calculates all timeframes from OHLCV including 7d/30d).
-   * Returns null when Charli3 has no data.
+   * Falls back to DexHunter OHLCV (daily candles) when Charli3 has no data.
+   * Note: the 1h timeframe is approximate in the DexHunter fallback path (daily resolution).
    *
    * @param unit - Token unit (policyId + assetName in hex)
    * @param timeframes - Comma-separated timeframes (e.g., '1h,24h,7d,30d')
@@ -544,7 +547,63 @@ export class TapToolsClient {
       this.logger.debug(`Charli3 price changes failed for ${unit.slice(0, 10)}...`);
     }
 
+    // FALLBACK: DexHunter OHLCV — fetch 31 daily candles, compute changes from close prices
+    try {
+      const scriptHash = unit.slice(0, 56);
+      const assetName = unit.slice(56);
+      const ohlcv = await this.dexHunterPricingClient.getTokenOHLCV(scriptHash, assetName, '1d', 31);
+      if (ohlcv && ohlcv.length > 0) {
+        const changes = this.calculatePriceChangesFromOHLCV(ohlcv, timeframes);
+        if (changes) {
+          this.logger.debug(`DexHunter OHLCV price changes for ${unit.slice(0, 10)}...`);
+          this.marketDataCache.set(cacheKey, changes);
+          return changes;
+        }
+      }
+    } catch {
+      this.logger.debug(`DexHunter price changes fallback failed for ${unit.slice(0, 10)}...`);
+    }
+
     return null;
+  }
+
+  /**
+   * Calculate price change percentages from an OHLCV series.
+   * Uses close prices and walks back from now by each timeframe's seconds.
+   */
+  private calculatePriceChangesFromOHLCV(series: MarketOhlcvSeries, timeframes: string): Record<string, number> | null {
+    if (!series.length) return null;
+
+    const TIMEFRAME_SECONDS: Record<string, number> = {
+      '1h': 3600,
+      '24h': 86400,
+      '7d': 7 * 86400,
+      '30d': 30 * 86400,
+    };
+
+    const now = Math.floor(Date.now() / 1000);
+    const currentPrice = series[series.length - 1].close;
+    if (!currentPrice) return null;
+
+    const frames = timeframes.split(',').map(t => t.trim());
+    const result: Record<string, number> = {};
+
+    for (const tf of frames) {
+      const secondsBack = TIMEFRAME_SECONDS[tf];
+      if (!secondsBack) {
+        result[tf] = 0;
+        continue;
+      }
+      const targetTs = now - secondsBack;
+      let oldPrice = series[0].close;
+      for (const point of series) {
+        if (point.time <= targetTs) oldPrice = point.close;
+        else break;
+      }
+      result[tf] = oldPrice > 0 ? ((currentPrice - oldPrice) / oldPrice) * 100 : 0;
+    }
+
+    return result;
   }
 
   /**
