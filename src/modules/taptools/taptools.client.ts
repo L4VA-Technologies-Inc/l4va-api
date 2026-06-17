@@ -256,9 +256,8 @@ export class TapToolsClient {
 
   /**
    * Get market cap data for a token.
-   * Charli3 is the PRIMARY source (works for all DEX-listed tokens including small VTs).
-   * Falls back to TapTools for FDV/supply data when available.
-   *
+   * Charli3 is the PRIMARY source for price.
+   * Supply is fetched from Blockfrost and FDV is computed as price * totalSupply (when supply is available).
    * @param unit - Token unit (policyId + assetName in hex)
    * @returns Market cap data or null if unavailable
    */
