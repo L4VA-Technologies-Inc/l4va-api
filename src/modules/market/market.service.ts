@@ -11,7 +11,7 @@ import { Currency, GetMarketsDto, MarketSortField, SortOrder } from './dto/get-m
 import { Market } from '@/database/market.entity';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { PriceService } from '@/modules/price/price.service';
-import { VaultMarketStatsService } from '@/modules/vaults/market-stats/vault-market-stats.service';
+import { TapToolsClient } from '@/modules/taptools/taptools.client';
 
 @Injectable()
 export class MarketService implements OnModuleInit {
@@ -24,7 +24,7 @@ export class MarketService implements OnModuleInit {
     private readonly configService: ConfigService,
     private readonly systemSettingsService: SystemSettingsService,
     private readonly priceService: PriceService,
-    private readonly vaultMarketStatsService: VaultMarketStatsService
+    private readonly tapToolsClient: TapToolsClient
   ) {}
 
   onModuleInit(): void {
@@ -69,7 +69,8 @@ export class MarketService implements OnModuleInit {
     let ohlcv = null;
 
     if (script_hash && asset_vault_name) {
-      ohlcv = await this.vaultMarketStatsService.getTokenOHLCV(script_hash, asset_vault_name, interval);
+      // Call TapToolsClient directly (it handles mainnet check and validation internally)
+      ohlcv = await this.tapToolsClient.getTokenOHLCV(script_hash, asset_vault_name, interval);
     } else {
       this.logger.warn(`Missing script_hash or asset_vault_name for vault ${vaultId}, skipping OHLCV`);
     }

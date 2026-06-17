@@ -47,7 +47,6 @@ import { VAULT_STATUSES_WITH_POTENTIAL_LP } from '@/types/vault.types';
 export class VaultMarketStatsService {
   private readonly logger = new Logger(VaultMarketStatsService.name);
   private readonly isMainnet: boolean;
-  private readonly validOHLCVIntervals: readonly string[] = ['1h', '1d', '1w', '1M'];
 
   constructor(
     @InjectRepository(Vault)
@@ -260,29 +259,6 @@ export class VaultMarketStatsService {
           `${withMarketData} with active LP, no price changes`
       );
     }
-  }
-
-  async getTokenOHLCV(
-    scriptHash: string,
-    assetName: string,
-    interval: string = '1h'
-  ): Promise<MarketOhlcvSeries | null> {
-    if (!this.isMainnet) {
-      this.logger.warn('Not mainnet environment - OHLCV data not available');
-      return null;
-    }
-
-    if (!scriptHash || !assetName) {
-      this.logger.warn('Policy ID and asset name are required for OHLCV data');
-      return null;
-    }
-
-    if (!this.validOHLCVIntervals.includes(interval)) {
-      this.logger.warn(`Invalid interval '${interval}'. Valid are: ${this.validOHLCVIntervals.join(', ')}`);
-      return null;
-    }
-
-    return this.tapToolsClient.getTokenOHLCV(scriptHash, assetName, interval);
   }
 
   /**

@@ -24,6 +24,11 @@ export class TapToolsClient {
   private readonly tapToolsApiKey: string;
 
   /**
+   * Valid OHLCV intervals supported by TapTools API
+   */
+  public readonly validOHLCVIntervals: readonly string[] = ['1h', '1d', '1w', '1M'];
+
+  /**
    * Cache for token price results
    * TTL: 5 minutes (300 seconds) - matches existing pricing cache strategy
    */
@@ -309,6 +314,12 @@ export class TapToolsClient {
     // Skip API calls for testnet/preprod - TapTools doesn't support preprod
     if (!this.isMainnet) {
       this.logger.debug(`Skipping TapTools OHLCV API call for non-mainnet environment`);
+      return null;
+    }
+
+    // Validate interval
+    if (!this.validOHLCVIntervals.includes(interval)) {
+      this.logger.warn(`Invalid interval '${interval}'. Valid intervals: ${this.validOHLCVIntervals.join(', ')}`);
       return null;
     }
 

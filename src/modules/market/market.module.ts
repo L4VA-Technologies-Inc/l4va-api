@@ -7,10 +7,17 @@ import { MarketService } from './market.service';
 import { Market } from '@/database/market.entity';
 import { SystemSettingsModule } from '@/modules/globals/system-settings/system-settings.module';
 import { PriceModule } from '@/modules/price/price.module';
+import { TapToolsPricingModule } from '@/modules/taptools/taptools-pricing.module';
 import { MarketStatsModule } from '@/modules/vaults/market-stats/market-stats.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Market]), SystemSettingsModule, PriceModule, MarketStatsModule],
+  imports: [
+    TypeOrmModule.forFeature([Market]),
+    SystemSettingsModule,
+    PriceModule,
+    TapToolsPricingModule,
+    MarketStatsModule,
+  ],
   controllers: [MarketController],
   providers: [MarketService],
   exports: [MarketService],
