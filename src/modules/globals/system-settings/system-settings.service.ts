@@ -41,6 +41,8 @@ export interface SystemSettingsData {
   price_max_deviation_percent_ft: number;
   price_min_absolute_move_ada: number;
   price_min_asset_price_for_deviation_check_ada: number;
+  // Hardcoded mainnet prices (policy_id -> price in ADA)
+  mainnet_hardcoded_prices: Record<string, number>;
 }
 
 const DEFAULT_SETTINGS: SystemSettingsData = {
@@ -78,6 +80,11 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   price_min_absolute_move_ada: 0,
   // Keep this low so deviation checks apply to typical FT price feeds by default
   price_min_asset_price_for_deviation_check_ada: 0.1,
+  // Hardcoded mainnet prices (used when API prices should be overridden)
+  mainnet_hardcoded_prices: {
+    // VLRM (Valorum) - Governance and utility token of Relics of Magma
+    '63efb704b7396890e4d9539d030c0e667739043add65c00f96c586c0': 0.00407853,
+  },
   hidden_mainnet_vault_ids: [
     '1a6e7495-178b-464e-b37e-00997ef1e9c2',
     '2761c805-77c5-443e-b352-f0afaf4860c0',
@@ -291,6 +298,10 @@ export class SystemSettingsService implements OnModuleInit {
     return Number.isFinite(value) && value >= 0
       ? value
       : DEFAULT_SETTINGS.price_min_asset_price_for_deviation_check_ada;
+  }
+
+  get mainnetHardcodedPrices(): Record<string, number> {
+    return this.settings.mainnet_hardcoded_prices || DEFAULT_SETTINGS.mainnet_hardcoded_prices || {};
   }
 
   // Kill switch getters

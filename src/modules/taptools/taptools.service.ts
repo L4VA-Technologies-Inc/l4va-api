@@ -445,7 +445,7 @@ export class TaptoolsService {
    *
    * Price priority:
    * 1. Custom price from customPriceMap (vault-specific overrides)
-   * 2. Testnet hardcoded prices (if not mainnet)
+   * 2. Hardcoded prices (mainnet or testnet based on environment)
    * 3. External API prices (DexHunter for FTs, WayUp for NFTs)
    *
    * @returns Promise with the asset value in ADA and USD
@@ -469,7 +469,30 @@ export class TaptoolsService {
         };
       }
 
-      if (!this.isMainnet) {
+      // Priority 2: Check for hardcoded prices (mainnet or testnet)
+      if (this.isMainnet) {
+        // Get mainnet prices from system settings (configurable without redeploy)
+        const mainnetPrices = this.systemSettingsService.mainnetHardcodedPrices;
+
+        // Check for asset-specific price first (policyId + assetName)
+        const assetId = `${policyId}${assetName}`;
+        if (mainnetPrices[assetId] !== undefined) {
+          const hardcodedPriceAda = mainnetPrices[assetId];
+          return {
+            priceAda: hardcodedPriceAda,
+            priceUsd: hardcodedPriceAda * adaPrice,
+          };
+        }
+
+        // Fall back to policy-level price
+        if (mainnetPrices[policyId] !== undefined) {
+          const hardcodedPriceAda = mainnetPrices[policyId];
+          return {
+            priceAda: hardcodedPriceAda,
+            priceUsd: hardcodedPriceAda * adaPrice,
+          };
+        }
+      } else {
         // Check for asset-specific price first (policyId + assetName)
         const assetId = `${policyId}${assetName}`;
         if (this.testnetPrices[assetId] !== undefined) {
@@ -630,7 +653,7 @@ export class TaptoolsService {
    *
    * Price priority:
    * 1. Custom prices from vault whitelist (valuation_method = 'custom')
-   * 2. Testnet hardcoded prices (if not mainnet)
+   * 2. Hardcoded prices (mainnet or testnet based on environment)
    * 3. External API prices (DexHunter for FTs, WayUp for NFTs)
    *
    * @param vaultIds Array of vault IDs to update assets for.
