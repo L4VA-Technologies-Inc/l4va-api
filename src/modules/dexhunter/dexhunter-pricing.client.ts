@@ -247,8 +247,6 @@ export class DexHunterPricingClient {
         from = to - 30 * 24 * 60 * 60;
       }
 
-      this.logger.log(`Fetching DexHunter OHLCV for ${tokenUnit.slice(0, 16)}... (${period})`);
-
       const response = await fetch(`${this.dexHunterChartsUrl}/charts`, {
         method: 'POST',
         headers: {
@@ -257,15 +255,12 @@ export class DexHunterPricingClient {
         },
         body: JSON.stringify({
           tokenIn: '', // Empty string for ADA
-          tokenOut: '0691b2fecca1ac4f53cb6dfb00b7013e561d1f34403b957cbb5af1fa4e49474854',
+          tokenOut: tokenUnit,
           period,
           from,
           to,
         }),
       });
-
-      console.log(`DexHunter OHLCV response status for ${tokenUnit.slice(0, 16)}...: ${response.status}`);
-      console.log(response);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -305,7 +300,7 @@ export class DexHunterPricingClient {
         volume: candle.volume,
       }));
 
-      this.logger.log(`DexHunter OHLCV success for ${tokenUnit.slice(0, 16)}...: ${ohlcvData.length} data points`);
+      // this.logger.log(`DexHunter OHLCV success for ${tokenUnit.slice(0, 16)}...: ${ohlcvData.length} data points`);
 
       // Cache the result
       this.ohlcvCache.set(cacheKey, ohlcvData);
