@@ -41,8 +41,6 @@ export interface SystemSettingsData {
   price_max_deviation_percent_ft: number;
   price_min_absolute_move_ada: number;
   price_min_asset_price_for_deviation_check_ada: number;
-  // Hardcoded mainnet prices (policy_id -> price in ADA)
-  mainnet_hardcoded_prices: Record<string, number>;
 }
 
 const DEFAULT_SETTINGS: SystemSettingsData = {
@@ -80,22 +78,7 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   price_min_absolute_move_ada: 0,
   // Keep this low so deviation checks apply to typical FT price feeds by default
   price_min_asset_price_for_deviation_check_ada: 0.1,
-  // Hardcoded mainnet prices (used when API prices should be overridden)
-  mainnet_hardcoded_prices: {
-    // VLRM (Valorum) - Governance and utility token of Relics of Magma
-    '63efb704b7396890e4d9539d030c0e667739043add65c00f96c586c0': 0.00407853,
-  },
-  hidden_mainnet_vault_ids: [
-    '1a6e7495-178b-464e-b37e-00997ef1e9c2',
-    '2761c805-77c5-443e-b352-f0afaf4860c0',
-    'deafbe8a-8939-4505-9e67-7dc3b3345243',
-    'cfd6b3d1-1ea2-4721-9c89-0a52484053ae',
-    'e9cf3cf9-4d7f-4188-954b-eef289f8e9b1',
-    'ad46dc9f-9b49-48aa-8c37-5180d035e08a',
-    'f008952b-c158-43a2-ae57-6e763ebb321e',
-    '16c6e87f-d29d-4de9-8b19-1484d3cd7183',
-    '912eb055-da67-41a4-98b0-30b25871e4db',
-  ],
+  hidden_mainnet_vault_ids: ['00000000-0000-0000-0000-000000000000'],
   vault_creator_whitelist: [
     'addr1q9j4eqs7v5pz08fddkfng2kvj762jhkhnpen4shr5jtht3evu56kfxkaqdjl4he2d6nguzl489fsvwsnx5554fe4lsjqe0ygg5',
     'addr1q90jnj7v8qmd3ypa668tufp7r663ppkctfd34dfwdfmam9eu2heaaj7eknfhahkydax07wqmvszndrcmh83adfph4umsskaxm5',
@@ -298,10 +281,6 @@ export class SystemSettingsService implements OnModuleInit {
     return Number.isFinite(value) && value >= 0
       ? value
       : DEFAULT_SETTINGS.price_min_asset_price_for_deviation_check_ada;
-  }
-
-  get mainnetHardcodedPrices(): Record<string, number> {
-    return this.settings.mainnet_hardcoded_prices || DEFAULT_SETTINGS.mainnet_hardcoded_prices || {};
   }
 
   // Kill switch getters

@@ -67,9 +67,9 @@ export class VaultMarketStatsService {
 
   /**
    * Scheduled task to update market stats for all locked and expansion vaults
-   * Runs every 10 minutes
+   * Runs every 30 minutes
    */
-  @Cron(CronExpression.EVERY_10_MINUTES)
+  @Cron(CronExpression.EVERY_30_MINUTES)
   async scheduledUpdateVaultTokensMarketStats(): Promise<void> {
     try {
       await this.updateVaultTokensMarketStats();
@@ -178,12 +178,25 @@ export class VaultMarketStatsService {
           const vaultUpdateData: Partial<Vault> = {};
           let hasMarketData = false;
 
-          // Check if Taptools has market data for this token
-          if (mcapData?.price && mcapData?.fdv) {
-            // Token is traded on DEX with LP
-            vaultUpdateData.fdv = mcapData.fdv;
+          // Check if TapTools or Charli3 provided a price
+          if (mcapData?.price) {
+            if (mcapData.fdv > 0) vaultUpdateData.fdv = mcapData.fdv;
             vaultUpdateData.vt_price = mcapData.price;
             hasMarketData = true;
+          } else {
+            // Final fallback: derive price from DexHunter pool reserves (adaAmount / tokenAmount)
+            // This works for any token with DEX liquidity even when no pricing API indexes it
+            const totalAda = liquidityCheck.pools.reduce((s, p) => s + p.adaAmount, 0);
+            const totalToken = liquidityCheck.pools.reduce((s, p) => s + p.tokenAmount, 0);
+            if (totalAda > 0 && totalToken > 0) {
+              const derivedPrice = totalAda / totalToken;
+              vaultUpdateData.vt_price = derivedPrice;
+              hasMarketData = true;
+              this.logger.log(
+                `${vault.name}: using DexHunter pool-derived price ${derivedPrice.toFixed(8)} ADA ` +
+                  `(${totalAda.toFixed(2)} ADA / ${totalToken.toFixed(0)} tokens across ${liquidityCheck.pools.length} pool(s))`
+              );
+            }
           }
 
           // Update vault if we got any market data
@@ -191,9 +204,9 @@ export class VaultMarketStatsService {
             await this.vaultRepository.update({ id: vault.id }, vaultUpdateData);
           }
 
-          // Update vault's LP status flag
+          // Update vault's LP status — trust DexHunter's liquidity detection, not price data availability
           const lpStatusUpdate: Partial<{ has_active_lp: boolean; lp_last_checked: Date }> = {
-            has_active_lp: hasMarketData,
+            has_active_lp: liquidityCheck.hasLiquidity,
             lp_last_checked: new Date(),
           };
           await this.vaultRepository.update({ id: vault.id }, lpStatusUpdate);
@@ -227,7 +240,7 @@ export class VaultMarketStatsService {
         } catch (error) {
           this.logger.error(
             `Error fetching market data for vault ${vault.name} (${unit}):`,
-            error.response?.data || error.message
+            error instanceof Error ? error.message : String(error)
           );
           return null;
         }
@@ -235,7 +248,7 @@ export class VaultMarketStatsService {
     );
 
     const successfulUpdates = tokensMarketData.filter(data => data !== null).length;
-    const withMarketData = tokensMarketData.filter(data => data?.has_market_data).length;
+    const withActiveLp = tokensMarketData.filter(data => data?.has_market_data).length;
 
     // Update user gains for vaults that got price updates
     const vaultIdsWithPriceUpdates = tokensMarketData
@@ -247,7 +260,7 @@ export class VaultMarketStatsService {
         await this.taptoolsService.updateMultipleVaultTotals(vaultIdsWithPriceUpdates);
         this.logger.log(
           `Market update complete: ${successfulUpdates}/${vaults.length} vaults processed, ` +
-            `${withMarketData} with active LP, ${vaultIdsWithPriceUpdates.length} user gains updated`
+            `${withActiveLp} with active LP, ${vaultIdsWithPriceUpdates.length} user gains updated`
         );
       } catch (error) {
         this.logger.error(
@@ -258,7 +271,7 @@ export class VaultMarketStatsService {
     } else {
       this.logger.log(
         `Market update complete: ${successfulUpdates}/${vaults.length} vaults processed, ` +
-          `${withMarketData} with active LP, no price changes`
+          `${withActiveLp} with active LP, no price changes`
       );
     }
   }

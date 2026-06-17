@@ -1,16 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
-import { TapToolsClient } from '../taptools/taptools.client';
+import { DexHunterPoolItem, TapToolsClient } from '../taptools/taptools.client';
 
 import { DexHunterPricingClient } from './dexhunter-pricing.client';
 
 /**
  * DexHunter Pricing Service - Orchestrates token pricing from multiple sources
  *
- * Pricing Strategy (TapTools-first with DexHunter fallback):
- * 1. Try TapToolsClient first (primary source)
- * 2. If TapTools fails or returns null, try DexHunterPricingClient as fallback
+ * Pricing Strategy (Charli3-first with DexHunter fallback):
+ * 1. Try Charli3 first via TapToolsClient (works for any DEX-listed token including small VTs)
+ * 2. If Charli3 fails or returns null, try DexHunterPricingClient as fallback
  * 3. Return null only if both sources fail or have no data
  *
  * Both clients handle their own caching (5-minute TTL) to reduce redundant API calls.
@@ -70,86 +70,64 @@ export class DexHunterPricingService {
   }
 
   /**
-   * Get current token price in ADA with DexHunter fallback
-   * Uses TapToolsClient first, falls back to DexHunterPricingClient if TapTools fails or returns null
-   * Results are cached by clients for 5 minutes to reduce API calls
-   *
-   * Fallback strategy:
-   * 1. Try TapToolsClient first (primary source)
-   * 2. If TapTools fails or returns null - try DexHunterPricingClient as fallback
-   * 3. Return null only if both sources fail or have no data
+   * Get current token price in ADA.
+   * Strategy: Charli3 (via TapToolsClient) → DexHunter → null
    *
    * @param tokenId - The token identifier (policyId + assetName in hex)
-   * @returns Token price in ADA, or null if token not found/no liquidity
+   * @returns Token price in ADA, or null if not found
    */
   async getTokenPrice(tokenId: string): Promise<number | null> {
-    // Try TapTools API first (primary source)
-    const tapToolsResult = await this.tapToolsClient.getTokenPrices([tokenId]);
-    const tapToolsPrice = tapToolsResult.get(tokenId);
+    // Charli3 primary (routed through TapToolsClient which uses Charli3 internally)
+    const charli3Result = await this.tapToolsClient.getTokenPrices([tokenId]);
+    const charli3Price = charli3Result.get(tokenId);
 
-    if (tapToolsPrice !== null && tapToolsPrice > 0) {
-      // this.logger.debug(
-      //   `Successfully fetched token price from TapTools (primary) for ${tokenId}: ${tapToolsPrice} ADA`
-      // );
-      return tapToolsPrice;
+    if (charli3Price !== null && charli3Price !== undefined && charli3Price > 0) {
+      return charli3Price;
     }
 
-    // Fallback to DexHunter API
-    this.logger.debug(`TapTools returned no price for token ${tokenId}, trying DexHunter fallback`);
+    // Fallback: DexHunter
+    this.logger.debug(`Charli3 returned no price for ${tokenId.slice(0, 10)}..., trying DexHunter`);
     const dexHunterResult = await this.dexHunterClient.getTokenPrices([tokenId]);
     const dexHunterPrice = dexHunterResult.get(tokenId);
 
-    if (dexHunterPrice !== null && dexHunterPrice > 0) {
-      this.logger.log(`DexHunter provided fallback price for token ${tokenId}: ${dexHunterPrice} ADA`);
+    if (dexHunterPrice !== null && dexHunterPrice !== undefined && dexHunterPrice > 0) {
+      this.logger.debug(`DexHunter price for ${tokenId.slice(0, 10)}...: ${dexHunterPrice} ADA`);
       return dexHunterPrice;
     }
 
-    // Both sources failed or returned no data
-    this.logger.debug(`No price data available from TapTools or DexHunter for token ${tokenId}`);
+    this.logger.debug(`No price available from Charli3 or DexHunter for ${tokenId.slice(0, 10)}...`);
     return null;
   }
 
   /**
-   * Get prices for multiple tokens in ADA with DexHunter fallback
-   * Batch fetches prices for efficiency using dedicated pricing clients
+   * Get prices for multiple tokens in ADA.
+   * Strategy: Charli3 (via TapToolsClient) → DexHunter for any misses → null
    *
-   * Fallback strategy:
-   * 1. Try fetching all prices from TapToolsClient first (primary source, native batch support)
-   * 2. For any tokens that returned null, try DexHunterPricingClient as fallback (in batch)
-   *
-   * Both clients handle their own caching and batch optimization.
-   *
-   * @param tokenIds - Array of token identifiers (policyId + assetName in hex)
+   * @param tokenIds - Array of token identifiers
    * @returns Map of tokenId to price in ADA (null if not found)
    */
   async getTokenPrices(tokenIds: string[]): Promise<Map<string, number | null>> {
-    this.logger.log(`Fetching prices for ${tokenIds.length} tokens`);
+    // Charli3 primary (via TapToolsClient)
+    const charli3Results = await this.tapToolsClient.getTokenPrices(tokenIds);
 
-    // Try TapTools API first (primary source with native batch support)
-    const tapToolsResults = await this.tapToolsClient.getTokenPrices(tokenIds);
-
-    // Find tokens that still have null prices and need DexHunter fallback
     const tokensNeedingFallback = tokenIds.filter(tokenId => {
-      const price = tapToolsResults.get(tokenId);
+      const price = charli3Results.get(tokenId);
       return price === null || price === undefined;
     });
 
     if (tokensNeedingFallback.length > 0) {
-      this.logger.log(
-        `${tokensNeedingFallback.length} tokens had no price from TapTools, trying DexHunter fallback in batch`
+      this.logger.debug(
+        `${tokensNeedingFallback.length}/${tokenIds.length} tokens had no Charli3 price, trying DexHunter`
       );
       const dexHunterResults = await this.dexHunterClient.getTokenPrices(tokensNeedingFallback);
-
-      // Merge DexHunter fallback results into main result map
       dexHunterResults.forEach((price, tokenId) => {
-        if (price !== null && price > 0) {
-          tapToolsResults.set(tokenId, price);
-          this.logger.debug(`DexHunter provided fallback price for token ${tokenId}: ${price} ADA`);
+        if (price !== null && price !== undefined && price > 0) {
+          charli3Results.set(tokenId, price);
         }
       });
     }
 
-    return tapToolsResults;
+    return charli3Results;
   }
 
   /**
@@ -207,13 +185,7 @@ export class DexHunterPricingService {
         throw new Error(`DexHunter API error: ${response.status} - ${sanitizedError}`);
       }
 
-      const data: Array<{
-        dex_name: string;
-        token_1_amount: number; // ADA amount
-        token_2_amount: number; // Token amount
-        pool_id: string;
-        pool_fee: number;
-      }> = await response.json();
+      const data: Array<DexHunterPoolItem> = await response.json();
 
       if (!data || data.length === 0) {
         return {

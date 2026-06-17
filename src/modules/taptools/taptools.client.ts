@@ -1,27 +1,66 @@
-import { HttpService } from '@nestjs/axios';
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import NodeCache from 'node-cache';
-import { firstValueFrom } from 'rxjs';
 
 import { TapToolsTokenPoolDto } from './interfaces/taptools.interface';
 
+import { AnvilClient } from '@/modules/anvil/anvil.client';
+import { Charli3Client } from '@/modules/charli3/charli3.client';
+import { DexHunterPricingClient } from '@/modules/dexhunter/dexhunter-pricing.client';
 import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
 
+/** Minimal VyFi pool shape needed for LP token resolution */
+interface VyFiPoolRaw {
+  'lpPolicyId-assetId'?: string;
+  unitsPair?: string;
+  poolValidatorUtxoAddress?: string; // Matches DexHunter pool_id
+  tokenAQuantity?: number;
+  tokenBQuantity?: number;
+  json?: string; // stringified VyFiPoolConfig
+}
+
+/** VyFiPoolConfig fields we need from pool.json */
+// interface VyFiPoolConfigAsset {
+//   currencySymbol: string;
+//   tokenName: string;
+// }
+
+/** Minimal Minswap pool metrics shape */
+interface MinswapPoolMetrics {
+  id?: string; // LP asset = policyId + tokenName
+  assetA?: { policyId?: string; assetName?: string };
+  assetB?: { policyId?: string; assetName?: string };
+  reserveA?: string;
+  reserveB?: string;
+}
+
+/** DexHunter /stats/pools/ADA response item */
+export interface DexHunterPoolItem {
+  dex_name: string;
+  pool_id: string;
+  /** ADA amount, example: "token_1_amount": 6763990.459555, */
+  token_1_amount: number;
+  /** Token amount, example: "token_2_amount": 905.383677, */
+  token_2_amount: number;
+  pool_fee: number;
+}
+
 /**
- * TapTools API client for token pricing and LP pool data
- * Centralized client for all TapTools API interactions
- *
- * Caches token price results for 5 minutes and LP pool data for 10 minutes
- * to reduce API calls and improve performance.
- * Designed to support future Redis caching migration without breaking consumers.
+ * TapTools API client — now a thin wrapper that routes to Charli3 (primary) and Anvil/DexHunter.
+ * All direct TapTools HTTP calls have been removed.
  */
 @Injectable()
 export class TapToolsClient {
   private readonly logger = new Logger(TapToolsClient.name);
   private readonly isMainnet: boolean;
-  private readonly tapToolsApiUrl: string;
-  private readonly tapToolsApiKey: string;
+  private readonly blockfrost: BlockFrostAPI;
+  private readonly dexHunterBaseUrl: string;
+  private readonly dexHunterApiKey: string;
+  private readonly networkId: number; // 1 = mainnet, 0 = testnet (VyFi convention)
+
+  /** Supply cache — 60 min TTL (total supply is immutable for most tokens) */
+  private readonly supplyCache: NodeCache;
 
   /**
    * Valid OHLCV intervals supported by TapTools API
@@ -59,12 +98,20 @@ export class TapToolsClient {
   private readonly marketDataCache: NodeCache;
 
   constructor(
-    private readonly httpService: HttpService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly charli3Client: Charli3Client,
+    private readonly anvilClient: AnvilClient,
+    private readonly dexHunterPricingClient: DexHunterPricingClient
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
-    this.tapToolsApiUrl = this.configService.get<string>('TAPTOOLS_API_URL');
-    this.tapToolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
+    this.blockfrost = new BlockFrostAPI({
+      projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
+    });
+    this.dexHunterBaseUrl = this.configService.get<string>('DEXHUNTER_BASE_URL') || 'https://api.dexhunter.io';
+    this.dexHunterApiKey = this.configService.get<string>('DEXHUNTER_API_KEY') || '';
+    this.networkId = this.isMainnet ? 1 : 0;
+
+    this.supplyCache = new NodeCache({ stdTTL: 3600, checkperiod: 300, useClones: false });
 
     // Initialize price cache with 5-minute TTL
     this.priceCache = new NodeCache({
@@ -110,10 +157,7 @@ export class TapToolsClient {
    * @returns Map of tokenId to price in ADA (null if not found)
    */
   async getTokenPrices(tokenIds: string[]): Promise<Map<string, number | null>> {
-    // Skip API calls for testnet/preprod - TapTools doesn't support preprod
     if (!this.isMainnet) {
-      this.logger.debug(`Skipping TapTools API call for non-mainnet environment (${tokenIds.length} tokens)`);
-      // Return null for all tokens
       const resultMap = new Map<string, number | null>();
       tokenIds.forEach(tokenId => resultMap.set(tokenId, null));
       return resultMap;
@@ -121,178 +165,182 @@ export class TapToolsClient {
 
     const priceMap = new Map<string, number | null>();
     const tokensToFetch: string[] = [];
-    const cacheHits: string[] = [];
 
-    // Check cache first for all tokens
     tokenIds.forEach(tokenId => {
       const cacheKey = `token_price_${tokenId}`;
       const cached = this.priceCache.get<number | null>(cacheKey);
       if (cached !== undefined) {
         priceMap.set(tokenId, cached);
-        cacheHits.push(tokenId);
       } else {
         tokensToFetch.push(tokenId);
       }
     });
 
-    // If all tokens found in cache, return early
-    if (tokensToFetch.length === 0) {
-      return priceMap;
-    }
+    if (tokensToFetch.length === 0) return priceMap;
 
-    // TapTools supports max 100 tokens per batch
-    const batchSize = 100;
-    for (let i = 0; i < tokensToFetch.length; i += batchSize) {
-      const batch = tokensToFetch.slice(i, i + batchSize);
-
-      try {
-        const response = await firstValueFrom(
-          this.httpService.post<Record<string, number | null>>(`${this.tapToolsApiUrl}/token/prices`, batch, {
-            headers: {
-              'Content-Type': 'application/json',
-              'x-api-key': this.tapToolsApiKey,
-            },
-            timeout: 10000, // 10 second timeout
-          })
-        );
-
-        const data = response.data;
-
-        // Map response to price map and cache results
-        batch.forEach(tokenId => {
-          const price = data[tokenId];
-          const normalizedPrice = price !== undefined && price !== null ? price : null;
-          priceMap.set(tokenId, normalizedPrice);
-          // Cache the result (including null values to avoid repeated failed lookups)
-          this.priceCache.set(`token_price_${tokenId}`, normalizedPrice);
-        });
-
-        // this.logger.debug(`Successfully fetched batch ${i / batchSize + 1} (${batch.length} tokens) from TapTools`);
-      } catch (error) {
-        // Log the error and set all tokens in batch to null
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        this.logger.warn(
-          `TapTools batch API failed for batch ${i / batchSize + 1} (${batch.length} tokens): ${errorMessage}`
-        );
-
-        // Set all tokens in failed batch to null and cache null results
-        batch.forEach(tokenId => {
+    // Fetch from Charli3 (primary)
+    await Promise.all(
+      tokensToFetch.map(async tokenId => {
+        try {
+          const data = await this.charli3Client.getTokenMarketCap(tokenId);
+          const price = data?.price > 0 ? data.price : null;
+          priceMap.set(tokenId, price);
+          this.priceCache.set(`token_price_${tokenId}`, price);
+        } catch {
           priceMap.set(tokenId, null);
           this.priceCache.set(`token_price_${tokenId}`, null);
-        });
-      }
-    }
+        }
+      })
+    );
 
     return priceMap;
   }
 
   /**
-   * Get LP pools for a specific token unit
-   * Caches results for 10 minutes since LP pool data is relatively static
+   * Get LP pools for a token.
+   * Strategy: DexHunter for pool list → VyFi API for lpTokenUnit on VyFi pools
+   *           → Minswap API for lpTokenUnit on Minswap pools.
    *
    * @param tokenUnit - Full token unit (policyId + assetName in hex)
-   * @returns Array of LP pools containing this token
    */
   async getTokenPools(tokenUnit: string): Promise<TapToolsTokenPoolDto[]> {
-    // Skip API calls for testnet/preprod - TapTools doesn't support preprod
-    if (!this.isMainnet) {
-      this.logger.debug(`Skipping TapTools API call for non-mainnet environment (token ${tokenUnit.slice(0, 5)}...)`);
-      return [];
-    }
-
-    // Check cache first (prefix key to avoid collision with onchainID keys)
+    if (!this.isMainnet) return [];
     const cacheKey = `tokenUnit_${tokenUnit}`;
     const cached = this.poolCache.get<TapToolsTokenPoolDto[]>(cacheKey);
-    if (cached !== undefined) {
-      // this.logger.debug(`Cache HIT for token ${tokenUnit.slice(0, 5)}... (${cached.length} pools)`);
-      return cached;
-    }
+    if (cached !== undefined) return cached;
 
     try {
-      const response = await firstValueFrom(
-        this.httpService.get<TapToolsTokenPoolDto[]>(`${this.tapToolsApiUrl}/token/pools`, {
-          params: { unit: tokenUnit },
-          headers: {
-            'x-api-key': this.tapToolsApiKey,
-          },
-        })
-      );
+      // Step 1: Get all pools from DexHunter
+      const dhResp = await fetch(`${this.dexHunterBaseUrl}/stats/pools/ADA/${tokenUnit}`, {
+        headers: { 'X-Partner-Id': this.dexHunterApiKey, 'Content-Type': 'application/json' },
+      });
 
-      // Cache the result (TTL handled automatically by node-cache)
-      this.poolCache.set(cacheKey, response.data);
-
-      // this.logger.debug(`Retrieved ${response.data.length} pools for token ${tokenUnit.slice(0, 6)}...`);
-
-      return response.data;
-    } catch (error) {
-      // 404 is expected when tokens don't have LP pools - cache empty result and return
-      const isAxiosError = error && typeof error === 'object' && 'response' in error;
-      if (isAxiosError && (error as any).response?.status === 404) {
-        // Cache empty results too (tokens without pools shouldn't be queried repeatedly)
+      if (!dhResp.ok) {
         this.poolCache.set(cacheKey, []);
-        // this.logger.debug(`No LP pools found in TapTools for token ${tokenUnit.slice(0, 5)}... `);
         return [];
       }
 
-      // For all other errors (network, 500, timeout, etc.) - rethrow to preserve error handling
-      // Caller should decide whether to fail or handle the error
-      this.logger.error(
-        `Failed to get token pools from TapTools for ${tokenUnit.slice(0, 5)}...: ${error instanceof Error ? error.message : String(error)}`
+      const dhPools: DexHunterPoolItem[] = await dhResp.json();
+      if (!dhPools || dhPools.length === 0) {
+        this.poolCache.set(cacheKey, []);
+        return [];
+      }
+
+      // Step 2: Pre-fetch DEX-specific data in parallel for LP token resolution
+      const hasVyFi = dhPools.some(p => p.dex_name.toLowerCase().includes('vyfi'));
+      const hasMinswap = dhPools.some(p => p.dex_name.toLowerCase().includes('minswap'));
+
+      const [vyfiPools, minswapPools] = await Promise.all([
+        hasVyFi ? this.fetchVyFiPoolsForToken(tokenUnit) : Promise.resolve([] as VyFiPoolRaw[]),
+        hasMinswap ? this.fetchMinswapPoolsForToken(tokenUnit) : Promise.resolve([] as MinswapPoolMetrics[]),
+      ]);
+
+      // Step 3: Map to TapToolsTokenPoolDto
+      const result: TapToolsTokenPoolDto[] = dhPools.map(pool => {
+        const dex = pool.dex_name.toLowerCase();
+        let lpTokenUnit = '';
+
+        if (dex.includes('vyfi') && vyfiPools.length > 0) {
+          const match = this.findVyFiPool(vyfiPools, pool.pool_id);
+          lpTokenUnit = match ? this.extractVyFiLpTokenUnit(match) : '';
+        } else if (dex.includes('minswap') && minswapPools.length > 0) {
+          const match = this.findMinswapPool(minswapPools, tokenUnit);
+          lpTokenUnit = match?.id ?? '';
+        }
+
+        return {
+          exchange: pool.dex_name,
+          lpTokenUnit,
+          onchainID: pool.pool_id,
+          tokenA: tokenUnit,
+          tokenALocked: pool.token_2_amount, // base token units
+          tokenATicker: '',
+          tokenB: '', // ADA
+          tokenBLocked: pool.token_1_amount, // already in ADA from DexHunter API
+          tokenBTicker: 'ADA',
+        };
+      });
+
+      this.poolCache.set(cacheKey, result);
+      return result;
+    } catch (error) {
+      this.logger.warn(
+        `getTokenPools failed for ${tokenUnit.slice(0, 10)}...: ${error instanceof Error ? error.message : String(error)}`
       );
-      throw error;
+      this.poolCache.set(cacheKey, []);
+      return [];
     }
   }
 
   /**
-   * Get LP pool by onchain ID
-   * Returns the first pool matching the onchain ID, or null if not found
-   *
-   * @param onchainID - Pool onchain identifier
-   * @returns LP pool data or null
+   * Get pool details by onchain ID that was from Taptools API
+   * Currently doesnt work
+   * @param onchainID - Pool onchain identifier (56-char hex script hash)
    */
   async getPoolByOnchainId(onchainID: string): Promise<TapToolsTokenPoolDto | null> {
-    // Skip API calls for testnet/preprod - TapTools doesn't support preprod
-    if (!this.isMainnet) {
-      this.logger.debug(`Skipping TapTools API call for non-mainnet environment`);
-      return null;
-    }
-
-    // Check cache first
+    if (!this.isMainnet) return null;
     const cacheKey = `onchainID_${onchainID}`;
     const cached = this.poolCache.get<TapToolsTokenPoolDto | null>(cacheKey);
-    if (cached !== undefined) {
-      return cached;
-    }
+    if (cached !== undefined) return cached;
 
+    // TapTools disabled — return null
+    this.poolCache.set(cacheKey, null);
+    return null;
+  }
+
+  // ─── Pool resolution helpers ─────────────────────────────────────────────────
+
+  /** Fetch VyFi pools for a tokenA/ADA pair */
+  private async fetchVyFiPoolsForToken(tokenUnit: string): Promise<VyFiPoolRaw[]> {
+    const url =
+      `https://api-v3.vyfi.io/lp?networkId=${this.networkId}` + `&tokenAUnit=${tokenUnit}&tokenBUnit=lovelace&v2=true`;
     try {
-      const response = await firstValueFrom(
-        this.httpService.get<TapToolsTokenPoolDto[]>(`${this.tapToolsApiUrl}/token/pools`, {
-          params: { onchainID },
-          headers: {
-            'x-api-key': this.tapToolsApiKey,
-          },
-        })
-      );
-
-      // Return first pool if array has results
-      const result = response.data && response.data.length > 0 ? response.data[0] : null;
-
-      // Cache the result (TTL handled automatically by node-cache)
-      this.poolCache.set(cacheKey, result);
-
-      return result;
-    } catch (error) {
-      const isAxiosError = error && typeof error === 'object' && 'response' in error;
-      if (isAxiosError && (error as any).response?.status === 404) {
-        // Cache null result
-        this.poolCache.set(cacheKey, null);
-      } else {
-        this.logger.warn(
-          `Failed to get pool by onchainID ${onchainID.slice(0, 8)}...: ${error instanceof Error ? error.message : String(error)}`
-        );
-      }
-      return null;
+      const resp = await fetch(url);
+      if (!resp.ok) return [];
+      const data: unknown = await resp.json();
+      return Array.isArray(data) ? (data as VyFiPoolRaw[]) : [];
+    } catch {
+      return [];
     }
+  }
+
+  /** Extract concatenated lpTokenUnit from VyFi pool "policyId-assetId" field */
+  private extractVyFiLpTokenUnit(pool: VyFiPoolRaw): string {
+    const parts = (pool['lpPolicyId-assetId'] ?? '').split('-');
+    return parts.length === 2 ? `${parts[0]}${parts[1]}` : '';
+  }
+
+  /** Find the VyFi pool that matches DexHunter's pool_id (address) */
+  private findVyFiPool(pools: VyFiPoolRaw[], poolId: string): VyFiPoolRaw | undefined {
+    // Match by poolValidatorUtxoAddress (VyFi) == pool_id (DexHunter)
+    return pools.find(p => p.poolValidatorUtxoAddress === poolId);
+  }
+
+  /** Fetch Minswap pools containing a token via POST /v1/pools/metrics */
+  private async fetchMinswapPoolsForToken(tokenUnit: string): Promise<MinswapPoolMetrics[]> {
+    try {
+      const resp = await fetch('https://api-mainnet-prod.minswap.org/v1/pools/metrics', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ term: tokenUnit, limit: 20, only_verified: false }),
+      });
+      if (!resp.ok) return [];
+      const body = await resp.json();
+      // API wraps list in { data: [...] }
+      return Array.isArray(body?.data) ? (body.data as MinswapPoolMetrics[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Find the Minswap pool that contains our token */
+  private findMinswapPool(pools: MinswapPoolMetrics[], tokenUnit: string): MinswapPoolMetrics | undefined {
+    const policyId = tokenUnit.slice(0, 56);
+    return pools.find(p => {
+      const unitA = `${p.assetA?.policyId ?? ''}${p.assetA?.assetName ?? ''}`;
+      const unitB = `${p.assetB?.policyId ?? ''}${p.assetB?.assetName ?? ''}`;
+      return unitA === tokenUnit || unitB === tokenUnit || unitA === policyId || unitB === policyId;
+    });
   }
 
   /**
@@ -311,69 +359,72 @@ export class TapToolsClient {
     interval: string,
     numIntervals?: number
   ): Promise<MarketOhlcvSeries | null> {
-    // Skip API calls for testnet/preprod - TapTools doesn't support preprod
-    if (!this.isMainnet) {
-      this.logger.debug(`Skipping TapTools OHLCV API call for non-mainnet environment`);
-      return null;
-    }
+    if (!this.isMainnet) return null;
 
-    // Validate interval
     if (!this.validOHLCVIntervals.includes(interval)) {
       this.logger.warn(`Invalid interval '${interval}'. Valid intervals: ${this.validOHLCVIntervals.join(', ')}`);
       return null;
     }
 
-    // Build cache key based on parameters
     const cacheKey = numIntervals
       ? `ohlcv_${scriptHash}_${assetName}_${interval}_${numIntervals}`
       : `ohlcv_${scriptHash}_${assetName}_${interval}`;
 
-    // Check cache first
     const cached = this.ohlcvCache.get<MarketOhlcvSeries>(cacheKey);
-    if (cached !== undefined) {
-      return cached;
+    if (cached !== undefined) return cached;
+
+    const unit = `${scriptHash}${assetName}`;
+
+    // PRIMARY: Charli3
+    try {
+      const charli3Data = await this.charli3Client.getTokenOHLCV(unit, interval, numIntervals);
+      if (charli3Data && charli3Data.length > 0) {
+        this.ohlcvCache.set(cacheKey, charli3Data);
+        return charli3Data;
+      }
+    } catch {
+      this.logger.debug(`Charli3 OHLCV failed for ${unit.slice(0, 10)}...`);
     }
 
+    return null;
+  }
+
+  /**
+   * Fetch token total supply and decimals from Blockfrost.
+   * Cached 60 min — supply is immutable for most Cardano tokens.
+   */
+  async getTokenSupply(unit: string): Promise<{ totalSupply: number; decimals: number } | null> {
+    const cacheKey = `supply_${unit}`;
+    const cached = this.supplyCache.get<{ totalSupply: number; decimals: number }>(cacheKey);
+    if (cached !== undefined) return cached;
+
     try {
-      const unit = `${scriptHash}${assetName}`;
-      const params: { unit: string; interval: string; numIntervals?: number } = { unit, interval };
+      const asset = await this.blockfrost.assetsById(unit);
+      const decimals = asset?.metadata?.decimals ?? 0;
 
-      // Only include numIntervals if specified (omitting it returns full history)
-      if (numIntervals !== undefined) {
-        params.numIntervals = numIntervals;
-      }
+      const quantity = BigInt(asset.quantity);
+      const divisor = BigInt(10) ** BigInt(decimals);
+      const maxSafeQuantity = BigInt(Number.MAX_SAFE_INTEGER) * divisor;
 
-      const response = await firstValueFrom(
-        this.httpService.get<MarketOhlcvSeries>(`${this.tapToolsApiUrl}/token/ohlcv`, {
-          params,
-          headers: {
-            'x-api-key': this.tapToolsApiKey,
-          },
-        })
-      );
-
-      if (!response.data || response.data.length === 0) {
-        this.logger.debug(`No OHLCV data available for ${scriptHash}.${assetName} (${interval})`);
+      if (quantity > maxSafeQuantity) {
+        this.logger.debug(`Blockfrost supply for ${unit.slice(0, 10)}... exceeds JS safe integer range`);
         return null;
       }
 
-      // Cache the result
-      this.ohlcvCache.set(cacheKey, response.data);
-
-      return response.data;
-    } catch (error) {
-      this.logger.error(
-        `Error fetching OHLCV data from TapTools for ${scriptHash}.${assetName} (interval: ${interval}):`,
-        error instanceof Error ? error.message : String(error)
-      );
+      const totalSupply = Number(quantity) / Number(divisor);
+      const result = { totalSupply, decimals };
+      this.supplyCache.set(cacheKey, result);
+      return result;
+    } catch {
+      this.logger.debug(`Blockfrost supply lookup failed for ${unit.slice(0, 10)}...`);
       return null;
     }
   }
 
   /**
-   * Get market cap data for a token from TapTools
-   * Includes price, FDV, market cap, circulating supply, and total supply
-   *
+   * Get market cap data for a token.
+   * Charli3 is the PRIMARY source for price.
+   * Supply is fetched from Blockfrost and FDV is computed as price * totalSupply (when supply is available).
    * @param unit - Token unit (policyId + assetName in hex)
    * @returns Market cap data or null if unavailable
    */
@@ -384,13 +435,11 @@ export class TapToolsClient {
     mcap: number;
     totalSupply: number;
   } | null> {
-    // Skip API calls for testnet/preprod - TapTools doesn't support preprod
     if (!this.isMainnet) {
-      this.logger.debug(`Skipping TapTools market cap API call for non-mainnet environment`);
+      this.logger.debug(`Skipping market cap API call for non-mainnet environment`);
       return null;
     }
 
-    // Check cache first
     const cacheKey = `mcap_${unit}`;
     const cached = this.marketDataCache.get<{
       price: number;
@@ -403,41 +452,38 @@ export class TapToolsClient {
       return cached;
     }
 
+    // PRIMARY: Charli3 price + Blockfrost supply → compute fdv/mcap
     try {
-      const response = await firstValueFrom(
-        this.httpService.get<{
-          price: number;
-          fdv: number;
-          circSupply: number;
-          mcap: number;
-          totalSupply: number;
-        }>(`${this.tapToolsApiUrl}/token/mcap`, {
-          params: { unit },
-          headers: {
-            'x-api-key': this.tapToolsApiKey,
-          },
-          timeout: 10000, // 10 second timeout
-        })
-      );
+      const charli3Data = await this.charli3Client.getTokenMarketCap(unit);
+      if (charli3Data && charli3Data.price > 0) {
+        this.logger.debug(`Charli3 price for ${unit.slice(0, 10)}...: ${charli3Data.price} ADA`);
 
-      if (response.data) {
-        // Cache the result
-        this.marketDataCache.set(cacheKey, response.data);
-        return response.data;
+        // Enrich with supply data from Blockfrost
+        const supplyData = await this.getTokenSupply(unit);
+        const totalSupply = supplyData?.totalSupply ?? 0;
+        const fdv = totalSupply > 0 ? charli3Data.price * totalSupply : 0;
+        const result = {
+          price: charli3Data.price,
+          fdv,
+          circSupply: 0,
+          mcap: 0,
+          totalSupply,
+        };
+        this.marketDataCache.set(cacheKey, result);
+        return result;
       }
-
-      return null;
-    } catch (error) {
-      this.logger.warn(
-        `Failed to fetch market cap from TapTools for unit ${unit.slice(0, 10)}...: ${error instanceof Error ? error.message : String(error)}`
-      );
-      return null;
+    } catch {
+      this.logger.debug(`Charli3 market cap failed for ${unit.slice(0, 10)}...`);
     }
+
+    return null;
   }
 
   /**
-   * Get price changes for a token from TapTools
-   * Returns percentage changes over specified timeframes
+   * Get price changes for a token.
+   * Charli3 is the PRIMARY source (calculates all timeframes from OHLCV including 7d/30d).
+   * Falls back to DexHunter OHLCV (daily candles) when Charli3 has no data.
+   * Note: the 1h timeframe is approximate in the DexHunter fallback path (daily resolution).
    *
    * @param unit - Token unit (policyId + assetName in hex)
    * @param timeframes - Comma-separated timeframes (e.g., '1h,24h,7d,30d')
@@ -447,46 +493,88 @@ export class TapToolsClient {
     unit: string,
     timeframes: string = '1h,24h,7d,30d'
   ): Promise<Record<string, number> | null> {
-    // Skip API calls for testnet/preprod - TapTools doesn't support preprod
     if (!this.isMainnet) {
-      this.logger.debug(`Skipping TapTools price changes API call for non-mainnet environment`);
+      this.logger.debug(`Skipping price changes API call for non-mainnet environment`);
       return null;
     }
 
-    // Check cache first
     const cacheKey = `price_chg_${unit}_${timeframes}`;
     const cached = this.marketDataCache.get<Record<string, number>>(cacheKey);
     if (cached !== undefined) {
       return cached;
     }
 
+    // PRIMARY: Charli3 — calculates from OHLCV, supports all timeframes including 7d/30d
     try {
-      const response = await firstValueFrom(
-        this.httpService.get<Record<string, number>>(`${this.tapToolsApiUrl}/token/prices/chg`, {
-          params: {
-            unit,
-            timeframes,
-          },
-          headers: {
-            'x-api-key': this.tapToolsApiKey,
-          },
-          timeout: 10000, // 10 second timeout
-        })
-      );
-
-      if (response.data) {
-        // Cache the result
-        this.marketDataCache.set(cacheKey, response.data);
-        return response.data;
+      const charli3Data = await this.charli3Client.getTokenPriceChanges(unit, timeframes);
+      if (charli3Data) {
+        this.logger.debug(
+          `Charli3 price changes for ${unit.slice(0, 10)}...: 1h=${charli3Data['1h']?.toFixed(2)}% 24h=${charli3Data['24h']?.toFixed(2)}% 7d=${charli3Data['7d']?.toFixed(2)}% 30d=${charli3Data['30d']?.toFixed(2)}%`
+        );
+        this.marketDataCache.set(cacheKey, charli3Data);
+        return charli3Data;
       }
-
-      return null;
-    } catch (error) {
-      this.logger.warn(
-        `Failed to fetch price changes from TapTools for unit ${unit.slice(0, 10)}...: ${error instanceof Error ? error.message : String(error)}`
-      );
-      return null;
+    } catch {
+      this.logger.debug(`Charli3 price changes failed for ${unit.slice(0, 10)}...`);
     }
+
+    // FALLBACK: DexHunter OHLCV — fetch 31 daily candles, compute changes from close prices
+    try {
+      const scriptHash = unit.slice(0, 56);
+      const assetName = unit.slice(56);
+      const ohlcv = await this.dexHunterPricingClient.getTokenOHLCV(scriptHash, assetName, '1d', 31);
+      if (ohlcv && ohlcv.length > 0) {
+        const changes = this.calculatePriceChangesFromOHLCV(ohlcv, timeframes);
+        if (changes) {
+          this.logger.debug(`DexHunter OHLCV price changes for ${unit.slice(0, 10)}...`);
+          this.marketDataCache.set(cacheKey, changes);
+          return changes;
+        }
+      }
+    } catch {
+      this.logger.debug(`DexHunter price changes fallback failed for ${unit.slice(0, 10)}...`);
+    }
+
+    return null;
+  }
+
+  /**
+   * Calculate price change percentages from an OHLCV series.
+   * Uses close prices and walks back from now by each timeframe's seconds.
+   */
+  private calculatePriceChangesFromOHLCV(series: MarketOhlcvSeries, timeframes: string): Record<string, number> | null {
+    if (!series.length) return null;
+
+    const TIMEFRAME_SECONDS: Record<string, number> = {
+      '1h': 3600,
+      '24h': 86400,
+      '7d': 7 * 86400,
+      '30d': 30 * 86400,
+    };
+
+    const now = Math.floor(Date.now() / 1000);
+    const currentPrice = series[series.length - 1].close;
+    if (!currentPrice) return null;
+
+    const frames = timeframes.split(',').map(t => t.trim());
+    const result: Record<string, number> = {};
+
+    for (const tf of frames) {
+      const secondsBack = TIMEFRAME_SECONDS[tf];
+      if (!secondsBack) {
+        result[tf] = 0;
+        continue;
+      }
+      const targetTs = now - secondsBack;
+      let oldPrice = series[0].close;
+      for (const point of series) {
+        if (point.time <= targetTs) oldPrice = point.close;
+        else break;
+      }
+      result[tf] = oldPrice > 0 ? ((currentPrice - oldPrice) / oldPrice) * 100 : 0;
+    }
+
+    return result;
   }
 
   /**
@@ -497,48 +585,25 @@ export class TapToolsClient {
    * @returns Object containing trait prices by trait type and value, or null if unavailable
    */
   async getTraitPrices(policyId: string): Promise<Record<string, Record<string, number>> | null> {
-    // Skip API calls for testnet/preprod - TapTools doesn't support preprod
-    if (!this.isMainnet) {
-      this.logger.debug(`Skipping TapTools trait prices API call for non-mainnet environment`);
-      return null;
-    }
+    if (!this.isMainnet) return null;
 
-    // Check cache first
     const cacheKey = `trait_prices_${policyId}`;
     const cached = this.traitPricesCache.get<Record<string, Record<string, number>>>(cacheKey);
-    if (cached !== undefined) {
-      return cached;
-    }
+    if (cached !== undefined) return cached;
 
+    // PRIMARY: Anvil — derives floor prices from marketplace listings
     try {
-      const response = await firstValueFrom(
-        this.httpService.get<Record<string, Record<string, number>>>(
-          `${this.tapToolsApiUrl}/nft/collection/traits/price`,
-          {
-            params: { policy: policyId },
-            headers: {
-              'x-api-key': this.tapToolsApiKey,
-              Accept: 'application/json',
-            },
-            timeout: 10000, // 10 second timeout
-          }
-        )
-      );
-
-      if (response.data && typeof response.data === 'object') {
-        // Cache the result
-        this.traitPricesCache.set(cacheKey, response.data);
-        return response.data;
+      const anvilTraits = await this.anvilClient.deriveTraitFloorPrices(policyId, 'Character');
+      if (anvilTraits && Object.keys(anvilTraits).length > 0) {
+        const result: Record<string, Record<string, number>> = { Character: anvilTraits };
+        this.traitPricesCache.set(cacheKey, result);
+        return result;
       }
-
-      this.logger.warn(`Invalid response format from TapTools trait prices API for policy ${policyId}`);
-      return null;
-    } catch (error) {
-      this.logger.warn(
-        `Failed to fetch trait prices from TapTools for policy ${policyId}: ${error instanceof Error ? error.message : String(error)}`
-      );
-      return null;
+    } catch {
+      this.logger.debug(`Anvil trait prices failed for ${policyId}`);
     }
+
+    return null;
   }
 
   /**
@@ -550,15 +615,16 @@ export class TapToolsClient {
     const ohlcvSize = this.ohlcvCache.keys().length;
     const traitPricesSize = this.traitPricesCache.keys().length;
     const marketDataSize = this.marketDataCache.keys().length;
+    const supplySize = this.supplyCache.keys().length;
     this.priceCache.flushAll();
     this.poolCache.flushAll();
     this.ohlcvCache.flushAll();
     this.traitPricesCache.flushAll();
     this.marketDataCache.flushAll();
+    this.supplyCache.flushAll();
     this.logger.log(
-      `Cleared caches - price: ${priceSize} entries, pool: ${poolSize} entries, ` +
-        `ohlcv: ${ohlcvSize} entries, traitPrices: ${traitPricesSize} entries, ` +
-        `marketData: ${marketDataSize} entries`
+      `Cleared caches - price: ${priceSize}, pool: ${poolSize}, ohlcv: ${ohlcvSize}, ` +
+        `traitPrices: ${traitPricesSize}, marketData: ${marketDataSize}, supply: ${supplySize} entries`
     );
   }
 
