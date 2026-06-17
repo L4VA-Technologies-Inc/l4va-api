@@ -9,7 +9,6 @@ import { DexHunterPricingModule } from '@/modules/dexhunter/dexhunter-pricing.mo
 import { SystemSettingsModule } from '@/modules/globals/system-settings/system-settings.module';
 import { PriceModule } from '@/modules/price/price.module';
 import { TapToolsPricingModule } from '@/modules/taptools/taptools-pricing.module';
-import { MarketStatsModule } from '@/modules/vaults/market-stats/market-stats.module';
 
 @Module({
   imports: [
@@ -18,7 +17,6 @@ import { MarketStatsModule } from '@/modules/vaults/market-stats/market-stats.mo
     PriceModule,
     TapToolsPricingModule,
     DexHunterPricingModule,
-    MarketStatsModule,
   ],
   controllers: [MarketController],
   providers: [MarketService],
