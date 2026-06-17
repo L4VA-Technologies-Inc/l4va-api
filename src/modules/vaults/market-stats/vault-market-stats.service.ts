@@ -2,8 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import axios, { AxiosInstance } from 'axios';
-import NodeCache from 'node-cache';
 import { In, Repository } from 'typeorm';
 
 import { Asset } from '@/database/asset.entity';
@@ -11,6 +9,7 @@ import { Market } from '@/database/market.entity';
 import { Vault } from '@/database/vault.entity';
 import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
 import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
+import { TapToolsClient } from '@/modules/taptools/taptools.client';
 import { TaptoolsService } from '@/modules/taptools/taptools.service';
 import { AssetType } from '@/types/asset.types';
 import { VAULT_STATUSES_WITH_POTENTIAL_LP } from '@/types/vault.types';
@@ -48,8 +47,6 @@ import { VAULT_STATUSES_WITH_POTENTIAL_LP } from '@/types/vault.types';
 export class VaultMarketStatsService {
   private readonly logger = new Logger(VaultMarketStatsService.name);
   private readonly isMainnet: boolean;
-  private readonly axiosTapToolsInstance: AxiosInstance;
-  private readonly ohlcvCache: NodeCache;
   private readonly validOHLCVIntervals: readonly string[] = ['1h', '1d', '1w', '1M'];
 
   constructor(
@@ -61,24 +58,10 @@ export class VaultMarketStatsService {
     private readonly assetRepository: Repository<Asset>,
     private readonly configService: ConfigService,
     private readonly taptoolsService: TaptoolsService,
+    private readonly tapToolsClient: TapToolsClient,
     private readonly dexHunterPricingService: DexHunterPricingService
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
-    const tapToolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
-    const tapToolsApiUrl = this.configService.get<string>('TAPTOOLS_API_URL');
-
-    this.axiosTapToolsInstance = axios.create({
-      baseURL: tapToolsApiUrl,
-      headers: {
-        'x-api-key': tapToolsApiKey,
-      },
-    });
-
-    this.ohlcvCache = new NodeCache({
-      stdTTL: 300,
-      checkperiod: 60,
-      useClones: false,
-    });
   }
 
   /**
@@ -186,14 +169,9 @@ export class VaultMarketStatsService {
           }
 
           // Step 2: Call Taptools API for OHLCV/price data (only if DexHunter confirmed liquidity)
-          const [{ data: mcapData }, { data: priceChangeData }] = await Promise.all([
-            this.axiosTapToolsInstance.get('/token/mcap', { params: { unit } }),
-            this.axiosTapToolsInstance.get('/token/prices/chg', {
-              params: {
-                unit,
-                timeframes: '1h,24h,7d,30d',
-              },
-            }),
+          const [mcapData, priceChangeData] = await Promise.all([
+            this.tapToolsClient.getTokenMarketCap(unit),
+            this.tapToolsClient.getTokenPriceChanges(unit, '1h,24h,7d,30d'),
           ]);
 
           const vaultUpdateData: Partial<Vault> = {};
@@ -284,59 +262,6 @@ export class VaultMarketStatsService {
     }
   }
 
-  /**
-   * Private helper to fetch OHLCV data from TapTools API
-   * Handles the actual API call with caching
-   *
-   * @param scriptHash - is policyId for vault and its tokens
-   * @param assetName - Token asset name (hex)
-   * @param interval - Time interval (1h, 1d, 1w, 1M)
-   * @param numIntervals - Optional number of intervals to return (omit for full history)
-   * @param cacheKey - Cache key for storing/retrieving cached data
-   * @returns OHLCV data array or null if unavailable
-   */
-  private async _fetchOHLCV(
-    scriptHash: string,
-    assetName: string,
-    interval: string,
-    numIntervals: number | undefined,
-    cacheKey: string
-  ): Promise<MarketOhlcvSeries | null> {
-    // Check cache first
-    const cachedData = this.ohlcvCache.get<MarketOhlcvSeries>(cacheKey);
-    if (cachedData) {
-      return cachedData;
-    }
-
-    try {
-      const unit = `${scriptHash}${assetName}`;
-      const params: { unit: string; interval: string; numIntervals?: number } = { unit, interval };
-
-      // Only include numIntervals if specified (omitting it returns full history)
-      if (numIntervals !== undefined) {
-        params.numIntervals = numIntervals;
-      }
-
-      const { data } = await this.axiosTapToolsInstance.get<MarketOhlcvSeries>('/token/ohlcv', { params });
-
-      if (!data || data.length === 0) {
-        this.logger.debug(`No OHLCV data available for ${scriptHash}.${assetName} (${interval})`);
-        return null;
-      }
-
-      // Cache for 5 minutes (same as cache TTL config)
-      this.ohlcvCache.set(cacheKey, data);
-
-      return data;
-    } catch (error) {
-      this.logger.error(
-        `Error fetching OHLCV data from TapTools for ${scriptHash}.${assetName} (interval: ${interval}):`,
-        error.response?.data || error.message
-      );
-      return null;
-    }
-  }
-
   async getTokenOHLCV(
     scriptHash: string,
     assetName: string,
@@ -357,8 +282,7 @@ export class VaultMarketStatsService {
       return null;
     }
 
-    const cacheKey = `ohlcv_${scriptHash}_${assetName}_${interval}`;
-    return this._fetchOHLCV(scriptHash, assetName, interval, undefined, cacheKey);
+    return this.tapToolsClient.getTokenOHLCV(scriptHash, assetName, interval);
   }
 
   /**
@@ -383,8 +307,7 @@ export class VaultMarketStatsService {
       return null;
     }
 
-    const cacheKey = `ohlcv_full_${policyId}_${assetName}`;
-    const data = await this._fetchOHLCV(policyId, assetName, '1d', undefined, cacheKey);
+    const data = await this.tapToolsClient.getTokenOHLCV(policyId, assetName, '1d');
 
     if (data && data.length > 0) {
       this.logger.log(
