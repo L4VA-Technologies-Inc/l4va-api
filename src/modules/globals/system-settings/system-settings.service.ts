@@ -78,7 +78,7 @@ const DEFAULT_SETTINGS: SystemSettingsData = {
   price_min_absolute_move_ada: 0,
   // Keep this low so deviation checks apply to typical FT price feeds by default
   price_min_asset_price_for_deviation_check_ada: 0.1,
-  hidden_mainnet_vault_ids: ['1a6e7495-178b-464e-b37e-00997ef1e9c1'],
+  hidden_mainnet_vault_ids: ['00000000-0000-0000-0000-000000000000'],
   vault_creator_whitelist: [
     'addr1q9j4eqs7v5pz08fddkfng2kvj762jhkhnpen4shr5jtht3evu56kfxkaqdjl4he2d6nguzl489fsvwsnx5554fe4lsjqe0ygg5',
     'addr1q90jnj7v8qmd3ypa668tufp7r663ppkctfd34dfwdfmam9eu2heaaj7eknfhahkydax07wqmvszndrcmh83adfph4umsskaxm5',
