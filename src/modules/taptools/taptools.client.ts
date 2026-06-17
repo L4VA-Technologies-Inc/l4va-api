@@ -298,8 +298,8 @@ export class TapToolsClient {
         const result = {
           price: charli3Data.price,
           fdv,
-          circSupply: totalSupply,
-          mcap: fdv,
+          circSupply: 0,
+          mcap: 0,
           totalSupply,
         };
         this.marketDataCache.set(cacheKey, result);
