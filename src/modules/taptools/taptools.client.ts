@@ -1,30 +1,26 @@
-import { HttpService } from '@nestjs/axios';
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import NodeCache from 'node-cache';
-import { firstValueFrom } from 'rxjs';
 
 import { TapToolsTokenPoolDto } from './interfaces/taptools.interface';
 
+import { AnvilClient } from '@/modules/anvil/anvil.client';
 import { Charli3Client } from '@/modules/charli3/charli3.client';
 import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
 
 /**
- * TapTools API client for token pricing and LP pool data
- * Centralized client for all TapTools API interactions
- *
- * Caches token price results for 5 minutes and LP pool data for 10 minutes
- * to reduce API calls and improve performance.
- * Designed to support future Redis caching migration without breaking consumers.
- *
- * Fallback Strategy: Uses Charli3Client when TapTools fails (price + 1h/24h changes only)
+ * TapTools API client — now a thin wrapper that routes to Charli3 (primary) and Anvil/DexHunter.
+ * All direct TapTools HTTP calls have been removed.
  */
 @Injectable()
 export class TapToolsClient {
   private readonly logger = new Logger(TapToolsClient.name);
   private readonly isMainnet: boolean;
-  private readonly tapToolsApiUrl: string;
-  private readonly tapToolsApiKey: string;
+  private readonly blockfrost: BlockFrostAPI;
+
+  /** Supply cache — 60 min TTL (total supply is immutable for most tokens) */
+  private readonly supplyCache: NodeCache;
 
   /**
    * Valid OHLCV intervals supported by TapTools API
@@ -62,13 +58,16 @@ export class TapToolsClient {
   private readonly marketDataCache: NodeCache;
 
   constructor(
-    private readonly httpService: HttpService,
     private readonly configService: ConfigService,
-    private readonly charli3Client: Charli3Client
+    private readonly charli3Client: Charli3Client,
+    private readonly anvilClient: AnvilClient
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
-    this.tapToolsApiUrl = this.configService.get<string>('TAPTOOLS_API_URL');
-    this.tapToolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
+    this.blockfrost = new BlockFrostAPI({
+      projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
+    });
+
+    this.supplyCache = new NodeCache({ stdTTL: 3600, checkperiod: 300, useClones: false });
 
     // Initialize price cache with 5-minute TTL
     this.priceCache = new NodeCache({
@@ -114,10 +113,7 @@ export class TapToolsClient {
    * @returns Map of tokenId to price in ADA (null if not found)
    */
   async getTokenPrices(tokenIds: string[]): Promise<Map<string, number | null>> {
-    // Skip API calls for testnet/preprod - TapTools doesn't support preprod
     if (!this.isMainnet) {
-      this.logger.debug(`Skipping TapTools API call for non-mainnet environment (${tokenIds.length} tokens)`);
-      // Return null for all tokens
       const resultMap = new Map<string, number | null>();
       tokenIds.forEach(tokenId => resultMap.set(tokenId, null));
       return resultMap;
@@ -125,67 +121,33 @@ export class TapToolsClient {
 
     const priceMap = new Map<string, number | null>();
     const tokensToFetch: string[] = [];
-    const cacheHits: string[] = [];
 
-    // Check cache first for all tokens
     tokenIds.forEach(tokenId => {
       const cacheKey = `token_price_${tokenId}`;
       const cached = this.priceCache.get<number | null>(cacheKey);
       if (cached !== undefined) {
         priceMap.set(tokenId, cached);
-        cacheHits.push(tokenId);
       } else {
         tokensToFetch.push(tokenId);
       }
     });
 
-    // If all tokens found in cache, return early
-    if (tokensToFetch.length === 0) {
-      return priceMap;
-    }
+    if (tokensToFetch.length === 0) return priceMap;
 
-    // TapTools supports max 100 tokens per batch
-    const batchSize = 100;
-    for (let i = 0; i < tokensToFetch.length; i += batchSize) {
-      const batch = tokensToFetch.slice(i, i + batchSize);
-
-      try {
-        const response = await firstValueFrom(
-          this.httpService.post<Record<string, number | null>>(`${this.tapToolsApiUrl}/token/prices`, batch, {
-            headers: {
-              'Content-Type': 'application/json',
-              'x-api-key': this.tapToolsApiKey,
-            },
-            timeout: 10000, // 10 second timeout
-          })
-        );
-
-        const data = response.data;
-
-        // Map response to price map and cache results
-        batch.forEach(tokenId => {
-          const price = data[tokenId];
-          const normalizedPrice = price !== undefined && price !== null ? price : null;
-          priceMap.set(tokenId, normalizedPrice);
-          // Cache the result (including null values to avoid repeated failed lookups)
-          this.priceCache.set(`token_price_${tokenId}`, normalizedPrice);
-        });
-
-        // this.logger.debug(`Successfully fetched batch ${i / batchSize + 1} (${batch.length} tokens) from TapTools`);
-      } catch (error) {
-        // Log the error and set all tokens in batch to null
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        this.logger.warn(
-          `TapTools batch API failed for batch ${i / batchSize + 1} (${batch.length} tokens): ${errorMessage}`
-        );
-
-        // Set all tokens in failed batch to null and cache null results
-        batch.forEach(tokenId => {
+    // Fetch from Charli3 (primary)
+    await Promise.all(
+      tokensToFetch.map(async tokenId => {
+        try {
+          const data = await this.charli3Client.getTokenMarketCap(tokenId);
+          const price = data?.price > 0 ? data.price : null;
+          priceMap.set(tokenId, price);
+          this.priceCache.set(`token_price_${tokenId}`, price);
+        } catch {
           priceMap.set(tokenId, null);
           this.priceCache.set(`token_price_${tokenId}`, null);
-        });
-      }
-    }
+        }
+      })
+    );
 
     return priceMap;
   }
@@ -198,53 +160,13 @@ export class TapToolsClient {
    * @returns Array of LP pools containing this token
    */
   async getTokenPools(tokenUnit: string): Promise<TapToolsTokenPoolDto[]> {
-    // Skip API calls for testnet/preprod - TapTools doesn't support preprod
-    if (!this.isMainnet) {
-      this.logger.debug(`Skipping TapTools API call for non-mainnet environment (token ${tokenUnit.slice(0, 5)}...)`);
-      return [];
-    }
-
-    // Check cache first (prefix key to avoid collision with onchainID keys)
+    if (!this.isMainnet) return [];
     const cacheKey = `tokenUnit_${tokenUnit}`;
     const cached = this.poolCache.get<TapToolsTokenPoolDto[]>(cacheKey);
-    if (cached !== undefined) {
-      // this.logger.debug(`Cache HIT for token ${tokenUnit.slice(0, 5)}... (${cached.length} pools)`);
-      return cached;
-    }
-
-    try {
-      const response = await firstValueFrom(
-        this.httpService.get<TapToolsTokenPoolDto[]>(`${this.tapToolsApiUrl}/token/pools`, {
-          params: { unit: tokenUnit },
-          headers: {
-            'x-api-key': this.tapToolsApiKey,
-          },
-        })
-      );
-
-      // Cache the result (TTL handled automatically by node-cache)
-      this.poolCache.set(cacheKey, response.data);
-
-      // this.logger.debug(`Retrieved ${response.data.length} pools for token ${tokenUnit.slice(0, 6)}...`);
-
-      return response.data;
-    } catch (error) {
-      // 404 is expected when tokens don't have LP pools - cache empty result and return
-      const isAxiosError = error && typeof error === 'object' && 'response' in error;
-      if (isAxiosError && (error as any).response?.status === 404) {
-        // Cache empty results too (tokens without pools shouldn't be queried repeatedly)
-        this.poolCache.set(cacheKey, []);
-        // this.logger.debug(`No LP pools found in TapTools for token ${tokenUnit.slice(0, 5)}... `);
-        return [];
-      }
-
-      // For all other errors (network, 500, timeout, etc.) - rethrow to preserve error handling
-      // Caller should decide whether to fail or handle the error
-      this.logger.error(
-        `Failed to get token pools from TapTools for ${tokenUnit.slice(0, 5)}...: ${error instanceof Error ? error.message : String(error)}`
-      );
-      throw error;
-    }
+    if (cached !== undefined) return cached;
+    // TapTools disabled — return empty (DexHunter handles pool detection)
+    this.poolCache.set(cacheKey, []);
+    return [];
   }
 
   /**
@@ -255,48 +177,13 @@ export class TapToolsClient {
    * @returns LP pool data or null
    */
   async getPoolByOnchainId(onchainID: string): Promise<TapToolsTokenPoolDto | null> {
-    // Skip API calls for testnet/preprod - TapTools doesn't support preprod
-    if (!this.isMainnet) {
-      this.logger.debug(`Skipping TapTools API call for non-mainnet environment`);
-      return null;
-    }
-
-    // Check cache first
+    if (!this.isMainnet) return null;
     const cacheKey = `onchainID_${onchainID}`;
     const cached = this.poolCache.get<TapToolsTokenPoolDto | null>(cacheKey);
-    if (cached !== undefined) {
-      return cached;
-    }
-
-    try {
-      const response = await firstValueFrom(
-        this.httpService.get<TapToolsTokenPoolDto[]>(`${this.tapToolsApiUrl}/token/pools`, {
-          params: { onchainID },
-          headers: {
-            'x-api-key': this.tapToolsApiKey,
-          },
-        })
-      );
-
-      // Return first pool if array has results
-      const result = response.data && response.data.length > 0 ? response.data[0] : null;
-
-      // Cache the result (TTL handled automatically by node-cache)
-      this.poolCache.set(cacheKey, result);
-
-      return result;
-    } catch (error) {
-      const isAxiosError = error && typeof error === 'object' && 'response' in error;
-      if (isAxiosError && (error as any).response?.status === 404) {
-        // Cache null result
-        this.poolCache.set(cacheKey, null);
-      } else {
-        this.logger.warn(
-          `Failed to get pool by onchainID ${onchainID.slice(0, 8)}...: ${error instanceof Error ? error.message : String(error)}`
-        );
-      }
-      return null;
-    }
+    if (cached !== undefined) return cached;
+    // TapTools disabled — return null
+    this.poolCache.set(cacheKey, null);
+    return null;
   }
 
   /**
@@ -315,70 +202,62 @@ export class TapToolsClient {
     interval: string,
     numIntervals?: number
   ): Promise<MarketOhlcvSeries | null> {
-    // Skip API calls for testnet/preprod - TapTools doesn't support preprod
-    if (!this.isMainnet) {
-      this.logger.debug(`Skipping TapTools OHLCV API call for non-mainnet environment`);
-      return null;
-    }
+    if (!this.isMainnet) return null;
 
-    // Validate interval
     if (!this.validOHLCVIntervals.includes(interval)) {
       this.logger.warn(`Invalid interval '${interval}'. Valid intervals: ${this.validOHLCVIntervals.join(', ')}`);
       return null;
     }
 
-    // Build cache key based on parameters
     const cacheKey = numIntervals
       ? `ohlcv_${scriptHash}_${assetName}_${interval}_${numIntervals}`
       : `ohlcv_${scriptHash}_${assetName}_${interval}`;
 
-    // Check cache first
     const cached = this.ohlcvCache.get<MarketOhlcvSeries>(cacheKey);
-    if (cached !== undefined) {
-      return cached;
+    if (cached !== undefined) return cached;
+
+    const unit = `${scriptHash}${assetName}`;
+
+    // PRIMARY: Charli3
+    try {
+      const charli3Data = await this.charli3Client.getTokenOHLCV(unit, interval, numIntervals);
+      if (charli3Data && charli3Data.length > 0) {
+        this.ohlcvCache.set(cacheKey, charli3Data);
+        return charli3Data;
+      }
+    } catch {
+      this.logger.debug(`Charli3 OHLCV failed for ${unit.slice(0, 10)}...`);
     }
 
+    return null;
+  }
+
+  /**
+   * Fetch token total supply and decimals from Blockfrost.
+   * Cached 60 min — supply is immutable for most Cardano tokens.
+   */
+  async getTokenSupply(unit: string): Promise<{ totalSupply: number; decimals: number } | null> {
+    const cacheKey = `supply_${unit}`;
+    const cached = this.supplyCache.get<{ totalSupply: number; decimals: number }>(cacheKey);
+    if (cached !== undefined) return cached;
+
     try {
-      const unit = `${scriptHash}${assetName}`;
-      const params: { unit: string; interval: string; numIntervals?: number } = { unit, interval };
-
-      // Only include numIntervals if specified (omitting it returns full history)
-      if (numIntervals !== undefined) {
-        params.numIntervals = numIntervals;
-      }
-
-      const response = await firstValueFrom(
-        this.httpService.get<MarketOhlcvSeries>(`${this.tapToolsApiUrl}/token/ohlcv`, {
-          params,
-          headers: {
-            'x-api-key': this.tapToolsApiKey,
-          },
-        })
-      );
-
-      if (!response.data || response.data.length === 0) {
-        this.logger.debug(`No OHLCV data available for ${scriptHash}.${assetName} (${interval})`);
-        return null;
-      }
-
-      // Cache the result
-      this.ohlcvCache.set(cacheKey, response.data);
-
-      return response.data;
-    } catch (error) {
-      this.logger.error(
-        `Error fetching OHLCV data from TapTools for ${scriptHash}.${assetName} (interval: ${interval}):`,
-        error instanceof Error ? error.message : String(error)
-      );
+      const asset = await this.blockfrost.assetsById(unit);
+      const decimals = asset?.metadata?.decimals ?? 0;
+      const totalSupply = parseInt(asset.quantity, 10) / Math.pow(10, decimals);
+      const result = { totalSupply, decimals };
+      this.supplyCache.set(cacheKey, result);
+      return result;
+    } catch {
+      this.logger.debug(`Blockfrost supply lookup failed for ${unit.slice(0, 10)}...`);
       return null;
     }
   }
 
   /**
-   * Get market cap data for a token from TapTools with Charli3 fallback
-   * Includes price, FDV, market cap, circulating supply, and total supply
-   *
-   * Fallback: If TapTools fails, tries Charli3 (price only, supply/FDV/mcap will be 0)
+   * Get market cap data for a token.
+   * Charli3 is the PRIMARY source (works for all DEX-listed tokens including small VTs).
+   * Falls back to TapTools for FDV/supply data when available.
    *
    * @param unit - Token unit (policyId + assetName in hex)
    * @returns Market cap data or null if unavailable
@@ -390,13 +269,11 @@ export class TapToolsClient {
     mcap: number;
     totalSupply: number;
   } | null> {
-    // Skip API calls for testnet/preprod - TapTools doesn't support preprod
     if (!this.isMainnet) {
-      this.logger.debug(`Skipping TapTools market cap API call for non-mainnet environment`);
+      this.logger.debug(`Skipping market cap API call for non-mainnet environment`);
       return null;
     }
 
-    // Check cache first
     const cacheKey = `mcap_${unit}`;
     const cached = this.marketDataCache.get<{
       price: number;
@@ -409,59 +286,37 @@ export class TapToolsClient {
       return cached;
     }
 
+    // PRIMARY: Charli3 price + Blockfrost supply → compute fdv/mcap
     try {
-      const response = await firstValueFrom(
-        this.httpService.get<{
-          price: number;
-          fdv: number;
-          circSupply: number;
-          mcap: number;
-          totalSupply: number;
-        }>(`${this.tapToolsApiUrl}/token/mcap`, {
-          params: { unit },
-          headers: {
-            'x-api-key': this.tapToolsApiKey,
-          },
-          timeout: 10000, // 10 second timeout
-        })
-      );
+      const charli3Data = await this.charli3Client.getTokenMarketCap(unit);
+      if (charli3Data && charli3Data.price > 0) {
+        this.logger.debug(`Charli3 price for ${unit.slice(0, 10)}...: ${charli3Data.price} ADA`);
 
-      if (response.data) {
-        // Cache the result
-        this.marketDataCache.set(cacheKey, response.data);
-        return response.data;
+        // Enrich with supply data from Blockfrost
+        const supplyData = await this.getTokenSupply(unit);
+        const totalSupply = supplyData?.totalSupply ?? 0;
+        const fdv = totalSupply > 0 ? charli3Data.price * totalSupply : 0;
+        const result = {
+          price: charli3Data.price,
+          fdv,
+          circSupply: totalSupply,
+          mcap: fdv,
+          totalSupply,
+        };
+        this.marketDataCache.set(cacheKey, result);
+        return result;
       }
-
-      return null;
-    } catch (error) {
-      this.logger.warn(
-        `TapTools market cap failed for ${unit.slice(0, 10)}...: ${error instanceof Error ? error.message : String(error)}. Trying Charli3 fallback...`
-      );
-
-      // Fallback to Charli3 (price only, supply/FDV/mcap will be 0)
-      try {
-        const charli3Data = await this.charli3Client.getTokenMarketCap(unit);
-        if (charli3Data && charli3Data.price > 0) {
-          this.logger.log(
-            `Charli3 fallback successful for ${unit.slice(0, 10)}... (price: ${charli3Data.price} ADA, FDV/supply/mcap unavailable)`
-          );
-          // Cache the fallback result
-          this.marketDataCache.set(cacheKey, charli3Data);
-          return charli3Data;
-        }
-      } catch {
-        this.logger.debug(`Charli3 fallback also failed for ${unit.slice(0, 10)}...`);
-      }
-
-      return null;
+    } catch {
+      this.logger.debug(`Charli3 market cap failed for ${unit.slice(0, 10)}...`);
     }
+
+    return null;
   }
 
   /**
-   * Get price changes for a token from TapTools with Charli3 fallback
-   * Returns percentage changes over specified timeframes
-   *
-   * Fallback: If TapTools fails, tries Charli3 (1h/24h only, 7d/30d will be 0)
+   * Get price changes for a token.
+   * Charli3 is the PRIMARY source (calculates all timeframes from OHLCV including 7d/30d).
+   * Falls back to TapTools when Charli3 has no data.
    *
    * @param unit - Token unit (policyId + assetName in hex)
    * @param timeframes - Comma-separated timeframes (e.g., '1h,24h,7d,30d')
@@ -471,62 +326,32 @@ export class TapToolsClient {
     unit: string,
     timeframes: string = '1h,24h,7d,30d'
   ): Promise<Record<string, number> | null> {
-    // Skip API calls for testnet/preprod - TapTools doesn't support preprod
     if (!this.isMainnet) {
-      this.logger.debug(`Skipping TapTools price changes API call for non-mainnet environment`);
+      this.logger.debug(`Skipping price changes API call for non-mainnet environment`);
       return null;
     }
 
-    // Check cache first
     const cacheKey = `price_chg_${unit}_${timeframes}`;
     const cached = this.marketDataCache.get<Record<string, number>>(cacheKey);
     if (cached !== undefined) {
       return cached;
     }
 
+    // PRIMARY: Charli3 — calculates from OHLCV, supports all timeframes including 7d/30d
     try {
-      const response = await firstValueFrom(
-        this.httpService.get<Record<string, number>>(`${this.tapToolsApiUrl}/token/prices/chg`, {
-          params: {
-            unit,
-            timeframes,
-          },
-          headers: {
-            'x-api-key': this.tapToolsApiKey,
-          },
-          timeout: 10000, // 10 second timeout
-        })
-      );
-
-      if (response.data) {
-        // Cache the result
-        this.marketDataCache.set(cacheKey, response.data);
-        return response.data;
+      const charli3Data = await this.charli3Client.getTokenPriceChanges(unit, timeframes);
+      if (charli3Data) {
+        this.logger.debug(
+          `Charli3 price changes for ${unit.slice(0, 10)}...: 1h=${charli3Data['1h']?.toFixed(2)}% 24h=${charli3Data['24h']?.toFixed(2)}% 7d=${charli3Data['7d']?.toFixed(2)}% 30d=${charli3Data['30d']?.toFixed(2)}%`
+        );
+        this.marketDataCache.set(cacheKey, charli3Data);
+        return charli3Data;
       }
-
-      return null;
-    } catch (error) {
-      this.logger.warn(
-        `TapTools price changes failed for ${unit.slice(0, 10)}...: ${error instanceof Error ? error.message : String(error)}. Trying Charli3 fallback...`
-      );
-
-      // Fallback to Charli3 (1h/24h only, 7d/30d will be 0)
-      try {
-        const charli3Data = await this.charli3Client.getTokenPriceChanges(unit, timeframes);
-        if (charli3Data) {
-          this.logger.log(
-            `Charli3 fallback successful for ${unit.slice(0, 10)}... (1h: ${charli3Data['1h']}%, 24h: ${charli3Data['24h']}%, 7d/30d unavailable)`
-          );
-          // Cache the fallback result
-          this.marketDataCache.set(cacheKey, charli3Data);
-          return charli3Data;
-        }
-      } catch {
-        this.logger.debug(`Charli3 fallback also failed for ${unit.slice(0, 10)}...`);
-      }
-
-      return null;
+    } catch {
+      this.logger.debug(`Charli3 price changes failed for ${unit.slice(0, 10)}...`);
     }
+
+    return null;
   }
 
   /**
@@ -537,48 +362,25 @@ export class TapToolsClient {
    * @returns Object containing trait prices by trait type and value, or null if unavailable
    */
   async getTraitPrices(policyId: string): Promise<Record<string, Record<string, number>> | null> {
-    // Skip API calls for testnet/preprod - TapTools doesn't support preprod
-    if (!this.isMainnet) {
-      this.logger.debug(`Skipping TapTools trait prices API call for non-mainnet environment`);
-      return null;
-    }
+    if (!this.isMainnet) return null;
 
-    // Check cache first
     const cacheKey = `trait_prices_${policyId}`;
     const cached = this.traitPricesCache.get<Record<string, Record<string, number>>>(cacheKey);
-    if (cached !== undefined) {
-      return cached;
-    }
+    if (cached !== undefined) return cached;
 
+    // PRIMARY: Anvil — derives floor prices from marketplace listings
     try {
-      const response = await firstValueFrom(
-        this.httpService.get<Record<string, Record<string, number>>>(
-          `${this.tapToolsApiUrl}/nft/collection/traits/price`,
-          {
-            params: { policy: policyId },
-            headers: {
-              'x-api-key': this.tapToolsApiKey,
-              Accept: 'application/json',
-            },
-            timeout: 10000, // 10 second timeout
-          }
-        )
-      );
-
-      if (response.data && typeof response.data === 'object') {
-        // Cache the result
-        this.traitPricesCache.set(cacheKey, response.data);
-        return response.data;
+      const anvilTraits = await this.anvilClient.deriveTraitFloorPrices(policyId, 'Character');
+      if (anvilTraits && Object.keys(anvilTraits).length > 0) {
+        const result: Record<string, Record<string, number>> = { Character: anvilTraits };
+        this.traitPricesCache.set(cacheKey, result);
+        return result;
       }
-
-      this.logger.warn(`Invalid response format from TapTools trait prices API for policy ${policyId}`);
-      return null;
-    } catch (error) {
-      this.logger.warn(
-        `Failed to fetch trait prices from TapTools for policy ${policyId}: ${error instanceof Error ? error.message : String(error)}`
-      );
-      return null;
+    } catch {
+      this.logger.debug(`Anvil trait prices failed for ${policyId}`);
     }
+
+    return null;
   }
 
   /**
@@ -590,15 +392,16 @@ export class TapToolsClient {
     const ohlcvSize = this.ohlcvCache.keys().length;
     const traitPricesSize = this.traitPricesCache.keys().length;
     const marketDataSize = this.marketDataCache.keys().length;
+    const supplySize = this.supplyCache.keys().length;
     this.priceCache.flushAll();
     this.poolCache.flushAll();
     this.ohlcvCache.flushAll();
     this.traitPricesCache.flushAll();
     this.marketDataCache.flushAll();
+    this.supplyCache.flushAll();
     this.logger.log(
-      `Cleared caches - price: ${priceSize} entries, pool: ${poolSize} entries, ` +
-        `ohlcv: ${ohlcvSize} entries, traitPrices: ${traitPricesSize} entries, ` +
-        `marketData: ${marketDataSize} entries`
+      `Cleared caches - price: ${priceSize}, pool: ${poolSize}, ohlcv: ${ohlcvSize}, ` +
+        `traitPrices: ${traitPricesSize}, marketData: ${marketDataSize}, supply: ${supplySize} entries`
     );
   }
 
