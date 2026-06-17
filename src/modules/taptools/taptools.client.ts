@@ -21,10 +21,10 @@ interface VyFiPoolRaw {
 }
 
 /** VyFiPoolConfig fields we need from pool.json */
-interface VyFiPoolConfigAsset {
-  currencySymbol: string;
-  tokenName: string;
-}
+// interface VyFiPoolConfigAsset {
+//   currencySymbol: string;
+//   tokenName: string;
+// }
 
 /** Minimal Minswap pool metrics shape */
 interface MinswapPoolMetrics {
