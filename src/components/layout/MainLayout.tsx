@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 
+import { AlertBanner } from '../shared/AlertBanner';
+
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 
@@ -12,10 +14,10 @@ const MainLayout = ({ children }: LayoutProps) => {
     <div>
       <Header />
       <main className="min-h-screen content-space-top">
-        {/* <AlertBanner
-          message="Asset pricing data may be incorrect. We are working on a solution. Please verify values before making contributions."
+        <AlertBanner
+          message="TapTools API is currently unavailable. Some asset pricing, wallet discovery, and market data features may be limited. We are monitoring the situation."
           type="warning"
-        /> */}
+        />
         <div className="container mx-auto px-4 xl:px-0">{children}</div>
       </main>
       <Footer />
