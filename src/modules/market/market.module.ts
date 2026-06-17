@@ -5,12 +5,19 @@ import { MarketController } from './market.controller';
 import { MarketService } from './market.service';
 
 import { Market } from '@/database/market.entity';
+import { DexHunterPricingModule } from '@/modules/dexhunter/dexhunter-pricing.module';
 import { SystemSettingsModule } from '@/modules/globals/system-settings/system-settings.module';
 import { PriceModule } from '@/modules/price/price.module';
-import { MarketStatsModule } from '@/modules/vaults/market-stats/market-stats.module';
+import { TapToolsPricingModule } from '@/modules/taptools/taptools-pricing.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Market]), SystemSettingsModule, PriceModule, MarketStatsModule],
+  imports: [
+    TypeOrmModule.forFeature([Market]),
+    SystemSettingsModule,
+    PriceModule,
+    TapToolsPricingModule,
+    DexHunterPricingModule,
+  ],
   controllers: [MarketController],
   providers: [MarketService],
   exports: [MarketService],

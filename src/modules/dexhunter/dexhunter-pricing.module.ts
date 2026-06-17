@@ -22,6 +22,6 @@ import { DexHunterPricingService } from './dexhunter-pricing.service';
 @Module({
   imports: [HttpModule, TapToolsPricingModule],
   providers: [DexHunterPricingClient, DexHunterPricingService],
-  exports: [DexHunterPricingService],
+  exports: [DexHunterPricingClient, DexHunterPricingService],
 })
 export class DexHunterPricingModule {}

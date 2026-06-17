@@ -2,7 +2,7 @@ import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { HttpException, Inject, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import axios, { AxiosInstance } from 'axios';
+import axios from 'axios';
 import { plainToInstance } from 'class-transformer';
 import NodeCache from 'node-cache';
 import { In, Repository } from 'typeorm';
@@ -62,10 +62,8 @@ export class TaptoolsService {
   private readonly priceDeviationProtectionEnabled: boolean;
   private cache = new NodeCache({ stdTTL: 600 }); // cache for 10 minutes to reduce API calls for ADA price
   private readonly blockfrost: BlockFrostAPI;
-  private readonly axiosTapToolsInstance: AxiosInstance;
   private assetDetailsCache = new NodeCache({ stdTTL: 3600, checkperiod: 300 });
   private walletUnitsCache = new NodeCache({ stdTTL: 60 }); // cache for 1 minute for wallet asset units
-  private traitPricesCache = new NodeCache({ stdTTL: 600 }); // cache trait prices for 10 minutes
 
   // Relics of Magma trait-based pricing configuration
   private readonly RELICS_OF_MAGMA_VITA_POLICY = '94ec588251e710b7660dfd7765f08c87742a3012cce802897a3ebd28';
@@ -130,16 +128,6 @@ export class TaptoolsService {
 
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
-    });
-
-    const tapToolsApiKey = this.configService.get<string>('TAPTOOLS_API_KEY');
-    const tapToolsApiUrl = this.configService.get<string>('TAPTOOLS_API_URL');
-
-    this.axiosTapToolsInstance = axios.create({
-      baseURL: tapToolsApiUrl,
-      headers: {
-        'x-api-key': tapToolsApiKey,
-      },
     });
   }
 
@@ -359,50 +347,6 @@ export class TaptoolsService {
   }
 
   /**
-   * Fetch trait prices from TapTools API for a given collection policy
-   * @param policyId The policy ID of the NFT collection
-   * @returns Object containing trait prices or null if failed
-   */
-  private async fetchTraitPricesFromTapTools(policyId: string): Promise<Record<string, Record<string, number>> | null> {
-    // Check cache first
-    const cacheKey = `trait_prices_${policyId}`;
-    const cached = this.traitPricesCache.get<Record<string, Record<string, number>>>(cacheKey);
-
-    if (cached) {
-      return cached;
-    }
-
-    // Only works on mainnet - TapTools doesn't support testnet
-    if (!this.isMainnet) {
-      this.logger.debug('Skipping TapTools trait prices fetch for testnet');
-      return null;
-    }
-
-    try {
-      const endpoint = `/nft/collection/traits/price?policy=${policyId}`;
-
-      const response = await this.axiosTapToolsInstance.get(endpoint, {
-        timeout: 10000,
-        headers: {
-          Accept: 'application/json',
-        },
-      });
-
-      if (response.data && typeof response.data === 'object') {
-        // Cache the result
-        this.traitPricesCache.set(cacheKey, response.data);
-        return response.data;
-      }
-
-      this.logger.warn(`Invalid response format from TapTools trait prices API`);
-      return null;
-    } catch (error) {
-      this.logger.warn(`Failed to fetch trait prices from TapTools: ${error.message}`);
-      return null;
-    }
-  }
-
-  /**
    * Fetch Relics of Magma Vita character trait from WayUp API
    * WayUp API returns properly decoded attributes including "attributes / Character"
    * @param policyId The policy ID of the NFT
@@ -475,7 +419,7 @@ export class TaptoolsService {
 
       if (character) {
         // Try to get dynamic price from TapTools first
-        const traitPrices = await this.fetchTraitPricesFromTapTools(policyId);
+        const traitPrices = await this.tapToolsClient.getTraitPrices(policyId);
 
         if (traitPrices && traitPrices.Character && traitPrices.Character[character]) {
           return traitPrices.Character[character];
@@ -501,7 +445,7 @@ export class TaptoolsService {
    *
    * Price priority:
    * 1. Custom price from customPriceMap (vault-specific overrides)
-   * 2. Testnet hardcoded prices (if not mainnet)
+   * 2. Hardcoded prices (mainnet or testnet based on environment)
    * 3. External API prices (DexHunter for FTs, WayUp for NFTs)
    *
    * @returns Promise with the asset value in ADA and USD
@@ -525,7 +469,30 @@ export class TaptoolsService {
         };
       }
 
-      if (!this.isMainnet) {
+      // Priority 2: Check for hardcoded prices (mainnet or testnet)
+      if (this.isMainnet) {
+        // Get mainnet prices from system settings (configurable without redeploy)
+        const mainnetPrices = this.systemSettingsService.mainnetHardcodedPrices;
+
+        // Check for asset-specific price first (policyId + assetName)
+        const assetId = `${policyId}${assetName}`;
+        if (mainnetPrices[assetId] !== undefined) {
+          const hardcodedPriceAda = mainnetPrices[assetId];
+          return {
+            priceAda: hardcodedPriceAda,
+            priceUsd: hardcodedPriceAda * adaPrice,
+          };
+        }
+
+        // Fall back to policy-level price
+        if (mainnetPrices[policyId] !== undefined) {
+          const hardcodedPriceAda = mainnetPrices[policyId];
+          return {
+            priceAda: hardcodedPriceAda,
+            priceUsd: hardcodedPriceAda * adaPrice,
+          };
+        }
+      } else {
         // Check for asset-specific price first (policyId + assetName)
         const assetId = `${policyId}${assetName}`;
         if (this.testnetPrices[assetId] !== undefined) {
@@ -686,7 +653,7 @@ export class TaptoolsService {
    *
    * Price priority:
    * 1. Custom prices from vault whitelist (valuation_method = 'custom')
-   * 2. Testnet hardcoded prices (if not mainnet)
+   * 2. Hardcoded prices (mainnet or testnet based on environment)
    * 3. External API prices (DexHunter for FTs, WayUp for NFTs)
    *
    * @param vaultIds Array of vault IDs to update assets for.

@@ -9,9 +9,10 @@ import { GetMarketsResponse, MarketItem, MarketItemWithOHLCV } from './dto/get-m
 import { Currency, GetMarketsDto, MarketSortField, SortOrder } from './dto/get-markets.dto';
 
 import { Market } from '@/database/market.entity';
+import { DexHunterPricingClient } from '@/modules/dexhunter/dexhunter-pricing.client';
 import { SystemSettingsService } from '@/modules/globals/system-settings/system-settings.service';
 import { PriceService } from '@/modules/price/price.service';
-import { VaultMarketStatsService } from '@/modules/vaults/market-stats/vault-market-stats.service';
+import { TapToolsClient } from '@/modules/taptools/taptools.client';
 
 @Injectable()
 export class MarketService implements OnModuleInit {
@@ -24,7 +25,8 @@ export class MarketService implements OnModuleInit {
     private readonly configService: ConfigService,
     private readonly systemSettingsService: SystemSettingsService,
     private readonly priceService: PriceService,
-    private readonly vaultMarketStatsService: VaultMarketStatsService
+    private readonly tapToolsClient: TapToolsClient,
+    private readonly dexHunterClient: DexHunterPricingClient
   ) {}
 
   onModuleInit(): void {
@@ -69,7 +71,19 @@ export class MarketService implements OnModuleInit {
     let ohlcv = null;
 
     if (script_hash && asset_vault_name) {
-      ohlcv = await this.vaultMarketStatsService.getTokenOHLCV(script_hash, asset_vault_name, interval);
+      // Try TapTools first (primary source)
+      ohlcv = await this.tapToolsClient.getTokenOHLCV(script_hash, asset_vault_name, interval);
+
+      // Fallback to DexHunter if TapTools fails or returns null
+      if (!ohlcv) {
+        ohlcv = await this.dexHunterClient.getTokenOHLCV(script_hash, asset_vault_name, interval);
+
+        if (ohlcv) {
+          this.logger.log(`DexHunter OHLCV fallback successful for vault ${vaultId}`);
+        } else {
+          this.logger.warn(`Both TapTools and DexHunter OHLCV unavailable for vault ${vaultId}`);
+        }
+      }
     } else {
       this.logger.warn(`Missing script_hash or asset_vault_name for vault ${vaultId}, skipping OHLCV`);
     }

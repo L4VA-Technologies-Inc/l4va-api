@@ -8,10 +8,16 @@ import { Asset } from '@/database/asset.entity';
 import { Market } from '@/database/market.entity';
 import { Vault } from '@/database/vault.entity';
 import { DexHunterPricingModule } from '@/modules/dexhunter/dexhunter-pricing.module';
+import { TapToolsPricingModule } from '@/modules/taptools/taptools-pricing.module';
 import { TaptoolsModule } from '@/modules/taptools/taptools.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Vault, Market, Asset]), DexHunterPricingModule, TaptoolsModule],
+  imports: [
+    TypeOrmModule.forFeature([Vault, Market, Asset]),
+    DexHunterPricingModule,
+    TapToolsPricingModule,
+    TaptoolsModule,
+  ],
   providers: [VaultMarketStatsService, VaultTvlCalculationService],
   exports: [VaultMarketStatsService, VaultTvlCalculationService],
 })
