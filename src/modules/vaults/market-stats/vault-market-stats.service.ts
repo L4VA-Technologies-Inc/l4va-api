@@ -180,7 +180,7 @@ export class VaultMarketStatsService {
 
           // Check if TapTools or Charli3 provided a price
           if (mcapData?.price) {
-            vaultUpdateData.fdv = mcapData.fdv;
+            if (mcapData.fdv > 0) vaultUpdateData.fdv = mcapData.fdv;
             vaultUpdateData.vt_price = mcapData.price;
             hasMarketData = true;
           } else {
