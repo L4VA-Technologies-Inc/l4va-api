@@ -4,6 +4,8 @@ import { ConfigModule } from '@nestjs/config';
 
 import { TapToolsClient } from './taptools.client';
 
+import { Charli3PricingModule } from '@/modules/charli3/charli3-pricing.module';
+
 /**
  * TapTools Pricing Module - Provides only token pricing client
  * Lightweight module that exports TapToolsClient without other dependencies
@@ -12,6 +14,8 @@ import { TapToolsClient } from './taptools.client';
  * - TaptoolsModule imports DexHunterPricingModule
  * - DexHunterPricingModule imports TapToolsPricingModule (this module)
  * - No reverse dependency from TapToolsPricingModule back to DexHunterPricingModule
+ *
+ * Includes Charli3PricingModule for fallback when TapTools API is unavailable
  */
 @Module({
   imports: [
@@ -20,6 +24,7 @@ import { TapToolsClient } from './taptools.client';
       maxRedirects: 3,
     }),
     ConfigModule,
+    Charli3PricingModule,
   ],
   providers: [TapToolsClient],
   exports: [TapToolsClient],

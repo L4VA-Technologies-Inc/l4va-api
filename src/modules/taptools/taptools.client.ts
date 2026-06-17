@@ -6,6 +6,7 @@ import { firstValueFrom } from 'rxjs';
 
 import { TapToolsTokenPoolDto } from './interfaces/taptools.interface';
 
+import { Charli3Client } from '@/modules/charli3/charli3.client';
 import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
 
 /**
@@ -15,6 +16,8 @@ import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
  * Caches token price results for 5 minutes and LP pool data for 10 minutes
  * to reduce API calls and improve performance.
  * Designed to support future Redis caching migration without breaking consumers.
+ *
+ * Fallback Strategy: Uses Charli3Client when TapTools fails (price + 1h/24h changes only)
  */
 @Injectable()
 export class TapToolsClient {
@@ -60,7 +63,8 @@ export class TapToolsClient {
 
   constructor(
     private readonly httpService: HttpService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly charli3Client: Charli3Client
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
     this.tapToolsApiUrl = this.configService.get<string>('TAPTOOLS_API_URL');
@@ -371,8 +375,10 @@ export class TapToolsClient {
   }
 
   /**
-   * Get market cap data for a token from TapTools
+   * Get market cap data for a token from TapTools with Charli3 fallback
    * Includes price, FDV, market cap, circulating supply, and total supply
+   *
+   * Fallback: If TapTools fails, tries Charli3 (price only, supply/FDV/mcap will be 0)
    *
    * @param unit - Token unit (policyId + assetName in hex)
    * @returns Market cap data or null if unavailable
@@ -429,15 +435,33 @@ export class TapToolsClient {
       return null;
     } catch (error) {
       this.logger.warn(
-        `Failed to fetch market cap from TapTools for unit ${unit.slice(0, 10)}...: ${error instanceof Error ? error.message : String(error)}`
+        `TapTools market cap failed for ${unit.slice(0, 10)}...: ${error instanceof Error ? error.message : String(error)}. Trying Charli3 fallback...`
       );
+
+      // Fallback to Charli3 (price only, supply/FDV/mcap will be 0)
+      try {
+        const charli3Data = await this.charli3Client.getTokenMarketCap(unit);
+        if (charli3Data && charli3Data.price > 0) {
+          this.logger.log(
+            `Charli3 fallback successful for ${unit.slice(0, 10)}... (price: ${charli3Data.price} ADA, FDV/supply/mcap unavailable)`
+          );
+          // Cache the fallback result
+          this.marketDataCache.set(cacheKey, charli3Data);
+          return charli3Data;
+        }
+      } catch {
+        this.logger.debug(`Charli3 fallback also failed for ${unit.slice(0, 10)}...`);
+      }
+
       return null;
     }
   }
 
   /**
-   * Get price changes for a token from TapTools
+   * Get price changes for a token from TapTools with Charli3 fallback
    * Returns percentage changes over specified timeframes
+   *
+   * Fallback: If TapTools fails, tries Charli3 (1h/24h only, 7d/30d will be 0)
    *
    * @param unit - Token unit (policyId + assetName in hex)
    * @param timeframes - Comma-separated timeframes (e.g., '1h,24h,7d,30d')
@@ -483,8 +507,24 @@ export class TapToolsClient {
       return null;
     } catch (error) {
       this.logger.warn(
-        `Failed to fetch price changes from TapTools for unit ${unit.slice(0, 10)}...: ${error instanceof Error ? error.message : String(error)}`
+        `TapTools price changes failed for ${unit.slice(0, 10)}...: ${error instanceof Error ? error.message : String(error)}. Trying Charli3 fallback...`
       );
+
+      // Fallback to Charli3 (1h/24h only, 7d/30d will be 0)
+      try {
+        const charli3Data = await this.charli3Client.getTokenPriceChanges(unit, timeframes);
+        if (charli3Data) {
+          this.logger.log(
+            `Charli3 fallback successful for ${unit.slice(0, 10)}... (1h: ${charli3Data['1h']}%, 24h: ${charli3Data['24h']}%, 7d/30d unavailable)`
+          );
+          // Cache the fallback result
+          this.marketDataCache.set(cacheKey, charli3Data);
+          return charli3Data;
+        }
+      } catch {
+        this.logger.debug(`Charli3 fallback also failed for ${unit.slice(0, 10)}...`);
+      }
+
       return null;
     }
   }
