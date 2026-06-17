@@ -290,7 +290,6 @@ export class VaultMarketStatsService {
 
     // Fallback to DexHunter if TapTools fails or returns null
     if (!data) {
-      this.logger.log(`TapTools OHLCV unavailable for ${policyId}.${assetName}, trying DexHunter fallback`);
       data = await this.dexHunterClient.getTokenOHLCV(policyId, assetName, '1d');
 
       if (data) {

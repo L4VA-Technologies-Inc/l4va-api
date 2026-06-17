@@ -76,7 +76,6 @@ export class MarketService implements OnModuleInit {
 
       // Fallback to DexHunter if TapTools fails or returns null
       if (!ohlcv) {
-        this.logger.log(`TapTools OHLCV unavailable for vault ${vaultId}, trying DexHunter fallback`);
         ohlcv = await this.dexHunterClient.getTokenOHLCV(script_hash, asset_vault_name, interval);
 
         if (ohlcv) {
