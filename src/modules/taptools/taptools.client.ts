@@ -35,11 +35,13 @@ interface MinswapPoolMetrics {
 }
 
 /** DexHunter /stats/pools/ADA response item */
-interface DexHunterPoolItem {
+export interface DexHunterPoolItem {
   dex_name: string;
   pool_id: string;
-  token_1_amount: number; // ADA in lovelace
-  token_2_amount: number; // token in base units
+  /** ADA amount, example: "token_1_amount": 6763990.459555, */
+  token_1_amount: number;
+  /** Token amount, example: "token_2_amount": 905.383677, */
+  token_2_amount: number;
   pool_fee: number;
 }
 
@@ -252,7 +254,7 @@ export class TapToolsClient {
           tokenALocked: pool.token_2_amount, // base token units
           tokenATicker: '',
           tokenB: '', // ADA
-          tokenBLocked: pool.token_1_amount / 1_000_000, // lovelace → ADA
+          tokenBLocked: pool.token_1_amount, // already in ADA from DexHunter API
           tokenBTicker: 'ADA',
         };
       });

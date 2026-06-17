@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
-import { TapToolsClient } from '../taptools/taptools.client';
+import { DexHunterPoolItem, TapToolsClient } from '../taptools/taptools.client';
 
 import { DexHunterPricingClient } from './dexhunter-pricing.client';
 
@@ -185,13 +185,7 @@ export class DexHunterPricingService {
         throw new Error(`DexHunter API error: ${response.status} - ${sanitizedError}`);
       }
 
-      const data: Array<{
-        dex_name: string;
-        token_1_amount: number; // ADA amount
-        token_2_amount: number; // Token amount
-        pool_id: string;
-        pool_fee: number;
-      }> = await response.json();
+      const data: Array<DexHunterPoolItem> = await response.json();
 
       if (!data || data.length === 0) {
         return {
