@@ -14,6 +14,7 @@ import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
 interface VyFiPoolRaw {
   'lpPolicyId-assetId'?: string;
   unitsPair?: string;
+  poolValidatorUtxoAddress?: string; // Matches DexHunter pool_id
   tokenAQuantity?: number;
   tokenBQuantity?: number;
   json?: string; // stringified VyFiPoolConfig
@@ -240,7 +241,8 @@ export class TapToolsClient {
         let lpTokenUnit = '';
 
         if (dex.includes('vyfi') && vyfiPools.length > 0) {
-          lpTokenUnit = this.extractVyFiLpTokenUnit(vyfiPools[0]);
+          const match = this.findVyFiPool(vyfiPools, pool.pool_id);
+          lpTokenUnit = match ? this.extractVyFiLpTokenUnit(match) : '';
         } else if (dex.includes('minswap') && minswapPools.length > 0) {
           const match = this.findMinswapPool(minswapPools, tokenUnit);
           lpTokenUnit = match?.id ?? '';
@@ -345,6 +347,12 @@ export class TapToolsClient {
   private extractVyFiLpTokenUnit(pool: VyFiPoolRaw): string {
     const parts = (pool['lpPolicyId-assetId'] ?? '').split('-');
     return parts.length === 2 ? `${parts[0]}${parts[1]}` : '';
+  }
+
+  /** Find the VyFi pool that matches DexHunter's pool_id (address) */
+  private findVyFiPool(pools: VyFiPoolRaw[], poolId: string): VyFiPoolRaw | undefined {
+    // Match by poolValidatorUtxoAddress (VyFi) == pool_id (DexHunter)
+    return pools.find(p => p.poolValidatorUtxoAddress === poolId);
   }
 
   /** Fetch Minswap pools containing a token via POST /v1/pools/metrics */
