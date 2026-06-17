@@ -509,7 +509,7 @@ export class TapToolsClient {
   /**
    * Get price changes for a token.
    * Charli3 is the PRIMARY source (calculates all timeframes from OHLCV including 7d/30d).
-   * Falls back to TapTools when Charli3 has no data.
+   * Returns null when Charli3 has no data.
    *
    * @param unit - Token unit (policyId + assetName in hex)
    * @param timeframes - Comma-separated timeframes (e.g., '1h,24h,7d,30d')
