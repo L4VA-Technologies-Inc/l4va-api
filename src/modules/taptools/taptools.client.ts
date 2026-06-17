@@ -273,9 +273,8 @@ export class TapToolsClient {
   }
 
   /**
-   * Get LP pool by onchain ID.
-   * Tries VyFi /pool/{id} endpoint — works when onchainID is a VyFi pool hash.
-   *
+   * Get pool details by onchain ID that was from Taptools API
+   * Currently doesnt work
    * @param onchainID - Pool onchain identifier (56-char hex script hash)
    */
   async getPoolByOnchainId(onchainID: string): Promise<TapToolsTokenPoolDto | null> {
@@ -284,45 +283,7 @@ export class TapToolsClient {
     const cached = this.poolCache.get<TapToolsTokenPoolDto | null>(cacheKey);
     if (cached !== undefined) return cached;
 
-    try {
-      const resp = await fetch(`https://api-v3.vyfi.io/pool/${onchainID}`);
-      if (resp.ok) {
-        const pool: VyFiPoolRaw = await resp.json();
-        if (pool) {
-          const lpTokenUnit = this.extractVyFiLpTokenUnit(pool);
-          let tokenAUnit = '';
-          let tokenBUnit = '';
-          try {
-            const config = JSON.parse(pool.json ?? '{}') as {
-              aAsset: VyFiPoolConfigAsset;
-              bAsset: VyFiPoolConfigAsset;
-            };
-            tokenAUnit = `${config.aAsset.currencySymbol}${config.aAsset.tokenName}`;
-            tokenBUnit = config.bAsset.currencySymbol; // empty string = ADA
-          } catch {
-            // ignore json parse errors
-          }
-
-          const result: TapToolsTokenPoolDto = {
-            exchange: 'VyFi',
-            lpTokenUnit,
-            onchainID,
-            tokenA: tokenAUnit,
-            tokenALocked: pool.tokenAQuantity ?? 0,
-            tokenATicker: '',
-            tokenB: tokenBUnit,
-            tokenBLocked: (pool.tokenBQuantity ?? 0) / 1_000_000,
-            tokenBTicker: 'ADA',
-          };
-
-          this.poolCache.set(cacheKey, result);
-          return result;
-        }
-      }
-    } catch {
-      this.logger.debug(`VyFi pool lookup failed for onchainID ${onchainID.slice(0, 10)}...`);
-    }
-
+    // TapTools disabled — return null
     this.poolCache.set(cacheKey, null);
     return null;
   }

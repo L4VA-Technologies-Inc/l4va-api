@@ -1718,8 +1718,6 @@ export class TaptoolsService {
     try {
       const poolData = await this.tapToolsClient.getPoolByOnchainId(onchainID);
       if (!poolData || !poolData.lpTokenUnit) {
-        this.logger.warn(`No pool data found in TapTools for onchain ID ${onchainID}`);
-
         // VyFi fallback: when onchainID is encoded as "tokenAUnit:tokenBUnit"
         if (lpTokenUnit && this.vyfiService && onchainID.includes(':')) {
           this.logger.debug('Attempting VyFi fallback for LP price calculation');
