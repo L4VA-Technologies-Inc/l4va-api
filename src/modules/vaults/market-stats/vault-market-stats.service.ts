@@ -7,6 +7,7 @@ import { In, Repository } from 'typeorm';
 import { Asset } from '@/database/asset.entity';
 import { Market } from '@/database/market.entity';
 import { Vault } from '@/database/vault.entity';
+import { DexHunterPricingClient } from '@/modules/dexhunter/dexhunter-pricing.client';
 import { DexHunterPricingService } from '@/modules/dexhunter/dexhunter-pricing.service';
 import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
 import { TapToolsClient } from '@/modules/taptools/taptools.client';
@@ -58,7 +59,8 @@ export class VaultMarketStatsService {
     private readonly configService: ConfigService,
     private readonly taptoolsService: TaptoolsService,
     private readonly tapToolsClient: TapToolsClient,
-    private readonly dexHunterPricingService: DexHunterPricingService
+    private readonly dexHunterPricingService: DexHunterPricingService,
+    private readonly dexHunterClient: DexHunterPricingClient
   ) {
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
   }
@@ -283,7 +285,20 @@ export class VaultMarketStatsService {
       return null;
     }
 
-    const data = await this.tapToolsClient.getTokenOHLCV(policyId, assetName, '1d');
+    // Try TapTools first (primary source)
+    let data = await this.tapToolsClient.getTokenOHLCV(policyId, assetName, '1d');
+
+    // Fallback to DexHunter if TapTools fails or returns null
+    if (!data) {
+      this.logger.log(`TapTools OHLCV unavailable for ${policyId}.${assetName}, trying DexHunter fallback`);
+      data = await this.dexHunterClient.getTokenOHLCV(policyId, assetName, '1d');
+
+      if (data) {
+        this.logger.log(`DexHunter OHLCV fallback successful for ${policyId}.${assetName}`);
+      } else {
+        this.logger.warn(`Both TapTools and DexHunter OHLCV unavailable for ${policyId}.${assetName}`);
+      }
+    }
 
     if (data && data.length > 0) {
       this.logger.log(

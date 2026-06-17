@@ -5,6 +5,7 @@ import { MarketController } from './market.controller';
 import { MarketService } from './market.service';
 
 import { Market } from '@/database/market.entity';
+import { DexHunterPricingModule } from '@/modules/dexhunter/dexhunter-pricing.module';
 import { SystemSettingsModule } from '@/modules/globals/system-settings/system-settings.module';
 import { PriceModule } from '@/modules/price/price.module';
 import { TapToolsPricingModule } from '@/modules/taptools/taptools-pricing.module';
@@ -16,6 +17,7 @@ import { MarketStatsModule } from '@/modules/vaults/market-stats/market-stats.mo
     SystemSettingsModule,
     PriceModule,
     TapToolsPricingModule,
+    DexHunterPricingModule,
     MarketStatsModule,
   ],
   controllers: [MarketController],
