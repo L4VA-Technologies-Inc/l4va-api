@@ -428,7 +428,17 @@ export class TapToolsClient {
     try {
       const asset = await this.blockfrost.assetsById(unit);
       const decimals = asset?.metadata?.decimals ?? 0;
-      const totalSupply = parseInt(asset.quantity, 10) / Math.pow(10, decimals);
+
+      const quantity = BigInt(asset.quantity);
+      const divisor = BigInt(10) ** BigInt(decimals);
+      const maxSafeQuantity = BigInt(Number.MAX_SAFE_INTEGER) * divisor;
+
+      if (quantity > maxSafeQuantity) {
+        this.logger.debug(`Blockfrost supply for ${unit.slice(0, 10)}... exceeds JS safe integer range`);
+        return null;
+      }
+
+      const totalSupply = Number(quantity) / Number(divisor);
       const result = { totalSupply, decimals };
       this.supplyCache.set(cacheKey, result);
       return result;
