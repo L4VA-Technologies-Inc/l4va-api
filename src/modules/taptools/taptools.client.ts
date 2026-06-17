@@ -9,6 +9,39 @@ import { AnvilClient } from '@/modules/anvil/anvil.client';
 import { Charli3Client } from '@/modules/charli3/charli3.client';
 import { MarketOhlcvSeries } from '@/modules/market/dto/market-ohlcv.dto';
 
+/** Minimal VyFi pool shape needed for LP token resolution */
+interface VyFiPoolRaw {
+  'lpPolicyId-assetId'?: string;
+  unitsPair?: string;
+  tokenAQuantity?: number;
+  tokenBQuantity?: number;
+  json?: string; // stringified VyFiPoolConfig
+}
+
+/** VyFiPoolConfig fields we need from pool.json */
+interface VyFiPoolConfigAsset {
+  currencySymbol: string;
+  tokenName: string;
+}
+
+/** Minimal Minswap pool metrics shape */
+interface MinswapPoolMetrics {
+  id?: string; // LP asset = policyId + tokenName
+  assetA?: { policyId?: string; assetName?: string };
+  assetB?: { policyId?: string; assetName?: string };
+  reserveA?: string;
+  reserveB?: string;
+}
+
+/** DexHunter /stats/pools/ADA response item */
+interface DexHunterPoolItem {
+  dex_name: string;
+  pool_id: string;
+  token_1_amount: number; // ADA in lovelace
+  token_2_amount: number; // token in base units
+  pool_fee: number;
+}
+
 /**
  * TapTools API client — now a thin wrapper that routes to Charli3 (primary) and Anvil/DexHunter.
  * All direct TapTools HTTP calls have been removed.
@@ -18,6 +51,9 @@ export class TapToolsClient {
   private readonly logger = new Logger(TapToolsClient.name);
   private readonly isMainnet: boolean;
   private readonly blockfrost: BlockFrostAPI;
+  private readonly dexHunterBaseUrl: string;
+  private readonly dexHunterApiKey: string;
+  private readonly networkId: number; // 1 = mainnet, 0 = testnet (VyFi convention)
 
   /** Supply cache — 60 min TTL (total supply is immutable for most tokens) */
   private readonly supplyCache: NodeCache;
@@ -66,6 +102,9 @@ export class TapToolsClient {
     this.blockfrost = new BlockFrostAPI({
       projectId: this.configService.get<string>('BLOCKFROST_API_KEY'),
     });
+    this.dexHunterBaseUrl = this.configService.get<string>('DEXHUNTER_BASE_URL') || 'https://api.dexhunter.io';
+    this.dexHunterApiKey = this.configService.get<string>('DEXHUNTER_API_KEY') || '';
+    this.networkId = this.isMainnet ? 1 : 0;
 
     this.supplyCache = new NodeCache({ stdTTL: 3600, checkperiod: 300, useClones: false });
 
@@ -153,37 +192,182 @@ export class TapToolsClient {
   }
 
   /**
-   * Get LP pools for a specific token unit
-   * Caches results for 10 minutes since LP pool data is relatively static
+   * Get LP pools for a token.
+   * Strategy: DexHunter for pool list → VyFi API for lpTokenUnit on VyFi pools
+   *           → Minswap API for lpTokenUnit on Minswap pools.
    *
    * @param tokenUnit - Full token unit (policyId + assetName in hex)
-   * @returns Array of LP pools containing this token
    */
   async getTokenPools(tokenUnit: string): Promise<TapToolsTokenPoolDto[]> {
     if (!this.isMainnet) return [];
     const cacheKey = `tokenUnit_${tokenUnit}`;
     const cached = this.poolCache.get<TapToolsTokenPoolDto[]>(cacheKey);
     if (cached !== undefined) return cached;
-    // TapTools disabled — return empty (DexHunter handles pool detection)
-    this.poolCache.set(cacheKey, []);
-    return [];
+
+    try {
+      // Step 1: Get all pools from DexHunter
+      const dhResp = await fetch(`${this.dexHunterBaseUrl}/stats/pools/ADA/${tokenUnit}`, {
+        headers: { 'X-Partner-Id': this.dexHunterApiKey, 'Content-Type': 'application/json' },
+      });
+
+      if (!dhResp.ok) {
+        this.poolCache.set(cacheKey, []);
+        return [];
+      }
+
+      const dhPools: DexHunterPoolItem[] = await dhResp.json();
+      if (!dhPools || dhPools.length === 0) {
+        this.poolCache.set(cacheKey, []);
+        return [];
+      }
+
+      // Step 2: Pre-fetch DEX-specific data in parallel for LP token resolution
+      const hasVyFi = dhPools.some(p => p.dex_name.toLowerCase().includes('vyfi'));
+      const hasMinswap = dhPools.some(p => p.dex_name.toLowerCase().includes('minswap'));
+
+      const [vyfiPools, minswapPools] = await Promise.all([
+        hasVyFi ? this.fetchVyFiPoolsForToken(tokenUnit) : Promise.resolve([] as VyFiPoolRaw[]),
+        hasMinswap ? this.fetchMinswapPoolsForToken(tokenUnit) : Promise.resolve([] as MinswapPoolMetrics[]),
+      ]);
+
+      // Step 3: Map to TapToolsTokenPoolDto
+      const result: TapToolsTokenPoolDto[] = dhPools.map(pool => {
+        const dex = pool.dex_name.toLowerCase();
+        let lpTokenUnit = '';
+
+        if (dex.includes('vyfi') && vyfiPools.length > 0) {
+          lpTokenUnit = this.extractVyFiLpTokenUnit(vyfiPools[0]);
+        } else if (dex.includes('minswap') && minswapPools.length > 0) {
+          const match = this.findMinswapPool(minswapPools, tokenUnit);
+          lpTokenUnit = match?.id ?? '';
+        }
+
+        return {
+          exchange: pool.dex_name,
+          lpTokenUnit,
+          onchainID: pool.pool_id,
+          tokenA: tokenUnit,
+          tokenALocked: pool.token_2_amount, // base token units
+          tokenATicker: '',
+          tokenB: '', // ADA
+          tokenBLocked: pool.token_1_amount / 1_000_000, // lovelace → ADA
+          tokenBTicker: 'ADA',
+        };
+      });
+
+      this.poolCache.set(cacheKey, result);
+      return result;
+    } catch (error) {
+      this.logger.warn(
+        `getTokenPools failed for ${tokenUnit.slice(0, 10)}...: ${error instanceof Error ? error.message : String(error)}`
+      );
+      this.poolCache.set(cacheKey, []);
+      return [];
+    }
   }
 
   /**
-   * Get LP pool by onchain ID
-   * Returns the first pool matching the onchain ID, or null if not found
+   * Get LP pool by onchain ID.
+   * Tries VyFi /pool/{id} endpoint — works when onchainID is a VyFi pool hash.
    *
-   * @param onchainID - Pool onchain identifier
-   * @returns LP pool data or null
+   * @param onchainID - Pool onchain identifier (56-char hex script hash)
    */
   async getPoolByOnchainId(onchainID: string): Promise<TapToolsTokenPoolDto | null> {
     if (!this.isMainnet) return null;
     const cacheKey = `onchainID_${onchainID}`;
     const cached = this.poolCache.get<TapToolsTokenPoolDto | null>(cacheKey);
     if (cached !== undefined) return cached;
-    // TapTools disabled — return null
+
+    try {
+      const resp = await fetch(`https://api-v3.vyfi.io/pool/${onchainID}`);
+      if (resp.ok) {
+        const pool: VyFiPoolRaw = await resp.json();
+        if (pool) {
+          const lpTokenUnit = this.extractVyFiLpTokenUnit(pool);
+          let tokenAUnit = '';
+          let tokenBUnit = '';
+          try {
+            const config = JSON.parse(pool.json ?? '{}') as {
+              aAsset: VyFiPoolConfigAsset;
+              bAsset: VyFiPoolConfigAsset;
+            };
+            tokenAUnit = `${config.aAsset.currencySymbol}${config.aAsset.tokenName}`;
+            tokenBUnit = config.bAsset.currencySymbol; // empty string = ADA
+          } catch {
+            // ignore json parse errors
+          }
+
+          const result: TapToolsTokenPoolDto = {
+            exchange: 'VyFi',
+            lpTokenUnit,
+            onchainID,
+            tokenA: tokenAUnit,
+            tokenALocked: pool.tokenAQuantity ?? 0,
+            tokenATicker: '',
+            tokenB: tokenBUnit,
+            tokenBLocked: (pool.tokenBQuantity ?? 0) / 1_000_000,
+            tokenBTicker: 'ADA',
+          };
+
+          this.poolCache.set(cacheKey, result);
+          return result;
+        }
+      }
+    } catch {
+      this.logger.debug(`VyFi pool lookup failed for onchainID ${onchainID.slice(0, 10)}...`);
+    }
+
     this.poolCache.set(cacheKey, null);
     return null;
+  }
+
+  // ─── Pool resolution helpers ─────────────────────────────────────────────────
+
+  /** Fetch VyFi pools for a tokenA/ADA pair */
+  private async fetchVyFiPoolsForToken(tokenUnit: string): Promise<VyFiPoolRaw[]> {
+    const url =
+      `https://api-v3.vyfi.io/lp?networkId=${this.networkId}` + `&tokenAUnit=${tokenUnit}&tokenBUnit=lovelace&v2=true`;
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) return [];
+      const data: unknown = await resp.json();
+      return Array.isArray(data) ? (data as VyFiPoolRaw[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Extract concatenated lpTokenUnit from VyFi pool "policyId-assetId" field */
+  private extractVyFiLpTokenUnit(pool: VyFiPoolRaw): string {
+    const parts = (pool['lpPolicyId-assetId'] ?? '').split('-');
+    return parts.length === 2 ? `${parts[0]}${parts[1]}` : '';
+  }
+
+  /** Fetch Minswap pools containing a token via POST /v1/pools/metrics */
+  private async fetchMinswapPoolsForToken(tokenUnit: string): Promise<MinswapPoolMetrics[]> {
+    try {
+      const resp = await fetch('https://api-mainnet-prod.minswap.org/v1/pools/metrics', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ term: tokenUnit, limit: 20, only_verified: false }),
+      });
+      if (!resp.ok) return [];
+      const body = await resp.json();
+      // API wraps list in { data: [...] }
+      return Array.isArray(body?.data) ? (body.data as MinswapPoolMetrics[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Find the Minswap pool that contains our token */
+  private findMinswapPool(pools: MinswapPoolMetrics[], tokenUnit: string): MinswapPoolMetrics | undefined {
+    const policyId = tokenUnit.slice(0, 56);
+    return pools.find(p => {
+      const unitA = `${p.assetA?.policyId ?? ''}${p.assetA?.assetName ?? ''}`;
+      const unitB = `${p.assetB?.policyId ?? ''}${p.assetB?.assetName ?? ''}`;
+      return unitA === tokenUnit || unitB === tokenUnit || unitA === policyId || unitB === policyId;
+    });
   }
 
   /**
