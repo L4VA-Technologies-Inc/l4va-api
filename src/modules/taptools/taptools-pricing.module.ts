@@ -5,6 +5,7 @@ import { TapToolsClient } from './taptools.client';
 
 import { Charli3PricingModule } from '@/modules/charli3/charli3-pricing.module';
 import { DexHunterPricingClient } from '@/modules/dexhunter/dexhunter-pricing.client';
+import { NexusModule } from '@/modules/nexus/nexus.module';
 
 /**
  * TapTools Pricing Module — routes to Charli3 (price) + Blockfrost SDK (supply).
@@ -14,7 +15,7 @@ import { DexHunterPricingClient } from '@/modules/dexhunter/dexhunter-pricing.cl
  * AnvilClient removed - NFT trait pricing now handled by fallback prices.
  */
 @Module({
-  imports: [ConfigModule, Charli3PricingModule],
+  imports: [ConfigModule, Charli3PricingModule, NexusModule],
   providers: [DexHunterPricingClient, TapToolsClient],
   exports: [TapToolsClient],
 })

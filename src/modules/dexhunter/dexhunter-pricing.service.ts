@@ -8,13 +8,14 @@ import { DexHunterPricingClient } from './dexhunter-pricing.client';
 /**
  * DexHunter Pricing Service - Orchestrates token pricing from multiple sources
  *
- * Pricing Strategy (Charli3-first with DexHunter fallback):
- * 1. Try Charli3 first via TapToolsClient (works for any DEX-listed token including small VTs)
- * 2. If Charli3 fails or returns null, try DexHunterPricingClient as fallback
- * 3. Return null only if both sources fail or have no data
+ * Pricing Strategy (VyFi-first with multi-source fallback):
+ * 1. Check Redis cache (populated by VyFi bulk refresh every 10 minutes)
+ * 2. If cache miss, try DexHunter API for individual token
+ * 3. If DexHunter fails, try TapTools (Charli3) as last resort
+ * 4. Return null only if all sources fail
  *
- * Both clients handle their own caching (5-minute TTL) to reduce redundant API calls.
- * This service acts as an orchestrator, delegating to specialized clients.
+ * VyFi bulk pricing: ~500 tokens cached in Redis, refreshed by background cron task
+ * This provides fast lookups for most tokens without per-token API calls.
  *
  * Build Swap Flow:
  * 1. Estimate Swap - Get price quote and fee breakdown
@@ -39,6 +40,86 @@ export class DexHunterPricingService {
     this.dexHunterBaseUrl = this.configService.get<string>('DEXHUNTER_BASE_URL');
     this.dexHunterApiKey = this.configService.get<string>('DEXHUNTER_API_KEY');
     this.isMainnet = this.configService.get<string>('CARDANO_NETWORK') === 'mainnet';
+  }
+
+  /**
+   * Fetch all token prices from VyFi API bulk endpoint
+   * @returns Map of tokenUnit -> priceAda, or null on error
+   */
+  private async fetchVyFiBulkPrices(): Promise<Map<string, number> | null> {
+    try {
+      const response = await fetch('https://api-v3.vyfi.io/fetchmaster?data=allTokenPricesMap', {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        const sanitizedError = this.sanitizeErrorText(errorText, response.status);
+        this.logger.error(`VyFi API error (${response.status}): ${sanitizedError}`);
+        return null;
+      }
+
+      const data = await response.json();
+      const pricesMap = data.allTokenPricesMap;
+
+      if (!pricesMap || typeof pricesMap !== 'object') {
+        this.logger.error('VyFi API returned invalid allTokenPricesMap structure');
+        return null;
+      }
+
+      // Parse VyFi response format: {"policyId-assetId": {priceADA: number, ...}}
+      const resultMap = new Map<string, number>();
+      let validCount = 0;
+
+      for (const [key, value] of Object.entries(pricesMap)) {
+        // Key format: "policyId-assetId", convert to tokenUnit: "policyIdassetId"
+        const tokenUnit = key.replace('-', '');
+        const priceData = value as any;
+
+        if (priceData.priceADA && typeof priceData.priceADA === 'number' && priceData.priceADA > 0) {
+          resultMap.set(tokenUnit, priceData.priceADA);
+          validCount++;
+        }
+      }
+
+      this.logger.log(`VyFi bulk fetch: ${validCount} token prices retrieved`);
+      return resultMap;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`VyFi bulk fetch failed: ${errorMessage}`);
+      return null;
+    }
+  }
+
+  /**
+   * Refresh VyFi token price cache in Redis
+   * Fetches all token prices from VyFi and stores them in Redis
+   * Called by background cron task every 10 minutes
+   * @returns Number of tokens cached, or null on failure
+   */
+  async refreshVyFiCache(): Promise<number | null> {
+    if (!this.isMainnet) {
+      this.logger.debug('Skipping VyFi cache refresh for non-mainnet environment');
+      return null;
+    }
+
+    const startTime = Date.now();
+    const pricesMap = await this.fetchVyFiBulkPrices();
+
+    if (!pricesMap || pricesMap.size === 0) {
+      this.logger.warn('VyFi bulk fetch returned no prices');
+      return null;
+    }
+
+    // Store all prices in Redis via DexHunterPricingClient
+    await this.dexHunterClient.setRedisPrices(pricesMap);
+
+    const duration = Date.now() - startTime;
+    this.logger.log(`VyFi cache refresh complete: ${pricesMap.size} tokens cached in ${duration}ms`);
+    return pricesMap.size;
   }
 
   /**
@@ -71,63 +152,90 @@ export class DexHunterPricingService {
 
   /**
    * Get current token price in ADA.
-   * Strategy: Charli3 (via TapToolsClient) → DexHunter → null
+   * Strategy: VyFi Redis cache → DexHunter API → TapTools (Charli3) → null
    *
    * @param tokenId - The token identifier (policyId + assetName in hex)
    * @returns Token price in ADA, or null if not found
    */
   async getTokenPrice(tokenId: string): Promise<number | null> {
-    // Charli3 primary (routed through TapToolsClient which uses Charli3 internally)
-    const charli3Result = await this.tapToolsClient.getTokenPrices([tokenId]);
-    const charli3Price = charli3Result.get(tokenId);
-
-    if (charli3Price !== null && charli3Price !== undefined && charli3Price > 0) {
-      return charli3Price;
+    // 1. Check VyFi Redis cache first
+    const cachedPrice = await this.dexHunterClient.getRedisPrice(tokenId);
+    if (cachedPrice !== null && cachedPrice > 0) {
+      return cachedPrice;
     }
 
-    // Fallback: DexHunter
-    this.logger.debug(`Charli3 returned no price for ${tokenId.slice(0, 10)}..., trying DexHunter`);
+    // 2. Fallback: DexHunter API
     const dexHunterResult = await this.dexHunterClient.getTokenPrices([tokenId]);
     const dexHunterPrice = dexHunterResult.get(tokenId);
 
     if (dexHunterPrice !== null && dexHunterPrice !== undefined && dexHunterPrice > 0) {
-      this.logger.debug(`DexHunter price for ${tokenId.slice(0, 10)}...: ${dexHunterPrice} ADA`);
+      this.logger.debug(`DexHunter API price for ${tokenId.slice(0, 10)}...: ${dexHunterPrice} ADA`);
       return dexHunterPrice;
     }
 
-    this.logger.debug(`No price available from Charli3 or DexHunter for ${tokenId.slice(0, 10)}...`);
+    // 3. Last resort: TapTools (Charli3)
+    this.logger.debug(`DexHunter returned no price for ${tokenId.slice(0, 10)}..., trying TapTools`);
+    const tapToolsResult = await this.tapToolsClient.getTokenPrices([tokenId]);
+    const tapToolsPrice = tapToolsResult.get(tokenId);
+
+    if (tapToolsPrice !== null && tapToolsPrice !== undefined && tapToolsPrice > 0) {
+      this.logger.debug(`TapTools price for ${tokenId.slice(0, 10)}...: ${tapToolsPrice} ADA`);
+      return tapToolsPrice;
+    }
+
+    this.logger.debug(`No price available from any source for ${tokenId.slice(0, 10)}...`);
     return null;
   }
 
   /**
    * Get prices for multiple tokens in ADA.
-   * Strategy: Charli3 (via TapToolsClient) → DexHunter for any misses → null
+   * Strategy: VyFi Redis cache → DexHunter API batch → TapTools batch → null
    *
    * @param tokenIds - Array of token identifiers
    * @returns Map of tokenId to price in ADA (null if not found)
    */
   async getTokenPrices(tokenIds: string[]): Promise<Map<string, number | null>> {
-    // Charli3 primary (via TapToolsClient)
-    const charli3Results = await this.tapToolsClient.getTokenPrices(tokenIds);
+    // 1. Check VyFi Redis cache first (batch operation)
+    const cachedResults = await this.dexHunterClient.getRedisPrices(tokenIds);
+    const tokensNeedingFallback: string[] = [];
 
-    const tokensNeedingFallback = tokenIds.filter(tokenId => {
-      const price = charli3Results.get(tokenId);
-      return price === null || price === undefined;
+    cachedResults.forEach((price, tokenId) => {
+      if (price === null || price === undefined) {
+        tokensNeedingFallback.push(tokenId);
+      }
     });
 
-    if (tokensNeedingFallback.length > 0) {
-      this.logger.debug(
-        `${tokensNeedingFallback.length}/${tokenIds.length} tokens had no Charli3 price, trying DexHunter`
-      );
-      const dexHunterResults = await this.dexHunterClient.getTokenPrices(tokensNeedingFallback);
-      dexHunterResults.forEach((price, tokenId) => {
+    // If all tokens found in cache, return early
+    if (tokensNeedingFallback.length === 0) {
+      return cachedResults;
+    }
+
+    this.logger.debug(`${tokensNeedingFallback.length}/${tokenIds.length} tokens cache miss, trying DexHunter API`);
+
+    // 2. Fallback: DexHunter API for cache misses
+    const dexHunterResults = await this.dexHunterClient.getTokenPrices(tokensNeedingFallback);
+    const tokensStillMissing: string[] = [];
+
+    dexHunterResults.forEach((price, tokenId) => {
+      if (price !== null && price !== undefined && price > 0) {
+        cachedResults.set(tokenId, price);
+      } else {
+        tokensStillMissing.push(tokenId);
+      }
+    });
+
+    // 3. Last resort: TapTools (Charli3) for remaining misses
+    if (tokensStillMissing.length > 0) {
+      this.logger.debug(`${tokensStillMissing.length}/${tokenIds.length} tokens still missing, trying TapTools`);
+      const tapToolsResults = await this.tapToolsClient.getTokenPrices(tokensStillMissing);
+      tapToolsResults.forEach((price, tokenId) => {
         if (price !== null && price !== undefined && price > 0) {
-          charli3Results.set(tokenId, price);
+          cachedResults.set(tokenId, price);
         }
       });
     }
 
-    return charli3Results;
+    return cachedResults;
   }
 
   /**
